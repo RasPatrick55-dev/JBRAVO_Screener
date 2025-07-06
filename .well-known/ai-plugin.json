@@ -1,0 +1,16 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "JBravo Screener",
+  "name_for_model": "jbravo_screener",
+  "description_for_human": "Screens US stocks for JBravo-style technical setups.",
+  "description_for_model": "Fetch US stocks meeting criteria: SMA9>SMA50>SMA200, RSI>50, MACD histogram >0, SMA9 cross EMA20.",
+  "auth": {"type": "none"},
+  "api": {
+    "type": "openapi",
+    "url": "https://<YOUR_HOST>/openapi.yaml",
+    "is_user_authenticated": false
+  },
+  "logo_url": "https://<YOUR_HOST>/logo.png",
+  "contact_email": "you@example.com",
+  "legal_info_url": ""
+}

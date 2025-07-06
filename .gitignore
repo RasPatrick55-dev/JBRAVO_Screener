@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+trades.db
+pipeline_log.txt
+assets_backup/

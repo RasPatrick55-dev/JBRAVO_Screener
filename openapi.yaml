@@ -1,0 +1,49 @@
+openapi: 3.1.0
+info:
+  title: JBravo Stock Screener
+  version: "1.0"
+servers:
+  - url: https://raspatrick.pythonanywhere.com
+paths:
+  /stock_screener:
+    get:
+      operationId: getStockScreener
+      summary: Returns stocks matching JBravo criteria
+            parameters:
+        - name: sector
+          in: query
+          schema: { type: string }
+          description: Technology, Healthcare, etc.
+        - name: priceMoreThan
+          in: query
+          schema: { type: number }
+        - name: priceLowerThan
+          in: query
+          schema: { type: number }
+        - name: volumeMoreThan
+          in: query
+          schema: { type: number }
+        - name: limit
+          in: query
+          schema: { type: integer }
+          description: Maximum number of results
+      responses:
+        "200":
+          description: List of stock objects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    symbol:
+                      type: string
+                      example: AAPL
+                    price:
+                      type: number
+                      format: float
+                      example: 175.5
+                  required:
+                    - symbol
+                    - price
