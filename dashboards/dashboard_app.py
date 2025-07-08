@@ -9,28 +9,34 @@ import plotly.express as px
 import pandas as pd
 import os
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Base directory of this dashboard application
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def data_path(filename):
-    return os.path.abspath(os.path.join(BASE_DIR, 'data', filename))
+# Absolute paths to CSV data files used throughout the dashboard
+trades_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'trades_log.csv'))
+open_positions_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'open_positions.csv'))
 
-def load_csv(filename, required_columns=None):
-    """Load a CSV file and validate required columns.
+def load_csv(filepath, required_columns=None):
+    """Load a CSV file from ``filepath`` and validate required columns.
 
-    Returns a tuple of (DataFrame, alert_component). If the file is missing
-    or columns are absent, an empty DataFrame and a Dash alert component are
+    Returns a tuple of (DataFrame, alert_component). If the file is missing or
+    columns are absent, an empty DataFrame and a Dash alert component are
     returned so the UI can gracefully inform the user.
     """
-    filepath = data_path(filename)
+    filename = os.path.basename(filepath)
     if not os.path.exists(filepath):
         alert = dbc.Alert(f"{filename} not found.", color="warning", className="m-2")
         return pd.DataFrame(), alert
 
     try:
         df = pd.read_csv(filepath, sep=',', encoding='utf-8')
-        app.logger.info(f"Columns loaded from {filename}: {df.columns.tolist()}")
+        app.logger.info(
+            f"Columns loaded from {filename}: {df.columns.tolist()}"
+        )
     except Exception as e:
-        alert = dbc.Alert(f"Error reading {filename}: {e}", color="danger", className="m-2")
+        alert = dbc.Alert(
+            f"Error reading {filename}: {e}", color="danger", className="m-2"
+        )
         return pd.DataFrame(), alert
 
     if required_columns:
@@ -81,13 +87,13 @@ app.layout = dbc.Container([
 )
 def render_tab(tab):
     if tab == 'tab-overview':
-        trades_df, alert = load_csv('trades_log.csv', required_columns=['pnl', 'entry_time'])
+        trades_df, alert = load_csv(trades_log_path, required_columns=['pnl', 'entry_time'])
         if alert:
             return alert
         required_columns = ['pnl', 'entry_time']
-        missing_columns = [c for c in required_columns if c not in trades_df.columns]
+        missing_columns = [col for col in required_columns if col not in trades_df.columns]
         if missing_columns:
-            app.logger.error(f"Missing columns in trades_log.csv: {missing_columns}")
+            app.logger.error(f"Missing columns in trades_df: {missing_columns}")
             return dash.no_update
         trades_df['cumulative_pnl'] = trades_df['pnl'].cumsum()
         equity_fig = px.line(trades_df, x='entry_time', y='cumulative_pnl', template='plotly_dark', title='Equity Curve')
@@ -102,13 +108,13 @@ def render_tab(tab):
         return dbc.Container([kpis, dcc.Graph(figure=equity_fig)], fluid=True)
 
     elif tab == 'tab-trades':
-        trades_df, alert = load_csv('trades_log.csv', required_columns=['symbol', 'entry_time'])
+        trades_df, alert = load_csv(trades_log_path, required_columns=['symbol', 'entry_time'])
         if alert:
             return alert
         required_columns = ['pnl', 'entry_time']
-        missing_columns = [c for c in required_columns if c not in trades_df.columns]
+        missing_columns = [col for col in required_columns if col not in trades_df.columns]
         if missing_columns:
-            app.logger.error(f"Missing columns in trades_log.csv: {missing_columns}")
+            app.logger.error(f"Missing columns in trades_df: {missing_columns}")
             return dash.no_update
         if 'pnl' not in trades_df.columns:
             trades_df['pnl'] = 0.0
@@ -118,7 +124,7 @@ def render_tab(tab):
                                     style_table={'overflowX':'auto'}, style_cell={'backgroundColor':'#212529','color':'#E0E0E0'})
 
     elif tab == 'tab-positions':
-        positions_df, alert = load_csv('open_positions.csv', required_columns=['symbol'])
+        positions_df, alert = load_csv(open_positions_path, required_columns=['symbol'])
         if alert:
             return alert
         pnl_col = 'unrealized_pl' if 'unrealized_pl' in positions_df.columns else 'pnl' if 'pnl' in positions_df.columns else None
@@ -129,7 +135,7 @@ def render_tab(tab):
         return dbc.Container([dcc.Graph(figure=positions_fig), dash_table.DataTable(data=positions_df.to_dict('records'), columns=columns, style_table={'overflowX':'auto'}, style_cell={'backgroundColor':'#212529','color':'#E0E0E0'})])
 
     elif tab == 'tab-symbols':
-        trades_df, alert = load_csv('trades_log.csv', required_columns=['symbol', 'pnl'])
+        trades_df, alert = load_csv(trades_log_path, required_columns=['symbol', 'pnl'])
         if alert:
             return alert
         symbol_perf = trades_df.groupby('symbol').agg({'pnl':['count','mean','sum']}).reset_index()
