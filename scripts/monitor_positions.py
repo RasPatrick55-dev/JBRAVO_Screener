@@ -90,6 +90,12 @@ def submit_sell_order(symbol, qty):
 # Continuous monitoring from pre-market to after-hours
 def monitor_positions():
     logging.info("Starting real-time position monitoring...")
+    # Ensure CSV exists even if no positions are open yet
+    try:
+        save_positions_csv(get_open_positions())
+    except Exception as e:
+        logging.error("Initial position fetch failed: %s", e)
+
     while True:
         now = datetime.now(timezone.utc)
         current_hour = now.astimezone().hour
@@ -106,6 +112,8 @@ def monitor_positions():
                 if sell_signal(symbol):
                     submit_sell_order(symbol, qty)
         else:
+            # Still write an empty CSV so the dashboard has fresh data
+            save_positions_csv([])
             logging.info("Outside trading hours, monitoring paused.")
 
         time.sleep(SLEEP_INTERVAL)
