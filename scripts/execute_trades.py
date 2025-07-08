@@ -48,6 +48,30 @@ def get_open_positions():
     positions = alpaca.list_positions()
     return {p.symbol: p for p in positions}
 
+def save_open_positions_csv():
+    """Fetch current open positions from Alpaca and save to CSV."""
+    try:
+        positions = alpaca.list_positions()
+        data = []
+        for p in positions:
+            data.append({
+                'symbol': p.symbol,
+                'qty': p.qty,
+                'avg_entry_price': p.avg_entry_price,
+                'current_price': p.current_price,
+                'unrealized_pl': p.unrealized_pl
+            })
+
+        df = pd.DataFrame(data, columns=['symbol', 'qty', 'avg_entry_price', 'current_price', 'unrealized_pl'])
+        if df.empty:
+            df = pd.DataFrame(columns=['symbol', 'qty', 'avg_entry_price', 'current_price', 'unrealized_pl'])
+
+        csv_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
+        df.to_csv(csv_path, index=False)
+        logging.info("Saved open positions to %s", csv_path)
+    except Exception as e:
+        logging.error("Failed to save open positions: %s", e)
+
 def allocate_position(symbol):
     open_positions = get_open_positions()
     if symbol in open_positions or len(open_positions) >= MAX_OPEN_TRADES:
@@ -150,5 +174,6 @@ if __name__ == '__main__':
     submit_trades()
     attach_trailing_stops()
     daily_exit_check()
+    save_open_positions_csv()
     logging.info("Pre-market trade execution script complete")
 
