@@ -12,7 +12,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def data_path(filename):
-    return os.path.join(BASE_DIR, 'data', filename)
+    return os.path.abspath(os.path.join(BASE_DIR, 'data', filename))
 
 def load_csv(filename, required_columns=None):
     """Load a CSV file and validate required columns.
@@ -27,7 +27,8 @@ def load_csv(filename, required_columns=None):
         return pd.DataFrame(), alert
 
     try:
-        df = pd.read_csv(filepath)
+        df = pd.read_csv(filepath, sep=',', encoding='utf-8')
+        app.logger.info(f"Columns loaded from {filename}: {df.columns.tolist()}")
     except Exception as e:
         alert = dbc.Alert(f"Error reading {filename}: {e}", color="danger", className="m-2")
         return pd.DataFrame(), alert
@@ -36,6 +37,7 @@ def load_csv(filename, required_columns=None):
         missing = [c for c in required_columns if c not in df.columns]
         if missing:
             msg = f"{filename} missing columns: {', '.join(missing)}"
+            app.logger.error(f"Missing columns in {filename}: {missing}")
             alert = dbc.Alert(msg, color="warning", className="m-2")
             return pd.DataFrame(), alert
 
@@ -82,6 +84,11 @@ def render_tab(tab):
         trades_df, alert = load_csv('trades_log.csv', required_columns=['pnl', 'entry_time'])
         if alert:
             return alert
+        required_columns = ['pnl', 'entry_time']
+        missing_columns = [c for c in required_columns if c not in trades_df.columns]
+        if missing_columns:
+            app.logger.error(f"Missing columns in trades_log.csv: {missing_columns}")
+            return dash.no_update
         trades_df['cumulative_pnl'] = trades_df['pnl'].cumsum()
         equity_fig = px.line(trades_df, x='entry_time', y='cumulative_pnl', template='plotly_dark', title='Equity Curve')
 
@@ -98,6 +105,11 @@ def render_tab(tab):
         trades_df, alert = load_csv('trades_log.csv', required_columns=['symbol', 'entry_time'])
         if alert:
             return alert
+        required_columns = ['pnl', 'entry_time']
+        missing_columns = [c for c in required_columns if c not in trades_df.columns]
+        if missing_columns:
+            app.logger.error(f"Missing columns in trades_log.csv: {missing_columns}")
+            return dash.no_update
         if 'pnl' not in trades_df.columns:
             trades_df['pnl'] = 0.0
         trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time']).dt.strftime('%Y-%m-%d %H:%M')
