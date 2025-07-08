@@ -1,8 +1,11 @@
 # create_dummy_data.py
+import os
 import sqlite3
 import pandas as pd
 import random
 from datetime import datetime, timedelta
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Generate dummy data
 def generate_dummy_trades(num_trades=20):
@@ -37,7 +40,8 @@ def populate_dummy_data():
     trades = generate_dummy_trades()
 
     # Populate SQLite
-    conn = sqlite3.connect('trades.db')
+    db_path = os.path.join(BASE_DIR, 'data', 'trades.db')
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS trades (
                  trade_id TEXT PRIMARY KEY, symbol TEXT,
@@ -57,12 +61,14 @@ def populate_dummy_data():
 
     # Populate trades_log.csv
     df_trades_log = pd.DataFrame(trades)
-    df_trades_log.to_csv('trades_log.csv', index=False)
+    trades_log_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
+    df_trades_log.to_csv(trades_log_path, index=False)
 
     # Populate top_candidates.csv
     top_candidates = [{'symbol': sym, 'score': round(random.uniform(50, 100), 2)} for sym in random.sample(['AAPL', 'MSFT', 'GOOG', 'AMZN', 'META'], 5)]
     df_top_candidates = pd.DataFrame(top_candidates)
-    df_top_candidates.to_csv('top_candidates.csv', index=False)
+    top_candidates_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
+    df_top_candidates.to_csv(top_candidates_path, index=False)
 
     # Populate metrics_summary.csv
     metrics_summary = {
@@ -74,7 +80,8 @@ def populate_dummy_data():
         'Average Return per Trade': round(sum([t['pnl'] for t in trades])/len(trades), 2)
     }
     df_metrics_summary = pd.DataFrame([metrics_summary])
-    df_metrics_summary.to_csv('metrics_summary.csv', index=False)
+    metrics_summary_path = os.path.join(BASE_DIR, 'data', 'metrics_summary.csv')
+    df_metrics_summary.to_csv(metrics_summary_path, index=False)
 
 if __name__ == "__main__":
     populate_dummy_data()

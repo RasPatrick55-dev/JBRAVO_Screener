@@ -1,9 +1,13 @@
 # metrics.py (enhanced with comprehensive metrics)
+import os
 import pandas as pd
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Load backtest results
 def load_results(csv_file='backtest_results.csv'):
-    return pd.read_csv(csv_file)
+    csv_path = os.path.join(BASE_DIR, 'data', csv_file)
+    return pd.read_csv(csv_path)
 
 # Calculate additional performance metrics
 def calculate_metrics(df):
@@ -62,14 +66,16 @@ def rank_candidates(df):
 # Save top-ranked candidates
 def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
     top_candidates = df.head(top_n)
-    top_candidates.to_csv(output_file, index=False)
-    print(f"[INFO] Top {top_n} candidates saved to {output_file}")
+    csv_path = os.path.join(BASE_DIR, 'data', output_file)
+    top_candidates.to_csv(csv_path, index=False)
+    print(f"[INFO] Top {top_n} candidates saved to {csv_path}")
 
 # Save overall metrics summary
 def save_metrics_summary(metrics_summary, output_file='metrics_summary.csv'):
     summary_df = pd.DataFrame([metrics_summary])
-    summary_df.to_csv(output_file, index=False)
-    print(f"[INFO] Metrics summary saved to {output_file}")
+    csv_path = os.path.join(BASE_DIR, 'data', output_file)
+    summary_df.to_csv(csv_path, index=False)
+    print(f"[INFO] Metrics summary saved to {csv_path}")
 
 # Full execution of metrics calculation, ranking, and summary
 def main():
@@ -82,3 +88,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

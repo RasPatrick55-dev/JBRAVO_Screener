@@ -9,11 +9,13 @@ import plotly.express as px
 import pandas as pd
 import os
 
-# Define absolute paths
-dirname = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def data_path(filename):
+    return os.path.join(BASE_DIR, 'data', filename)
 
 def load_csv(filename):
-    filepath = os.path.join(dirname, filename)
+    filepath = data_path(filename)
     return pd.read_csv(filepath) if os.path.exists(filepath) else pd.DataFrame()
 
 app = Dash(__name__, external_stylesheets=[
@@ -99,3 +101,4 @@ def toggle_modal(active_cell, close_click, is_open):
 
 if __name__ == '__main__':
     app.run(debug=False)
+

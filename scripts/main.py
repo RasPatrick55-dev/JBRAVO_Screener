@@ -3,7 +3,8 @@ from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 import alpaca_trade_api as tradeapi
 
-dotenv_path = os.path.expanduser('/home/RasPatrick/jbravo_screener/.env')
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+dotenv_path = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path)
 
 app = Flask(__name__)
