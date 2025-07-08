@@ -1,13 +1,23 @@
 # execute_trades.py updated for pre-market trading (3% allocation, top 3 symbols, 3% trailing stop)
 
 import os
+from logging.handlers import RotatingFileHandler
+import logging
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from alpaca_trade_api import REST, TimeFrame
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+dotenv_path = os.path.join(BASE_DIR, '.env')
+load_dotenv(dotenv_path)
+log_path = os.path.join(BASE_DIR, 'logs', 'execute_trades.log')
+logging.basicConfig(
+    handlers=[RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5)],
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
@@ -22,11 +32,12 @@ MAX_HOLD_DAYS = 7
 
 # Read top candidates (top 3 symbols only)
 try:
-    df = pd.read_csv('top_candidates.csv')
+    csv_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
+    df = pd.read_csv(csv_path)
     df = df.sort_values('score', ascending=False).head(3)
-    print("[INFO] Loaded top_candidates.csv successfully")
+    logging.info("Loaded %s successfully", csv_path)
 except Exception as e:
-    print(f"[ERROR] Failed to read CSV: {e}")
+    logging.error("Failed to read CSV: %s", e)
     exit()
 
 def get_buying_power():
@@ -40,7 +51,7 @@ def get_open_positions():
 def allocate_position(symbol):
     open_positions = get_open_positions()
     if symbol in open_positions or len(open_positions) >= MAX_OPEN_TRADES:
-        print(f"[DEBUG] Skipping {symbol}: already trading or max trades reached")
+        logging.debug("Skipping %s: already trading or max trades reached", symbol)
         return None
 
     buying_power = get_buying_power()
@@ -48,16 +59,16 @@ def allocate_position(symbol):
     bars = alpaca.get_bars(symbol, TimeFrame.Day, limit=1).df
 
     if bars.empty:
-        print(f"[DEBUG] No bars available for {symbol}")
+        logging.debug("No bars available for %s", symbol)
         return None
 
     last_close = bars['close'].iloc[-1]
     qty = int(alloc_amount / last_close)
     if qty < 1:
-        print(f"[DEBUG] Allocation insufficient for {symbol}")
+        logging.debug("Allocation insufficient for %s", symbol)
         return None
 
-    print(f"[DEBUG] Allocating {qty} shares of {symbol} at {last_close}")
+    logging.debug("Allocating %d shares of %s at %s", qty, symbol, last_close)
     return qty, round(last_close, 2)
 
 def submit_trades():
@@ -68,7 +79,7 @@ def submit_trades():
             continue
 
         qty, entry_price = alloc
-        print(f"[INFO] Submitting limit buy order for {sym}, qty={qty}, limit={entry_price}")
+        logging.info("Submitting limit buy order for %s, qty=%s, limit=%s", sym, qty, entry_price)
         try:
             alpaca.submit_order(
                 symbol=sym,
@@ -80,7 +91,7 @@ def submit_trades():
                 extended_hours=True  # enable pre-market trading
             )
         except Exception as e:
-            print(f"[ERROR] Failed to submit buy order for {sym}: {e}")
+            logging.error("Failed to submit buy order for %s: %s", sym, e)
 
 def attach_trailing_stops():
     positions = get_open_positions()
@@ -88,10 +99,10 @@ def attach_trailing_stops():
         orders = alpaca.list_orders(status='open', symbols=[symbol])
         has_trail = any(o.order_type == 'trailing_stop' for o in orders)
         if has_trail:
-            print(f"[DEBUG] Trailing stop already active for {symbol}")
+            logging.debug("Trailing stop already active for %s", symbol)
             continue
 
-        print(f"[INFO] Creating trailing stop for {symbol}, qty={pos.qty}")
+        logging.info("Creating trailing stop for %s, qty=%s", symbol, pos.qty)
         try:
             alpaca.submit_order(
                 symbol=symbol,
@@ -102,7 +113,7 @@ def attach_trailing_stops():
                 time_in_force='gtc'
             )
         except Exception as e:
-            print(f"[ERROR] Failed to create trailing stop for {symbol}: {e}")
+            logging.error("Failed to create trailing stop for %s: %s", symbol, e)
 
 def daily_exit_check():
     positions = get_open_positions()
@@ -111,17 +122,17 @@ def daily_exit_check():
     for symbol, pos in positions.items():
         entry_orders = [o for o in orders if o.symbol == symbol and o.side == 'buy']
         if not entry_orders:
-            print(f"[WARN] No entry order found for {symbol}, skipping.")
+            logging.warning("No entry order found for %s, skipping.", symbol)
             continue
 
         entry_order = sorted(entry_orders, key=lambda o: o.filled_at, reverse=True)[0]
         entry_date = entry_order.filled_at.date()
         days_held = (datetime.now(timezone.utc).date() - entry_date).days
 
-        print(f"[DEBUG] {symbol} entered on {entry_date}, held for {days_held} days")
+        logging.debug("%s entered on %s, held for %s days", symbol, entry_date, days_held)
 
         if days_held >= MAX_HOLD_DAYS:
-            print(f"[INFO] Exiting {symbol} after {days_held} days")
+            logging.info("Exiting %s after %s days", symbol, days_held)
             try:
                 alpaca.submit_order(
                     symbol=symbol,
@@ -132,12 +143,12 @@ def daily_exit_check():
                     extended_hours=True
                 )
             except Exception as e:
-                print(f"[ERROR] Failed to close {symbol}: {e}")
+                logging.error("Failed to close %s: %s", symbol, e)
 
 if __name__ == '__main__':
-    print("[INFO] Starting pre-market trade execution script")
+    logging.info("Starting pre-market trade execution script")
     submit_trades()
     attach_trailing_stops()
     daily_exit_check()
-    print("[INFO] Pre-market trade execution script complete")
+    logging.info("Pre-market trade execution script complete")
 

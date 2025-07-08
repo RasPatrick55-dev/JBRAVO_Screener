@@ -1,6 +1,7 @@
 # screener.py with debugging and robust scoring
 import os
 import logging
+from logging.handlers import RotatingFileHandler
 import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
@@ -9,21 +10,19 @@ from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
-# Configure logging
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+log_path = os.path.join(BASE_DIR, 'logs', 'screener.log')
+
 logging.basicConfig(
+    handlers=[RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5)],
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
 # Load environment variables
-env_path = os.environ.get("BRAVO_ENV_PATH")
-if not env_path:
-    cwd_env = os.path.join(os.getcwd(), ".env")
-    default_env = os.path.expanduser("~/jbravo_screener/.env")
-    env_path = cwd_env if os.path.exists(cwd_env) else default_env
-
-logging.info("Loading environment variables from %s", env_path)
-load_dotenv(env_path)
+dotenv_path = os.path.join(BASE_DIR, '.env')
+logging.info("Loading environment variables from %s", dotenv_path)
+load_dotenv(dotenv_path)
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
@@ -96,5 +95,6 @@ ranked_df.sort_values(by="total_score", ascending=False, inplace=True)
 if ranked_df.empty:
     logging.warning("No candidates met the screening criteria. CSV file not created.")
 else:
-    ranked_df.head(15).to_csv("top_candidates.csv", index=False)
-    logging.info("Top 15 ranked candidates saved to top_candidates.csv")
+    csv_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
+    ranked_df.head(15).to_csv(csv_path, index=False)
+    logging.info("Top 15 ranked candidates saved to %s", csv_path)

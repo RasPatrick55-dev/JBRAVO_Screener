@@ -1,11 +1,15 @@
 # weekly_summary.py - Weekly trade performance summary
 
+import os
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # Connect to SQLite database and load trades
 def load_trades(db_path='trades.db'):
+    db_path = os.path.join(BASE_DIR, 'data', db_path)
     conn = sqlite3.connect(db_path)
     df = pd.read_sql_query("SELECT * FROM trades", conn)
     conn.close()
@@ -44,8 +48,9 @@ def calculate_weekly_summary(trades_df):
 # Save weekly summary to CSV
 def save_weekly_summary(summary, output_file='weekly_summary.csv'):
     df_summary = pd.DataFrame([summary])
-    df_summary.to_csv(output_file, index=False)
-    print(f"[INFO] Weekly summary saved to {output_file}")
+    csv_path = os.path.join(BASE_DIR, 'data', output_file)
+    df_summary.to_csv(csv_path, index=False)
+    print(f"[INFO] Weekly summary saved to {csv_path}")
 
 if __name__ == '__main__':
     print("[INFO] Generating weekly trade performance summary...")
@@ -53,3 +58,4 @@ if __name__ == '__main__':
     summary = calculate_weekly_summary(trades_df)
     save_weekly_summary(summary)
     print("[INFO] Weekly trade performance summary generated successfully.")
+

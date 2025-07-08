@@ -4,10 +4,20 @@ import alpaca_trade_api as tradeapi
 import backtrader as bt
 from dotenv import load_dotenv
 import os
+from logging.handlers import RotatingFileHandler
+import logging
 from datetime import datetime, timedelta, timezone
 
-# Load environment variables
-dotenv_path = '/home/RasPatrick/jbravo_screener/.env'
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+dotenv_path = os.path.join(BASE_DIR, '.env')
+log_path = os.path.join(BASE_DIR, 'logs', 'backtest.log')
+
+logging.basicConfig(
+    handlers=[RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5)],
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+
 load_dotenv(dotenv_path)
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
@@ -94,13 +104,16 @@ def backtest_symbols(symbols):
     # Ensure CSV is always written (empty if no results)
     results_df = pd.DataFrame(results, columns=['symbol', 'trades', 'wins', 'losses', 'win_rate', 'net_pnl'])
     results_df.sort_values(by='win_rate', ascending=False, inplace=True)
-    results_df.to_csv('backtest_results.csv', index=False)
-    print("[INFO] Backtesting complete. Results saved to backtest_results.csv.")
+    csv_path = os.path.join(BASE_DIR, 'data', 'backtest_results.csv')
+    results_df.to_csv(csv_path, index=False)
+    logging.info("Backtesting complete. Results saved to %s", csv_path)
 
 if __name__ == '__main__':
     try:
-        symbols_df = pd.read_csv('top_candidates.csv')
+        csv_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
+        symbols_df = pd.read_csv(csv_path)
         symbols = symbols_df.iloc[:, 0].tolist()
         backtest_symbols(symbols)
     except Exception as e:
-        print(f"[ERROR] Failed to execute backtesting pipeline: {e}")
+        logging.error("Failed to execute backtesting pipeline: %s", e)
+
