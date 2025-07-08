@@ -1,0 +1,1158 @@
+[1mdiff --git a/.gitignore b/.gitignore[m
+[1mdeleted file mode 100644[m
+[1mindex db50774..0000000[m
+[1m--- a/.gitignore[m
+[1m+++ /dev/null[m
+[36m@@ -1,6 +0,0 @@[m
+[31m-__pycache__/[m
+[31m-*.pyc[m
+[31m-.env[m
+[31m-trades.db[m
+[31m-pipeline_log.txt[m
+[31m-assets_backup/[m
+[1mdiff --git a/.well-known/ai-plugin.json b/.well-known/ai-plugin.json[m
+[1mdeleted file mode 100644[m
+[1mindex 4eb9957..0000000[m
+[1m--- a/.well-known/ai-plugin.json[m
+[1m+++ /dev/null[m
+[36m@@ -1,16 +0,0 @@[m
+[31m-{[m
+[31m-  "schema_version": "v1",[m
+[31m-  "name_for_human": "JBravo Screener",[m
+[31m-  "name_for_model": "jbravo_screener",[m
+[31m-  "description_for_human": "Screens US stocks for JBravo-style technical setups.",[m
+[31m-  "description_for_model": "Fetch US stocks meeting criteria: SMA9>SMA50>SMA200, RSI>50, MACD histogram >0, SMA9 cross EMA20.",[m
+[31m-  "auth": {"type": "none"},[m
+[31m-  "api": {[m
+[31m-    "type": "openapi",[m
+[31m-    "url": "https://<YOUR_HOST>/openapi.yaml",[m
+[31m-    "is_user_authenticated": false[m
+[31m-  },[m
+[31m-  "logo_url": "https://<YOUR_HOST>/logo.png",[m
+[31m-  "contact_email": "you@example.com",[m
+[31m-  "legal_info_url": ""[m
+[31m-}[m
+[1mdiff --git a/assets/typography.css b/assets/typography.css[m
+[1mdeleted file mode 100644[m
+[1mindex 80f69b9..0000000[m
+[1m--- a/assets/typography.css[m
+[1m+++ /dev/null[m
+[36m@@ -1,36 +0,0 @@[m
+[31m-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');[m
+[31m-[m
+[31m-body, td, th {[m
+[31m-    font-family: 'Roboto', sans-serif;[m
+[31m-    line-height: 1.5;[m
+[31m-    color: rgba(255,255,255,0.87);[m
+[31m-}[m
+[31m-[m
+[31m-h1, h2, h3, h4, h5, h6 {[m
+[31m-    font-family: 'Roboto', sans-serif;[m
+[31m-    font-weight: 600;[m
+[31m-}[m
+[31m-[m
+[31m-.secondary-text {[m
+[31m-    color: rgba(255,255,255,0.60);[m
+[31m-}[m
+[31m-[m
+[31m-.dash-cell {[m
+[31m-    border-bottom: 1px solid rgba(255,255,255,0.1);[m
+[31m-}[m
+[31m-[m
+[31m-.dash-cell:hover {[m
+[31m-    background-color: rgba(255,255,255,0.08);[m
+[31m-}[m
+[31m-[m
+[31m-/* Remove vertical borders in DataTables */[m
+[31m-.dash-table-container .dash-spreadsheet .dash-cell {[m
+[31m-    border-left: none !important;[m
+[31m-    border-right: none !important;[m
+[31m-}[m
+[31m-[m
+[31m-/* Adjust card shadow and borders */[m
+[31m-.card.shadow {[m
+[31m-    box-shadow: 0 4px 10px rgba(0,0,0,0.3);[m
+[31m-    border-top: 3px solid #4DB6AC;[m
+[31m-}[m
+[1mdiff --git a/backtest.py b/backtest.py[m
+[1mdeleted file mode 100644[m
+[1mindex 80849e5..0000000[m
+[1m--- a/backtest.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,106 +0,0 @@[m
+[31m-# backtest.py - Updated with robust error handling and guaranteed CSV output[m
+[31m-import pandas as pd[m
+[31m-import alpaca_trade_api as tradeapi[m
+[31m-import backtrader as bt[m
+[31m-from dotenv import load_dotenv[m
+[31m-import os[m
+[31m-from datetime import datetime, timedelta, timezone[m
+[31m-[m
+[31m-# Load environment variables[m
+[31m-dotenv_path = '/home/RasPatrick/jbravo_screener/.env'[m
+[31m-load_dotenv(dotenv_path)[m
+[31m-[m
+[31m-API_KEY = os.getenv("APCA_API_KEY_ID")[m
+[31m-API_SECRET = os.getenv("APCA_API_SECRET_KEY")[m
+[31m-BASE_URL = os.getenv("APCA_API_BASE_URL")[m
+[31m-[m
+[31m-# Initialize Alpaca API[m
+[31m-api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')[m
+[31m-[m
+[31m-# Fetch historical data[m
+[31m-def get_data(symbol, days=750):[m
+[31m-    start_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")[m
+[31m-    bars = api.get_bars(symbol, tradeapi.TimeFrame.Day, start=start_date, limit=days).df[m
+[31m-    if bars.empty:[m
+[31m-        return pd.DataFrame()[m
+[31m-[m
+[31m-    bars = bars.reset_index()[m
+[31m-    bars['datetime'] = pd.to_datetime(bars['timestamp'])[m
+[31m-    bars.set_index('datetime', inplace=True)[m
+[31m-    return bars[['open', 'high', 'low', 'close', 'volume']][m
+[31m-[m
+[31m-# JBravo Swing Trading Strategy[m
+[31m-class JBravoStrategy(bt.Strategy):[m
+[31m-    def __init__(self):[m
+[31m-        self.sma9 = bt.ind.SMA(period=9)[m
+[31m-        self.ema20 = bt.ind.EMA(period=20)[m
+[31m-        self.sma180 = bt.ind.SMA(period=180)[m
+[31m-        self.rsi = bt.ind.RSI(period=14)[m
+[31m-[m
+[31m-    def next(self):[m
+[31m-        if not self.position:[m
+[31m-            if self.data.close[0] > self.sma9[0] and self.sma9[0] > self.ema20[0] > self.sma180[0] and self.rsi[0] > 50:[m
+[31m-                self.buy()[m
+[31m-        else:[m
+[31m-            if self.data.close[0] < self.ema20[0] or self.rsi[0] > 70:[m
+[31m-                self.close()[m
+[31m-[m
+[31m-# Run backtest for a single symbol[m
+[31m-def run_backtest(symbol):[m
+[31m-    try:[m
+[31m-        data = get_data(symbol)[m
+[31m-        if len(data) < 180:[m
+[31m-            print(f"[WARN] {symbol}: insufficient bars ({len(data)}), skipping.")[m
+[31m-            return None[m
+[31m-[m
+[31m-        cerebro = bt.Cerebro()[m
+[31m-        cerebro.adddata(bt.feeds.PandasData(dataname=data))[m
+[31m-        cerebro.addstrategy(JBravoStrategy)[m
+[31m-        cerebro.broker.setcash(10000.0)[m
+[31m-        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')[m
+[31m-[m
+[31m-        result = cerebro.run()[m
+[31m-        analysis = result[0].analyzers.trades.get_analysis()[m
+[31m-[m
+[31m-        total_trades = analysis.total.closed if 'closed' in analysis.total else 0[m
+[31m-        won_trades = analysis.won.total if 'won' in analysis and 'total' in analysis.won else 0[m
+[31m-        lost_trades = analysis.lost.total if 'lost' in analysis and 'total' in analysis.lost else 0[m
+[31m-        pnl_net = analysis.pnl.net.total if 'pnl' in analysis and 'net' in analysis.pnl else 0[m
+[31m-[m
+[31m-        win_rate = (won_trades / total_trades) * 100 if total_trades else 0[m
+[31m-[m
+[31m-        return {[m
+[31m-            'symbol': symbol,[m
+[31m-            'trades': total_trades,[m
+[31m-            'wins': won_trades,[m
+[31m-            'losses': lost_trades,[m
+[31m-            'win_rate': win_rate,[m
+[31m-            'net_pnl': pnl_net[m
+[31m-        }[m
+[31m-[m
+[31m-    except Exception as e:[m
+[31m-        print(f"[ERROR] Exception during backtest for {symbol}: {e}")[m
+[31m-        return None[m
+[31m-[m
+[31m-# Run backtests on a list of symbols and save results[m
+[31m-def backtest_symbols(symbols):[m
+[31m-    results = [][m
+[31m-    for symbol in symbols:[m
+[31m-        print(f"[INFO] Backtesting {symbol}...")[m
+[31m-        result = run_backtest(symbol)[m
+[31m-        if result:[m
+[31m-            results.append(result)[m
+[31m-[m
+[31m-    # Ensure CSV is always written (empty if no results)[m
+[31m-    results_df = pd.DataFrame(results, columns=['symbol', 'trades', 'wins', 'losses', 'win_rate', 'net_pnl'])[m
+[31m-    results_df.sort_values(by='win_rate', ascending=False, inplace=True)[m
+[31m-    results_df.to_csv('backtest_results.csv', index=False)[m
+[31m-    print("[INFO] Backtesting complete. Results saved to backtest_results.csv.")[m
+[31m-[m
+[31m-if __name__ == '__main__':[m
+[31m-    try:[m
+[31m-        symbols_df = pd.read_csv('top_candidates.csv')[m
+[31m-        symbols = symbols_df.iloc[:, 0].tolist()[m
+[31m-        backtest_symbols(symbols)[m
+[31m-    except Exception as e:[m
+[31m-        print(f"[ERROR] Failed to execute backtesting pipeline: {e}")[m
+[1mdiff --git a/backtest_results.csv b/backtest_results.csv[m
+[1mdeleted file mode 100644[m
+[1mindex f1014a6..0000000[m
+[1m--- a/backtest_results.csv[m
+[1m+++ /dev/null[m
+[36m@@ -1,16 +0,0 @@[m
+[31m-symbol,trades,wins,losses,win_rate,net_pnl[m
+[31m-PTHL,8,6,2,75.0,3.5200000000000014[m
+[31m-TDUP,31,21,10,67.74193548387096,2.624000000000003[m
+[31m-TMC,21,14,7,66.66666666666666,8.182000000000002[m
+[31m-SPRO,11,7,4,63.63636363636363,0.18500000000000116[m
+[31m-AEVA,36,22,14,61.111111111111114,21.894999999999996[m
+[31m-SRM,5,3,2,60.0,2.6111999999999984[m
+[31m-GRPN,29,17,12,58.620689655172406,1.2980000000000018[m
+[31m-ERNA,6,3,3,50.0,-0.3500000000000001[m
+[31m-OTLY,16,8,8,50.0,-0.5900000000000001[m
+[31m-OCG,27,13,14,48.148148148148145,2.7826000000000013[m
+[31m-TMCWW,22,10,12,45.45454545454545,1.8936000000000002[m
+[31m-DUO,9,4,5,44.44444444444444,-1.774900000000001[m
+[31m-FGEN,7,3,4,42.857142857142854,-0.6401999999999992[m
+[31m-HOVRW,13,5,8,38.46153846153847,0.1271[m
+[31m-WBX,0,0,0,0.0,0.0[m
+[1mdiff --git a/create_dummy_data.py b/create_dummy_data.py[m
+[1mdeleted file mode 100644[m
+[1mindex 17fd153..0000000[m
+[1m--- a/create_dummy_data.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,81 +0,0 @@[m
+[31m-# create_dummy_data.py[m
+[31m-import sqlite3[m
+[31m-import pandas as pd[m
+[31m-import random[m
+[31m-from datetime import datetime, timedelta[m
+[31m-[m
+[31m-# Generate dummy data[m
+[31m-def generate_dummy_trades(num_trades=20):[m
+[31m-    symbols = ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'META', 'TSLA', 'NFLX', 'NVDA', 'AMD', 'INTC'][m
+[31m-    trades = [][m
+[31m-    now = datetime.now()[m
+[31m-    for i in range(num_trades):[m
+[31m-        symbol = random.choice(symbols)[m
+[31m-        entry_price = round(random.uniform(100, 500), 2)[m
+[31m-        exit_price = entry_price + round(random.uniform(-20, 50), 2)[m
+[31m-        quantity = random.randint(10, 200)[m
+[31m-        entry_time = now - timedelta(days=random.randint(1, 10))[m
+[31m-        exit_time = entry_time + timedelta(days=random.randint(1, 7))[m
+[31m-        pnl = (exit_price - entry_price) * quantity[m
+[31m-        exit_reason = random.choice(['Trailing Stop', 'Max Hold Time', 'Manual Close'])[m
+[31m-[m
+[31m-        trades.append({[m
+[31m-            'trade_id': f"{symbol}_{entry_time.strftime('%Y%m%d%H%M%S')}",[m
+[31m-            'symbol': symbol,[m
+[31m-            'entry_price': entry_price,[m
+[31m-            'exit_price': exit_price,[m
+[31m-            'quantity': quantity,[m
+[31m-            'entry_time': entry_time,[m
+[31m-            'exit_time': exit_time,[m
+[31m-            'pnl': pnl,[m
+[31m-            'exit_reason': exit_reason[m
+[31m-        })[m
+[31m-    return trades[m
+[31m-[m
+[31m-# Populate SQLite database and CSVs[m
+[31m-def populate_dummy_data():[m
+[31m-    trades = generate_dummy_trades()[m
+[31m-[m
+[31m-    # Populate SQLite[m
+[31m-    conn = sqlite3.connect('trades.db')[m
+[31m-    c = conn.cursor()[m
+[31m-    c.execute('''CREATE TABLE IF NOT EXISTS trades ([m
+[31m-                 trade_id TEXT PRIMARY KEY, symbol TEXT,[m
+[31m-                 entry_price REAL, exit_price REAL,[m
+[31m-                 quantity INTEGER, entry_time TEXT, [m
+[31m-                 exit_time TEXT, pnl REAL, exit_reason TEXT)''')[m
+[31m-[m
+[31m-    for trade in trades:[m
+[31m-        c.execute("INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?)", ([m
+[31m-            trade['trade_id'], trade['symbol'], trade['entry_price'], trade['exit_price'],[m
+[31m-            trade['quantity'], trade['entry_time'].strftime('%Y-%m-%d %H:%M:%S'),[m
+[31m-            trade['exit_time'].strftime('%Y-%m-%d %H:%M:%S'),[m
+[31m-            trade['pnl'], trade['exit_reason'][m
+[31m-        ))[m
+[31m-    conn.commit()[m
+[31m-    conn.close()[m
+[31m-[m
+[31m-    # Populate trades_log.csv[m
+[31m-    df_trades_log = pd.DataFrame(trades)[m
+[31m-    df_trades_log.to_csv('trades_log.csv', index=False)[m
+[31m-[m
+[31m-    # Populate top_candidates.csv[m
+[31m-    top_candidates = [{'symbol': sym, 'score': round(random.uniform(50, 100), 2)} for sym in random.sample(['AAPL', 'MSFT', 'GOOG', 'AMZN', 'META'], 5)][m
+[31m-    df_top_candidates = pd.DataFrame(top_candidates)[m
+[31m-    df_top_candidates.to_csv('top_candidates.csv', index=False)[m
+[31m-[m
+[31m-    # Populate metrics_summary.csv[m
+[31m-    metrics_summary = {[m
+[31m-        'Total Trades': len(trades),[m
+[31m-        'Total Wins': len([t for t in trades if t['pnl'] > 0]),[m
+[31m-        'Total Losses': len([t for t in trades if t['pnl'] <= 0]),[m
+[31m-        'Win Rate (%)': round(100 * len([t for t in trades if t['pnl'] > 0]) / len(trades), 2),[m
+[31m-        'Total Net PnL': round(sum([t['pnl'] for t in trades]), 2),[m
+[31m-        'Average Return per Trade': round(sum([t['pnl'] for t in trades])/len(trades), 2)[m
+[31m-    }[m
+[31m-    df_metrics_summary = pd.DataFrame([metrics_summary])[m
+[31m-    df_metrics_summary.to_csv('metrics_summary.csv', index=False)[m
+[31m-[m
+[31m-if __name__ == "__main__":[m
+[31m-    populate_dummy_data()[m
+[31m-    print("[INFO] Dummy data created successfully.")[m
+\ No newline at end of file[m
+[1mdiff --git a/dashboard_app.py b/dashboard_app.py[m
+[1mdeleted file mode 100644[m
+[1mindex 416297a..0000000[m
+[1m--- a/dashboard_app.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,101 +0,0 @@[m
+[31m-# Complete Integrated Dashboard (dashboard_app.py)[m
+[31m-[m
+[31m-import dash[m
+[31m-from dash import Dash, html, dash_table, dcc[m
+[31m-import dash_bootstrap_components as dbc[m
+[31m-from dash.dependencies import Input, Output, State[m
+[31m-import plotly.graph_objects as go[m
+[31m-import plotly.express as px[m
+[31m-import pandas as pd[m
+[31m-import os[m
+[31m-[m
+[31m-# Define absolute paths[m
+[31m-dirname = os.path.dirname(os.path.abspath(__file__))[m
+[31m-[m
+[31m-def load_csv(filename):[m
+[31m-    filepath = os.path.join(dirname, filename)[m
+[31m-    return pd.read_csv(filepath) if os.path.exists(filepath) else pd.DataFrame()[m
+[31m-[m
+[31m-app = Dash(__name__, external_stylesheets=[[m
+[31m-    dbc.themes.DARKLY,[m
+[31m-    "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates@V2.1.0/dbc.min.css"[m
+[31m-])[m
+[31m-[m
+[31m-# Layout with Tabs and Modals[m
+[31m-app.layout = dbc.Container([[m
+[31m-    dbc.Row(dbc.Col(html.H1('JBravo Swing Trading Dashboard', className="text-center my-4 text-light"))),[m
+[31m-[m
+[31m-    dcc.Tabs(id='main-tabs', value='tab-overview', children=[[m
+[31m-        dcc.Tab(label='Overview', value='tab-overview'),[m
+[31m-        dcc.Tab(label='Trade Log', value='tab-trades'),[m
+[31m-        dcc.Tab(label='Open Positions', value='tab-positions'),[m
+[31m-        dcc.Tab(label='Symbol Performance', value='tab-symbols')[m
+[31m-    ], className="my-2"),[m
+[31m-[m
+[31m-    html.Div(id='tabs-content', className="mt-4"),[m
+[31m-[m
+[31m-    dcc.Interval(id='interval-update', interval=60000, n_intervals=0),[m
+[31m-[m
+[31m-    dbc.Modal(id='detail-modal', is_open=False, size="lg", children=[[m
+[31m-        dbc.ModalHeader(dbc.ModalTitle("Details")),[m
+[31m-        dbc.ModalBody(id='modal-content'),[m
+[31m-        dbc.ModalFooter(dbc.Button("Close", id="close-modal", className="ms-auto"))[m
+[31m-    ])[m
+[31m-], fluid=True)[m
+[31m-[m
+[31m-# Callbacks for tabs content[m
+[31m-@app.callback([m
+[31m-    Output('tabs-content', 'children'),[m
+[31m-    Input('main-tabs', 'value')[m
+[31m-)[m
+[31m-def render_tab(tab):[m
+[31m-    if tab == 'tab-overview':[m
+[31m-        trades_df = load_csv('trades_log.csv')[m
+[31m-        trades_df['cumulative_pnl'] = trades_df['pnl'].cumsum()[m
+[31m-        equity_fig = px.line(trades_df, x='entry_time', y='cumulative_pnl', template='plotly_dark', title='Equity Curve')[m
+[31m-[m
+[31m-        kpis = dbc.Row([[m
+[31m-            dbc.Col(dbc.Card([dbc.CardHeader("Win Rate"), dbc.CardBody(html.H4(f"{(trades_df['pnl'] > 0).mean()*100:.2f}%"))]), width=3),[m
+[31m-            dbc.Col(dbc.Card([dbc.CardHeader("Expectancy"), dbc.CardBody(html.H4(f"${trades_df['pnl'].mean():.2f}"))]), width=3),[m
+[31m-            dbc.Col(dbc.Card([dbc.CardHeader("Profit Factor"), dbc.CardBody(html.H4(f"{trades_df[trades_df['pnl']>0]['pnl'].sum()/abs(trades_df[trades_df['pnl']<0]['pnl'].sum()):.2f}"))]), width=3),[m
+[31m-            dbc.Col(dbc.Card([dbc.CardHeader("Max Drawdown"), dbc.CardBody(html.H4(f"${(trades_df['cumulative_pnl']-trades_df['cumulative_pnl'].cummax()).min():.2f}"))]), width=3)[m
+[31m-        ])[m
+[31m-[m
+[31m-        return dbc.Container([kpis, dcc.Graph(figure=equity_fig)], fluid=True)[m
+[31m-[m
+[31m-    elif tab == 'tab-trades':[m
+[31m-        trades_df = load_csv('trades_log.csv')[m
+[31m-        trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time']).dt.strftime('%Y-%m-%d %H:%M')[m
+[31m-        columns = [{'name': c.replace('_',' ').title(), 'id': c} for c in trades_df.columns][m
+[31m-        return dash_table.DataTable(data=trades_df.to_dict('records'), columns=columns, page_size=20, filter_action="native", sort_action="native",[m
+[31m-                                    style_table={'overflowX':'auto'}, style_cell={'backgroundColor':'#212529','color':'#E0E0E0'})[m
+[31m-[m
+[31m-    elif tab == 'tab-positions':[m
+[31m-        positions_df = load_csv('open_positions.csv')[m
+[31m-        columns = [{'name': c.replace('_',' ').title(), 'id': c} for c in positions_df.columns][m
+[31m-        positions_fig = px.bar(positions_df, x='symbol', y='pnl', color=positions_df['pnl']>0, color_discrete_map={True:'#4DB6AC',False:'#E57373'}, template='plotly_dark', title='Open Positions P/L')[m
+[31m-        return dbc.Container([dcc.Graph(figure=positions_fig), dash_table.DataTable(data=positions_df.to_dict('records'), columns=columns, style_table={'overflowX':'auto'}, style_cell={'backgroundColor':'#212529','color':'#E0E0E0'})])[m
+[31m-[m
+[31m-    elif tab == 'tab-symbols':[m
+[31m-        trades_df = load_csv('trades_log.csv')[m
+[31m-        symbol_perf = trades_df.groupby('symbol').agg({'pnl':['count','mean','sum']}).reset_index()[m
+[31m-        symbol_perf.columns = ['Symbol','Trades','Avg P/L','Total P/L'][m
+[31m-        symbol_fig = px.bar(symbol_perf, x='Symbol', y='Total P/L', color='Total P/L', template='plotly_dark', title='Performance by Symbol')[m
+[31m-        columns = [{'name': c, 'id': c} for c in symbol_perf.columns][m
+[31m-        return dbc.Container([dcc.Graph(figure=symbol_fig), dash_table.DataTable(data=symbol_perf.to_dict('records'), columns=columns, style_table={'overflowX':'auto'}, style_cell={'backgroundColor':'#212529','color':'#E0E0E0'})])[m
+[31m-[m
+[31m-# Callback for modal interaction[m
+[31m-@app.callback([m
+[31m-    [Output('detail-modal', 'is_open'), Output('modal-content', 'children')],[m
+[31m-    [Input('top-candidates-table', 'active_cell'), Input('close-modal', 'n_clicks')],[m
+[31m-    [State('detail-modal', 'is_open')][m
+[31m-)[m
+[31m-def toggle_modal(active_cell, close_click, is_open):[m
+[31m-    if active_cell and not is_open:[m
+[31m-        return True, html.Div("Detailed information would appear here (charts, additional stats, etc.)")[m
+[31m-    if close_click and is_open:[m
+[31m-        return False, ""[m
+[31m-    return is_open, ""[m
+[31m-[m
+[31m-if __name__ == '__main__':[m
+[31m-    app.run(debug=False)[m
+[1mdiff --git a/did.bin b/did.bin[m
+[1mdeleted file mode 100644[m
+[1mindex be77149..0000000[m
+Binary files a/did.bin and /dev/null differ
+[1mdiff --git a/execute_trades.py b/execute_trades.py[m
+[1mdeleted file mode 100644[m
+[1mindex 66ffc6e..0000000[m
+[1m--- a/execute_trades.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,143 +0,0 @@[m
+[31m-# execute_trades.py updated for pre-market trading (3% allocation, top 3 symbols, 3% trailing stop)[m
+[31m-[m
+[31m-import os[m
+[31m-import pandas as pd[m
+[31m-from datetime import datetime, timedelta, timezone[m
+[31m-from alpaca_trade_api import REST, TimeFrame[m
+[31m-from dotenv import load_dotenv[m
+[31m-[m
+[31m-# Load environment variables[m
+[31m-load_dotenv()[m
+[31m-[m
+[31m-API_KEY = os.getenv("APCA_API_KEY_ID")[m
+[31m-API_SECRET = os.getenv("APCA_API_SECRET_KEY")[m
+[31m-BASE_URL = os.getenv("APCA_API_BASE_URL")[m
+[31m-alpaca = REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')[m
+[31m-[m
+[31m-# Constants[m
+[31m-MAX_OPEN_TRADES = 4[m
+[31m-ALLOC_PERCENT = 0.03  # Changed allocation to 3%[m
+[31m-TRAIL_PERCENT = 3.0[m
+[31m-MAX_HOLD_DAYS = 7[m
+[31m-[m
+[31m-# Read top candidates (top 3 symbols only)[m
+[31m-try:[m
+[31m-    df = pd.read_csv('top_candidates.csv')[m
+[31m-    df = df.sort_values('score', ascending=False).head(3)[m
+[31m-    print("[INFO] Loaded top_candidates.csv successfully")[m
+[31m-except Exception as e:[m
+[31m-    print(f"[ERROR] Failed to read CSV: {e}")[m
+[31m-    exit()[m
+[31m-[m
+[31m-def get_buying_power():[m
+[31m-    acc = alpaca.get_account()[m
+[31m-    return float(acc.buying_power)[m
+[31m-[m
+[31m-def get_open_positions():[m
+[31m-    positions = alpaca.list_positions()[m
+[31m-    return {p.symbol: p for p in positions}[m
+[31m-[m
+[31m-def allocate_position(symbol):[m
+[31m-    open_positions = get_open_positions()[m
+[31m-    if symbol in open_positions or len(open_positions) >= MAX_OPEN_TRADES:[m
+[31m-        print(f"[DEBUG] Skipping {symbol}: already trading or max trades reached")[m
+[31m-        return None[m
+[31m-[m
+[31m-    buying_power = get_buying_power()[m
+[31m-    alloc_amount = buying_power * ALLOC_PERCENT[m
+[31m-    bars = alpaca.get_bars(symbol, TimeFrame.Day, limit=1).df[m
+[31m-[m
+[31m-    if bars.empty:[m
+[31m-        print(f"[DEBUG] No bars available for {symbol}")[m
+[31m-        return None[m
+[31m-[m
+[31m-    last_close = bars['close'].iloc[-1][m
+[31m-    qty = int(alloc_amount / last_close)[m
+[31m-    if qty < 1:[m
+[31m-        print(f"[DEBUG] Allocation insufficient for {symbol}")[m
+[31m-        return None[m
+[31m-[m
+[31m-    print(f"[DEBUG] Allocating {qty} shares of {symbol} at {last_close}")[m
+[31m-    return qty, round(last_close, 2)[m
+[31m-[m
+[31m-def submit_trades():[m
+[31m-    for _, row in df.iterrows():[m
+[31m-        sym = row.symbol[m
+[31m-        alloc = allocate_position(sym)[m
+[31m-        if not alloc:[m
+[31m-            continue[m
+[31m-[m
+[31m-        qty, entry_price = alloc[m
+[31m-        print(f"[INFO] Submitting limit buy order for {sym}, qty={qty}, limit={entry_price}")[m
+[31m-        try:[m
+[31m-            alpaca.submit_order([m
+[31m-                symbol=sym,[m
+[31m-                qty=qty,[m
+[31m-                side='buy',[m
+[31m-                type='limit',[m
+[31m-                time_in_force='day',[m
+[31m-                limit_price=entry_price,[m
+[31m-                extended_hours=True  # enable pre-market trading[m
+[31m-            )[m
+[31m-        except Exception as e:[m
+[31m-            print(f"[ERROR] Failed to submit buy order for {sym}: {e}")[m
+[31m-[m
+[31m-def attach_trailing_stops():[m
+[31m-    positions = get_open_positions()[m
+[31m-    for symbol, pos in positions.items():[m
+[31m-        orders = alpaca.list_orders(status='open', symbols=[symbol])[m
+[31m-        has_trail = any(o.order_type == 'trailing_stop' for o in orders)[m
+[31m-        if has_trail:[m
+[31m-            print(f"[DEBUG] Trailing stop already active for {symbol}")[m
+[31m-            continue[m
+[31m-[m
+[31m-        print(f"[INFO] Creating trailing stop for {symbol}, qty={pos.qty}")[m
+[31m-        try:[m
+[31m-            alpaca.submit_order([m
+[31m-                symbol=symbol,[m
+[31m-                qty=pos.qty,[m
+[31m-                side='sell',[m
+[31m-                type='trailing_stop',[m
+[31m-                trail_percent=TRAIL_PERCENT,[m
+[31m-                time_in_force='gtc'[m
+[31m-            )[m
+[31m-        except Exception as e:[m
+[31m-            print(f"[ERROR] Failed to create trailing stop for {symbol}: {e}")[m
+[31m-[m
+[31m-def daily_exit_check():[m
+[31m-    positions = get_open_positions()[m
+[31m-    orders = alpaca.list_orders(status='closed')[m
+[31m-[m
+[31m-    for symbol, pos in positions.items():[m
+[31m-        entry_orders = [o for o in orders if o.symbol == symbol and o.side == 'buy'][m
+[31m-        if not entry_orders:[m
+[31m-            print(f"[WARN] No entry order found for {symbol}, skipping.")[m
+[31m-            continue[m
+[31m-[m
+[31m-        entry_order = sorted(entry_orders, key=lambda o: o.filled_at, reverse=True)[0][m
+[31m-        entry_date = entry_order.filled_at.date()[m
+[31m-        days_held = (datetime.now(timezone.utc).date() - entry_date).days[m
+[31m-[m
+[31m-        print(f"[DEBUG] {symbol} entered on {entry_date}, held for {days_held} days")[m
+[31m-[m
+[31m-        if days_held >= MAX_HOLD_DAYS:[m
+[31m-            print(f"[INFO] Exiting {symbol} after {days_held} days")[m
+[31m-            try:[m
+[31m-                alpaca.submit_order([m
+[31m-                    symbol=symbol,[m
+[31m-                    qty=pos.qty,[m
+[31m-                    side='sell',[m
+[31m-                    type='market',[m
+[31m-                    time_in_force='day',[m
+[31m-                    extended_hours=True[m
+[31m-                )[m
+[31m-            except Exception as e:[m
+[31m-                print(f"[ERROR] Failed to close {symbol}: {e}")[m
+[31m-[m
+[31m-if __name__ == '__main__':[m
+[31m-    print("[INFO] Starting pre-market trade execution script")[m
+[31m-    submit_trades()[m
+[31m-    attach_trailing_stops()[m
+[31m-    daily_exit_check()[m
+[31m-    print("[INFO] Pre-market trade execution script complete")[m
+[31m-[m
+[1mdiff --git a/logger.py b/logger.py[m
+[1mdeleted file mode 100644[m
+[1mindex d2566fe..0000000[m
+[1m--- a/logger.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,37 +0,0 @@[m
+[31m-# logger.py[m
+[31m-import sqlite3[m
+[31m-import csv[m
+[31m-[m
+[31m-class TradeLogger:[m
+[31m-    def __init__(self, db_path='trades.db', csv_path='trades_log.csv'):[m
+[31m-        self.db_path = db_path[m
+[31m-        self.csv_path = csv_path[m
+[31m-        conn = sqlite3.connect(self.db_path)[m
+[31m-        conn.execute('''CREATE TABLE IF NOT EXISTS trades ([m
+[31m-                            trade_id TEXT PRIMARY KEY,[m
+[31m-                            symbol TEXT,[m
+[31m-                            entry_price REAL,[m
+[31m-                            exit_price REAL,[m
+[31m-                            quantity INTEGER,[m
+[31m-                            entry_time TEXT,[m
+[31m-                            exit_time TEXT,[m
+[31m-                            pnl REAL,[m
+[31m-                            exit_reason TEXT[m
+[31m-                        );''')[m
+[31m-        conn.close()[m
+[31m-[m
+[31m-    def log_trade(self, symbol, entry_price, exit_price, quantity, entry_time, exit_time, exit_reason):[m
+[31m-        pnl = (exit_price - entry_price) * quantity[m
+[31m-        trade_id = f"{symbol}_{entry_time}"[m
+[31m-[m
+[31m-        # SQLite[m
+[31m-        conn = sqlite3.connect(self.db_path)[m
+[31m-        conn.execute("INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?)",[m
+[31m-                     (trade_id, symbol, entry_price, exit_price, quantity, entry_time, exit_time, pnl, exit_reason))[m
+[31m-        conn.commit()[m
+[31m-        conn.close()[m
+[31m-[m
+[31m-        # CSV[m
+[31m-        with open(self.csv_path, 'a', newline='') as f:[m
+[31m-            writer = csv.writer(f)[m
+[31m-            writer.writerow([trade_id, symbol, entry_price, exit_price, quantity, entry_time, exit_time, pnl, exit_reason])[m
+[1mdiff --git a/main.py b/main.py[m
+[1mdeleted file mode 100644[m
+[1mindex b228c86..0000000[m
+[1m--- a/main.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,42 +0,0 @@[m
+[31m-import os[m
+[31m-from flask import Flask, request, jsonify, send_from_directory[m
+[31m-from dotenv import load_dotenv[m
+[31m-import alpaca_trade_api as tradeapi[m
+[31m-[m
+[31m-dotenv_path = os.path.expanduser('/home/RasPatrick/jbravo_screener/.env')[m
+[31m-load_dotenv(dotenv_path)[m
+[31m-[m
+[31m-app = Flask(__name__)[m
+[31m-[m
+[31m-api = tradeapi.REST([m
+[31m-    os.getenv("APCA_API_KEY_ID"),[m
+[31m-    os.getenv("APCA_API_SECRET_KEY"),[m
+[31m-    os.getenv("APCA_API_BASE_URL"),[m
+[31m-    api_version="v2"[m
+[31m-)[m
+[31m-[m
+[31m-@app.route('/webhook', methods=['POST'])[m
+[31m-def webhook_handler():[m
+[31m-    data = request.json[m
+[31m-    action = data.get('action', '').lower()[m
+[31m-    ticker = data.get('ticker')[m
+[31m-    qty = 1  # customize quantity based on your strategy[m
+[31m-[m
+[31m-    if action not in ('buy', 'sell'):[m
+[31m-        return jsonify({'status': 'ignored', 'reason': 'Invalid action'}), 400[m
+[31m-[m
+[31m-    try:[m
+[31m-        order = api.submit_order([m
+[31m-            symbol=ticker,[m
+[31m-            qty=qty,[m
+[31m-            side=action,[m
+[31m-            type='market',[m
+[31m-            time_in_force='day'[m
+[31m-        )[m
+[31m-        return jsonify({'status': 'executed', 'order_id': order.id}), 200[m
+[31m-[m
+[31m-    except Exception as e:[m
+[31m-        return jsonify({'status': 'error', 'message': str(e)}), 500[m
+[31m-[m
+[31m-if __name__ == '__main__':[m
+[31m-    app.run(host='0.0.0.0', port=8000)[m
+\ No newline at end of file[m
+[1mdiff --git a/metrics.py b/metrics.py[m
+[1mdeleted file mode 100644[m
+[1mindex 1aee453..0000000[m
+[1m--- a/metrics.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,84 +0,0 @@[m
+[31m-# metrics.py (enhanced with comprehensive metrics)[m
+[31m-import pandas as pd[m
+[31m-[m
+[31m-# Load backtest results[m
+[31m-def load_results(csv_file='backtest_results.csv'):[m
+[31m-    return pd.read_csv(csv_file)[m
+[31m-[m
+[31m-# Calculate additional performance metrics[m
+[31m-def calculate_metrics(df):[m
+[31m-    total_trades = df['trades'].sum()[m
+[31m-    total_wins = df['wins'].sum()[m
+[31m-    total_losses = df['losses'].sum()[m
+[31m-    total_pnl = df['net_pnl'].sum()[m
+[31m-[m
+[31m-    win_rate = (total_wins / total_trades) * 100 if total_trades else 0[m
+[31m-    avg_return_per_trade = df['net_pnl'].sum() / total_trades if total_trades else 0[m
+[31m-    avg_win = df[df['net_pnl'] > 0]['net_pnl'].mean()[m
+[31m-    avg_loss = df[df['net_pnl'] < 0]['net_pnl'].mean()[m
+[31m-[m
+[31m-    metrics_summary = {[m
+[31m-        'Total Trades': total_trades,[m
+[31m-        'Total Wins': total_wins,[m
+[31m-        'Total Losses': total_losses,[m
+[31m-        'Win Rate (%)': win_rate,[m
+[31m-        'Total Net PnL': total_pnl,[m
+[31m-        'Average Return per Trade': avg_return_per_trade,[m
+[31m-        'Average Win': avg_win,[m
+[31m-        'Average Loss': avg_loss[m
+[31m-    }[m
+[31m-[m
+[31m-    return metrics_summary[m
+[31m-[m
+[31m-# Scoring and ranking candidates based on performance metrics[m
+[31m-def rank_candidates(df):[m
+[31m-    weights = {[m
+[31m-        'win_rate': 0.40,[m
+[31m-        'net_pnl': 0.30,[m
+[31m-        'trades': 0.20,[m
+[31m-        'avg_return': 0.10[m
+[31m-    }[m
+[31m-[m
+[31m-    # Calculate additional metrics[m
+[31m-    df['avg_return'] = df['net_pnl'] / df['trades'].replace(0, 1)[m
+[31m-[m
+[31m-    # Normalize metrics[m
+[31m-    df['win_rate_norm'] = df['win_rate'] / df['win_rate'].max()[m
+[31m-    df['net_pnl_norm'] = df['net_pnl'] / df['net_pnl'].max()[m
+[31m-    df['trades_norm'] = df['trades'] / df['trades'].max()[m
+[31m-    df['avg_return_norm'] = df['avg_return'] / df['avg_return'].max()[m
+[31m-[m
+[31m-    # Compute weighted score[m
+[31m-    df['score'] = ([m
+[31m-        df['win_rate_norm'] * weights['win_rate'] +[m
+[31m-        df['net_pnl_norm'] * weights['net_pnl'] +[m
+[31m-        df['trades_norm'] * weights['trades'] +[m
+[31m-        df['avg_return_norm'] * weights['avg_return'][m
+[31m-    )[m
+[31m-[m
+[31m-    ranked_df = df.sort_values(by='score', ascending=False).reset_index(drop=True)[m
+[31m-    return ranked_df[m
+[31m-[m
+[31m-# Save top-ranked candidates[m
+[31m-def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):[m
+[31m-    top_candidates = df.head(top_n)[m
+[31m-    top_candidates.to_csv(output_file, index=False)[m
+[31m-    print(f"[INFO] Top {top_n} candidates saved to {output_file}")[m
+[31m-[m
+[31m-# Save overall metrics summary[m
+[31m-def save_metrics_summary(metrics_summary, output_file='metrics_summary.csv'):[m
+[31m-    summary_df = pd.DataFrame([metrics_summary])[m
+[31m-    summary_df.to_csv(output_file, index=False)[m
+[31m-    print(f"[INFO] Metrics summary saved to {output_file}")[m
+[31m-[m
+[31m-# Full execution of metrics calculation, ranking, and summary[m
+[31m-def main():[m
+[31m-    results_df = load_results()[m
+[31m-    ranked_df = rank_candidates(results_df)[m
+[31m-    save_top_candidates(ranked_df)[m
+[31m-[m
+[31m-    metrics_summary = calculate_metrics(ranked_df)[m
+[31m-    save_metrics_summary(metrics_summary)[m
+[31m-[m
+[31m-if __name__ == "__main__":[m
+[31m-    main()[m
+[1mdiff --git a/metrics_summary.csv b/metrics_summary.csv[m
+[1mdeleted file mode 100644[m
+[1mindex 73eb2d7..0000000[m
+[1m--- a/metrics_summary.csv[m
+[1m+++ /dev/null[m
+[36m@@ -1,2 +0,0 @@[m
+[31m-Total Trades,Total Wins,Total Losses,Win Rate (%),Total Net PnL,Average Return per Trade[m
+[31m-20,11,9,55.0,17866.44,893.32[m
+[1mdiff --git a/monitor_positions.py b/monitor_positions.py[m
+[1mdeleted file mode 100644[m
+[1mindex e2a9e3c..0000000[m
+[1m--- a/monitor_positions.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,83 +0,0 @@[m
+[31m-# monitor_positions.py[m
+[31m-[m
+[31m-import os[m
+[31m-import time[m
+[31m-from datetime import datetime, timezone[m
+[31m-import pandas as pd[m
+[31m-from alpaca_trade_api import REST, TimeFrame[m
+[31m-from dotenv import load_dotenv[m
+[31m-[m
+[31m-# Load environment variables[m
+[31m-load_dotenv()[m
+[31m-[m
+[31m-API_KEY = os.getenv("APCA_API_KEY_ID")[m
+[31m-API_SECRET = os.getenv("APCA_API_SECRET_KEY")[m
+[31m-BASE_URL = os.getenv("APCA_API_BASE_URL")[m
+[31m-alpaca = REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')[m
+[31m-[m
+[31m-# Constants[m
+[31m-SLEEP_INTERVAL = 60  # Check every 60 seconds[m
+[31m-[m
+[31m-# Fetch current positions[m
+[31m-def get_open_positions():[m
+[31m-    return alpaca.list_positions()[m
+[31m-[m
+[31m-# Check sell signals (close < 9 SMA or 20 EMA)[m
+[31m-def sell_signal(symbol):[m
+[31m-    bars = alpaca.get_bars(symbol, TimeFrame.Day, limit=20).df[m
+[31m-    if bars.empty or len(bars) < 20:[m
+[31m-        return False[m
+[31m-[m
+[31m-    bars['sma9'] = bars['close'].rolling(9).mean()[m
+[31m-    bars['ema20'] = bars['close'].ewm(span=20).mean()[m
+[31m-[m
+[31m-    last_close = bars['close'].iloc[-1][m
+[31m-    last_sma9 = bars['sma9'].iloc[-1][m
+[31m-    last_ema20 = bars['ema20'].iloc[-1][m
+[31m-[m
+[31m-    if last_close < last_sma9 or last_close < last_ema20:[m
+[31m-        print(f"[ALERT] Sell signal detected for {symbol}: close={last_close}, SMA9={last_sma9}, EMA20={last_ema20}")[m
+[31m-        return True[m
+[31m-[m
+[31m-    return False[m
+[31m-[m
+[31m-# Execute sell orders[m
+[31m-[m
+[31m-def submit_sell_order(symbol, qty):[m
+[31m-    try:[m
+[31m-        alpaca.submit_order([m
+[31m-            symbol=symbol,[m
+[31m-            qty=qty,[m
+[31m-            side='sell',[m
+[31m-            type='market',[m
+[31m-            time_in_force='day',[m
+[31m-            extended_hours=True[m
+[31m-        )[m
+[31m-        print(f"[INFO] Sell order submitted for {symbol}, qty={qty}")[m
+[31m-    except Exception as e:[m
+[31m-        print(f"[ERROR] Failed to submit sell order for {symbol}: {e}")[m
+[31m-[m
+[31m-# Continuous monitoring from pre-market to after-hours[m
+[31m-def monitor_positions():[m
+[31m-    print("[INFO] Starting real-time position monitoring...")[m
+[31m-    while True:[m
+[31m-        now = datetime.now(timezone.utc)[m
+[31m-        current_hour = now.astimezone().hour[m
+[31m-        current_minute = now.astimezone().minute[m
+[31m-[m
+[31m-        # Market hours from 4 AM to 8 PM EST[m
+[31m-        if 4 <= current_hour < 20:[m
+[31m-            positions = get_open_positions()[m
+[31m-            for position in positions:[m
+[31m-                symbol = position.symbol[m
+[31m-                qty = abs(int(position.qty))[m
+[31m-[m
+[31m-                if sell_signal(symbol):[m
+[31m-                    submit_sell_order(symbol, qty)[m
+[31m-        else:[m
+[31m-            print("[INFO] Outside trading hours, monitoring paused.")[m
+[31m-[m
+[31m-        time.sleep(SLEEP_INTERVAL)[m
+[31m-[m
+[31m-if __name__ == '__main__':[m
+[31m-    monitor_positions()[m
+[1mdiff --git a/openapi.yaml b/openapi.yaml[m
+[1mdeleted file mode 100644[m
+[1mindex 88ba27b..0000000[m
+[1m--- a/openapi.yaml[m
+[1m+++ /dev/null[m
+[36m@@ -1,49 +0,0 @@[m
+[31m-openapi: 3.1.0[m
+[31m-info:[m
+[31m-  title: JBravo Stock Screener[m
+[31m-  version: "1.0"[m
+[31m-servers:[m
+[31m-  - url: https://raspatrick.pythonanywhere.com[m
+[31m-paths:[m
+[31m-  /stock_screener:[m
+[31m-    get:[m
+[31m-      operationId: getStockScreener[m
+[31m-      summary: Returns stocks matching JBravo criteria[m
+[31m-            parameters:[m
+[31m-        - name: sector[m
+[31m-          in: query[m
+[31m-          schema: { type: string }[m
+[31m-          description: Technology, Healthcare, etc.[m
+[31m-        - name: priceMoreThan[m
+[31m-          in: query[m
+[31m-          schema: { type: number }[m
+[31m-        - name: priceLowerThan[m
+[31m-          in: query[m
+[31m-          schema: { type: number }[m
+[31m-        - name: volumeMoreThan[m
+[31m-          in: query[m
+[31m-          schema: { type: number }[m
+[31m-        - name: limit[m
+[31m-          in: query[m
+[31m-          schema: { type: integer }[m
+[31m-          description: Maximum number of results[m
+[31m-      responses:[m
+[31m-        "200":[m
+[31m-          description: List of stock objects[m
+[31m-          content:[m
+[31m-            application/json:[m
+[31m-              schema:[m
+[31m-                type: array[m
+[31m-                items:[m
+[31m-                  type: object[m
+[31m-                  properties:[m
+[31m-                    symbol:[m
+[31m-                      type: string[m
+[31m-                      example: AAPL[m
+[31m-                    price:[m
+[31m-                      type: number[m
+[31m-                      format: float[m
+[31m-                      example: 175.5[m
+[31m-                  required:[m
+[31m-                    - symbol[m
+[31m-                    - price[m
+\ No newline at end of file[m
+[1mdiff --git a/requirements.txt b/requirements.txt[m
+[1mdeleted file mode 100644[m
+[1mindex 2619691..0000000[m
+[1m--- a/requirements.txt[m
+[1m+++ /dev/null[m
+[36m@@ -1,30 +0,0 @@[m
+[31m-blinker==1.9.0[m
+[31m-certifi==2025.6.15[m
+[31m-charset-normalizer==3.4.2[m
+[31m-click==8.2.1[m
+[31m-dash==3.1.1[m
+[31m-dash-bootstrap-components==2.0.3[m
+[31m-dash-bootstrap-templates==2.1.0[m
+[31m-Flask==3.1.1[m
+[31m-idna==3.10[m
+[31m-importlib_metadata==8.7.0[m
+[31m-itsdangerous==2.2.0[m
+[31m-Jinja2==3.1.6[m
+[31m-MarkupSafe==3.0.2[m
+[31m-narwhals==1.45.0[m
+[31m-nest-asyncio==1.6.0[m
+[31m-numpy==2.2.6[m
+[31m-packaging==25.0[m
+[31m-pandas==2.3.0[m
+[31m-plotly==6.2.0[m
+[31m-python-dateutil==2.9.0.post0[m
+[31m-python-dotenv==1.1.1[m
+[31m-pytz==2025.2[m
+[31m-requests==2.32.4[m
+[31m-retrying==1.4.0[m
+[31m-six==1.17.0[m
+[31m-typing_extensions==4.14.1[m
+[31m-tzdata==2025.2[m
+[31m-urllib3==2.5.0[m
+[31m-Werkzeug==3.1.3[m
+[31m-zipp==3.23.0[m
+[1mdiff --git a/run_pipeline.py b/run_pipeline.py[m
+[1mdeleted file mode 100644[m
+[1mindex 8e6cfff..0000000[m
+[1m--- a/run_pipeline.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,34 +0,0 @@[m
+[31m-# run_pipeline.py (enhanced with error handling and logging)[m
+[31m-import subprocess[m
+[31m-import datetime[m
+[31m-[m
+[31m-log_file = "pipeline_log.txt"[m
+[31m-[m
+[31m-def log_message(message):[m
+[31m-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")[m
+[31m-    print(f"[{timestamp}] {message}")[m
+[31m-    with open(log_file, "a") as f:[m
+[31m-        f.write(f"[{timestamp}] {message}\n")[m
+[31m-[m
+[31m-def run_step(step_name, command):[m
+[31m-    try:[m
+[31m-        log_message(f"Starting {step_name}...")[m
+[31m-        subprocess.run(command, check=True)[m
+[31m-        log_message(f"Completed {step_name} successfully.")[m
+[31m-    except subprocess.CalledProcessError as e:[m
+[31m-        log_message(f"ERROR in {step_name}: {e}")[m
+[31m-        exit(1)[m
+[31m-[m
+[31m-if __name__ == "__main__":[m
+[31m-    log_message("Pipeline execution started.")[m
+[31m-[m
+[31m-    # Run Screener[m
+[31m-    run_step("Screener", ["python", "screener.py"])[m
+[31m-[m
+[31m-    # Run Backtest[m
+[31m-    run_step("Backtest", ["python", "backtest.py"])[m
+[31m-[m
+[31m-    # Run Metrics Calculation and Ranking[m
+[31m-    run_step("Metrics Calculation", ["python", "metrics.py"])[m
+[31m-[m
+[31m-    log_message("Pipeline execution complete. Top candidates available in 'top_candidates.csv'.")[m
+\ No newline at end of file[m
+[1mdiff --git a/screener.py b/screener.py[m
+[1mdeleted file mode 100644[m
+[1mindex 96e93d1..0000000[m
+[1m--- a/screener.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,81 +0,0 @@[m
+[31m-# screener.py with debugging and robust scoring[m
+[31m-import os[m
+[31m-import pandas as pd[m
+[31m-from alpaca.trading.client import TradingClient[m
+[31m-from alpaca.data.historical import StockHistoricalDataClient[m
+[31m-from alpaca.data.requests import StockBarsRequest[m
+[31m-from alpaca.data.timeframe import TimeFrame[m
+[31m-from datetime import datetime, timedelta, timezone[m
+[31m-from dotenv import load_dotenv[m
+[31m-[m
+[31m-# Load environment variables[m
+[31m-dotenv_path = os.path.expanduser('/home/RasPatrick/jbravo_screener/.env')[m
+[31m-load_dotenv(dotenv_path)[m
+[31m-[m
+[31m-API_KEY = os.getenv("APCA_API_KEY_ID")[m
+[31m-API_SECRET = os.getenv("APCA_API_SECRET_KEY")[m
+[31m-[m
+[31m-# Initialize Alpaca clients[m
+[31m-trading_client = TradingClient(API_KEY, API_SECRET)[m
+[31m-data_client = StockHistoricalDataClient(API_KEY, API_SECRET)[m
+[31m-[m
+[31m-# Fetch all tradable symbols[m
+[31m-assets = trading_client.get_all_assets()[m
+[31m-symbols = [a.symbol for a in assets if a.tradable and a.status == "active" and a.exchange in ("NYSE", "NASDAQ")][m
+[31m-[m
+[31m-ranked_candidates = [][m
+[31m-[m
+[31m-# Screening and ranking criteria[m
+[31m-for symbol in symbols:[m
+[31m-    print(f"[INFO] Processing {symbol}...")[m
+[31m-    try:[m
+[31m-        request_params = StockBarsRequest([m
+[31m-            symbol_or_symbols=symbol,[m
+[31m-            timeframe=TimeFrame.Day,[m
+[31m-            start=(datetime.now(timezone.utc) - timedelta(days=750)).strftime("%Y-%m-%dT%H:%M:%SZ"),[m
+[31m-            end=(datetime.now(timezone.utc) - timedelta(minutes=16)).strftime("%Y-%m-%dT%H:%M:%SZ")[m
+[31m-        )[m
+[31m-        bars = data_client.get_stock_bars(request_params).df[m
+[31m-[m
+[31m-        if len(bars) < 200:[m
+[31m-            print(f"[WARN] Skipping {symbol}: insufficient data ({len(bars)} bars)")[m
+[31m-            continue[m
+[31m-[m
+[31m-        df = bars.copy().sort_index()[m
+[31m-        df['sma9'] = df['close'].rolling(9, min_periods=1).mean()[m
+[31m-        df['ema20'] = df['close'].ewm(span=20, min_periods=1).mean()[m
+[31m-        df['sma180'] = df['close'].rolling(180, min_periods=1).mean()[m
+[31m-[m
+[31m-        last = df.iloc[-1][m
+[31m-        prior = df.iloc[-2][m
+[31m-[m
+[31m-        if ([m
+[31m-            last['close'] > last['sma9'] and[m
+[31m-            prior['close'] < prior['sma9'] and[m
+[31m-            last['sma9'] > last['ema20'] and[m
+[31m-            last['ema20'] > last['sma180'][m
+[31m-        ):[m
+[31m-            # Robust ranking score calculation[m
+[31m-            momentum_score = (last['close'] - last['sma9']) / last['sma9'][m
+[31m-            alignment_score = (last['sma9'] - last['ema20']) / last['ema20'][m
+[31m-            long_term_trend_score = (last['ema20'] - last['sma180']) / last['sma180'][m
+[31m-            total_score = (0.5 * momentum_score) + (0.3 * alignment_score) + (0.2 * long_term_trend_score)[m
+[31m-[m
+[31m-            ranked_candidates.append({[m
+[31m-                'symbol': symbol,[m
+[31m-                'momentum_score': momentum_score,[m
+[31m-                'alignment_score': alignment_score,[m
+[31m-                'long_term_trend_score': long_term_trend_score,[m
+[31m-                'total_score': total_score[m
+[31m-            })[m
+[31m-[m
+[31m-    except Exception as e:[m
+[31m-        print(f"[ERROR] {symbol} failed: {e}")[m
+[31m-[m
+[31m-# Convert to DataFrame and rank[m
+[31m-ranked_df = pd.DataFrame(ranked_candidates)[m
+[31m-ranked_df.sort_values(by='total_score', ascending=False, inplace=True)[m
+[31m-[m
+[31m-# Output top 15 candidates[m
+[31m-ranked_df.head(15).to_csv("top_candidates.csv", index=False)[m
+[31m-print("[INFO] Top 15 ranked candidates saved to top_candidates.csv")[m
+[1mdiff --git a/top_candidates.csv b/top_candidates.csv[m
+[1mdeleted file mode 100644[m
+[1mindex f2609af..0000000[m
+[1m--- a/top_candidates.csv[m
+[1m+++ /dev/null[m
+[36m@@ -1,6 +0,0 @@[m
+[31m-symbol,score[m
+[31m-AMZN,60.27[m
+[31m-META,83.63[m
+[31m-AAPL,90.48[m
+[31m-GOOG,74.04[m
+[31m-MSFT,89.95[m
+[1mdiff --git a/trades_log.csv b/trades_log.csv[m
+[1mdeleted file mode 100644[m
+[1mindex 0a37b71..0000000[m
+[1m--- a/trades_log.csv[m
+[1m+++ /dev/null[m
+[36m@@ -1,21 +0,0 @@[m
+[31m-trade_id,symbol,entry_price,exit_price,quantity,entry_time,exit_time,pnl,exit_reason[m
+[31m-GOOG_20250629212447,GOOG,339.3,378.44,68,2025-06-29 21:24:47.620602,2025-07-05 21:24:47.620602,2661.519999999999,Manual Close[m
+[31m-META_20250628212447,META,182.06,177.07,62,2025-06-28 21:24:47.620602,2025-06-30 21:24:47.620602,-309.38000000000056,Max Hold Time[m
+[31m-AMZN_20250626212447,AMZN,229.31,272.59000000000003,39,2025-06-26 21:24:47.620602,2025-07-01 21:24:47.620602,1687.9200000000012,Trailing Stop[m
+[31m-GOOG_20250628212447,GOOG,388.55,411.51,123,2025-06-28 21:24:47.620602,2025-07-04 21:24:47.620602,2824.0799999999977,Max Hold Time[m
+[31m-AMD_20250701212447,AMD,463.53,493.46999999999997,114,2025-07-01 21:24:47.620602,2025-07-06 21:24:47.620602,3413.16,Max Hold Time[m
+[31m-MSFT_20250628212447,MSFT,146.83,163.84,155,2025-06-28 21:24:47.620602,2025-07-05 21:24:47.620602,2636.5499999999984,Max Hold Time[m
+[31m-INTC_20250630212447,INTC,324.81,313.18,15,2025-06-30 21:24:47.620602,2025-07-02 21:24:47.620602,-174.44999999999993,Trailing Stop[m
+[31m-NFLX_20250703212447,NFLX,118.64,104.74,169,2025-07-03 21:24:47.620602,2025-07-04 21:24:47.620602,-2349.100000000001,Trailing Stop[m
+[31m-TSLA_20250702212447,TSLA,378.21,409.29999999999995,116,2025-07-02 21:24:47.620602,2025-07-04 21:24:47.620602,3606.439999999997,Max Hold Time[m
+[31m-META_20250703212447,META,142.96,180.99,56,2025-07-03 21:24:47.620602,2025-07-05 21:24:47.620602,2129.6800000000003,Max Hold Time[m
+[31m-MSFT_20250701212447,MSFT,403.65,392.09999999999997,20,2025-07-01 21:24:47.620602,2025-07-02 21:24:47.620602,-231.00000000000023,Trailing Stop[m
+[31m-NFLX_20250703212447,NFLX,120.36,117.16,55,2025-07-03 21:24:47.620602,2025-07-08 21:24:47.620602,-176.00000000000017,Max Hold Time[m
+[31m-NFLX_20250625212447,NFLX,145.72,155.17,29,2025-06-25 21:24:47.620602,2025-06-30 21:24:47.620602,274.04999999999967,Manual Close[m
+[31m-GOOG_20250704212447,GOOG,217.98,211.59,45,2025-07-04 21:24:47.620602,2025-07-06 21:24:47.620602,-287.5499999999994,Manual Close[m
+[31m-NFLX_20250625212447,NFLX,168.39,160.04,102,2025-06-25 21:24:47.620602,2025-06-28 21:24:47.620602,-851.6999999999994,Max Hold Time[m
+[31m-AMD_20250629212447,AMD,215.75,232.44,186,2025-06-29 21:24:47.620602,2025-07-06 21:24:47.620602,3104.3399999999997,Max Hold Time[m
+[31m-MSFT_20250626212447,MSFT,416.62,418.39,13,2025-06-26 21:24:47.620602,2025-06-28 21:24:47.620602,23.009999999999764,Trailing Stop[m
+[31m-AMZN_20250626212447,AMZN,344.07,358.13,30,2025-06-26 21:24:47.620602,2025-06-29 21:24:47.620602,421.80000000000007,Manual Close[m
+[31m-NVDA_20250702212447,NVDA,366.63,363.1,31,2025-07-02 21:24:47.620602,2025-07-07 21:24:47.620602,-109.42999999999915,Trailing Stop[m
+[31m-AMD_20250628212447,AMD,473.77,469.02,90,2025-06-28 21:24:47.620602,2025-07-02 21:24:47.620602,-427.5,Trailing Stop[m
+[1mdiff --git a/weekly_summary.py b/weekly_summary.py[m
+[1mdeleted file mode 100644[m
+[1mindex 3241489..0000000[m
+[1m--- a/weekly_summary.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,55 +0,0 @@[m
+[31m-# weekly_summary.py - Weekly trade performance summary[m
+[31m-[m
+[31m-import pandas as pd[m
+[31m-import sqlite3[m
+[31m-from datetime import datetime, timedelta[m
+[31m-[m
+[31m-# Connect to SQLite database and load trades[m
+[31m-def load_trades(db_path='trades.db'):[m
+[31m-    conn = sqlite3.connect(db_path)[m
+[31m-    df = pd.read_sql_query("SELECT * FROM trades", conn)[m
+[31m-    conn.close()[m
+[31m-    return df[m
+[31m-[m
+[31m-# Calculate weekly performance summary[m
+[31m-def calculate_weekly_summary(trades_df):[m
+[31m-    today = datetime.utcnow().date()[m
+[31m-    one_week_ago = today - timedelta(days=7)[m
+[31m-[m
+[31m-    trades_df['exit_time'] = pd.to_datetime(trades_df['exit_time']).dt.date[m
+[31m-    weekly_trades = trades_df[trades_df['exit_time'] >= one_week_ago][m
+[31m-[m
+[31m-    total_trades = len(weekly_trades)[m
+[31m-    wins = len(weekly_trades[weekly_trades['pnl'] > 0])[m
+[31m-    losses = total_trades - wins[m
+[31m-    win_rate = (wins / total_trades) * 100 if total_trades else 0[m
+[31m-    total_pnl = weekly_trades['pnl'].sum()[m
+[31m-    avg_trade_return = weekly_trades['pnl'].mean()[m
+[31m-    best_trade = weekly_trades['pnl'].max()[m
+[31m-    worst_trade = weekly_trades['pnl'].min()[m
+[31m-[m
+[31m-    summary = {[m
+[31m-        'Total Trades': total_trades,[m
+[31m-        'Wins': wins,[m
+[31m-        'Losses': losses,[m
+[31m-        'Win Rate (%)': round(win_rate, 2),[m
+[31m-        'Total Net PnL': round(total_pnl, 2),[m
+[31m-        'Average Return per Trade': round(avg_trade_return, 2),[m
+[31m-        'Best Trade': round(best_trade, 2),[m
+[31m-        'Worst Trade': round(worst_trade, 2)[m
+[31m-    }[m
+[31m-[m
+[31m-    return summary[m
+[31m-[m
+[31m-# Save weekly summary to CSV[m
+[31m-def save_weekly_summary(summary, output_file='weekly_summary.csv'):[m
+[31m-    df_summary = pd.DataFrame([summary])[m
+[31m-    df_summary.to_csv(output_file, index=False)[m
+[31m-    print(f"[INFO] Weekly summary saved to {output_file}")[m
+[31m-[m
+[31m-if __name__ == '__main__':[m
+[31m-    print("[INFO] Generating weekly trade performance summary...")[m
+[31m-    trades_df = load_trades()[m
+[31m-    summary = calculate_weekly_summary(trades_df)[m
+[31m-    save_weekly_summary(summary)[m
+[31m-    print("[INFO] Weekly trade performance summary generated successfully.")[m
+\ No newline at end of file[m
