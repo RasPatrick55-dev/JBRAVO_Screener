@@ -30,9 +30,8 @@ def load_csv(filepath, required_columns=None):
 
     try:
         df = pd.read_csv(filepath, sep=',', encoding='utf-8')
-        app.logger.info(
-            f"Columns loaded from {filename}: {df.columns.tolist()}"
-        )
+        df.rename(columns=lambda c: c.strip(), inplace=True)
+        app.logger.info("Loaded columns: %s", df.columns.tolist())
     except Exception as e:
         alert = dbc.Alert(
             f"Error reading {filename}: {e}", color="danger", className="m-2"
@@ -43,8 +42,8 @@ def load_csv(filepath, required_columns=None):
         missing = [c for c in required_columns if c not in df.columns]
         if missing:
             msg = f"{filename} missing columns: {', '.join(missing)}"
-            app.logger.error(f"Missing columns in {filename}: {missing}")
-            alert = dbc.Alert(msg, color="warning", className="m-2")
+            app.logger.error(msg)
+            alert = dbc.Alert(msg, color="danger", className="m-2")
             return pd.DataFrame(), alert
 
     if df.empty:
@@ -90,11 +89,6 @@ def render_tab(tab):
         trades_df, alert = load_csv(trades_log_path, required_columns=['pnl', 'entry_time'])
         if alert:
             return alert
-        required_columns = ['pnl', 'entry_time']
-        missing_columns = [col for col in required_columns if col not in trades_df.columns]
-        if missing_columns:
-            app.logger.error(f"Missing columns in trades_df: {missing_columns}")
-            return dash.no_update
         trades_df['cumulative_pnl'] = trades_df['pnl'].cumsum()
         equity_fig = px.line(trades_df, x='entry_time', y='cumulative_pnl', template='plotly_dark', title='Equity Curve')
 
@@ -108,16 +102,11 @@ def render_tab(tab):
         return dbc.Container([kpis, dcc.Graph(figure=equity_fig)], fluid=True)
 
     elif tab == 'tab-trades':
-        trades_df, alert = load_csv(trades_log_path, required_columns=['symbol', 'entry_time'])
+        trades_df, alert = load_csv(
+            trades_log_path, required_columns=['symbol', 'entry_time', 'pnl']
+        )
         if alert:
             return alert
-        required_columns = ['pnl', 'entry_time']
-        missing_columns = [col for col in required_columns if col not in trades_df.columns]
-        if missing_columns:
-            app.logger.error(f"Missing columns in trades_df: {missing_columns}")
-            return dash.no_update
-        if 'pnl' not in trades_df.columns:
-            trades_df['pnl'] = 0.0
         trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time']).dt.strftime('%Y-%m-%d %H:%M')
         columns = [{'name': c.replace('_',' ').title(), 'id': c} for c in trades_df.columns]
         return dash_table.DataTable(data=trades_df.to_dict('records'), columns=columns, page_size=20, filter_action="native", sort_action="native",
