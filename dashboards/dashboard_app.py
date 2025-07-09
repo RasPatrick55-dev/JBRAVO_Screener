@@ -4,6 +4,7 @@ import dash
 from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
+from datetime import datetime
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
@@ -73,6 +74,18 @@ def read_recent_lines(filepath, num_lines=50):
     except Exception as e:
         return [f"Error reading {filename}: {e}\n"]
 
+def format_log_lines(lines):
+    """Return a list of HTML spans with coloring for ERROR and WARNING lines."""
+    formatted = []
+    for line in lines:
+        if '[ERROR]' in line or 'ERROR' in line:
+            formatted.append(html.Span(line, style={'color': '#E57373'}))
+        elif '[WARNING]' in line or 'WARNING' in line:
+            formatted.append(html.Span(line, style={'color': '#FFB74D'}))
+        else:
+            formatted.append(html.Span(line))
+    return formatted
+
 app = Dash(__name__, external_stylesheets=[
     dbc.themes.DARKLY,
     "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates@V2.1.0/dbc.min.css"
@@ -91,13 +104,17 @@ app.layout = dbc.Container([
             dbc.Tab(label='Screener', tab_id='tab-screener', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab'),
             dbc.Tab(label='Trade Log', tab_id='tab-trades', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab'),
             dbc.Tab(label='Open Positions', tab_id='tab-positions', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab'),
-            dbc.Tab(label='Symbol Performance', tab_id='tab-symbols', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab')
+            dbc.Tab(label='Symbol Performance', tab_id='tab-symbols', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab'),
+            dbc.Tab(label='Monitor Log', tab_id='tab-monitor',
+                    tab_style={'backgroundColor': '#343a40', 'color': '#ccc'},
+                    active_tab_style={'backgroundColor': '#17a2b8', 'color': '#fff'},
+                    className='custom-tab')
         ]
     ),
 
     html.Div(id='tabs-content', className="mt-4"),
 
-    dcc.Interval(id='interval-update', interval=60000, n_intervals=0),
+    dcc.Interval(id='interval-update', interval=600000, n_intervals=0),
 
     dbc.Modal(id='detail-modal', is_open=False, size="lg", children=[
         dbc.ModalHeader(dbc.ModalTitle("Details")),
@@ -109,9 +126,9 @@ app.layout = dbc.Container([
 # Callbacks for tabs content
 @app.callback(
     Output('tabs-content', 'children'),
-    Input('main-tabs', 'active_tab')
+    [Input('main-tabs', 'active_tab'), Input('interval-update', 'n_intervals')]
 )
-def render_tab(tab):
+def render_tab(tab, n_intervals):
     if tab == 'tab-overview':
         trades_df, alert = load_csv(trades_log_path, required_columns=['pnl', 'entry_time'])
         if alert:
@@ -194,6 +211,53 @@ def render_tab(tab):
         symbol_fig = px.bar(symbol_perf, x='Symbol', y='Total P/L', color='Total P/L', template='plotly_dark', title='Performance by Symbol')
         columns = [{'name': c, 'id': c} for c in symbol_perf.columns]
         return dbc.Container([dcc.Graph(figure=symbol_fig), dash_table.DataTable(data=symbol_perf.to_dict('records'), columns=columns, style_table={'overflowX':'auto'}, style_cell={'backgroundColor':'#212529','color':'#E0E0E0'})])
+
+    elif tab == 'tab-monitor':
+        closed_df, alert = load_csv(trades_log_path, required_columns=['symbol', 'exit_time', 'pnl'])
+        if alert:
+            closed_table = alert
+        else:
+            closed_df['exit_time'] = pd.to_datetime(closed_df['exit_time'])
+            closed_df.sort_values('exit_time', ascending=False, inplace=True)
+            recent_trades = closed_df.head(10)
+            columns = [{'name': c.replace('_',' ').title(), 'id': c} for c in recent_trades.columns]
+            closed_table = dash_table.DataTable(
+                data=recent_trades.to_dict('records'),
+                columns=columns,
+                page_size=10,
+                filter_action='native',
+                sort_action='native',
+                style_table={'overflowX': 'auto'},
+                style_cell={'backgroundColor': '#212529', 'color': '#E0E0E0'}
+            )
+
+        log_lines = read_recent_lines(monitor_log_path, num_lines=100)
+        log_display = html.Pre(
+            format_log_lines(log_lines),
+            style={
+                'maxHeight': '400px',
+                'overflowY': 'auto',
+                'backgroundColor': '#272B30',
+                'color': '#E0E0E0',
+                'padding': '0.5rem',
+                'whiteSpace': 'pre-wrap',
+                'fontFamily': 'monospace'
+            }
+        )
+
+        timestamp = html.Div(
+            f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            className='text-muted mt-2'
+        )
+
+        return dbc.Container([
+            html.H5('Recently Closed Positions', className='text-light'),
+            closed_table,
+            html.Hr(),
+            html.H5('Monitoring Log', className='text-light'),
+            log_display,
+            timestamp
+        ], fluid=True)
 
 # Callback for modal interaction
 @app.callback(
