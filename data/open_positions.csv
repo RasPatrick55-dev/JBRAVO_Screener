@@ -1,0 +1,4 @@
+symbol,entry_price,entry_time,quantity,unrealized_pl
+AAPL,170.5,2025-07-01 10:30:00,50,125.5
+GOOG,350.0,2025-07-03 09:45:00,20,-80.0
+TSLA,250.0,2025-07-05 11:15:00,10,15.0
