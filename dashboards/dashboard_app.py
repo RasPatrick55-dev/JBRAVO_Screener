@@ -250,9 +250,9 @@ def render_tab(tab, n_intervals):
                 style_cell={'backgroundColor':'#212529','color':'#E0E0E0'}
             )
 
-        pipeline_lines = read_recent_lines(pipeline_log_path)
-        screener_lines = read_recent_lines(screener_log_path)
-        backtest_lines = read_recent_lines(backtest_log_path)
+        pipeline_lines = read_recent_lines(pipeline_log_path)[::-1]
+        screener_lines = read_recent_lines(screener_log_path)[::-1]
+        backtest_lines = read_recent_lines(backtest_log_path)[::-1]
 
         def format_lines(lines):
             return [html.Span(l, style={'color':'#E57373'} if 'ERROR' in l else {}) for l in lines]
@@ -288,7 +288,9 @@ def render_tab(tab, n_intervals):
         if alert:
             trades_table = alert
         else:
-            trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time']).dt.strftime('%Y-%m-%d %H:%M')
+            trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time'])
+            trades_df.sort_values('entry_time', ascending=False, inplace=True)
+            trades_df['entry_time'] = trades_df['entry_time'].dt.strftime('%Y-%m-%d %H:%M')
             columns = [{'name': c.replace('_',' ').title(), 'id': c} for c in trades_df.columns]
             trades_table = dash_table.DataTable(
                 data=trades_df.to_dict('records'),
@@ -307,7 +309,9 @@ def render_tab(tab, n_intervals):
         if exec_alert:
             executed_table = exec_alert
         else:
-            executed_df['entry_time'] = pd.to_datetime(executed_df['entry_time']).dt.strftime('%Y-%m-%d %H:%M')
+            executed_df['entry_time'] = pd.to_datetime(executed_df['entry_time'])
+            executed_df.sort_values('entry_time', ascending=False, inplace=True)
+            executed_df['entry_time'] = executed_df['entry_time'].dt.strftime('%Y-%m-%d %H:%M')
             e_cols = [{'name': c.replace('_',' ').title(), 'id': c} for c in executed_df.columns]
             executed_table = dash_table.DataTable(
                 data=executed_df.to_dict('records'),
@@ -391,9 +395,9 @@ def render_tab(tab, n_intervals):
                 style_cell={'backgroundColor': '#212529', 'color': '#E0E0E0'}
             )
 
-        monitor_lines = read_recent_lines(monitor_log_path, num_lines=100)
-        exec_lines = read_recent_lines(execute_trades_log_path, num_lines=50)
-        error_lines = read_recent_lines(error_log_path, num_lines=50)
+        monitor_lines = read_recent_lines(monitor_log_path, num_lines=100)[::-1]
+        exec_lines = read_recent_lines(execute_trades_log_path, num_lines=50)[::-1]
+        error_lines = read_recent_lines(error_log_path, num_lines=50)[::-1]
 
         def log_box(title, lines):
             return html.Div([
