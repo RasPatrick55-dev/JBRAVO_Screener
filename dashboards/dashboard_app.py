@@ -15,6 +15,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Absolute paths to CSV data files used throughout the dashboard
 trades_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'trades_log.csv'))
 open_positions_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'open_positions.csv'))
+top_candidates_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'top_candidates.csv'))
+
+# Absolute paths to log files for the Screener tab
+pipeline_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'pipeline_log.txt'))
+monitor_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'monitor.log'))
 
 def load_csv(filepath, required_columns=None):
     """Load a CSV file from ``filepath`` and validate required columns.
@@ -52,6 +57,22 @@ def load_csv(filepath, required_columns=None):
 
     return df, None
 
+def read_recent_lines(filepath, num_lines=50):
+    """Return the last ``num_lines`` lines of ``filepath``.
+    If the file is missing or unreadable, an informative message is returned
+    instead.
+    """
+    filename = os.path.basename(filepath)
+    if not os.path.exists(filepath):
+        return [f"{filename} not found.\n"]
+
+    try:
+        with open(filepath, 'r') as f:
+            lines = f.readlines()[-num_lines:]
+        return lines if lines else [f"No entries in {filename}.\n"]
+    except Exception as e:
+        return [f"Error reading {filename}: {e}\n"]
+
 app = Dash(__name__, external_stylesheets=[
     dbc.themes.DARKLY,
     "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates@V2.1.0/dbc.min.css"
@@ -61,12 +82,18 @@ app = Dash(__name__, external_stylesheets=[
 app.layout = dbc.Container([
     dbc.Row(dbc.Col(html.H1('JBravo Swing Trading Dashboard', className="text-center my-4 text-light"))),
 
-    dcc.Tabs(id='main-tabs', value='tab-overview', children=[
-        dcc.Tab(label='Overview', value='tab-overview'),
-        dcc.Tab(label='Trade Log', value='tab-trades'),
-        dcc.Tab(label='Open Positions', value='tab-positions'),
-        dcc.Tab(label='Symbol Performance', value='tab-symbols')
-    ], className="my-2"),
+    dbc.Tabs(
+        id='main-tabs',
+        active_tab='tab-overview',
+        class_name='mb-3',
+        children=[
+            dbc.Tab(label='Overview', tab_id='tab-overview', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab'),
+            dbc.Tab(label='Screener', tab_id='tab-screener', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab'),
+            dbc.Tab(label='Trade Log', tab_id='tab-trades', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab'),
+            dbc.Tab(label='Open Positions', tab_id='tab-positions', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab'),
+            dbc.Tab(label='Symbol Performance', tab_id='tab-symbols', tab_style={'backgroundColor':'#343a40','color':'#ccc'}, active_tab_style={'backgroundColor':'#17a2b8','color':'#fff'}, className='custom-tab')
+        ]
+    ),
 
     html.Div(id='tabs-content', className="mt-4"),
 
@@ -82,7 +109,7 @@ app.layout = dbc.Container([
 # Callbacks for tabs content
 @app.callback(
     Output('tabs-content', 'children'),
-    Input('main-tabs', 'value')
+    Input('main-tabs', 'active_tab')
 )
 def render_tab(tab):
     if tab == 'tab-overview':
@@ -100,6 +127,41 @@ def render_tab(tab):
         ])
 
         return dbc.Container([kpis, dcc.Graph(figure=equity_fig)], fluid=True)
+
+    elif tab == 'tab-screener':
+        candidates_df, alert = load_csv(top_candidates_path)
+        if alert:
+            table = alert
+        else:
+            columns = [{'name': c.replace('_',' ').title(), 'id': c} for c in candidates_df.columns]
+            table = dash_table.DataTable(
+                id='top-candidates-table',
+                data=candidates_df.to_dict('records'),
+                columns=columns,
+                page_size=20,
+                filter_action='native',
+                sort_action='native',
+                style_table={'overflowX':'auto'},
+                style_cell={'backgroundColor':'#212529','color':'#E0E0E0'}
+            )
+
+        pipeline_lines = read_recent_lines(pipeline_log_path)
+        monitor_lines = read_recent_lines(monitor_log_path)
+
+        def format_lines(lines):
+            return [html.Span(l, style={'color':'#E57373'} if 'ERROR' in l else {}) for l in lines]
+
+        pipeline_log = html.Div([
+            html.H5('Pipeline Log', className='text-light'),
+            html.Pre(format_lines(pipeline_lines), style={'maxHeight':'200px','overflowY':'auto','backgroundColor':'#272B30','color':'#E0E0E0','padding':'0.5rem'})
+        ], className='mb-3')
+
+        monitor_log = html.Div([
+            html.H5('Monitor Log', className='text-light'),
+            html.Pre(format_lines(monitor_lines), style={'maxHeight':'200px','overflowY':'auto','backgroundColor':'#272B30','color':'#E0E0E0','padding':'0.5rem'})
+        ])
+
+        return dbc.Container([table, pipeline_log, monitor_log], fluid=True)
 
     elif tab == 'tab-trades':
         trades_df, alert = load_csv(
