@@ -1,0 +1,33 @@
+2025-07-08 15:05:33,023 [INFO] Loaded /home/RasPatrick/jbravo_screener/data/top_candidates.csv successfully
+2025-07-08 15:05:33,023 [INFO] Starting pre-market trade execution script
+2025-07-08 15:05:33,106 [INFO] Submitting limit buy order for ARQQ, qty=329, limit=36.09
+2025-07-08 15:05:33,164 [INFO] Submitting limit buy order for ESGLW, qty=288732, limit=0.04
+2025-07-08 15:05:33,211 [INFO] Submitting limit buy order for EYE, qty=424, limit=23.96
+2025-07-08 15:05:33,258 [INFO] Pre-market trade execution script complete
+2025-07-08 15:47:42,112 [INFO] Loaded /home/RasPatrick/jbravo_screener/data/top_candidates.csv successfully
+2025-07-08 15:47:42,113 [INFO] Starting pre-market trade execution script
+2025-07-08 15:47:42,181 [INFO] Submitting limit buy order for ESGLW, qty=246426, limit=0.04
+2025-07-08 15:47:42,215 [INFO] Creating trailing stop for ARQQ, qty=329
+2025-07-08 15:47:42,233 [INFO] Creating trailing stop for EYE, qty=424
+2025-07-08 15:47:42,280 [INFO] Saved open positions to /home/RasPatrick/jbravo_screener/data/open_positions.csv
+2025-07-08 15:47:42,283 [INFO] Pre-market trade execution script complete
+2025-07-09 16:11:22,991 [INFO] Loaded /home/RasPatrick/jbravo_screener/data/top_candidates.csv successfully
+2025-07-09 16:11:22,991 [INFO] Starting pre-market trade execution script
+2025-07-09 16:11:23,236 [INFO] Submitting limit buy order for TNXP, qty=305, limit=37.76
+2025-07-09 16:11:23,276 [INFO] Submitting limit buy order for CUBWW, qty=31112, limit=0.36
+2025-07-09 16:11:23,314 [INFO] Submitting limit buy order for SPRO, qty=3200, limit=3.08
+2025-07-09 16:11:23,379 [INFO] Saved open positions to /home/RasPatrick/jbravo_screener/data/open_positions.csv
+2025-07-09 16:11:23,382 [INFO] Pre-market trade execution script complete
+2025-07-09 18:52:32,469 [INFO] Loaded /home/RasPatrick/jbravo_screener/data/top_candidates.csv successfully
+2025-07-09 18:52:32,469 [INFO] Starting pre-market trade execution script
+2025-07-09 18:52:32,536 [INFO] Submitting limit buy order for CUBWW, qty=26557, limit=0.36
+2025-07-09 19:21:42,026 [INFO] Loaded /home/RasPatrick/jbravo_screener/data/top_candidates.csv successfully
+2025-07-09 19:21:42,026 [INFO] Starting pre-market trade execution script
+2025-07-09 19:21:42,096 [INFO] Submitting limit buy order for CUBWW, qty=30291, limit=0.36
+2025-07-09 19:26:38,788 [INFO] Loaded /home/RasPatrick/jbravo_screener/data/top_candidates.csv successfully
+2025-07-09 19:26:38,788 [INFO] Starting pre-market trade execution script
+2025-07-09 19:26:38,858 [INFO] Submitting limit buy order for CUBWW, qty=26655, limit=0.36
+2025-07-09 19:26:38,906 [INFO] Creating trailing stop for SPRO, qty=3200
+2025-07-09 19:26:38,924 [INFO] Creating trailing stop for TNXP, qty=305
+2025-07-09 19:26:38,972 [INFO] Saved open positions to /home/RasPatrick/jbravo_screener/data/open_positions.csv
+2025-07-09 19:26:38,976 [INFO] Pre-market trade execution script complete
