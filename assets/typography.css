@@ -34,3 +34,16 @@ h1, h2, h3, h4, h5, h6 {
     box-shadow: 0 4px 10px rgba(0,0,0,0.3);
     border-top: 3px solid #4DB6AC;
 }
+
+/* Styling for dashboard tabs */
+.custom-tab {
+    background-color: #343a40;
+    color: #ccc;
+    padding: 8px 12px;
+    border-radius: 0.25rem;
+    margin-right: 4px;
+}
+.custom-tab.active {
+    background-color: #17a2b8;
+    color: #fff;
+}
