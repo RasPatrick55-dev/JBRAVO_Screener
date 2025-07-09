@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 2025-07-08 03:25:34,363 [INFO] Loading environment variables from /home/RasPatrick/jbravo_screener/.env
 2025-07-08 03:25:35,286 [INFO] Processing BNJ...
 2025-07-08 03:25:35,438 [INFO] Processing ATHE...
@@ -25677,3 +25678,8 @@
 2025-07-09 01:13:46,885 [INFO] Processing TELA...
 2025-07-09 01:13:46,927 [INFO] Processing TEL...
 2025-07-09 01:13:46,989 [INFO] Top 15 ranked candidates saved to /home/RasPatrick/jbravo_screener/data/top_candidates.csv
+=======
+2025-07-07 09:30:00 INFO Screener started
+2025-07-07 09:31:00 INFO Screener completed
+2025-07-07 09:31:10 ERROR Failed to fetch data
+>>>>>>> 8154046be1fd401171e40e8f847805d526c1202e

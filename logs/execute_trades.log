@@ -31,3 +31,6 @@
 2025-07-09 19:26:38,924 [INFO] Creating trailing stop for TNXP, qty=305
 2025-07-09 19:26:38,972 [INFO] Saved open positions to /home/RasPatrick/jbravo_screener/data/open_positions.csv
 2025-07-09 19:26:38,976 [INFO] Pre-market trade execution script complete
+2025-07-07 09:34:00 INFO Trade execution started
+2025-07-07 09:35:00 INFO AAPL order filled
+2025-07-07 09:35:10 WARNING AMZN order rejected
