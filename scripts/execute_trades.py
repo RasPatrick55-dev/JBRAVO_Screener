@@ -68,12 +68,20 @@ def save_open_positions_csv():
                 'qty': p.qty,
                 'avg_entry_price': p.avg_entry_price,
                 'current_price': p.current_price,
-                'unrealized_pl': p.unrealized_pl
+                'unrealized_pl': p.unrealized_pl,
+                'entry_price': p.avg_entry_price,
+                'entry_time': getattr(p, 'created_at', datetime.utcnow()).isoformat()
             })
 
-        df = pd.DataFrame(data, columns=['symbol', 'qty', 'avg_entry_price', 'current_price', 'unrealized_pl'])
+        df = pd.DataFrame(data, columns=[
+            'symbol', 'qty', 'avg_entry_price', 'current_price',
+            'unrealized_pl', 'entry_price', 'entry_time']
+        )
         if df.empty:
-            df = pd.DataFrame(columns=['symbol', 'qty', 'avg_entry_price', 'current_price', 'unrealized_pl'])
+            df = pd.DataFrame(columns=[
+                'symbol', 'qty', 'avg_entry_price', 'current_price',
+                'unrealized_pl', 'entry_price', 'entry_time'
+            ])
 
         csv_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
         df.to_csv(csv_path, index=False)

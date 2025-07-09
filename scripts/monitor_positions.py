@@ -61,12 +61,27 @@ def save_positions_csv(positions):
             {
                 'symbol': p.symbol,
                 'qty': p.qty,
+                'avg_entry_price': p.avg_entry_price,
                 'current_price': p.current_price,
                 'unrealized_pl': p.unrealized_pl,
+                'entry_price': p.avg_entry_price,
+                'entry_time': getattr(p, 'created_at', datetime.utcnow()).isoformat(),
             }
             for p in positions
         ]
-        pd.DataFrame(data).to_csv(csv_path, index=False)
+        df = pd.DataFrame(
+            data,
+            columns=[
+                'symbol', 'qty', 'avg_entry_price', 'current_price',
+                'unrealized_pl', 'entry_price', 'entry_time'
+            ]
+        )
+        if df.empty:
+            df = pd.DataFrame(columns=[
+                'symbol', 'qty', 'avg_entry_price', 'current_price',
+                'unrealized_pl', 'entry_price', 'entry_time'
+            ])
+        df.to_csv(csv_path, index=False)
         logging.debug("Saved open positions to %s", csv_path)
     except Exception as e:
         logging.error("Failed to save positions CSV: %s", e)
