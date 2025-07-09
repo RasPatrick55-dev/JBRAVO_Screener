@@ -24,7 +24,7 @@ executed_trades_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'exe
 historical_candidates_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'historical_candidates.csv'))
 
 # Absolute paths to log files for the Screener tab
-pipeline_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'pipeline_log.txt'))
+pipeline_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'pipeline.log'))
 monitor_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'monitor.log'))
 # Additional logs
 screener_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'screener.log'))

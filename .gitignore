@@ -2,5 +2,5 @@ __pycache__/
 *.pyc
 .env
 trades.db
-pipeline_log.txt
+ pipeline.log
 assets_backup/
