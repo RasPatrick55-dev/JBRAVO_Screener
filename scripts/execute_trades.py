@@ -5,7 +5,13 @@ from logging.handlers import RotatingFileHandler
 import logging
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-from alpaca_trade_api import REST, TimeFrame
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import TrailingStopOrderRequest
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -22,7 +28,10 @@ logging.basicConfig(
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
-alpaca = REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
+
+# Initialize Alpaca clients
+trading_client = TradingClient(API_KEY, API_SECRET, base_url=BASE_URL)
+data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # Constants
 MAX_OPEN_TRADES = 4
@@ -41,17 +50,17 @@ except Exception as e:
     exit()
 
 def get_buying_power():
-    acc = alpaca.get_account()
+    acc = trading_client.get_account()
     return float(acc.buying_power)
 
 def get_open_positions():
-    positions = alpaca.list_positions()
+    positions = trading_client.get_all_positions()
     return {p.symbol: p for p in positions}
 
 def save_open_positions_csv():
     """Fetch current open positions from Alpaca and save to CSV."""
     try:
-        positions = alpaca.list_positions()
+        positions = trading_client.get_all_positions()
         data = []
         for p in positions:
             data.append({
@@ -80,7 +89,8 @@ def allocate_position(symbol):
 
     buying_power = get_buying_power()
     alloc_amount = buying_power * ALLOC_PERCENT
-    bars = alpaca.get_bars(symbol, TimeFrame.Day, limit=1).df
+    request = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=1)
+    bars = data_client.get_stock_bars(request).df
 
     if bars.empty:
         logging.debug("No bars available for %s", symbol)
@@ -105,22 +115,22 @@ def submit_trades():
         qty, entry_price = alloc
         logging.info("Submitting limit buy order for %s, qty=%s, limit=%s", sym, qty, entry_price)
         try:
-            alpaca.submit_order(
+            order = LimitOrderRequest(
                 symbol=sym,
                 qty=qty,
-                side='buy',
-                type='limit',
-                time_in_force='day',
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
                 limit_price=entry_price,
-                extended_hours=True  # enable pre-market trading
+                extended_hours=True
             )
+            trading_client.submit_order(order)
         except Exception as e:
             logging.error("Failed to submit buy order for %s: %s", sym, e)
 
 def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
-        orders = alpaca.list_orders(status='open', symbols=[symbol])
+        orders = trading_client.get_orders(status='open', symbols=[symbol])
         has_trail = any(o.order_type == 'trailing_stop' for o in orders)
         if has_trail:
             logging.debug("Trailing stop already active for %s", symbol)
@@ -128,20 +138,20 @@ def attach_trailing_stops():
 
         logging.info("Creating trailing stop for %s, qty=%s", symbol, pos.qty)
         try:
-            alpaca.submit_order(
+            request = TrailingStopOrderRequest(
                 symbol=symbol,
                 qty=pos.qty,
-                side='sell',
-                type='trailing_stop',
+                side=OrderSide.SELL,
                 trail_percent=TRAIL_PERCENT,
-                time_in_force='gtc'
+                time_in_force=TimeInForce.GTC
             )
+            trading_client.submit_order(request)
         except Exception as e:
             logging.error("Failed to create trailing stop for %s: %s", symbol, e)
 
 def daily_exit_check():
     positions = get_open_positions()
-    orders = alpaca.list_orders(status='closed')
+    orders = trading_client.get_orders(status='closed')
 
     for symbol, pos in positions.items():
         entry_orders = [o for o in orders if o.symbol == symbol and o.side == 'buy']
@@ -158,14 +168,14 @@ def daily_exit_check():
         if days_held >= MAX_HOLD_DAYS:
             logging.info("Exiting %s after %s days", symbol, days_held)
             try:
-                alpaca.submit_order(
+                order = MarketOrderRequest(
                     symbol=symbol,
                     qty=pos.qty,
-                    side='sell',
-                    type='market',
-                    time_in_force='day',
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY,
                     extended_hours=True
                 )
+                trading_client.submit_order(order)
             except Exception as e:
                 logging.error("Failed to close %s: %s", symbol, e)
 

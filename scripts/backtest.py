@@ -1,6 +1,9 @@
 # backtest.py - Updated with robust error handling and guaranteed CSV output
 import pandas as pd
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 import backtrader as bt
 from dotenv import load_dotenv
 import os
@@ -24,13 +27,20 @@ API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
 
-# Initialize Alpaca API
-api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
+# Initialize Alpaca clients
+trading_client = TradingClient(API_KEY, API_SECRET, base_url=BASE_URL)
+data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # Fetch historical data
 def get_data(symbol, days=750):
-    start_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    bars = api.get_bars(symbol, tradeapi.TimeFrame.Day, start=start_date, limit=days).df
+    start_date = datetime.now(timezone.utc) - timedelta(days=days)
+    request_params = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Day,
+        start=start_date,
+        limit=days
+    )
+    bars = data_client.get_stock_bars(request_params).df
     if bars.empty:
         return pd.DataFrame()
 
