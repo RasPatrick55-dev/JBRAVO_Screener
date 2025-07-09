@@ -32,7 +32,7 @@ if not API_KEY or not API_SECRET:
     raise SystemExit(1)
 
 # Initialize Alpaca clients
-trading_client = TradingClient(API_KEY, API_SECRET)
+trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # Fetch all tradable symbols
