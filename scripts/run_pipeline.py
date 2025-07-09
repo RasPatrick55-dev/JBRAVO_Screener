@@ -5,10 +5,19 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-log_path = os.path.join(BASE_DIR, 'logs', 'pipeline_log.txt')
+os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
+
+log_path = os.path.join(BASE_DIR, 'logs', 'pipeline.log')
+error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
+
+error_handler = RotatingFileHandler(error_log_path, maxBytes=5_000_000, backupCount=5)
+error_handler.setLevel(logging.ERROR)
 
 logging.basicConfig(
-    handlers=[RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5)],
+    handlers=[
+        RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5),
+        error_handler,
+    ],
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )

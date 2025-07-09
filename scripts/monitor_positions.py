@@ -24,11 +24,26 @@ os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 
 log_path = os.path.join(BASE_DIR, 'logs', 'monitor.log')
+error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
+
+error_handler = RotatingFileHandler(error_log_path, maxBytes=5_000_000, backupCount=5)
+error_handler.setLevel(logging.ERROR)
+
 logging.basicConfig(
-    handlers=[RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5)],
+    handlers=[
+        RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5),
+        error_handler,
+    ],
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
+
+open_pos_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
+if not os.path.exists(open_pos_path):
+    pd.DataFrame(
+        columns=['symbol', 'qty', 'avg_entry_price', 'current_price',
+                 'unrealized_pl', 'entry_price', 'entry_time']
+    ).to_csv(open_pos_path, index=False)
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")

@@ -15,12 +15,22 @@ from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 
 dotenv_path = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path)
 log_path = os.path.join(BASE_DIR, 'logs', 'execute_trades.log')
+error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
+
+error_handler = RotatingFileHandler(error_log_path, maxBytes=5_000_000, backupCount=5)
+error_handler.setLevel(logging.ERROR)
+
 logging.basicConfig(
-    handlers=[RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5)],
+    handlers=[
+        RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5),
+        error_handler,
+    ],
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
@@ -48,6 +58,18 @@ try:
 except Exception as e:
     logging.error("Failed to read CSV: %s", e)
     exit()
+
+# Ensure executed trades file exists
+exec_trades_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
+if not os.path.exists(exec_trades_path):
+    pd.DataFrame(columns=['symbol', 'entry_price', 'entry_time', 'order_status']).to_csv(exec_trades_path, index=False)
+
+# Ensure open positions file exists
+open_pos_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
+if not os.path.exists(open_pos_path):
+    pd.DataFrame(
+        columns=['symbol', 'qty', 'avg_entry_price', 'current_price', 'unrealized_pl', 'entry_price', 'entry_time']
+    ).to_csv(open_pos_path, index=False)
 
 def get_buying_power():
     acc = trading_client.get_account()
@@ -88,6 +110,17 @@ def save_open_positions_csv():
         logging.info("Saved open positions to %s", csv_path)
     except Exception as e:
         logging.error("Failed to save open positions: %s", e)
+
+def record_executed_trade(symbol, entry_price, status):
+    """Append executed trade details to CSV."""
+    csv_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
+    row = {
+        'symbol': symbol,
+        'entry_price': entry_price,
+        'entry_time': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+        'order_status': status,
+    }
+    pd.DataFrame([row]).to_csv(csv_path, mode='a', header=False, index=False)
 
 def allocate_position(symbol):
     open_positions = get_open_positions()
@@ -132,6 +165,7 @@ def submit_trades():
                 extended_hours=True
             )
             trading_client.submit_order(order)
+            record_executed_trade(sym, entry_price, 'buy')
         except Exception as e:
             logging.error("Failed to submit buy order for %s: %s", sym, e)
 
@@ -155,6 +189,7 @@ def attach_trailing_stops():
                 time_in_force=TimeInForce.GTC
             )
             trading_client.submit_order(request)
+            record_executed_trade(symbol, pos.avg_entry_price, 'trailing_stop')
         except Exception as e:
             logging.error("Failed to create trailing stop for %s: %s", symbol, e)
 
@@ -186,6 +221,7 @@ def daily_exit_check():
                     extended_hours=True
                 )
                 trading_client.submit_order(order)
+                record_executed_trade(symbol, pos.current_price, 'sell')
             except Exception as e:
                 logging.error("Failed to close %s: %s", symbol, e)
 

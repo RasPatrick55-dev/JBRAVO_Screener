@@ -12,11 +12,21 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
+
 dotenv_path = os.path.join(BASE_DIR, '.env')
 log_path = os.path.join(BASE_DIR, 'logs', 'backtest.log')
+error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
+
+error_handler = RotatingFileHandler(error_log_path, maxBytes=5_000_000, backupCount=5)
+error_handler.setLevel(logging.ERROR)
 
 logging.basicConfig(
-    handlers=[RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5)],
+    handlers=[
+        RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5),
+        error_handler,
+    ],
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
@@ -112,9 +122,16 @@ def backtest_symbols(symbols):
             results.append(result)
 
     # Ensure CSV is always written (empty if no results)
-    results_df = pd.DataFrame(results, columns=['symbol', 'trades', 'wins', 'losses', 'win_rate', 'net_pnl'])
+    results_df = pd.DataFrame(
+        results,
+        columns=['symbol', 'trades', 'wins', 'losses', 'win_rate', 'net_pnl']
+    )
     results_df.sort_values(by='win_rate', ascending=False, inplace=True)
     csv_path = os.path.join(BASE_DIR, 'data', 'backtest_results.csv')
+    if results_df.empty:
+        results_df = pd.DataFrame(
+            columns=['symbol', 'trades', 'wins', 'losses', 'win_rate', 'net_pnl']
+        )
     results_df.to_csv(csv_path, index=False)
     logging.info("Backtesting complete. Results saved to %s", csv_path)
 
