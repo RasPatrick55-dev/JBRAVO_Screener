@@ -14,7 +14,7 @@ app = Flask(__name__)
 client = TradingClient(
     os.getenv("APCA_API_KEY_ID"),
     os.getenv("APCA_API_SECRET_KEY"),
-    base_url=os.getenv("APCA_API_BASE_URL")
+    paper=True
 )
 
 @app.route('/webhook', methods=['POST'])

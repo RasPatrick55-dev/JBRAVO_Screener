@@ -35,7 +35,7 @@ API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
 
 # Initialize Alpaca clients
-trading_client = TradingClient(API_KEY, API_SECRET, base_url=BASE_URL)
+trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # Constants
