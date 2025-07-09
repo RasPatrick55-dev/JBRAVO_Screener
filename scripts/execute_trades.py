@@ -7,7 +7,7 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, GetOrdersRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.trading.requests import TrailingStopOrderRequest
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
@@ -130,7 +130,7 @@ def submit_trades():
 def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
-        request = GetOrdersRequest(status=OrderStatus.OPEN, symbols=[symbol])
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
         orders = trading_client.get_orders(filter=request)
         has_trail = any(o.order_type == 'trailing_stop' for o in orders)
         if has_trail:
@@ -152,7 +152,7 @@ def attach_trailing_stops():
 
 def daily_exit_check():
     positions = get_open_positions()
-    request = GetOrdersRequest(status=OrderStatus.CLOSED)
+    request = GetOrdersRequest(status=QueryOrderStatus.CLOSED)
     orders = trading_client.get_orders(filter=request)
 
     for symbol, pos in positions.items():
