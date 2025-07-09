@@ -1,7 +1,9 @@
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 dotenv_path = os.path.join(BASE_DIR, '.env')
@@ -9,11 +11,10 @@ load_dotenv(dotenv_path)
 
 app = Flask(__name__)
 
-api = tradeapi.REST(
+client = TradingClient(
     os.getenv("APCA_API_KEY_ID"),
     os.getenv("APCA_API_SECRET_KEY"),
-    os.getenv("APCA_API_BASE_URL"),
-    api_version="v2"
+    base_url=os.getenv("APCA_API_BASE_URL")
 )
 
 @app.route('/webhook', methods=['POST'])
@@ -27,14 +28,14 @@ def webhook_handler():
         return jsonify({'status': 'ignored', 'reason': 'Invalid action'}), 400
 
     try:
-        order = api.submit_order(
+        order = MarketOrderRequest(
             symbol=ticker,
             qty=qty,
-            side=action,
-            type='market',
-            time_in_force='day'
+            side=OrderSide.BUY if action == 'buy' else OrderSide.SELL,
+            time_in_force=TimeInForce.DAY
         )
-        return jsonify({'status': 'executed', 'order_id': order.id}), 200
+        response = client.submit_order(order)
+        return jsonify({'status': 'executed', 'order_id': response.id}), 200
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500

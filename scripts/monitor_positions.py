@@ -4,7 +4,12 @@ import os
 import time
 from datetime import datetime
 import pandas as pd
-from alpaca_trade_api import REST, TimeFrame
+from alpaca.trading.client import TradingClient
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
 from dotenv import load_dotenv
 from logging.handlers import RotatingFileHandler
 import logging
@@ -28,7 +33,10 @@ logging.basicConfig(
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
-alpaca = REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
+
+# Initialize Alpaca clients
+trading_client = TradingClient(API_KEY, API_SECRET, base_url=BASE_URL)
+data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # Constants
 SLEEP_INTERVAL = int(os.getenv("MONITOR_SLEEP_INTERVAL", "60"))
@@ -40,7 +48,7 @@ EASTERN_TZ = pytz.timezone('US/Eastern')
 # Fetch current positions
 def get_open_positions():
     try:
-        return alpaca.list_positions()
+        return trading_client.get_all_positions()
     except Exception as e:
         logging.error("Failed to fetch open positions: %s", e)
         return []
@@ -66,7 +74,8 @@ def save_positions_csv(positions):
 # Check sell signals (close < 9 SMA or 20 EMA)
 def sell_signal(symbol):
     try:
-        bars = alpaca.get_bars(symbol, TimeFrame.Day, limit=20).df
+        request = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=20)
+        bars = data_client.get_stock_bars(request).df
     except Exception as e:
         logging.error("Failed to fetch bars for %s: %s", symbol, e)
         return False
@@ -93,14 +102,14 @@ def sell_signal(symbol):
 
 def close_position_order(symbol, qty, side):
     try:
-        alpaca.submit_order(
+        order = MarketOrderRequest(
             symbol=symbol,
             qty=str(qty),
-            side=side,
-            type='market',
-            time_in_force='day',
+            side=OrderSide.BUY if side == 'buy' else OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
             extended_hours=True,
         )
+        trading_client.submit_order(order)
         logging.info("%s order submitted for %s, qty=%s", side.capitalize(), symbol, qty)
     except Exception as e:
         logging.error("Failed to submit %s order for %s: %s", side, symbol, e)
