@@ -2,6 +2,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
 from dotenv import load_dotenv
+from datetime import datetime
 import pandas as pd
 import os
 
@@ -39,7 +40,13 @@ while True:
     end = chunk[-1].submitted_at.isoformat()
 
 open_positions = {}
-orders_sorted = sorted(all_orders, key=lambda o: o.filled_at)
+
+# Use a fallback datetime.min when filled_at is None so orders without
+# a fill timestamp are still included but sorted predictably.
+orders_sorted = sorted(
+    all_orders,
+    key=lambda o: o.filled_at if o.filled_at is not None else datetime.min
+)
 records = []
 
 for order in orders_sorted:
