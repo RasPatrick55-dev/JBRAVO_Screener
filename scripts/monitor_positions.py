@@ -8,8 +8,9 @@ from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.enums import QueryOrderStatus
+from alpaca.trading.enums import QueryOrderStatus, OrderSide
 from alpaca.trading.requests import GetOrdersRequest
+from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 import logging
 import pytz
@@ -26,11 +27,13 @@ log_dir = os.path.join(BASE_DIR, 'logs')
 os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, 'monitor.log')
 
-logging.basicConfig(
-    filename=log_path,
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s: %(message)s'
-)
+LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
+handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
+handler.setFormatter(logging.Formatter(LOG_FORMAT))
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 open_pos_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
 if not os.path.exists(open_pos_path):
@@ -92,6 +95,7 @@ def save_positions_csv(positions):
             ])
         df.to_csv(csv_path, index=False)
         logging.debug("Saved open positions to %s", csv_path)
+        logging.info("Updated open_positions.csv successfully.")
     except Exception as e:
         logging.error("Failed to save positions CSV: %s", e)
 
@@ -173,6 +177,21 @@ def get_trailing_stop_order(symbol):
     return None
 
 
+def last_filled_trailing_stop(symbol):
+    request = GetOrdersRequest(status=QueryOrderStatus.CLOSED, symbols=[symbol], limit=10)
+    try:
+        orders = trading_client.get_orders(filter=request)
+        for o in orders:
+            if (
+                getattr(o, 'order_type', '') == 'trailing_stop'
+                and o.status == 'filled'
+            ):
+                return o
+    except Exception as e:
+        logging.error("Failed to fetch order history for %s: %s", symbol, e)
+    return None
+
+
 def has_pending_sell_order(symbol):
     orders = get_open_orders(symbol)
     for o in orders:
@@ -187,8 +206,16 @@ def manage_trailing_stop(position):
     current = float(position.current_price)
     gain_pct = (current - entry) / entry * 100 if entry else 0
 
+    logging.info(f"Checking existing orders for {symbol}.")
     trailing_order = get_trailing_stop_order(symbol)
     if not trailing_order:
+        last_filled = last_filled_trailing_stop(symbol)
+        if last_filled:
+            logging.info(
+                "Previous trailing stop filled for %s at %s",
+                symbol,
+                getattr(last_filled, 'filled_avg_price', 'n/a'),
+            )
         try:
             trading_client.submit_order(
                 symbol=symbol,
@@ -198,10 +225,12 @@ def manage_trailing_stop(position):
                 trail_percent='5',
                 time_in_force='gtc'
             )
-            logging.info("Placed trailing stop for %s at 5% below peak price.", symbol)
+            logging.info(f"Placing new trailing stop for {symbol}.")
         except Exception as e:
             logging.error("Failed to create trailing stop for %s: %s", symbol, e)
         return
+    else:
+        logging.info(f"Trailing stop already exists for {symbol}.")
 
     if gain_pct > 10:
         new_trail = '3'
@@ -246,6 +275,9 @@ def submit_sell_market_order(symbol, qty):
 def process_positions_cycle():
     positions = get_open_positions()
     save_positions_csv(positions)
+    if not positions:
+        logging.info("No open positions found.")
+        return
     for position in positions:
         symbol = position.symbol
         indicators = fetch_indicators(symbol)
@@ -316,5 +348,10 @@ def monitor_positions():
         logging.info("Monitoring stopped by user.")
 
 if __name__ == '__main__':
-    monitor_positions()
+    logging.info("Starting monitor_positions.py")
+    print("Starting monitor_positions.py")
+    try:
+        monitor_positions()
+    except Exception as e:
+        logging.error(f"Script error: {e}")
 
