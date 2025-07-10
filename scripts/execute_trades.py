@@ -66,7 +66,7 @@ if not os.path.exists(exec_trades_path):
     pd.DataFrame(
         columns=[
             'id', 'symbol', 'side', 'filled_qty', 'entry_price',
-            'exit_price', 'entry_time', 'exit_time', 'status', 'pnl'
+            'exit_price', 'entry_time', 'exit_time', 'order_status', 'pnl'
         ]
     ).to_csv(exec_trades_path, index=False)
 
@@ -164,7 +164,7 @@ def record_executed_trade(symbol, entry_price, status):
         'exit_price': '',
         'entry_time': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         'exit_time': '',
-        'status': status,
+        'order_status': status,
         'pnl': 0.0,
     }
     pd.DataFrame([row]).to_csv(csv_path, mode='a', header=False, index=False)

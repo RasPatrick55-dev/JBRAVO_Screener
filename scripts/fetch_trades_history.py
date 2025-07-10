@@ -94,7 +94,7 @@ for order in orders_sorted:
             'exit_price': exit_price,
             'entry_time': entry_time,
             'exit_time': exit_time,
-            'status': order.status.value,
+            'order_status': order.status.value if order.status else 'unknown',
             'pnl': pnl,
         }
     )
@@ -111,7 +111,7 @@ cols = [
     'exit_price',
     'entry_time',
     'exit_time',
-    'status',
+    'order_status',
     'pnl',
 ]
 
