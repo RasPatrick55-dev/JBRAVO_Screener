@@ -27,13 +27,18 @@ log_dir = os.path.join(BASE_DIR, 'logs')
 os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, 'monitor.log')
 
-LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
+LOG_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
 handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
 handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+logger.handlers = []  # Clear existing handlers
 logger.addHandler(handler)
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+logger.addHandler(console_handler)
 
 open_pos_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
 if not os.path.exists(open_pos_path):
@@ -202,6 +207,7 @@ def has_pending_sell_order(symbol):
 
 def manage_trailing_stop(position):
     symbol = position.symbol
+    logging.info(f"Evaluating trailing stop logic for {symbol}")
     entry = float(position.avg_entry_price)
     current = float(position.current_price)
     gain_pct = (current - entry) / entry * 100 if entry else 0
