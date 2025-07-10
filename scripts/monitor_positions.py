@@ -28,7 +28,7 @@ os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, 'monitor.log')
 
 LOG_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
-handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
+handler = RotatingFileHandler(log_path, maxBytes=2 * 1024 * 1024, backupCount=5)
 handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
 logger = logging.getLogger()
@@ -207,7 +207,8 @@ def has_pending_sell_order(symbol):
 
 def manage_trailing_stop(position):
     symbol = position.symbol
-    logging.info(f"Evaluating trailing stop logic for {symbol}")
+    qty = position.qty
+    logging.info(f"Evaluating trailing stop for {symbol} – qty: {qty}")
     entry = float(position.avg_entry_price)
     current = float(position.current_price)
     gain_pct = (current - entry) / entry * 100 if entry else 0
@@ -215,6 +216,7 @@ def manage_trailing_stop(position):
     logging.info(f"Checking existing orders for {symbol}.")
     trailing_order = get_trailing_stop_order(symbol)
     if not trailing_order:
+        logging.info(f"No active trailing stop for {symbol}.")
         last_filled = last_filled_trailing_stop(symbol)
         if last_filled:
             logging.info(
@@ -231,12 +233,14 @@ def manage_trailing_stop(position):
                 trail_percent='5',
                 time_in_force='gtc'
             )
-            logging.info(f"Placing new trailing stop for {symbol}.")
+            logging.info(f"Placed new trailing stop for {symbol}.")
         except Exception as e:
             logging.error("Failed to create trailing stop for %s: %s", symbol, e)
         return
     else:
-        logging.info(f"Trailing stop already exists for {symbol}.")
+        logging.info(
+            f"Trailing stop already exists for {symbol} (order id {trailing_order.id})."
+        )
 
     if gain_pct > 10:
         new_trail = '3'
@@ -258,6 +262,12 @@ def manage_trailing_stop(position):
             )
         except Exception as e:
             logging.error("Failed to adjust trailing stop for %s: %s", symbol, e)
+    else:
+        logging.info(
+            "No trailing stop adjustment needed for %s (gain: %.2f%%)",
+            symbol,
+            gain_pct,
+        )
 
 # Execute sell orders
 
