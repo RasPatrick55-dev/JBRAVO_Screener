@@ -11,7 +11,7 @@ os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
 logging.basicConfig(
     handlers=[RotatingFileHandler(
         os.path.join(BASE_DIR, 'logs', 'metrics.log'),
-        maxBytes=5_000_000,
+        maxBytes=2_000_000,
         backupCount=5,
     )],
     level=logging.INFO,

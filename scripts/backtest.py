@@ -19,12 +19,12 @@ dotenv_path = os.path.join(BASE_DIR, '.env')
 log_path = os.path.join(BASE_DIR, 'logs', 'backtest.log')
 error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
 
-error_handler = RotatingFileHandler(error_log_path, maxBytes=5_000_000, backupCount=5)
+error_handler = RotatingFileHandler(error_log_path, maxBytes=2_000_000, backupCount=5)
 error_handler.setLevel(logging.ERROR)
 
 logging.basicConfig(
     handlers=[
-        RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5),
+        RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5),
         error_handler,
     ],
     level=logging.INFO,
