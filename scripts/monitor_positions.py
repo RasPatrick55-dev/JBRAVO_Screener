@@ -8,8 +8,8 @@ from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.enums import QueryOrderStatus, OrderSide
-from alpaca.trading.requests import GetOrdersRequest
+from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce
+from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest
 from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 import logging
@@ -247,15 +247,18 @@ def manage_trailing_stop(position):
                 symbol,
                 getattr(last_filled, 'filled_avg_price', 'n/a'),
             )
+        logging.info(
+            f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct=5"
+        )
         try:
-            trading_client.submit_order(
+            request = TrailingStopOrderRequest(
                 symbol=symbol,
                 qty=position.qty,
-                side='sell',
-                type='trailing_stop',
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.GTC,
                 trail_percent='5',
-                time_in_force='gtc'
             )
+            trading_client.submit_order(order_data=request)
             logging.info(f"Placed new trailing stop for {symbol}.")
         except Exception as e:
             logging.error("Failed to create trailing stop for %s: %s", symbol, e)
@@ -270,14 +273,17 @@ def manage_trailing_stop(position):
         new_trail = '3'
         try:
             trading_client.cancel_order(trailing_order.id)
-            trading_client.submit_order(
+            logging.info(
+                f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct={new_trail}"
+            )
+            request = TrailingStopOrderRequest(
                 symbol=symbol,
                 qty=position.qty,
-                side='sell',
-                type='trailing_stop',
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.GTC,
                 trail_percent=new_trail,
-                time_in_force='gtc'
             )
+            trading_client.submit_order(order_data=request)
             logging.info(
                 "Adjusted trailing stop for %s from 5% to %s%% (gain: %.2f%%).",
                 symbol,
