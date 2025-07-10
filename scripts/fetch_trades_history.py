@@ -5,6 +5,14 @@ from dotenv import load_dotenv
 import pandas as pd
 import os
 
+
+def safe_float(val, default=0.0):
+    """Safely convert values to float with a default on failure."""
+    try:
+        return float(val) if val is not None else default
+    except (ValueError, TypeError):
+        return default
+
 load_dotenv()
 client = TradingClient(
     os.getenv('APCA_API_KEY_ID'),
@@ -32,9 +40,9 @@ records = []
 for order in all_orders:
     data = getattr(order, 'raw_data', order.model_dump())
 
-    filled_qty = float(data.get('filled_qty', 0))
-    avg_fill_price = float(data.get('filled_avg_price', 0))
-    limit_price = float(data.get('limit_price') or 0)
+    filled_qty = safe_float(data.get('filled_qty', 0))
+    avg_fill_price = safe_float(data.get('filled_avg_price'))
+    limit_price = safe_float(data.get('limit_price'))
 
     if data['side'] == 'buy':
         entry_price = avg_fill_price if avg_fill_price else limit_price
@@ -43,10 +51,12 @@ for order in all_orders:
         entry_price = None
         entry_time = None
 
-    current_price = float(
-        data.get('filled_avg_price') or data.get('limit_price') or 0
+    current_price = safe_float(
+        data.get('filled_avg_price') or data.get('limit_price')
     )
-    pnl = (current_price - entry_price) * filled_qty if entry_price else 0
+    pnl = (
+        (current_price - (entry_price or 0)) * filled_qty if entry_price else 0
+    )
 
     records.append(
         {
