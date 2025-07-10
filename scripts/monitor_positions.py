@@ -28,7 +28,7 @@ os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, 'monitor.log')
 
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
-handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3)
+handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
 handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
 logger = logging.getLogger()
@@ -207,6 +207,7 @@ def has_pending_sell_order(symbol):
 
 def manage_trailing_stop(position):
     symbol = position.symbol
+    logging.info(f"Evaluating trailing stop for {symbol}")
     qty = position.qty
     logging.info(f"Evaluating trailing stop for {symbol} – qty: {qty}")
     entry = float(position.avg_entry_price)
