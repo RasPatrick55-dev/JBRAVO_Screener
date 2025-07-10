@@ -7,5 +7,5 @@ assets_backup/
 
 # Ignore runtime data and logs
 data/*.csv
-logs/*.log
+logs/*.log*
 
