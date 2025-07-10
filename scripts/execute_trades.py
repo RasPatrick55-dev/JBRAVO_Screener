@@ -1,6 +1,7 @@
 # execute_trades.py updated for pre-market trading (3% allocation, top 3 symbols, 3% trailing stop)
 
 import os
+import subprocess
 from logging.handlers import RotatingFileHandler
 import logging
 import pandas as pd
@@ -263,4 +264,12 @@ if __name__ == '__main__':
     save_open_positions_csv()
     update_trades_log()
     logging.info("Pre-market trade execution script complete")
+
+    # Run historical trades script after executing trades
+    history_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fetch_trades_history.py')
+    try:
+        subprocess.run(["python", history_script], check=True)
+        print("[INFO] Historical trades successfully fetched and CSV files updated.")
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] Failed to run historical trade script: {e}")
 
