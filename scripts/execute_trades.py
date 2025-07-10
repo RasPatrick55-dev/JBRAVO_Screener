@@ -111,6 +111,36 @@ def save_open_positions_csv():
     except Exception as e:
         logging.error("Failed to save open positions: %s", e)
 
+def update_trades_log():
+    """Fetch recent closed orders from Alpaca and save to trades_log.csv."""
+    try:
+        request = GetOrdersRequest(status=QueryOrderStatus.CLOSED, limit=100)
+        orders = trading_client.get_orders(filter=request)
+        records = []
+        for order in orders:
+            records.append({
+                'trade_id': order.id,
+                'symbol': order.symbol,
+                'qty': order.filled_qty,
+                'side': order.side.value,
+                'entry_price': order.filled_avg_price if order.side.value == 'buy' else '',
+                'exit_price': order.filled_avg_price if order.side.value == 'sell' else '',
+                'entry_time': order.filled_at.isoformat() if order.side.value == 'buy' else '',
+                'exit_time': order.filled_at.isoformat() if order.side.value == 'sell' else '',
+                'pnl': '',
+                'status': order.status.value
+            })
+        df = pd.DataFrame(records, columns=[
+            'trade_id', 'symbol', 'qty', 'side',
+            'entry_price', 'exit_price', 'entry_time',
+            'exit_time', 'pnl', 'status'
+        ])
+        csv_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
+        df.to_csv(csv_path, index=False)
+        logging.info("Saved trades log to %s", csv_path)
+    except Exception as e:
+        logging.error("Failed to update trades log: %s", e)
+
 def record_executed_trade(symbol, entry_price, status):
     """Append executed trade details to CSV."""
     csv_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
@@ -231,5 +261,6 @@ if __name__ == '__main__':
     attach_trailing_stops()
     daily_exit_check()
     save_open_positions_csv()
+    update_trades_log()
     logging.info("Pre-market trade execution script complete")
 

@@ -10,27 +10,28 @@ import plotly.express as px
 import pandas as pd
 import os
 
-# Base directory of this dashboard application
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Base directory of the project (parent of this file)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Absolute paths to CSV data files used throughout the dashboard
-trades_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'trades_log.csv'))
-open_positions_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'open_positions.csv'))
-top_candidates_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'top_candidates.csv'))
+trades_log_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
+open_positions_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
+top_candidates_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
 
 # Additional datasets introduced for monitoring
-metrics_summary_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'metrics_summary.csv'))
-executed_trades_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'executed_trades.csv'))
-historical_candidates_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'data', 'historical_candidates.csv'))
+metrics_summary_path = os.path.join(BASE_DIR, 'data', 'metrics_summary.csv')
+executed_trades_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
+historical_candidates_path = os.path.join(BASE_DIR, 'data', 'historical_candidates.csv')
 
 # Absolute paths to log files for the Screener tab
-pipeline_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'pipeline.log'))
-monitor_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'monitor.log'))
+screener_log_dir = os.path.join(BASE_DIR, 'logs')
+pipeline_log_path = os.path.join(screener_log_dir, 'pipeline.log')
+monitor_log_path = os.path.join(screener_log_dir, 'monitor.log')
 # Additional logs
-screener_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'screener.log'))
-backtest_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'backtest.log'))
-execute_trades_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'execute_trades.log'))
-error_log_path = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs', 'error.log'))
+screener_log_path = os.path.join(screener_log_dir, 'screener.log')
+backtest_log_path = os.path.join(screener_log_dir, 'backtest.log')
+execute_trades_log_path = os.path.join(screener_log_dir, 'execute_trades.log')
+error_log_path = os.path.join(screener_log_dir, 'error.log')
 
 def load_csv(filepath, required_columns=None):
     """Load a CSV file from ``filepath`` and validate required columns.
@@ -48,6 +49,10 @@ def load_csv(filepath, required_columns=None):
         df = pd.read_csv(filepath, sep=',', encoding='utf-8')
         df.rename(columns=lambda c: c.strip(), inplace=True)
         app.logger.info("Loaded columns: %s", df.columns.tolist())
+    except pd.errors.EmptyDataError:
+        app.logger.warning("No data in %s", filepath)
+        alert = dbc.Alert(f"No data available in {filename}.", color="warning", className="m-2")
+        return pd.DataFrame(), alert
     except Exception as e:
         alert = dbc.Alert(
             f"Error reading {filename}: {e}", color="danger", className="m-2"
