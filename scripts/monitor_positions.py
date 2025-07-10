@@ -8,10 +8,9 @@ from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.enums import QueryOrderStatus
+from alpaca.trading.requests import GetOrdersRequest
 from dotenv import load_dotenv
-from logging.handlers import RotatingFileHandler
 import logging
 import pytz
 
@@ -23,19 +22,14 @@ load_dotenv(dotenv_path)
 os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 
-log_path = os.path.join(BASE_DIR, 'logs', 'monitor.log')
-error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
-
-error_handler = RotatingFileHandler(error_log_path, maxBytes=5_000_000, backupCount=5)
-error_handler.setLevel(logging.ERROR)
+log_dir = os.path.join(BASE_DIR, 'logs')
+os.makedirs(log_dir, exist_ok=True)
+log_path = os.path.join(log_dir, 'monitor.log')
 
 logging.basicConfig(
-    handlers=[
-        RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5),
-        error_handler,
-    ],
+    filename=log_path,
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s'
+    format='%(asctime)s %(levelname)s: %(message)s'
 )
 
 open_pos_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
@@ -101,58 +95,186 @@ def save_positions_csv(positions):
     except Exception as e:
         logging.error("Failed to save positions CSV: %s", e)
 
-# Check sell signals (close < 9 SMA or 20 EMA)
-def sell_signal(symbol):
+def fetch_indicators(symbol):
+    """Fetch recent daily bars and compute indicators."""
     try:
-        request = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=20)
+        request = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=TimeFrame.Day,
+            limit=50
+        )
         bars = data_client.get_stock_bars(request).df
     except Exception as e:
         logging.error("Failed to fetch bars for %s: %s", symbol, e)
-        return False
-    if bars.empty or len(bars) < 20:
-        return False
+        return None
 
-    bars['sma9'] = bars['close'].rolling(9).mean()
-    bars['ema20'] = bars['close'].ewm(span=20).mean()
+    if bars.empty or len(bars) < 26:
+        logging.warning("Not enough bars for %s indicator calculation", symbol)
+        return None
 
-    last_close = bars['close'].iloc[-1]
-    last_sma9 = bars['sma9'].iloc[-1]
-    last_ema20 = bars['ema20'].iloc[-1]
+    bars['SMA9'] = bars['close'].rolling(9).mean()
+    bars['EMA20'] = bars['close'].ewm(span=20).mean()
 
-    if last_close < last_sma9 or last_close < last_ema20:
-        logging.warning(
-            "Sell signal detected for %s: close=%s, SMA9=%s, EMA20=%s",
-            symbol, last_close, last_sma9, last_ema20
-        )
+    delta = bars['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+    rs = avg_gain / avg_loss
+    bars['RSI'] = 100 - (100 / (1 + rs))
+
+    ema12 = bars['close'].ewm(span=12, adjust=False).mean()
+    ema26 = bars['close'].ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    bars['MACD'] = macd
+    bars['MACD_signal'] = macd.ewm(span=9, adjust=False).mean()
+
+    last = bars.iloc[-1]
+    return {
+        'close': float(last['close']),
+        'SMA9': float(last['SMA9']),
+        'EMA20': float(last['EMA20']),
+        'RSI': float(last['RSI']),
+        'MACD': float(last['MACD']),
+        'MACD_signal': float(last['MACD_signal']),
+    }
+
+
+def check_sell_signal(indicators) -> bool:
+    price = indicators['close']
+    ema20 = indicators['EMA20']
+    rsi = indicators['RSI']
+    macd = indicators['MACD']
+    macd_signal = indicators['MACD_signal']
+
+    sell_by_ma = price < ema20
+    sell_by_rsi = rsi < 50
+    sell_by_macd = macd < macd_signal
+
+    if sell_by_ma and sell_by_rsi and sell_by_macd:
         return True
-
     return False
+
+
+def get_open_orders(symbol):
+    request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+    try:
+        return trading_client.get_orders(filter=request)
+    except Exception as e:
+        logging.error("Failed to fetch open orders for %s: %s", symbol, e)
+        return []
+
+
+def get_trailing_stop_order(symbol):
+    orders = get_open_orders(symbol)
+    for o in orders:
+        if getattr(o, 'order_type', '') == 'trailing_stop':
+            return o
+    return None
+
+
+def has_pending_sell_order(symbol):
+    orders = get_open_orders(symbol)
+    for o in orders:
+        if o.side == OrderSide.SELL and getattr(o, 'order_type', '') != 'trailing_stop':
+            return True
+    return False
+
+
+def manage_trailing_stop(position):
+    symbol = position.symbol
+    entry = float(position.avg_entry_price)
+    current = float(position.current_price)
+    gain_pct = (current - entry) / entry * 100 if entry else 0
+
+    trailing_order = get_trailing_stop_order(symbol)
+    if not trailing_order:
+        try:
+            trading_client.submit_order(
+                symbol=symbol,
+                qty=position.qty,
+                side='sell',
+                type='trailing_stop',
+                trail_percent='5',
+                time_in_force='gtc'
+            )
+            logging.info("Placed trailing stop for %s at 5% below peak price.", symbol)
+        except Exception as e:
+            logging.error("Failed to create trailing stop for %s: %s", symbol, e)
+        return
+
+    if gain_pct > 10:
+        new_trail = '3'
+        try:
+            trading_client.cancel_order(trailing_order.id)
+            trading_client.submit_order(
+                symbol=symbol,
+                qty=position.qty,
+                side='sell',
+                type='trailing_stop',
+                trail_percent=new_trail,
+                time_in_force='gtc'
+            )
+            logging.info(
+                "Adjusted trailing stop for %s from 5% to %s%% (gain: %.2f%%).",
+                symbol,
+                new_trail,
+                gain_pct,
+            )
+        except Exception as e:
+            logging.error("Failed to adjust trailing stop for %s: %s", symbol, e)
 
 # Execute sell orders
 
-def close_position_order(symbol, qty, side):
+def submit_sell_market_order(symbol, qty):
+    """Submit a market sell order with error handling."""
     try:
-        order = MarketOrderRequest(
+        trading_client.submit_order(
             symbol=symbol,
-            qty=str(qty),
-            side=OrderSide.BUY if side == 'buy' else OrderSide.SELL,
-            time_in_force=TimeInForce.DAY,
-            extended_hours=True,
+            qty=qty,
+            side='sell',
+            type='market',
+            time_in_force='day'
         )
-        trading_client.submit_order(order)
-        logging.info("%s order submitted for %s, qty=%s", side.capitalize(), symbol, qty)
+        logging.info(
+            "[SELL SIGNAL] Selling %s (qty %s) due to strategy exit conditions.",
+            symbol, qty
+        )
     except Exception as e:
-        logging.error("Failed to submit %s order for %s: %s", side, symbol, e)
+        logging.error("Error submitting sell order for %s: %s", symbol, e)
 
 def process_positions_cycle():
     positions = get_open_positions()
     save_positions_csv(positions)
     for position in positions:
         symbol = position.symbol
-        quantity = abs(float(position.qty))
-        if sell_signal(symbol):
-            side = 'sell' if float(position.qty) > 0 else 'buy'
-            close_position_order(symbol, quantity, side)
+        indicators = fetch_indicators(symbol)
+        if not indicators:
+            continue
+
+        logging.info(
+            "Evaluating sell conditions for %s - price: %.2f, EMA20: %.2f, RSI: %.2f",
+            symbol,
+            indicators['close'],
+            indicators['EMA20'],
+            indicators['RSI'],
+        )
+
+        if check_sell_signal(indicators):
+            if has_pending_sell_order(symbol):
+                logging.info("Sell order already pending for %s", symbol)
+                continue
+
+            trailing_order = get_trailing_stop_order(symbol)
+            if trailing_order:
+                try:
+                    trading_client.cancel_order(trailing_order.id)
+                except Exception as e:
+                    logging.error("Failed to cancel trailing stop for %s: %s", symbol, e)
+
+            submit_sell_market_order(symbol, position.qty)
+        else:
+            manage_trailing_stop(position)
 
 
 def monitor_positions():
