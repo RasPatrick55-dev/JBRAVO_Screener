@@ -2,7 +2,7 @@
 
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
@@ -28,9 +28,7 @@ os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, 'monitor.log')
 
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
-# Lower the rotation threshold to make log rotation easier to trigger during
-# tests. This ensures the rotation logic is exercised frequently.
-handler = RotatingFileHandler(log_path, maxBytes=50_000, backupCount=5)
+handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
 handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
 logger = logging.getLogger()
@@ -63,6 +61,9 @@ OFF_HOUR_SLEEP_INTERVAL = int(os.getenv("MONITOR_OFF_HOUR_SLEEP", "300"))
 TRADING_START_HOUR = int(os.getenv("TRADING_START_HOUR", "4"))
 TRADING_END_HOUR = int(os.getenv("TRADING_END_HOUR", "20"))
 EASTERN_TZ = pytz.timezone('US/Eastern')
+
+# Minimum number of historical bars required for indicator calculation
+required_bars = 200
 
 # Fetch current positions
 def get_open_positions():
@@ -112,14 +113,19 @@ def fetch_indicators(symbol):
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
-            limit=50
+            start=(datetime.now(timezone.utc) - timedelta(days=750)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            end=(datetime.now(timezone.utc) - timedelta(minutes=16)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         bars = data_client.get_stock_bars(request).df
     except Exception as e:
         logging.error("Failed to fetch bars for %s: %s", symbol, e)
         return None
 
-    if bars.empty or len(bars) < 26:
+    logging.debug(
+        f"{symbol}: Screener-bar-count={len(bars)}, Monitor-threshold={required_bars}"
+    )
+
+    if bars.empty or len(bars) < required_bars:
         logging.warning("Not enough bars for %s indicator calculation", symbol)
         logging.info(
             "Skipping indicator evaluation for %s due to insufficient bars.",

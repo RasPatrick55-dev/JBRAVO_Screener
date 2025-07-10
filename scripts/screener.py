@@ -17,12 +17,13 @@ os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 log_path = os.path.join(BASE_DIR, 'logs', 'screener.log')
 error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
 
-error_handler = RotatingFileHandler(error_log_path, maxBytes=5_000_000, backupCount=5)
+# Configure a rotating error handler so logs don't grow unbounded
+error_handler = RotatingFileHandler(error_log_path, maxBytes=2_000_000, backupCount=5)
 error_handler.setLevel(logging.ERROR)
 
 logging.basicConfig(
     handlers=[
-        RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5),
+        RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5),
         error_handler,
     ],
     level=logging.INFO,
@@ -61,6 +62,9 @@ data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 assets = trading_client.get_all_assets()
 symbols = [a.symbol for a in assets if a.tradable and a.status == "active" and a.exchange in ("NYSE", "NASDAQ")]
 
+# Required number of daily bars for indicator calculations
+required_bars = 200
+
 ranked_candidates = []
 
 # Screening and ranking criteria
@@ -75,8 +79,14 @@ for symbol in symbols:
         )
         bars = data_client.get_stock_bars(request_params).df
 
-        if len(bars) < 200:
-            logging.warning("Skipping %s: insufficient data (%d bars)", symbol, len(bars))
+        logging.debug(
+            f"{symbol}: Screener-bar-count={len(bars)}, Monitor-threshold={required_bars}"
+        )
+
+        if len(bars) < required_bars:
+            logging.warning(
+                "Skipping %s: insufficient data (%d bars)", symbol, len(bars)
+            )
             continue
 
         df = bars.copy().sort_index()

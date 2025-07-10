@@ -359,7 +359,26 @@ def render_tab(tab, n_intervals):
                 {'if':{'filter_query':f'{{{pnl_col}}} > 0','column_id':pnl_col},'color':'#4DB6AC'},
             ]
         )
-        return dbc.Container([dcc.Graph(figure=positions_fig), table], fluid=True)
+        exec_df, exec_alert = load_csv(executed_trades_path, required_columns=['symbol','order_status','entry_time'])
+        if exec_alert:
+            exec_table = exec_alert
+        else:
+            exec_df['entry_time'] = pd.to_datetime(exec_df['entry_time']).dt.strftime('%Y-%m-%d %H:%M')
+            e_cols = [{'name': c.replace('_',' ').title(), 'id': c} for c in ['symbol','side','order_status','entry_time'] if c in exec_df.columns]
+            exec_table = dash_table.DataTable(
+                data=exec_df[['symbol','side','order_status','entry_time']].to_dict('records'),
+                columns=e_cols,
+                page_size=10,
+                style_table={'overflowX':'auto'},
+                style_cell={'backgroundColor':'#212529','color':'#E0E0E0'}
+            )
+        return dbc.Container([
+            dcc.Graph(figure=positions_fig),
+            table,
+            html.Hr(),
+            html.H5('Recent Order Status', className='text-light'),
+            exec_table
+        ], fluid=True)
 
     elif tab == 'tab-symbols':
         trades_df, alert = load_csv(trades_log_path, required_columns=['symbol', 'pnl'])
