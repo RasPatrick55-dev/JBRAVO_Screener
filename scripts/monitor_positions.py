@@ -27,8 +27,8 @@ log_dir = os.path.join(BASE_DIR, 'logs')
 os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, 'monitor.log')
 
-LOG_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
-handler = RotatingFileHandler(log_path, maxBytes=2 * 1024 * 1024, backupCount=5)
+LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
+handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3)
 handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
 logger = logging.getLogger()
@@ -212,7 +212,14 @@ def manage_trailing_stop(position):
     entry = float(position.avg_entry_price)
     current = float(position.current_price)
     gain_pct = (current - entry) / entry * 100 if entry else 0
-
+    if not qty or float(qty) <= 0:
+        logging.info(
+            f"Skipping trailing stop for {symbol} due to non-positive quantity: {qty}."
+        )
+        return
+    logging.debug(
+        f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}."
+    )
     logging.info(f"Checking existing orders for {symbol}.")
     trailing_order = get_trailing_stop_order(symbol)
     if not trailing_order:
@@ -239,7 +246,7 @@ def manage_trailing_stop(position):
         return
     else:
         logging.info(
-            f"Trailing stop already exists for {symbol} (order id {trailing_order.id})."
+            f"Trailing stop already exists for {symbol} (order id {trailing_order.id}, status {trailing_order.status})."
         )
 
     if gain_pct > 10:
