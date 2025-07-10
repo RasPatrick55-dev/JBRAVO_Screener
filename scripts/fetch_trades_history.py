@@ -17,7 +17,12 @@ while True:
     all_orders.extend(chunk)
     end = chunk[-1].submitted_at.isoformat()
 
-df = pd.DataFrame([order._raw for order in all_orders]).drop_duplicates('id')
+# ``Order`` objects from alpaca-py used to expose a ``_raw`` attribute. In
+# newer versions this was renamed to ``raw_data`` and the official way to
+# obtain a dictionary representation is via ``dict()``.  To remain compatible
+# with either version we check for ``raw_data`` and fall back to ``dict()``.
+records = [getattr(order, "raw_data", order.dict()) for order in all_orders]
+df = pd.DataFrame(records).drop_duplicates("id")
 data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
 df.to_csv(os.path.join(data_dir, 'trades_log.csv'), index=False)
 executed = df[df['filled_qty'].astype(float) > 0]
