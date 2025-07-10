@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 import pandas as pd
 import os
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 def safe_float(val, default=0.0):
     """Safely convert values to float with a default on failure."""
@@ -36,72 +38,78 @@ while True:
     all_orders.extend(chunk)
     end = chunk[-1].submitted_at.isoformat()
 
+open_positions = {}
+orders_sorted = sorted(all_orders, key=lambda o: o.filled_at)
 records = []
-for order in all_orders:
-    data = getattr(order, 'raw_data', order.model_dump())
 
-    filled_qty = safe_float(data.get('filled_qty', 0))
-    avg_fill_price = safe_float(data.get('filled_avg_price'))
-    limit_price = safe_float(data.get('limit_price'))
+for order in orders_sorted:
+    side = order.side.value
+    symbol = order.symbol
+    avg_price = safe_float(order.filled_avg_price)
+    qty = safe_float(order.filled_qty)
 
-    if data['side'] == 'buy':
-        entry_price = avg_fill_price if avg_fill_price else limit_price
-        entry_time = data.get('filled_at') or data.get('submitted_at')
+    entry_price = ''
+    exit_price = ''
+    entry_time = ''
+    exit_time = ''
+
+    if side == 'buy':
+        entry_price = avg_price
+        entry_time = order.filled_at.isoformat() if order.filled_at else ''
+        open_positions[symbol] = {
+            'price': avg_price,
+            'qty': qty,
+            'time': entry_time,
+        }
+        pnl = 0.0
+    elif side == 'sell':
+        exit_price = avg_price
+        exit_time = order.filled_at.isoformat() if order.filled_at else ''
+        if symbol in open_positions:
+            entry_info = open_positions.pop(symbol)
+            entry_price = entry_info['price']
+            entry_time = entry_info['time']
+            pnl = (avg_price - entry_info['price']) * entry_info['qty']
+        else:
+            pnl = 0.0
     else:
-        entry_price = None
-        entry_time = None
-
-    current_price = safe_float(
-        data.get('filled_avg_price') or data.get('limit_price')
-    )
-    pnl = (
-        (current_price - (entry_price or 0)) * filled_qty if entry_price else 0
-    )
+        pnl = 0.0
 
     records.append(
         {
-            **data,
+            'id': order.id,
+            'symbol': symbol,
+            'side': side,
+            'filled_qty': qty,
             'entry_price': entry_price,
+            'exit_price': exit_price,
             'entry_time': entry_time,
+            'exit_time': exit_time,
+            'status': order.status.value,
             'pnl': pnl,
-            'order_status': data['status'],
         }
     )
 
 df = pd.DataFrame(records).drop_duplicates('id')
-data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+data_dir = os.path.join(BASE_DIR, 'data')
 
-trades_log_cols = [
+cols = [
     'id',
     'symbol',
     'side',
     'filled_qty',
-    'filled_avg_price',
-    'submitted_at',
-    'filled_at',
     'entry_price',
+    'exit_price',
     'entry_time',
-    'pnl',
+    'exit_time',
     'status',
+    'pnl',
 ]
-df[trades_log_cols].to_csv(
-    os.path.join(data_dir, 'trades_log.csv'), index=False
-)
 
-executed_trades = df[df['filled_qty'].astype(float) > 0]
-executed_trades_cols = [
-    'id',
-    'symbol',
-    'side',
-    'filled_qty',
-    'filled_avg_price',
-    'submitted_at',
-    'filled_at',
-    'entry_price',
-    'entry_time',
-    'order_status',
-]
-executed_trades[executed_trades_cols].to_csv(
+df[cols].to_csv(os.path.join(data_dir, 'trades_log.csv'), index=False)
+
+executed_trades = df[df['filled_qty'] > 0]
+executed_trades[cols].to_csv(
     os.path.join(data_dir, 'executed_trades.csv'),
     index=False,
 )

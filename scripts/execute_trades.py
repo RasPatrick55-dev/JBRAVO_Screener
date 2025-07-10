@@ -63,7 +63,12 @@ except Exception as e:
 # Ensure executed trades file exists
 exec_trades_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
 if not os.path.exists(exec_trades_path):
-    pd.DataFrame(columns=['symbol', 'entry_price', 'entry_time', 'order_status']).to_csv(exec_trades_path, index=False)
+    pd.DataFrame(
+        columns=[
+            'id', 'symbol', 'side', 'filled_qty', 'entry_price',
+            'exit_price', 'entry_time', 'exit_time', 'status', 'pnl'
+        ]
+    ).to_csv(exec_trades_path, index=False)
 
 # Ensure open positions file exists
 open_pos_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
@@ -119,22 +124,27 @@ def update_trades_log():
         orders = trading_client.get_orders(filter=request)
         records = []
         for order in orders:
+            entry_price = order.filled_avg_price if order.side.value == 'buy' else ''
+            exit_price = order.filled_avg_price if order.side.value == 'sell' else ''
+            entry_time = order.filled_at.isoformat() if order.side.value == 'buy' else ''
+            exit_time = order.filled_at.isoformat() if order.side.value == 'sell' else ''
+
             records.append({
-                'trade_id': order.id,
+                'id': order.id,
                 'symbol': order.symbol,
-                'qty': order.filled_qty,
                 'side': order.side.value,
-                'entry_price': order.filled_avg_price if order.side.value == 'buy' else '',
-                'exit_price': order.filled_avg_price if order.side.value == 'sell' else '',
-                'entry_time': order.filled_at.isoformat() if order.side.value == 'buy' else '',
-                'exit_time': order.filled_at.isoformat() if order.side.value == 'sell' else '',
-                'pnl': '',
-                'status': order.status.value
+                'filled_qty': float(order.filled_qty or 0),
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'entry_time': entry_time,
+                'exit_time': exit_time,
+                'status': order.status.value,
+                'pnl': 0.0,
             })
         df = pd.DataFrame(records, columns=[
-            'trade_id', 'symbol', 'qty', 'side',
+            'id', 'symbol', 'side', 'filled_qty',
             'entry_price', 'exit_price', 'entry_time',
-            'exit_time', 'pnl', 'status'
+            'exit_time', 'status', 'pnl'
         ])
         csv_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
         df.to_csv(csv_path, index=False)
@@ -146,10 +156,16 @@ def record_executed_trade(symbol, entry_price, status):
     """Append executed trade details to CSV."""
     csv_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
     row = {
+        'id': datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S'),
         'symbol': symbol,
+        'side': status,
+        'filled_qty': 0,
         'entry_price': entry_price,
+        'exit_price': '',
         'entry_time': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
-        'order_status': status,
+        'exit_time': '',
+        'status': status,
+        'pnl': 0.0,
     }
     pd.DataFrame([row]).to_csv(csv_path, mode='a', header=False, index=False)
 
@@ -269,7 +285,7 @@ if __name__ == '__main__':
     history_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fetch_trades_history.py')
     try:
         subprocess.run(["python", history_script], check=True)
-        print("[INFO] Historical trades successfully fetched and CSV files updated.")
+        logging.info("Historical trades successfully fetched and CSV files updated.")
     except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Failed to run historical trade script: {e}")
+        logging.error("Failed to run historical trade script: %s", e)
 
