@@ -1,8 +1,22 @@
 # metrics.py (enhanced with comprehensive metrics)
 import os
 import pandas as pd
+import logging
+from logging.handlers import RotatingFileHandler
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
+
+logging.basicConfig(
+    handlers=[RotatingFileHandler(
+        os.path.join(BASE_DIR, 'logs', 'metrics.log'),
+        maxBytes=5_000_000,
+        backupCount=5,
+    )],
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+)
 
 # Load backtest results
 def load_results(csv_file='backtest_results.csv'):
@@ -67,15 +81,21 @@ def rank_candidates(df):
 def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
     top_candidates = df.head(top_n)
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
-    top_candidates.to_csv(csv_path, index=False)
-    print(f"[INFO] Top {top_n} candidates saved to {csv_path}")
+    try:
+        top_candidates.to_csv(csv_path, mode='a', header=False, index=False)
+        logging.info("Successfully appended data to %s", csv_path)
+    except Exception as e:
+        logging.error("Failed appending to %s: %s", csv_path, e)
 
 # Save overall metrics summary
 def save_metrics_summary(metrics_summary, output_file='metrics_summary.csv'):
     summary_df = pd.DataFrame([metrics_summary])
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
-    summary_df.to_csv(csv_path, index=False)
-    print(f"[INFO] Metrics summary saved to {csv_path}")
+    try:
+        summary_df.to_csv(csv_path, mode='a', header=False, index=False)
+        logging.info("Successfully appended data to %s", csv_path)
+    except Exception as e:
+        logging.error("Failed appending to %s: %s", csv_path, e)
 
 # Full execution of metrics calculation, ranking, and summary
 def main():
@@ -87,5 +107,7 @@ def main():
     save_metrics_summary(metrics_summary)
 
 if __name__ == "__main__":
+    logging.info("Starting metrics calculation")
     main()
+    logging.info("Metrics calculation complete")
 
