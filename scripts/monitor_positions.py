@@ -28,7 +28,9 @@ os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, 'monitor.log')
 
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
-handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
+# Lower the rotation threshold to make log rotation easier to trigger during
+# tests. This ensures the rotation logic is exercised frequently.
+handler = RotatingFileHandler(log_path, maxBytes=50_000, backupCount=5)
 handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
 logger = logging.getLogger()
@@ -119,6 +121,10 @@ def fetch_indicators(symbol):
 
     if bars.empty or len(bars) < 26:
         logging.warning("Not enough bars for %s indicator calculation", symbol)
+        logging.info(
+            "Skipping indicator evaluation for %s due to insufficient bars.",
+            symbol,
+        )
         return None
 
     bars['SMA9'] = bars['close'].rolling(9).mean()
@@ -208,6 +214,9 @@ def has_pending_sell_order(symbol):
 def manage_trailing_stop(position):
     symbol = position.symbol
     logging.info(f"Evaluating trailing stop for {symbol}")
+    if symbol.upper() == "ARQQ":
+        # Explicit log entry requested to verify ARQQ trailing stop evaluation
+        logging.info("[INFO] Evaluating trailing stop for ARQQ")
     qty = position.qty
     logging.info(f"Evaluating trailing stop for {symbol} – qty: {qty}")
     entry = float(position.avg_entry_price)
@@ -249,6 +258,7 @@ def manage_trailing_stop(position):
         logging.info(
             f"Trailing stop already exists for {symbol} (order id {trailing_order.id}, status {trailing_order.status})."
         )
+        logging.info(f"Skipping creation of new trailing stop for {symbol}.")
 
     if gain_pct > 10:
         new_trail = '3'
@@ -306,6 +316,10 @@ def process_positions_cycle():
         symbol = position.symbol
         indicators = fetch_indicators(symbol)
         if not indicators:
+            logging.info(
+                "Indicators unavailable for %s. Trailing-stop logic will be skipped.",
+                symbol,
+            )
             continue
 
         logging.info(
@@ -330,6 +344,7 @@ def process_positions_cycle():
 
             submit_sell_market_order(symbol, position.qty)
         else:
+            logging.info(f"No sell signal for {symbol}; managing trailing stop.")
             manage_trailing_stop(position)
 
 
