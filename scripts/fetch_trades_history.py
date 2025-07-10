@@ -18,10 +18,11 @@ while True:
     end = chunk[-1].submitted_at.isoformat()
 
 # ``Order`` objects from alpaca-py used to expose a ``_raw`` attribute. In
-# newer versions this was renamed to ``raw_data`` and the official way to
-# obtain a dictionary representation is via ``dict()``.  To remain compatible
-# with either version we check for ``raw_data`` and fall back to ``dict()``.
-records = [getattr(order, "raw_data", order.dict()) for order in all_orders]
+# newer versions this was renamed to ``raw_data``.  With Pydantic v2 the
+# preferred method to obtain a dictionary representation is ``model_dump()``.
+# To remain compatible with older versions we check for ``raw_data`` and fall
+# back to ``model_dump()``.
+records = [getattr(order, "raw_data", order.model_dump()) for order in all_orders]
 df = pd.DataFrame(records).drop_duplicates("id")
 data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
 df.to_csv(os.path.join(data_dir, 'trades_log.csv'), index=False)
