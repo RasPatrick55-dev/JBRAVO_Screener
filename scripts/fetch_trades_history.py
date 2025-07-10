@@ -2,7 +2,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 import os
 
@@ -39,14 +39,16 @@ while True:
     all_orders.extend(chunk)
     end = chunk[-1].submitted_at.isoformat()
 
+# Normalize all filled_at timestamps to timezone-aware UTC datetimes to avoid
+# offset-naive vs offset-aware comparison issues when sorting.
+for order in all_orders:
+    if order.filled_at is not None and order.filled_at.tzinfo is None:
+        order.filled_at = order.filled_at.replace(tzinfo=timezone.utc)
+
 open_positions = {}
 
-# Use a fallback datetime.min when filled_at is None so orders without
-# a fill timestamp are still included but sorted predictably.
-orders_sorted = sorted(
-    all_orders,
-    key=lambda o: o.filled_at if o.filled_at is not None else datetime.min
-)
+orders_with_filled = [o for o in all_orders if o.filled_at is not None]
+orders_sorted = sorted(orders_with_filled, key=lambda o: o.filled_at)
 records = []
 
 for order in orders_sorted:
