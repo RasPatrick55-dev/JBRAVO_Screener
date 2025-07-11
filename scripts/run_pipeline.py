@@ -39,9 +39,18 @@ def run_step(step_name, command):
 if __name__ == "__main__":
     logging.info("Pipeline execution started.")
     steps = [
-        ("Screener", ["python", "scripts/screener.py"]),
-        ("Backtest", ["python", "scripts/backtest.py"]),
-        ("Metrics Calculation", ["python", "scripts/metrics.py"]),
+        (
+            "Screener",
+            ["python", "/home/RasPatrick/jbravo_screener/scripts/screener.py"],
+        ),
+        (
+            "Backtest",
+            ["python", "/home/RasPatrick/jbravo_screener/scripts/backtest.py"],
+        ),
+        (
+            "Metrics Calculation",
+            ["python", "/home/RasPatrick/jbravo_screener/scripts/metrics.py"],
+        ),
     ]
     for name, cmd in steps:
         try:
