@@ -233,7 +233,7 @@ app.layout = dbc.Container(
                     className="custom-tab",
                 ),
                 dbc.Tab(
-                    label="Trade Log",
+                    label="Pipeline Log",
                     tab_id="tab-trades",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
@@ -564,91 +564,27 @@ def render_tab(tab, n_intervals, n_log_intervals):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-trades":
-        executed_df, exec_alert = load_csv(
-            executed_trades_path,
-            required_columns=["symbol", "entry_price", "entry_time", "order_status"],
-        )
-        trades_df, alert = load_csv(
-            trades_log_path, required_columns=["symbol", "entry_time", "pnl"]
-        )
-        freshness = data_freshness_alert(trades_log_path, "Trade log")
-        exec_fresh = data_freshness_alert(executed_trades_path, "Executed trades")
-        if alert:
-            trades_table = alert
-        else:
-            trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"])
-            trades_df.sort_values("entry_time", ascending=False, inplace=True)
-            trades_df["entry_time"] = trades_df["entry_time"].dt.strftime(
-                "%Y-%m-%d %H:%M"
-            )
-            columns = [
-                {"name": c.replace("_", " ").title(), "id": c}
-                for c in trades_df.columns
-            ]
-            trades_table = dash_table.DataTable(
-                data=trades_df.to_dict("records"),
-                columns=columns,
-                page_size=20,
-                filter_action="native",
-                sort_action="native",
-                style_table={"overflowX": "auto"},
-                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-                style_data_conditional=[
-                    {
-                        "if": {"filter_query": "{pnl} < 0", "column_id": "pnl"},
-                        "color": "#E57373",
-                    },
-                    {
-                        "if": {"filter_query": "{pnl} > 0", "column_id": "pnl"},
-                        "color": "#4DB6AC",
-                    },
-                ],
-            )
-
-        if exec_alert:
-            executed_table = exec_alert
-        else:
-            executed_df["entry_time"] = pd.to_datetime(executed_df["entry_time"])
-            executed_df.sort_values("entry_time", ascending=False, inplace=True)
-            executed_df["entry_time"] = executed_df["entry_time"].dt.strftime(
-                "%Y-%m-%d %H:%M"
-            )
-            e_cols = [
-                {"name": c.replace("_", " ").title(), "id": c}
-                for c in executed_df.columns
-            ]
-            executed_table = dash_table.DataTable(
-                data=executed_df.to_dict("records"),
-                columns=e_cols,
-                page_size=10,
-                style_table={"overflowX": "auto"},
-                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-            )
-
-        latest_file = trades_log_path
-        if os.path.exists(executed_trades_path) and os.path.getmtime(
-            executed_trades_path
-        ) > os.path.getmtime(trades_log_path):
-            latest_file = executed_trades_path
+        lines = read_recent_lines(pipeline_log_path)[::-1]
         timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(latest_file)}",
+            f"Log last refreshed: {file_timestamp(pipeline_log_path)}",
             className="text-muted mb-2",
         )
-        components = [timestamp]
-        if freshness:
-            components.append(freshness)
-        if exec_fresh:
-            components.append(exec_fresh)
-        components.extend(
+        log_view = html.Div(
             [
-                html.H5("Executed Trades", className="text-light"),
-                executed_table,
-                html.Hr(),
-                html.H5("Trade Log", className="text-light"),
-                trades_table,
+                html.H5("Pipeline Log", className="text-light"),
+                html.Pre(
+                    format_log_lines(lines),
+                    style={
+                        "maxHeight": "400px",
+                        "overflowY": "auto",
+                        "backgroundColor": "#272B30",
+                        "color": "#E0E0E0",
+                        "padding": "0.5rem",
+                    },
+                ),
             ]
         )
-        return dbc.Container(components, fluid=True)
+        return dbc.Container([timestamp, log_view], fluid=True)
 
     elif tab == "tab-positions":
         positions_df, alert = load_csv(
