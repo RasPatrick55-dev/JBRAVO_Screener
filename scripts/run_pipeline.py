@@ -28,12 +28,22 @@ def run_step(step_name, command):
         subprocess.run(command, check=True)
         logging.info(f"Completed {step_name} successfully.")
     except subprocess.CalledProcessError as e:
-        logging.error(f"ERROR in {step_name}: {e}")
+        logging.error("ERROR in %s: %s", step_name, e)
+        raise
+    except Exception as e:
+        logging.error("Unexpected failure in %s: %s", step_name, e)
         raise
 
 if __name__ == "__main__":
     logging.info("Pipeline execution started.")
-    run_step("Screener", ["python", "scripts/screener.py"])
-    run_step("Backtest", ["python", "scripts/backtest.py"])
-    run_step("Metrics Calculation", ["python", "scripts/metrics.py"])
+    steps = [
+        ("Screener", ["python", "scripts/screener.py"]),
+        ("Backtest", ["python", "scripts/backtest.py"]),
+        ("Metrics Calculation", ["python", "scripts/metrics.py"]),
+    ]
+    for name, cmd in steps:
+        try:
+            run_step(name, cmd)
+        except Exception:
+            logging.error("Step %s failed", name)
     logging.info("Pipeline execution complete.")
