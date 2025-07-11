@@ -6,6 +6,7 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 import backtrader as bt
 from dotenv import load_dotenv
+import math
 import os
 from logging.handlers import RotatingFileHandler
 import logging
@@ -61,13 +62,27 @@ def get_data(symbol, days=750):
 
 # JBravo Swing Trading Strategy
 class JBravoStrategy(bt.Strategy):
+    params = (('symbol', ''),)
+
     def __init__(self):
-        self.sma9 = bt.ind.SMA(period=9)
-        self.ema20 = bt.ind.EMA(period=20)
-        self.sma180 = bt.ind.SMA(period=180)
-        self.rsi = bt.ind.RSI(period=14)
+        self._ind_error = False
+        try:
+            self.sma9 = bt.ind.SMA(period=9)
+            self.ema20 = bt.ind.EMA(period=20)
+            self.sma180 = bt.ind.SMA(period=180)
+            self.rsi = bt.ind.RSI(period=14)
+        except Exception as e:
+            logging.warning(
+                "Indicator initialization failed for %s: %s",
+                self.p.symbol,
+                e,
+            )
+            self._ind_error = True
 
     def next(self):
+        if self._ind_error:
+            return
+
         if not self.position:
             if self.data.close[0] > self.sma9[0] and self.sma9[0] > self.ema20[0] > self.sma180[0] and self.rsi[0] > 50:
                 self.buy()
@@ -80,16 +95,40 @@ def run_backtest(symbol):
     try:
         data = get_data(symbol)
         if len(data) < 180:
-            print(f"[WARN] {symbol}: insufficient bars ({len(data)}), skipping.")
+            logging.warning(
+                "%s: insufficient bars (%d), skipping.",
+                symbol,
+                len(data),
+            )
+            return None
+        if data[['close']].isna().any().any() or data['close'].nunique() <= 1:
+            logging.warning(
+                "Skipping backtest for %s due to insufficient data or constant prices.",
+                symbol,
+            )
             return None
 
         cerebro = bt.Cerebro()
         cerebro.adddata(bt.feeds.PandasData(dataname=data))
-        cerebro.addstrategy(JBravoStrategy)
+        cerebro.addstrategy(JBravoStrategy, symbol=symbol)
         cerebro.broker.setcash(10000.0)
         cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
-
-        result = cerebro.run()
+        try:
+            result = cerebro.run()
+        except ZeroDivisionError as e:
+            logging.warning(
+                "Skipping backtest for %s due to zero division error: %s",
+                symbol,
+                e,
+            )
+            return None
+        except Exception as e:
+            logging.warning(
+                "Skipping backtest for %s due to error during backtest: %s",
+                symbol,
+                e,
+            )
+            return None
         analysis = result[0].analyzers.trades.get_analysis()
 
         total_trades = analysis.total.closed if 'closed' in analysis.total else 0
@@ -97,7 +136,14 @@ def run_backtest(symbol):
         lost_trades = analysis.lost.total if 'lost' in analysis and 'total' in analysis.lost else 0
         pnl_net = analysis.pnl.net.total if 'pnl' in analysis and 'net' in analysis.pnl else 0
 
-        win_rate = (won_trades / total_trades) * 100 if total_trades else 0
+        if not total_trades or pd.isna(total_trades):
+            logging.warning(
+                "Skipping backtest for %s due to insufficient data or zero denominator.",
+                symbol,
+            )
+            return None
+
+        win_rate = (won_trades / total_trades) * 100
 
         return {
             'symbol': symbol,
@@ -109,14 +155,14 @@ def run_backtest(symbol):
         }
 
     except Exception as e:
-        print(f"[ERROR] Exception during backtest for {symbol}: {e}")
+        logging.error("Exception during backtest for %s: %s", symbol, e)
         return None
 
 # Run backtests on a list of symbols and save results
 def backtest_symbols(symbols):
     results = []
     for symbol in symbols:
-        print(f"[INFO] Backtesting {symbol}...")
+        logging.info("Backtesting %s...", symbol)
         result = run_backtest(symbol)
         if result:
             results.append(result)
