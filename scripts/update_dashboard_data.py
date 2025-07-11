@@ -64,7 +64,9 @@ def init_db():
                     symbol TEXT,
                     side TEXT,
                     filled_qty REAL,
-                    status TEXT,
+                    entry_price REAL,
+                    entry_time TEXT,
+                    order_status TEXT,
                     submitted_at TEXT,
                     filled_at TEXT
             )"""
@@ -136,19 +138,24 @@ def update_executed_trades():
         orders = trading_client.get_orders(filter=request)
         rows = [
             {
-                'id': o.id,
-                'symbol': o.symbol,
-                'side': o.side.value,
-                'filled_qty': float(o.filled_qty or 0),
-                'status': o.status.value,
-                'submitted_at': o.submitted_at.isoformat() if o.submitted_at else '',
-                'filled_at': o.filled_at.isoformat() if o.filled_at else '',
+                'id': order.id,
+                'symbol': order.symbol,
+                'side': order.side.value,
+                'filled_qty': float(order.filled_qty or 0),
+                'entry_price': float(order.filled_avg_price or 0) if order.filled_qty else '',
+                'entry_time': order.filled_at.isoformat() if order.filled_at else '',
+                'order_status': order.status.value,
+                'submitted_at': order.submitted_at.isoformat() if order.submitted_at else '',
+                'filled_at': order.filled_at.isoformat() if order.filled_at else '',
             }
-            for o in orders
+            for order in orders
         ]
         df = pd.DataFrame(rows)
         if df.empty:
-            df = pd.DataFrame(columns=['id', 'symbol', 'side', 'filled_qty', 'status', 'submitted_at', 'filled_at'])
+            df = pd.DataFrame(columns=[
+                'id', 'symbol', 'side', 'filled_qty', 'entry_price',
+                'entry_time', 'order_status', 'submitted_at', 'filled_at'
+            ])
         path = os.path.join(DATA_DIR, 'executed_trades.csv')
         write_csv_atomic(df, path)
         with sqlite3.connect(DB_PATH) as conn:
