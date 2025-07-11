@@ -22,23 +22,27 @@ class InfoRotatingFileHandler(RotatingFileHandler):
         super().doRollover()
         logging.info("Log rotated due to size limit.")
 
+
 from dotenv import load_dotenv
 import logging
 import pytz
+import requests
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-dotenv_path = os.path.join(BASE_DIR, '.env')
+dotenv_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path)
 
-os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
-os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
+ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
 
-log_dir = os.path.join(BASE_DIR, 'logs')
+os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
+
+log_dir = os.path.join(BASE_DIR, "logs")
 os.makedirs(log_dir, exist_ok=True)
-log_path = os.path.join(log_dir, 'monitor.log')
+log_path = os.path.join(log_dir, "monitor.log")
 
-LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 handler = InfoRotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
 handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
@@ -51,11 +55,43 @@ console_handler = logging.StreamHandler()
 console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 logger.addHandler(console_handler)
 
-open_pos_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
+
+def send_alert(message: str):
+    """Send alert message to webhook if configured."""
+    if not ALERT_WEBHOOK_URL:
+        return
+    try:
+        requests.post(ALERT_WEBHOOK_URL, json={"text": message}, timeout=5)
+    except Exception as exc:
+        logging.error("Failed to send alert: %s", exc)
+
+
+def log_if_stale(file_path: str, name: str, threshold_minutes: int = 15):
+    """Log a warning if ``file_path`` is older than ``threshold_minutes``."""
+    if not os.path.exists(file_path):
+        logging.warning("%s missing: %s", name, file_path)
+        send_alert(f"{name} missing: {file_path}")
+        return
+    age = datetime.utcnow() - datetime.utcfromtimestamp(os.path.getmtime(file_path))
+    if age > timedelta(minutes=threshold_minutes):
+        minutes = age.total_seconds() / 60
+        msg = f"{name} is stale ({minutes:.1f} minutes old)"
+        logging.warning(msg)
+        send_alert(msg)
+
+
+open_pos_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 if not os.path.exists(open_pos_path):
     pd.DataFrame(
-        columns=['symbol', 'qty', 'avg_entry_price', 'current_price',
-                 'unrealized_pl', 'entry_price', 'entry_time']
+        columns=[
+            "symbol",
+            "qty",
+            "avg_entry_price",
+            "current_price",
+            "unrealized_pl",
+            "entry_price",
+            "entry_time",
+        ]
     ).to_csv(open_pos_path, index=False)
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
@@ -75,10 +111,11 @@ SLEEP_INTERVAL = int(os.getenv("MONITOR_SLEEP_INTERVAL", "60"))
 OFF_HOUR_SLEEP_INTERVAL = int(os.getenv("MONITOR_OFF_HOUR_SLEEP", "300"))
 TRADING_START_HOUR = int(os.getenv("TRADING_START_HOUR", "4"))
 TRADING_END_HOUR = int(os.getenv("TRADING_END_HOUR", "20"))
-EASTERN_TZ = pytz.timezone('US/Eastern')
+EASTERN_TZ = pytz.timezone("US/Eastern")
 
 # Minimum number of historical bars required for indicator calculation
 required_bars = 200
+
 
 # Fetch current positions
 def get_open_positions():
@@ -88,35 +125,76 @@ def get_open_positions():
         logging.error("Failed to fetch open positions: %s", e)
         return []
 
+
 # Save open positions to CSV for dashboard consumption
 def save_positions_csv(positions):
-    csv_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
+    csv_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
     try:
-        data = [
-            {
-                'symbol': p.symbol,
-                'qty': p.qty,
-                'avg_entry_price': p.avg_entry_price,
-                'current_price': p.current_price,
-                'unrealized_pl': p.unrealized_pl,
-                'entry_price': p.avg_entry_price,
-                'entry_time': getattr(p, 'created_at', datetime.utcnow()).isoformat(),
-            }
-            for p in positions
-        ]
+        existing = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+
+        active_symbols = set()
+        rows = []
+        for p in positions:
+            try:
+                qty = float(p.qty)
+            except Exception:
+                qty = 0
+            if qty <= 0:
+                logging.warning(
+                    "Skipping %s due to non-positive quantity: %s", p.symbol, qty
+                )
+                continue
+            active_symbols.add(p.symbol)
+            rows.append(
+                {
+                    "symbol": p.symbol,
+                    "qty": qty,
+                    "avg_entry_price": p.avg_entry_price,
+                    "current_price": p.current_price,
+                    "unrealized_pl": p.unrealized_pl,
+                    "entry_price": p.avg_entry_price,
+                    "entry_time": getattr(
+                        p, "created_at", datetime.utcnow()
+                    ).isoformat(),
+                }
+            )
+
         df = pd.DataFrame(
-            data,
+            rows,
             columns=[
-                'symbol', 'qty', 'avg_entry_price', 'current_price',
-                'unrealized_pl', 'entry_price', 'entry_time'
-            ]
+                "symbol",
+                "qty",
+                "avg_entry_price",
+                "current_price",
+                "unrealized_pl",
+                "entry_price",
+                "entry_time",
+            ],
         )
+
+        removed = []
+        if not existing.empty and "symbol" in existing.columns:
+            removed = sorted(set(existing["symbol"]) - active_symbols)
+        if removed:
+            msg = f"Removing inactive positions: {', '.join(removed)}"
+            logging.info(msg)
+            send_alert(msg)
+
         if df.empty:
-            df = pd.DataFrame(columns=[
-                'symbol', 'qty', 'avg_entry_price', 'current_price',
-                'unrealized_pl', 'entry_price', 'entry_time'
-            ])
-        tmp = NamedTemporaryFile('w', delete=False, dir=os.path.dirname(csv_path), newline='')
+            df = pd.DataFrame(
+                columns=[
+                    "symbol",
+                    "qty",
+                    "avg_entry_price",
+                    "current_price",
+                    "unrealized_pl",
+                    "entry_price",
+                    "entry_time",
+                ]
+            )
+        tmp = NamedTemporaryFile(
+            "w", delete=False, dir=os.path.dirname(csv_path), newline=""
+        )
         df.to_csv(tmp.name, index=False)
         tmp.close()
         shutil.move(tmp.name, csv_path)
@@ -125,14 +203,19 @@ def save_positions_csv(positions):
     except Exception as e:
         logging.error("Failed to save positions CSV: %s", e)
 
+
 def fetch_indicators(symbol):
     """Fetch recent daily bars and compute indicators."""
     try:
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
-            start=(datetime.now(timezone.utc) - timedelta(days=750)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            end=(datetime.now(timezone.utc) - timedelta(minutes=16)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            start=(datetime.now(timezone.utc) - timedelta(days=750)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            end=(datetime.now(timezone.utc) - timedelta(minutes=16)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
         )
         bars = data_client.get_stock_bars(request).df
     except Exception as e:
@@ -151,40 +234,40 @@ def fetch_indicators(symbol):
         )
         return None
 
-    bars['SMA9'] = bars['close'].rolling(9).mean()
-    bars['EMA20'] = bars['close'].ewm(span=20).mean()
+    bars["SMA9"] = bars["close"].rolling(9).mean()
+    bars["EMA20"] = bars["close"].ewm(span=20).mean()
 
-    delta = bars['close'].diff()
+    delta = bars["close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
     avg_gain = gain.rolling(14).mean()
     avg_loss = loss.rolling(14).mean()
     rs = avg_gain / avg_loss
-    bars['RSI'] = 100 - (100 / (1 + rs))
+    bars["RSI"] = 100 - (100 / (1 + rs))
 
-    ema12 = bars['close'].ewm(span=12, adjust=False).mean()
-    ema26 = bars['close'].ewm(span=26, adjust=False).mean()
+    ema12 = bars["close"].ewm(span=12, adjust=False).mean()
+    ema26 = bars["close"].ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
-    bars['MACD'] = macd
-    bars['MACD_signal'] = macd.ewm(span=9, adjust=False).mean()
+    bars["MACD"] = macd
+    bars["MACD_signal"] = macd.ewm(span=9, adjust=False).mean()
 
     last = bars.iloc[-1]
     return {
-        'close': float(last['close']),
-        'SMA9': float(last['SMA9']),
-        'EMA20': float(last['EMA20']),
-        'RSI': float(last['RSI']),
-        'MACD': float(last['MACD']),
-        'MACD_signal': float(last['MACD_signal']),
+        "close": float(last["close"]),
+        "SMA9": float(last["SMA9"]),
+        "EMA20": float(last["EMA20"]),
+        "RSI": float(last["RSI"]),
+        "MACD": float(last["MACD"]),
+        "MACD_signal": float(last["MACD_signal"]),
     }
 
 
 def check_sell_signal(indicators) -> bool:
-    price = indicators['close']
-    ema20 = indicators['EMA20']
-    rsi = indicators['RSI']
-    macd = indicators['MACD']
-    macd_signal = indicators['MACD_signal']
+    price = indicators["close"]
+    ema20 = indicators["EMA20"]
+    rsi = indicators["RSI"]
+    macd = indicators["MACD"]
+    macd_signal = indicators["MACD_signal"]
 
     sell_by_ma = price < ema20
     sell_by_rsi = rsi < 50
@@ -207,20 +290,19 @@ def get_open_orders(symbol):
 def get_trailing_stop_order(symbol):
     orders = get_open_orders(symbol)
     for o in orders:
-        if getattr(o, 'order_type', '') == 'trailing_stop':
+        if getattr(o, "order_type", "") == "trailing_stop":
             return o
     return None
 
 
 def last_filled_trailing_stop(symbol):
-    request = GetOrdersRequest(status=QueryOrderStatus.CLOSED, symbols=[symbol], limit=10)
+    request = GetOrdersRequest(
+        status=QueryOrderStatus.CLOSED, symbols=[symbol], limit=10
+    )
     try:
         orders = trading_client.get_orders(filter=request)
         for o in orders:
-            if (
-                getattr(o, 'order_type', '') == 'trailing_stop'
-                and o.status == 'filled'
-            ):
+            if getattr(o, "order_type", "") == "trailing_stop" and o.status == "filled":
                 return o
     except Exception as e:
         logging.error("Failed to fetch order history for %s: %s", symbol, e)
@@ -230,7 +312,7 @@ def last_filled_trailing_stop(symbol):
 def has_pending_sell_order(symbol):
     orders = get_open_orders(symbol)
     for o in orders:
-        if o.side == OrderSide.SELL and getattr(o, 'order_type', '') != 'trailing_stop':
+        if o.side == OrderSide.SELL and getattr(o, "order_type", "") != "trailing_stop":
             return True
     return False
 
@@ -263,7 +345,7 @@ def manage_trailing_stop(position):
             logging.info(
                 "Previous trailing stop filled for %s at %s",
                 symbol,
-                getattr(last_filled, 'filled_avg_price', 'n/a'),
+                getattr(last_filled, "filled_avg_price", "n/a"),
             )
         logging.info(
             f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct=5"
@@ -274,7 +356,7 @@ def manage_trailing_stop(position):
                 qty=position.qty,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.GTC,
-                trail_percent='5',
+                trail_percent="5",
             )
             trading_client.submit_order(order_data=request)
             logging.info(f"Placed new trailing stop for {symbol}.")
@@ -288,7 +370,7 @@ def manage_trailing_stop(position):
         logging.info(f"Skipping creation of new trailing stop for {symbol}.")
 
     if gain_pct > 10:
-        new_trail = '3'
+        new_trail = "3"
         try:
             trading_client.cancel_order(trailing_order.id)
             logging.info(
@@ -317,24 +399,24 @@ def manage_trailing_stop(position):
             gain_pct,
         )
 
+
 # Execute sell orders
+
 
 def submit_sell_market_order(symbol, qty):
     """Submit a market sell order with error handling."""
     try:
         trading_client.submit_order(
-            symbol=symbol,
-            qty=qty,
-            side='sell',
-            type='market',
-            time_in_force='day'
+            symbol=symbol, qty=qty, side="sell", type="market", time_in_force="day"
         )
         logging.info(
             "[SELL SIGNAL] Selling %s (qty %s) due to strategy exit conditions.",
-            symbol, qty
+            symbol,
+            qty,
         )
     except Exception as e:
         logging.error("Error submitting sell order for %s: %s", symbol, e)
+
 
 def process_positions_cycle():
     positions = get_open_positions()
@@ -355,9 +437,9 @@ def process_positions_cycle():
         logging.info(
             "Evaluating sell conditions for %s - price: %.2f, EMA20: %.2f, RSI: %.2f",
             symbol,
-            indicators['close'],
-            indicators['EMA20'],
-            indicators['RSI'],
+            indicators["close"],
+            indicators["EMA20"],
+            indicators["RSI"],
         )
 
         if check_sell_signal(indicators):
@@ -370,7 +452,9 @@ def process_positions_cycle():
                 try:
                     trading_client.cancel_order(trailing_order.id)
                 except Exception as e:
-                    logging.error("Failed to cancel trailing stop for %s: %s", symbol, e)
+                    logging.error(
+                        "Failed to cancel trailing stop for %s: %s", symbol, e
+                    )
 
             submit_sell_market_order(symbol, position.qty)
         else:
@@ -391,6 +475,8 @@ def monitor_positions():
         while True:
             now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ)
             market_hours = TRADING_START_HOUR <= now_et.hour < TRADING_END_HOUR
+
+            log_if_stale(open_pos_path, "open_positions.csv")
 
             if market_hours and not in_market:
                 logging.info("Entering market hours")
@@ -421,11 +507,11 @@ def monitor_positions():
     except KeyboardInterrupt:
         logging.info("Monitoring stopped by user.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     logging.info("Starting monitor_positions.py")
     print("Starting monitor_positions.py")
     try:
         monitor_positions()
     except Exception as e:
         logging.error(f"Script error: {e}")
-
