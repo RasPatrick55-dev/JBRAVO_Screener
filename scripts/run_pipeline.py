@@ -2,6 +2,8 @@
 import subprocess
 import os
 import logging
+import shutil
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,4 +48,22 @@ if __name__ == "__main__":
             run_step(name, cmd)
         except Exception:
             logging.error("Step %s failed", name)
+
+    # Update latest_candidates.csv with the newest results
+    source_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
+    target_path = os.path.join(BASE_DIR, 'data', 'latest_candidates.csv')
+    if os.path.exists(source_path):
+        try:
+            shutil.copy2(source_path, target_path)
+            logging.info(
+                "Updated latest_candidates.csv at %s",
+                datetime.utcnow().isoformat(),
+            )
+        except Exception as exc:
+            logging.error("Failed to update latest_candidates.csv: %s", exc)
+    else:
+        logging.error(
+            "top_candidates.csv not found; latest_candidates.csv was not updated."
+        )
+
     logging.info("Pipeline execution complete.")
