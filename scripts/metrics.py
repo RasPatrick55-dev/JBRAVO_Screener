@@ -2,6 +2,8 @@
 import os
 import pandas as pd
 import logging
+import shutil
+from tempfile import NamedTemporaryFile
 from logging.handlers import RotatingFileHandler
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,6 +19,13 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s',
 )
+
+
+def write_csv_atomic(df: pd.DataFrame, dest: str):
+    tmp = NamedTemporaryFile('w', delete=False, dir=os.path.dirname(dest), newline='')
+    df.to_csv(tmp.name, index=False)
+    tmp.close()
+    shutil.move(tmp.name, dest)
 
 # Load backtest results
 def load_results(csv_file='backtest_results.csv'):
@@ -82,7 +91,7 @@ def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
     top_candidates = df.head(top_n)
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
     try:
-        top_candidates.to_csv(csv_path, mode='a', header=False, index=False)
+        write_csv_atomic(top_candidates, csv_path)
         logging.info("Successfully appended data to %s", csv_path)
     except Exception as e:
         logging.error("Failed appending to %s: %s", csv_path, e)
@@ -92,7 +101,7 @@ def save_metrics_summary(metrics_summary, output_file='metrics_summary.csv'):
     summary_df = pd.DataFrame([metrics_summary])
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
     try:
-        summary_df.to_csv(csv_path, mode='a', header=False, index=False)
+        write_csv_atomic(summary_df, csv_path)
         logging.info("Successfully appended data to %s", csv_path)
     except Exception as e:
         logging.error("Failed appending to %s: %s", csv_path, e)

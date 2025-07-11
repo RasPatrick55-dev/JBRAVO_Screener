@@ -9,7 +9,7 @@ from tempfile import NamedTemporaryFile
 import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
-from alpaca.trading.enums import QueryOrderStatus, ActivityType
+from alpaca.trading.enums import QueryOrderStatus
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -106,69 +106,137 @@ def update_open_positions():
         logger.exception('Failed to update open_positions.csv due to %s', e)
 
 
-def update_trades_log():
+def fetch_all_orders(limit=500):
+    """Retrieve the full order history from Alpaca."""
+    orders = []
+    end = None
+    while True:
+        req = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=limit, until=end, direction='desc')
+        chunk = trading_client.get_orders(filter=req)
+        if not chunk:
+            break
+        orders.extend(chunk)
+        if len(chunk) < limit:
+            break
+        end = chunk[-1].submitted_at.isoformat()
+    return orders
+
+
+def update_order_history():
+    """Update executed_trades.csv and trades_log.csv from order history."""
     try:
-        activities = trading_client.get_activities(activity_types=[ActivityType.FILL])
-        records = [
-            {
-                'id': a.id,
-                'symbol': a.symbol,
-                'side': a.side,
-                'qty': float(getattr(a, 'qty', 0)),
-                'price': float(getattr(a, 'price', 0)),
-                'transaction_time': a.transaction_time.isoformat(),
-            }
-            for a in activities
-        ]
-        df = pd.DataFrame(records)
+        orders = [o for o in fetch_all_orders() if o.filled_at is not None]
+        orders.sort(key=lambda o: o.filled_at)
+
+        open_positions = {}
+        records = []
+
+        for order in orders:
+            side = order.side.value
+            symbol = order.symbol
+            qty = float(order.filled_qty or 0)
+            price = float(order.filled_avg_price or 0)
+
+            entry_price = ''
+            exit_price = ''
+            entry_time = ''
+            exit_time = ''
+            pnl = 0.0
+
+            if side == 'buy':
+                entry_price = price
+                entry_time = order.filled_at.isoformat()
+                open_positions[symbol] = {'price': price, 'qty': qty, 'time': entry_time}
+            elif side == 'sell':
+                exit_price = price
+                exit_time = order.filled_at.isoformat()
+                if symbol in open_positions:
+                    info = open_positions.pop(symbol)
+                    entry_price = info['price']
+                    entry_time = info['time']
+                    pnl = (price - info['price']) * info['qty']
+
+            records.append({
+                'id': order.id,
+                'symbol': symbol,
+                'side': side,
+                'filled_qty': qty,
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'entry_time': entry_time,
+                'exit_time': exit_time,
+                'order_status': order.status.value if order.status else 'unknown',
+                'pnl': pnl,
+            })
+
+        df = pd.DataFrame(records).drop_duplicates('id')
+        cols = ['id','symbol','side','filled_qty','entry_price','exit_price','entry_time','exit_time','order_status','pnl']
         if df.empty:
-            df = pd.DataFrame(columns=['id', 'symbol', 'side', 'qty', 'price', 'transaction_time'])
-        path = os.path.join(DATA_DIR, 'trades_log.csv')
-        write_csv_atomic(df, path)
+            df = pd.DataFrame(columns=cols)
+
+        write_csv_atomic(df, os.path.join(DATA_DIR, 'trades_log.csv'))
+        executed_df = df[df['filled_qty'] > 0]
+        write_csv_atomic(executed_df, os.path.join(DATA_DIR, 'executed_trades.csv'))
+
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql('trades_log', conn, if_exists='replace', index=False)
-        logger.info('Updated trades_log.csv successfully.')
+            executed_df.to_sql('executed_trades', conn, if_exists='replace', index=False)
+
+        logger.info('Updated trades_log.csv and executed_trades.csv successfully.')
     except Exception as e:
-        logger.exception('Failed to update trades_log.csv due to %s', e)
+        logger.exception('Failed to update order history due to %s', e)
 
 
-def update_executed_trades():
+def update_metrics_summary():
+    """Compute and persist summary trading metrics."""
     try:
-        request = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=100)
-        orders = trading_client.get_orders(filter=request)
-        rows = [
-            {
-                'id': order.id,
-                'symbol': order.symbol,
-                'side': order.side.value,
-                'filled_qty': float(order.filled_qty or 0),
-                'entry_price': float(order.filled_avg_price or 0) if order.filled_qty else '',
-                'entry_time': order.filled_at.isoformat() if order.filled_at else '',
-                'order_status': order.status.value,
-                'submitted_at': order.submitted_at.isoformat() if order.submitted_at else '',
-                'filled_at': order.filled_at.isoformat() if order.filled_at else '',
-            }
-            for order in orders
-        ]
-        df = pd.DataFrame(rows)
-        if df.empty:
-            df = pd.DataFrame(columns=[
-                'id', 'symbol', 'side', 'filled_qty', 'entry_price',
-                'entry_time', 'order_status', 'submitted_at', 'filled_at'
+        trades_path = os.path.join(DATA_DIR, 'trades_log.csv')
+        if not os.path.exists(trades_path):
+            df = pd.DataFrame()
+        else:
+            df = pd.read_csv(trades_path)
+
+        if df.empty or 'pnl' not in df.columns:
+            summary_df = pd.DataFrame([
+                {
+                    'Total Trades': 0,
+                    'Total Wins': 0,
+                    'Total Losses': 0,
+                    'Win Rate (%)': 0.0,
+                    'Total Net PnL': 0.0,
+                    'Average Return per Trade': 0.0,
+                }
             ])
-        path = os.path.join(DATA_DIR, 'executed_trades.csv')
-        write_csv_atomic(df, path)
+        else:
+            total_trades = len(df)
+            wins = len(df[df['pnl'] > 0])
+            losses = total_trades - wins
+            win_rate = (wins / total_trades) * 100 if total_trades else 0.0
+            total_pnl = df['pnl'].sum()
+            avg_return = df['pnl'].mean()
+            summary_df = pd.DataFrame([
+                {
+                    'Total Trades': total_trades,
+                    'Total Wins': wins,
+                    'Total Losses': losses,
+                    'Win Rate (%)': round(win_rate, 2),
+                    'Total Net PnL': round(total_pnl, 2),
+                    'Average Return per Trade': round(avg_return, 2),
+                }
+            ])
+
+        write_csv_atomic(summary_df, os.path.join(DATA_DIR, 'metrics_summary.csv'))
         with sqlite3.connect(DB_PATH) as conn:
-            df.to_sql('executed_trades', conn, if_exists='replace', index=False)
-        logger.info('Updated executed_trades.csv successfully.')
+            summary_df.to_sql('metrics_summary', conn, if_exists='replace', index=False)
+        logger.info('Updated metrics_summary.csv successfully.')
     except Exception as e:
-        logger.exception('Failed to update executed_trades.csv due to %s', e)
+        logger.exception('Failed to update metrics_summary.csv due to %s', e)
 
 
 if __name__ == '__main__':
     init_db()
     update_open_positions()
-    update_trades_log()
-    update_executed_trades()
+    update_order_history()
+    update_metrics_summary()
     logger.info('Dashboard data refresh complete')
 

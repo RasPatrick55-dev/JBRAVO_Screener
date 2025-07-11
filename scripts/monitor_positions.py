@@ -11,6 +11,8 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest
 from logging.handlers import RotatingFileHandler
+import shutil
+from tempfile import NamedTemporaryFile
 
 
 class InfoRotatingFileHandler(RotatingFileHandler):
@@ -114,7 +116,10 @@ def save_positions_csv(positions):
                 'symbol', 'qty', 'avg_entry_price', 'current_price',
                 'unrealized_pl', 'entry_price', 'entry_time'
             ])
-        df.to_csv(csv_path, index=False)
+        tmp = NamedTemporaryFile('w', delete=False, dir=os.path.dirname(csv_path), newline='')
+        df.to_csv(tmp.name, index=False)
+        tmp.close()
+        shutil.move(tmp.name, csv_path)
         logging.debug("Saved open positions to %s", csv_path)
         logging.info("Updated open_positions.csv successfully.")
     except Exception as e:
