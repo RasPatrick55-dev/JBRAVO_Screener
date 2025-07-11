@@ -40,6 +40,10 @@ API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
 
+if not API_KEY or not API_SECRET:
+    logging.error("Missing Alpaca API credentials.")
+    raise SystemExit(1)
+
 # Initialize Alpaca clients
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)

@@ -173,6 +173,7 @@ app.layout = dbc.Container([
     html.Div(id='tabs-content', className="mt-4"),
 
     dcc.Interval(id='interval-update', interval=600000, n_intervals=0),
+    dcc.Interval(id='log-interval', interval=10000, n_intervals=0),
 
     dbc.Modal(id='detail-modal', is_open=False, size="lg", children=[
         dbc.ModalHeader(dbc.ModalTitle("Details")),
@@ -184,9 +185,13 @@ app.layout = dbc.Container([
 # Callbacks for tabs content
 @app.callback(
     Output('tabs-content', 'children'),
-    [Input('main-tabs', 'active_tab'), Input('interval-update', 'n_intervals')]
+    [
+        Input('main-tabs', 'active_tab'),
+        Input('interval-update', 'n_intervals'),
+        Input('log-interval', 'n_intervals')
+    ]
 )
-def render_tab(tab, n_intervals):
+def render_tab(tab, n_intervals, n_log_intervals):
     if tab == 'tab-overview':
         trades_df, alert = load_csv(trades_log_path, required_columns=['pnl', 'entry_time'])
         if alert:
@@ -233,8 +238,12 @@ def render_tab(tab, n_intervals):
             dbc.Col(dcc.Graph(figure=monthly_fig), md=4),
             dbc.Col(dcc.Graph(figure=dd_fig), md=12)
         ])
+        timestamp = html.Div(
+            f"Data last refreshed: {file_timestamp(trades_log_path)}",
+            className='text-muted mb-2'
+        )
 
-        return dbc.Container([kpis, graphs], fluid=True)
+        return dbc.Container([timestamp, kpis, graphs], fluid=True)
 
     elif tab == 'tab-screener':
         candidates_df, alert = load_csv(top_candidates_path)
@@ -280,7 +289,12 @@ def render_tab(tab, n_intervals):
         status = pipeline_status_component()
         freshness = data_freshness_alert(top_candidates_path, 'Top candidates')
 
-        components = [table, status]
+        timestamp = html.Div(
+            f"Data last refreshed: {file_timestamp(top_candidates_path)}",
+            className='text-muted mb-2'
+        )
+
+        components = [timestamp, table, status]
         if freshness:
             components.append(freshness)
         components.extend([pipeline_log, screener_log, backtest_log])
@@ -326,7 +340,12 @@ def render_tab(tab, n_intervals):
                 style_cell={'backgroundColor':'#212529','color':'#E0E0E0'}
             )
 
+        timestamp = html.Div(
+            f"Data last refreshed: {file_timestamp(trades_log_path)}",
+            className='text-muted mb-2'
+        )
         return dbc.Container([
+            timestamp,
             html.H5('Executed Trades', className='text-light'),
             executed_table,
             html.Hr(),
@@ -372,7 +391,12 @@ def render_tab(tab, n_intervals):
                 style_table={'overflowX':'auto'},
                 style_cell={'backgroundColor':'#212529','color':'#E0E0E0'}
             )
+        timestamp = html.Div(
+            f"Data last refreshed: {file_timestamp(open_positions_path)}",
+            className='text-muted mb-2'
+        )
         return dbc.Container([
+            timestamp,
             dcc.Graph(figure=positions_fig),
             table,
             html.Hr(),
@@ -398,7 +422,11 @@ def render_tab(tab, n_intervals):
                 {'if':{'filter_query':'{Total P/L} > 0','column_id':'Total P/L'},'color':'#4DB6AC'},
             ]
         )
-        return dbc.Container([dcc.Graph(figure=symbol_fig), table])
+        timestamp = html.Div(
+            f"Data last refreshed: {file_timestamp(trades_log_path)}",
+            className='text-muted mb-2'
+        )
+        return dbc.Container([timestamp, dcc.Graph(figure=symbol_fig), table])
 
     elif tab == 'tab-monitor':
         closed_df, alert = load_csv(trades_log_path, required_columns=['symbol', 'exit_time', 'pnl'])
@@ -439,7 +467,13 @@ def render_tab(tab, n_intervals):
             ], className='text-muted'
         )
 
+        timestamp = html.Div(
+            f"Data last refreshed: {file_timestamp(trades_log_path)}",
+            className='text-muted mb-2'
+        )
+
         return dbc.Container([
+            timestamp,
             html.H5('Recently Closed Positions', className='text-light'),
             closed_table,
             html.Hr(),
