@@ -20,7 +20,6 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
 open_positions_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
-latest_candidates_path = os.path.join(BASE_DIR, "data", "latest_candidates.csv")
 
 # Additional datasets introduced for monitoring
 metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
@@ -459,10 +458,10 @@ def render_tab(tab, n_intervals, n_log_intervals):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-screener":
-        candidates_df, alert = load_csv(latest_candidates_path)
+        candidates_df, alert = load_csv(top_candidates_path)
         backtest_df, _ = load_csv(
             os.path.join(
-                os.path.dirname(latest_candidates_path), "backtest_results.csv"
+                os.path.dirname(top_candidates_path), "backtest_results.csv"
             )
         )
         if alert:
@@ -550,10 +549,10 @@ def render_tab(tab, n_intervals, n_log_intervals):
         )
 
         status = pipeline_status_component()
-        freshness = data_freshness_alert(latest_candidates_path, "Latest candidates")
+        freshness = data_freshness_alert(top_candidates_path, "Top candidates")
 
         timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(latest_candidates_path)}",
+            f"Data last refreshed: {file_timestamp(top_candidates_path)}",
             className="text-muted mb-2",
         )
 
