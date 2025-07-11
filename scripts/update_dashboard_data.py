@@ -99,9 +99,9 @@ def update_open_positions():
         write_csv_atomic(df, path)
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql('open_positions', conn, if_exists='replace', index=False)
-        logger.info('Open positions updated')
-    except Exception:
-        logger.exception('Failed updating open positions')
+        logger.info('Updated open_positions.csv successfully.')
+    except Exception as e:
+        logger.exception('Failed to update open_positions.csv due to %s', e)
 
 
 def update_trades_log():
@@ -125,9 +125,9 @@ def update_trades_log():
         write_csv_atomic(df, path)
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql('trades_log', conn, if_exists='replace', index=False)
-        logger.info('Trades log updated')
-    except Exception:
-        logger.exception('Failed updating trades log')
+        logger.info('Updated trades_log.csv successfully.')
+    except Exception as e:
+        logger.exception('Failed to update trades_log.csv due to %s', e)
 
 
 def update_executed_trades():
@@ -153,9 +153,9 @@ def update_executed_trades():
         write_csv_atomic(df, path)
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql('executed_trades', conn, if_exists='replace', index=False)
-        logger.info('Executed trades updated')
-    except Exception:
-        logger.exception('Failed updating executed trades')
+        logger.info('Updated executed_trades.csv successfully.')
+    except Exception as e:
+        logger.exception('Failed to update executed_trades.csv due to %s', e)
 
 
 if __name__ == '__main__':

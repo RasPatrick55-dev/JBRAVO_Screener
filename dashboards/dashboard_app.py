@@ -5,6 +5,9 @@ from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
 from datetime import datetime
+from alpaca.trading.client import TradingClient
+from dotenv import load_dotenv
+import logging
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
@@ -32,6 +35,32 @@ screener_log_path = os.path.join(screener_log_dir, 'screener.log')
 backtest_log_path = os.path.join(screener_log_dir, 'backtest.log')
 execute_trades_log_path = os.path.join(screener_log_dir, 'execute_trades.log')
 error_log_path = os.path.join(screener_log_dir, 'error.log')
+
+load_dotenv(os.path.join(BASE_DIR, '.env'))
+API_KEY = os.getenv('APCA_API_KEY_ID')
+API_SECRET = os.getenv('APCA_API_SECRET_KEY')
+trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
+logger = logging.getLogger(__name__)
+
+
+def fetch_positions_api():
+    """Fetch open positions from Alpaca for fallback."""
+    try:
+        positions = trading_client.get_all_positions()
+        return pd.DataFrame([
+            {
+                'symbol': p.symbol,
+                'qty': p.qty,
+                'avg_entry_price': p.avg_entry_price,
+                'current_price': p.current_price,
+                'unrealized_pl': p.unrealized_pl,
+                'entry_time': getattr(p, 'created_at', datetime.utcnow()).isoformat(),
+            }
+            for p in positions
+        ])
+    except Exception as e:
+        logger.error('open_positions.csv empty; failed Alpaca fallback: %s', e)
+        return pd.DataFrame()
 
 def load_csv(filepath, required_columns=None):
     """Load a CSV file from ``filepath`` and validate required columns.
@@ -105,7 +134,7 @@ def file_timestamp(path):
     """Return modification time of ``path`` formatted for display."""
     if not os.path.exists(path):
         return "N/A"
-    return datetime.fromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.utcfromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d %H:%M:%S UTC')
 
 def pipeline_status_component():
     """Create status indicators for Screener -> Backtest -> Execution."""
@@ -194,6 +223,7 @@ app.layout = dbc.Container([
 def render_tab(tab, n_intervals, n_log_intervals):
     if tab == 'tab-overview':
         trades_df, alert = load_csv(trades_log_path, required_columns=['pnl', 'entry_time'])
+        freshness = data_freshness_alert(trades_log_path, 'Trade log')
         if alert:
             return alert
 
@@ -243,7 +273,11 @@ def render_tab(tab, n_intervals, n_log_intervals):
             className='text-muted mb-2'
         )
 
-        return dbc.Container([timestamp, kpis, graphs], fluid=True)
+        components = [timestamp]
+        if freshness:
+            components.append(freshness)
+        components.extend([kpis, graphs])
+        return dbc.Container(components, fluid=True)
 
     elif tab == 'tab-screener':
         candidates_df, alert = load_csv(top_candidates_path)
@@ -304,6 +338,8 @@ def render_tab(tab, n_intervals, n_log_intervals):
     elif tab == 'tab-trades':
         executed_df, exec_alert = load_csv(executed_trades_path, required_columns=['symbol','entry_price','entry_time','order_status'])
         trades_df, alert = load_csv(trades_log_path, required_columns=['symbol', 'entry_time', 'pnl'])
+        freshness = data_freshness_alert(trades_log_path, 'Trade log')
+        exec_fresh = data_freshness_alert(executed_trades_path, 'Executed trades')
         if alert:
             trades_table = alert
         else:
@@ -344,19 +380,34 @@ def render_tab(tab, n_intervals, n_log_intervals):
             f"Data last refreshed: {file_timestamp(trades_log_path)}",
             className='text-muted mb-2'
         )
-        return dbc.Container([
-            timestamp,
+        components = [timestamp]
+        if freshness:
+            components.append(freshness)
+        if exec_fresh:
+            components.append(exec_fresh)
+        components.extend([
             html.H5('Executed Trades', className='text-light'),
             executed_table,
             html.Hr(),
             html.H5('Trade Log', className='text-light'),
             trades_table
-        ], fluid=True)
+        ])
+        return dbc.Container(components, fluid=True)
 
     elif tab == 'tab-positions':
         positions_df, alert = load_csv(open_positions_path, required_columns=['symbol','entry_price','entry_time'])
-        if alert:
-            return alert
+        freshness = data_freshness_alert(open_positions_path, 'Open positions')
+        exec_fresh = data_freshness_alert(executed_trades_path, 'Executed trades')
+        if positions_df.empty:
+            fallback_df = fetch_positions_api()
+            if not fallback_df.empty:
+                positions_df = fallback_df
+                alert = dbc.Alert('open_positions.csv empty; loaded positions from Alpaca API as fallback.', color='warning', className='m-2')
+                logger.info('open_positions.csv empty; loaded positions from Alpaca API as fallback.')
+            elif alert:
+                return alert
+        if alert and not positions_df.empty:
+            alert = None
         pnl_col = 'unrealized_pl' if 'unrealized_pl' in positions_df.columns else 'pnl' if 'pnl' in positions_df.columns else None
         if pnl_col is None:
             return dbc.Alert("open_positions.csv missing unrealized P/L data.", color="warning", className="m-2")
@@ -395,17 +446,25 @@ def render_tab(tab, n_intervals, n_log_intervals):
             f"Data last refreshed: {file_timestamp(open_positions_path)}",
             className='text-muted mb-2'
         )
-        return dbc.Container([
-            timestamp,
+        components = [timestamp]
+        if freshness:
+            components.append(freshness)
+        if alert:
+            components.append(alert)
+        components.extend([
             dcc.Graph(figure=positions_fig),
             table,
             html.Hr(),
             html.H5('Recent Order Status', className='text-light'),
             exec_table
-        ], fluid=True)
+        ])
+        if exec_fresh:
+            components.append(exec_fresh)
+        return dbc.Container(components, fluid=True)
 
     elif tab == 'tab-symbols':
         trades_df, alert = load_csv(trades_log_path, required_columns=['symbol', 'pnl'])
+        freshness = data_freshness_alert(trades_log_path, 'Trade log')
         if alert:
             return alert
         symbol_perf = trades_df.groupby('symbol').agg({'pnl':['count','mean','sum']}).reset_index()
@@ -426,10 +485,15 @@ def render_tab(tab, n_intervals, n_log_intervals):
             f"Data last refreshed: {file_timestamp(trades_log_path)}",
             className='text-muted mb-2'
         )
-        return dbc.Container([timestamp, dcc.Graph(figure=symbol_fig), table])
+        components = [timestamp]
+        if freshness:
+            components.append(freshness)
+        components.extend([dcc.Graph(figure=symbol_fig), table])
+        return dbc.Container(components, fluid=True)
 
     elif tab == 'tab-monitor':
         closed_df, alert = load_csv(trades_log_path, required_columns=['symbol', 'exit_time', 'pnl'])
+        freshness = data_freshness_alert(trades_log_path, 'Trade log')
         if alert:
             closed_table = alert
         else:
@@ -472,8 +536,10 @@ def render_tab(tab, n_intervals, n_log_intervals):
             className='text-muted mb-2'
         )
 
-        return dbc.Container([
-            timestamp,
+        components = [timestamp]
+        if freshness:
+            components.append(freshness)
+        components.extend([
             html.H5('Recently Closed Positions', className='text-light'),
             closed_table,
             html.Hr(),
@@ -481,7 +547,8 @@ def render_tab(tab, n_intervals, n_log_intervals):
             log_box('Execution Log', exec_lines),
             log_box('Errors', error_lines),
             heartbeat
-        ], fluid=True)
+        ])
+        return dbc.Container(components, fluid=True)
 
 # Callback for modal interaction
 @app.callback(

@@ -11,6 +11,15 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest
 from logging.handlers import RotatingFileHandler
+
+
+class InfoRotatingFileHandler(RotatingFileHandler):
+    """RotatingFileHandler that logs when a rollover occurs."""
+
+    def doRollover(self):
+        super().doRollover()
+        logging.info("Log rotated due to size limit.")
+
 from dotenv import load_dotenv
 import logging
 import pytz
@@ -28,7 +37,7 @@ os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, 'monitor.log')
 
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
-handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
+handler = InfoRotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
 handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
 logger = logging.getLogger()
@@ -394,7 +403,12 @@ def monitor_positions():
                 sleep_time = SLEEP_INTERVAL
             else:
                 if not off_hours_written:
-                    save_positions_csv([])
+                    current_positions = get_open_positions()
+                    save_positions_csv(current_positions)
+                    if current_positions:
+                        logging.info("Persisted open positions to CSV.")
+                    else:
+                        logging.info("No open positions found; CSV cleared.")
                     off_hours_written = True
                 sleep_time = OFF_HOUR_SLEEP_INTERVAL
 
