@@ -3,9 +3,18 @@
 import os
 import pandas as pd
 import sqlite3
+import shutil
+from tempfile import NamedTemporaryFile
 from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def write_csv_atomic(df: pd.DataFrame, dest: str):
+    tmp = NamedTemporaryFile('w', delete=False, dir=os.path.dirname(dest), newline='')
+    df.to_csv(tmp.name, index=False)
+    tmp.close()
+    shutil.move(tmp.name, dest)
 
 # Connect to SQLite database and load trades
 def load_trades(db_path='trades.db'):
@@ -49,7 +58,7 @@ def calculate_weekly_summary(trades_df):
 def save_weekly_summary(summary, output_file='weekly_summary.csv'):
     df_summary = pd.DataFrame([summary])
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
-    df_summary.to_csv(csv_path, index=False)
+    write_csv_atomic(df_summary, csv_path)
     print(f"[INFO] Weekly summary saved to {csv_path}")
 
 if __name__ == '__main__':

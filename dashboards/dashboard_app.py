@@ -268,8 +268,11 @@ def render_tab(tab, n_intervals, n_log_intervals):
             dbc.Col(dcc.Graph(figure=monthly_fig), md=4),
             dbc.Col(dcc.Graph(figure=dd_fig), md=12)
         ])
+        latest_file = trades_log_path
+        if os.path.exists(executed_trades_path) and os.path.getmtime(executed_trades_path) > os.path.getmtime(trades_log_path):
+            latest_file = executed_trades_path
         timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(trades_log_path)}",
+            f"Data last refreshed: {file_timestamp(latest_file)}",
             className='text-muted mb-2'
         )
 
@@ -376,8 +379,11 @@ def render_tab(tab, n_intervals, n_log_intervals):
                 style_cell={'backgroundColor':'#212529','color':'#E0E0E0'}
             )
 
+        latest_file = trades_log_path
+        if os.path.exists(executed_trades_path) and os.path.getmtime(executed_trades_path) > os.path.getmtime(trades_log_path):
+            latest_file = executed_trades_path
         timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(trades_log_path)}",
+            f"Data last refreshed: {file_timestamp(latest_file)}",
             className='text-muted mb-2'
         )
         components = [timestamp]
@@ -442,8 +448,11 @@ def render_tab(tab, n_intervals, n_log_intervals):
                 style_table={'overflowX':'auto'},
                 style_cell={'backgroundColor':'#212529','color':'#E0E0E0'}
             )
+        latest_file = open_positions_path
+        if os.path.exists(executed_trades_path) and os.path.getmtime(executed_trades_path) > os.path.getmtime(open_positions_path):
+            latest_file = executed_trades_path
         timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(open_positions_path)}",
+            f"Data last refreshed: {file_timestamp(latest_file)}",
             className='text-muted mb-2'
         )
         components = [timestamp]
