@@ -102,7 +102,10 @@ def save_open_positions_csv():
                 'current_price': p.current_price,
                 'unrealized_pl': p.unrealized_pl,
                 'entry_price': p.avg_entry_price,
-                'entry_time': getattr(p, 'created_at', datetime.utcnow()).isoformat()
+                # Safely convert timestamp to ISO format only when present
+                'entry_time': (
+                    ts.isoformat() if (ts := getattr(p, 'created_at', None)) is not None else 'N/A'
+                )
             })
 
         df = pd.DataFrame(data, columns=[
@@ -130,8 +133,20 @@ def update_trades_log():
         for order in orders:
             entry_price = order.filled_avg_price if order.side.value == 'buy' else ''
             exit_price = order.filled_avg_price if order.side.value == 'sell' else ''
-            entry_time = order.filled_at.isoformat() if order.side.value == 'buy' else ''
-            exit_time = order.filled_at.isoformat() if order.side.value == 'sell' else ''
+
+            if order.side.value == 'buy':
+                # Ensure timestamp exists before converting
+                ts = order.filled_at
+                entry_time = ts.isoformat() if ts is not None else 'N/A'
+            else:
+                entry_time = ''
+
+            if order.side.value == 'sell':
+                # Safely convert sell timestamp when available
+                ts = order.filled_at
+                exit_time = ts.isoformat() if ts is not None else 'N/A'
+            else:
+                exit_time = ''
 
             records.append({
                 'id': order.id,
