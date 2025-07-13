@@ -4,7 +4,6 @@ import os
 import re
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta
 import shutil
 from tempfile import NamedTemporaryFile
 import pandas as pd
@@ -57,7 +56,7 @@ def parse_execution_log(log_name: str = "execute_trades.log") -> dict:
         logger.warning("Execution log not found: %s", path)
         return stats
 
-    one_week_ago = datetime.utcnow() - timedelta(days=7)
+    one_week_ago = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(days=7)
     ts_pattern = re.compile(r"^(\d{4}-\d{2}-\d{2})\s(\d{2}:\d{2}:\d{2})")
     with open(path, "r") as fh:
         for line in fh:
@@ -65,8 +64,8 @@ def parse_execution_log(log_name: str = "execute_trades.log") -> dict:
             if not match:
                 continue
             try:
-                dt = datetime.strptime(
-                    f"{match.group(1)} {match.group(2)}", "%Y-%m-%d %H:%M:%S"
+                dt = pd.to_datetime(
+                    f"{match.group(1)} {match.group(2)}", format="%Y-%m-%d %H:%M:%S", utc=True
                 )
             except Exception:
                 continue
@@ -87,8 +86,8 @@ def parse_execution_log(log_name: str = "execute_trades.log") -> dict:
 
 def calculate_weekly_summary() -> dict:
     """Compute weekly trading metrics from CSV files."""
-    today = datetime.utcnow().date()
-    one_week_ago = today - timedelta(days=7)
+    today = pd.Timestamp.utcnow().tz_localize("UTC")
+    one_week_ago = today - pd.Timedelta(days=7)
 
     executed_trades = load_csv("executed_trades.csv")
     trades_log = load_csv("trades_log.csv")
@@ -100,16 +99,16 @@ def calculate_weekly_summary() -> dict:
 
     # Filter executed trades for the week
     if "entry_time" in executed_trades.columns:
-        executed_trades["entry_time"] = pd.to_datetime(executed_trades["entry_time"])
-        weekly_exec = executed_trades[executed_trades["entry_time"] >= pd.Timestamp(one_week_ago)]
+        executed_trades["entry_time"] = pd.to_datetime(executed_trades["entry_time"], utc=True)
+        weekly_exec = executed_trades[executed_trades["entry_time"] >= one_week_ago]
     else:
         weekly_exec = pd.DataFrame()
     total_trades = len(weekly_exec)
 
     # Closed trades for the week
     if not trades_log.empty:
-        trades_log["exit_time"] = pd.to_datetime(trades_log["exit_time"])
-        closed_week = trades_log[trades_log["exit_time"] >= pd.Timestamp(one_week_ago)]
+        trades_log["exit_time"] = pd.to_datetime(trades_log["exit_time"], utc=True)
+        closed_week = trades_log[trades_log["exit_time"] >= one_week_ago]
     else:
         closed_week = pd.DataFrame()
 
@@ -139,9 +138,9 @@ def calculate_weekly_summary() -> dict:
 
     best_candidate = ""
     if not historical_candidates.empty:
-        historical_candidates["date"] = pd.to_datetime(historical_candidates["date"])
+        historical_candidates["date"] = pd.to_datetime(historical_candidates["date"], utc=True)
         recent_candidates = historical_candidates[
-            historical_candidates["date"] >= pd.Timestamp(one_week_ago)
+            historical_candidates["date"] >= one_week_ago
         ]
         if not recent_candidates.empty:
             best_candidate = recent_candidates.sort_values("score", ascending=False)["symbol"].iloc[0]
