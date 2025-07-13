@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Insert the project root directory into Python's module search path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import logging
 import math
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
