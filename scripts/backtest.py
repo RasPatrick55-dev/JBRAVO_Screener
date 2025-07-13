@@ -396,6 +396,12 @@ def run_backtest(symbols: List[str]) -> None:
     bt.run()
 
     trades_df = bt.results()
+    # Add entry_time column for dashboard compatibility
+    if "entry_date" in trades_df.columns and "entry_time" not in trades_df.columns:
+        trades_df["entry_time"] = trades_df["entry_date"]
+    if "exit_date" in trades_df.columns and "exit_time" not in trades_df.columns:
+        trades_df["exit_time"] = trades_df["exit_date"]
+
     equity_df = bt.equity()
     metrics = bt.metrics()
 
