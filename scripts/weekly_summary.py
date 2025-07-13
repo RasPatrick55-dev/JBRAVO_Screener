@@ -86,7 +86,8 @@ def parse_execution_log(log_name: str = "execute_trades.log") -> dict:
 
 def calculate_weekly_summary() -> dict:
     """Compute weekly trading metrics from CSV files."""
-    today = pd.Timestamp.utcnow().tz_localize("UTC")
+    # Use timezone-aware timestamp directly to avoid localization errors
+    today = pd.Timestamp.now(tz="UTC")
     one_week_ago = today - pd.Timedelta(days=7)
 
     executed_trades = load_csv("executed_trades.csv")
