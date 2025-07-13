@@ -15,7 +15,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 # Import indicator helpers from screener to keep the scoring consistent
-from . import screener
+from scripts import screener
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
