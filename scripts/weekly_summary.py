@@ -56,7 +56,7 @@ def parse_execution_log(log_name: str = "execute_trades.log") -> dict:
         logger.warning("Execution log not found: %s", path)
         return stats
 
-    one_week_ago = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(days=7)
+    one_week_ago = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=7)
     ts_pattern = re.compile(r"^(\d{4}-\d{2}-\d{2})\s(\d{2}:\d{2}:\d{2})")
     with open(path, "r") as fh:
         for line in fh:
