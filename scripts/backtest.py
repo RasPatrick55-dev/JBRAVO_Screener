@@ -172,7 +172,7 @@ class Position:
     symbol: str
     qty: int
     entry_price: float
-    entry_date: pd.Timestamp
+    entry_time: pd.Timestamp
     highest_close: float
     trailing_stop: float
 
@@ -180,8 +180,8 @@ class Position:
 @dataclass
 class Trade:
     symbol: str
-    entry_date: pd.Timestamp
-    exit_date: pd.Timestamp
+    entry_time: pd.Timestamp
+    exit_time: pd.Timestamp
     entry_price: float
     exit_price: float
     qty: int
@@ -237,7 +237,7 @@ class PortfolioBacktester:
             symbol=symbol,
             qty=qty,
             entry_price=price,
-            entry_date=date,
+            entry_time=date,
             highest_close=price,
             trailing_stop=trailing,
         )
@@ -253,8 +253,8 @@ class PortfolioBacktester:
         self.trades.append(
             Trade(
                 symbol=symbol,
-                entry_date=pos.entry_date,
-                exit_date=date,
+                entry_time=pos.entry_time,
+                exit_time=date,
                 entry_price=pos.entry_price,
                 exit_price=price,
                 qty=pos.qty,
@@ -279,7 +279,7 @@ class PortfolioBacktester:
                 pos.trailing_stop = max(
                     pos.trailing_stop, pos.highest_close * (1 - self.trail_pct)
                 )
-                hold_days = (date - pos.entry_date).days
+                hold_days = (date - pos.entry_time).days
 
                 exit_price = close
                 reason = None
@@ -396,11 +396,14 @@ def run_backtest(symbols: List[str]) -> None:
     bt.run()
 
     trades_df = bt.results()
-    # Add entry_time column for dashboard compatibility
-    if "entry_date" in trades_df.columns and "entry_time" not in trades_df.columns:
+    # Ensure timestamp columns for dashboard compatibility
+    if "entry_time" not in trades_df.columns and "entry_date" in trades_df.columns:
         trades_df["entry_time"] = trades_df["entry_date"]
-    if "exit_date" in trades_df.columns and "exit_time" not in trades_df.columns:
+    if "exit_time" not in trades_df.columns and "exit_date" in trades_df.columns:
         trades_df["exit_time"] = trades_df["exit_date"]
+    for col in ["entry_date", "exit_date"]:
+        if col in trades_df.columns:
+            trades_df.drop(columns=col, inplace=True)
 
     equity_df = bt.equity()
     metrics = bt.metrics()
