@@ -15,7 +15,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 # Import indicator helpers from screener to keep the scoring consistent
-from scripts import screener
+from .screener import adx, aroon, macd, obv, rsi
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
@@ -93,14 +93,14 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["ma50"] = df["close"].rolling(50).mean()
     df["ma200"] = df["close"].rolling(200).mean()
-    df["rsi"] = screener.rsi(df["close"])
-    macd_line, macd_signal, macd_hist = screener.macd(df["close"])
+    df["rsi"] = rsi(df["close"])
+    macd_line, macd_signal, macd_hist = macd(df["close"])
     df["macd"] = macd_line
     df["macd_signal"] = macd_signal
     df["macd_hist"] = macd_hist
-    df["adx"] = screener.adx(df)
-    df["aroon_up"], df["aroon_down"] = screener.aroon(df)
-    df["obv"] = screener.obv(df)
+    df["adx"] = adx(df)
+    df["aroon_up"], df["aroon_down"] = aroon(df)
+    df["obv"] = obv(df)
     df["vol_avg30"] = df["volume"].rolling(30).mean()
     df["month_high"] = df["high"].rolling(21).max().shift(1)
     df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()

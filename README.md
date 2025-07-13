@@ -22,3 +22,15 @@ To keep CSV files in sync with your Alpaca account, schedule
 ```
 
 Logs for these updates are written to `logs/data_update.log`.
+
+## Running the Backtest
+
+Scripts inside the `scripts` directory use relative imports and should be
+executed as modules from the project root. To run the backtester, use:
+
+```bash
+python -m scripts.backtest
+```
+
+Running the module in this way ensures Python resolves package imports
+correctly.
