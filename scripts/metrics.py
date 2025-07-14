@@ -109,6 +109,24 @@ def save_metrics_summary(metrics_summary, output_file='metrics_summary.csv'):
 # Full execution of metrics calculation, ranking, and summary
 def main():
     results_df = load_results()
+
+    # Detect missing symbol-level metrics and compute from trades_log.csv
+    if "net_pnl" not in results_df.columns:
+        trades_df = pd.read_csv(os.path.join(BASE_DIR, "data", "trades_log.csv"))
+        grouped = trades_df.groupby("symbol")["pnl"]
+
+        symbol_metrics = grouped.agg(
+            trades="count",
+            wins=lambda s: (s > 0).sum(),
+            losses=lambda s: (s <= 0).sum(),
+            net_pnl="sum",
+        ).reset_index()
+        symbol_metrics["win_rate"] = (
+            symbol_metrics["wins"] / symbol_metrics["trades"] * 100
+        )
+
+        results_df = symbol_metrics
+
     ranked_df = rank_candidates(results_df)
     save_top_candidates(ranked_df)
 
