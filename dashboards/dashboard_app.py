@@ -458,44 +458,58 @@ def render_tab(tab, n_intervals, n_log_intervals):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-screener":
-        candidates_df, alert = load_csv(top_candidates_path)
-        backtest_df, _ = load_csv(
-            os.path.join(
-                os.path.dirname(top_candidates_path), "backtest_results.csv"
-            )
+        candidates_df, cand_alert = load_csv(
+            top_candidates_path, required_columns=["symbol", "score"]
         )
-        if alert:
-            table = alert
-        else:
+        backtest_df, back_alert = load_csv(
+            os.path.join(os.path.dirname(top_candidates_path), "backtest_results.csv"),
+            required_columns=["symbol", "win_rate", "net_pnl", "trades", "wins", "losses"],
+        )
+
+        alerts = []
+        if cand_alert:
+            alerts.append(cand_alert)
+        if back_alert:
+            alerts.append(back_alert)
+
+        if not candidates_df.empty:
             merged = pd.merge(
-                candidates_df,
-                backtest_df[["symbol", "win_rate", "net_pnl"]],
+                candidates_df[["symbol", "score"]],
+                backtest_df[
+                    ["symbol", "win_rate", "net_pnl", "trades", "wins", "losses"]
+                ],
                 on="symbol",
                 how="left",
             )
-            columns = [
-                {"name": c.replace("_", " ").title(), "id": c} for c in merged.columns
-            ]
+            merged.sort_values("score", ascending=False, inplace=True)
+            merged.fillna("N/A", inplace=True)
+            merged = merged.head(15)
             table = dash_table.DataTable(
                 id="top-candidates-table",
                 data=merged.to_dict("records"),
-                columns=columns,
-                page_size=20,
-                filter_action="native",
+                columns=[
+                    {"name": "Symbol", "id": "symbol"},
+                    {"name": "Score", "id": "score"},
+                    {"name": "Win Rate", "id": "win_rate"},
+                    {"name": "Net Pnl", "id": "net_pnl"},
+                    {"name": "Trades", "id": "trades"},
+                    {"name": "Wins", "id": "wins"},
+                    {"name": "Losses", "id": "losses"},
+                ],
+                page_size=15,
                 sort_action="native",
                 style_table={"overflowX": "auto"},
                 style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
             )
+        else:
+            table = dbc.Alert("No candidates to display.", color="warning", className="m-2")
 
         pipeline_lines = read_recent_lines(pipeline_log_path)[::-1]
         screener_lines = read_recent_lines(screener_log_path)[::-1]
         backtest_lines = read_recent_lines(backtest_log_path)[::-1]
 
         def format_lines(lines):
-            return [
-                html.Span(l, style={"color": "#E57373"} if "ERROR" in l else {})
-                for l in lines
-            ]
+            return format_log_lines(lines)
 
         pipeline_log = html.Div(
             [
@@ -556,7 +570,9 @@ def render_tab(tab, n_intervals, n_log_intervals):
             className="text-muted mb-2",
         )
 
-        components = [timestamp, table, status]
+        components = [timestamp]
+        components.extend(alerts)
+        components.extend([table, status])
         if freshness:
             components.append(freshness)
         components.extend([pipeline_log, screener_log, backtest_log])
