@@ -7,6 +7,10 @@ short term swing trading.  Only Alpaca tradable assets are evaluated.
 """
 
 import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import logging
 import sqlite3
 from logging.handlers import RotatingFileHandler
@@ -20,8 +24,8 @@ from alpaca.data.historical import StockHistoricalDataClient
 from dotenv import load_dotenv
 import requests
 
-from .indicators import adx, aroon, macd, obv, rsi
-from .utils import write_csv_atomic, cache_bars
+from indicators import adx, aroon, macd, obv, rsi
+from utils import write_csv_atomic, cache_bars
 
 
 
