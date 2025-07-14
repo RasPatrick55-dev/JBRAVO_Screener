@@ -28,7 +28,7 @@ historical_candidates_path = os.path.join(BASE_DIR, "data", "historical_candidat
 
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
-pipeline_log_path = os.path.join(screener_log_dir, "pipeline.log")
+pipeline_log_path = os.path.join(screener_log_dir, "pipeline_log.txt")
 monitor_log_path = os.path.join(screener_log_dir, "monitor.log")
 # Additional logs
 screener_log_path = os.path.join(screener_log_dir, "screener.log")
