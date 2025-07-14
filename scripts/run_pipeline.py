@@ -1,6 +1,11 @@
 # run_pipeline.py
-import subprocess
 import os
+import sys
+
+# Add project root to sys.path so that sibling packages (like scripts) can be imported
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import subprocess
 import logging
 import shutil
 from datetime import datetime, timezone
@@ -8,7 +13,7 @@ from logging.handlers import RotatingFileHandler
 import requests
 import pandas as pd
 
-from .utils import write_csv_atomic
+from utils import write_csv_atomic
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
