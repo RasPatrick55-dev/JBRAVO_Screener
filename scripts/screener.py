@@ -192,6 +192,13 @@ for fut in futures:
 
 # Convert to DataFrame and rank
 ranked_df = pd.DataFrame(ranked_candidates)
+if "score" not in ranked_df.columns:
+    logging.error(
+        "Screener output missing 'score'. DataFrame columns: %s",
+        ranked_df.columns.tolist(),
+    )
+    # Optional: send webhook alert for failure
+    sys.exit(1)
 ranked_df.sort_values(by="score", ascending=False, inplace=True)
 
 csv_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
