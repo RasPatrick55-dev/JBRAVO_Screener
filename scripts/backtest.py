@@ -377,7 +377,26 @@ def run_backtest(symbols: List[str]) -> None:
             trades_df.drop(columns=col, inplace=True)
 
     equity_df = bt.equity()
-    metrics = bt.metrics()
+
+    # Aggregate per-symbol metrics from the trades log
+    if not trades_df.empty:
+        summary_df = (
+            trades_df.groupby("symbol")
+            .agg(
+                trades=("pnl", "size"),
+                wins=("pnl", lambda x: (x > 0).sum()),
+                losses=("pnl", lambda x: (x <= 0).sum()),
+                net_pnl=("pnl", "sum"),
+            )
+            .reset_index()
+        )
+        summary_df["win_rate"] = (
+            summary_df["wins"] / summary_df["trades"] * 100
+        )
+    else:
+        summary_df = pd.DataFrame(
+            columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
+        )
 
     trades_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
     equity_path = os.path.join(BASE_DIR, "data", "equity_curve.csv")
@@ -385,7 +404,7 @@ def run_backtest(symbols: List[str]) -> None:
 
     write_csv_atomic(trades_df, trades_path)
     write_csv_atomic(equity_df.reset_index(), equity_path)
-    write_csv_atomic(pd.DataFrame([metrics]), metrics_path)
+    write_csv_atomic(summary_df, metrics_path)
 
     logging.info("Backtest complete. Results saved to data directory")
 
