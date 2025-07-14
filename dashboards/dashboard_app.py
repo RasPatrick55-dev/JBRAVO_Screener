@@ -831,14 +831,34 @@ def render_tab(tab, n_intervals, n_log_intervals):
 # Callback for modal interaction
 @app.callback(
     [Output("detail-modal", "is_open"), Output("modal-content", "children")],
-    [Input("top-candidates-table", "active_cell"), Input("close-modal", "n_clicks")],
+    [
+        Input("top-candidates-table", "active_cell"),
+        Input("top-candidates-table", "data"),
+        Input("close-modal", "n_clicks"),
+    ],
     [State("detail-modal", "is_open")],
 )
-def toggle_modal(active_cell, close_click, is_open):
-    if active_cell and not is_open:
-        return True, html.Div(
-            "Detailed information would appear here (charts, additional stats, etc.)"
-        )
+def toggle_modal(active_cell, table_data, close_click, is_open):
+    if active_cell and not is_open and table_data:
+        row = table_data[active_cell["row"]]
+        symbol = row.get("symbol")
+        path = os.path.join(BASE_DIR, "data", "history_cache", f"{symbol}.csv")
+        if os.path.exists(path):
+            df = pd.read_csv(path)
+            fig = go.Figure()
+            fig.add_trace(
+                go.Candlestick(
+                    x=df["timestamp"],
+                    open=df["open"],
+                    high=df["high"],
+                    low=df["low"],
+                    close=df["close"],
+                    name=symbol,
+                )
+            )
+            fig.update_layout(template="plotly_dark", title=f"{symbol} Price")
+            return True, dcc.Graph(figure=fig)
+        return True, html.Div(f"No data for {symbol}")
     if close_click and is_open:
         return False, ""
     return is_open, ""

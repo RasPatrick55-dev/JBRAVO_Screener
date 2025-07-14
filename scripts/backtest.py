@@ -13,6 +13,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
+import json
 
 import numpy as np
 import pandas as pd
@@ -20,7 +21,8 @@ import pandas as pd
 from dotenv import load_dotenv
 
 # Import indicator helpers from screener to keep the scoring consistent
-from scripts.screener import adx, aroon, macd, obv, rsi
+from scripts.indicators import adx, aroon, macd, obv, rsi, compute_indicators
+from scripts.utils import write_csv_atomic, cache_bars
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
@@ -48,13 +50,17 @@ logging.basicConfig(
 dotenv_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path)
 
+CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+CONFIG = {}
+if os.path.exists(CONFIG_PATH):
+    with open(CONFIG_PATH) as f:
+        CONFIG = json.load(f)
+
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
-    from alpaca.data.requests import StockBarsRequest
-    from alpaca.data.timeframe import TimeFrame
 
     data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 except Exception as exc:  # pragma: no cover - optional dependency
@@ -63,53 +69,14 @@ except Exception as exc:  # pragma: no cover - optional dependency
 
 
 def get_data(symbol: str, days: int = 800) -> pd.DataFrame:
-    """Fetch OHLCV data from Alpaca. Returns empty DataFrame on failure."""
-
     if data_client is None:
         logging.error("Data client not initialized. Returning empty DataFrame.")
         return pd.DataFrame()
 
-    start_date = datetime.now(timezone.utc) - timedelta(days=days)
-    try:
-        request_params = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,
-            start=start_date,
-            limit=days,
-        )
-        bars = data_client.get_stock_bars(request_params).df
-    except Exception as exc:  # pragma: no cover - network call
-        logging.error("%s: data fetch failed: %s", symbol, exc)
-        return pd.DataFrame()
-
-    if bars.empty:
-        logging.warning("%s: no bars returned", symbol)
-        return pd.DataFrame()
-
-    bars = bars.reset_index()
-    bars["datetime"] = pd.to_datetime(bars["timestamp"])
-    bars.set_index("datetime", inplace=True)
-    return bars[["open", "high", "low", "close", "volume"]]
+    df = cache_bars(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache"), days)
+    return df[["open", "high", "low", "close", "volume"]] if not df.empty else pd.DataFrame()
 
 
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Add indicator columns used in the screener."""
-
-    df = df.copy()
-    df["ma50"] = df["close"].rolling(50).mean()
-    df["ma200"] = df["close"].rolling(200).mean()
-    df["rsi"] = rsi(df["close"])
-    macd_line, macd_signal, macd_hist = macd(df["close"])
-    df["macd"] = macd_line
-    df["macd_signal"] = macd_signal
-    df["macd_hist"] = macd_hist
-    df["adx"] = adx(df)
-    df["aroon_up"], df["aroon_down"] = aroon(df)
-    df["obv"] = obv(df)
-    df["vol_avg30"] = df["volume"].rolling(30).mean()
-    df["month_high"] = df["high"].rolling(21).max().shift(1)
-    df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
-    return df
 
 
 def composite_score(df: pd.DataFrame) -> pd.Series:
@@ -392,7 +359,11 @@ def run_backtest(symbols: List[str]) -> None:
         logging.error("No valid data to run backtest.")
         return
 
-    bt = PortfolioBacktester(data)
+    bt = PortfolioBacktester(
+        data,
+        trail_pct=CONFIG.get('trail_pct', 0.03),
+        max_hold_days=CONFIG.get('max_hold_days', 7),
+    )
     bt.run()
 
     trades_df = bt.results()
@@ -412,9 +383,9 @@ def run_backtest(symbols: List[str]) -> None:
     equity_path = os.path.join(BASE_DIR, "data", "equity_curve.csv")
     metrics_path = os.path.join(BASE_DIR, "data", "backtest_results.csv")
 
-    trades_df.to_csv(trades_path, index=False)
-    equity_df.to_csv(equity_path)
-    pd.DataFrame([metrics]).to_csv(metrics_path, index=False)
+    write_csv_atomic(trades_df, trades_path)
+    write_csv_atomic(equity_df.reset_index(), equity_path)
+    write_csv_atomic(pd.DataFrame([metrics]), metrics_path)
 
     logging.info("Backtest complete. Results saved to data directory")
 
