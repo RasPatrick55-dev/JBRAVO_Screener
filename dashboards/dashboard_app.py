@@ -458,44 +458,21 @@ def render_tab(tab, n_intervals, n_log_intervals):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-screener":
-        candidates_df, cand_alert = load_csv(
-            top_candidates_path, required_columns=["symbol", "score"]
-        )
-        backtest_df, back_alert = load_csv(
-            os.path.join(os.path.dirname(top_candidates_path), "backtest_results.csv"),
-            required_columns=["symbol", "win_rate", "net_pnl", "trades", "wins", "losses"],
-        )
+        df, alert = load_csv(top_candidates_path)
 
-        alerts = []
-        if cand_alert:
-            alerts.append(cand_alert)
-        if back_alert:
-            alerts.append(back_alert)
+        alerts = [alert] if alert else []
 
-        if not candidates_df.empty:
-            merged = pd.merge(
-                candidates_df[["symbol", "score"]],
-                backtest_df[
-                    ["symbol", "win_rate", "net_pnl", "trades", "wins", "losses"]
-                ],
-                on="symbol",
-                how="left",
-            )
-            merged.sort_values("score", ascending=False, inplace=True)
-            merged.fillna("N/A", inplace=True)
-            merged = merged.head(15)
+        if not df.empty:
+            if "score" in df.columns:
+                df.sort_values("score", ascending=False, inplace=True)
+            df = df.head(15)
+            columns = [
+                {"name": c.replace("_", " ").title(), "id": c} for c in df.columns
+            ]
             table = dash_table.DataTable(
                 id="top-candidates-table",
-                data=merged.to_dict("records"),
-                columns=[
-                    {"name": "Symbol", "id": "symbol"},
-                    {"name": "Score", "id": "score"},
-                    {"name": "Win Rate", "id": "win_rate"},
-                    {"name": "Net Pnl", "id": "net_pnl"},
-                    {"name": "Trades", "id": "trades"},
-                    {"name": "Wins", "id": "wins"},
-                    {"name": "Losses", "id": "losses"},
-                ],
+                data=df.to_dict("records"),
+                columns=columns,
                 page_size=15,
                 sort_action="native",
                 style_table={"overflowX": "auto"},
