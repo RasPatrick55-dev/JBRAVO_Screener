@@ -36,7 +36,12 @@ def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 800) -> pd.
         return df
 
     if not new_df.empty:
-        new_df.index = pd.to_datetime(new_df.index)
+        first_idx = new_df.index.tolist()[0]
+        if isinstance(first_idx, tuple):
+            idx_df = pd.DataFrame(new_df.index.tolist(), columns=["year", "month", "day"])
+            new_df.index = pd.to_datetime(idx_df)
+        else:
+            new_df.index = pd.to_datetime(new_df.index)
         df = pd.concat([df, new_df]).sort_index()
         df = df[~df.index.duplicated(keep="last")].tail(days)
         tmp = NamedTemporaryFile("w", delete=False, dir=cache_dir, newline="")
