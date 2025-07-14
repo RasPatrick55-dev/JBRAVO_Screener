@@ -1,11 +1,17 @@
 """Utility helpers for pipeline scripts."""
 import os
 import shutil
+import logging
 import pandas as pd
 from tempfile import NamedTemporaryFile
 from datetime import datetime, timedelta, timezone
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+
+
+def has_datetime_index(idx) -> bool:
+    """Return True if the given index has a datetime dtype."""
+    return hasattr(idx, "dtype") and pd.api.types.is_datetime64_any_dtype(idx.dtype)
 
 
 def write_csv_atomic(df: pd.DataFrame, dest: str) -> None:
@@ -33,6 +39,17 @@ def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 800) -> pd.
     try:
         new_df = data_client.get_stock_bars(request_params).df
     except Exception:
+        return df
+
+    # Validate that the DataFrame has a date-based index
+    if "timestamp" not in new_df.columns and not has_datetime_index(new_df.index):
+        logging.warning(
+            "cache_bars: %s returned invalid index type %s", symbol, new_df.index
+        )
+        return pd.DataFrame()
+
+    if new_df.empty:
+        logging.warning("cache_bars: %s returned empty data", symbol)
         return df
 
     if not new_df.empty:
