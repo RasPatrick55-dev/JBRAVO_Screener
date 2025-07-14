@@ -39,8 +39,10 @@ def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 800) -> pd.
         idx_list = new_df.index.tolist()
         if idx_list and isinstance(idx_list[0], tuple):
             n = len(idx_list[0])
-            col_names = ["year", "month", "day"][:n]
-            idx_df = pd.DataFrame(idx_list, columns=col_names)
+            raw = list(idx_list)
+            if n == 2:
+                raw = [(y, m, 1) for (y, m) in raw]  # default day = 1
+            idx_df = pd.DataFrame(raw, columns=["year", "month", "day"])
             new_df.index = pd.to_datetime(idx_df)
         else:
             new_df.index = pd.to_datetime(new_df.index)
