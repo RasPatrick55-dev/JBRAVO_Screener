@@ -1,4 +1,6 @@
-# execute_trades.py updated for pre-market trading (3% allocation, top 3 symbols, 3% trailing stop)
+# execute_trades.py
+# Dynamically execute limit buys for the highest ranked candidates.
+# Trailing stops and max hold logic manage risk on open trades.
 
 import os
 import subprocess
@@ -54,15 +56,8 @@ ALLOC_PERCENT = 0.03  # Changed allocation to 3%
 TRAIL_PERCENT = 3.0
 MAX_HOLD_DAYS = 7
 
-# Read top candidates (top 3 symbols only)
-try:
-    csv_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
-    df = pd.read_csv(csv_path)
-    df = df.sort_values('score', ascending=False).head(3)
-    logging.info("Loaded %s successfully", csv_path)
-except Exception as e:
-    logging.error("Failed to read CSV: %s", e)
-    exit()
+# Candidate selection happens dynamically from ``top_candidates.csv``.
+
 
 # Ensure executed trades file exists
 exec_trades_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
@@ -88,6 +83,21 @@ def get_buying_power():
 def get_open_positions():
     positions = trading_client.get_all_positions()
     return {p.symbol: p for p in positions}
+
+def load_top_candidates() -> pd.DataFrame:
+    """Load ranked candidates and return only the top slots available."""
+    csv_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
+    try:
+        df = pd.read_csv(csv_path)
+        if 'score' in df.columns:
+            df.sort_values('score', ascending=False, inplace=True)
+        slots = max(MAX_OPEN_TRADES - len(get_open_positions()), 0)
+        df = df.head(slots)
+        logging.info("Loaded %s successfully", csv_path)
+        return df
+    except Exception as exc:
+        logging.error("Failed to read %s: %s", csv_path, exc)
+        return pd.DataFrame(columns=['symbol'])
 
 def save_open_positions_csv():
     """Fetch current open positions from Alpaca and save to CSV."""
@@ -213,6 +223,7 @@ def allocate_position(symbol):
     return qty, round(last_close, 2)
 
 def submit_trades():
+    df = load_top_candidates()
     for _, row in df.iterrows():
         sym = row.symbol
         alloc = allocate_position(sym)
