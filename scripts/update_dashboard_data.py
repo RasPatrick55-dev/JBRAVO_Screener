@@ -82,25 +82,28 @@ def init_db():
         )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS trades_log (
-                    id TEXT PRIMARY KEY,
                     symbol TEXT,
-                    side TEXT,
                     qty REAL,
-                    price REAL,
-                    transaction_time TEXT
+                    entry_price REAL,
+                    exit_price REAL,
+                    entry_time TEXT,
+                    exit_time TEXT,
+                    order_status TEXT,
+                    net_pnl REAL,
+                    order_type TEXT
             )"""
         )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS executed_trades (
-                    id TEXT PRIMARY KEY,
                     symbol TEXT,
-                    side TEXT,
-                    filled_qty REAL,
+                    qty REAL,
                     entry_price REAL,
+                    exit_price REAL,
                     entry_time TEXT,
+                    exit_time TEXT,
                     order_status TEXT,
-                    submitted_at TEXT,
-                    filled_at TEXT
+                    net_pnl REAL,
+                    order_type TEXT
             )"""
         )
 
@@ -206,38 +209,36 @@ def update_order_history():
 
             records.append(
                 {
-                    "id": order.id,
                     "symbol": symbol,
-                    "side": side,
-                    "filled_qty": qty,
+                    "qty": qty,
                     "entry_price": entry_price,
                     "exit_price": exit_price,
                     "entry_time": entry_time,
                     "exit_time": exit_time,
                     "order_status": order.status.value if order.status else "unknown",
-                    "pnl": pnl,
+                    "net_pnl": pnl,
+                    "order_type": getattr(order, "order_type", ""),
                 }
             )
 
         cols = [
-            "id",
             "symbol",
-            "side",
-            "filled_qty",
+            "qty",
             "entry_price",
             "exit_price",
             "entry_time",
             "exit_time",
             "order_status",
-            "pnl",
+            "net_pnl",
+            "order_type",
         ]
-        df = pd.DataFrame(records, columns=cols).drop_duplicates("id")
+        df = pd.DataFrame(records, columns=cols)
 
         if df.empty:
             df = pd.DataFrame(columns=cols)
 
         write_csv_atomic(df, TRADES_LOG_CSV)
-        executed_df = df[df["filled_qty"] > 0][cols]
+        executed_df = df[df["qty"] > 0][cols]
         write_csv_atomic(executed_df, EXECUTED_TRADES_CSV)
 
         with sqlite3.connect(DB_PATH) as conn:
@@ -259,7 +260,7 @@ def update_metrics_summary():
         else:
             df = pd.read_csv(TRADES_LOG_CSV)
 
-        if df.empty or "pnl" not in df.columns:
+        if df.empty or "net_pnl" not in df.columns:
             summary_df = pd.DataFrame(
                 [
                     {
@@ -274,11 +275,11 @@ def update_metrics_summary():
             )
         else:
             total_trades = len(df)
-            wins = len(df[df["pnl"] > 0])
+            wins = len(df[df["net_pnl"] > 0])
             losses = total_trades - wins
             win_rate = (wins / total_trades) * 100 if total_trades else 0.0
-            total_pnl = df["pnl"].sum()
-            avg_return = df["pnl"].mean()
+            total_pnl = df["net_pnl"].sum()
+            avg_return = df["net_pnl"].mean()
             summary_df = pd.DataFrame(
                 [
                     {
