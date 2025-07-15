@@ -191,6 +191,7 @@ def update_trades_log():
                 'exit_time': exit_time,
                 'order_status': order.status.value,
                 'net_pnl': pnl,
+                'pnl': pnl,
                 'order_type': getattr(order, 'order_type', ''),
             })
 
@@ -203,6 +204,7 @@ def update_trades_log():
             'exit_time',
             'order_status',
             'net_pnl',
+            'pnl',
             'order_type',
         ])
         csv_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')

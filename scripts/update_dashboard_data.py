@@ -45,6 +45,19 @@ TRADES_LOG_CSV = os.path.join(DATA_DIR, "trades_log.csv")
 EXECUTED_TRADES_CSV = os.path.join(DATA_DIR, "executed_trades.csv")
 
 
+def load_csv_with_pnl(path: str, fallback_col: str | None = None) -> pd.DataFrame:
+    """Load a CSV ensuring a ``pnl`` column is present."""
+    df = pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
+    if "pnl" not in df.columns:
+        if fallback_col and fallback_col in df.columns:
+            df["pnl"] = df[fallback_col]
+        elif "net_pnl" in df.columns:
+            df["pnl"] = df["net_pnl"]
+        else:
+            df["pnl"] = 0.0
+    return df
+
+
 def send_alert(message: str):
     """Send alert via webhook if configured."""
     if not ALERT_WEBHOOK_URL:
@@ -136,6 +149,7 @@ def update_open_positions():
             "avg_entry_price",
             "current_price",
             "unrealized_pl",
+            "pnl",
             "entry_price",
             "entry_time",
             "exit_price",
@@ -156,6 +170,7 @@ def update_open_positions():
                         "avg_entry_price": float(p.avg_entry_price),
                         "current_price": float(p.current_price),
                         "unrealized_pl": float(p.unrealized_pl),
+                        "pnl": float(p.unrealized_pl),
                         "entry_price": float(p.avg_entry_price),
                         "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
                         "exit_price": "",
@@ -250,6 +265,7 @@ def update_order_history():
                     "exit_price": exit_price,
                     "exit_time": exit_time,
                     "net_pnl": pnl,
+                    "pnl": pnl,
                     "order_status": order.status.value if order.status else "unknown",
                     "order_type": getattr(order, "order_type", ""),
                 }
@@ -266,6 +282,7 @@ def update_order_history():
             "exit_price",
             "exit_time",
             "net_pnl",
+            "pnl",
             "order_status",
             "order_type",
         ]
@@ -299,7 +316,7 @@ def update_metrics_summary():
         if not os.path.exists(TRADES_LOG_CSV):
             df = pd.DataFrame()
         else:
-            df = pd.read_csv(TRADES_LOG_CSV)
+            df = load_csv_with_pnl(TRADES_LOG_CSV)
 
         if df.empty or "net_pnl" not in df.columns:
             summary_df = pd.DataFrame(
@@ -349,7 +366,7 @@ def validate_open_positions():
         if not os.path.exists(OPEN_POSITIONS_CSV):
             logger.warning("open_positions.csv not found for validation")
             return
-        df = pd.read_csv(OPEN_POSITIONS_CSV)
+        df = load_csv_with_pnl(OPEN_POSITIONS_CSV, fallback_col="unrealized_pl")
         csv_map = {row["symbol"]: float(row["qty"]) for _, row in df.iterrows()}
         mismatches = []
         for symbol, qty in csv_map.items():

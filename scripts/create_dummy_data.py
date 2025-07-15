@@ -72,6 +72,7 @@ def populate_dummy_data():
                 'exit_time': t['exit_time'].strftime('%Y-%m-%d %H:%M:%S'),
                 'order_status': 'Filled',
                 'net_pnl': t['pnl'],
+                'pnl': t['pnl'],
                 'order_type': 'sell',
             }
         )
