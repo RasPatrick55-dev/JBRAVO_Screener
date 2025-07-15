@@ -94,6 +94,7 @@ for order in orders_sorted:
             'exit_time': exit_time,
             'order_status': order.status.value if order.status else 'unknown',
             'net_pnl': pnl,
+            'pnl': pnl,
             'order_type': getattr(order, 'order_type', ''),
         }
     )
@@ -110,6 +111,7 @@ cols = [
     'exit_time',
     'order_status',
     'net_pnl',
+    'pnl',
     'order_type',
 ]
 
