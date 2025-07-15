@@ -40,7 +40,7 @@ os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
 log_dir = os.path.join(BASE_DIR, "logs")
 os.makedirs(log_dir, exist_ok=True)
-log_path = os.path.join(log_dir, "monitor.log")
+log_path = os.path.join(log_dir, "monitor_positions.log")
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 handler = InfoRotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
@@ -93,6 +93,26 @@ if not os.path.exists(open_pos_path):
             "entry_time",
         ]
     ).to_csv(open_pos_path, index=False)
+
+executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
+trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
+
+TRADE_COLUMNS = [
+    "symbol",
+    "qty",
+    "entry_price",
+    "exit_price",
+    "entry_time",
+    "exit_time",
+    "order_status",
+    "net_pnl",
+    "order_type",
+    "exit_reason",
+]
+
+for path in (executed_trades_path, trades_log_path):
+    if not os.path.exists(path):
+        pd.DataFrame(columns=TRADE_COLUMNS).to_csv(path, index=False)
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
@@ -280,28 +300,20 @@ def fetch_indicators(symbol):
     }
 
 
-def check_sell_signal(indicators) -> bool:
+def check_sell_signal(indicators) -> list:
+    """Return list of exit reasons triggered by indicators."""
     price = indicators["close"]
     ema20 = indicators["EMA20"]
     rsi = indicators["RSI"]
-    macd = indicators["MACD"]
-    macd_signal = indicators["MACD_signal"]
 
-    sell_by_ma = price < ema20
-    sell_by_rsi = rsi < 50
-    sell_by_macd = macd < macd_signal
-
-    if sell_by_ma and sell_by_rsi and sell_by_macd:
-        logging.info(
-            "Sell signal: price %.2f < EMA20 %.2f, RSI %.2f < 50, MACD %.2f < %.2f",
-            price,
-            ema20,
-            rsi,
-            macd,
-            macd_signal,
-        )
-        return True
-    return False
+    reasons = []
+    if price < ema20:
+        logging.info("Price %.2f below EMA20 %.2f", price, ema20)
+        reasons.append("EMA20 cross")
+    if rsi > 70:
+        logging.info("RSI %.2f above 70", rsi)
+        reasons.append("RSI > 70")
+    return reasons
 
 
 def get_open_orders(symbol):
@@ -333,6 +345,37 @@ def last_filled_trailing_stop(symbol):
     except Exception as e:
         logging.error("Failed to fetch order history for %s: %s", symbol, e)
     return None
+
+
+def log_trade_exit(
+    symbol: str,
+    qty: float,
+    entry_price: float,
+    exit_price: str,
+    entry_time: str,
+    exit_time: str,
+    order_status: str,
+    order_type: str,
+    exit_reason: str,
+):
+    """Append a standardized trade record to CSV files."""
+    row = {
+        "symbol": symbol,
+        "qty": qty,
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "entry_time": entry_time,
+        "exit_time": exit_time,
+        "order_status": order_status,
+        "net_pnl": 0.0,
+        "order_type": order_type,
+        "exit_reason": exit_reason,
+    }
+    for path in (executed_trades_path, trades_log_path):
+        try:
+            pd.DataFrame([row]).to_csv(path, mode="a", header=False, index=False)
+        except Exception as exc:
+            logging.error("Failed to log trade to %s: %s", path, exc)
 
 
 def has_pending_sell_order(symbol):
@@ -434,16 +477,30 @@ def manage_trailing_stop(position):
 # Execute sell orders
 
 
-def submit_sell_market_order(symbol, qty, reason: str):
-    """Submit a market sell order with error handling."""
+def submit_sell_market_order(position, reason: str):
+    """Submit a market sell order and log the attempt."""
+    symbol = position.symbol
+    qty = position.qty
+    entry_price = float(position.avg_entry_price)
+    entry_time = getattr(position, "created_at", datetime.utcnow()).isoformat()
     try:
         trading_client.submit_order(
-            symbol=symbol, qty=qty, side="sell", type="market", time_in_force="day"
+            symbol=symbol,
+            qty=qty,
+            side="sell",
+            type="market",
+            time_in_force="day",
         )
-        logging.info(
-            "[EXIT] Market sell %s qty %s due to %s.",
+        logging.info("[EXIT] Market sell %s qty %s due to %s", symbol, qty, reason)
+        log_trade_exit(
             symbol,
-            qty,
+            float(qty),
+            entry_price,
+            "",
+            entry_time,
+            "",
+            "submitted",
+            "market",
             reason,
         )
     except Exception as e:
@@ -469,11 +526,16 @@ def process_positions_cycle():
             if trailing_order:
                 try:
                     trading_client.cancel_order(trailing_order.id)
-                    logging.info("Cancelled trailing stop for %s due to max hold exit", symbol)
+                    logging.info(
+                        "Cancelled trailing stop for %s due to max hold exit",
+                        symbol,
+                    )
                 except Exception as e:
-                    logging.error("Failed to cancel trailing stop for %s: %s", symbol, e)
+                    logging.error(
+                        "Failed to cancel trailing stop for %s: %s", symbol, e
+                    )
 
-            submit_sell_market_order(symbol, position.qty, reason=f"max hold {days_held}d")
+            submit_sell_market_order(position, reason=f"Max Hold {days_held}d")
             continue
 
         indicators = fetch_indicators(symbol)
@@ -492,7 +554,8 @@ def process_positions_cycle():
             indicators["RSI"],
         )
 
-        if check_sell_signal(indicators):
+        reasons = check_sell_signal(indicators)
+        if reasons:
             if has_pending_sell_order(symbol):
                 logging.info("Sell order already pending for %s", symbol)
                 continue
@@ -505,8 +568,8 @@ def process_positions_cycle():
                     logging.error(
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
-
-            submit_sell_market_order(symbol, position.qty, reason="indicator sell signal")
+            reason_text = "; ".join(reasons)
+            submit_sell_market_order(position, reason=reason_text)
         else:
             logging.info(f"No sell signal for {symbol}; managing trailing stop.")
             manage_trailing_stop(position)
