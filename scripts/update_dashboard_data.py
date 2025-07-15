@@ -26,7 +26,9 @@ ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
 logger = logging.getLogger("update_dashboard_data")
 logger.setLevel(logging.INFO)
 handler = RotatingFileHandler(
-    os.path.join(LOG_DIR, "data_update.log"), maxBytes=2_000_000, backupCount=5
+    os.path.join(LOG_DIR, "update_dashboard_data.log"),
+    maxBytes=2_000_000,
+    backupCount=5,
 )
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 handler.setFormatter(formatter)
@@ -77,19 +79,27 @@ def init_db():
                     current_price REAL,
                     unrealized_pl REAL,
                     entry_price REAL,
-                    entry_time TEXT
+                    entry_time TEXT,
+                    exit_price REAL,
+                    exit_time TEXT,
+                    net_pnl REAL,
+                    order_status TEXT,
+                    order_type TEXT
             )"""
         )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS trades_log (
                     symbol TEXT,
                     qty REAL,
+                    avg_entry_price REAL,
+                    current_price REAL,
+                    unrealized_pl REAL,
                     entry_price REAL,
                     exit_price REAL,
                     entry_time TEXT,
                     exit_time TEXT,
-                    order_status TEXT,
                     net_pnl REAL,
+                    order_status TEXT,
                     order_type TEXT
             )"""
         )
@@ -97,12 +107,15 @@ def init_db():
             """CREATE TABLE IF NOT EXISTS executed_trades (
                     symbol TEXT,
                     qty REAL,
+                    avg_entry_price REAL,
+                    current_price REAL,
+                    unrealized_pl REAL,
                     entry_price REAL,
                     exit_price REAL,
                     entry_time TEXT,
                     exit_time TEXT,
-                    order_status TEXT,
                     net_pnl REAL,
+                    order_status TEXT,
                     order_type TEXT
             )"""
         )
@@ -125,21 +138,38 @@ def update_open_positions():
             "unrealized_pl",
             "entry_price",
             "entry_time",
+            "exit_price",
+            "exit_time",
+            "net_pnl",
+            "order_status",
+            "order_type",
         ]
 
         positions = trading_client.get_all_positions()
-        rows = [
-            {
-                "symbol": p.symbol,
-                "qty": float(p.qty),
-                "avg_entry_price": float(p.avg_entry_price),
-                "current_price": float(p.current_price),
-                "unrealized_pl": float(p.unrealized_pl),
-                "entry_price": float(p.avg_entry_price),
-                "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
-            }
-            for p in positions
-        ]
+        rows = []
+        for p in positions:
+            try:
+                rows.append(
+                    {
+                        "symbol": p.symbol,
+                        "qty": float(p.qty),
+                        "avg_entry_price": float(p.avg_entry_price),
+                        "current_price": float(p.current_price),
+                        "unrealized_pl": float(p.unrealized_pl),
+                        "entry_price": float(p.avg_entry_price),
+                        "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
+                        "exit_price": "",
+                        "exit_time": "",
+                        "net_pnl": float(p.unrealized_pl),
+                        "order_status": "open",
+                        "order_type": "",
+                    }
+                )
+            except Exception as exc:
+                logger.error("Error processing position %s: %s", getattr(p, "symbol", ""), exc)
+
+        logger.info("Fetched %s open positions", len(rows))
+
         df = pd.DataFrame(rows, columns=columns)
         if df.empty:
             df = pd.DataFrame(columns=columns)
@@ -174,6 +204,7 @@ def update_order_history():
     try:
         orders = [o for o in fetch_all_orders() if o.filled_at is not None]
         orders.sort(key=lambda o: o.filled_at)
+        logger.info("Fetched %s orders from Alpaca", len(orders))
 
         open_positions = {}
         records = []
@@ -211,12 +242,15 @@ def update_order_history():
                 {
                     "symbol": symbol,
                     "qty": qty,
+                    "avg_entry_price": entry_price,
+                    "current_price": exit_price or entry_price,
+                    "unrealized_pl": 0.0,
                     "entry_price": entry_price,
-                    "exit_price": exit_price,
                     "entry_time": entry_time,
+                    "exit_price": exit_price,
                     "exit_time": exit_time,
-                    "order_status": order.status.value if order.status else "unknown",
                     "net_pnl": pnl,
+                    "order_status": order.status.value if order.status else "unknown",
                     "order_type": getattr(order, "order_type", ""),
                 }
             )
@@ -224,12 +258,15 @@ def update_order_history():
         cols = [
             "symbol",
             "qty",
+            "avg_entry_price",
+            "current_price",
+            "unrealized_pl",
             "entry_price",
-            "exit_price",
             "entry_time",
+            "exit_price",
             "exit_time",
-            "order_status",
             "net_pnl",
+            "order_status",
             "order_type",
         ]
         df = pd.DataFrame(records, columns=cols)
@@ -247,7 +284,11 @@ def update_order_history():
                 "executed_trades", conn, if_exists="replace", index=False
             )
 
-        logger.info("Updated trades_log.csv and executed_trades.csv successfully.")
+        logger.info(
+            "Updated trades_log.csv with %s records and executed_trades.csv with %s records.",
+            len(df),
+            len(executed_df),
+        )
     except Exception as e:
         logger.exception("Failed to update order history due to %s", e)
 
