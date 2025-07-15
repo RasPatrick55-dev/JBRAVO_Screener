@@ -113,8 +113,26 @@ TRADING_START_HOUR = int(os.getenv("TRADING_START_HOUR", "4"))
 TRADING_END_HOUR = int(os.getenv("TRADING_END_HOUR", "20"))
 EASTERN_TZ = pytz.timezone("US/Eastern")
 
+# Trailing stop and position exit configuration
+TRAIL_START_PERCENT = float(os.getenv("TRAIL_START_PERCENT", "5"))
+TRAIL_TIGHT_PERCENT = float(os.getenv("TRAIL_TIGHT_PERCENT", "3"))
+GAIN_THRESHOLD_ADJUST = float(os.getenv("GAIN_THRESHOLD_ADJUST", "10"))
+MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "7"))
+
 # Minimum number of historical bars required for indicator calculation
 required_bars = 200
+
+
+def calculate_days_held(position) -> int:
+    """Return the number of days the position has been held."""
+    entry_ts = getattr(position, "created_at", None)
+    if entry_ts is None:
+        return 0
+    try:
+        entry_dt = pd.to_datetime(entry_ts, utc=True)
+    except Exception:
+        return 0
+    return (datetime.now(timezone.utc) - entry_dt).days
 
 
 # Fetch current positions
@@ -274,6 +292,14 @@ def check_sell_signal(indicators) -> bool:
     sell_by_macd = macd < macd_signal
 
     if sell_by_ma and sell_by_rsi and sell_by_macd:
+        logging.info(
+            "Sell signal: price %.2f < EMA20 %.2f, RSI %.2f < 50, MACD %.2f < %.2f",
+            price,
+            ema20,
+            rsi,
+            macd,
+            macd_signal,
+        )
         return True
     return False
 
@@ -348,7 +374,7 @@ def manage_trailing_stop(position):
                 getattr(last_filled, "filled_avg_price", "n/a"),
             )
         logging.info(
-            f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct=5"
+            f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct={TRAIL_START_PERCENT}"
         )
         try:
             request = TrailingStopOrderRequest(
@@ -356,21 +382,25 @@ def manage_trailing_stop(position):
                 qty=position.qty,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.GTC,
-                trail_percent="5",
+                trail_percent=str(TRAIL_START_PERCENT),
             )
             trading_client.submit_order(order_data=request)
-            logging.info(f"Placed new trailing stop for {symbol}.")
+            logging.info(f"Placed new trailing stop for {symbol} at {TRAIL_START_PERCENT}%.")
         except Exception as e:
             logging.error("Failed to create trailing stop for %s: %s", symbol, e)
         return
     else:
         logging.info(
-            f"Trailing stop already exists for {symbol} (order id {trailing_order.id}, status {trailing_order.status})."
+            "Existing trailing stop for %s (order id %s, status %s, trail %% %s)",
+            symbol,
+            trailing_order.id,
+            trailing_order.status,
+            getattr(trailing_order, "trail_percent", "n/a"),
         )
         logging.info(f"Skipping creation of new trailing stop for {symbol}.")
 
-    if gain_pct > 10:
-        new_trail = "3"
+    if gain_pct > GAIN_THRESHOLD_ADJUST:
+        new_trail = str(TRAIL_TIGHT_PERCENT)
         try:
             trading_client.cancel_order(trailing_order.id)
             logging.info(
@@ -385,9 +415,10 @@ def manage_trailing_stop(position):
             )
             trading_client.submit_order(order_data=request)
             logging.info(
-                "Adjusted trailing stop for %s from 5% to %s%% (gain: %.2f%%).",
+                "Adjusted trailing stop for %s from %s%% to %s%% (gain: %.2f%%).",
                 symbol,
-                new_trail,
+                TRAIL_START_PERCENT,
+                TRAIL_TIGHT_PERCENT,
                 gain_pct,
             )
         except Exception as e:
@@ -403,16 +434,17 @@ def manage_trailing_stop(position):
 # Execute sell orders
 
 
-def submit_sell_market_order(symbol, qty):
+def submit_sell_market_order(symbol, qty, reason: str):
     """Submit a market sell order with error handling."""
     try:
         trading_client.submit_order(
             symbol=symbol, qty=qty, side="sell", type="market", time_in_force="day"
         )
         logging.info(
-            "[SELL SIGNAL] Selling %s (qty %s) due to strategy exit conditions.",
+            "[EXIT] Market sell %s qty %s due to %s.",
             symbol,
             qty,
+            reason,
         )
     except Exception as e:
         logging.error("Error submitting sell order for %s: %s", symbol, e)
@@ -426,6 +458,24 @@ def process_positions_cycle():
         return
     for position in positions:
         symbol = position.symbol
+        days_held = calculate_days_held(position)
+        logging.info("%s held for %d days", symbol, days_held)
+        if days_held >= MAX_HOLD_DAYS:
+            if has_pending_sell_order(symbol):
+                logging.info("Sell order already pending for %s", symbol)
+                continue
+
+            trailing_order = get_trailing_stop_order(symbol)
+            if trailing_order:
+                try:
+                    trading_client.cancel_order(trailing_order.id)
+                    logging.info("Cancelled trailing stop for %s due to max hold exit", symbol)
+                except Exception as e:
+                    logging.error("Failed to cancel trailing stop for %s: %s", symbol, e)
+
+            submit_sell_market_order(symbol, position.qty, reason=f"max hold {days_held}d")
+            continue
+
         indicators = fetch_indicators(symbol)
         if not indicators:
             logging.info(
@@ -456,7 +506,7 @@ def process_positions_cycle():
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
 
-            submit_sell_market_order(symbol, position.qty)
+            submit_sell_market_order(symbol, position.qty, reason="indicator sell signal")
         else:
             logging.info(f"No sell signal for {symbol}; managing trailing stop.")
             manage_trailing_stop(position)
