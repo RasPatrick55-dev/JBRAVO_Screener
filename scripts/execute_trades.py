@@ -157,13 +157,13 @@ def update_trades_log():
                 'exit_price': exit_price,
                 'entry_time': entry_time,
                 'exit_time': exit_time,
-                'status': order.status.value,
+                'order_status': order.status.value,
                 'pnl': 0.0,
             })
         df = pd.DataFrame(records, columns=[
             'id', 'symbol', 'side', 'filled_qty',
             'entry_price', 'exit_price', 'entry_time',
-            'exit_time', 'status', 'pnl'
+            'exit_time', 'order_status', 'pnl'
         ])
         csv_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
         df.to_csv(csv_path, index=False)

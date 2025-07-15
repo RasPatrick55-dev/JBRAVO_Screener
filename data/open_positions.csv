@@ -1,4 +1,4 @@
-symbol,qty,current_price,unrealized_pl
-EYE,424,25.25,546.96
-SPRO,3200,3.04,-128
-TNXP,305,38.01,79.3
+symbol,qty,avg_entry_price,current_price,unrealized_pl,entry_price,entry_time
+EYE,424,,25.25,546.96,,
+SPRO,3200,,3.04,-128,,
+TNXP,305,,38.01,79.3,,
