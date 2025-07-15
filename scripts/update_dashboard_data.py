@@ -114,6 +114,16 @@ def write_csv_atomic(df: pd.DataFrame, dest: str):
 
 def update_open_positions():
     try:
+        columns = [
+            "symbol",
+            "qty",
+            "avg_entry_price",
+            "current_price",
+            "unrealized_pl",
+            "entry_price",
+            "entry_time",
+        ]
+
         positions = trading_client.get_all_positions()
         rows = [
             {
@@ -127,19 +137,9 @@ def update_open_positions():
             }
             for p in positions
         ]
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(rows, columns=columns)
         if df.empty:
-            df = pd.DataFrame(
-                columns=[
-                    "symbol",
-                    "qty",
-                    "avg_entry_price",
-                    "current_price",
-                    "unrealized_pl",
-                    "entry_price",
-                    "entry_time",
-                ]
-            )
+            df = pd.DataFrame(columns=columns)
         write_csv_atomic(df, OPEN_POSITIONS_CSV)
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql("open_positions", conn, if_exists="replace", index=False)
@@ -219,7 +219,6 @@ def update_order_history():
                 }
             )
 
-        df = pd.DataFrame(records).drop_duplicates("id")
         cols = [
             "id",
             "symbol",
@@ -232,11 +231,13 @@ def update_order_history():
             "order_status",
             "pnl",
         ]
+        df = pd.DataFrame(records, columns=cols).drop_duplicates("id")
+
         if df.empty:
             df = pd.DataFrame(columns=cols)
 
         write_csv_atomic(df, TRADES_LOG_CSV)
-        executed_df = df[df["filled_qty"] > 0]
+        executed_df = df[df["filled_qty"] > 0][cols]
         write_csv_atomic(executed_df, EXECUTED_TRADES_CSV)
 
         with sqlite3.connect(DB_PATH) as conn:
