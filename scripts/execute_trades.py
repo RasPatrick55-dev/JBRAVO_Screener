@@ -328,10 +328,13 @@ def daily_exit_check():
             logging.warning("No entry order found for %s, skipping.", symbol)
             continue
 
-        valid_entries = [o for o in entry_orders if o.filled_at is not None]
+        # Filter out orders without a fill timestamp
+        valid_entries = [o for o in entry_orders if getattr(o, "filled_at", None)]
         if not valid_entries:
-            logging.warning(f"No filled entry orders found for symbol {symbol}. Skipping exit check.")
-            continue
+            logging.warning(
+                f"No filled entry orders found for symbol {symbol}. Skipping exit check."
+            )
+            continue  # Move to next symbol
         entry_order = max(valid_entries, key=lambda o: o.filled_at)
         entry_date = entry_order.filled_at.date()
         days_held = (datetime.now(timezone.utc).date() - entry_date).days
