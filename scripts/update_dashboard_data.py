@@ -149,13 +149,12 @@ def update_open_positions():
             "avg_entry_price",
             "current_price",
             "unrealized_pl",
-            "pnl",
             "entry_price",
             "entry_time",
-            "exit_price",
-            "exit_time",
-            "net_pnl",
+            "side",
             "order_status",
+            "net_pnl",
+            "pnl",
             "order_type",
         ]
 
@@ -170,14 +169,13 @@ def update_open_positions():
                         "avg_entry_price": float(p.avg_entry_price),
                         "current_price": float(p.current_price),
                         "unrealized_pl": float(p.unrealized_pl),
-                        "pnl": float(p.unrealized_pl),
                         "entry_price": float(p.avg_entry_price),
                         "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
-                        "exit_price": "",
-                        "exit_time": "",
-                        "net_pnl": float(p.unrealized_pl),
+                        "side": getattr(p, "side", "long"),
                         "order_status": "open",
-                        "order_type": "",
+                        "net_pnl": float(p.unrealized_pl),
+                        "pnl": float(p.unrealized_pl),
+                        "order_type": getattr(p, "order_type", "market"),
                     }
                 )
             except Exception as exc:
@@ -185,9 +183,15 @@ def update_open_positions():
 
         logger.info("Fetched %s open positions", len(rows))
 
-        df = pd.DataFrame(rows, columns=columns)
+        df = pd.DataFrame(rows)
         if df.empty:
             df = pd.DataFrame(columns=columns)
+        df['side'] = df.get('side', 'long')
+        df['order_status'] = df.get('order_status', 'open')
+        df['net_pnl'] = df.get('unrealized_pl', 0.0)
+        df['pnl'] = df['net_pnl']
+        df['order_type'] = df.get('order_type', 'market')
+        df = df[columns]
         write_csv_atomic(df, OPEN_POSITIONS_CSV)
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql("open_positions", conn, if_exists="replace", index=False)
