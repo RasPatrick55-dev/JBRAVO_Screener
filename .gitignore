@@ -8,4 +8,6 @@ assets_backup/
 # Ignore runtime data and logs
 data/*.csv
 logs/*.log*
+data/open_positions.csv
+data/trades_log.csv
 
