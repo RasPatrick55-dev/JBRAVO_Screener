@@ -113,9 +113,9 @@ def calculate_weekly_summary() -> dict:
     else:
         closed_week = pd.DataFrame()
 
-    wins = (closed_week["pnl"] > 0).sum() if not closed_week.empty else 0
+    wins = (closed_week["net_pnl"] > 0).sum() if not closed_week.empty else 0
     win_rate = (wins / len(closed_week) * 100) if len(closed_week) else 0
-    realized_pnl = closed_week["pnl"].sum() if not closed_week.empty else 0
+    realized_pnl = closed_week["net_pnl"].sum() if not closed_week.empty else 0
 
     unrealized_pnl = (
         open_positions["unrealized_pl"].sum() if "unrealized_pl" in open_positions.columns else 0
@@ -127,7 +127,7 @@ def calculate_weekly_summary() -> dict:
 
     best_trade_symbol = ""
     if not closed_week.empty:
-        best_idx = closed_week["pnl"].idxmax()
+        best_idx = closed_week["net_pnl"].idxmax()
         if pd.notna(best_idx):
             best_trade_symbol = closed_week.loc[best_idx, "symbol"]
 

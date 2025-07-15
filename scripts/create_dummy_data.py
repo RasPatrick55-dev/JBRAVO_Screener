@@ -64,16 +64,15 @@ def populate_dummy_data():
     for t in trades:
         normalized.append(
             {
-                'id': t['trade_id'],
                 'symbol': t['symbol'],
-                'side': 'sell',
-                'filled_qty': t['quantity'],
+                'qty': t['quantity'],
                 'entry_price': t['entry_price'],
                 'exit_price': t['exit_price'],
                 'entry_time': t['entry_time'].strftime('%Y-%m-%d %H:%M:%S'),
                 'exit_time': t['exit_time'].strftime('%Y-%m-%d %H:%M:%S'),
                 'order_status': 'Filled',
-                'pnl': t['pnl'],
+                'net_pnl': t['pnl'],
+                'order_type': 'sell',
             }
         )
     df_trades_log = pd.DataFrame(normalized)
