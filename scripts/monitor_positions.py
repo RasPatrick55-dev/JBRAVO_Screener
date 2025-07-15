@@ -40,7 +40,7 @@ os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
 log_dir = os.path.join(BASE_DIR, "logs")
 os.makedirs(log_dir, exist_ok=True)
-log_path = os.path.join(log_dir, "monitor.log")
+log_path = os.path.join(log_dir, "monitor_positions.log")
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 handler = InfoRotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
@@ -94,6 +94,26 @@ if not os.path.exists(open_pos_path):
         ]
     ).to_csv(open_pos_path, index=False)
 
+executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
+trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
+
+TRADE_COLUMNS = [
+    "symbol",
+    "qty",
+    "entry_price",
+    "exit_price",
+    "entry_time",
+    "exit_time",
+    "order_status",
+    "net_pnl",
+    "order_type",
+    "exit_reason",
+]
+
+for path in (executed_trades_path, trades_log_path):
+    if not os.path.exists(path):
+        pd.DataFrame(columns=TRADE_COLUMNS).to_csv(path, index=False)
+
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
@@ -113,8 +133,26 @@ TRADING_START_HOUR = int(os.getenv("TRADING_START_HOUR", "4"))
 TRADING_END_HOUR = int(os.getenv("TRADING_END_HOUR", "20"))
 EASTERN_TZ = pytz.timezone("US/Eastern")
 
+# Trailing stop and position exit configuration
+TRAIL_START_PERCENT = float(os.getenv("TRAIL_START_PERCENT", "5"))
+TRAIL_TIGHT_PERCENT = float(os.getenv("TRAIL_TIGHT_PERCENT", "3"))
+GAIN_THRESHOLD_ADJUST = float(os.getenv("GAIN_THRESHOLD_ADJUST", "10"))
+MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "7"))
+
 # Minimum number of historical bars required for indicator calculation
 required_bars = 200
+
+
+def calculate_days_held(position) -> int:
+    """Return the number of days the position has been held."""
+    entry_ts = getattr(position, "created_at", None)
+    if entry_ts is None:
+        return 0
+    try:
+        entry_dt = pd.to_datetime(entry_ts, utc=True)
+    except Exception:
+        return 0
+    return (datetime.now(timezone.utc) - entry_dt).days
 
 
 # Fetch current positions
@@ -262,20 +300,20 @@ def fetch_indicators(symbol):
     }
 
 
-def check_sell_signal(indicators) -> bool:
+def check_sell_signal(indicators) -> list:
+    """Return list of exit reasons triggered by indicators."""
     price = indicators["close"]
     ema20 = indicators["EMA20"]
     rsi = indicators["RSI"]
-    macd = indicators["MACD"]
-    macd_signal = indicators["MACD_signal"]
 
-    sell_by_ma = price < ema20
-    sell_by_rsi = rsi < 50
-    sell_by_macd = macd < macd_signal
-
-    if sell_by_ma and sell_by_rsi and sell_by_macd:
-        return True
-    return False
+    reasons = []
+    if price < ema20:
+        logging.info("Price %.2f below EMA20 %.2f", price, ema20)
+        reasons.append("EMA20 cross")
+    if rsi > 70:
+        logging.info("RSI %.2f above 70", rsi)
+        reasons.append("RSI > 70")
+    return reasons
 
 
 def get_open_orders(symbol):
@@ -307,6 +345,37 @@ def last_filled_trailing_stop(symbol):
     except Exception as e:
         logging.error("Failed to fetch order history for %s: %s", symbol, e)
     return None
+
+
+def log_trade_exit(
+    symbol: str,
+    qty: float,
+    entry_price: float,
+    exit_price: str,
+    entry_time: str,
+    exit_time: str,
+    order_status: str,
+    order_type: str,
+    exit_reason: str,
+):
+    """Append a standardized trade record to CSV files."""
+    row = {
+        "symbol": symbol,
+        "qty": qty,
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "entry_time": entry_time,
+        "exit_time": exit_time,
+        "order_status": order_status,
+        "net_pnl": 0.0,
+        "order_type": order_type,
+        "exit_reason": exit_reason,
+    }
+    for path in (executed_trades_path, trades_log_path):
+        try:
+            pd.DataFrame([row]).to_csv(path, mode="a", header=False, index=False)
+        except Exception as exc:
+            logging.error("Failed to log trade to %s: %s", path, exc)
 
 
 def has_pending_sell_order(symbol):
@@ -348,7 +417,7 @@ def manage_trailing_stop(position):
                 getattr(last_filled, "filled_avg_price", "n/a"),
             )
         logging.info(
-            f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct=5"
+            f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct={TRAIL_START_PERCENT}"
         )
         try:
             request = TrailingStopOrderRequest(
@@ -356,21 +425,25 @@ def manage_trailing_stop(position):
                 qty=position.qty,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.GTC,
-                trail_percent="5",
+                trail_percent=str(TRAIL_START_PERCENT),
             )
             trading_client.submit_order(order_data=request)
-            logging.info(f"Placed new trailing stop for {symbol}.")
+            logging.info(f"Placed new trailing stop for {symbol} at {TRAIL_START_PERCENT}%.")
         except Exception as e:
             logging.error("Failed to create trailing stop for %s: %s", symbol, e)
         return
     else:
         logging.info(
-            f"Trailing stop already exists for {symbol} (order id {trailing_order.id}, status {trailing_order.status})."
+            "Existing trailing stop for %s (order id %s, status %s, trail %% %s)",
+            symbol,
+            trailing_order.id,
+            trailing_order.status,
+            getattr(trailing_order, "trail_percent", "n/a"),
         )
         logging.info(f"Skipping creation of new trailing stop for {symbol}.")
 
-    if gain_pct > 10:
-        new_trail = "3"
+    if gain_pct > GAIN_THRESHOLD_ADJUST:
+        new_trail = str(TRAIL_TIGHT_PERCENT)
         try:
             trading_client.cancel_order(trailing_order.id)
             logging.info(
@@ -385,9 +458,10 @@ def manage_trailing_stop(position):
             )
             trading_client.submit_order(order_data=request)
             logging.info(
-                "Adjusted trailing stop for %s from 5% to %s%% (gain: %.2f%%).",
+                "Adjusted trailing stop for %s from %s%% to %s%% (gain: %.2f%%).",
                 symbol,
-                new_trail,
+                TRAIL_START_PERCENT,
+                TRAIL_TIGHT_PERCENT,
                 gain_pct,
             )
         except Exception as e:
@@ -403,16 +477,31 @@ def manage_trailing_stop(position):
 # Execute sell orders
 
 
-def submit_sell_market_order(symbol, qty):
-    """Submit a market sell order with error handling."""
+def submit_sell_market_order(position, reason: str):
+    """Submit a market sell order and log the attempt."""
+    symbol = position.symbol
+    qty = position.qty
+    entry_price = float(position.avg_entry_price)
+    entry_time = getattr(position, "created_at", datetime.utcnow()).isoformat()
     try:
         trading_client.submit_order(
-            symbol=symbol, qty=qty, side="sell", type="market", time_in_force="day"
+            symbol=symbol,
+            qty=qty,
+            side="sell",
+            type="market",
+            time_in_force="day",
         )
-        logging.info(
-            "[SELL SIGNAL] Selling %s (qty %s) due to strategy exit conditions.",
+        logging.info("[EXIT] Market sell %s qty %s due to %s", symbol, qty, reason)
+        log_trade_exit(
             symbol,
-            qty,
+            float(qty),
+            entry_price,
+            "",
+            entry_time,
+            "",
+            "submitted",
+            "market",
+            reason,
         )
     except Exception as e:
         logging.error("Error submitting sell order for %s: %s", symbol, e)
@@ -426,6 +515,29 @@ def process_positions_cycle():
         return
     for position in positions:
         symbol = position.symbol
+        days_held = calculate_days_held(position)
+        logging.info("%s held for %d days", symbol, days_held)
+        if days_held >= MAX_HOLD_DAYS:
+            if has_pending_sell_order(symbol):
+                logging.info("Sell order already pending for %s", symbol)
+                continue
+
+            trailing_order = get_trailing_stop_order(symbol)
+            if trailing_order:
+                try:
+                    trading_client.cancel_order(trailing_order.id)
+                    logging.info(
+                        "Cancelled trailing stop for %s due to max hold exit",
+                        symbol,
+                    )
+                except Exception as e:
+                    logging.error(
+                        "Failed to cancel trailing stop for %s: %s", symbol, e
+                    )
+
+            submit_sell_market_order(position, reason=f"Max Hold {days_held}d")
+            continue
+
         indicators = fetch_indicators(symbol)
         if not indicators:
             logging.info(
@@ -442,7 +554,8 @@ def process_positions_cycle():
             indicators["RSI"],
         )
 
-        if check_sell_signal(indicators):
+        reasons = check_sell_signal(indicators)
+        if reasons:
             if has_pending_sell_order(symbol):
                 logging.info("Sell order already pending for %s", symbol)
                 continue
@@ -455,8 +568,8 @@ def process_positions_cycle():
                     logging.error(
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
-
-            submit_sell_market_order(symbol, position.qty)
+            reason_text = "; ".join(reasons)
+            submit_sell_market_order(position, reason=reason_text)
         else:
             logging.info(f"No sell signal for {symbol}; managing trailing stop.")
             manage_trailing_stop(position)

@@ -59,8 +59,23 @@ def populate_dummy_data():
     conn.commit()
     conn.close()
 
-    # Populate trades_log.csv
-    df_trades_log = pd.DataFrame(trades)
+    # Populate trades_log.csv using standardized columns
+    normalized = []
+    for t in trades:
+        normalized.append(
+            {
+                'symbol': t['symbol'],
+                'qty': t['quantity'],
+                'entry_price': t['entry_price'],
+                'exit_price': t['exit_price'],
+                'entry_time': t['entry_time'].strftime('%Y-%m-%d %H:%M:%S'),
+                'exit_time': t['exit_time'].strftime('%Y-%m-%d %H:%M:%S'),
+                'order_status': 'Filled',
+                'net_pnl': t['pnl'],
+                'order_type': 'sell',
+            }
+        )
+    df_trades_log = pd.DataFrame(normalized)
     trades_log_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
     df_trades_log.to_csv(trades_log_path, index=False)
 

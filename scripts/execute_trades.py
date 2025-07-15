@@ -1,4 +1,6 @@
-# execute_trades.py updated for pre-market trading (3% allocation, top 3 symbols, 3% trailing stop)
+# execute_trades.py
+# Dynamically execute limit buys for the highest ranked candidates.
+# Trailing stops and max hold logic manage risk on open trades.
 
 import os
 import subprocess
@@ -54,23 +56,23 @@ ALLOC_PERCENT = 0.03  # Changed allocation to 3%
 TRAIL_PERCENT = 3.0
 MAX_HOLD_DAYS = 7
 
-# Read top candidates (top 3 symbols only)
-try:
-    csv_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
-    df = pd.read_csv(csv_path)
-    df = df.sort_values('score', ascending=False).head(3)
-    logging.info("Loaded %s successfully", csv_path)
-except Exception as e:
-    logging.error("Failed to read CSV: %s", e)
-    exit()
+# Candidate selection happens dynamically from ``top_candidates.csv``.
+
 
 # Ensure executed trades file exists
 exec_trades_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
 if not os.path.exists(exec_trades_path):
     pd.DataFrame(
         columns=[
-            'id', 'symbol', 'side', 'filled_qty', 'entry_price',
-            'exit_price', 'entry_time', 'exit_time', 'order_status', 'pnl'
+            'symbol',
+            'qty',
+            'entry_price',
+            'exit_price',
+            'entry_time',
+            'exit_time',
+            'order_status',
+            'net_pnl',
+            'order_type',
         ]
     ).to_csv(exec_trades_path, index=False)
 
@@ -88,6 +90,37 @@ def get_buying_power():
 def get_open_positions():
     positions = trading_client.get_all_positions()
     return {p.symbol: p for p in positions}
+
+def load_top_candidates() -> pd.DataFrame:
+    """Load ranked candidates from ``top_candidates.csv`` and return the
+    top entries based on ``MAX_OPEN_TRADES``.
+    """
+
+    top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
+    expected_columns = [
+        "symbol",
+        "score",
+        "win_rate",
+        "net_pnl",
+        "trades",
+        "wins",
+        "losses",
+        "avg_return",
+    ]
+
+    try:
+        candidates_df = pd.read_csv(top_candidates_path)
+        assert all(
+            col in candidates_df.columns for col in expected_columns
+        ), "Missing columns in top_candidates.csv"
+
+        candidates_df.sort_values("score", ascending=False, inplace=True)
+        selected_candidates = candidates_df.head(MAX_OPEN_TRADES)
+        logging.info("Loaded %s successfully", top_candidates_path)
+        return selected_candidates
+    except Exception as exc:
+        logging.error("Failed to read %s: %s", top_candidates_path, exc)
+        return pd.DataFrame(columns=expected_columns)
 
 def save_open_positions_csv():
     """Fetch current open positions from Alpaca and save to CSV."""
@@ -135,35 +168,42 @@ def update_trades_log():
             exit_price = order.filled_avg_price if order.side.value == 'sell' else ''
 
             if order.side.value == 'buy':
-                # Ensure timestamp exists before converting
                 ts = order.filled_at
                 entry_time = ts.isoformat() if ts is not None else 'N/A'
             else:
                 entry_time = ''
 
             if order.side.value == 'sell':
-                # Safely convert sell timestamp when available
                 ts = order.filled_at
                 exit_time = ts.isoformat() if ts is not None else 'N/A'
             else:
                 exit_time = ''
 
+            qty = float(order.filled_qty or 0)
+            pnl = (float(exit_price) - float(entry_price)) * qty if exit_price and entry_price else 0.0
+
             records.append({
-                'id': order.id,
                 'symbol': order.symbol,
-                'side': order.side.value,
-                'filled_qty': float(order.filled_qty or 0),
+                'qty': qty,
                 'entry_price': entry_price,
                 'exit_price': exit_price,
                 'entry_time': entry_time,
                 'exit_time': exit_time,
-                'status': order.status.value,
-                'pnl': 0.0,
+                'order_status': order.status.value,
+                'net_pnl': pnl,
+                'order_type': getattr(order, 'order_type', ''),
             })
+
         df = pd.DataFrame(records, columns=[
-            'id', 'symbol', 'side', 'filled_qty',
-            'entry_price', 'exit_price', 'entry_time',
-            'exit_time', 'status', 'pnl'
+            'symbol',
+            'qty',
+            'entry_price',
+            'exit_price',
+            'entry_time',
+            'exit_time',
+            'order_status',
+            'net_pnl',
+            'order_type',
         ])
         csv_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
         df.to_csv(csv_path, index=False)
@@ -171,22 +211,22 @@ def update_trades_log():
     except Exception as e:
         logging.error("Failed to update trades log: %s", e)
 
-def record_executed_trade(symbol, entry_price, status):
-    """Append executed trade details to CSV."""
-    csv_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
+def record_executed_trade(symbol, qty, entry_price, order_type, order_status="submitted"):
+    """Append executed trade details to CSV using the unified schema."""
+
+    csv_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
     row = {
-        'id': datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S'),
-        'symbol': symbol,
-        'side': status,
-        'filled_qty': 0,
-        'entry_price': entry_price,
-        'exit_price': '',
-        'entry_time': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
-        'exit_time': '',
-        'order_status': status,
-        'pnl': 0.0,
+        "symbol": symbol,
+        "qty": qty,
+        "entry_price": entry_price,
+        "exit_price": "",
+        "entry_time": datetime.now(timezone.utc).isoformat(),
+        "exit_time": "",
+        "order_status": order_status,
+        "net_pnl": 0.0,
+        "order_type": order_type,
     }
-    pd.DataFrame([row]).to_csv(csv_path, mode='a', header=False, index=False)
+    pd.DataFrame([row]).to_csv(csv_path, mode="a", header=False, index=False)
 
 def allocate_position(symbol):
     open_positions = get_open_positions()
@@ -213,6 +253,7 @@ def allocate_position(symbol):
     return qty, round(last_close, 2)
 
 def submit_trades():
+    df = load_top_candidates()
     for _, row in df.iterrows():
         sym = row.symbol
         alloc = allocate_position(sym)
@@ -220,7 +261,16 @@ def submit_trades():
             continue
 
         qty, entry_price = alloc
-        logging.info("Submitting limit buy order for %s, qty=%s, limit=%s", sym, qty, entry_price)
+        logging.info(
+            "Submitting limit buy order for %s, qty=%s, limit=%s | score=%s win_rate=%s net_pnl=%s avg_return=%s",
+            sym,
+            qty,
+            entry_price,
+            row.score,
+            row.win_rate,
+            row.net_pnl,
+            row.avg_return,
+        )
         try:
             order = LimitOrderRequest(
                 symbol=sym,
@@ -231,7 +281,8 @@ def submit_trades():
                 extended_hours=True
             )
             trading_client.submit_order(order)
-            record_executed_trade(sym, entry_price, 'buy')
+            record_executed_trade(sym, qty, entry_price, order_type="limit")
+            attach_trailing_stops()
         except Exception as e:
             logging.error("Failed to submit buy order for %s: %s", sym, e)
 
@@ -255,7 +306,12 @@ def attach_trailing_stops():
                 time_in_force=TimeInForce.GTC
             )
             trading_client.submit_order(request)
-            record_executed_trade(symbol, pos.avg_entry_price, 'trailing_stop')
+            record_executed_trade(
+                symbol,
+                int(pos.qty),
+                pos.avg_entry_price,
+                order_type="trailing_stop",
+            )
         except Exception as e:
             logging.error("Failed to create trailing stop for %s: %s", symbol, e)
 
@@ -287,7 +343,12 @@ def daily_exit_check():
                     extended_hours=True
                 )
                 trading_client.submit_order(order)
-                record_executed_trade(symbol, pos.current_price, 'sell')
+                record_executed_trade(
+                    symbol,
+                    int(pos.qty),
+                    pos.current_price,
+                    order_type="market",
+                )
             except Exception as e:
                 logging.error("Failed to close %s: %s", symbol, e)
 

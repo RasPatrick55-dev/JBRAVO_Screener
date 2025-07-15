@@ -26,7 +26,9 @@ ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
 logger = logging.getLogger("update_dashboard_data")
 logger.setLevel(logging.INFO)
 handler = RotatingFileHandler(
-    os.path.join(LOG_DIR, "data_update.log"), maxBytes=2_000_000, backupCount=5
+    os.path.join(LOG_DIR, "update_dashboard_data.log"),
+    maxBytes=2_000_000,
+    backupCount=5,
 )
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 handler.setFormatter(formatter)
@@ -76,30 +78,45 @@ def init_db():
                     avg_entry_price REAL,
                     current_price REAL,
                     unrealized_pl REAL,
-                    entry_time TEXT
+                    entry_price REAL,
+                    entry_time TEXT,
+                    exit_price REAL,
+                    exit_time TEXT,
+                    net_pnl REAL,
+                    order_status TEXT,
+                    order_type TEXT
             )"""
         )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS trades_log (
-                    id TEXT PRIMARY KEY,
                     symbol TEXT,
-                    side TEXT,
                     qty REAL,
-                    price REAL,
-                    transaction_time TEXT
+                    avg_entry_price REAL,
+                    current_price REAL,
+                    unrealized_pl REAL,
+                    entry_price REAL,
+                    exit_price REAL,
+                    entry_time TEXT,
+                    exit_time TEXT,
+                    net_pnl REAL,
+                    order_status TEXT,
+                    order_type TEXT
             )"""
         )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS executed_trades (
-                    id TEXT PRIMARY KEY,
                     symbol TEXT,
-                    side TEXT,
-                    filled_qty REAL,
+                    qty REAL,
+                    avg_entry_price REAL,
+                    current_price REAL,
+                    unrealized_pl REAL,
                     entry_price REAL,
+                    exit_price REAL,
                     entry_time TEXT,
+                    exit_time TEXT,
+                    net_pnl REAL,
                     order_status TEXT,
-                    submitted_at TEXT,
-                    filled_at TEXT
+                    order_type TEXT
             )"""
         )
 
@@ -113,30 +130,49 @@ def write_csv_atomic(df: pd.DataFrame, dest: str):
 
 def update_open_positions():
     try:
-        positions = trading_client.get_all_positions()
-        rows = [
-            {
-                "symbol": p.symbol,
-                "qty": float(p.qty),
-                "avg_entry_price": float(p.avg_entry_price),
-                "current_price": float(p.current_price),
-                "unrealized_pl": float(p.unrealized_pl),
-                "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
-            }
-            for p in positions
+        columns = [
+            "symbol",
+            "qty",
+            "avg_entry_price",
+            "current_price",
+            "unrealized_pl",
+            "entry_price",
+            "entry_time",
+            "exit_price",
+            "exit_time",
+            "net_pnl",
+            "order_status",
+            "order_type",
         ]
-        df = pd.DataFrame(rows)
+
+        positions = trading_client.get_all_positions()
+        rows = []
+        for p in positions:
+            try:
+                rows.append(
+                    {
+                        "symbol": p.symbol,
+                        "qty": float(p.qty),
+                        "avg_entry_price": float(p.avg_entry_price),
+                        "current_price": float(p.current_price),
+                        "unrealized_pl": float(p.unrealized_pl),
+                        "entry_price": float(p.avg_entry_price),
+                        "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
+                        "exit_price": "",
+                        "exit_time": "",
+                        "net_pnl": float(p.unrealized_pl),
+                        "order_status": "open",
+                        "order_type": "",
+                    }
+                )
+            except Exception as exc:
+                logger.error("Error processing position %s: %s", getattr(p, "symbol", ""), exc)
+
+        logger.info("Fetched %s open positions", len(rows))
+
+        df = pd.DataFrame(rows, columns=columns)
         if df.empty:
-            df = pd.DataFrame(
-                columns=[
-                    "symbol",
-                    "qty",
-                    "avg_entry_price",
-                    "current_price",
-                    "unrealized_pl",
-                    "entry_time",
-                ]
-            )
+            df = pd.DataFrame(columns=columns)
         write_csv_atomic(df, OPEN_POSITIONS_CSV)
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql("open_positions", conn, if_exists="replace", index=False)
@@ -168,6 +204,7 @@ def update_order_history():
     try:
         orders = [o for o in fetch_all_orders() if o.filled_at is not None]
         orders.sort(key=lambda o: o.filled_at)
+        logger.info("Fetched %s orders from Alpaca", len(orders))
 
         open_positions = {}
         records = []
@@ -203,37 +240,42 @@ def update_order_history():
 
             records.append(
                 {
-                    "id": order.id,
                     "symbol": symbol,
-                    "side": side,
-                    "filled_qty": qty,
+                    "qty": qty,
+                    "avg_entry_price": entry_price,
+                    "current_price": exit_price or entry_price,
+                    "unrealized_pl": 0.0,
                     "entry_price": entry_price,
-                    "exit_price": exit_price,
                     "entry_time": entry_time,
+                    "exit_price": exit_price,
                     "exit_time": exit_time,
+                    "net_pnl": pnl,
                     "order_status": order.status.value if order.status else "unknown",
-                    "pnl": pnl,
+                    "order_type": getattr(order, "order_type", ""),
                 }
             )
 
-        df = pd.DataFrame(records).drop_duplicates("id")
         cols = [
-            "id",
             "symbol",
-            "side",
-            "filled_qty",
+            "qty",
+            "avg_entry_price",
+            "current_price",
+            "unrealized_pl",
             "entry_price",
-            "exit_price",
             "entry_time",
+            "exit_price",
             "exit_time",
+            "net_pnl",
             "order_status",
-            "pnl",
+            "order_type",
         ]
+        df = pd.DataFrame(records, columns=cols)
+
         if df.empty:
             df = pd.DataFrame(columns=cols)
 
         write_csv_atomic(df, TRADES_LOG_CSV)
-        executed_df = df[df["filled_qty"] > 0]
+        executed_df = df[df["qty"] > 0][cols]
         write_csv_atomic(executed_df, EXECUTED_TRADES_CSV)
 
         with sqlite3.connect(DB_PATH) as conn:
@@ -242,7 +284,11 @@ def update_order_history():
                 "executed_trades", conn, if_exists="replace", index=False
             )
 
-        logger.info("Updated trades_log.csv and executed_trades.csv successfully.")
+        logger.info(
+            "Updated trades_log.csv with %s records and executed_trades.csv with %s records.",
+            len(df),
+            len(executed_df),
+        )
     except Exception as e:
         logger.exception("Failed to update order history due to %s", e)
 
@@ -255,7 +301,7 @@ def update_metrics_summary():
         else:
             df = pd.read_csv(TRADES_LOG_CSV)
 
-        if df.empty or "pnl" not in df.columns:
+        if df.empty or "net_pnl" not in df.columns:
             summary_df = pd.DataFrame(
                 [
                     {
@@ -270,11 +316,11 @@ def update_metrics_summary():
             )
         else:
             total_trades = len(df)
-            wins = len(df[df["pnl"] > 0])
+            wins = len(df[df["net_pnl"] > 0])
             losses = total_trades - wins
             win_rate = (wins / total_trades) * 100 if total_trades else 0.0
-            total_pnl = df["pnl"].sum()
-            avg_return = df["pnl"].mean()
+            total_pnl = df["net_pnl"].sum()
+            avg_return = df["net_pnl"].mean()
             summary_df = pd.DataFrame(
                 [
                     {

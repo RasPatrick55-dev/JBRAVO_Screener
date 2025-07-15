@@ -86,38 +86,36 @@ for order in orders_sorted:
 
     records.append(
         {
-            'id': order.id,
             'symbol': symbol,
-            'side': side,
-            'filled_qty': qty,
+            'qty': qty,
             'entry_price': entry_price,
             'exit_price': exit_price,
             'entry_time': entry_time,
             'exit_time': exit_time,
             'order_status': order.status.value if order.status else 'unknown',
-            'pnl': pnl,
+            'net_pnl': pnl,
+            'order_type': getattr(order, 'order_type', ''),
         }
     )
 
-df = pd.DataFrame(records).drop_duplicates('id')
+df = pd.DataFrame(records)
 data_dir = os.path.join(BASE_DIR, 'data')
 
 cols = [
-    'id',
     'symbol',
-    'side',
-    'filled_qty',
+    'qty',
     'entry_price',
     'exit_price',
     'entry_time',
     'exit_time',
     'order_status',
-    'pnl',
+    'net_pnl',
+    'order_type',
 ]
 
 df[cols].to_csv(os.path.join(data_dir, 'trades_log.csv'), index=False)
 
-executed_trades = df[df['filled_qty'] > 0]
+executed_trades = df[df['qty'] > 0]
 executed_trades[cols].to_csv(
     os.path.join(data_dir, 'executed_trades.csv'),
     index=False,

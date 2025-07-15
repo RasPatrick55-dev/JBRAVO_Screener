@@ -113,7 +113,7 @@ def main():
     # Detect missing symbol-level metrics and compute from trades_log.csv
     if "net_pnl" not in results_df.columns:
         trades_df = pd.read_csv(os.path.join(BASE_DIR, "data", "trades_log.csv"))
-        grouped = trades_df.groupby("symbol")["pnl"]
+        grouped = trades_df.groupby("symbol")["net_pnl"]
 
         symbol_metrics = grouped.agg(
             trades="count",
