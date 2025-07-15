@@ -76,6 +76,7 @@ def init_db():
                     avg_entry_price REAL,
                     current_price REAL,
                     unrealized_pl REAL,
+                    entry_price REAL,
                     entry_time TEXT
             )"""
         )
@@ -121,6 +122,7 @@ def update_open_positions():
                 "avg_entry_price": float(p.avg_entry_price),
                 "current_price": float(p.current_price),
                 "unrealized_pl": float(p.unrealized_pl),
+                "entry_price": float(p.avg_entry_price),
                 "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
             }
             for p in positions
@@ -134,6 +136,7 @@ def update_open_positions():
                     "avg_entry_price",
                     "current_price",
                     "unrealized_pl",
+                    "entry_price",
                     "entry_time",
                 ]
             )
