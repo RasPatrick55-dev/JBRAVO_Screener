@@ -91,6 +91,11 @@ if not os.path.exists(open_pos_path):
             "unrealized_pl",
             "entry_price",
             "entry_time",
+            "side",
+            "order_status",
+            "net_pnl",
+            "pnl",
+            "order_type",
         ]
     ).to_csv(open_pos_path, index=False)
 
@@ -191,24 +196,31 @@ def save_positions_csv(positions):
                     "current_price": p.current_price,
                     "unrealized_pl": p.unrealized_pl,
                     "entry_price": p.avg_entry_price,
-                    "entry_time": getattr(
-                        p, "created_at", datetime.utcnow()
-                    ).isoformat(),
+                    "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
+                    "side": getattr(p, "side", "long"),
+                    "order_status": "open",
+                    "net_pnl": p.unrealized_pl,
+                    "pnl": p.unrealized_pl,
+                    "order_type": getattr(p, "order_type", "market"),
                 }
             )
 
-        df = pd.DataFrame(
-            rows,
-            columns=[
-                "symbol",
-                "qty",
-                "avg_entry_price",
-                "current_price",
-                "unrealized_pl",
-                "entry_price",
-                "entry_time",
-            ],
-        )
+        columns = [
+            "symbol",
+            "qty",
+            "avg_entry_price",
+            "current_price",
+            "unrealized_pl",
+            "entry_price",
+            "entry_time",
+            "side",
+            "order_status",
+            "net_pnl",
+            "pnl",
+            "order_type",
+        ]
+
+        df = pd.DataFrame(rows, columns=columns)
 
         removed = []
         if not existing.empty and "symbol" in existing.columns:
@@ -219,17 +231,7 @@ def save_positions_csv(positions):
             send_alert(msg)
 
         if df.empty:
-            df = pd.DataFrame(
-                columns=[
-                    "symbol",
-                    "qty",
-                    "avg_entry_price",
-                    "current_price",
-                    "unrealized_pl",
-                    "entry_price",
-                    "entry_time",
-                ]
-            )
+            df = pd.DataFrame(columns=columns)
         tmp = NamedTemporaryFile(
             "w", delete=False, dir=os.path.dirname(csv_path), newline=""
         )
