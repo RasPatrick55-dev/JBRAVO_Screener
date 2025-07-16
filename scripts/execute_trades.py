@@ -174,9 +174,16 @@ def save_open_positions_csv():
             'order_type',
         ]
 
-        df = pd.DataFrame(data, columns=columns)
+        df = pd.DataFrame(data)
         if df.empty:
             df = pd.DataFrame(columns=columns)
+
+        df['side'] = df.get('side', 'long')
+        df['order_status'] = df.get('order_status', 'open')
+        df['net_pnl'] = df.get('unrealized_pl', 0.0)
+        df['pnl'] = df['net_pnl']
+        df['order_type'] = df.get('order_type', 'limit')
+        df = df[columns]
 
         csv_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
         df.to_csv(csv_path, index=False)
