@@ -113,6 +113,7 @@ TRADE_COLUMNS = [
     "net_pnl",
     "order_type",
     "exit_reason",
+    "side",
 ]
 
 for path in (executed_trades_path, trades_log_path):
@@ -379,6 +380,7 @@ def log_trade_exit(
         "net_pnl": 0.0,
         "order_type": order_type,
         "exit_reason": exit_reason,
+        "side": "sell",
     }
     for path in (executed_trades_path, trades_log_path):
         try:

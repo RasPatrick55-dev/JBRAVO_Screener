@@ -113,7 +113,8 @@ def init_db():
                     exit_time TEXT,
                     net_pnl REAL,
                     order_status TEXT,
-                    order_type TEXT
+                    order_type TEXT,
+                    side TEXT
             )"""
         )
         conn.execute(
@@ -129,7 +130,8 @@ def init_db():
                     exit_time TEXT,
                     net_pnl REAL,
                     order_status TEXT,
-                    order_type TEXT
+                    order_type TEXT,
+                    side TEXT
             )"""
         )
 
@@ -272,6 +274,7 @@ def update_order_history():
                     "pnl": pnl,
                     "order_status": order.status.value if order.status else "unknown",
                     "order_type": getattr(order, "order_type", ""),
+                    "side": side,
                 }
             )
 
@@ -289,6 +292,7 @@ def update_order_history():
             "pnl",
             "order_status",
             "order_type",
+            "side",
         ]
         df = pd.DataFrame(records, columns=cols)
 

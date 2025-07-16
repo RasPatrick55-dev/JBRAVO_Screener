@@ -96,6 +96,7 @@ for order in orders_sorted:
             'net_pnl': pnl,
             'pnl': pnl,
             'order_type': getattr(order, 'order_type', ''),
+            'side': side,
         }
     )
 
@@ -113,6 +114,7 @@ cols = [
     'net_pnl',
     'pnl',
     'order_type',
+    'side',
 ]
 
 df[cols].to_csv(os.path.join(data_dir, 'trades_log.csv'), index=False)
