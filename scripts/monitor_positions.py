@@ -220,7 +220,14 @@ def save_positions_csv(positions):
             "order_type",
         ]
 
-        df = pd.DataFrame(rows, columns=columns)
+        df = pd.DataFrame(rows)
+
+        df['side'] = df.get('side', 'long')
+        df['order_status'] = df.get('order_status', 'open')
+        df['net_pnl'] = df.get('unrealized_pl', 0.0)
+        df['pnl'] = df['net_pnl']
+        df['order_type'] = df.get('order_type', 'limit')
+        df = df[columns]
 
         removed = []
         if not existing.empty and "symbol" in existing.columns:

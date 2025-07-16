@@ -175,7 +175,7 @@ def update_open_positions():
                         "order_status": "open",
                         "net_pnl": float(p.unrealized_pl),
                         "pnl": float(p.unrealized_pl),
-                        "order_type": getattr(p, "order_type", "market"),
+                        "order_type": getattr(p, "order_type", "limit"),
                     }
                 )
             except Exception as exc:
@@ -190,7 +190,7 @@ def update_open_positions():
         df['order_status'] = df.get('order_status', 'open')
         df['net_pnl'] = df.get('unrealized_pl', 0.0)
         df['pnl'] = df['net_pnl']
-        df['order_type'] = df.get('order_type', 'market')
+        df['order_type'] = df.get('order_type', 'limit')
         df = df[columns]
         write_csv_atomic(df, OPEN_POSITIONS_CSV)
         with sqlite3.connect(DB_PATH) as conn:
