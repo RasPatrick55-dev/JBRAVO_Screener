@@ -64,15 +64,16 @@ exec_trades_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
 if not os.path.exists(exec_trades_path):
     pd.DataFrame(
         columns=[
-            'symbol',
-            'qty',
-            'entry_price',
-            'exit_price',
-            'entry_time',
-            'exit_time',
-            'order_status',
-            'net_pnl',
-            'order_type',
+            "symbol",
+            "qty",
+            "entry_price",
+            "exit_price",
+            "entry_time",
+            "exit_time",
+            "order_status",
+            "net_pnl",
+            "order_type",
+            "side",
         ]
     ).to_csv(exec_trades_path, index=False)
 
@@ -216,38 +217,47 @@ def update_trades_log():
             qty = float(order.filled_qty or 0)
             pnl = (float(exit_price) - float(entry_price)) * qty if exit_price and entry_price else 0.0
 
-            records.append({
-                'symbol': order.symbol,
-                'qty': qty,
-                'entry_price': entry_price,
-                'exit_price': exit_price,
-                'entry_time': entry_time,
-                'exit_time': exit_time,
-                'order_status': order.status.value,
-                'net_pnl': pnl,
-                'pnl': pnl,
-                'order_type': getattr(order, 'order_type', ''),
-            })
+            records.append(
+                {
+                    "symbol": order.symbol,
+                    "qty": qty,
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "entry_time": entry_time,
+                    "exit_time": exit_time,
+                    "order_status": order.status.value,
+                    "net_pnl": pnl,
+                    "pnl": pnl,
+                    "order_type": getattr(order, "order_type", ""),
+                    "side": order.side.value,
+                }
+            )
 
-        df = pd.DataFrame(records, columns=[
-            'symbol',
-            'qty',
-            'entry_price',
-            'exit_price',
-            'entry_time',
-            'exit_time',
-            'order_status',
-            'net_pnl',
-            'pnl',
-            'order_type',
-        ])
+        df = pd.DataFrame(
+            records,
+            columns=[
+                "symbol",
+                "qty",
+                "entry_price",
+                "exit_price",
+                "entry_time",
+                "exit_time",
+                "order_status",
+                "net_pnl",
+                "pnl",
+                "order_type",
+                "side",
+            ],
+        )
         csv_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
         df.to_csv(csv_path, index=False)
         logging.info("Saved trades log to %s", csv_path)
     except Exception as e:
         logging.error("Failed to update trades log: %s", e)
 
-def record_executed_trade(symbol, qty, entry_price, order_type, order_status="submitted"):
+def record_executed_trade(
+    symbol, qty, entry_price, order_type, side, order_status="submitted"
+):
     """Append executed trade details to CSV using the unified schema."""
 
     csv_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
@@ -261,6 +271,7 @@ def record_executed_trade(symbol, qty, entry_price, order_type, order_status="su
         "order_status": order_status,
         "net_pnl": 0.0,
         "order_type": order_type,
+        "side": side,
     }
     pd.DataFrame([row]).to_csv(csv_path, mode="a", header=False, index=False)
 
@@ -317,7 +328,9 @@ def submit_trades():
                 extended_hours=True
             )
             trading_client.submit_order(order)
-            record_executed_trade(sym, qty, entry_price, order_type="limit")
+            record_executed_trade(
+                sym, qty, entry_price, order_type="limit", side="buy"
+            )
             attach_trailing_stops()
         except Exception as e:
             logging.error("Failed to submit buy order for %s: %s", sym, e)
@@ -347,6 +360,7 @@ def attach_trailing_stops():
                 int(pos.qty),
                 pos.avg_entry_price,
                 order_type="trailing_stop",
+                side="sell",
             )
         except Exception as e:
             logging.error("Failed to create trailing stop for %s: %s", symbol, e)
@@ -391,6 +405,7 @@ def daily_exit_check():
                     int(pos.qty),
                     pos.current_price,
                     order_type="market",
+                    side="sell",
                 )
             except Exception as e:
                 logging.error("Failed to close %s: %s", symbol, e)

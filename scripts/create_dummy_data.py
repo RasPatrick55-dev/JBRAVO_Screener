@@ -74,6 +74,7 @@ def populate_dummy_data():
                 'net_pnl': t['pnl'],
                 'pnl': t['pnl'],
                 'order_type': 'sell',
+                'side': 'sell',
             }
         )
     df_trades_log = pd.DataFrame(normalized)
