@@ -77,10 +77,23 @@ if not os.path.exists(exec_trades_path):
     ).to_csv(exec_trades_path, index=False)
 
 # Ensure open positions file exists
-open_pos_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
+open_pos_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 if not os.path.exists(open_pos_path):
     pd.DataFrame(
-        columns=['symbol', 'qty', 'avg_entry_price', 'current_price', 'unrealized_pl', 'entry_price', 'entry_time']
+        columns=[
+            "symbol",
+            "qty",
+            "avg_entry_price",
+            "current_price",
+            "unrealized_pl",
+            "entry_price",
+            "entry_time",
+            "side",
+            "order_status",
+            "net_pnl",
+            "pnl",
+            "order_type",
+        ]
     ).to_csv(open_pos_path, index=False)
 
 def get_buying_power():
@@ -138,18 +151,32 @@ def save_open_positions_csv():
                 # Safely convert timestamp to ISO format only when present
                 'entry_time': (
                     ts.isoformat() if (ts := getattr(p, 'created_at', None)) is not None else 'N/A'
-                )
+                ),
+                'side': getattr(p, 'side', 'long'),
+                'order_status': 'open',
+                'net_pnl': p.unrealized_pl,
+                'pnl': p.unrealized_pl,
+                'order_type': getattr(p, 'order_type', 'market'),
             })
 
-        df = pd.DataFrame(data, columns=[
-            'symbol', 'qty', 'avg_entry_price', 'current_price',
-            'unrealized_pl', 'entry_price', 'entry_time']
-        )
+        columns = [
+            'symbol',
+            'qty',
+            'avg_entry_price',
+            'current_price',
+            'unrealized_pl',
+            'entry_price',
+            'entry_time',
+            'side',
+            'order_status',
+            'net_pnl',
+            'pnl',
+            'order_type',
+        ]
+
+        df = pd.DataFrame(data, columns=columns)
         if df.empty:
-            df = pd.DataFrame(columns=[
-                'symbol', 'qty', 'avg_entry_price', 'current_price',
-                'unrealized_pl', 'entry_price', 'entry_time'
-            ])
+            df = pd.DataFrame(columns=columns)
 
         csv_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
         df.to_csv(csv_path, index=False)
