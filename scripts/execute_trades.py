@@ -392,14 +392,15 @@ def daily_exit_check():
         if days_held >= MAX_HOLD_DAYS:
             logging.info("Exiting %s after %s days", symbol, days_held)
             try:
-                order = MarketOrderRequest(
+                order_request = MarketOrderRequest(
                     symbol=symbol,
                     qty=pos.qty,
                     side=OrderSide.SELL,
                     time_in_force=TimeInForce.DAY,
-                    extended_hours=True
+                    extended_hours=True,
                 )
-                trading_client.submit_order(order)
+                order_response = trading_client.submit_order(order_request)
+                logging.info("Order submitted successfully for %s", symbol)
                 record_executed_trade(
                     symbol,
                     int(pos.qty),
@@ -408,7 +409,7 @@ def daily_exit_check():
                     side="sell",
                 )
             except Exception as e:
-                logging.error("Failed to close %s: %s", symbol, e)
+                logging.error("Order submission error for %s: %s", symbol, e)
 
 if __name__ == '__main__':
     logging.info("Starting pre-market trade execution script")

@@ -28,8 +28,8 @@ historical_candidates_path = os.path.join(BASE_DIR, "data", "historical_candidat
 
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
-pipeline_log_path = os.path.join(screener_log_dir, "pipeline_log.txt")
-monitor_log_path = os.path.join(screener_log_dir, "monitor.log")
+pipeline_log_path = os.path.join(screener_log_dir, "pipeline.log")
+monitor_log_path = os.path.join(screener_log_dir, "monitor_positions.log")
 # Additional logs
 screener_log_path = os.path.join(screener_log_dir, "screener.log")
 backtest_log_path = os.path.join(screener_log_dir, "backtest.log")
@@ -262,8 +262,13 @@ app.layout = dbc.Container(
                 ),
             ],
         ),
+        html.Button(
+            "Refresh Now",
+            id="refresh-button",
+            className="btn btn-secondary mb-2",
+        ),
         html.Div(id="tabs-content", className="mt-4"),
-        dcc.Interval(id="interval-update", interval=600000, n_intervals=0),
+        dcc.Interval(id="interval-update", interval=5 * 60 * 1000, n_intervals=0),
         dcc.Interval(id="log-interval", interval=10000, n_intervals=0),
         dbc.Modal(
             id="detail-modal",
@@ -289,9 +294,10 @@ app.layout = dbc.Container(
         Input("main-tabs", "active_tab"),
         Input("interval-update", "n_intervals"),
         Input("log-interval", "n_intervals"),
+        Input("refresh-button", "n_clicks"),
     ],
 )
-def render_tab(tab, n_intervals, n_log_intervals):
+def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     if tab == "tab-overview":
         trades_df, alert = load_csv(
             trades_log_path, required_columns=["pnl", "entry_time"]
