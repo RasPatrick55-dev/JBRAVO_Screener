@@ -34,3 +34,13 @@ python -m scripts.backtest
 
 Running the module in this way ensures Python resolves package imports
 correctly.
+
+## Scheduled Pipeline and Trading Tasks
+
+Set up PythonAnywhere scheduled tasks (or cron jobs) to execute the main pipeline
+and trading script automatically:
+
+```bash
+python scripts/run_pipeline.py
+python scripts/execute_trades.py
+```
