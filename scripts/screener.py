@@ -65,7 +65,6 @@ EMA_MID = 20
 SMA_LONG = 180
 TRAIL_PERCENT = 3.0
 MAX_HOLD_DAYS = 7
-MIN_BARS = max(SMA_LONG, 20) + 1  # ensure enough data for sma180, ema20
 
 
 def send_alert(message: str) -> None:
@@ -111,8 +110,6 @@ data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 assets = trading_client.get_all_assets()
 symbols = [a.symbol for a in assets if a.tradable and a.status == "active" and a.exchange in ("NYSE", "NASDAQ")]
 
-required_bars = 250
-
 
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Return the Average True Range."""
@@ -131,13 +128,8 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
     try:
         logging.debug("Running compute_score for %s with %d rows", symbol, len(df))
-        if len(df) < MIN_BARS:
-            logging.warning(
-                "Skipping %s: insufficient data (%d bars, need >=%d)",
-                symbol,
-                len(df),
-                MIN_BARS,
-            )
+        if len(df) < 2:
+            logging.warning("Skipping %s: not enough bars (%d)", symbol, len(df))
             return None
         df = df.copy().sort_index()
         df["ma50"] = df["close"].rolling(50).mean()
@@ -164,32 +156,43 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
         prev = df.iloc[-2]
 
         score = 0.0
-        score += 1 if last["close"] > last["ma50"] else -1
-        score += 1 if last["close"] > last["ma200"] else -1
-        if last["ma50"] > last["ma200"] and prev["ma50"] <= prev["ma200"]:
-            score += 1.5
-        if last["rsi"] > 50 and prev["rsi"] <= 50:
-            score += 1
-        if last["rsi"] > 30 and prev["rsi"] <= 30:
-            score += 1
-        if last["rsi"] > 70:
-            score -= 1
-        score += 1 if last["macd"] > last["macd_signal"] else -1
-        if last["macd_hist"] > prev["macd_hist"]:
-            score += 1
-        if last["adx"] > 20:
-            score += 1
-        if last["adx"] > 40:
-            score += 0.5
-        if last["aroon_up"] > last["aroon_down"] and prev["aroon_up"] <= prev["aroon_down"]:
-            score += 1
-        if last["aroon_up"] > 70:
-            score += 1
-        score += 1 if last["obv"] > prev["obv"] else -1
-        if last["volume"] > 2 * last["vol_avg30"]:
-            score += 1
-        if last["close"] > last["month_high"]:
-            score += 1
+        if pd.notna(last.get("ma50")):
+            score += 1 if last["close"] > last["ma50"] else -1
+        if pd.notna(last.get("ma200")):
+            score += 1 if last["close"] > last["ma200"] else -1
+        if pd.notna(last.get("ma50")) and pd.notna(last.get("ma200")) and pd.notna(prev.get("ma50")) and pd.notna(prev.get("ma200")):
+            if last["ma50"] > last["ma200"] and prev["ma50"] <= prev["ma200"]:
+                score += 1.5
+        if pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")):
+            if last["rsi"] > 50 and prev["rsi"] <= 50:
+                score += 1
+            if last["rsi"] > 30 and prev["rsi"] <= 30:
+                score += 1
+            if last["rsi"] > 70:
+                score -= 1
+        if pd.notna(last.get("macd")) and pd.notna(last.get("macd_signal")):
+            score += 1 if last["macd"] > last["macd_signal"] else -1
+        if pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")):
+            if last["macd_hist"] > prev["macd_hist"]:
+                score += 1
+        if pd.notna(last.get("adx")):
+            if last["adx"] > 20:
+                score += 1
+            if last["adx"] > 40:
+                score += 0.5
+        if all(pd.notna([last.get("aroon_up"), last.get("aroon_down"), prev.get("aroon_up"), prev.get("aroon_down")])):
+            if last["aroon_up"] > last["aroon_down"] and prev["aroon_up"] <= prev["aroon_down"]:
+                score += 1
+            if last["aroon_up"] > 70:
+                score += 1
+        if pd.notna(last.get("obv")) and pd.notna(prev.get("obv")):
+            score += 1 if last["obv"] > prev["obv"] else -1
+        if pd.notna(last.get("volume")) and pd.notna(last.get("vol_avg30")):
+            if last["volume"] > 2 * last["vol_avg30"]:
+                score += 1
+        if pd.notna(last.get("month_high")):
+            if last["close"] > last["month_high"]:
+                score += 1
         body = abs(last["close"] - last["open"])
         lower = last["low"] - min(last["close"], last["open"])
         upper = last["high"] - max(last["close"], last["open"])
@@ -205,26 +208,33 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
         ):
             score += 1
         # === JBravo enhancements ===
-        if last["close"] > last["sma9"] and prev["close"] <= prev["sma9"]:
-            score += 2
-        if last["sma9"] > last["ema20"] and last["ema20"] > last["sma180"]:
-            score += 2
-        sma9_slope = last["sma9"] - prev["sma9"]
-        ema20_slope = last["ema20"] - prev["ema20"]
-        score += 0.5 if sma9_slope > 0 else -0.5
-        score += 0.5 if ema20_slope > 0 else -0.5
-        if last["rsi"] > 60:
-            score += 1
-        elif last["rsi"] > RSI_BULLISH:
-            score += 0.5
-        if last["rsi"] > RSI_OVERBOUGHT:
-            score -= 2
-        if last["macd"] > 0:
-            score += 0.5
-        if last["macd_hist"] > 0 and last["macd_hist"] > prev["macd_hist"]:
-            score += 0.5
-        if last["macd_hist"] < prev["macd_hist"]:
-            score -= 0.5
+        if pd.notna(last.get("sma9")) and pd.notna(prev.get("sma9")):
+            if last["close"] > last["sma9"] and prev["close"] <= prev["sma9"]:
+                score += 2
+        if all(pd.notna([last.get("sma9"), last.get("ema20"), last.get("sma180")])):
+            if last["sma9"] > last["ema20"] and last["ema20"] > last["sma180"]:
+                score += 2
+        if pd.notna(last.get("sma9")) and pd.notna(prev.get("sma9")):
+            sma9_slope = last["sma9"] - prev["sma9"]
+            score += 0.5 if sma9_slope > 0 else -0.5
+        if pd.notna(last.get("ema20")) and pd.notna(prev.get("ema20")):
+            ema20_slope = last["ema20"] - prev["ema20"]
+            score += 0.5 if ema20_slope > 0 else -0.5
+        if pd.notna(last.get("rsi")):
+            if last["rsi"] > 60:
+                score += 1
+            elif last["rsi"] > RSI_BULLISH:
+                score += 0.5
+            if last["rsi"] > RSI_OVERBOUGHT:
+                score -= 2
+        if pd.notna(last.get("macd")):
+            if last["macd"] > 0:
+                score += 0.5
+        if pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")):
+            if last["macd_hist"] > 0 and last["macd_hist"] > prev["macd_hist"]:
+                score += 0.5
+            if last["macd_hist"] < prev["macd_hist"]:
+                score -= 0.5
         atr_ratio = last["atr"] / last["close"] if last["close"] > 0 else 0
         if pd.notna(atr_ratio):
             if atr_ratio < 0.05:
@@ -236,12 +246,15 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
                 score += 0.5
             if last["close"] >= last["year_high"]:
                 score += 1
-        if last["close"] < last["ema20"] and prev["close"] >= prev["ema20"]:
-            score -= 2
-        if last["macd_hist"] < 0 and prev["macd_hist"] >= 0:
-            score -= 1
-        if last["rsi"] < prev["rsi"]:
-            score -= 0.5
+        if all(pd.notna([last.get("ema20"), prev.get("ema20")])):
+            if last["close"] < last["ema20"] and prev["close"] >= prev["ema20"]:
+                score -= 2
+        if pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")):
+            if last["macd_hist"] < 0 and prev["macd_hist"] >= 0:
+                score -= 1
+        if pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")):
+            if last["rsi"] < prev["rsi"]:
+                score -= 0.5
         score_dict = {"symbol": symbol, "score": round(score, 2)}
         logging.debug("compute_score for %s returned %s", symbol, score_dict)
         return score_dict
@@ -255,9 +268,7 @@ records: list[dict] = []
 for symbol in symbols:
     logging.info("Processing %s...", symbol)
     df = cache_bars(symbol, data_client, DATA_CACHE_DIR)
-    if len(df) < required_bars:
-        logging.warning("Skipping %s: insufficient data (%d bars)", symbol, len(df))
-        continue
+    logging.debug("%s has %d bars", symbol, len(df))
     try:
         rec = compute_score(symbol, df)
         if rec is not None:

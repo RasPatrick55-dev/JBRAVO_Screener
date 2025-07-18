@@ -21,7 +21,7 @@ def write_csv_atomic(df: pd.DataFrame, dest: str) -> None:
     shutil.move(tmp.name, dest)
 
 
-def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 800) -> pd.DataFrame:
+def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 1500) -> pd.DataFrame:
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, f"{symbol}.csv")
     df = (
@@ -40,6 +40,13 @@ def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 800) -> pd.
         new_df = data_client.get_stock_bars(request_params).df
     except Exception:
         return df
+
+    # Drop the symbol level when returned as a MultiIndex
+    if isinstance(new_df.index, pd.MultiIndex):
+        if "symbol" in new_df.index.names:
+            new_df = new_df.droplevel("symbol")
+        else:
+            new_df = new_df.droplevel(0)
 
     # Validate that the DataFrame has a date-based index
     if "timestamp" not in new_df.columns and not has_datetime_index(new_df.index):
