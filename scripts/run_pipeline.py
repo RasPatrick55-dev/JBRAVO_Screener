@@ -63,7 +63,7 @@ if __name__ == "__main__":
     steps = [
         (
             "Screener",
-            ["python", "/home/RasPatrick/jbravo_screener/scripts/screener.py"],
+            ["python", "scripts/screener.py"],
         ),
         (
             "Backtest",

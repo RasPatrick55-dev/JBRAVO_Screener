@@ -16,6 +16,8 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
+from utils import cache_bars
+from indicators import rsi, macd
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
@@ -104,6 +106,29 @@ def get_buying_power():
 def get_open_positions():
     positions = trading_client.get_all_positions()
     return {p.symbol: p for p in positions}
+
+
+def should_exit_early(symbol: str) -> bool:
+    """Check momentum conditions for an early exit."""
+    try:
+        cache_dir = os.path.join(BASE_DIR, "data", "history_cache")
+        df = cache_bars(symbol, data_client, cache_dir)
+        if len(df) < 25:
+            return False
+        df = df.sort_index()
+        df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+        df["rsi"] = rsi(df["close"])
+        macd_line, macd_signal, macd_hist = macd(df["close"])
+        df["macd_hist"] = macd_hist
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        ema_break = last["close"] < last["ema20"] and prev["close"] >= prev["ema20"]
+        overbought = last["rsi"] > 70
+        macd_flip = last["macd_hist"] < 0 and prev["macd_hist"] >= 0
+        return bool(ema_break or overbought or macd_flip)
+    except Exception as exc:
+        logging.error("Early exit check failed for %s: %s", symbol, exc)
+        return False
 
 def load_top_candidates() -> pd.DataFrame:
     """Load ranked candidates from ``top_candidates.csv`` and return the
@@ -401,6 +426,26 @@ def daily_exit_check():
                 )
                 order_response = trading_client.submit_order(order_request)
                 logging.info("Order submitted successfully for %s", symbol)
+                record_executed_trade(
+                    symbol,
+                    int(pos.qty),
+                    pos.current_price,
+                    order_type="market",
+                    side="sell",
+                )
+            except Exception as e:
+                logging.error("Order submission error for %s: %s", symbol, e)
+        elif should_exit_early(symbol):
+            logging.info("Early exit signal for %s", symbol)
+            try:
+                order_request = MarketOrderRequest(
+                    symbol=symbol,
+                    qty=pos.qty,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY,
+                    extended_hours=True,
+                )
+                trading_client.submit_order(order_request)
                 record_executed_trade(
                     symbol,
                     int(pos.qty),
