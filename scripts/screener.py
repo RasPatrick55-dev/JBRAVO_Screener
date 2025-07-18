@@ -59,6 +59,15 @@ DATA_CACHE_DIR = os.path.join(BASE_DIR, 'data', 'history_cache')
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 DB_PATH = os.path.join(BASE_DIR, 'data', 'pipeline.db')
 
+# Tunable strategy parameters
+RSI_OVERBOUGHT = 70
+RSI_BULLISH = 50
+SMA_SHORT = 9
+EMA_MID = 20
+SMA_LONG = 180
+TRAIL_PERCENT = 3.0
+MAX_HOLD_DAYS = 7
+
 
 def send_alert(message: str) -> None:
     if not ALERT_WEBHOOK_URL:
@@ -106,6 +115,20 @@ symbols = [a.symbol for a in assets if a.tradable and a.status == "active" and a
 required_bars = 250
 
 
+def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Return the Average True Range."""
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+
 def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
     try:
         df = df.copy().sort_index()
@@ -121,6 +144,11 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
         df["obv"] = obv(df)
         df["vol_avg30"] = df["volume"].rolling(30).mean()
         df["month_high"] = df["high"].rolling(21).max().shift(1)
+        df["sma9"] = df["close"].rolling(SMA_SHORT).mean()
+        df["ema20"] = df["close"].ewm(span=EMA_MID, adjust=False).mean()
+        df["sma180"] = df["close"].rolling(SMA_LONG).mean()
+        df["atr"] = compute_atr(df)
+        df["year_high"] = df["high"].rolling(252).max().shift(1)
 
         last = df.iloc[-1]
         prev = df.iloc[-2]
@@ -166,6 +194,44 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
             and prev_body > 0
         ):
             score += 1
+        # === JBravo enhancements ===
+        if last["close"] > last["sma9"] and prev["close"] <= prev["sma9"]:
+            score += 2
+        if last["sma9"] > last["ema20"] and last["ema20"] > last["sma180"]:
+            score += 2
+        sma9_slope = last["sma9"] - prev["sma9"]
+        ema20_slope = last["ema20"] - prev["ema20"]
+        score += 0.5 if sma9_slope > 0 else -0.5
+        score += 0.5 if ema20_slope > 0 else -0.5
+        if last["rsi"] > 60:
+            score += 1
+        elif last["rsi"] > RSI_BULLISH:
+            score += 0.5
+        if last["rsi"] > RSI_OVERBOUGHT:
+            score -= 2
+        if last["macd"] > 0:
+            score += 0.5
+        if last["macd_hist"] > 0 and last["macd_hist"] > prev["macd_hist"]:
+            score += 0.5
+        if last["macd_hist"] < prev["macd_hist"]:
+            score -= 0.5
+        atr_ratio = last["atr"] / last["close"] if last["close"] > 0 else 0
+        if pd.notna(atr_ratio):
+            if atr_ratio < 0.05:
+                score += 0.5
+            elif atr_ratio > 0.07:
+                score -= 0.5
+        if pd.notna(last["year_high"]):
+            if last["close"] >= 0.9 * last["year_high"]:
+                score += 0.5
+            if last["close"] >= last["year_high"]:
+                score += 1
+        if last["close"] < last["ema20"] and prev["close"] >= prev["ema20"]:
+            score -= 2
+        if last["macd_hist"] < 0 and prev["macd_hist"] >= 0:
+            score -= 1
+        if last["rsi"] < prev["rsi"]:
+            score -= 0.5
         return {"symbol": symbol, "score": round(score, 2)}
     except Exception as exc:
         logging.error("%s processing failed: %s", symbol, exc)
