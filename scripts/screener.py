@@ -17,8 +17,6 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
-import time
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from dotenv import load_dotenv
@@ -131,6 +129,7 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
 def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
     try:
+        logging.debug("Running compute_score for %s with %d rows", symbol, len(df))
         df = df.copy().sort_index()
         df["ma50"] = df["close"].rolling(50).mean()
         df["ma200"] = df["close"].rolling(200).mean()
@@ -232,38 +231,43 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
             score -= 1
         if last["rsi"] < prev["rsi"]:
             score -= 0.5
-        return {"symbol": symbol, "score": round(score, 2)}
+        score_dict = {"symbol": symbol, "score": round(score, 2)}
+        logging.debug("compute_score for %s returned %s", symbol, score_dict)
+        return score_dict
     except Exception as exc:
         logging.error("%s processing failed: %s", symbol, exc)
         send_alert(f"Screener failed for {symbol}: {exc}")
         return None
 
 
-ranked_candidates: list[dict] = []
-futures = []
-executor = ThreadPoolExecutor(max_workers=4)
-
+records: list[dict] = []
 for symbol in symbols:
     logging.info("Processing %s...", symbol)
     df = cache_bars(symbol, data_client, DATA_CACHE_DIR)
     if len(df) < required_bars:
         logging.warning("Skipping %s: insufficient data (%d bars)", symbol, len(df))
         continue
-    futures.append(executor.submit(compute_score, symbol, df))
-
-for fut in futures:
-    res = fut.result()
-    if res:
-        ranked_candidates.append(res)
+    try:
+        rec = compute_score(symbol, df)
+        if rec is not None:
+            records.append(rec)
+        else:
+            logging.info("Skipping %s: compute_score returned None", symbol)
+    except Exception as e:
+        logging.error("compute_score failed for %s: %s", symbol, e, exc_info=True)
 
 # Convert to DataFrame and rank
-ranked_df = pd.DataFrame(ranked_candidates)
-if "score" not in ranked_df.columns:
+ranked_df = pd.DataFrame(records)
+logging.debug("Screener output columns: %s", ranked_df.columns.tolist())
+if (
+    ranked_df.empty
+    or "score" not in ranked_df.columns
+    or ranked_df["score"].isnull().all()
+):
     logging.error(
         "Screener output missing 'score'. DataFrame columns: %s",
         ranked_df.columns.tolist(),
     )
-    # Optional: send webhook alert for failure
     sys.exit(1)
 ranked_df.sort_values(by="score", ascending=False, inplace=True)
 
