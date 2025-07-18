@@ -48,6 +48,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 
+logging.info("Backtest script started.")
+
 dotenv_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path)
 
@@ -399,6 +401,17 @@ def run_backtest(symbols: List[str]) -> None:
             columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
         )
 
+    summary_df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    summary_df["symbols_tested"] = len(symbols)
+
+    for _, row in summary_df.iterrows():
+        logging.info(
+            "Backtest %s win_rate=%.2f%% net_pnl=%.2f",
+            row.symbol,
+            row.win_rate,
+            row.net_pnl,
+        )
+
     trades_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
     equity_path = os.path.join(BASE_DIR, "data", "equity_curve.csv")
     metrics_path = os.path.join(BASE_DIR, "data", "backtest_results.csv")
@@ -416,6 +429,7 @@ if __name__ == "__main__":
         symbols_df = pd.read_csv(csv_path)
         symbol_list = symbols_df.iloc[:, 0].tolist()
         run_backtest(symbol_list)
+        logging.info("Backtest script finished.")
     except Exception as exc:
         logging.error("Backtest failed: %s", exc)
 

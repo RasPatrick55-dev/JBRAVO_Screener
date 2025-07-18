@@ -47,6 +47,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
+logging.info("Screener script started.")
+
 # Load environment variables
 dotenv_path = os.path.join(BASE_DIR, '.env')
 logging.info("Loading environment variables from %s", dotenv_path)
@@ -156,108 +158,84 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
         prev = df.iloc[-2]
 
         score = 0.0
-        if pd.notna(last.get("ma50")):
-            score += 1 if last["close"] > last["ma50"] else -1
-        if pd.notna(last.get("ma200")):
-            score += 1 if last["close"] > last["ma200"] else -1
-        if pd.notna(last.get("ma50")) and pd.notna(last.get("ma200")) and pd.notna(prev.get("ma50")) and pd.notna(prev.get("ma200")):
-            if last["ma50"] > last["ma200"] and prev["ma50"] <= prev["ma200"]:
-                score += 1.5
-        if pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")):
-            if last["rsi"] > 50 and prev["rsi"] <= 50:
-                score += 1
-            if last["rsi"] > 30 and prev["rsi"] <= 30:
-                score += 1
-            if last["rsi"] > 70:
-                score -= 1
-        if pd.notna(last.get("macd")) and pd.notna(last.get("macd_signal")):
-            score += 1 if last["macd"] > last["macd_signal"] else -1
-        if pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")):
-            if last["macd_hist"] > prev["macd_hist"]:
-                score += 1
-        if pd.notna(last.get("adx")):
-            if last["adx"] > 20:
-                score += 1
-            if last["adx"] > 40:
-                score += 0.5
-        if all(pd.notna([last.get("aroon_up"), last.get("aroon_down"), prev.get("aroon_up"), prev.get("aroon_down")])):
-            if last["aroon_up"] > last["aroon_down"] and prev["aroon_up"] <= prev["aroon_down"]:
-                score += 1
-            if last["aroon_up"] > 70:
-                score += 1
-        if pd.notna(last.get("obv")) and pd.notna(prev.get("obv")):
-            score += 1 if last["obv"] > prev["obv"] else -1
-        if pd.notna(last.get("volume")) and pd.notna(last.get("vol_avg30")):
-            if last["volume"] > 2 * last["vol_avg30"]:
-                score += 1
-        if pd.notna(last.get("month_high")):
-            if last["close"] > last["month_high"]:
-                score += 1
+        reasons: list[str] = []
+
+        def add(val: float, reason: str, condition: bool = True) -> None:
+            nonlocal score
+            if not condition:
+                return
+            score += val
+            reasons.append(f"{val:+g} {reason}")
+
+        add(1 if last["close"] > last["ma50"] else -1, "close vs MA50", pd.notna(last.get("ma50")))
+        add(1 if last["close"] > last["ma200"] else -1, "close vs MA200", pd.notna(last.get("ma200")))
+        add(1.5, "MA50 crossover", pd.notna(last.get("ma50")) and pd.notna(prev.get("ma50")) and pd.notna(last.get("ma200")) and pd.notna(prev.get("ma200")) and last["ma50"] > last["ma200"] and prev["ma50"] <= prev["ma200"])
+        add(1, "RSI > 50", pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")) and last["rsi"] > 50 and prev["rsi"] <= 50)
+        add(1, "RSI > 30", pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")) and last["rsi"] > 30 and prev["rsi"] <= 30)
+        add(-1, "RSI > 70", pd.notna(last.get("rsi")) and last["rsi"] > 70)
+        add(1 if last["macd"] > last["macd_signal"] else -1, "MACD cross", pd.notna(last.get("macd")) and pd.notna(last.get("macd_signal")))
+        add(1, "MACD hist rising", pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")) and last["macd_hist"] > prev["macd_hist"])
+        add(1, "ADX > 20", pd.notna(last.get("adx")) and last["adx"] > 20)
+        add(0.5, "ADX > 40", pd.notna(last.get("adx")) and last["adx"] > 40)
+        add(1, "Aroon up cross", all(pd.notna([last.get("aroon_up"), last.get("aroon_down"), prev.get("aroon_up"), prev.get("aroon_down")])) and last["aroon_up"] > last["aroon_down"] and prev["aroon_up"] <= prev["aroon_down"])
+        add(1, "Aroon > 70", pd.notna(last.get("aroon_up")) and last["aroon_up"] > 70)
+        add(1 if last.get("obv") > prev.get("obv") else -1, "OBV", pd.notna(last.get("obv")) and pd.notna(prev.get("obv")))
+        add(1, "Volume spike", pd.notna(last.get("volume")) and pd.notna(last.get("vol_avg30")) and last["volume"] > 2 * last["vol_avg30"])
+        add(1, "New month high", pd.notna(last.get("month_high")) and last["close"] > last["month_high"])
         body = abs(last["close"] - last["open"])
         lower = last["low"] - min(last["close"], last["open"])
         upper = last["high"] - max(last["close"], last["open"])
-        if lower > 2 * body and upper <= body:
-            score += 1
+        add(1, "Hammer", lower > 2 * body and upper <= body)
         prev_body = abs(prev["close"] - prev["open"])
-        if (
+        engulf = (
             prev["close"] < prev["open"]
             and last["close"] > last["open"]
             and last["close"] > prev["open"]
             and last["open"] < prev["close"]
             and prev_body > 0
-        ):
-            score += 1
+        )
+        add(1, "Bull engulf", engulf)
+
         # === JBravo enhancements ===
+        add(2, "SMA9 crossover", pd.notna(last.get("sma9")) and pd.notna(prev.get("sma9")) and last["close"] > last["sma9"] and prev["close"] <= prev["sma9"])
+        add(2, "MA stack", all(pd.notna([last.get("sma9"), last.get("ema20"), last.get("sma180")])) and last["sma9"] > last["ema20"] and last["ema20"] > last["sma180"])
         if pd.notna(last.get("sma9")) and pd.notna(prev.get("sma9")):
-            if last["close"] > last["sma9"] and prev["close"] <= prev["sma9"]:
-                score += 2
-        if all(pd.notna([last.get("sma9"), last.get("ema20"), last.get("sma180")])):
-            if last["sma9"] > last["ema20"] and last["ema20"] > last["sma180"]:
-                score += 2
-        if pd.notna(last.get("sma9")) and pd.notna(prev.get("sma9")):
-            sma9_slope = last["sma9"] - prev["sma9"]
-            score += 0.5 if sma9_slope > 0 else -0.5
+            add(0.5 if last["sma9"] - prev["sma9"] > 0 else -0.5, "SMA9 slope")
         if pd.notna(last.get("ema20")) and pd.notna(prev.get("ema20")):
-            ema20_slope = last["ema20"] - prev["ema20"]
-            score += 0.5 if ema20_slope > 0 else -0.5
+            add(0.5 if last["ema20"] - prev["ema20"] > 0 else -0.5, "EMA20 slope")
         if pd.notna(last.get("rsi")):
-            if last["rsi"] > 60:
-                score += 1
-            elif last["rsi"] > RSI_BULLISH:
-                score += 0.5
-            if last["rsi"] > RSI_OVERBOUGHT:
-                score -= 2
-        if pd.notna(last.get("macd")):
-            if last["macd"] > 0:
-                score += 0.5
-        if pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")):
-            if last["macd_hist"] > 0 and last["macd_hist"] > prev["macd_hist"]:
-                score += 0.5
-            if last["macd_hist"] < prev["macd_hist"]:
-                score -= 0.5
+            add(1, "RSI > 60", last["rsi"] > 60)
+            add(0.5, "RSI > 50", 50 < last["rsi"] <= 60)
+            add(-2, "RSI overbought", last["rsi"] > RSI_OVERBOUGHT)
+        add(0.5, "MACD > 0", pd.notna(last.get("macd")) and last["macd"] > 0)
+        add(0.5, "MACD hist up", pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")) and last["macd_hist"] > 0 and last["macd_hist"] > prev["macd_hist"])
+        add(-0.5, "MACD hist down", pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")) and last["macd_hist"] < prev["macd_hist"])
         atr_ratio = last["atr"] / last["close"] if last["close"] > 0 else 0
-        if pd.notna(atr_ratio):
-            if atr_ratio < 0.05:
-                score += 0.5
-            elif atr_ratio > 0.07:
-                score -= 0.5
-        if pd.notna(last["year_high"]):
-            if last["close"] >= 0.9 * last["year_high"]:
-                score += 0.5
-            if last["close"] >= last["year_high"]:
-                score += 1
-        if all(pd.notna([last.get("ema20"), prev.get("ema20")])):
-            if last["close"] < last["ema20"] and prev["close"] >= prev["ema20"]:
-                score -= 2
-        if pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")):
-            if last["macd_hist"] < 0 and prev["macd_hist"] >= 0:
-                score -= 1
-        if pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")):
-            if last["rsi"] < prev["rsi"]:
-                score -= 0.5
-        score_dict = {"symbol": symbol, "score": round(score, 2)}
-        logging.debug("compute_score for %s returned %s", symbol, score_dict)
-        return score_dict
+        add(0.5, "Low ATR", pd.notna(atr_ratio) and atr_ratio < 0.05)
+        add(-0.5, "High ATR", pd.notna(atr_ratio) and atr_ratio > 0.07)
+        add(0.5, "Near 52w high", pd.notna(last.get("year_high")) and last["close"] >= 0.9 * last["year_high"])
+        add(1, "New 52w high", pd.notna(last.get("year_high")) and last["close"] >= last["year_high"])
+        add(-2, "Close < EMA20", all(pd.notna([last.get("ema20"), prev.get("ema20")])) and last["close"] < last["ema20"] and prev["close"] >= prev["ema20"])
+        add(-1, "MACD hist flip", pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")) and last["macd_hist"] < 0 and prev["macd_hist"] >= 0)
+        add(-0.5, "RSI falling", pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")) and last["rsi"] < prev["rsi"])
+
+        result = {
+            "symbol": symbol,
+            "score": round(score, 2),
+            "rsi": round(last.get("rsi", float("nan")), 2) if pd.notna(last.get("rsi")) else None,
+            "macd": round(last.get("macd", float("nan")), 2) if pd.notna(last.get("macd")) else None,
+            "macd_hist": round(last.get("macd_hist", float("nan")), 2) if pd.notna(last.get("macd_hist")) else None,
+            "adx": round(last.get("adx", float("nan")), 2) if pd.notna(last.get("adx")) else None,
+            "aroon_up": round(last.get("aroon_up", float("nan")), 2) if pd.notna(last.get("aroon_up")) else None,
+            "aroon_down": round(last.get("aroon_down", float("nan")), 2) if pd.notna(last.get("aroon_down")) else None,
+            "sma9": round(last.get("sma9", float("nan")), 2) if pd.notna(last.get("sma9")) else None,
+            "ema20": round(last.get("ema20", float("nan")), 2) if pd.notna(last.get("ema20")) else None,
+            "sma180": round(last.get("sma180", float("nan")), 2) if pd.notna(last.get("sma180")) else None,
+            "atr": round(last.get("atr", float("nan")), 2) if pd.notna(last.get("atr")) else None,
+            "score_breakdown": "; ".join(reasons),
+        }
+        logging.debug("compute_score for %s returned %s", symbol, result)
+        return result
     except Exception as exc:
         logging.error("%s processing failed: %s", symbol, exc)
         send_alert(f"Screener failed for {symbol}: {exc}")
@@ -265,6 +243,7 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
 
 
 records: list[dict] = []
+skipped = 0
 for symbol in symbols:
     logging.info("Processing %s...", symbol)
     df = cache_bars(symbol, data_client, DATA_CACHE_DIR)
@@ -274,12 +253,19 @@ for symbol in symbols:
         if rec is not None:
             records.append(rec)
         else:
+            skipped += 1
             logging.info("Skipping %s: compute_score returned None", symbol)
     except Exception as e:
+        skipped += 1
         logging.error("compute_score failed for %s: %s", symbol, e, exc_info=True)
 
 # Convert to DataFrame and rank
-logging.info("Processed %d symbols, %d valid scores", len(symbols), len(records))
+logging.info(
+    "Processed %d symbols, %d scored, %d skipped",
+    len(symbols),
+    len(records),
+    skipped,
+)
 if not records:
     logging.error("All symbols skipped; no valid output.")
     sys.exit(1)
@@ -300,19 +286,47 @@ if ranked_df.empty or ranked_df["score"].isnull().all():
     sys.exit(1)
 ranked_df.sort_values(by="score", ascending=False, inplace=True)
 
-csv_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
-if ranked_df.empty:
-    logging.warning("No candidates met the screening criteria.")
-    ranked_df = pd.DataFrame(columns=["symbol", "score"])
+# Save full scored list
+scored_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
+write_csv_atomic(ranked_df, scored_path)
+logging.info("All scored candidates saved to %s", scored_path)
 
-write_csv_atomic(ranked_df.head(15), csv_path)
+# Log details for top symbols
+for _, row in ranked_df.head(15).iterrows():
+    logging.info("%s score %.2f: %s", row.symbol, row.score, row.score_breakdown)
+
+# Prepare top candidates with timestamp and universe info
+timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+top15 = ranked_df.head(15).copy()
+top15.insert(0, "timestamp", timestamp)
+top15["universe_count"] = len(symbols)
+
+csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
+write_csv_atomic(top15, csv_path)
 logging.info("Top 15 ranked candidates saved to %s", csv_path)
 
 # Append to historical candidates log
-hist_path = os.path.join(BASE_DIR, 'data', 'historical_candidates.csv')
-append_df = ranked_df.head(15).copy()
-append_df.insert(0, 'date', datetime.now().strftime('%Y-%m-%d'))
+hist_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
+append_df = top15.copy()
+append_df.insert(0, "date", datetime.now().strftime("%Y-%m-%d"))
 write_csv_atomic(append_df, hist_path)
 logging.info("Historical candidates updated at %s", hist_path)
 with sqlite3.connect(DB_PATH) as conn:
     append_df.to_sql("historical_candidates", conn, if_exists="append", index=False)
+
+# Update screener summary CSV
+summary = "; ".join([
+    f"{r.symbol}({r.score}: {r.score_breakdown})" for r in top15.itertuples()
+])
+summary_path = os.path.join(BASE_DIR, "data", "screener_summary.csv")
+if os.path.exists(summary_path):
+    summary_df = pd.read_csv(summary_path)
+else:
+    summary_df = pd.DataFrame(columns=["date", "time", "summary"])
+new_row = pd.DataFrame(
+    [[datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%H:%M"), summary]],
+    columns=["date", "time", "summary"],
+)
+summary_df = pd.concat([summary_df, new_row], ignore_index=True)
+write_csv_atomic(summary_df, summary_path)
+logging.info("Screener script finished.")

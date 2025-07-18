@@ -40,6 +40,8 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
+logging.info("Trade execution script started.")
+
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
@@ -108,14 +110,13 @@ def get_open_positions():
     return {p.symbol: p for p in positions}
 
 
-def should_exit_early(symbol: str) -> bool:
-    """Check momentum conditions for an early exit."""
+def should_exit_early(symbol: str, data_client, cache_dir: str, lookback: int = 100) -> bool:
+    """Return True if the position should be exited early based on momentum."""
     try:
-        cache_dir = os.path.join(BASE_DIR, "data", "history_cache")
         df = cache_bars(symbol, data_client, cache_dir)
         if len(df) < 25:
             return False
-        df = df.sort_index()
+        df = df.sort_index().iloc[-lookback:].copy()
         df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
         df["rsi"] = rsi(df["close"])
         macd_line, macd_signal, macd_hist = macd(df["close"])
@@ -326,10 +327,13 @@ def allocate_position(symbol):
 
 def submit_trades():
     df = load_top_candidates()
+    submitted = 0
+    skipped = 0
     for _, row in df.iterrows():
         sym = row.symbol
         alloc = allocate_position(sym)
         if not alloc:
+            skipped += 1
             continue
 
         qty, entry_price = alloc
@@ -357,8 +361,11 @@ def submit_trades():
                 sym, qty, entry_price, order_type="limit", side="buy"
             )
             attach_trailing_stops()
+            submitted += 1
         except Exception as e:
             logging.error("Failed to submit buy order for %s: %s", sym, e)
+            skipped += 1
+    logging.info("Orders submitted: %d, skipped: %d", submitted, skipped)
 
 def attach_trailing_stops():
     positions = get_open_positions()
@@ -435,7 +442,7 @@ def daily_exit_check():
                 )
             except Exception as e:
                 logging.error("Order submission error for %s: %s", symbol, e)
-        elif should_exit_early(symbol):
+        elif should_exit_early(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache")):
             logging.info("Early exit signal for %s", symbol)
             try:
                 order_request = MarketOrderRequest(
