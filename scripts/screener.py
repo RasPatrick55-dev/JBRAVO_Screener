@@ -65,6 +65,7 @@ EMA_MID = 20
 SMA_LONG = 180
 TRAIL_PERCENT = 3.0
 MAX_HOLD_DAYS = 7
+MIN_BARS = max(SMA_LONG, 20) + 1  # ensure enough data for sma180, ema20
 
 
 def send_alert(message: str) -> None:
@@ -130,6 +131,14 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
     try:
         logging.debug("Running compute_score for %s with %d rows", symbol, len(df))
+        if len(df) < MIN_BARS:
+            logging.warning(
+                "Skipping %s: insufficient data (%d bars, need >=%d)",
+                symbol,
+                len(df),
+                MIN_BARS,
+            )
+            return None
         df = df.copy().sort_index()
         df["ma50"] = df["close"].rolling(50).mean()
         df["ma200"] = df["close"].rolling(200).mean()
@@ -148,6 +157,8 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
         df["sma180"] = df["close"].rolling(SMA_LONG).mean()
         df["atr"] = compute_atr(df)
         df["year_high"] = df["high"].rolling(252).max().shift(1)
+        df.fillna(method="ffill", inplace=True)
+        df.fillna(method="bfill", inplace=True)
 
         last = df.iloc[-1]
         prev = df.iloc[-2]
@@ -257,15 +268,22 @@ for symbol in symbols:
         logging.error("compute_score failed for %s: %s", symbol, e, exc_info=True)
 
 # Convert to DataFrame and rank
+logging.info("Processed %d symbols, %d valid scores", len(symbols), len(records))
+if not records:
+    logging.error("All symbols skipped; no valid output.")
+    sys.exit(1)
+
 ranked_df = pd.DataFrame(records)
 logging.debug("Screener output columns: %s", ranked_df.columns.tolist())
-if (
-    ranked_df.empty
-    or "score" not in ranked_df.columns
-    or ranked_df["score"].isnull().all()
-):
+if "score" not in ranked_df.columns:
     logging.error(
         "Screener output missing 'score'. DataFrame columns: %s",
+        ranked_df.columns.tolist(),
+    )
+    sys.exit(1)
+if ranked_df.empty or ranked_df["score"].isnull().all():
+    logging.error(
+        "Screener output missing valid scores. DataFrame columns: %s",
         ranked_df.columns.tolist(),
     )
     sys.exit(1)
