@@ -5,6 +5,7 @@ import logging
 import shutil
 from tempfile import NamedTemporaryFile
 from logging.handlers import RotatingFileHandler
+from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -19,6 +20,8 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s',
 )
+
+logging.info("Metrics script started.")
 
 
 def write_csv_atomic(df: pd.DataFrame, dest: str):
@@ -97,8 +100,10 @@ def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
         logging.error("Failed appending to %s: %s", csv_path, e)
 
 # Save overall metrics summary
-def save_metrics_summary(metrics_summary, output_file='metrics_summary.csv'):
+def save_metrics_summary(metrics_summary, symbols, output_file='metrics_summary.csv'):
     summary_df = pd.DataFrame([metrics_summary])
+    summary_df['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    summary_df['symbols'] = ';'.join(symbols)
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
     try:
         write_csv_atomic(summary_df, csv_path)
@@ -131,10 +136,17 @@ def main():
     save_top_candidates(ranked_df)
 
     metrics_summary = calculate_metrics(ranked_df)
-    save_metrics_summary(metrics_summary)
+    save_metrics_summary(metrics_summary, ranked_df['symbol'].tolist())
+    logging.info(
+        "Metrics summary: trades=%s win_rate=%.2f%% net_pnl=%.2f",
+        metrics_summary['Total Trades'],
+        metrics_summary['Win Rate (%)'],
+        metrics_summary['Total Net PnL'],
+    )
 
 if __name__ == "__main__":
     logging.info("Starting metrics calculation")
     main()
     logging.info("Metrics calculation complete")
+    logging.info("Metrics script finished.")
 

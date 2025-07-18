@@ -20,6 +20,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
 open_positions_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
+scored_candidates_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
 
 # Additional datasets introduced for monitoring
 metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
@@ -465,8 +466,11 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
     elif tab == "tab-screener":
         df, alert = load_csv(top_candidates_path)
+        scored_df, scored_alert = load_csv(scored_candidates_path)
 
         alerts = [alert] if alert else []
+        if scored_alert:
+            alerts.append(scored_alert)
 
         if not df.empty:
             if "score" in df.columns:
@@ -487,8 +491,24 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         else:
             table = dbc.Alert("No candidates to display.", color="warning", className="m-2")
 
+        if not scored_df.empty:
+            scored_columns = [
+                {"name": c.replace("_", " ").title(), "id": c} for c in scored_df.columns
+            ]
+            scored_table = dash_table.DataTable(
+                id="scored-candidates-table",
+                data=scored_df.to_dict("records"),
+                columns=scored_columns,
+                page_size=15,
+                sort_action="native",
+                style_table={"overflowX": "auto"},
+                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+            )
+        else:
+            scored_table = dbc.Alert("No scored candidates available.", color="warning", className="m-2")
+
         pipeline_lines = read_recent_lines(pipeline_log_path)[::-1]
-        screener_lines = read_recent_lines(screener_log_path)[::-1]
+        screener_lines = read_recent_lines(screener_log_path, num_lines=20)[::-1]
         backtest_lines = read_recent_lines(backtest_log_path)[::-1]
 
         def format_lines(lines):
@@ -555,7 +575,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         components = [timestamp]
         components.extend(alerts)
-        components.extend([table, status])
+        components.extend([table, scored_table, status])
         if freshness:
             components.append(freshness)
         components.extend([pipeline_log, screener_log, backtest_log])
