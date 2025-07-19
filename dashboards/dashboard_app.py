@@ -5,6 +5,8 @@ from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
 from datetime import datetime
+import subprocess
+import json
 from alpaca.trading.client import TradingClient
 from dotenv import load_dotenv
 import logging
@@ -36,6 +38,7 @@ screener_log_path = os.path.join(screener_log_dir, "screener.log")
 backtest_log_path = os.path.join(screener_log_dir, "backtest.log")
 execute_trades_log_path = os.path.join(screener_log_dir, "execute_trades.log")
 error_log_path = os.path.join(screener_log_dir, "error.log")
+pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json")
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 API_KEY = os.getenv("APCA_API_KEY_ID")
@@ -143,13 +146,31 @@ def format_log_lines(lines):
     return formatted
 
 
+def get_version_string():
+    """Return short git commit hash or file mtime for version banner."""
+    try:
+        commit = (
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=BASE_DIR)
+            .decode("utf-8")
+            .strip()
+        )
+        ts = datetime.utcfromtimestamp(os.path.getmtime(__file__)).strftime(
+            "%Y-%m-%d %H:%M UTC"
+        )
+        return f"Dashboard version: {commit} (updated {ts})"
+    except Exception:
+        ts = datetime.utcfromtimestamp(os.path.getmtime(__file__)).strftime(
+            "%Y-%m-%d %H:%M UTC"
+        )
+        return f"Dashboard version: {ts}"
+
+
 def file_timestamp(path):
     """Return modification time of ``path`` formatted for display."""
     if not os.path.exists(path):
         return "N/A"
-    return datetime.utcfromtimestamp(os.path.getmtime(path)).strftime(
-        "%Y-%m-%d %H:%M:%S UTC"
-    )
+    ts = datetime.utcfromtimestamp(os.path.getmtime(path))
+    return ts.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
 
 
 def pipeline_status_component():
@@ -159,11 +180,17 @@ def pipeline_status_component():
         ("Backtest", backtest_log_path),
         ("Execution", execute_trades_log_path),
     ]
-    now = datetime.now()
+    now = datetime.utcnow()
     items = []
+    status_data = {}
+    if os.path.exists(pipeline_status_json_path):
+        try:
+            status_data = json.load(open(pipeline_status_json_path))
+        except Exception:
+            status_data = {}
     for name, path in steps:
         if os.path.exists(path):
-            mtime = datetime.fromtimestamp(os.path.getmtime(path))
+            mtime = datetime.utcfromtimestamp(os.path.getmtime(path))
             age = (now - mtime).total_seconds() / 60
             if age < 60:
                 color = "success"
@@ -171,11 +198,19 @@ def pipeline_status_component():
             else:
                 color = "warning"
                 status = "Stale"
-            timestamp = mtime.strftime("%Y-%m-%d %H:%M")
+            timestamp = mtime.strftime("%Y-%m-%d %H:%M") + " UTC"
         else:
-            color = "danger"
-            status = "Missing"
-            timestamp = "N/A"
+            # check json status as fallback
+            ts = status_data.get(name)
+            if ts:
+                mtime = datetime.utcfromtimestamp(ts)
+                timestamp = mtime.strftime("%Y-%m-%d %H:%M") + " UTC"
+                color = "warning"
+                status = "Stale"
+            else:
+                color = "danger"
+                status = "Missing"
+                timestamp = "N/A"
         items.append(dbc.ListGroupItem(f"{name}: {status} ({timestamp})", color=color))
     return dbc.ListGroup(items, className="mb-3")
 
@@ -184,8 +219,8 @@ def data_freshness_alert(path, name, threshold_minutes=60):
     """Return a Dash alert if ``path`` was not modified within ``threshold_minutes``."""
     if not os.path.exists(path):
         return dbc.Alert(f"{name} not found", color="danger", className="m-2")
-    mtime = datetime.fromtimestamp(os.path.getmtime(path))
-    age = (datetime.now() - mtime).total_seconds() / 60
+    mtime = datetime.utcfromtimestamp(os.path.getmtime(path))
+    age = (datetime.utcnow() - mtime).total_seconds() / 60
     if age > threshold_minutes:
         return dbc.Alert(
             f"{name} has not updated for {int(age)} minutes",
@@ -268,7 +303,11 @@ app.layout = dbc.Container(
             id="refresh-button",
             className="btn btn-secondary mb-2",
         ),
-        html.Div(id="tabs-content", className="mt-4"),
+        dcc.Loading(
+            id="loading",
+            children=html.Div(id="tabs-content", className="mt-4"),
+            type="default",
+        ),
         dcc.Interval(id="interval-update", interval=5 * 60 * 1000, n_intervals=0),
         dcc.Interval(id="log-interval", interval=10000, n_intervals=0),
         dbc.Modal(
@@ -283,6 +322,7 @@ app.layout = dbc.Container(
                 ),
             ],
         ),
+        html.Div(get_version_string(), id="version-banner", className="text-muted mt-2"),
     ],
     fluid=True,
 )
@@ -474,7 +514,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         if not df.empty:
             if "score" in df.columns:
-                df.sort_values("score", ascending=False, inplace=True)
+                df.sort_values("score", ascending=False, na_position="last", inplace=True)
             df = df.head(15)
             columns = [
                 {"name": c.replace("_", " ").title(), "id": c} for c in df.columns
@@ -639,9 +679,11 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 color="warning",
                 className="m-2",
             )
-        positions_df["entry_time"] = pd.to_datetime(
-            positions_df["entry_time"]
-        ).dt.strftime("%Y-%m-%d %H:%M")
+        positions_df["entry_time"] = (
+            pd.to_datetime(positions_df["entry_time"])
+            .dt.strftime("%Y-%m-%d %H:%M")
+            + " UTC"
+        )
         columns = [
             {"name": c.replace("_", " ").title(), "id": c} for c in positions_df.columns
         ]
@@ -677,8 +719,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         if exec_alert:
             exec_table = exec_alert
         else:
-            exec_df["entry_time"] = pd.to_datetime(exec_df["entry_time"]).dt.strftime(
-                "%Y-%m-%d %H:%M"
+            exec_df["entry_time"] = (
+                pd.to_datetime(exec_df["entry_time"]).dt.strftime("%Y-%m-%d %H:%M")
+                + " UTC"
             )
             e_cols = [
                 {"name": c.replace("_", " ").title(), "id": c}
@@ -775,7 +818,11 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         if alert:
             closed_table = alert
         else:
-            closed_df["exit_time"] = pd.to_datetime(closed_df["exit_time"])
+            closed_df["exit_time"] = (
+                pd.to_datetime(closed_df["exit_time"])
+                .dt.strftime("%Y-%m-%d %H:%M")
+                + " UTC"
+            )
             closed_df.sort_values("exit_time", ascending=False, inplace=True)
             recent_trades = closed_df.head(10)
             columns = [
