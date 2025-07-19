@@ -242,91 +242,103 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
         return None
 
 
-records: list[dict] = []
-skipped = 0
-for symbol in symbols:
-    logging.info("Processing %s...", symbol)
-    df = cache_bars(symbol, data_client, DATA_CACHE_DIR)
-    logging.debug("%s has %d bars", symbol, len(df))
-    try:
-        rec = compute_score(symbol, df)
-        if rec is not None:
-            records.append(rec)
-        else:
+def main() -> None:
+    records: list[dict] = []
+    skipped = 0
+    for symbol in symbols:
+        logging.info("Processing %s...", symbol)
+        df = cache_bars(symbol, data_client, DATA_CACHE_DIR)
+        logging.debug("%s has %d bars", symbol, len(df))
+        try:
+            rec = compute_score(symbol, df)
+            if rec is not None:
+                records.append(rec)
+            else:
+                skipped += 1
+                logging.info("Skipping %s: compute_score returned None", symbol)
+        except Exception as e:
             skipped += 1
-            logging.info("Skipping %s: compute_score returned None", symbol)
-    except Exception as e:
-        skipped += 1
-        logging.error("compute_score failed for %s: %s", symbol, e, exc_info=True)
+            logging.error("compute_score failed for %s: %s", symbol, e, exc_info=True)
 
-# Convert to DataFrame and rank
-logging.info(
-    "Processed %d symbols, %d scored, %d skipped",
-    len(symbols),
-    len(records),
-    skipped,
-)
-if not records:
-    logging.error("All symbols skipped; no valid output.")
-    sys.exit(1)
+    # Convert to DataFrame and rank
+    logging.info(
+        "Processed %d symbols, %d scored, %d skipped",
+        len(symbols),
+        len(records),
+        skipped,
+    )
+    if not records:
+        logging.error("All symbols skipped; no valid output.")
+        sys.exit(1)
 
-ranked_df = pd.DataFrame(records)
-logging.debug("Screener output columns: %s", ranked_df.columns.tolist())
-if "score" not in ranked_df.columns:
-    logging.error(
-        "Screener output missing 'score'. DataFrame columns: %s",
-        ranked_df.columns.tolist(),
-    )
-    sys.exit(1)
-if ranked_df.empty or ranked_df["score"].isnull().all():
-    logging.error(
-        "Screener output missing valid scores. DataFrame columns: %s",
-        ranked_df.columns.tolist(),
-    )
-    sys.exit(1)
-ranked_df.sort_values(by="score", ascending=False, inplace=True)
+    ranked_df = pd.DataFrame(records)
+    logging.debug("Screener output columns: %s", ranked_df.columns.tolist())
+    if "score" not in ranked_df.columns:
+        logging.error(
+            "Screener output missing 'score'. DataFrame columns: %s",
+            ranked_df.columns.tolist(),
+        )
+        sys.exit(1)
+    if ranked_df.empty or ranked_df["score"].isnull().all():
+        logging.error(
+            "Screener output missing valid scores. DataFrame columns: %s",
+            ranked_df.columns.tolist(),
+        )
+        sys.exit(1)
+    ranked_df.sort_values(by="score", ascending=False, inplace=True)
 
 # Save full scored list
-scored_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
-write_csv_atomic(ranked_df, scored_path)
-logging.info("All scored candidates saved to %s", scored_path)
+    scored_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
+    write_csv_atomic(ranked_df, scored_path)
+    logging.info("All scored candidates saved to %s", scored_path)
 
 # Log details for top symbols
-for _, row in ranked_df.head(15).iterrows():
-    logging.info("%s score %.2f: %s", row.symbol, row.score, row.score_breakdown)
+    for _, row in ranked_df.head(15).iterrows():
+        logging.info("%s score %.2f: %s", row.symbol, row.score, row.score_breakdown)
 
 # Prepare top candidates with timestamp and universe info
-timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-top15 = ranked_df.head(15).copy()
-top15.insert(0, "timestamp", timestamp)
-top15["universe_count"] = len(symbols)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    top15 = ranked_df.head(15).copy()
+    top15.insert(0, "timestamp", timestamp)
+    top15["universe_count"] = len(symbols)
 
-csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
-write_csv_atomic(top15, csv_path)
-logging.info("Top 15 ranked candidates saved to %s", csv_path)
+    csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
+    write_csv_atomic(top15, csv_path)
+    logging.info("Top 15 ranked candidates saved to %s", csv_path)
 
 # Append to historical candidates log
-hist_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
-append_df = top15.copy()
-append_df.insert(0, "date", datetime.now().strftime("%Y-%m-%d"))
-write_csv_atomic(append_df, hist_path)
-logging.info("Historical candidates updated at %s", hist_path)
-with sqlite3.connect(DB_PATH) as conn:
-    append_df.to_sql("historical_candidates", conn, if_exists="append", index=False)
+    hist_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
+    append_df = top15.copy()
+    append_df.insert(0, "date", datetime.now().strftime("%Y-%m-%d"))
+    write_csv_atomic(append_df, hist_path)
+    logging.info("Historical candidates updated at %s", hist_path)
+    with sqlite3.connect(DB_PATH) as conn:
+        append_df.to_sql("historical_candidates", conn, if_exists="append", index=False)
 
 # Update screener summary CSV
-summary = "; ".join([
-    f"{r.symbol}({r.score}: {r.score_breakdown})" for r in top15.itertuples()
-])
-summary_path = os.path.join(BASE_DIR, "data", "screener_summary.csv")
-if os.path.exists(summary_path):
-    summary_df = pd.read_csv(summary_path)
-else:
-    summary_df = pd.DataFrame(columns=["date", "time", "summary"])
-new_row = pd.DataFrame(
-    [[datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%H:%M"), summary]],
-    columns=["date", "time", "summary"],
-)
-summary_df = pd.concat([summary_df, new_row], ignore_index=True)
-write_csv_atomic(summary_df, summary_path)
-logging.info("Screener script finished.")
+    summary = "; ".join([
+        f"{r.symbol}({r.score}: {r.score_breakdown})" for r in top15.itertuples()
+    ])
+    summary_path = os.path.join(BASE_DIR, "data", "screener_summary.csv")
+    if os.path.exists(summary_path):
+        summary_df = pd.read_csv(summary_path)
+    else:
+        summary_df = pd.DataFrame(columns=["date", "time", "summary"])
+    new_row = pd.DataFrame(
+        [[datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%H:%M"), summary]],
+        columns=["date", "time", "summary"],
+    )
+    summary_df = pd.concat([summary_df, new_row], ignore_index=True)
+    write_csv_atomic(summary_df, summary_path)
+    logging.info("Screener script finished.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        logging.error("Unhandled exception in Screener: %s", e, exc_info=True)
+        sys.exit(1)
+    else:
+        logging.info("Screener completed successfully, exiting with code 0.")
+        sys.exit(0)

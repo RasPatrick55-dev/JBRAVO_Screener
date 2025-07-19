@@ -45,23 +45,16 @@ def send_alert(msg: str) -> None:
         logging.error("Failed to send alert: %s", exc)
 
 def run_step(step_name, command):
-    logging.info(f"Starting {step_name}...")
+    logging.info("Starting %s...", step_name)
     try:
-        if step_name == "Screener":
-            subprocess.check_output(command, stderr=subprocess.STDOUT)
-        else:
-            subprocess.run(command, check=True)
-        logging.info(f"Completed {step_name} successfully.")
-    except subprocess.CalledProcessError as e:
-        if step_name == "Screener":
-            error_path = os.path.join(BASE_DIR, "data", "screener_error.log")
-            with open(error_path, "wb") as f:
-                f.write(e.output or b"")
-            logging.error("Screener crashed: %s", e)
-        else:
-            logging.error("ERROR in %s: %s", step_name, e)
-        send_alert(f"Pipeline step {step_name} failed: {e}")
-        raise
+        result = subprocess.run(command, capture_output=True)
+        logging.info("%s stdout:\n%s", step_name, result.stdout.decode())
+        logging.info("%s stderr:\n%s", step_name, result.stderr.decode())
+        if result.returncode != 0:
+            logging.error("%s returned non-zero exit %d", step_name, result.returncode)
+            send_alert(f"Pipeline step {step_name} failed: exit {result.returncode}")
+            sys.exit(result.returncode)
+        logging.info("Completed %s successfully.", step_name)
     except Exception as e:
         logging.error("Unexpected failure in %s: %s", step_name, e)
         send_alert(f"Pipeline step {step_name} exception: {e}")

@@ -16,8 +16,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
-from utils import cache_bars
-from indicators import rsi, macd
+from exit_signals import should_exit_early
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
@@ -110,26 +109,6 @@ def get_open_positions():
     return {p.symbol: p for p in positions}
 
 
-def should_exit_early(symbol: str, data_client, cache_dir: str, lookback: int = 100) -> bool:
-    """Return True if the position should be exited early based on momentum."""
-    try:
-        df = cache_bars(symbol, data_client, cache_dir)
-        if len(df) < 25:
-            return False
-        df = df.sort_index().iloc[-lookback:].copy()
-        df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
-        df["rsi"] = rsi(df["close"])
-        macd_line, macd_signal, macd_hist = macd(df["close"])
-        df["macd_hist"] = macd_hist
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
-        ema_break = last["close"] < last["ema20"] and prev["close"] >= prev["ema20"]
-        overbought = last["rsi"] > 70
-        macd_flip = last["macd_hist"] < 0 and prev["macd_hist"] >= 0
-        return bool(ema_break or overbought or macd_flip)
-    except Exception as exc:
-        logging.error("Early exit check failed for %s: %s", symbol, exc)
-        return False
 
 def load_top_candidates() -> pd.DataFrame:
     """Load ranked candidates from ``top_candidates.csv`` and return the
