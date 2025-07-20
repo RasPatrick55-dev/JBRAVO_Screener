@@ -98,6 +98,12 @@ def calculate_weekly_summary() -> dict:
     historical_candidates = load_csv("historical_candidates.csv")
     top_candidates = load_csv("top_candidates.csv")
 
+    # Log missing metric columns in backtest_results
+    metrics = ["win_rate", "net_pnl", "trades"]
+    for m in metrics:
+        if m not in backtest_results.columns:
+            logger.warning("No '%s' column in backtest_results—using fallback or skipping.", m)
+
     # Filter executed trades for the week
     if "entry_time" in executed_trades.columns:
         executed_trades["entry_time"] = pd.to_datetime(executed_trades["entry_time"], utc=True)
@@ -113,9 +119,16 @@ def calculate_weekly_summary() -> dict:
     else:
         closed_week = pd.DataFrame()
 
-    wins = (closed_week["net_pnl"] > 0).sum() if not closed_week.empty else 0
-    win_rate = (wins / len(closed_week) * 100) if len(closed_week) else 0
-    realized_pnl = closed_week["net_pnl"].sum() if not closed_week.empty else 0
+    wins = 0
+    win_rate = 0
+    realized_pnl = 0
+    if not closed_week.empty:
+        if "net_pnl" in closed_week.columns:
+            wins = (closed_week["net_pnl"] > 0).sum()
+            win_rate = (wins / len(closed_week) * 100) if len(closed_week) else 0
+            realized_pnl = closed_week["net_pnl"].sum()
+        else:
+            logger.warning("No 'net_pnl' column in trades_log—skipping PnL statistics")
 
     unrealized_pnl = (
         open_positions["unrealized_pl"].sum() if "unrealized_pl" in open_positions.columns else 0
@@ -127,15 +140,23 @@ def calculate_weekly_summary() -> dict:
 
     best_trade_symbol = ""
     if not closed_week.empty:
-        best_idx = closed_week["net_pnl"].idxmax()
-        if pd.notna(best_idx):
-            best_trade_symbol = closed_week.loc[best_idx, "symbol"]
+        if "net_pnl" in closed_week.columns and "symbol" in closed_week.columns:
+            best_idx = closed_week["net_pnl"].idxmax()
+            if pd.notna(best_idx):
+                best_trade_symbol = closed_week.loc[best_idx, "symbol"]
+        else:
+            logger.warning("Required columns missing in trades_log—cannot determine best trade")
 
     best_backtest_symbol = ""
     if not backtest_results.empty:
-        best_backtest_symbol = (
-            backtest_results.sort_values("net_pnl", ascending=False)["symbol"].iloc[0]
-        )
+        missing_cols = [c for c in ["net_pnl", "symbol"] if c not in backtest_results.columns]
+        if missing_cols:
+            for c in missing_cols:
+                logger.warning("No '%s' column in backtest_results—skipping", c)
+        if "net_pnl" in backtest_results.columns and "symbol" in backtest_results.columns:
+            best_backtest_symbol = (
+                backtest_results.sort_values("net_pnl", ascending=False)["symbol"].iloc[0]
+            )
 
     best_candidate = ""
     if not historical_candidates.empty:
@@ -143,8 +164,12 @@ def calculate_weekly_summary() -> dict:
         recent_candidates = historical_candidates[
             historical_candidates["date"] >= one_week_ago
         ]
-        if not recent_candidates.empty:
+        if not recent_candidates.empty and "score" in recent_candidates.columns and "symbol" in recent_candidates.columns:
             best_candidate = recent_candidates.sort_values("score", ascending=False)["symbol"].iloc[0]
+        elif recent_candidates.empty:
+            pass
+        else:
+            logger.warning("Historical candidates missing required columns—cannot determine best candidate")
 
     metrics_row = metrics_summary.iloc[0] if not metrics_summary.empty else pd.Series()
 
