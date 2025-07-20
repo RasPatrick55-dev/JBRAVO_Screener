@@ -4,9 +4,13 @@ import shutil
 import logging
 import pandas as pd
 from tempfile import NamedTemporaryFile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time as dt_time
+import pytz
+import time
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca.common.exceptions import APIError
+from tvDatafeed import TvDatafeed, Interval
 
 
 def has_datetime_index(idx) -> bool:
@@ -21,7 +25,39 @@ def write_csv_atomic(df: pd.DataFrame, dest: str) -> None:
     shutil.move(tmp.name, dest)
 
 
+def get_last_trading_day_end(now: datetime | None = None) -> datetime:
+    """Return previous market close timestamp in UTC.
+
+    This helps when running during weekends or outside market hours.
+    """
+    tz = pytz.timezone("America/New_York")
+    now = now.astimezone(tz) if now else datetime.now(tz)
+
+    # Determine the most recent trading day
+    weekday = now.weekday()
+    if weekday >= 5:  # Sat/Sun -> go back to Friday
+        delta = weekday - 4
+        last_day = (now - timedelta(days=delta)).date()
+    elif now.time() < dt_time(9, 30):
+        # before market open -> use previous weekday
+        delta = 3 if weekday == 0 else 1
+        last_day = (now - timedelta(days=delta)).date()
+    else:
+        # During trading hours or after close use today
+        last_day = now.date() if weekday < 5 else (now - timedelta(days=weekday - 4)).date()
+
+    close_dt = datetime.combine(last_day, dt_time(16, 0), tz)
+    return close_dt.astimezone(timezone.utc)
+
+
 def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 1500) -> pd.DataFrame:
+    """Fetch and cache daily bars for a symbol.
+
+    When running outside market hours the end date is adjusted to the last
+    market close to avoid requesting future data. If the Alpaca request
+    returns no data, TradingView is used as a fallback source.
+    """
+
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, f"{symbol}.csv")
     df = (
@@ -31,14 +67,21 @@ def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 1500) -> pd
     )
     last = df.index.max() if not df.empty else None
     start = last + timedelta(days=1) if last is not None else datetime.now(timezone.utc) - timedelta(days=days)
-    end = datetime.now(timezone.utc) - timedelta(minutes=16)
+    end = get_last_trading_day_end()
     if start >= end:
         return df
 
     request_params = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, start=start, end=end)
     try:
         new_df = data_client.get_stock_bars(request_params).df
-    except Exception:
+    except APIError as exc:
+        if getattr(exc, "status_code", None) == 429:
+            logging.error("Alpaca rate limit hit fetching %s", symbol)
+        else:
+            logging.error("Alpaca API error fetching %s: %s", symbol, exc)
+        return df
+    except Exception as exc:
+        logging.error("Unexpected error fetching %s: %s", symbol, exc)
         return df
 
     # Drop the symbol level when returned as a MultiIndex
@@ -57,7 +100,18 @@ def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 1500) -> pd
 
     if new_df.empty:
         logging.warning("cache_bars: %s returned empty data", symbol)
-        return df
+        try:
+            tv = TvDatafeed()
+            tv_df = tv.get_hist(symbol, exchange="NYSE", interval=Interval.in_daily, n_bars=days)
+            if not tv_df.empty:
+                tv_df.index = tv_df.index.tz_localize("America/New_York").tz_convert("UTC")
+                tv_df.rename(columns={"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"}, inplace=True)
+                new_df = tv_df
+            else:
+                return df
+        except Exception as tv_exc:
+            logging.error("TradingView fallback failed for %s: %s", symbol, tv_exc)
+            return df
 
     if not new_df.empty:
         idx_list = new_df.index.tolist()
@@ -70,6 +124,8 @@ def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 1500) -> pd
             new_df.index = pd.to_datetime(idx_df)
         else:
             new_df.index = pd.to_datetime(new_df.index)
+        if new_df.index.tzinfo is None:
+            new_df.index = new_df.index.tz_localize("UTC")
         df = pd.concat([df, new_df]).sort_index()
         df = df[~df.index.duplicated(keep="last")].tail(days)
         tmp = NamedTemporaryFile("w", delete=False, dir=cache_dir, newline="")
@@ -77,4 +133,67 @@ def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 1500) -> pd
         tmp.close()
         shutil.move(tmp.name, path)
     return df
+
+
+def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int = 1500, batch_size: int = 100, retries: int = 3) -> dict[str, pd.DataFrame]:
+    """Fetch historical bars for many symbols in batches.
+
+    Returns a mapping of symbol to DataFrame containing the updated cache.
+    """
+
+    results: dict[str, pd.DataFrame] = {}
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i : i + batch_size]
+        start_map = {}
+        df_map = {}
+        for sym in batch:
+            path = os.path.join(cache_dir, f"{sym}.csv")
+            df_existing = (
+                pd.read_csv(path, parse_dates=["timestamp"]).set_index("timestamp")
+                if os.path.exists(path)
+                else pd.DataFrame()
+            )
+            df_map[sym] = df_existing
+            last = df_existing.index.max() if not df_existing.empty else None
+            start_map[sym] = last + timedelta(days=1) if last is not None else datetime.now(timezone.utc) - timedelta(days=days)
+
+        end = get_last_trading_day_end()
+        min_start = min(start_map.values())
+        request_params = StockBarsRequest(symbol_or_symbols=batch, timeframe=TimeFrame.Day, start=min_start, end=end)
+
+        attempt = 0
+        bars_df = pd.DataFrame()
+        while attempt <= retries:
+            try:
+                bars_df = data_client.get_stock_bars(request_params).df
+                break
+            except APIError as exc:
+                if getattr(exc, "status_code", None) == 429:
+                    logging.warning("Rate limit hit for batch %s, retrying...", batch)
+                    time.sleep(1)
+                    attempt += 1
+                    continue
+                logging.error("Alpaca API error for batch %s: %s", batch, exc)
+                break
+            except Exception as exc:
+                logging.error("Unexpected error for batch %s: %s", batch, exc)
+                break
+
+        if isinstance(bars_df.index, pd.MultiIndex) and "symbol" in bars_df.index.names:
+            for sym in batch:
+                sym_df = bars_df.xs(sym, level="symbol") if not bars_df.empty else pd.DataFrame()
+                df_map[sym] = pd.concat([df_map[sym], sym_df]).sort_index()
+        else:
+            for sym in batch:
+                sym_df = bars_df[bars_df.get("symbol") == sym].drop(columns=["symbol"], errors="ignore") if not bars_df.empty else pd.DataFrame()
+                df_map[sym] = pd.concat([df_map[sym], sym_df]).sort_index()
+
+        for sym, df_sym in df_map.items():
+            df_sym = df_sym[~df_sym.index.duplicated(keep="last")].tail(days)
+            os.makedirs(cache_dir, exist_ok=True)
+            path = os.path.join(cache_dir, f"{sym}.csv")
+            write_csv_atomic(df_sym.reset_index(), path)
+            results[sym] = df_sym
+
+    return results
 
