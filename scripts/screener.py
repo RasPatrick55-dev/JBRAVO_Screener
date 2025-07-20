@@ -31,27 +31,23 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 
-log_path = os.path.join(BASE_DIR, 'logs', 'screener.log')
 error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
-
-# Configure a rotating error handler so logs don't grow unbounded
 error_handler = RotatingFileHandler(error_log_path, maxBytes=2_000_000, backupCount=5)
 error_handler.setLevel(logging.ERROR)
 
 logging.basicConfig(
-    handlers=[
-        RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5),
-        error_handler,
-    ],
+    filename=os.path.join(BASE_DIR, 'logs', 'pipeline.log'),
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    format='%(asctime)s %(levelname)s [%(name)s]: %(message)s'
 )
+logging.getLogger().addHandler(error_handler)
 
-logging.info("Screener script started.")
+logger = logging.getLogger(__name__)
+logger.info("Screener script started.")
 
 # Load environment variables
 dotenv_path = os.path.join(BASE_DIR, '.env')
-logging.info("Loading environment variables from %s", dotenv_path)
+logger.info("Loading environment variables from %s", dotenv_path)
 load_dotenv(dotenv_path)
 
 ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
@@ -75,7 +71,7 @@ def send_alert(message: str) -> None:
     try:
         requests.post(ALERT_WEBHOOK_URL, json={"text": message}, timeout=5)
     except Exception as exc:
-        logging.error("Failed to send alert: %s", exc)
+        logger.error("Failed to send alert: %s", exc)
 
 
 from scripts.ensure_db_indicators import (
@@ -106,7 +102,7 @@ API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
 if not API_KEY or not API_SECRET:
-    logging.error("Missing API credentials. Please set APCA_API_KEY_ID and APCA_API_SECRET_KEY in the .env file.")
+    logger.error("Missing API credentials. Please set APCA_API_KEY_ID and APCA_API_SECRET_KEY in the .env file.")
     raise SystemExit(1)
 
 # Initialize Alpaca clients
@@ -134,9 +130,9 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
 def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
     try:
-        logging.debug("Running compute_score for %s with %d rows", symbol, len(df))
+        logger.debug("Running compute_score for %s with %d rows", symbol, len(df))
         if len(df) < 2:
-            logging.warning("Skipping %s: not enough bars (%d)", symbol, len(df))
+            logger.warning("Skipping %s: not enough bars (%d)", symbol, len(df))
             return None
         df = df.copy().sort_index()
         df["ma50"] = df["close"].rolling(50).mean()
@@ -239,10 +235,10 @@ def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
             "atr": round(last.get("atr", float("nan")), 2) if pd.notna(last.get("atr")) else None,
             "score_breakdown": "; ".join(reasons),
         }
-        logging.debug("compute_score for %s returned %s", symbol, result)
+        logger.debug("compute_score for %s returned %s", symbol, result)
         return result
     except Exception as exc:
-        logging.error("%s processing failed: %s", symbol, exc)
+        logger.error("%s processing failed: %s", symbol, exc)
         send_alert(f"Screener failed for {symbol}: {exc}")
         return None
 
@@ -251,41 +247,41 @@ def main() -> None:
     records: list[dict] = []
     skipped = 0
     for symbol in symbols:
-        logging.info("Processing %s...", symbol)
+        logger.info("Processing %s...", symbol)
         df = cache_bars(symbol, data_client, DATA_CACHE_DIR)
-        logging.debug("%s has %d bars", symbol, len(df))
+        logger.debug("%s has %d bars", symbol, len(df))
         try:
             rec = compute_score(symbol, df)
             if rec is not None:
                 records.append(rec)
             else:
                 skipped += 1
-                logging.info("Skipping %s: compute_score returned None", symbol)
+                logger.info("Skipping %s: compute_score returned None", symbol)
         except Exception as e:
             skipped += 1
-            logging.error("compute_score failed for %s: %s", symbol, e, exc_info=True)
+            logger.error("compute_score failed for %s: %s", symbol, e, exc_info=True)
 
     # Convert to DataFrame and rank
-    logging.info(
+    logger.info(
         "Processed %d symbols, %d scored, %d skipped",
         len(symbols),
         len(records),
         skipped,
     )
     if not records:
-        logging.error("All symbols skipped; no valid output.")
+        logger.error("All symbols skipped; no valid output.")
         sys.exit(1)
 
     ranked_df = pd.DataFrame(records)
-    logging.debug("Screener output columns: %s", ranked_df.columns.tolist())
+    logger.debug("Screener output columns: %s", ranked_df.columns.tolist())
     if "score" not in ranked_df.columns:
-        logging.error(
+        logger.error(
             "Screener output missing 'score'. DataFrame columns: %s",
             ranked_df.columns.tolist(),
         )
         sys.exit(1)
     if ranked_df.empty or ranked_df["score"].isnull().all():
-        logging.error(
+        logger.error(
             "Screener output missing valid scores. DataFrame columns: %s",
             ranked_df.columns.tolist(),
         )
@@ -295,11 +291,11 @@ def main() -> None:
 # Save full scored list
     scored_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
     write_csv_atomic(ranked_df, scored_path)
-    logging.info("All scored candidates saved to %s", scored_path)
+    logger.info("All scored candidates saved to %s", scored_path)
 
 # Log details for top symbols
     for _, row in ranked_df.head(15).iterrows():
-        logging.info("%s score %.2f: %s", row.symbol, row.score, row.score_breakdown)
+        logger.info("%s score %.2f: %s", row.symbol, row.score, row.score_breakdown)
 
 # Prepare top candidates with timestamp and universe info
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -316,7 +312,7 @@ def main() -> None:
 
     csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
     write_csv_atomic(top15, csv_path)
-    logging.info(
+    logger.info(
         "Top candidates updated: %d records written to %s",
         len(top15),
         csv_path,
@@ -327,7 +323,7 @@ def main() -> None:
     append_df = top15.copy()
     append_df.insert(0, "date", datetime.now().strftime("%Y-%m-%d"))
     write_csv_atomic(append_df, hist_path)
-    logging.info("Historical candidates updated at %s", hist_path)
+    logger.info("Historical candidates updated at %s", hist_path)
     # Synchronize SQLite schema to match the DataFrame before insertion
     sync_columns_from_dataframe(append_df, DB_PATH)
     with sqlite3.connect(DB_PATH) as conn:
@@ -348,15 +344,15 @@ def main() -> None:
     )
     summary_df = pd.concat([summary_df, new_row], ignore_index=True)
     write_csv_atomic(summary_df, summary_path)
-    logging.info("Screener script finished.")
+    logger.info("Screener script finished.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        logging.error("Unhandled exception in Screener: %s", e, exc_info=True)
+        logger.error("Unhandled exception in Screener: %s", e, exc_info=True)
         sys.exit(1)
     else:
-        logging.info("Screener completed successfully, exiting with code 0.")
+        logger.info("Screener completed successfully, exiting with code 0.")
         sys.exit(0)

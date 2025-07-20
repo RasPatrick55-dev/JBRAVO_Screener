@@ -35,16 +35,16 @@ def load_results(csv_file='backtest_results.csv'):
 def calculate_metrics(df):
     total_trades = df['trades'].sum() if 'trades' in df.columns else 0
     if 'trades' not in df.columns:
-        logging.warning("Column 'trades' missing. Using 0 for total trades")
+        logger.warning("Column 'trades' missing. Using 0 for total trades")
     total_wins = df['wins'].sum() if 'wins' in df.columns else 0
     if 'wins' not in df.columns:
-        logging.warning("Column 'wins' missing. Using 0 for wins")
+        logger.warning("Column 'wins' missing. Using 0 for wins")
     total_losses = df['losses'].sum() if 'losses' in df.columns else 0
     if 'losses' not in df.columns:
-        logging.warning("Column 'losses' missing. Using 0 for losses")
+        logger.warning("Column 'losses' missing. Using 0 for losses")
     total_pnl = df['net_pnl'].sum() if 'net_pnl' in df.columns else 0
     if 'net_pnl' not in df.columns:
-        logging.warning("Column 'net_pnl' missing. Using 0 for net_pnl")
+        logger.warning("Column 'net_pnl' missing. Using 0 for net_pnl")
 
     win_rate = (total_wins / total_trades) * 100 if total_trades else 0
     avg_return_per_trade = df['net_pnl'].sum() / total_trades if total_trades and 'net_pnl' in df.columns else 0
@@ -75,7 +75,7 @@ def rank_candidates(df):
 
     missing = [c for c in ['win_rate', 'net_pnl', 'trades'] if c not in df.columns]
     if missing:
-        logging.warning("Missing columns for ranking: %s", missing)
+        logger.warning("Missing columns for ranking: %s", missing)
         for col in missing:
             df[col] = 0
 
@@ -99,21 +99,21 @@ def rank_candidates(df):
 
 # Save top-ranked candidates
 def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
-    required_columns = ['symbol', 'score', 'win_rate', 'net_pnl']
-    missing_cols = [c for c in required_columns if c not in df.columns]
+    required_cols = ['symbol', 'score', 'win_rate', 'net_pnl']
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
-    if missing_cols:
-        logger.error("Missing columns: %s", missing_cols)
-        return
-
-    top_candidates = df.head(top_n)
-    try:
-        write_csv_atomic(top_candidates, csv_path)
-        logger.info(
-            "Successfully updated %s with %d records", csv_path, len(top_candidates)
-        )
-    except Exception as e:
-        logger.error("Failed appending to %s: %s", csv_path, e)
+    if all(col in df.columns for col in required_cols):
+        cols = required_cols + [c for c in df.columns if c not in required_cols]
+        top_candidates = df[cols].head(top_n)
+        try:
+            write_csv_atomic(top_candidates, csv_path)
+            logger.info(
+                "Successfully updated %s with %d records", csv_path, len(top_candidates)
+            )
+        except Exception as e:
+            logger.error("Failed appending to %s: %s", csv_path, e)
+    else:
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        logger.error(f"Missing columns: {missing_cols}")
 
 # Save overall metrics summary
 def save_metrics_summary(metrics_summary, symbols, output_file='metrics_summary.csv'):
@@ -123,9 +123,9 @@ def save_metrics_summary(metrics_summary, symbols, output_file='metrics_summary.
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
     try:
         write_csv_atomic(summary_df, csv_path)
-        logging.info("Successfully appended data to %s", csv_path)
+        logger.info("Successfully appended data to %s", csv_path)
     except Exception as e:
-        logging.error("Failed appending to %s: %s", csv_path, e)
+        logger.error("Failed appending to %s: %s", csv_path, e)
 
 # Full execution of metrics calculation, ranking, and summary
 def main():
@@ -159,14 +159,14 @@ def main():
         ", ".join(ranked_df['symbol'].head(15).tolist()),
     )
     save_top_candidates(ranked_df)
-    logging.info(
+    logger.info(
         "Top Candidates: %s",
         ranked_df[['symbol', 'score', 'win_rate', 'net_pnl']].head(15).to_string(index=False)
     )
 
     metrics_summary = calculate_metrics(ranked_df)
     save_metrics_summary(metrics_summary, ranked_df['symbol'].tolist())
-    logging.info(
+    logger.info(
         "Metrics summary: trades=%s win_rate=%.2f%% net_pnl=%.2f",
         metrics_summary['Total Trades'],
         metrics_summary['Win Rate (%)'],
@@ -174,8 +174,8 @@ def main():
     )
 
 if __name__ == "__main__":
-    logging.info("Starting metrics calculation")
+    logger.info("Starting metrics calculation")
     main()
-    logging.info("Metrics calculation complete")
-    logging.info("Metrics script finished.")
+    logger.info("Metrics calculation complete")
+    logger.info("Metrics script finished.")
 
