@@ -4,16 +4,14 @@ import sys
 
 # Ensure the script runs from the repository root regardless of where it is
 # invoked from.
-os.chdir(os.path.dirname(__file__))
+os.chdir(os.path.dirname(__file__) or ".")
 
 # Add project root to sys.path so that sibling packages (like scripts) can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import subprocess
 import logging
-import shutil
 from datetime import datetime, timezone
-from logging.handlers import RotatingFileHandler
 import requests
 import pandas as pd
 
@@ -23,18 +21,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
 
 log_path = os.path.join(BASE_DIR, 'logs', 'pipeline.log')
-error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
-
-error_handler = RotatingFileHandler(error_log_path, maxBytes=2_000_000, backupCount=5)
-error_handler.setLevel(logging.ERROR)
 
 logging.basicConfig(
-    handlers=[
-        RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5),
-        error_handler,
-    ],
+    filename=log_path,
     level=logging.INFO,
-    format='%(asctime)s UTC [%(levelname)s] %(message)s'
+    format="%(asctime)s UTC [%(levelname)s] %(message)s",
 )
 
 ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
@@ -70,11 +61,23 @@ def run_step(step_name, command):
 
 if __name__ == "__main__":
     logging.info("Pipeline execution started.")
+
+    step_name = "Screener"
+    command = ["python", "scripts/screener.py"]
+
+    logging.info("Starting %s...", step_name)
+    result = subprocess.run(command, capture_output=True, text=True)
+
+    logging.info("%s stdout:\n%s", step_name, result.stdout)
+    logging.info("%s stderr:\n%s", step_name, result.stderr)
+
+    if result.returncode != 0:
+        logging.error("%s failed with exit code %d", step_name, result.returncode)
+        sys.exit(result.returncode)
+    else:
+        logging.info("%s completed successfully", step_name)
+
     steps = [
-        (
-            "Screener",
-            [sys.executable, "scripts/screener.py"],
-        ),
         (
             "Backtest",
             [sys.executable, "scripts/backtest.py"],
@@ -84,6 +87,7 @@ if __name__ == "__main__":
             [sys.executable, "scripts/metrics.py"],
         ),
     ]
+
     for name, cmd in steps:
         try:
             run_step(name, cmd)
