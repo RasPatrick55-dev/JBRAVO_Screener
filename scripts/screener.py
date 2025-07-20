@@ -78,7 +78,11 @@ def send_alert(message: str) -> None:
         logging.error("Failed to send alert: %s", exc)
 
 
-from scripts.ensure_db_indicators import ensure_columns, REQUIRED_COLUMNS
+from scripts.ensure_db_indicators import (
+    ensure_columns,
+    sync_columns_from_dataframe,
+    REQUIRED_COLUMNS,
+)
 
 
 def init_db() -> None:
@@ -313,6 +317,8 @@ def main() -> None:
     append_df.insert(0, "date", datetime.now().strftime("%Y-%m-%d"))
     write_csv_atomic(append_df, hist_path)
     logging.info("Historical candidates updated at %s", hist_path)
+    # Synchronize SQLite schema to match the DataFrame before insertion
+    sync_columns_from_dataframe(append_df, DB_PATH)
     with sqlite3.connect(DB_PATH) as conn:
         append_df.to_sql("historical_candidates", conn, if_exists="append", index=False)
 
