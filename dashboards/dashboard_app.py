@@ -38,6 +38,7 @@ screener_log_path = os.path.join(screener_log_dir, "screener.log")
 backtest_log_path = os.path.join(screener_log_dir, "backtest.log")
 execute_trades_log_path = os.path.join(screener_log_dir, "execute_trades.log")
 error_log_path = os.path.join(screener_log_dir, "error.log")
+metrics_log_path = os.path.join(screener_log_dir, "metrics.log")
 pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json")
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -550,6 +551,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         pipeline_lines = read_recent_lines(pipeline_log_path)[::-1]
         screener_lines = read_recent_lines(screener_log_path, num_lines=20)[::-1]
         backtest_lines = read_recent_lines(backtest_log_path)[::-1]
+        metrics_lines = read_recent_lines(metrics_log_path)[::-1]
 
         def format_lines(lines):
             return format_log_lines(lines)
@@ -605,6 +607,23 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="mb-3",
         )
 
+        metrics_log = html.Div(
+            [
+                html.H5("Metrics Log", className="text-light"),
+                html.Pre(
+                    format_lines(metrics_lines),
+                    style={
+                        "maxHeight": "200px",
+                        "overflowY": "auto",
+                        "backgroundColor": "#272B30",
+                        "color": "#E0E0E0",
+                        "padding": "0.5rem",
+                    },
+                ),
+            ],
+            className="mb-3",
+        )
+
         status = pipeline_status_component()
         freshness = data_freshness_alert(top_candidates_path, "Top candidates")
 
@@ -618,7 +637,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         components.extend([table, scored_table, status])
         if freshness:
             components.append(freshness)
-        components.extend([pipeline_log, screener_log, backtest_log])
+        components.extend([pipeline_log, screener_log, backtest_log, metrics_log])
 
         return dbc.Container(components, fluid=True)
 
