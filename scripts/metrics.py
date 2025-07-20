@@ -4,24 +4,20 @@ import pandas as pd
 import logging
 import shutil
 from tempfile import NamedTemporaryFile
-from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 
 logging.basicConfig(
-    handlers=[RotatingFileHandler(
-        os.path.join(BASE_DIR, 'logs', 'metrics.log'),
-        maxBytes=2_000_000,
-        backupCount=5,
-    )],
+    filename=os.path.join(BASE_DIR, "logs", "pipeline.log"),
     level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
+    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
 )
 
-logging.info("Metrics script started.")
+logger = logging.getLogger("metrics")
+logger.info("Metrics script started.")
 
 
 def write_csv_atomic(df: pd.DataFrame, dest: str):
@@ -145,6 +141,15 @@ def main():
         results_df = symbol_metrics
 
     ranked_df = rank_candidates(results_df)
+    logger.info(
+        "Screener Metrics Summary: total_candidates=%s, avg_score=%.2f",
+        len(ranked_df),
+        ranked_df['score'].mean(),
+    )
+    logger.info(
+        "Top 15 Screener Symbols: %s",
+        ", ".join(ranked_df['symbol'].head(15).tolist()),
+    )
     save_top_candidates(ranked_df)
     logging.info(
         "Top Candidates: %s",
