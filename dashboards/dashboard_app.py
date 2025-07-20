@@ -521,7 +521,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 {"name": c.replace("_", " ").title(), "id": c} for c in df.columns
             ]
             table = dash_table.DataTable(
-                id="top-candidates-table",
+                id="screener-table",
                 data=df.to_dict("records"),
                 columns=columns,
                 page_size=15,
@@ -551,7 +551,6 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         pipeline_lines = read_recent_lines(pipeline_log_path)[::-1]
         screener_lines = read_recent_lines(screener_log_path, num_lines=20)[::-1]
         backtest_lines = read_recent_lines(backtest_log_path)[::-1]
-        metrics_lines = read_recent_lines(metrics_log_path)[::-1]
 
         def format_lines(lines):
             return format_log_lines(lines)
@@ -609,9 +608,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         metrics_log = html.Div(
             [
-                html.H5("Metrics Log", className="text-light"),
+                html.H5("Metrics Logs", className="text-light"),
                 html.Pre(
-                    format_lines(metrics_lines),
+                    id="metrics-logs",
                     style={
                         "maxHeight": "200px",
                         "overflowY": "auto",
@@ -917,8 +916,8 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 @app.callback(
     [Output("detail-modal", "is_open"), Output("modal-content", "children")],
     [
-        Input("top-candidates-table", "active_cell"),
-        Input("top-candidates-table", "data"),
+        Input("screener-table", "active_cell"),
+        Input("screener-table", "data"),
         Input("close-modal", "n_clicks"),
     ],
     [State("detail-modal", "is_open")],
@@ -950,7 +949,7 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
 
 
 # Periodically refresh screener table
-@app.callback(Output("top-candidates-table", "data"), Input("interval-update", "n_intervals"))
+@app.callback(Output("screener-table", "data"), Input("interval-update", "n_intervals"))
 def update_screener_table(n):
     if os.path.exists(top_candidates_path):
         df = pd.read_csv(top_candidates_path)
@@ -960,6 +959,16 @@ def update_screener_table(n):
         return df.to_dict("records")
     logger.warning("%s not found when updating screener table", top_candidates_path)
     return []
+
+
+# Periodically refresh metrics log display
+@app.callback(Output("metrics-logs", "children"), Input("interval-update", "n_intervals"))
+def update_metrics_logs(n):
+    if os.path.exists(metrics_log_path):
+        with open(metrics_log_path, "r") as log_file:
+            logs = log_file.readlines()
+        return "".join(logs[-50:])
+    return ""
 
 
 if __name__ == "__main__":

@@ -30,26 +30,21 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
-log_path = os.path.join(BASE_DIR, "logs", "backtest.log")
 error_log_path = os.path.join(BASE_DIR, "logs", "error.log")
-
 error_handler = logging.handlers.RotatingFileHandler(
     error_log_path, maxBytes=2_000_000, backupCount=5
 )
 error_handler.setLevel(logging.ERROR)
 
 logging.basicConfig(
-    handlers=[
-        logging.handlers.RotatingFileHandler(
-            log_path, maxBytes=2_000_000, backupCount=5
-        ),
-        error_handler,
-    ],
+    filename=os.path.join(BASE_DIR, "logs", "pipeline.log"),
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
 )
+logging.getLogger().addHandler(error_handler)
 
-logging.info("Backtest script started.")
+logger = logging.getLogger(__name__)
+logger.info("Backtest script started.")
 
 dotenv_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path)
@@ -69,12 +64,12 @@ try:
     data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 except Exception as exc:  # pragma: no cover - optional dependency
     data_client = None
-    logging.error("Alpaca client unavailable: %s", exc)
+    logger.error("Alpaca client unavailable: %s", exc)
 
 
 def get_data(symbol: str, days: int = 800) -> pd.DataFrame:
     if data_client is None:
-        logging.error("Data client not initialized. Returning empty DataFrame.")
+        logger.error("Data client not initialized. Returning empty DataFrame.")
         return pd.DataFrame()
 
     df = cache_bars(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache"), days)
@@ -212,7 +207,7 @@ class PortfolioBacktester:
             highest_close=price,
             trailing_stop=trailing,
         )
-        logging.info("Opened %s @ %.2f (%d shares)", symbol, price, qty)
+        logger.info("Opened %s @ %.2f (%d shares)", symbol, price, qty)
 
     def _close_position(
         self, symbol: str, price: float, date: pd.Timestamp, reason: str
@@ -233,7 +228,7 @@ class PortfolioBacktester:
                 exit_reason=reason,
             )
         )
-        logging.info("Closed %s @ %.2f reason=%s", symbol, price, reason)
+        logger.info("Closed %s @ %.2f reason=%s", symbol, price, reason)
 
     def run(self) -> None:
         for date in self.dates:
@@ -353,21 +348,21 @@ def run_backtest(symbols: List[str]) -> None:
         if re.match(r'^[A-Z]{1,5}$', symbol):
             valid_symbols.append(symbol)
         else:
-            logging.warning("Invalid symbol skipped: %s", symbol)
+            logger.warning("Invalid symbol skipped: %s", symbol)
 
     data = {}
     for sym in valid_symbols:
-        logging.info("Fetching data for %s", sym)
+        logger.info("Fetching data for %s", sym)
         df = get_data(sym)
         if df.empty or len(df) < 250:
-            logging.warning("Skipping %s: insufficient data", sym)
+            logger.warning("Skipping %s: insufficient data", sym)
             continue
         df = compute_indicators(df)
         df["score"] = composite_score(df)
         data[sym] = df.dropna(subset=["score"])
 
     if not data:
-        logging.error("No valid data to run backtest.")
+        logger.error("No valid data to run backtest.")
         return
 
     bt = PortfolioBacktester(
@@ -413,7 +408,7 @@ def run_backtest(symbols: List[str]) -> None:
     summary_df["symbols_tested"] = len(symbols)
 
     for _, row in summary_df.iterrows():
-        logging.info(
+        logger.info(
             "Backtest %s win_rate=%.2f%% net_pnl=%.2f",
             row.symbol,
             row.win_rate,
@@ -428,20 +423,18 @@ def run_backtest(symbols: List[str]) -> None:
     write_csv_atomic(equity_df.reset_index(), equity_path)
     write_csv_atomic(summary_df, metrics_path)
 
-    logging.info("Backtest complete. Results saved to data directory")
+    logger.info("Backtest complete. Results saved to data directory")
 
 
 if __name__ == "__main__":
     try:
         csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
         symbols_df = pd.read_csv(csv_path)
-        if "symbol" in symbols_df.columns:
-            symbol_list = symbols_df["symbol"].tolist()
-        else:
-            symbol_list = symbols_df.iloc[:, 0].tolist()
-        logging.info("Loaded %d symbols from %s", len(symbol_list), csv_path)
+        top_candidates = pd.read_csv(csv_path)
+        symbol_list = top_candidates["symbol"].tolist()
+        logger.info("Loaded %d symbols from %s", len(symbol_list), csv_path)
         run_backtest(symbol_list)
-        logging.info("Backtest script finished.")
+        logger.info("Backtest script finished.")
     except Exception as exc:
-        logging.error("Backtest failed: %s", exc)
+        logger.error("Backtest failed: %s", exc)
 
