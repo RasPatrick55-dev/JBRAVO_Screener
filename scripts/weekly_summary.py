@@ -157,6 +157,10 @@ def calculate_weekly_summary() -> dict:
             best_backtest_symbol = (
                 backtest_results.sort_values("net_pnl", ascending=False)["symbol"].iloc[0]
             )
+        else:
+            logger.warning(
+                "Column 'net_pnl' or 'symbol' missing. Skipping best backtest symbol calculation."
+            )
 
     best_candidate = ""
     if not historical_candidates.empty:

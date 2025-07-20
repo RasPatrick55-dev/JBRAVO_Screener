@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import logging
 import logging.handlers
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
@@ -347,8 +348,15 @@ class PortfolioBacktester:
 
 
 def run_backtest(symbols: List[str]) -> None:
+    valid_symbols: List[str] = []
+    for symbol in symbols:
+        if re.match(r'^[A-Z]{1,5}$', symbol):
+            valid_symbols.append(symbol)
+        else:
+            logging.warning("Invalid symbol skipped: %s", symbol)
+
     data = {}
-    for sym in symbols:
+    for sym in valid_symbols:
         logging.info("Fetching data for %s", sym)
         df = get_data(sym)
         if df.empty or len(df) < 250:
