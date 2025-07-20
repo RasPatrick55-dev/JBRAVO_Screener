@@ -4,10 +4,11 @@ import sys
 
 # Ensure the script runs from the repository root regardless of where it is
 # invoked from.
-os.chdir(os.path.dirname(__file__) or ".")
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+os.chdir(BASE_DIR)
 
 # Add project root to sys.path so that sibling packages (like scripts) can be imported
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, BASE_DIR)
 
 import subprocess
 import logging
@@ -17,7 +18,6 @@ import pandas as pd
 
 from utils import write_csv_atomic
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
 
 log_path = os.path.join(BASE_DIR, 'logs', 'pipeline.log')
@@ -44,11 +44,12 @@ def run_step(step_name, command):
     try:
         result = subprocess.run(
             command,
-            cwd=os.path.dirname(__file__),
+            cwd=BASE_DIR,
             capture_output=True,
+            text=True,
         )
-        logging.info("%s stdout:\n%s", step_name, result.stdout.decode())
-        logging.info("%s stderr:\n%s", step_name, result.stderr.decode())
+        logging.info("%s stdout:\n%s", step_name, result.stdout)
+        logging.info("%s stderr:\n%s", step_name, result.stderr)
         if result.returncode != 0:
             logging.error("%s returned non-zero exit %d", step_name, result.returncode)
             send_alert(f"Pipeline step {step_name} failed: exit {result.returncode}")
@@ -62,20 +63,11 @@ def run_step(step_name, command):
 if __name__ == "__main__":
     logging.info("Pipeline execution started.")
 
-    step_name = "Screener"
-    command = ["python", "scripts/screener.py"]
-
-    logging.info("Starting %s...", step_name)
-    result = subprocess.run(command, capture_output=True, text=True)
-
-    logging.info("%s stdout:\n%s", step_name, result.stdout)
-    logging.info("%s stderr:\n%s", step_name, result.stderr)
-
-    if result.returncode != 0:
-        logging.error("%s failed with exit code %d", step_name, result.returncode)
-        sys.exit(result.returncode)
-    else:
-        logging.info("%s completed successfully", step_name)
+    try:
+        run_step("Screener", [sys.executable, "scripts/screener.py"])
+    except Exception:
+        logging.error("Screener step failed")
+        sys.exit(1)
 
     steps = [
         (
