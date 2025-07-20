@@ -102,15 +102,12 @@ def send_alert(message: str) -> None:
         logging.error("Failed to send alert: %s", exc)
 
 
+from scripts.ensure_db_indicators import ensure_columns, REQUIRED_COLUMNS
+
+
 def init_db() -> None:
-    """Ensure the SQLite table for historical candidates exists."""
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS historical_candidates (date TEXT, symbol TEXT, score REAL)"
-        )
-        columns = [row[1] for row in conn.execute("PRAGMA table_info(historical_candidates)")]
-        if "rsi" not in columns:
-            conn.execute("ALTER TABLE historical_candidates ADD COLUMN rsi REAL;")
+    """Ensure the SQLite table has all required columns."""
+    ensure_columns(DB_PATH, REQUIRED_COLUMNS)
 
 
 init_db()
