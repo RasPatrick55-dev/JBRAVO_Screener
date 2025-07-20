@@ -19,6 +19,7 @@ REQUIRED_COLUMNS = [
     "adx",
     "aroon_up",
     "aroon_down",
+    "score_breakdown",
     "win_rate",
     "net_pnl",
     "trades",
