@@ -1,5 +1,7 @@
 import os
 import sqlite3
+from typing import Iterable
+import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, 'data', 'pipeline.db')
@@ -61,6 +63,17 @@ def ensure_columns(db_path: str = DB_PATH, indicators: list[str] = REQUIRED_COLU
         print("All required columns verified.")
 
     conn.close()
+
+
+def sync_columns_from_dataframe(df: pd.DataFrame, db_path: str = DB_PATH) -> None:
+    """Ensure DB schema matches the columns in ``df``.
+
+    Any columns present in ``df`` but missing from the
+    ``historical_candidates`` table will be added automatically.
+    """
+
+    columns = list(df.columns)
+    ensure_columns(db_path, columns)
 
 
 if __name__ == "__main__":
