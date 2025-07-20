@@ -83,6 +83,11 @@ def init_db() -> None:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS historical_candidates (date TEXT, symbol TEXT, score REAL)"
         )
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(historical_candidates)")]
+        if "timestamp" not in columns:
+            conn.execute("PRAGMA foreign_keys=off;")
+            conn.execute("ALTER TABLE historical_candidates ADD COLUMN timestamp TEXT;")
+            conn.execute("PRAGMA foreign_keys=on;")
 
 
 init_db()

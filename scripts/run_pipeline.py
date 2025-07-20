@@ -2,6 +2,10 @@
 import os
 import sys
 
+# Ensure the script runs from the repository root regardless of where it is
+# invoked from.
+os.chdir(os.path.dirname(__file__))
+
 # Add project root to sys.path so that sibling packages (like scripts) can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -47,7 +51,11 @@ def send_alert(msg: str) -> None:
 def run_step(step_name, command):
     logging.info("Starting %s...", step_name)
     try:
-        result = subprocess.run(command, capture_output=True)
+        result = subprocess.run(
+            command,
+            cwd=os.path.dirname(__file__),
+            capture_output=True,
+        )
         logging.info("%s stdout:\n%s", step_name, result.stdout.decode())
         logging.info("%s stderr:\n%s", step_name, result.stderr.decode())
         if result.returncode != 0:
@@ -65,15 +73,15 @@ if __name__ == "__main__":
     steps = [
         (
             "Screener",
-            ["python", "scripts/screener.py"],
+            [sys.executable, "scripts/screener.py"],
         ),
         (
             "Backtest",
-            ["python", "/home/RasPatrick/jbravo_screener/scripts/backtest.py"],
+            [sys.executable, "scripts/backtest.py"],
         ),
         (
             "Metrics Calculation",
-            ["python", "/home/RasPatrick/jbravo_screener/scripts/metrics.py"],
+            [sys.executable, "scripts/metrics.py"],
         ),
     ]
     for name, cmd in steps:
