@@ -71,12 +71,16 @@ if __name__ == "__main__":
 
     steps = [
         (
-            "Backtest",
-            [sys.executable, "scripts/backtest.py"],
-        ),
-        (
             "Metrics Calculation",
             [sys.executable, "scripts/metrics.py"],
+        ),
+        (
+            "Execute Trades",
+            [sys.executable, "scripts/execute_trades.py"],
+        ),
+        (
+            "Weekly Summary",
+            [sys.executable, "scripts/weekly_summary.py"],
         ),
     ]
 
