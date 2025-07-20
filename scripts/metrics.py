@@ -37,15 +37,23 @@ def load_results(csv_file='backtest_results.csv'):
 
 # Calculate additional performance metrics
 def calculate_metrics(df):
-    total_trades = df['trades'].sum()
-    total_wins = df['wins'].sum()
-    total_losses = df['losses'].sum()
-    total_pnl = df['net_pnl'].sum()
+    total_trades = df['trades'].sum() if 'trades' in df.columns else 0
+    if 'trades' not in df.columns:
+        logging.warning("Column 'trades' missing. Using 0 for total trades")
+    total_wins = df['wins'].sum() if 'wins' in df.columns else 0
+    if 'wins' not in df.columns:
+        logging.warning("Column 'wins' missing. Using 0 for wins")
+    total_losses = df['losses'].sum() if 'losses' in df.columns else 0
+    if 'losses' not in df.columns:
+        logging.warning("Column 'losses' missing. Using 0 for losses")
+    total_pnl = df['net_pnl'].sum() if 'net_pnl' in df.columns else 0
+    if 'net_pnl' not in df.columns:
+        logging.warning("Column 'net_pnl' missing. Using 0 for net_pnl")
 
     win_rate = (total_wins / total_trades) * 100 if total_trades else 0
-    avg_return_per_trade = df['net_pnl'].sum() / total_trades if total_trades else 0
-    avg_win = df[df['net_pnl'] > 0]['net_pnl'].mean()
-    avg_loss = df[df['net_pnl'] < 0]['net_pnl'].mean()
+    avg_return_per_trade = df['net_pnl'].sum() / total_trades if total_trades and 'net_pnl' in df.columns else 0
+    avg_win = df[df['net_pnl'] > 0]['net_pnl'].mean() if 'net_pnl' in df.columns else 0
+    avg_loss = df[df['net_pnl'] < 0]['net_pnl'].mean() if 'net_pnl' in df.columns else 0
 
     metrics_summary = {
         'Total Trades': total_trades,
@@ -69,14 +77,18 @@ def rank_candidates(df):
         'avg_return': 0.10
     }
 
-    # Calculate additional metrics
-    df['avg_return'] = df['net_pnl'] / df['trades'].replace(0, 1)
+    missing = [c for c in ['win_rate', 'net_pnl', 'trades'] if c not in df.columns]
+    if missing:
+        logging.warning("Missing columns for ranking: %s", missing)
+        for col in missing:
+            df[col] = 0
 
-    # Normalize metrics
-    df['win_rate_norm'] = df['win_rate'] / df['win_rate'].max()
-    df['net_pnl_norm'] = df['net_pnl'] / df['net_pnl'].max()
-    df['trades_norm'] = df['trades'] / df['trades'].max()
-    df['avg_return_norm'] = df['avg_return'] / df['avg_return'].max()
+    df['avg_return'] = df['net_pnl'] / df['trades'].replace(0, 1) if 'net_pnl' in df.columns and 'trades' in df.columns else 0
+
+    df['win_rate_norm'] = df['win_rate'] / df['win_rate'].max() if 'win_rate' in df.columns else 0
+    df['net_pnl_norm'] = df['net_pnl'] / df['net_pnl'].max() if 'net_pnl' in df.columns else 0
+    df['trades_norm'] = df['trades'] / df['trades'].max() if 'trades' in df.columns else 0
+    df['avg_return_norm'] = df['avg_return'] / df['avg_return'].max() if 'avg_return' in df.columns else 0
 
     # Compute weighted score
     df['score'] = (
@@ -134,6 +146,10 @@ def main():
 
     ranked_df = rank_candidates(results_df)
     save_top_candidates(ranked_df)
+    logging.info(
+        "Top Candidates: %s",
+        ranked_df[['symbol', 'score', 'win_rate', 'net_pnl']].head(15).to_string(index=False)
+    )
 
     metrics_summary = calculate_metrics(ranked_df)
     save_metrics_summary(metrics_summary, ranked_df['symbol'].tolist())
