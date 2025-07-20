@@ -435,7 +435,11 @@ if __name__ == "__main__":
     try:
         csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
         symbols_df = pd.read_csv(csv_path)
-        symbol_list = symbols_df.iloc[:, 0].tolist()
+        if "symbol" in symbols_df.columns:
+            symbol_list = symbols_df["symbol"].tolist()
+        else:
+            symbol_list = symbols_df.iloc[:, 0].tolist()
+        logging.info("Loaded %d symbols from %s", len(symbol_list), csv_path)
         run_backtest(symbol_list)
         logging.info("Backtest script finished.")
     except Exception as exc:

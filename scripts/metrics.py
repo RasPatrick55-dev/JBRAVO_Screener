@@ -99,13 +99,21 @@ def rank_candidates(df):
 
 # Save top-ranked candidates
 def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
-    top_candidates = df.head(top_n)
+    required_columns = ['symbol', 'score', 'win_rate', 'net_pnl']
+    missing_cols = [c for c in required_columns if c not in df.columns]
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
+    if missing_cols:
+        logger.error("Missing columns: %s", missing_cols)
+        return
+
+    top_candidates = df.head(top_n)
     try:
         write_csv_atomic(top_candidates, csv_path)
-        logging.info("Successfully appended data to %s", csv_path)
+        logger.info(
+            "Successfully updated %s with %d records", csv_path, len(top_candidates)
+        )
     except Exception as e:
-        logging.error("Failed appending to %s: %s", csv_path, e)
+        logger.error("Failed appending to %s: %s", csv_path, e)
 
 # Save overall metrics summary
 def save_metrics_summary(metrics_summary, symbols, output_file='metrics_summary.csv'):

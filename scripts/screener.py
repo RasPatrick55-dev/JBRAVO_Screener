@@ -307,9 +307,20 @@ def main() -> None:
     top15.insert(0, "timestamp", timestamp)
     top15["universe_count"] = len(symbols)
 
+    cols = [
+        "symbol",
+        "score",
+        "timestamp",
+    ] + [c for c in top15.columns if c not in ["symbol", "score", "timestamp"]]
+    top15 = top15[cols]
+
     csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
     write_csv_atomic(top15, csv_path)
-    logging.info("Top 15 ranked candidates saved to %s", csv_path)
+    logging.info(
+        "Top candidates updated: %d records written to %s",
+        len(top15),
+        csv_path,
+    )
 
 # Append to historical candidates log
     hist_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
