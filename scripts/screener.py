@@ -88,6 +88,8 @@ def init_db() -> None:
             conn.execute("PRAGMA foreign_keys=off;")
             conn.execute("ALTER TABLE historical_candidates ADD COLUMN timestamp TEXT;")
             conn.execute("PRAGMA foreign_keys=on;")
+        if "rsi" not in columns:
+            conn.execute("ALTER TABLE historical_candidates ADD COLUMN rsi REAL;")
 
 
 init_db()
