@@ -949,5 +949,18 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
     return is_open, ""
 
 
+# Periodically refresh screener table
+@app.callback(Output("top-candidates-table", "data"), Input("interval-update", "n_intervals"))
+def update_screener_table(n):
+    if os.path.exists(top_candidates_path):
+        df = pd.read_csv(top_candidates_path)
+        logger.info(
+            "Screener table updated successfully with %d records.", len(df)
+        )
+        return df.to_dict("records")
+    logger.warning("%s not found when updating screener table", top_candidates_path)
+    return []
+
+
 if __name__ == "__main__":
     app.run(debug=False)
