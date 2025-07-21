@@ -271,7 +271,7 @@ app.layout = dbc.Container(
                 ),
                 dbc.Tab(
                     label="Execute Trades",
-                    tab_id="tab-trades",
+                    tab_id="tab-execute-trades",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                     className="custom-tab",
@@ -641,7 +641,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         return dbc.Container(components, fluid=True)
 
-    elif tab == "tab-trades":
+    elif tab == "tab-execute-trades":
         trades_df, alert = load_csv(executed_trades_path)
         if alert:
             table = alert
