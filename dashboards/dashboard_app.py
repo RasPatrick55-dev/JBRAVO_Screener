@@ -654,7 +654,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     for col in trades_df.columns
                 ],
                 data=trades_df.to_dict("records"),
-                page_size=10,
+                page_size=15,
                 style_table={"overflowX": "auto"},
                 style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
                 style_data_conditional=[
@@ -679,7 +679,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                         "overflowY": "auto",
                         "backgroundColor": "#272B30",
                         "color": "#E0E0E0",
-                        "padding": "0.5rem",
+                        "padding": "10px",
                     },
                 ),
             ]
