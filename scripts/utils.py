@@ -245,3 +245,91 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
 
     return results
 
+
+def fetch_daily_bars(symbol: str, trade_date: str, data_client) -> pd.DataFrame:
+    """Return the IEX 1-day bar for ``symbol`` on ``trade_date``.
+
+    Parameters
+    ----------
+    symbol : str
+        The ticker to fetch.
+    trade_date : str
+        ISO formatted date (``YYYY-MM-DD``).
+    data_client : StockHistoricalDataClient
+        Alpaca data client used to request the bars.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing the daily bar indexed by timestamp.
+    """
+
+    request = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Day,
+        start=trade_date,
+        end=trade_date,
+        feed="iex",
+    )
+    bars = data_client.get_stock_bars(request).df
+    if isinstance(bars.index, pd.MultiIndex):
+        bars = bars.droplevel("symbol") if "symbol" in bars.index.names else bars.droplevel(0)
+    return bars
+
+
+def fetch_extended_hours_bars(symbol: str, trade_date: str, data_client) -> tuple[int, pd.DataFrame]:
+    """Fetch pre- and post-market minute bars and return the total volume.
+
+    The returned DataFrame contains all minute bars between 08:00 and 17:00
+    US/Eastern for ``trade_date`` retrieved from the IEX feed.
+    """
+
+    tz = pytz.timezone("America/New_York")
+    day = datetime.strptime(trade_date, "%Y-%m-%d").date()
+    start = tz.localize(datetime.combine(day, dt_time(8, 0)))
+    end = tz.localize(datetime.combine(day, dt_time(17, 0)))
+
+    request = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Minute,
+        start=start,
+        end=end,
+        feed="iex",
+    )
+    bars = data_client.get_stock_bars(request).df
+    if isinstance(bars.index, pd.MultiIndex):
+        bars = bars.droplevel("symbol") if "symbol" in bars.index.names else bars.droplevel(0)
+    if bars.index.tzinfo is None:
+        bars.index = bars.index.tz_localize("UTC").tz_convert(tz)
+    else:
+        bars.index = bars.index.tz_convert(tz)
+
+    pre = bars.between_time("08:00", "09:30")["volume"].sum()
+    post = bars.between_time("16:00", "17:00")["volume"].sum()
+    return int(pre + post), bars
+
+
+def get_combined_daily_bar(symbol: str, trade_date: str, data_client) -> pd.DataFrame:
+    """Return a daily bar adjusted with extended hours data."""
+
+    daily = fetch_daily_bars(symbol, trade_date, data_client)
+    ext_vol, ext_bars = fetch_extended_hours_bars(symbol, trade_date, data_client)
+
+    if daily.empty:
+        return daily
+
+    idx = daily.index[0]
+    daily.loc[idx, "volume"] = daily.loc[idx, "volume"] + ext_vol
+
+    if not ext_bars.empty:
+        ext_high = ext_bars["high"].max()
+        ext_low = ext_bars["low"].min()
+        close_series = ext_bars.between_time("16:00", "17:00")["close"]
+        ext_close = close_series.iloc[-1] if not close_series.empty else daily.loc[idx, "close"]
+
+        daily.loc[idx, "high"] = max(daily.loc[idx, "high"], ext_high)
+        daily.loc[idx, "low"] = min(daily.loc[idx, "low"], ext_low)
+        daily.loc[idx, "close"] = ext_close
+
+    return daily
+

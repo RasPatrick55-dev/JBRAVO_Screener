@@ -5,7 +5,13 @@ from datetime import datetime
 import pandas as pd
 import pytz
 
-from scripts.utils import cache_bars, get_last_trading_day_end
+from scripts.utils import (
+    cache_bars,
+    get_last_trading_day_end,
+    fetch_daily_bars,
+    fetch_extended_hours_bars,
+    get_combined_daily_bar,
+)
 
 class TestUtils(unittest.TestCase):
     def setUp(self):
@@ -26,6 +32,62 @@ class TestUtils(unittest.TestCase):
         client.get_stock_bars.return_value.df = pd.DataFrame()
         df = cache_bars('FAKE', client, self.cache_dir, days=10)
         self.assertIsInstance(df, pd.DataFrame)
+
+    def test_fetch_daily_bars_iex_feed(self):
+        client = MagicMock()
+        mock_df = pd.DataFrame(
+            {
+                "open": [1],
+                "high": [1],
+                "low": [1],
+                "close": [1],
+                "volume": [1],
+            },
+            index=[pd.Timestamp("2024-01-02")],
+        )
+        client.get_stock_bars.return_value.df = mock_df
+        df = fetch_daily_bars("AAPL", "2024-01-02", client)
+        req = client.get_stock_bars.call_args[0][0]
+        self.assertEqual(req.feed, "iex")
+        self.assertFalse(df.empty)
+
+    def test_get_combined_daily_bar(self):
+        client = MagicMock()
+        daily_df = pd.DataFrame(
+            {
+                "open": [1.0],
+                "high": [2.0],
+                "low": [0.5],
+                "close": [1.5],
+                "volume": [100],
+            },
+            index=[pd.Timestamp("2024-01-01")],
+        )
+        extended_df = pd.DataFrame(
+            {
+                "open": [1.2, 1.6, 1.7, 1.8],
+                "high": [1.3, 2.1, 1.8, 1.9],
+                "low": [1.2, 1.3, 1.6, 1.7],
+                "close": [1.25, 1.9, 1.85, 1.8],
+                "volume": [10, 5, 20, 30],
+            },
+            index=pd.DatetimeIndex(
+                [
+                    "2024-01-01 08:30",
+                    "2024-01-01 09:00",
+                    "2024-01-01 16:10",
+                    "2024-01-01 16:50",
+                ],
+                tz="America/New_York",
+            ),
+        )
+        client.get_stock_bars.side_effect = [MagicMock(df=daily_df), MagicMock(df=extended_df)]
+
+        combined = get_combined_daily_bar("AAPL", "2024-01-01", client)
+        row = combined.iloc[0]
+        self.assertEqual(row["volume"], 165)
+        self.assertAlmostEqual(row["high"], 2.1)
+        self.assertAlmostEqual(row["close"], 1.8)
 
 if __name__ == '__main__':
     unittest.main()
