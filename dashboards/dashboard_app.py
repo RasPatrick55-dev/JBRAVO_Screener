@@ -670,7 +670,13 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 ],
             )
 
-        metrics_data = {"orders_submitted": 0, "symbols_skipped": 0, "api_retries": 0, "api_failures": 0}
+        metrics_data = {
+            "symbols_processed": 0,
+            "orders_submitted": 0,
+            "symbols_skipped": 0,
+            "api_retries": 0,
+            "api_failures": 0,
+        }
         if os.path.exists(execute_metrics_path):
             try:
                 with open(execute_metrics_path) as f:
@@ -681,9 +687,10 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         metrics_view = html.Div([
             html.H5("Execute Trades Metrics"),
             html.Ul([
-                html.Li(f"Orders Submitted: {metrics_data['orders_submitted']}"),
-                html.Li(f"Symbols Skipped: {metrics_data['symbols_skipped']}"),
-                html.Li(f"API Retries: {metrics_data['api_retries']}"),
+                html.Li(f"Symbols Processed: {metrics_data['symbols_processed']}") ,
+                html.Li(f"Trades Submitted: {metrics_data['orders_submitted']}"),
+                html.Li(f"Trades Skipped: {metrics_data['symbols_skipped']}"),
+                html.Li(f"Retries Attempted: {metrics_data['api_retries']}"),
                 html.Li(f"API Failures: {metrics_data['api_failures']}")
             ]),
             html.Pre(

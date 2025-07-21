@@ -65,8 +65,13 @@ ALLOC_PERCENT = 0.03  # Changed allocation to 3%
 TRAIL_PERCENT = 3.0
 MAX_HOLD_DAYS = 7
 
+# Directory used for caching market history
+DATA_CACHE_DIR = os.path.join(BASE_DIR, "data", "history_cache")
+os.makedirs(DATA_CACHE_DIR, exist_ok=True)
+
 # Runtime metrics recorded for dashboard display
 metrics = {
+    "symbols_processed": 0,
     "orders_submitted": 0,
     "symbols_skipped": 0,
     "api_retries": 0,
@@ -310,13 +315,30 @@ def allocate_position(symbol):
 
     buying_power = get_buying_power()
     alloc_amount = buying_power * ALLOC_PERCENT
-    request = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=1)
-    bars = data_client.get_stock_bars(request).df
-
-    if bars.empty:
-        reason = "no bars available"
-        logging.debug("Skipping %s: %s", symbol, reason)
-        return None, reason
+    now = datetime.now(timezone.utc)
+    end = now - timedelta(minutes=15)
+    start = end - timedelta(hours=1)
+    try:
+        request = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=TimeFrame.Minute,
+            start=start,
+            end=end,
+        )
+        bars = data_client.get_stock_bars(request).df
+        if bars.empty:
+            logging.warning(
+                "No bars available for %s from %s to %s. Retrying with previous day's close.",
+                symbol,
+                start,
+                end,
+            )
+            prev_close = trading_client.get_latest_trade(symbol).price
+            bars = pd.DataFrame([{"close": prev_close}])
+            logging.info("Using previous close price for %s: %s", symbol, prev_close)
+    except Exception as e:
+        logging.error("Error fetching bars for %s: %s", symbol, e)
+        return None, "market data error"
 
     last_close = bars['close'].iloc[-1]
     qty = int(alloc_amount / last_close)
@@ -330,10 +352,19 @@ def allocate_position(symbol):
 
 def submit_trades():
     df = load_top_candidates()
+    clock = trading_client.get_clock()
+    if not clock.is_open:
+        logging.warning(
+            "Market is closed. Current time: %s. Next open: %s",
+            clock.timestamp,
+            clock.next_open,
+        )
+        return
     submitted = 0
     skipped = 0
     for _, row in df.iterrows():
         sym = row.symbol
+        metrics["symbols_processed"] += 1
         alloc, reason = allocate_position(sym)
         if alloc is None:
             skipped += 1
