@@ -79,7 +79,7 @@ def cache_bars(
                 symbol_or_symbols=symbol,
                 timeframe=TimeFrame.Minute,
                 start=start,
-                end=end,
+                feed="iex",
             )
             df = data_client.get_stock_bars(request).df
             if df.empty:
@@ -119,7 +119,12 @@ def cache_bars(
     if start >= end:
         return df
 
-    request_params = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, start=start, end=end)
+    request_params = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Day,
+        start=start,
+        feed="iex",
+    )
     try:
         new_df = data_client.get_stock_bars(request_params).df
     except APIError as exc:
@@ -207,7 +212,12 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
 
         end = get_last_trading_day_end()
         min_start = min(start_map.values())
-        request_params = StockBarsRequest(symbol_or_symbols=batch, timeframe=TimeFrame.Day, start=min_start, end=end)
+        request_params = StockBarsRequest(
+            symbol_or_symbols=batch,
+            timeframe=TimeFrame.Day,
+            start=min_start,
+            feed="iex",
+        )
 
         attempt = 0
         bars_df = pd.DataFrame()
@@ -268,7 +278,6 @@ def fetch_daily_bars(symbol: str, trade_date: str, data_client) -> pd.DataFrame:
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Day,
         start=trade_date,
-        end=trade_date,
         feed="iex",
     )
     bars = data_client.get_stock_bars(request).df
@@ -293,7 +302,6 @@ def fetch_extended_hours_bars(symbol: str, trade_date: str, data_client) -> tupl
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Minute,
         start=start,
-        end=end,
         feed="iex",
     )
     bars = data_client.get_stock_bars(request).df

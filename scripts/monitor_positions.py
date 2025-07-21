@@ -261,9 +261,7 @@ def fetch_indicators(symbol):
             start=(datetime.now(timezone.utc) - timedelta(days=750)).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
             ),
-            end=(datetime.now(timezone.utc) - timedelta(minutes=16)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
+            feed="iex",
         )
         bars = data_client.get_stock_bars(request).df
     except Exception as e:
