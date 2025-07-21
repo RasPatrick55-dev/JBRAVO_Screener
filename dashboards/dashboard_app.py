@@ -334,7 +334,8 @@ app.layout = dbc.Container(
             children=html.Div(id="tabs-content", className="mt-4"),
             type="default",
         ),
-        dcc.Interval(id="interval-update", interval=5 * 60 * 1000, n_intervals=0),
+        # Refresh dashboards roughly every 30 seconds to reflect new logs
+        dcc.Interval(id="interval-update", interval=30000, n_intervals=0),
         dcc.Interval(id="log-interval", interval=10000, n_intervals=0),
         dcc.Interval(id="interval-trades", interval=30 * 1000, n_intervals=0),
         dbc.Modal(
@@ -1043,13 +1044,19 @@ def update_screener_table(n):
 
 
 # Periodically refresh metrics log display
-@app.callback(Output("metrics-logs", "children"), Input("interval-update", "n_intervals"))
+@app.callback(
+    Output("metrics-logs", "children"),
+    Input("interval-update", "n_intervals"),
+)
 def update_metrics_logs(n):
-    if os.path.exists(metrics_log_path):
-        with open(metrics_log_path, "r") as log_file:
-            logs = log_file.readlines()
-        return "".join(logs[-50:])
-    return ""
+    """Read the metrics log file and return the most recent entries."""
+    try:
+        with open(metrics_log_path, "r") as file:
+            log_lines = file.readlines()
+        recent_log_lines = log_lines[-50:][::-1]
+        return "".join(recent_log_lines)
+    except FileNotFoundError:
+        return "Metrics log file not found."
 
 
 # Periodically refresh executed trades table
