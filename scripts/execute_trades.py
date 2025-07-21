@@ -7,6 +7,7 @@ import subprocess
 from logging.handlers import RotatingFileHandler
 import logging
 import pandas as pd
+import json
 from datetime import datetime, timedelta, timezone
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, GetOrdersRequest
@@ -63,6 +64,15 @@ MAX_OPEN_TRADES = 4
 ALLOC_PERCENT = 0.03  # Changed allocation to 3%
 TRAIL_PERCENT = 3.0
 MAX_HOLD_DAYS = 7
+
+# Runtime metrics recorded for dashboard display
+metrics = {
+    "orders_submitted": 0,
+    "symbols_skipped": 0,
+    "api_retries": 0,
+    "api_failures": 0,
+}
+metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 
 # Candidate selection happens dynamically from ``top_candidates.csv``.
 
@@ -327,6 +337,7 @@ def submit_trades():
         alloc, reason = allocate_position(sym)
         if alloc is None:
             skipped += 1
+            metrics["symbols_skipped"] += 1
             logging.warning("Trade skipped for %s: %s", sym, reason)
             continue
 
@@ -355,6 +366,7 @@ def submit_trades():
             record_executed_trade(sym, qty, entry_price, order_type="limit", side="buy")
             attach_trailing_stops()
             submitted += 1
+            metrics["orders_submitted"] += 1
         except APIError as e:
             logging.error("Order submission error for %s: %s", sym, e)
             if "extended hours order must be DAY limit orders" in str(e):
@@ -376,16 +388,21 @@ def submit_trades():
                     )
                     attach_trailing_stops()
                     submitted += 1
+                    metrics["orders_submitted"] += 1
+                    metrics["api_retries"] += 1
                 except APIError as retry_e:
                     logging.error(
                         "Retry order submission failed for %s: %s", sym, retry_e
                     )
                     skipped += 1
+                    metrics["api_failures"] += 1
             else:
                 skipped += 1
+                metrics["api_failures"] += 1
         except Exception as e:
             logging.error("Failed to submit buy order for %s: %s", sym, e)
             skipped += 1
+            metrics["api_failures"] += 1
     logging.info("Orders submitted: %d, skipped: %d", submitted, skipped)
 
 def attach_trailing_stops():
@@ -461,6 +478,7 @@ def daily_exit_check():
                     order_type="market",
                     side="sell",
                 )
+                metrics["orders_submitted"] += 1
             except APIError as e:
                 logging.error("Order submission error for %s: %s", symbol, e)
                 if "extended hours order must be DAY limit orders" in str(e):
@@ -484,14 +502,18 @@ def daily_exit_check():
                             order_type="market",
                             side="sell",
                         )
+                        metrics["orders_submitted"] += 1
+                        metrics["api_retries"] += 1
                     except APIError as retry_e:
                         logging.error(
                             "Retry order submission failed for %s: %s",
                             symbol,
                             retry_e,
                         )
+                        metrics["api_failures"] += 1
             except Exception as e:
                 logging.error("Order submission error for %s: %s", symbol, e)
+                metrics["api_failures"] += 1
         elif should_exit_early(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache")):
             logging.info("Early exit signal for %s", symbol)
             try:
@@ -510,6 +532,7 @@ def daily_exit_check():
                     order_type="market",
                     side="sell",
                 )
+                metrics["orders_submitted"] += 1
             except APIError as e:
                 logging.error("Order submission error for %s: %s", symbol, e)
                 if "extended hours order must be DAY limit orders" in str(e):
@@ -532,12 +555,16 @@ def daily_exit_check():
                             order_type="market",
                             side="sell",
                         )
+                        metrics["orders_submitted"] += 1
+                        metrics["api_retries"] += 1
                     except APIError as retry_e:
                         logging.error(
                             "Retry order submission failed for %s: %s", symbol, retry_e
                         )
+                        metrics["api_failures"] += 1
             except Exception as e:
                 logging.error("Order submission error for %s: %s", symbol, e)
+                metrics["api_failures"] += 1
 
 if __name__ == '__main__':
     logging.info("Starting pre-market trade execution script")
@@ -546,6 +573,13 @@ if __name__ == '__main__':
     daily_exit_check()
     save_open_positions_csv()
     update_trades_log()
+    # Persist metrics for dashboard
+    try:
+        with open(metrics_path, "w") as f:
+            json.dump(metrics, f)
+        logging.info("Execution metrics saved to %s", metrics_path)
+    except Exception as exc:
+        logging.error("Failed to save execution metrics: %s", exc)
     logging.info("Pre-market trade execution script complete")
 
     # Run historical trades script after executing trades

@@ -64,10 +64,10 @@ def should_exit_early(symbol: str, data_client, cache_dir: str, lookback: int = 
     """
     try:
         df = cache_bars(symbol, data_client, cache_dir)
-        # Focus on the most recent ``lookback`` bars
-        if len(df) < 25:
-            # Not enough data to compute the indicators
+        if df is None or len(df) < 25:
+            # Not enough data available to compute the indicators
             return False
+        # Focus on the most recent ``lookback`` bars
         df = df.sort_index().iloc[-lookback:].copy()
 
         # Compute 20‑period EMA, RSI and MACD histogram

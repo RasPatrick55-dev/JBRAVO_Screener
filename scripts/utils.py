@@ -50,15 +50,54 @@ def get_last_trading_day_end(now: datetime | None = None) -> datetime:
     return close_dt.astimezone(timezone.utc)
 
 
-def cache_bars(symbol: str, data_client, cache_dir: str, days: int = 1500) -> pd.DataFrame:
-    """Fetch and cache daily bars for a symbol.
+def cache_bars(
+    symbol: str,
+    data_client,
+    cache_dir: str,
+    days: int = 1500,
+    timeframe: TimeFrame = TimeFrame.Day,
+) -> pd.DataFrame | None:
+    """Fetch and cache bars for ``symbol``.
 
-    When running outside market hours the end date is adjusted to the last
-    market close to avoid requesting future data. If the Alpaca request
-    returns no data, TradingView is used as a fallback source.
+    For ``TimeFrame.Day`` the behaviour mirrors the original implementation
+    where data are cached to disk.  When ``timeframe`` is ``TimeFrame.Minute``
+    only a small intraday window is requested (most recent hour delayed by
+    15 minutes) and the resulting DataFrame is returned without touching the
+    cache.  ``None`` is returned when no data could be fetched.
     """
 
     os.makedirs(cache_dir, exist_ok=True)
+
+    # Intraday minute bars are not cached to disk.  They are fetched for the
+    # last hour with a 15 minute delay to respect Alpaca's data policies.
+    if timeframe == TimeFrame.Minute:
+        now = datetime.now(timezone.utc)
+        end = now - timedelta(minutes=15)
+        start = end - timedelta(hours=1)
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Minute,
+                start=start,
+                end=end,
+            )
+            df = data_client.get_stock_bars(request).df
+            if df.empty:
+                logging.warning(
+                    "No bars returned for %s from %s to %s", symbol, start, end
+                )
+                return None
+            if isinstance(df.index, pd.MultiIndex):
+                df = df.droplevel("symbol") if "symbol" in df.index.names else df.droplevel(0)
+            df.index = pd.to_datetime(df.index)
+            if df.index.tzinfo is None:
+                df.index = df.index.tz_localize("UTC")
+            logging.info("Received %d bars for %s", len(df), symbol)
+            return df
+        except Exception as e:  # pragma: no cover - network errors
+            logging.error("Market data fetch error for %s: %s", symbol, e)
+            return None
+
     path = os.path.join(cache_dir, f"{symbol}.csv")
     df = (
         pd.read_csv(path, parse_dates=["timestamp"]).set_index("timestamp")
