@@ -19,6 +19,8 @@ from utils import logger_utils
 import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
 import requests
 
@@ -237,7 +239,15 @@ def main() -> None:
     skipped = 0
     for symbol in symbols:
         logger.info("Processing %s...", symbol)
-        df = cache_bars(symbol, data_client, DATA_CACHE_DIR)
+        request_params = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=TimeFrame.Day,
+            start=datetime.now(timezone.utc) - timedelta(days=1500),
+            end=datetime.now(timezone.utc),
+        )
+        bars = data_client.get_stock_bars(request_params)
+        cache_bars(symbol, bars, DATA_CACHE_DIR)
+        df = bars.df.reset_index()
         logger.debug("%s has %d bars", symbol, len(df))
         try:
             rec = compute_score(symbol, df)
