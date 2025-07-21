@@ -310,7 +310,7 @@ def allocate_position(symbol):
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Minute,
             start=start,
-            end=end,
+            feed="iex",
         )
         bars = data_client.get_stock_bars(request).df
         if bars.empty:

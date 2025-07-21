@@ -243,7 +243,7 @@ def main() -> None:
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
             start=datetime.now(timezone.utc) - timedelta(days=1500),
-            end=datetime.now(timezone.utc),
+            feed="iex",
         )
         bars = data_client.get_stock_bars(request_params)
         cache_bars(symbol, bars, DATA_CACHE_DIR)
