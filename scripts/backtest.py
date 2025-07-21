@@ -37,7 +37,7 @@ error_handler = logging.handlers.RotatingFileHandler(
 error_handler.setLevel(logging.ERROR)
 
 logging.basicConfig(
-    filename=os.path.join(BASE_DIR, "logs", "pipeline.log"),
+    filename=os.path.join(BASE_DIR, "logs", "backtest.log"),
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
 )

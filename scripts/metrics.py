@@ -11,7 +11,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 
 logging.basicConfig(
-    filename=os.path.join(BASE_DIR, "logs", "pipeline.log"),
+    filename=os.path.join(BASE_DIR, "logs", "metrics.log"),
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
 )
