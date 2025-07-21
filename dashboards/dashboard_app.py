@@ -42,6 +42,26 @@ error_log_path = os.path.join(screener_log_dir, "error.log")
 metrics_log_path = os.path.join(screener_log_dir, "metrics.log")
 pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json")
 
+# Threshold in minutes to consider a log stale
+STALE_THRESHOLD_MIN = 1440  # 24 hours
+
+
+def is_log_stale(log_path):
+    """Return True if the most recent INFO/ERROR entry in ``log_path`` is older than ``STALE_THRESHOLD_MIN`` minutes."""
+    if not os.path.exists(log_path):
+        return True
+    try:
+        with open(log_path) as f:
+            lines = f.readlines()
+        for line in reversed(lines):
+            if "[INFO]" in line or "[ERROR]" in line:
+                ts_str = line[:19]
+                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                return (datetime.utcnow() - ts).total_seconds() > (STALE_THRESHOLD_MIN * 60)
+    except Exception:
+        return True
+    return True
+
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
@@ -193,22 +213,26 @@ def pipeline_status_component():
     for name, path in steps:
         if os.path.exists(path):
             mtime = datetime.utcfromtimestamp(os.path.getmtime(path))
-            age = (now - mtime).total_seconds() / 60
-            if age < 60:
-                color = "success"
-                status = "Completed"
-            else:
+            stale = is_log_stale(path)
+            if stale:
                 color = "warning"
                 status = "Stale"
+            else:
+                color = "success"
+                status = "Completed"
             timestamp = mtime.strftime("%Y-%m-%d %H:%M") + " UTC"
         else:
-            # check json status as fallback
             ts = status_data.get(name)
             if ts:
                 mtime = datetime.utcfromtimestamp(ts)
                 timestamp = mtime.strftime("%Y-%m-%d %H:%M") + " UTC"
-                color = "warning"
-                status = "Stale"
+                stale = (datetime.utcnow() - mtime).total_seconds() > (STALE_THRESHOLD_MIN * 60)
+                if stale:
+                    color = "warning"
+                    status = "Stale"
+                else:
+                    color = "success"
+                    status = "Completed"
             else:
                 color = "danger"
                 status = "Missing"
