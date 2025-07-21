@@ -10,10 +10,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 
+# Configure logging to write detailed metrics information
 logging.basicConfig(
     filename=os.path.join(BASE_DIR, "logs", "metrics.log"),
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
+    format="%(asctime)s [%(levelname)s] %(message)s",
 )
 
 logger = logging.getLogger("metrics")
