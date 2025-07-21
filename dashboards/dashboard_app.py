@@ -43,21 +43,21 @@ metrics_log_path = os.path.join(screener_log_dir, "metrics.log")
 pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json")
 
 # Threshold in minutes to consider a log stale
-STALE_THRESHOLD_MIN = 1440  # 24 hours
+STALE_THRESHOLD_MINUTES = 1440  # 24 hours
 
 
 def is_log_stale(log_path):
-    """Return True if the most recent INFO/ERROR entry in ``log_path`` is older than ``STALE_THRESHOLD_MIN`` minutes."""
+    """Return True if the most recent INFO/ERROR entry in ``log_path`` is older than 24 hours."""
     if not os.path.exists(log_path):
         return True
     try:
-        with open(log_path) as f:
-            lines = f.readlines()
+        with open(log_path) as file:
+            lines = file.readlines()
         for line in reversed(lines):
-            if "[INFO]" in line or "[ERROR]" in line:
+            if '[INFO]' in line or '[ERROR]' in line:
                 ts_str = line[:19]
                 ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                return (datetime.utcnow() - ts).total_seconds() > (STALE_THRESHOLD_MIN * 60)
+                return (datetime.utcnow() - ts).total_seconds() > (STALE_THRESHOLD_MINUTES * 60)
     except Exception:
         return True
     return True
@@ -226,7 +226,7 @@ def pipeline_status_component():
             if ts:
                 mtime = datetime.utcfromtimestamp(ts)
                 timestamp = mtime.strftime("%Y-%m-%d %H:%M") + " UTC"
-                stale = (datetime.utcnow() - mtime).total_seconds() > (STALE_THRESHOLD_MIN * 60)
+                stale = (datetime.utcnow() - mtime).total_seconds() > (STALE_THRESHOLD_MINUTES * 60)
                 if stale:
                     color = "warning"
                     status = "Stale"

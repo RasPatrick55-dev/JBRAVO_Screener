@@ -2,23 +2,16 @@
 import os
 import pandas as pd
 import logging
+from utils import logger_utils
 import shutil
 from tempfile import NamedTemporaryFile
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
-
-# Configure logging to write detailed metrics information
-logging.basicConfig(
-    filename=os.path.join(BASE_DIR, "logs", "metrics.log"),
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-
-logger = logging.getLogger("metrics")
-logger.info("Metrics script started.")
+logger = logger_utils.init_logging(__name__, "metrics.log")
+start_time = datetime.utcnow()
+logger.info("Script started")
 
 
 def write_csv_atomic(df: pd.DataFrame, dest: str):
@@ -178,5 +171,7 @@ if __name__ == "__main__":
     logger.info("Starting metrics calculation")
     main()
     logger.info("Metrics calculation complete")
-    logger.info("Metrics script finished.")
+    end_time = datetime.utcnow()
+    elapsed_time = end_time - start_time
+    logger.info("Script finished in %s", elapsed_time)
 

@@ -21,30 +21,18 @@ import numpy as np
 import pandas as pd
 
 from dotenv import load_dotenv
+from utils import logger_utils
 
 # Import indicator helpers from screener to keep the scoring consistent
 from scripts.indicators import adx, aroon, macd, obv, rsi, compute_indicators
 from scripts.utils import write_csv_atomic, cache_bars
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
-error_log_path = os.path.join(BASE_DIR, "logs", "error.log")
-error_handler = logging.handlers.RotatingFileHandler(
-    error_log_path, maxBytes=2_000_000, backupCount=5
-)
-error_handler.setLevel(logging.ERROR)
-
-logging.basicConfig(
-    filename=os.path.join(BASE_DIR, "logs", "backtest.log"),
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
-)
-logging.getLogger().addHandler(error_handler)
-
-logger = logging.getLogger(__name__)
-logger.info("Backtest script started.")
+logger = logger_utils.init_logging(__name__, "backtest.log")
+start_time = datetime.utcnow()
+logger.info("Script started")
 
 dotenv_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path)
@@ -342,7 +330,7 @@ class PortfolioBacktester:
         }
 
 
-def run_backtest(symbols: List[str]) -> None:
+def run_backtest(symbols: List[str]) -> dict:
     valid_symbols: List[str] = []
     for symbol in symbols:
         if re.match(r'^[A-Z]{1,5}$', symbol):
@@ -363,7 +351,7 @@ def run_backtest(symbols: List[str]) -> None:
 
     if not data:
         logger.error("No valid data to run backtest.")
-        return
+        return {"tested": 0, "skipped": len(valid_symbols)}
 
     bt = PortfolioBacktester(
         data,
@@ -423,18 +411,33 @@ def run_backtest(symbols: List[str]) -> None:
     write_csv_atomic(equity_df.reset_index(), equity_path)
     write_csv_atomic(summary_df, metrics_path)
 
+    processed = len(valid_symbols)
+    tested = len(data)
+    skipped = processed - tested
+    logger.info(
+        "Processed %d symbols, %d tested, %d skipped",
+        processed,
+        tested,
+        skipped,
+    )
     logger.info("Backtest complete. Results saved to data directory")
+
+    return {"tested": tested, "skipped": skipped}
 
 
 if __name__ == "__main__":
     try:
         csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
         symbols_df = pd.read_csv(csv_path)
-        top_candidates = pd.read_csv(csv_path)
-        symbol_list = top_candidates["symbol"].tolist()
+        symbol_list = symbols_df["symbol"].tolist()
         logger.info("Loaded %d symbols from %s", len(symbol_list), csv_path)
         run_backtest(symbol_list)
-        logger.info("Backtest script finished.")
+        logger.info("Backtest script finished")
     except Exception as exc:
         logger.error("Backtest failed: %s", exc)
+    finally:
+        end_time = datetime.utcnow()
+        elapsed_time = end_time - start_time
+        logger.info("Script finished in %s", elapsed_time)
+        sys.exit(0)
 

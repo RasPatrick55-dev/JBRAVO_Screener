@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import logging
 import sqlite3
-from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, timezone
+from utils import logger_utils
 
 import pandas as pd
 from alpaca.trading.client import TradingClient
@@ -28,22 +28,11 @@ from utils import write_csv_atomic, cache_bars
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 
-error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
-error_handler = RotatingFileHandler(error_log_path, maxBytes=2_000_000, backupCount=5)
-error_handler.setLevel(logging.ERROR)
-
-logging.basicConfig(
-    filename=os.path.join(BASE_DIR, 'logs', 'screener.log'),
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s [%(name)s]: %(message)s'
-)
-logging.getLogger().addHandler(error_handler)
-
-logger = logging.getLogger(__name__)
-logger.info("Screener script started.")
+logger = logger_utils.init_logging(__name__, 'screener.log')
+start_time = datetime.utcnow()
+logger.info('Script started')
 
 # Load environment variables
 dotenv_path = os.path.join(BASE_DIR, '.env')
@@ -354,5 +343,9 @@ if __name__ == "__main__":
         logger.error("Unhandled exception in Screener: %s", e, exc_info=True)
         sys.exit(1)
     else:
-        logger.info("Screener completed successfully, exiting with code 0.")
+        logger.info("Screener completed successfully")
+    finally:
+        end_time = datetime.utcnow()
+        elapsed_time = end_time - start_time
+        logger.info("Script finished in %s", elapsed_time)
         sys.exit(0)
