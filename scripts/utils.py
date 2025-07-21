@@ -84,9 +84,18 @@ def cache_bars(
             df = data_client.get_stock_bars(request).df
             if df.empty:
                 logging.warning(
-                    "No bars returned for %s from %s to %s", symbol, start, end
+                    "No bars returned for %s from %s to %s. Retrying with previous day's close.",
+                    symbol,
+                    start,
+                    end,
                 )
-                return None
+                try:
+                    prev_close = data_client.get_latest_trade(symbol).price
+                    df = pd.DataFrame([{"close": prev_close}], index=[end])
+                    logging.info("Using previous close price for %s: %s", symbol, prev_close)
+                except Exception as exc:
+                    logging.error("Error fetching latest trade for %s: %s", symbol, exc)
+                    return None
             if isinstance(df.index, pd.MultiIndex):
                 df = df.droplevel("symbol") if "symbol" in df.index.names else df.droplevel(0)
             df.index = pd.to_datetime(df.index)
