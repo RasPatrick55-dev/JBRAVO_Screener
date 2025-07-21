@@ -270,7 +270,7 @@ app.layout = dbc.Container(
                     className="custom-tab",
                 ),
                 dbc.Tab(
-                    label="Pipeline Log",
+                    label="Execute Trades",
                     tab_id="tab-trades",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
@@ -311,6 +311,7 @@ app.layout = dbc.Container(
         ),
         dcc.Interval(id="interval-update", interval=5 * 60 * 1000, n_intervals=0),
         dcc.Interval(id="log-interval", interval=10000, n_intervals=0),
+        dcc.Interval(id="interval-trades", interval=30 * 1000, n_intervals=0),
         dbc.Modal(
             id="detail-modal",
             is_open=False,
@@ -641,16 +642,38 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-trades":
-        lines = read_recent_lines(pipeline_log_path)[::-1]
-        timestamp = html.Div(
-            f"Log last refreshed: {file_timestamp(pipeline_log_path)}",
-            className="text-muted mb-2",
-        )
+        trades_df, alert = load_csv(executed_trades_path)
+        if alert:
+            table = alert
+        else:
+            trades_df.sort_values("entry_time", ascending=False, inplace=True)
+            table = dash_table.DataTable(
+                id="executed-trades-table",
+                columns=[
+                    {"name": col.replace("_", " ").title(), "id": col}
+                    for col in trades_df.columns
+                ],
+                data=trades_df.to_dict("records"),
+                page_size=10,
+                style_table={"overflowX": "auto"},
+                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+                style_data_conditional=[
+                    {
+                        "if": {"filter_query": "{net_pnl} < 0", "column_id": "net_pnl"},
+                        "color": "#E57373",
+                    },
+                    {
+                        "if": {"filter_query": "{net_pnl} > 0", "column_id": "net_pnl"},
+                        "color": "#4DB6AC",
+                    },
+                ],
+            )
+
         log_view = html.Div(
             [
-                html.H5("Pipeline Log", className="text-light"),
+                html.H5("Execution Logs"),
                 html.Pre(
-                    format_log_lines(lines),
+                    id="execute-trades-log",
                     style={
                         "maxHeight": "400px",
                         "overflowY": "auto",
@@ -661,7 +684,21 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 ),
             ]
         )
-        return dbc.Container([timestamp, log_view], fluid=True)
+
+        download = html.Div(
+            [
+                html.Button("Download CSV", id="btn-download-trades"),
+                dcc.Download(id="download-executed-trades"),
+            ],
+            className="mb-2",
+        )
+
+        timestamp = html.Div(
+            f"Data last refreshed: {file_timestamp(executed_trades_path)}",
+            className="text-muted mb-2",
+        )
+
+        return dbc.Container([timestamp, download, table, html.Hr(), log_view], fluid=True)
 
     elif tab == "tab-positions":
         positions_df, alert = load_csv(
@@ -969,6 +1006,45 @@ def update_metrics_logs(n):
             logs = log_file.readlines()
         return "".join(logs[-50:])
     return ""
+
+
+# Periodically refresh executed trades table
+@app.callback(
+    Output("executed-trades-table", "data"),
+    Input("interval-trades", "n_intervals"),
+)
+def refresh_trades_table(n):
+    if os.path.exists(executed_trades_path):
+        trades_df = pd.read_csv(executed_trades_path)
+        trades_df.sort_values("entry_time", ascending=False, inplace=True)
+        return trades_df.to_dict("records")
+    return []
+
+
+# Periodically update execution logs
+@app.callback(
+    Output("execute-trades-log", "children"),
+    Input("log-interval", "n_intervals"),
+)
+def update_execution_logs(n):
+    if os.path.exists(execute_trades_log_path):
+        with open(execute_trades_log_path, "r") as file:
+            lines = file.readlines()
+        recent_lines = lines[-50:][::-1]
+        return "".join(recent_lines)
+    return ""
+
+
+# Download executed trades CSV
+@app.callback(
+    Output("download-executed-trades", "data"),
+    Input("btn-download-trades", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_trades(n_clicks):
+    if n_clicks:
+        return dcc.send_file(executed_trades_path)
+
 
 
 if __name__ == "__main__":
