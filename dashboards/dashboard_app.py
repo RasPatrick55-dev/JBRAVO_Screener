@@ -28,6 +28,7 @@ scored_candidates_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
 metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
 executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
 historical_candidates_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
+execute_metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
@@ -669,21 +670,33 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 ],
             )
 
-        log_view = html.Div(
-            [
-                html.H5("Execution Logs"),
-                html.Pre(
-                    id="execute-trades-log",
-                    style={
-                        "maxHeight": "400px",
-                        "overflowY": "auto",
-                        "backgroundColor": "#272B30",
-                        "color": "#E0E0E0",
-                        "padding": "10px",
-                    },
-                ),
-            ]
-        )
+        metrics_data = {"orders_submitted": 0, "symbols_skipped": 0, "api_retries": 0, "api_failures": 0}
+        if os.path.exists(execute_metrics_path):
+            try:
+                with open(execute_metrics_path) as f:
+                    metrics_data.update(json.load(f))
+            except Exception as exc:  # pragma: no cover - log file errors
+                logger.error("Failed to load execution metrics: %s", exc)
+
+        metrics_view = html.Div([
+            html.H5("Execute Trades Metrics"),
+            html.Ul([
+                html.Li(f"Orders Submitted: {metrics_data['orders_submitted']}"),
+                html.Li(f"Symbols Skipped: {metrics_data['symbols_skipped']}"),
+                html.Li(f"API Retries: {metrics_data['api_retries']}"),
+                html.Li(f"API Failures: {metrics_data['api_failures']}")
+            ]),
+            html.Pre(
+                id="execute-trades-log",
+                style={
+                    "maxHeight": "400px",
+                    "overflowY": "auto",
+                    "backgroundColor": "#272B30",
+                    "color": "#E0E0E0",
+                    "padding": "10px",
+                },
+            ),
+        ])
 
         download = html.Div(
             [
@@ -698,7 +711,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="text-muted mb-2",
         )
 
-        return dbc.Container([timestamp, download, table, html.Hr(), log_view], fluid=True)
+        return dbc.Container([timestamp, download, table, html.Hr(), metrics_view], fluid=True)
 
     elif tab == "tab-positions":
         positions_df, alert = load_csv(
