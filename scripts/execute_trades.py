@@ -12,6 +12,11 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.trading.requests import TrailingStopOrderRequest
+
+try:  # Compatibility with alpaca-py and alpaca-trade-api
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except Exception:  # pragma: no cover - fallback import
+    from alpaca.common.exceptions import APIError  # type: ignore
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -135,7 +140,9 @@ def load_top_candidates() -> pd.DataFrame:
 
         candidates_df.sort_values("score", ascending=False, inplace=True)
         selected_candidates = candidates_df.head(MAX_OPEN_TRADES)
+        symbols_list = selected_candidates['symbol'].tolist()
         logging.info("Loaded %s successfully", top_candidates_path)
+        logging.info("Candidate symbols loaded: %s", symbols_list)
         return selected_candidates
     except Exception as exc:
         logging.error("Failed to read %s: %s", top_candidates_path, exc)
@@ -282,9 +289,14 @@ def record_executed_trade(
 
 def allocate_position(symbol):
     open_positions = get_open_positions()
-    if symbol in open_positions or len(open_positions) >= MAX_OPEN_TRADES:
-        logging.debug("Skipping %s: already trading or max trades reached", symbol)
-        return None
+    if symbol in open_positions:
+        reason = "already in open positions"
+        logging.debug("Skipping %s: %s", symbol, reason)
+        return None, reason
+    if len(open_positions) >= MAX_OPEN_TRADES:
+        reason = "max open trades reached"
+        logging.debug("Skipping %s: %s", symbol, reason)
+        return None, reason
 
     buying_power = get_buying_power()
     alloc_amount = buying_power * ALLOC_PERCENT
@@ -292,17 +304,19 @@ def allocate_position(symbol):
     bars = data_client.get_stock_bars(request).df
 
     if bars.empty:
-        logging.debug("No bars available for %s", symbol)
-        return None
+        reason = "no bars available"
+        logging.debug("Skipping %s: %s", symbol, reason)
+        return None, reason
 
     last_close = bars['close'].iloc[-1]
     qty = int(alloc_amount / last_close)
     if qty < 1:
-        logging.debug("Allocation insufficient for %s", symbol)
-        return None
+        reason = "allocation insufficient"
+        logging.debug("Skipping %s: %s", symbol, reason)
+        return None, reason
 
     logging.debug("Allocating %d shares of %s at %s", qty, symbol, last_close)
-    return qty, round(last_close, 2)
+    return (qty, round(last_close, 2)), None
 
 def submit_trades():
     df = load_top_candidates()
@@ -310,9 +324,10 @@ def submit_trades():
     skipped = 0
     for _, row in df.iterrows():
         sym = row.symbol
-        alloc = allocate_position(sym)
-        if not alloc:
+        alloc, reason = allocate_position(sym)
+        if alloc is None:
             skipped += 1
+            logging.warning("Trade skipped for %s: %s", sym, reason)
             continue
 
         qty, entry_price = alloc
@@ -333,14 +348,41 @@ def submit_trades():
                 side=OrderSide.BUY,
                 time_in_force=TimeInForce.DAY,
                 limit_price=entry_price,
-                extended_hours=True
+                extended_hours=True,
             )
             trading_client.submit_order(order)
-            record_executed_trade(
-                sym, qty, entry_price, order_type="limit", side="buy"
-            )
+            logging.info("Order submitted successfully for %s", sym)
+            record_executed_trade(sym, qty, entry_price, order_type="limit", side="buy")
             attach_trailing_stops()
             submitted += 1
+        except APIError as e:
+            logging.error("Order submission error for %s: %s", sym, e)
+            if "extended hours order must be DAY limit orders" in str(e):
+                try:
+                    retry_order = LimitOrderRequest(
+                        symbol=sym,
+                        qty=qty,
+                        side=OrderSide.BUY,
+                        time_in_force=TimeInForce.DAY,
+                        limit_price=entry_price,
+                        extended_hours=False,
+                    )
+                    trading_client.submit_order(retry_order)
+                    logging.info(
+                        "Retry successful with regular hours order for %s", sym
+                    )
+                    record_executed_trade(
+                        sym, qty, entry_price, order_type="limit", side="buy"
+                    )
+                    attach_trailing_stops()
+                    submitted += 1
+                except APIError as retry_e:
+                    logging.error(
+                        "Retry order submission failed for %s: %s", sym, retry_e
+                    )
+                    skipped += 1
+            else:
+                skipped += 1
         except Exception as e:
             logging.error("Failed to submit buy order for %s: %s", sym, e)
             skipped += 1
@@ -410,7 +452,7 @@ def daily_exit_check():
                     time_in_force=TimeInForce.DAY,
                     extended_hours=True,
                 )
-                order_response = trading_client.submit_order(order_request)
+                trading_client.submit_order(order_request)
                 logging.info("Order submitted successfully for %s", symbol)
                 record_executed_trade(
                     symbol,
@@ -419,6 +461,35 @@ def daily_exit_check():
                     order_type="market",
                     side="sell",
                 )
+            except APIError as e:
+                logging.error("Order submission error for %s: %s", symbol, e)
+                if "extended hours order must be DAY limit orders" in str(e):
+                    try:
+                        retry_req = MarketOrderRequest(
+                            symbol=symbol,
+                            qty=pos.qty,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY,
+                            extended_hours=False,
+                        )
+                        trading_client.submit_order(retry_req)
+                        logging.info(
+                            "Retry successful with regular hours order for %s",
+                            symbol,
+                        )
+                        record_executed_trade(
+                            symbol,
+                            int(pos.qty),
+                            pos.current_price,
+                            order_type="market",
+                            side="sell",
+                        )
+                    except APIError as retry_e:
+                        logging.error(
+                            "Retry order submission failed for %s: %s",
+                            symbol,
+                            retry_e,
+                        )
             except Exception as e:
                 logging.error("Order submission error for %s: %s", symbol, e)
         elif should_exit_early(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache")):
@@ -439,6 +510,32 @@ def daily_exit_check():
                     order_type="market",
                     side="sell",
                 )
+            except APIError as e:
+                logging.error("Order submission error for %s: %s", symbol, e)
+                if "extended hours order must be DAY limit orders" in str(e):
+                    try:
+                        retry_req = MarketOrderRequest(
+                            symbol=symbol,
+                            qty=pos.qty,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY,
+                            extended_hours=False,
+                        )
+                        trading_client.submit_order(retry_req)
+                        logging.info(
+                            "Retry successful with regular hours order for %s", symbol
+                        )
+                        record_executed_trade(
+                            symbol,
+                            int(pos.qty),
+                            pos.current_price,
+                            order_type="market",
+                            side="sell",
+                        )
+                    except APIError as retry_e:
+                        logging.error(
+                            "Retry order submission failed for %s: %s", symbol, retry_e
+                        )
             except Exception as e:
                 logging.error("Order submission error for %s: %s", symbol, e)
 
