@@ -7,7 +7,8 @@ import subprocess
 import logging
 import pandas as pd
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
+import pytz
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
@@ -31,7 +32,7 @@ dotenv_path = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path)
 logger = logger_utils.init_logging(__name__, 'execute_trades.log')
 start_time = datetime.utcnow()
-logger.info('Script started')
+logger.info("Trade execution script started.")
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
@@ -338,14 +339,22 @@ def allocate_position(symbol):
 
 def submit_trades():
     df = load_top_candidates()
-    clock = trading_client.get_clock()
-    if not clock.is_open:
+    calendar_today = trading_client.get_calendar()[0]
+    if calendar_today.open is None or calendar_today.close is None:
         logger.warning(
-            "Market is closed. Current time: %s. Next open: %s",
-            clock.timestamp,
-            clock.next_open,
+            "No market hours available today. Possibly a holiday or weekend. Skipping."
         )
         return
+
+    clock = trading_client.get_clock()
+    now_et = datetime.now(pytz.timezone("US/Eastern")).time()
+    if not clock.is_open:
+        if time(4, 0) <= now_et < time(9, 30):
+            logger.info("In pre-market session – continuing trade execution.")
+        else:
+            logger.warning(
+                "Market is fully closed (not even in pre-market). Skipping trade execution.")
+            return
     submitted = 0
     skipped = 0
     for _, row in df.iterrows():
@@ -355,7 +364,10 @@ def submit_trades():
         if alloc is None:
             skipped += 1
             metrics["symbols_skipped"] += 1
-            logger.warning("Trade skipped for %s: %s", sym, reason)
+            if reason == "market data error":
+                logger.warning("Skipping %s: No bars available.", sym)
+            else:
+                logger.warning("Trade skipped for %s: %s", sym, reason)
             continue
 
         qty, entry_price = alloc
@@ -385,8 +397,8 @@ def submit_trades():
             submitted += 1
             metrics["orders_submitted"] += 1
         except APIError as e:
-            logger.error("Order submission error for %s: %s", sym, e)
             if "extended hours order must be DAY limit orders" in str(e):
+                logger.warning("Retrying %s without extended_hours flag.", sym)
                 try:
                     retry_order = LimitOrderRequest(
                         symbol=sym,
@@ -414,13 +426,20 @@ def submit_trades():
                     skipped += 1
                     metrics["api_failures"] += 1
             else:
+                logger.error("Order failed for %s: %s", sym, e)
                 skipped += 1
                 metrics["api_failures"] += 1
         except Exception as e:
             logger.error("Failed to submit buy order for %s: %s", sym, e)
             skipped += 1
             metrics["api_failures"] += 1
-    logger.info("Orders submitted: %d, skipped: %d", submitted, skipped)
+    errors = metrics.get("api_failures", 0)
+    logger.info(
+        "Orders submitted: %d, skipped: %d, errors: %d",
+        submitted,
+        skipped,
+        errors,
+    )
 
 def attach_trailing_stops():
     positions = get_open_positions()
