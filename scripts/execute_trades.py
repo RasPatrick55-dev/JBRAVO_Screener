@@ -4,7 +4,6 @@
 
 import os
 import subprocess
-from logging.handlers import RotatingFileHandler
 import logging
 import pandas as pd
 import json
@@ -22,37 +21,24 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
+from utils import logger_utils
 from exit_signals import should_exit_early
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 
 dotenv_path = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path)
-log_path = os.path.join(BASE_DIR, 'logs', 'execute_trades.log')
-error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
-
-error_handler = RotatingFileHandler(error_log_path, maxBytes=2_000_000, backupCount=5)
-error_handler.setLevel(logging.ERROR)
-
-logging.basicConfig(
-    handlers=[
-        RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5),
-        error_handler,
-    ],
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s'
-)
-
-logging.info("Trade execution script started.")
+logger = logger_utils.init_logging(__name__, 'execute_trades.log')
+start_time = datetime.utcnow()
+logger.info('Script started')
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
 
 if not API_KEY or not API_SECRET:
-    logging.error("Missing Alpaca API credentials.")
+    logger.error("Missing Alpaca API credentials.")
     raise SystemExit(1)
 
 # Initialize Alpaca clients
@@ -156,11 +142,11 @@ def load_top_candidates() -> pd.DataFrame:
         candidates_df.sort_values("score", ascending=False, inplace=True)
         selected_candidates = candidates_df.head(MAX_OPEN_TRADES)
         symbols_list = selected_candidates['symbol'].tolist()
-        logging.info("Loaded %s successfully", top_candidates_path)
-        logging.info("Candidate symbols loaded: %s", symbols_list)
+        logger.info("Loaded %s successfully", top_candidates_path)
+        logger.info("Candidate symbols loaded: %s", symbols_list)
         return selected_candidates
     except Exception as exc:
-        logging.error("Failed to read %s: %s", top_candidates_path, exc)
+        logger.error("Failed to read %s: %s", top_candidates_path, exc)
         return pd.DataFrame(columns=expected_columns)
 
 def save_open_positions_csv():
@@ -215,9 +201,9 @@ def save_open_positions_csv():
 
         csv_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
         df.to_csv(csv_path, index=False)
-        logging.info("Saved open positions to %s", csv_path)
+        logger.info("Saved open positions to %s", csv_path)
     except Exception as e:
-        logging.error("Failed to save open positions: %s", e)
+        logger.error("Failed to save open positions: %s", e)
 
 def update_trades_log():
     """Fetch recent closed orders from Alpaca and save to trades_log.csv."""
@@ -278,9 +264,9 @@ def update_trades_log():
         )
         csv_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
         df.to_csv(csv_path, index=False)
-        logging.info("Saved trades log to %s", csv_path)
+        logger.info("Saved trades log to %s", csv_path)
     except Exception as e:
-        logging.error("Failed to update trades log: %s", e)
+        logger.error("Failed to update trades log: %s", e)
 
 def record_executed_trade(
     symbol, qty, entry_price, order_type, side, order_status="submitted"
@@ -306,11 +292,11 @@ def allocate_position(symbol):
     open_positions = get_open_positions()
     if symbol in open_positions:
         reason = "already in open positions"
-        logging.debug("Skipping %s: %s", symbol, reason)
+        logger.debug("Skipping %s: %s", symbol, reason)
         return None, reason
     if len(open_positions) >= MAX_OPEN_TRADES:
         reason = "max open trades reached"
-        logging.debug("Skipping %s: %s", symbol, reason)
+        logger.debug("Skipping %s: %s", symbol, reason)
         return None, reason
 
     buying_power = get_buying_power()
@@ -327,7 +313,7 @@ def allocate_position(symbol):
         )
         bars = data_client.get_stock_bars(request).df
         if bars.empty:
-            logging.warning(
+            logger.warning(
                 "No bars available for %s from %s to %s. Retrying with previous day's close.",
                 symbol,
                 start,
@@ -335,26 +321,26 @@ def allocate_position(symbol):
             )
             prev_close = trading_client.get_latest_trade(symbol).price
             bars = pd.DataFrame([{"close": prev_close}])
-            logging.info("Using previous close price for %s: %s", symbol, prev_close)
+            logger.info("Using previous close price for %s: %s", symbol, prev_close)
     except Exception as e:
-        logging.error("Error fetching bars for %s: %s", symbol, e)
+        logger.error("Error fetching bars for %s: %s", symbol, e)
         return None, "market data error"
 
     last_close = bars['close'].iloc[-1]
     qty = int(alloc_amount / last_close)
     if qty < 1:
         reason = "allocation insufficient"
-        logging.debug("Skipping %s: %s", symbol, reason)
+        logger.debug("Skipping %s: %s", symbol, reason)
         return None, reason
 
-    logging.debug("Allocating %d shares of %s at %s", qty, symbol, last_close)
+    logger.debug("Allocating %d shares of %s at %s", qty, symbol, last_close)
     return (qty, round(last_close, 2)), None
 
 def submit_trades():
     df = load_top_candidates()
     clock = trading_client.get_clock()
     if not clock.is_open:
-        logging.warning(
+        logger.warning(
             "Market is closed. Current time: %s. Next open: %s",
             clock.timestamp,
             clock.next_open,
@@ -369,11 +355,11 @@ def submit_trades():
         if alloc is None:
             skipped += 1
             metrics["symbols_skipped"] += 1
-            logging.warning("Trade skipped for %s: %s", sym, reason)
+            logger.warning("Trade skipped for %s: %s", sym, reason)
             continue
 
         qty, entry_price = alloc
-        logging.info(
+        logger.info(
             "Submitting limit buy order for %s, qty=%s, limit=%s | score=%s win_rate=%s net_pnl=%s avg_return=%s",
             sym,
             qty,
@@ -393,13 +379,13 @@ def submit_trades():
                 extended_hours=True,
             )
             trading_client.submit_order(order)
-            logging.info("Order submitted successfully for %s", sym)
+            logger.info("Order submitted successfully for %s", sym)
             record_executed_trade(sym, qty, entry_price, order_type="limit", side="buy")
             attach_trailing_stops()
             submitted += 1
             metrics["orders_submitted"] += 1
         except APIError as e:
-            logging.error("Order submission error for %s: %s", sym, e)
+            logger.error("Order submission error for %s: %s", sym, e)
             if "extended hours order must be DAY limit orders" in str(e):
                 try:
                     retry_order = LimitOrderRequest(
@@ -411,7 +397,7 @@ def submit_trades():
                         extended_hours=False,
                     )
                     trading_client.submit_order(retry_order)
-                    logging.info(
+                    logger.info(
                         "Retry successful with regular hours order for %s", sym
                     )
                     record_executed_trade(
@@ -422,7 +408,7 @@ def submit_trades():
                     metrics["orders_submitted"] += 1
                     metrics["api_retries"] += 1
                 except APIError as retry_e:
-                    logging.error(
+                    logger.error(
                         "Retry order submission failed for %s: %s", sym, retry_e
                     )
                     skipped += 1
@@ -431,10 +417,10 @@ def submit_trades():
                 skipped += 1
                 metrics["api_failures"] += 1
         except Exception as e:
-            logging.error("Failed to submit buy order for %s: %s", sym, e)
+            logger.error("Failed to submit buy order for %s: %s", sym, e)
             skipped += 1
             metrics["api_failures"] += 1
-    logging.info("Orders submitted: %d, skipped: %d", submitted, skipped)
+    logger.info("Orders submitted: %d, skipped: %d", submitted, skipped)
 
 def attach_trailing_stops():
     positions = get_open_positions()
@@ -443,10 +429,10 @@ def attach_trailing_stops():
         orders = trading_client.get_orders(filter=request)
         has_trail = any(o.order_type == 'trailing_stop' for o in orders)
         if has_trail:
-            logging.debug("Trailing stop already active for %s", symbol)
+            logger.debug("Trailing stop already active for %s", symbol)
             continue
 
-        logging.info("Creating trailing stop for %s, qty=%s", symbol, pos.qty)
+        logger.info("Creating trailing stop for %s, qty=%s", symbol, pos.qty)
         try:
             request = TrailingStopOrderRequest(
                 symbol=symbol,
@@ -464,7 +450,7 @@ def attach_trailing_stops():
                 side="sell",
             )
         except Exception as e:
-            logging.error("Failed to create trailing stop for %s: %s", symbol, e)
+            logger.error("Failed to create trailing stop for %s: %s", symbol, e)
 
 def daily_exit_check():
     positions = get_open_positions()
@@ -474,13 +460,13 @@ def daily_exit_check():
     for symbol, pos in positions.items():
         entry_orders = [o for o in orders if o.symbol == symbol and o.side == 'buy']
         if not entry_orders:
-            logging.warning("No entry order found for %s, skipping.", symbol)
+            logger.warning("No entry order found for %s, skipping.", symbol)
             continue
 
         # Filter out orders without a fill timestamp
         valid_entries = [o for o in entry_orders if getattr(o, "filled_at", None)]
         if not valid_entries:
-            logging.warning(
+            logger.warning(
                 f"No filled entry orders found for symbol {symbol}. Skipping exit check."
             )
             continue  # Move to next symbol
@@ -488,10 +474,10 @@ def daily_exit_check():
         entry_date = entry_order.filled_at.date()
         days_held = (datetime.now(timezone.utc).date() - entry_date).days
 
-        logging.debug("%s entered on %s, held for %s days", symbol, entry_date, days_held)
+        logger.debug("%s entered on %s, held for %s days", symbol, entry_date, days_held)
 
         if days_held >= MAX_HOLD_DAYS:
-            logging.info("Exiting %s after %s days", symbol, days_held)
+            logger.info("Exiting %s after %s days", symbol, days_held)
             try:
                 order_request = MarketOrderRequest(
                     symbol=symbol,
@@ -501,7 +487,7 @@ def daily_exit_check():
                     extended_hours=True,
                 )
                 trading_client.submit_order(order_request)
-                logging.info("Order submitted successfully for %s", symbol)
+                logger.info("Order submitted successfully for %s", symbol)
                 record_executed_trade(
                     symbol,
                     int(pos.qty),
@@ -511,7 +497,7 @@ def daily_exit_check():
                 )
                 metrics["orders_submitted"] += 1
             except APIError as e:
-                logging.error("Order submission error for %s: %s", symbol, e)
+                logger.error("Order submission error for %s: %s", symbol, e)
                 if "extended hours order must be DAY limit orders" in str(e):
                     try:
                         retry_req = MarketOrderRequest(
@@ -522,7 +508,7 @@ def daily_exit_check():
                             extended_hours=False,
                         )
                         trading_client.submit_order(retry_req)
-                        logging.info(
+                        logger.info(
                             "Retry successful with regular hours order for %s",
                             symbol,
                         )
@@ -536,17 +522,17 @@ def daily_exit_check():
                         metrics["orders_submitted"] += 1
                         metrics["api_retries"] += 1
                     except APIError as retry_e:
-                        logging.error(
+                        logger.error(
                             "Retry order submission failed for %s: %s",
                             symbol,
                             retry_e,
                         )
                         metrics["api_failures"] += 1
             except Exception as e:
-                logging.error("Order submission error for %s: %s", symbol, e)
+                logger.error("Order submission error for %s: %s", symbol, e)
                 metrics["api_failures"] += 1
         elif should_exit_early(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache")):
-            logging.info("Early exit signal for %s", symbol)
+            logger.info("Early exit signal for %s", symbol)
             try:
                 order_request = MarketOrderRequest(
                     symbol=symbol,
@@ -565,7 +551,7 @@ def daily_exit_check():
                 )
                 metrics["orders_submitted"] += 1
             except APIError as e:
-                logging.error("Order submission error for %s: %s", symbol, e)
+                logger.error("Order submission error for %s: %s", symbol, e)
                 if "extended hours order must be DAY limit orders" in str(e):
                     try:
                         retry_req = MarketOrderRequest(
@@ -576,7 +562,7 @@ def daily_exit_check():
                             extended_hours=False,
                         )
                         trading_client.submit_order(retry_req)
-                        logging.info(
+                        logger.info(
                             "Retry successful with regular hours order for %s", symbol
                         )
                         record_executed_trade(
@@ -589,16 +575,16 @@ def daily_exit_check():
                         metrics["orders_submitted"] += 1
                         metrics["api_retries"] += 1
                     except APIError as retry_e:
-                        logging.error(
+                        logger.error(
                             "Retry order submission failed for %s: %s", symbol, retry_e
                         )
                         metrics["api_failures"] += 1
             except Exception as e:
-                logging.error("Order submission error for %s: %s", symbol, e)
+                logger.error("Order submission error for %s: %s", symbol, e)
                 metrics["api_failures"] += 1
 
 if __name__ == '__main__':
-    logging.info("Starting pre-market trade execution script")
+    logger.info("Starting pre-market trade execution script")
     submit_trades()
     attach_trailing_stops()
     daily_exit_check()
@@ -608,16 +594,20 @@ if __name__ == '__main__':
     try:
         with open(metrics_path, "w") as f:
             json.dump(metrics, f)
-        logging.info("Execution metrics saved to %s", metrics_path)
+        logger.info("Execution metrics saved to %s", metrics_path)
     except Exception as exc:
-        logging.error("Failed to save execution metrics: %s", exc)
-    logging.info("Pre-market trade execution script complete")
+        logger.error("Failed to save execution metrics: %s", exc)
+    logger.info("Pre-market trade execution script complete")
 
     # Run historical trades script after executing trades
     history_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fetch_trades_history.py')
     try:
         subprocess.run(["python", history_script], check=True)
-        logging.info("Historical trades successfully fetched and CSV files updated.")
+        logger.info("Historical trades successfully fetched and CSV files updated.")
     except subprocess.CalledProcessError as e:
-        logging.error("Failed to run historical trade script: %s", e)
+        logger.error("Failed to run historical trade script: %s", e)
+
+    end_time = datetime.utcnow()
+    elapsed_time = end_time - start_time
+    logger.info("Script finished in %s", elapsed_time)
 
