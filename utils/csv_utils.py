@@ -17,14 +17,14 @@ def write_csv_atomic(path: str, rows: Union[pd.DataFrame, list[dict]], fieldname
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
 
     if isinstance(rows, pd.DataFrame):
-        if fieldnames is None:
-            fieldnames = list(rows.columns)
-        rows = rows.to_dict("records")
+        with atomic_write(path, overwrite=True, newline="", encoding="utf-8") as f:
+            rows.to_csv(f, index=False)
+        return
 
     if not rows:
         if fieldnames is None:
             raise ValueError("fieldnames must be provided when rows is empty")
-        with atomic_write(path, newline="", encoding="utf-8") as f:
+        with atomic_write(path, overwrite=True, newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
         return
@@ -32,7 +32,7 @@ def write_csv_atomic(path: str, rows: Union[pd.DataFrame, list[dict]], fieldname
     if fieldnames is None:
         fieldnames = list(rows[0].keys())
 
-    with atomic_write(path, newline="", encoding="utf-8") as f:
+    with atomic_write(path, overwrite=True, newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
