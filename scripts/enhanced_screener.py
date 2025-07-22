@@ -115,11 +115,11 @@ init_db()
 # Prepare initial CSVs if they do not already exist
 hist_init_path = os.path.join(BASE_DIR, 'data', 'historical_candidates.csv')
 if not os.path.exists(hist_init_path):
-    write_csv_atomic(pd.DataFrame(columns=['date', 'symbol', 'score']), hist_init_path)
+    write_csv_atomic(hist_init_path, pd.DataFrame(columns=['date', 'symbol', 'score']))
 
 top_init_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
 if not os.path.exists(top_init_path):
-    write_csv_atomic(pd.DataFrame(columns=["symbol", "score"]), top_init_path)
+    write_csv_atomic(top_init_path, pd.DataFrame(columns=["symbol", "score"]))
 
 
 # Gather all tradable tickers via Alpaca.  We defer the Alpaca imports
@@ -340,13 +340,13 @@ def main() -> None:
     if ranked_df.empty:
         logging.warning("No candidates met the screening criteria.")
         ranked_df = pd.DataFrame(columns=["symbol", "score"])
-    write_csv_atomic(ranked_df.head(15), csv_path)
+    write_csv_atomic(csv_path, ranked_df.head(15))
     logging.info("Top 15 ranked candidates saved to %s", csv_path)
     # Append to historical candidates log
     hist_path = os.path.join(BASE_DIR, 'data', 'historical_candidates.csv')
     append_df = ranked_df.head(15).copy()
     append_df.insert(0, 'date', datetime.now().strftime('%Y-%m-%d'))
-    write_csv_atomic(append_df, hist_path)
+    write_csv_atomic(hist_path, append_df)
     logging.info("Historical candidates updated at %s", hist_path)
     with sqlite3.connect(DB_PATH) as conn:
         append_df.to_sql("historical_candidates", conn, if_exists="append", index=False)

@@ -136,11 +136,11 @@ def init_db():
         )
 
 
-def write_csv_atomic(df: pd.DataFrame, dest: str):
+def write_csv_atomic(path: str, df: pd.DataFrame):
     tmp = NamedTemporaryFile("w", delete=False, dir=DATA_DIR, newline="")
     df.to_csv(tmp.name, index=False)
     tmp.close()
-    shutil.move(tmp.name, dest)
+    shutil.move(tmp.name, path)
 
 
 def update_open_positions():
@@ -194,7 +194,7 @@ def update_open_positions():
         df['pnl'] = df['net_pnl']
         df['order_type'] = df.get('order_type', 'limit')
         df = df[columns]
-        write_csv_atomic(df, OPEN_POSITIONS_CSV)
+        write_csv_atomic(OPEN_POSITIONS_CSV, df)
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql("open_positions", conn, if_exists="replace", index=False)
         logger.info("Updated open_positions.csv successfully.")
@@ -299,9 +299,9 @@ def update_order_history():
         if df.empty:
             df = pd.DataFrame(columns=cols)
 
-        write_csv_atomic(df, TRADES_LOG_CSV)
+        write_csv_atomic(TRADES_LOG_CSV, df)
         executed_df = df[df["qty"] > 0][cols]
-        write_csv_atomic(executed_df, EXECUTED_TRADES_CSV)
+        write_csv_atomic(EXECUTED_TRADES_CSV, executed_df)
 
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql("trades_log", conn, if_exists="replace", index=False)
@@ -359,7 +359,7 @@ def update_metrics_summary():
                 ]
             )
 
-        write_csv_atomic(summary_df, os.path.join(DATA_DIR, "metrics_summary.csv"))
+        write_csv_atomic(os.path.join(DATA_DIR, "metrics_summary.csv"), summary_df)
         with sqlite3.connect(DB_PATH) as conn:
             summary_df.to_sql("metrics_summary", conn, if_exists="replace", index=False)
         logger.info("Updated metrics_summary.csv successfully.")

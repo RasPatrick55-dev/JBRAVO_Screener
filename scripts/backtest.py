@@ -407,9 +407,9 @@ def run_backtest(symbols: List[str]) -> dict:
     equity_path = os.path.join(BASE_DIR, "data", "equity_curve.csv")
     metrics_path = os.path.join(BASE_DIR, "data", "backtest_results.csv")
 
-    write_csv_atomic(trades_df, trades_path)
-    write_csv_atomic(equity_df.reset_index(), equity_path)
-    write_csv_atomic(summary_df, metrics_path)
+    write_csv_atomic(trades_path, trades_df)
+    write_csv_atomic(equity_path, equity_df.reset_index())
+    write_csv_atomic(metrics_path, summary_df)
 
     processed = len(valid_symbols)
     tested = len(data)

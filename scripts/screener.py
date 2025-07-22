@@ -82,12 +82,12 @@ init_db()
 # Ensure historical candidates file exists
 hist_init_path = os.path.join(BASE_DIR, 'data', 'historical_candidates.csv')
 if not os.path.exists(hist_init_path):
-    write_csv_atomic(pd.DataFrame(columns=['date', 'symbol', 'score']), hist_init_path)
+    write_csv_atomic(hist_init_path, pd.DataFrame(columns=['date', 'symbol', 'score']))
 
 # Ensure top candidates file exists
 top_init_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
 if not os.path.exists(top_init_path):
-    write_csv_atomic(pd.DataFrame(columns=["symbol", "score"]), top_init_path)
+    write_csv_atomic(top_init_path, pd.DataFrame(columns=["symbol", "score"]))
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
@@ -289,7 +289,7 @@ def main() -> None:
 
 # Save full scored list
     scored_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
-    write_csv_atomic(ranked_df, scored_path)
+    write_csv_atomic(scored_path, ranked_df)
     logger.info("All scored candidates saved to %s", scored_path)
 
 # Log details for top symbols
@@ -310,7 +310,7 @@ def main() -> None:
     top15 = top15[cols]
 
     csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
-    write_csv_atomic(top15, csv_path)
+    write_csv_atomic(csv_path, top15)
     logger.info(
         "Top candidates updated: %d records written to %s",
         len(top15),
@@ -321,7 +321,7 @@ def main() -> None:
     hist_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
     append_df = top15.copy()
     append_df.insert(0, "date", datetime.now().strftime("%Y-%m-%d"))
-    write_csv_atomic(append_df, hist_path)
+    write_csv_atomic(hist_path, append_df)
     logger.info("Historical candidates updated at %s", hist_path)
     # Synchronize SQLite schema to match the DataFrame before insertion
     sync_columns_from_dataframe(append_df, DB_PATH)
@@ -342,7 +342,7 @@ def main() -> None:
         columns=["date", "time", "summary"],
     )
     summary_df = pd.concat([summary_df, new_row], ignore_index=True)
-    write_csv_atomic(summary_df, summary_path)
+    write_csv_atomic(summary_path, summary_df)
     logger.info("Screener script finished.")
 
 

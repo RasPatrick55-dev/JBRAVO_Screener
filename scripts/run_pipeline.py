@@ -113,7 +113,7 @@ if __name__ == "__main__":
     if os.path.exists(source_path):
         try:
             df = pd.read_csv(source_path)
-            write_csv_atomic(df, target_path)
+            write_csv_atomic(target_path, df)
             logger.info(
                 "Updated latest_candidates.csv at %s",
                 datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(),
