@@ -19,13 +19,12 @@ from utils import logger_utils
 import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
 import requests
 
 from indicators import adx, aroon, macd, obv, rsi
-from utils import write_csv_atomic, cache_bars
+from utils import write_csv_atomic, cache_bars, fetch_bars_with_cutoff
 
 
 
@@ -239,16 +238,8 @@ def main() -> None:
     skipped = 0
     for symbol in symbols:
         logger.info("Processing %s...", symbol)
-        now_utc = datetime.now(timezone.utc)
-        end_safe = now_utc - timedelta(minutes=16)
-        request_params = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,
-            start=datetime.now(timezone.utc) - timedelta(days=1500),
-            end=end_safe.isoformat(),
-            feed="iex",
-        )
-        bars = data_client.get_stock_bars(request_params)
+        start = datetime.now(timezone.utc) - timedelta(days=1500)
+        bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Day, data_client)
         cache_bars(symbol, bars, DATA_CACHE_DIR)
         df = bars.df.reset_index()
         logger.debug("%s has %d bars", symbol, len(df))

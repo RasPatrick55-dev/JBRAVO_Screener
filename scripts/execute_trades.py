@@ -19,10 +19,9 @@ try:  # Compatibility with alpaca-py and alpaca-trade-api
 except Exception:  # pragma: no cover - fallback import
     from alpaca.common.exceptions import APIError  # type: ignore
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
-from utils import logger_utils
+from utils import logger_utils, fetch_bars_with_cutoff
 from exit_signals import should_exit_early
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -302,24 +301,15 @@ def allocate_position(symbol):
 
     buying_power = get_buying_power()
     alloc_amount = buying_power * ALLOC_PERCENT
-    now_utc = datetime.now(timezone.utc)
-    end_safe = now_utc - timedelta(minutes=16)
-    start = end_safe - timedelta(hours=1)
+    start = datetime.now(timezone.utc) - timedelta(hours=1, minutes=16)
     try:
-        request = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Minute,
-            start=start,
-            end=end_safe.isoformat(),
-            feed="iex",
-        )
-        bars = data_client.get_stock_bars(request).df
+        bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Minute, data_client).df
         if bars.empty:
             logger.warning(
                 "No bars available for %s from %s to %s. Retrying with previous day's close.",
                 symbol,
                 start,
-                end_safe,
+                (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat(),
             )
             prev_close = trading_client.get_latest_trade(symbol).price
             bars = pd.DataFrame([{"close": prev_close}])

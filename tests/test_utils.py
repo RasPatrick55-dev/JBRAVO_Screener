@@ -1,7 +1,7 @@
 import os
 import unittest
 from unittest.mock import MagicMock
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 import pytz
 
@@ -11,6 +11,7 @@ from scripts.utils import (
     fetch_daily_bars,
     fetch_extended_hours_bars,
     get_combined_daily_bar,
+    fetch_bars_with_cutoff,
 )
 
 class TestUtils(unittest.TestCase):
@@ -50,6 +51,17 @@ class TestUtils(unittest.TestCase):
         req = client.get_stock_bars.call_args[0][0]
         self.assertEqual(req.feed, "iex")
         self.assertFalse(df.empty)
+
+    def test_fetch_bars_with_cutoff_end_time(self):
+        client = MagicMock()
+        client.get_stock_bars.return_value.df = pd.DataFrame(
+            {"close": [1]}, index=[pd.Timestamp("2024-01-01")]
+        )
+        fetch_bars_with_cutoff("AAPL", "2024-01-01", "D", client)
+        req = client.get_stock_bars.call_args[0][0]
+        end_dt = datetime.fromisoformat(req.end)
+        diff = datetime.now(timezone.utc) - end_dt
+        self.assertGreaterEqual(diff.total_seconds(), 15 * 60)
 
     def test_get_combined_daily_bar(self):
         client = MagicMock()
