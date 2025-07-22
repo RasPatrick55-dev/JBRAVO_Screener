@@ -24,7 +24,8 @@ from dotenv import load_dotenv
 import requests
 
 from indicators import adx, aroon, macd, obv, rsi
-from utils import write_csv_atomic, cache_bars, fetch_bars_with_cutoff
+from utils import write_csv_atomic
+from scripts.utils import fetch_bars_with_cutoff, cache_bars
 
 
 
@@ -240,7 +241,7 @@ def main() -> None:
         logger.info("Processing %s...", symbol)
         start = datetime.now(timezone.utc) - timedelta(days=1500)
         bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Day, data_client)
-        cache_bars(symbol, bars, DATA_CACHE_DIR)
+        cache_bars(symbol, data_client, DATA_CACHE_DIR)
         df = bars.df.reset_index()
         logger.debug("%s has %d bars", symbol, len(df))
         try:

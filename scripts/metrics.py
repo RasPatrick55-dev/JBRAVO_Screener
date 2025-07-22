@@ -2,13 +2,20 @@
 import os
 import pandas as pd
 import logging
-from utils import logger_utils
+import sys
+from pathlib import Path
+
+# Adjust sys.path to ensure utils package is correctly found
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
+
+from utils.logger_utils import init_logging
 from utils import write_csv_atomic
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-logger = logger_utils.init_logging(__name__, "metrics.log")
+logger = init_logging(__name__, "metrics.log")
 start_time = datetime.utcnow()
 logger.info("Script started")
 
