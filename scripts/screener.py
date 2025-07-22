@@ -239,10 +239,13 @@ def main() -> None:
     skipped = 0
     for symbol in symbols:
         logger.info("Processing %s...", symbol)
+        now_utc = datetime.now(timezone.utc)
+        end_safe = now_utc - timedelta(minutes=16)
         request_params = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
             start=datetime.now(timezone.utc) - timedelta(days=1500),
+            end=end_safe.isoformat(),
             feed="iex",
         )
         bars = data_client.get_stock_bars(request_params)

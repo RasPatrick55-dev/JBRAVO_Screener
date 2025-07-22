@@ -62,23 +62,24 @@ def cache_bars(
     For ``TimeFrame.Day`` the behaviour mirrors the original implementation
     where data are cached to disk.  When ``timeframe`` is ``TimeFrame.Minute``
     only a small intraday window is requested (most recent hour delayed by
-    15 minutes) and the resulting DataFrame is returned without touching the
+    16 minutes) and the resulting DataFrame is returned without touching the
     cache.  ``None`` is returned when no data could be fetched.
     """
 
     os.makedirs(cache_dir, exist_ok=True)
 
     # Intraday minute bars are not cached to disk.  They are fetched for the
-    # last hour with a 15 minute delay to respect Alpaca's data policies.
+    # last hour with a 16 minute delay to respect Alpaca's data policies.
     if timeframe == TimeFrame.Minute:
-        now = datetime.now(timezone.utc)
-        end = now - timedelta(minutes=15)
-        start = end - timedelta(hours=1)
+        now_utc = datetime.now(timezone.utc)
+        end_safe = now_utc - timedelta(minutes=16)
+        start = end_safe - timedelta(hours=1)
         try:
             request = StockBarsRequest(
                 symbol_or_symbols=symbol,
                 timeframe=TimeFrame.Minute,
                 start=start,
+                end=end_safe.isoformat(),
                 feed="iex",
             )
             df = data_client.get_stock_bars(request).df
@@ -87,11 +88,11 @@ def cache_bars(
                     "No bars returned for %s from %s to %s. Retrying with previous day's close.",
                     symbol,
                     start,
-                    end,
+                    end_safe,
                 )
                 try:
                     prev_close = data_client.get_latest_trade(symbol).price
-                    df = pd.DataFrame([{"close": prev_close}], index=[end])
+                    df = pd.DataFrame([{"close": prev_close}], index=[end_safe])
                     logging.info("Using previous close price for %s: %s", symbol, prev_close)
                 except Exception as exc:
                     logging.error("Error fetching latest trade for %s: %s", symbol, exc)
@@ -119,10 +120,14 @@ def cache_bars(
     if start >= end:
         return df
 
+    now_utc = datetime.now(timezone.utc)
+    end_safe = now_utc - timedelta(minutes=16)
+
     request_params = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Day,
         start=start,
+        end=end_safe.isoformat(),
         feed="iex",
     )
     try:
@@ -212,10 +217,13 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
 
         end = get_last_trading_day_end()
         min_start = min(start_map.values())
+        now_utc = datetime.now(timezone.utc)
+        end_safe = now_utc - timedelta(minutes=16)
         request_params = StockBarsRequest(
             symbol_or_symbols=batch,
             timeframe=TimeFrame.Day,
             start=min_start,
+            end=end_safe.isoformat(),
             feed="iex",
         )
 
@@ -274,10 +282,13 @@ def fetch_daily_bars(symbol: str, trade_date: str, data_client) -> pd.DataFrame:
         DataFrame containing the daily bar indexed by timestamp.
     """
 
+    now_utc = datetime.now(timezone.utc)
+    end_safe = now_utc - timedelta(minutes=16)
     request = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Day,
         start=trade_date,
+        end=end_safe.isoformat(),
         feed="iex",
     )
     bars = data_client.get_stock_bars(request).df
@@ -298,10 +309,13 @@ def fetch_extended_hours_bars(symbol: str, trade_date: str, data_client) -> tupl
     start = tz.localize(datetime.combine(day, dt_time(8, 0)))
     end = tz.localize(datetime.combine(day, dt_time(17, 0)))
 
+    now_utc = datetime.now(timezone.utc)
+    end_safe = now_utc - timedelta(minutes=16)
     request = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Minute,
         start=start,
+        end=end_safe.isoformat(),
         feed="iex",
     )
     bars = data_client.get_stock_bars(request).df

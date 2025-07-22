@@ -302,14 +302,15 @@ def allocate_position(symbol):
 
     buying_power = get_buying_power()
     alloc_amount = buying_power * ALLOC_PERCENT
-    now = datetime.now(timezone.utc)
-    end = now - timedelta(minutes=15)
-    start = end - timedelta(hours=1)
+    now_utc = datetime.now(timezone.utc)
+    end_safe = now_utc - timedelta(minutes=16)
+    start = end_safe - timedelta(hours=1)
     try:
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Minute,
             start=start,
+            end=end_safe.isoformat(),
             feed="iex",
         )
         bars = data_client.get_stock_bars(request).df
@@ -318,7 +319,7 @@ def allocate_position(symbol):
                 "No bars available for %s from %s to %s. Retrying with previous day's close.",
                 symbol,
                 start,
-                end,
+                end_safe,
             )
             prev_close = trading_client.get_latest_trade(symbol).price
             bars = pd.DataFrame([{"close": prev_close}])
