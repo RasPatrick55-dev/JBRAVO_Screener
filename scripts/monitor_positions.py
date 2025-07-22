@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest
 from logging.handlers import RotatingFileHandler
+from utils import fetch_bars_with_cutoff
 import shutil
 from tempfile import NamedTemporaryFile
 
@@ -255,18 +255,8 @@ def save_positions_csv(positions):
 def fetch_indicators(symbol):
     """Fetch recent daily bars and compute indicators."""
     try:
-        now_utc = datetime.now(timezone.utc)
-        end_safe = now_utc - timedelta(minutes=16)
-        request = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,
-            start=(datetime.now(timezone.utc) - timedelta(days=750)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
-            end=end_safe.isoformat(),
-            feed="iex",
-        )
-        bars = data_client.get_stock_bars(request).df
+        start = (datetime.now(timezone.utc) - timedelta(days=750)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Day, data_client).df
     except Exception as e:
         logging.error("Failed to fetch bars for %s: %s", symbol, e)
         return None

@@ -25,6 +25,26 @@ def write_csv_atomic(path: str, df: pd.DataFrame) -> None:
     shutil.move(tmp.name, path)
 
 
+def fetch_bars_with_cutoff(symbol: str, start_date, timeframe, data_client):
+    """Return IEX bars with end time at least 16 minutes ago."""
+
+    now_utc = datetime.now(timezone.utc)
+    end_safe = now_utc - timedelta(minutes=16)
+    if isinstance(timeframe, str):
+        tf = TimeFrame.Day if timeframe.upper().startswith("D") else TimeFrame.Minute
+    else:
+        tf = timeframe
+
+    req = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=tf,
+        start=start_date,
+        end=end_safe.isoformat(),
+        feed="iex",
+    )
+    return data_client.get_stock_bars(req)
+
+
 def get_last_trading_day_end(now: datetime | None = None) -> datetime:
     """Return previous market close timestamp in UTC.
 
@@ -71,28 +91,21 @@ def cache_bars(
     # Intraday minute bars are not cached to disk.  They are fetched for the
     # last hour with a 16 minute delay to respect Alpaca's data policies.
     if timeframe == TimeFrame.Minute:
-        now_utc = datetime.now(timezone.utc)
-        end_safe = now_utc - timedelta(minutes=16)
-        start = end_safe - timedelta(hours=1)
+        start = datetime.now(timezone.utc) - timedelta(hours=1, minutes=16)
         try:
-            request = StockBarsRequest(
-                symbol_or_symbols=symbol,
-                timeframe=TimeFrame.Minute,
-                start=start,
-                end=end_safe.isoformat(),
-                feed="iex",
-            )
-            df = data_client.get_stock_bars(request).df
+            bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Minute, data_client)
+            df = bars.df
             if df.empty:
+                cutoff = datetime.now(timezone.utc) - timedelta(minutes=16)
                 logging.warning(
                     "No bars returned for %s from %s to %s. Retrying with previous day's close.",
                     symbol,
                     start,
-                    end_safe,
+                    cutoff.isoformat(),
                 )
                 try:
                     prev_close = data_client.get_latest_trade(symbol).price
-                    df = pd.DataFrame([{"close": prev_close}], index=[end_safe])
+                    df = pd.DataFrame([{"close": prev_close}], index=[datetime.now(timezone.utc)])
                     logging.info("Using previous close price for %s: %s", symbol, prev_close)
                 except Exception as exc:
                     logging.error("Error fetching latest trade for %s: %s", symbol, exc)
@@ -120,18 +133,9 @@ def cache_bars(
     if start >= end:
         return df
 
-    now_utc = datetime.now(timezone.utc)
-    end_safe = now_utc - timedelta(minutes=16)
-
-    request_params = StockBarsRequest(
-        symbol_or_symbols=symbol,
-        timeframe=TimeFrame.Day,
-        start=start,
-        end=end_safe.isoformat(),
-        feed="iex",
-    )
     try:
-        new_df = data_client.get_stock_bars(request_params).df
+        bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Day, data_client)
+        new_df = bars.df
     except APIError as exc:
         if getattr(exc, "status_code", None) == 429:
             logging.error("Alpaca rate limit hit fetching %s", symbol)
@@ -282,16 +286,7 @@ def fetch_daily_bars(symbol: str, trade_date: str, data_client) -> pd.DataFrame:
         DataFrame containing the daily bar indexed by timestamp.
     """
 
-    now_utc = datetime.now(timezone.utc)
-    end_safe = now_utc - timedelta(minutes=16)
-    request = StockBarsRequest(
-        symbol_or_symbols=symbol,
-        timeframe=TimeFrame.Day,
-        start=trade_date,
-        end=end_safe.isoformat(),
-        feed="iex",
-    )
-    bars = data_client.get_stock_bars(request).df
+    bars = fetch_bars_with_cutoff(symbol, trade_date, TimeFrame.Day, data_client).df
     if isinstance(bars.index, pd.MultiIndex):
         bars = bars.droplevel("symbol") if "symbol" in bars.index.names else bars.droplevel(0)
     return bars
@@ -307,18 +302,9 @@ def fetch_extended_hours_bars(symbol: str, trade_date: str, data_client) -> tupl
     tz = pytz.timezone("America/New_York")
     day = datetime.strptime(trade_date, "%Y-%m-%d").date()
     start = tz.localize(datetime.combine(day, dt_time(8, 0)))
-    end = tz.localize(datetime.combine(day, dt_time(17, 0)))
+    _ = tz.localize(datetime.combine(day, dt_time(17, 0)))
 
-    now_utc = datetime.now(timezone.utc)
-    end_safe = now_utc - timedelta(minutes=16)
-    request = StockBarsRequest(
-        symbol_or_symbols=symbol,
-        timeframe=TimeFrame.Minute,
-        start=start,
-        end=end_safe.isoformat(),
-        feed="iex",
-    )
-    bars = data_client.get_stock_bars(request).df
+    bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Minute, data_client).df
     if isinstance(bars.index, pd.MultiIndex):
         bars = bars.droplevel("symbol") if "symbol" in bars.index.names else bars.droplevel(0)
     if bars.index.tzinfo is None:
