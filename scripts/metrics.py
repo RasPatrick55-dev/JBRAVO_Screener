@@ -3,8 +3,7 @@ import os
 import pandas as pd
 import logging
 from utils import logger_utils
-import shutil
-from tempfile import NamedTemporaryFile
+from utils import write_csv_atomic
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,12 +12,6 @@ logger = logger_utils.init_logging(__name__, "metrics.log")
 start_time = datetime.utcnow()
 logger.info("Script started")
 
-
-def write_csv_atomic(df: pd.DataFrame, dest: str):
-    tmp = NamedTemporaryFile('w', delete=False, dir=os.path.dirname(dest), newline='')
-    df.to_csv(tmp.name, index=False)
-    tmp.close()
-    shutil.move(tmp.name, dest)
 
 # Load backtest results
 def load_results(csv_file='backtest_results.csv'):
@@ -99,7 +92,7 @@ def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
         cols = required_cols + [c for c in df.columns if c not in required_cols]
         top_candidates = df[cols].head(top_n)
         try:
-            write_csv_atomic(top_candidates, csv_path)
+            write_csv_atomic(csv_path, top_candidates)
             logger.info(
                 "Successfully updated %s with %d records", csv_path, len(top_candidates)
             )
@@ -116,7 +109,7 @@ def save_metrics_summary(metrics_summary, symbols, output_file='metrics_summary.
     summary_df['symbols'] = ';'.join(symbols)
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
     try:
-        write_csv_atomic(summary_df, csv_path)
+        write_csv_atomic(csv_path, summary_df)
         logger.info("Successfully appended data to %s", csv_path)
     except Exception as e:
         logger.error("Failed appending to %s: %s", csv_path, e)

@@ -25,12 +25,12 @@ handler.setFormatter(formatter)
 logger.addHandler(handler)
 
 
-def write_csv_atomic(df: pd.DataFrame, dest: str) -> None:
-    """Write DataFrame to ``dest`` atomically."""
-    tmp = NamedTemporaryFile("w", delete=False, dir=os.path.dirname(dest), newline="")
+def write_csv_atomic(path: str, df: pd.DataFrame) -> None:
+    """Write DataFrame to ``path`` atomically."""
+    tmp = NamedTemporaryFile("w", delete=False, dir=os.path.dirname(path), newline="")
     df.to_csv(tmp.name, index=False)
     tmp.close()
-    shutil.move(tmp.name, dest)
+    shutil.move(tmp.name, path)
 
 
 def load_csv(filename: str) -> pd.DataFrame:
@@ -205,7 +205,7 @@ def save_weekly_summary(summary: dict, filename: str = "weekly_summary.csv") -> 
     """Write ``summary`` to a CSV in the data directory."""
     dest = os.path.join(DATA_DIR, filename)
     df = pd.DataFrame([summary])
-    write_csv_atomic(df, dest)
+    write_csv_atomic(dest, df)
     logger.info("Weekly summary saved to %s", dest)
 
 

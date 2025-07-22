@@ -18,11 +18,11 @@ def has_datetime_index(idx) -> bool:
     return hasattr(idx, "dtype") and pd.api.types.is_datetime64_any_dtype(idx.dtype)
 
 
-def write_csv_atomic(df: pd.DataFrame, dest: str) -> None:
-    tmp = NamedTemporaryFile("w", delete=False, dir=os.path.dirname(dest), newline="")
+def write_csv_atomic(path: str, df: pd.DataFrame) -> None:
+    tmp = NamedTemporaryFile("w", delete=False, dir=os.path.dirname(path), newline="")
     df.to_csv(tmp.name, index=False)
     tmp.close()
-    shutil.move(tmp.name, dest)
+    shutil.move(tmp.name, path)
 
 
 def get_last_trading_day_end(now: datetime | None = None) -> datetime:
@@ -250,7 +250,7 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
             df_sym = df_sym[~df_sym.index.duplicated(keep="last")].tail(days)
             os.makedirs(cache_dir, exist_ok=True)
             path = os.path.join(cache_dir, f"{sym}.csv")
-            write_csv_atomic(df_sym.reset_index(), path)
+            write_csv_atomic(path, df_sym.reset_index())
             results[sym] = df_sym
 
     return results
