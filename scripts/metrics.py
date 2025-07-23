@@ -1,21 +1,19 @@
 # metrics.py (enhanced with comprehensive metrics)
 import os
+import sys
+
+# Ensure project root is first in Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import pandas as pd
 import logging
-import sys
-from pathlib import Path
 
-# Adjust sys.path to ensure utils package is correctly found
-project_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(project_root))
-
-from utils.logger_utils import init_logging
-from utils import write_csv_atomic
+from utils import logger_utils, write_csv_atomic
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-logger = init_logging(__name__, "metrics.log")
+logger = logger_utils.init_logging(__name__, "metrics.log")
 start_time = datetime.utcnow()
 logger.info("Script started")
 
