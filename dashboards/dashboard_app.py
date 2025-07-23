@@ -712,6 +712,15 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             except Exception as exc:  # pragma: no cover - log file errors
                 logger.error("Failed to load execution metrics: %s", exc)
 
+        api_error_alert = (
+            html.Div(
+                f"Recent API Errors: {metrics_data['api_failures']}",
+                style={"color": "orange"},
+            )
+            if metrics_data["api_failures"] > 0
+            else None
+        )
+
         metrics_view = html.Div([
             html.H5("Execute Trades Metrics"),
             html.Ul([
@@ -746,7 +755,11 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="text-muted mb-2",
         )
 
-        return dbc.Container([timestamp, download, table, html.Hr(), metrics_view], fluid=True)
+        components = [timestamp, download, table, html.Hr()]
+        if api_error_alert:
+            components.append(api_error_alert)
+        components.append(metrics_view)
+        return dbc.Container(components, fluid=True)
 
     elif tab == "tab-positions":
         positions_df, alert = load_csv(
@@ -849,11 +862,11 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
         limit_info = html.Div(
             f"Max Open Trades Limit: {MAX_OPEN_TRADES}",
-            className="text-muted",
+            style={"font-weight": "bold"},
         )
         limit_alert = (
             dbc.Alert(
-                "Max Open Trades limit reached - new trades blocked.",
+                "Warning: Maximum open trades limit reached, new trades skipped!",
                 color="danger",
                 className="m-2",
             )
