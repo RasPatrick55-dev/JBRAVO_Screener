@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone, time
 import pytz
 import time
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, GetOrdersRequest
+from alpaca.trading.requests import LimitOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.trading.requests import TrailingStopOrderRequest
 
@@ -29,6 +29,8 @@ except Exception:  # pragma: no cover - fallback import
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
+# Alerting
+import requests
 # Import from the top-level utils package explicitly
 from utils.logger_utils import init_logging
 
@@ -47,6 +49,17 @@ logger = init_logging(__name__, 'execute_trades.log')
 start_time = datetime.utcnow()
 logger.info("Trade execution script started.")
 
+ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
+
+
+def send_alert(message: str) -> None:
+    if not ALERT_WEBHOOK_URL:
+        return
+    try:
+        requests.post(ALERT_WEBHOOK_URL, json={"text": message}, timeout=5)
+    except Exception as exc:
+        logger.error("Failed to send alert: %s", exc)
+
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
@@ -60,7 +73,8 @@ trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # Constants
-MAX_OPEN_TRADES = 4
+# Maximum number of concurrent open trades allowed
+MAX_OPEN_TRADES = 10
 ALLOC_PERCENT = 0.03  # Changed allocation to 3%
 TRAIL_PERCENT = 3.0
 MAX_HOLD_DAYS = 7
@@ -548,10 +562,13 @@ def daily_exit_check():
         if days_held >= MAX_HOLD_DAYS:
             logger.info("Exiting %s after %s days", symbol, days_held)
             try:
-                order_request = MarketOrderRequest(
+                exit_price = float(pos.current_price)
+                order_request = LimitOrderRequest(
                     symbol=symbol,
                     qty=pos.qty,
                     side=OrderSide.SELL,
+                    type="limit",
+                    limit_price=exit_price,
                     time_in_force=TimeInForce.DAY,
                     extended_hours=True,
                 )
@@ -574,7 +591,9 @@ def daily_exit_check():
                 logger.error("Order submission error for %s: %s", symbol, e)
                 if "extended hours order must be DAY limit orders" in str(e):
                     try:
-                        retry_req = MarketOrderRequest(
+                        retry_req = LimitOrderRequest(
+                            type="limit",
+                            limit_price=exit_price,
                             symbol=symbol,
                             qty=pos.qty,
                             side=OrderSide.SELL,
@@ -613,10 +632,13 @@ def daily_exit_check():
         elif should_exit_early(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache")):
             logger.info("Early exit signal for %s", symbol)
             try:
-                order_request = MarketOrderRequest(
+                exit_price = float(pos.current_price)
+                order_request = LimitOrderRequest(
                     symbol=symbol,
                     qty=pos.qty,
                     side=OrderSide.SELL,
+                    type="limit",
+                    limit_price=exit_price,
                     time_in_force=TimeInForce.DAY,
                     extended_hours=True,
                 )
@@ -625,8 +647,8 @@ def daily_exit_check():
                 record_executed_trade(
                     symbol,
                     int(pos.qty),
-                    pos.current_price,
-                    order_type="market",
+                    exit_price,
+                    order_type="limit",
                     side="sell",
                     order_status=status,
                 )
@@ -638,7 +660,9 @@ def daily_exit_check():
                 logger.error("Order submission error for %s: %s", symbol, e)
                 if "extended hours order must be DAY limit orders" in str(e):
                     try:
-                        retry_req = MarketOrderRequest(
+                        retry_req = LimitOrderRequest(
+                            type="limit",
+                            limit_price=exit_price,
                             symbol=symbol,
                             qty=pos.qty,
                             side=OrderSide.SELL,
@@ -652,8 +676,8 @@ def daily_exit_check():
                         record_executed_trade(
                             symbol,
                             int(pos.qty),
-                            pos.current_price,
-                            order_type="market",
+                            exit_price,
+                            order_type="limit",
                             side="sell",
                         )
                         metrics["orders_submitted"] += 1
@@ -669,29 +693,33 @@ def daily_exit_check():
 
 if __name__ == '__main__':
     logger.info("Starting pre-market trade execution script")
-    submit_trades()
-    attach_trailing_stops()
-    daily_exit_check()
-    save_open_positions_csv()
-    update_trades_log()
-    # Persist metrics for dashboard
     try:
-        with open(metrics_path, "w") as f:
-            json.dump(metrics, f)
-        logger.info("Execution metrics saved to %s", metrics_path)
+        submit_trades()
+        attach_trailing_stops()
+        daily_exit_check()
+        save_open_positions_csv()
+        update_trades_log()
+        # Persist metrics for dashboard
+        try:
+            with open(metrics_path, "w") as f:
+                json.dump(metrics, f)
+            logger.info("Execution metrics saved to %s", metrics_path)
+        except Exception as exc:
+            logger.error("Failed to save execution metrics: %s", exc)
+
+        # Run historical trades script after executing trades
+        history_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fetch_trades_history.py')
+        try:
+            subprocess.run(["python", history_script], check=True)
+            logger.info("Historical trades successfully fetched and CSV files updated.")
+        except subprocess.CalledProcessError as e:
+            logger.error("Failed to run historical trade script: %s", e)
     except Exception as exc:
-        logger.error("Failed to save execution metrics: %s", exc)
-    logger.info("Pre-market trade execution script complete")
-
-    # Run historical trades script after executing trades
-    history_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fetch_trades_history.py')
-    try:
-        subprocess.run(["python", history_script], check=True)
-        logger.info("Historical trades successfully fetched and CSV files updated.")
-    except subprocess.CalledProcessError as e:
-        logger.error("Failed to run historical trade script: %s", e)
-
-    end_time = datetime.utcnow()
-    elapsed_time = end_time - start_time
-    logger.info("Script finished in %s", elapsed_time)
+        logger.exception("Critical error occurred: %s", exc)
+        send_alert(str(exc))
+    finally:
+        end_time = datetime.utcnow()
+        elapsed_time = end_time - start_time
+        logger.info("Script finished in %s", elapsed_time)
+        logger.info("Pre-market trade execution script complete")
 
