@@ -9,18 +9,10 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest
-from logging.handlers import RotatingFileHandler
 from utils import fetch_bars_with_cutoff
+from utils.logger_utils import init_logging
 import shutil
 from tempfile import NamedTemporaryFile
-
-
-class InfoRotatingFileHandler(RotatingFileHandler):
-    """RotatingFileHandler that logs when a rollover occurs."""
-
-    def doRollover(self):
-        super().doRollover()
-        logging.info("Log rotated due to size limit.")
 
 
 from dotenv import load_dotenv
@@ -38,22 +30,8 @@ ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
-log_dir = os.path.join(BASE_DIR, "logs")
-os.makedirs(log_dir, exist_ok=True)
-log_path = os.path.join(log_dir, "monitor.log")
-
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
-handler = InfoRotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
-handler.setFormatter(logging.Formatter(LOG_FORMAT))
-
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-logger.handlers = []  # Clear existing handlers
-logger.addHandler(handler)
-
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-logger.addHandler(console_handler)
+logger = init_logging(__name__, "monitor.log")
+logger.info("Monitoring service active.")
 
 
 def send_alert(message: str):
