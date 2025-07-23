@@ -51,3 +51,12 @@ written in the correct location:
 ```bash
 cd /home/RasPatrick/jbravo_screener && /home/RasPatrick/.virtualenvs/jbravo-env/bin/python scripts/execute_trades.py
 ```
+
+Ensure all tasks activate the virtual environment explicitly. Example entries:
+
+```bash
+cd /home/RasPatrick/jbravo_screener && /home/RasPatrick/.virtualenvs/jbravo-env/bin/python scripts/run_pipeline.py
+cd /home/RasPatrick/jbravo_screener && /home/RasPatrick/.virtualenvs/jbravo-env/bin/python scripts/metrics.py
+cd /home/RasPatrick/jbravo_screener && /home/RasPatrick/.virtualenvs/jbravo-env/bin/python scripts/weekly_summary.py
+cd /home/RasPatrick/jbravo_screener && /home/RasPatrick/.virtualenvs/jbravo-env/bin/python scripts/monitor_positions.py
+```
