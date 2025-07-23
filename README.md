@@ -43,3 +43,11 @@ automatically:
 ```bash
 python scripts/run_pipeline.py
 ```
+
+When creating a scheduled task for `execute_trades.py` on PythonAnywhere make
+sure the working directory is set to the project root so logs and CSV files are
+written in the correct location:
+
+```bash
+cd /home/RasPatrick/jbravo_screener && /home/RasPatrick/.virtualenvs/jbravo-env/bin/python scripts/execute_trades.py
+```
