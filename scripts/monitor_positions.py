@@ -1,6 +1,7 @@
 # monitor_positions.py
 
 import os
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 import pandas as pd
@@ -9,6 +10,11 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 from utils import fetch_bars_with_cutoff
 from utils.logger_utils import init_logging
 import shutil
@@ -19,8 +25,6 @@ from dotenv import load_dotenv
 import logging
 import pytz
 import requests
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 dotenv_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path)
