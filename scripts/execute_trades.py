@@ -5,8 +5,10 @@
 import os
 import sys
 
-# Ensure project root is first in Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Explicitly insert the project root at the front of sys.path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 import subprocess
 import logging
@@ -26,8 +28,13 @@ except Exception:  # pragma: no cover - fallback import
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
-from utils import logger_utils  # from top-level utils package
-from scripts.utils import fetch_bars_with_cutoff, cache_bars  # explicitly from scripts directory
+# Import from the top-level utils package explicitly
+from utils.logger_utils import init_logging
+
+# Import scripts/utils explicitly
+from scripts.utils import fetch_bars_with_cutoff, cache_bars
+
+# Explicit import from scripts directory
 from scripts.exit_signals import should_exit_early
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,7 +42,7 @@ os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 
 dotenv_path = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path)
-logger = logger_utils.init_logging(__name__, 'execute_trades.log')
+logger = init_logging(__name__, 'execute_trades.log')
 start_time = datetime.utcnow()
 logger.info("Trade execution script started.")
 
