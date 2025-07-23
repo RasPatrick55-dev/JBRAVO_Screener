@@ -3,6 +3,11 @@
 # Trailing stops and max hold logic manage risk on open trades.
 
 import os
+import sys
+
+# Ensure project root is first in Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import subprocess
 import logging
 import pandas as pd
@@ -21,8 +26,9 @@ except Exception:  # pragma: no cover - fallback import
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
-from utils import logger_utils, fetch_bars_with_cutoff
-from exit_signals import should_exit_early
+from utils import logger_utils  # from top-level utils package
+from scripts.utils import fetch_bars_with_cutoff, cache_bars  # explicitly from scripts directory
+from scripts.exit_signals import should_exit_early
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
