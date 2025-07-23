@@ -174,7 +174,13 @@ def submit_trades() -> None:
     logging.info("Buying power: %s, allocation per trade: %s", buying_power, alloc_dollars)
     for _, row in candidates.iterrows():
         sym = row["symbol"]
-        last_price = trading_client.get_latest_trade(sym).price
+        try:
+            last_price = trading_client.get_stock_latest_trade(sym).price
+        except AttributeError:
+            logging.warning(
+                "Method get_stock_latest_trade not available for %s", sym
+            )
+            continue
         qty = max(int(alloc_dollars / last_price), 1)
         entry_price = last_price  # You can adjust limit pricing here
         logging.info("Submitting buy order for %s: qty=%s @ %s", sym, qty, entry_price)

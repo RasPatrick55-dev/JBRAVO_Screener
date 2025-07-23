@@ -324,7 +324,14 @@ def allocate_position(symbol):
                 start,
                 (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat(),
             )
-            prev_close = trading_client.get_latest_trade(symbol).price
+            try:
+                latest_trade = trading_client.get_stock_latest_trade(symbol)
+                prev_close = latest_trade.price
+            except AttributeError:
+                logger.warning(
+                    "Method get_stock_latest_trade not available for %s", symbol
+                )
+                return None, "market data error"
             bars = pd.DataFrame([{"close": prev_close}])
             logger.info("Using previous close price for %s: %s", symbol, prev_close)
     except Exception as e:

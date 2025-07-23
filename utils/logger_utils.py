@@ -1,16 +1,21 @@
 import logging
-import os
+from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 
 def init_logging(module_name: str, log_filename: str) -> logging.Logger:
-    os.makedirs("logs", exist_ok=True)
+    """Initialize a module level logger writing to the project ``logs`` folder."""
+    base_dir = Path(__file__).resolve().parent.parent
+    log_dir = base_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+
     log_formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] [%(name)s]: %(message)s"
     )
 
     file_handler = RotatingFileHandler(
-        f"logs/{log_filename}", maxBytes=2 * 1024 * 1024, backupCount=5
+        log_path, maxBytes=2 * 1024 * 1024, backupCount=5
     )
     file_handler.setFormatter(log_formatter)
 
@@ -19,7 +24,7 @@ def init_logging(module_name: str, log_filename: str) -> logging.Logger:
     logger.addHandler(file_handler)
 
     error_handler = RotatingFileHandler(
-        "logs/error.log", maxBytes=2 * 1024 * 1024, backupCount=5
+        log_dir / "error.log", maxBytes=2 * 1024 * 1024, backupCount=5
     )
     error_handler.setFormatter(log_formatter)
     error_handler.setLevel(logging.ERROR)
