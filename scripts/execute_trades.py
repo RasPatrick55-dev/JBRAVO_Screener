@@ -16,6 +16,7 @@ import pandas as pd
 import json
 from datetime import datetime, timedelta, timezone, time
 import pytz
+import time
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
@@ -301,6 +302,23 @@ def record_executed_trade(
     }
     pd.DataFrame([row]).to_csv(csv_path, mode="a", header=False, index=False)
 
+
+def poll_order_until_complete(order_id: str) -> str:
+    """Poll Alpaca for ``order_id`` until it is filled or cancelled."""
+    while True:
+        try:
+            status = trading_client.get_order_by_id(order_id).status.value
+        except Exception as exc:
+            logger.error("Failed fetching status for %s: %s", order_id, exc)
+            status = "unknown"
+            break
+        if status in {"filled", "canceled", "expired"}:
+            break
+        logger.info("Polling order %s, status: %s", order_id, status)
+        time.sleep(10)
+    logger.info("Order %s completed with status %s", order_id, status)
+    return status
+
 def allocate_position(symbol):
     open_positions = get_open_positions()
     if symbol in open_positions:
@@ -393,18 +411,30 @@ def submit_trades():
             row.avg_return,
         )
         try:
-            order = LimitOrderRequest(
+            latest_trade = trading_client.get_stock_latest_trade(sym)
+            order_request = LimitOrderRequest(
                 symbol=sym,
                 qty=qty,
                 side=OrderSide.BUY,
+                type="limit",
+                limit_price=latest_trade.price,
                 time_in_force=TimeInForce.DAY,
-                limit_price=entry_price,
                 extended_hours=True,
             )
-            trading_client.submit_order(order)
-            logger.info("Order submitted successfully for %s", sym)
-            record_executed_trade(sym, qty, entry_price, order_type="limit", side="buy")
-            attach_trailing_stops()
+            order = trading_client.submit_order(order_request)
+            status = poll_order_until_complete(order.id)
+            record_executed_trade(
+                sym,
+                qty,
+                latest_trade.price,
+                order_type="limit",
+                side="buy",
+                order_status=status,
+            )
+            if status == "filled":
+                attach_trailing_stops()
+                save_open_positions_csv()
+                update_trades_log()
             submitted += 1
             metrics["orders_submitted"] += 1
         except APIError as e:
@@ -419,14 +449,23 @@ def submit_trades():
                         limit_price=entry_price,
                         extended_hours=False,
                     )
-                    trading_client.submit_order(retry_order)
+                    order = trading_client.submit_order(retry_order)
+                    status = poll_order_until_complete(order.id)
                     logger.info(
                         "Retry successful with regular hours order for %s", sym
                     )
                     record_executed_trade(
-                        sym, qty, entry_price, order_type="limit", side="buy"
+                        sym,
+                        qty,
+                        entry_price,
+                        order_type="limit",
+                        side="buy",
+                        order_status=status,
                     )
-                    attach_trailing_stops()
+                    if status == "filled":
+                        attach_trailing_stops()
+                        save_open_positions_csv()
+                        update_trades_log()
                     submitted += 1
                     metrics["orders_submitted"] += 1
                     metrics["api_retries"] += 1
@@ -516,7 +555,8 @@ def daily_exit_check():
                     time_in_force=TimeInForce.DAY,
                     extended_hours=True,
                 )
-                trading_client.submit_order(order_request)
+                order = trading_client.submit_order(order_request)
+                status = poll_order_until_complete(order.id)
                 logger.info("Order submitted successfully for %s", symbol)
                 record_executed_trade(
                     symbol,
@@ -524,7 +564,11 @@ def daily_exit_check():
                     pos.current_price,
                     order_type="market",
                     side="sell",
+                    order_status=status,
                 )
+                if status == "filled":
+                    save_open_positions_csv()
+                    update_trades_log()
                 metrics["orders_submitted"] += 1
             except APIError as e:
                 logger.error("Order submission error for %s: %s", symbol, e)
@@ -537,7 +581,8 @@ def daily_exit_check():
                             time_in_force=TimeInForce.DAY,
                             extended_hours=False,
                         )
-                        trading_client.submit_order(retry_req)
+                        order = trading_client.submit_order(retry_req)
+                        status = poll_order_until_complete(order.id)
                         logger.info(
                             "Retry successful with regular hours order for %s",
                             symbol,
@@ -548,7 +593,11 @@ def daily_exit_check():
                             pos.current_price,
                             order_type="market",
                             side="sell",
+                            order_status=status,
                         )
+                        if status == "filled":
+                            save_open_positions_csv()
+                            update_trades_log()
                         metrics["orders_submitted"] += 1
                         metrics["api_retries"] += 1
                     except APIError as retry_e:
@@ -571,14 +620,19 @@ def daily_exit_check():
                     time_in_force=TimeInForce.DAY,
                     extended_hours=True,
                 )
-                trading_client.submit_order(order_request)
+                order = trading_client.submit_order(order_request)
+                status = poll_order_until_complete(order.id)
                 record_executed_trade(
                     symbol,
                     int(pos.qty),
                     pos.current_price,
                     order_type="market",
                     side="sell",
+                    order_status=status,
                 )
+                if status == "filled":
+                    save_open_positions_csv()
+                    update_trades_log()
                 metrics["orders_submitted"] += 1
             except APIError as e:
                 logger.error("Order submission error for %s: %s", symbol, e)

@@ -334,8 +334,8 @@ app.layout = dbc.Container(
             children=html.Div(id="tabs-content", className="mt-4"),
             type="default",
         ),
-        # Refresh dashboards roughly every 30 seconds to reflect new logs
-        dcc.Interval(id="interval-update", interval=30000, n_intervals=0),
+        # Refresh dashboards roughly every 15 seconds to reflect new logs
+        dcc.Interval(id="interval-update", interval=15000, n_intervals=0),
         dcc.Interval(id="log-interval", interval=10000, n_intervals=0),
         dcc.Interval(id="interval-trades", interval=30 * 1000, n_intervals=0),
         dbc.Modal(
@@ -942,6 +942,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         monitor_lines = read_recent_lines(monitor_log_path, num_lines=100)[::-1]
         exec_lines = read_recent_lines(execute_trades_log_path, num_lines=50)[::-1]
         error_lines = read_recent_lines(error_log_path, num_lines=50)[::-1]
+        trade_errors = [
+            l for l in exec_lines if "rejected" in l.lower() or "error" in l.lower()
+        ]
 
         def log_box(title, lines):
             return html.Div(
@@ -985,6 +988,17 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 html.H5("Recently Closed Positions", className="text-light"),
                 closed_table,
                 html.Hr(),
+                html.H6("Recent Trade Errors", className="text-light"),
+                html.Pre(
+                    "".join(trade_errors[-5:]) if trade_errors else "No trade errors.",
+                    style={
+                        "maxHeight": "120px",
+                        "overflowY": "auto",
+                        "backgroundColor": "#272B30",
+                        "color": "#E0E0E0",
+                        "padding": "0.5rem",
+                    },
+                ),
                 log_box("Monitor Log", monitor_lines),
                 log_box("Execution Log", exec_lines),
                 log_box("Errors", error_lines),

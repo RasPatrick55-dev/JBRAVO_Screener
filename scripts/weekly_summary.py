@@ -42,6 +42,13 @@ def load_csv(filename: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(path)
         logger.info("Loaded %s (%d rows)", filename, len(df))
+        if 'net_pnl' not in df.columns:
+            if {'close_price', 'open_price'} <= set(df.columns):
+                df['net_pnl'] = df['close_price'] - df['open_price']
+            elif {'exit_price', 'entry_price'} <= set(df.columns):
+                df['net_pnl'] = df['exit_price'].fillna(0) - df['entry_price'].fillna(0)
+            else:
+                df['net_pnl'] = 0.0
         return df
     except Exception as exc:
         logger.error("Failed reading %s: %s", filename, exc)

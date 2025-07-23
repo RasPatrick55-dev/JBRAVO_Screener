@@ -40,7 +40,7 @@ os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
 log_dir = os.path.join(BASE_DIR, "logs")
 os.makedirs(log_dir, exist_ok=True)
-log_path = os.path.join(log_dir, "monitor_positions.log")
+log_path = os.path.join(log_dir, "monitor.log")
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 handler = InfoRotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
