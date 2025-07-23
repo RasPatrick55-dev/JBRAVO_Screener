@@ -5,8 +5,8 @@ from logging.handlers import RotatingFileHandler
 
 def init_logging(module_name: str, log_filename: str) -> logging.Logger:
     """Return a logger writing to the project's ``logs`` directory."""
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    log_dir = os.path.join(base_dir, "logs")
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    log_dir = os.path.join(BASE_DIR, "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, log_filename)
 

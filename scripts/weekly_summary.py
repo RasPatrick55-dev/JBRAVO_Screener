@@ -7,6 +7,7 @@ from logging.handlers import RotatingFileHandler
 import shutil
 from tempfile import NamedTemporaryFile
 import pandas as pd
+import sqlite3
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -14,6 +15,9 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
+
+# Connect to local trades database if present
+DB_CONN = sqlite3.connect(os.path.join(BASE_DIR, 'data', 'trades.db'))
 
 logger = logging.getLogger("weekly_summary")
 logger.setLevel(logging.INFO)

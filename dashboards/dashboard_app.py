@@ -45,6 +45,9 @@ pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json
 # Threshold in minutes to consider a log stale
 STALE_THRESHOLD_MINUTES = 1440  # 24 hours
 
+# Displayed configuration values
+MAX_OPEN_TRADES = 10
+
 
 def is_log_stale(log_path):
     """Return True if the most recent INFO/ERROR entry in ``log_path`` is older than 24 hours."""
@@ -779,11 +782,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 color="warning",
                 className="m-2",
             )
-        positions_df["entry_time"] = (
-            pd.to_datetime(positions_df["entry_time"])
-            .dt.strftime("%Y-%m-%d %H:%M")
-            + " UTC"
-        )
+        entry_times = pd.to_datetime(positions_df["entry_time"], utc=True)
+        positions_df["days_in_trade"] = (pd.Timestamp.utcnow() - entry_times).dt.days
+        positions_df["entry_time"] = entry_times.dt.strftime("%Y-%m-%d %H:%M") + " UTC"
         columns = [
             {"name": c.replace("_", " ").title(), "id": c} for c in positions_df.columns
         ]
@@ -846,7 +847,34 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             f"Data last refreshed: {file_timestamp(latest_file)}",
             className="text-muted mb-2",
         )
-        components = [timestamp]
+        limit_info = html.Div(
+            f"Max Open Trades Limit: {MAX_OPEN_TRADES}",
+            className="text-muted",
+        )
+        limit_alert = (
+            dbc.Alert(
+                "Max Open Trades limit reached - new trades blocked.",
+                color="danger",
+                className="m-2",
+            )
+            if len(positions_df) >= MAX_OPEN_TRADES
+            else None
+        )
+        data_stale = is_log_stale(monitor_log_path) or is_log_stale(pipeline_log_path)
+        stale_warning = (
+            html.Div(
+                "Warning: Monitoring service is stale or scheduled tasks have errors!",
+                style={"color": "red"},
+            )
+            if data_stale
+            else None
+        )
+
+        components = [timestamp, limit_info]
+        if stale_warning:
+            components.append(stale_warning)
+        if limit_alert:
+            components.append(limit_alert)
         if freshness:
             components.append(freshness)
         if alert:
