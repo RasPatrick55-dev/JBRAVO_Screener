@@ -17,6 +17,7 @@ import json
 from datetime import datetime, timedelta, timezone, time
 import pytz
 from time import sleep
+from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import LimitOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
@@ -92,6 +93,28 @@ metrics = {
     "api_failures": 0,
 }
 metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
+
+
+def round_price(value: float) -> float:
+    """Return ``value`` rounded to two decimal places."""
+    return float(Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def get_latest_price(symbol: str) -> float | None:
+    """Return the most recent trade price for ``symbol``."""
+    if hasattr(trading_client, "get_stock_latest_trade"):
+        try:
+            trade = trading_client.get_stock_latest_trade(symbol)
+            return float(trade.price)
+        except Exception as exc:  # pragma: no cover - API errors
+            logger.warning("get_stock_latest_trade failed for %s: %s", symbol, exc)
+    try:
+        bars = data_client.get_stock_bars(symbol, TimeFrame.Minute, limit=1).df
+        if not bars.empty:
+            return float(bars["close"].iloc[-1])
+    except Exception as exc:  # pragma: no cover - API errors
+        logger.error("Fallback price fetch failed for %s: %s", symbol, exc)
+    return None
 
 
 def is_extended_hours(now_et: time) -> bool:
@@ -361,13 +384,8 @@ def allocate_position(symbol):
                 start,
                 (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat(),
             )
-            try:
-                latest_trade = trading_client.get_stock_latest_trade(symbol)
-                prev_close = latest_trade.price
-            except AttributeError:
-                logger.warning(
-                    "Method get_stock_latest_trade not available for %s", symbol
-                )
+            prev_close = get_latest_price(symbol)
+            if prev_close is None:
                 return None, "market data error"
             bars = pd.DataFrame([{"close": prev_close}])
             logger.info("Using previous close price for %s: %s", symbol, prev_close)
@@ -430,14 +448,28 @@ def submit_trades():
             row.avg_return,
         )
         try:
-            latest_trade = trading_client.get_stock_latest_trade(sym)
+            price = get_latest_price(sym)
+            if price is None:
+                logger.warning("[SKIPPED] %s: reason=market data unavailable", sym)
+                skipped += 1
+                metrics["symbols_skipped"] += 1
+                continue
+            price = round_price(price)
             now_et = datetime.now(pytz.timezone("US/Eastern")).time()
+            session = "extended" if is_extended_hours(now_et) else "regular"
+            logger.info(
+                "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
+                sym,
+                qty,
+                price,
+                session,
+            )
             order_request = LimitOrderRequest(
                 symbol=sym,
                 qty=qty,
                 side=OrderSide.BUY,
                 type="limit",
-                limit_price=latest_trade.price,
+                limit_price=price,
                 time_in_force=TimeInForce.DAY,
                 extended_hours=is_extended_hours(now_et),
             )
@@ -446,7 +478,7 @@ def submit_trades():
             record_executed_trade(
                 sym,
                 qty,
-                latest_trade.price,
+                price,
                 order_type="limit",
                 side="buy",
                 order_status=status,
@@ -461,12 +493,13 @@ def submit_trades():
             if "extended hours order must be DAY limit orders" in str(e):
                 logger.warning("Retrying %s without extended_hours flag.", sym)
                 try:
+                    retry_price = round_price(entry_price)
                     retry_order = LimitOrderRequest(
                         symbol=sym,
                         qty=qty,
                         side=OrderSide.BUY,
                         time_in_force=TimeInForce.DAY,
-                        limit_price=entry_price,
+                        limit_price=retry_price,
                         extended_hours=False,
                     )
                     order = trading_client.submit_order(retry_order)
@@ -477,7 +510,7 @@ def submit_trades():
                     record_executed_trade(
                         sym,
                         qty,
-                        entry_price,
+                        retry_price,
                         order_type="limit",
                         side="buy",
                         order_status=status,
@@ -570,7 +603,15 @@ def daily_exit_check():
         if days_held >= MAX_HOLD_DAYS:
             logger.info("Exiting %s after %s days", symbol, days_held)
             try:
-                valid_exit_price = float(pos.current_price)
+                valid_exit_price = round_price(float(pos.current_price))
+                session = "extended" if extended else "regular"
+                logger.info(
+                    "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
+                    symbol,
+                    pos.qty,
+                    valid_exit_price,
+                    session,
+                )
                 order_request = LimitOrderRequest(
                     symbol=symbol,
                     qty=pos.qty,
@@ -640,8 +681,17 @@ def daily_exit_check():
         elif should_exit_early(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache")):
             logger.info("Early exit signal for %s", symbol)
             try:
-                valid_exit_price = float(pos.current_price)
+                valid_exit_price = round_price(float(pos.current_price))
                 now_et = datetime.now(pytz.timezone("US/Eastern")).time()
+                extended_now = is_extended_hours(now_et)
+                session = "extended" if extended_now else "regular"
+                logger.info(
+                    "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
+                    symbol,
+                    pos.qty,
+                    valid_exit_price,
+                    session,
+                )
                 order_request = LimitOrderRequest(
                     symbol=symbol,
                     qty=pos.qty,
@@ -649,7 +699,7 @@ def daily_exit_check():
                     type="limit",
                     limit_price=valid_exit_price,
                     time_in_force=TimeInForce.DAY,
-                    extended_hours=is_extended_hours(now_et),
+                    extended_hours=extended_now,
                 )
                 order = trading_client.submit_order(order_request)
                 status = poll_order_until_complete(order.id)
