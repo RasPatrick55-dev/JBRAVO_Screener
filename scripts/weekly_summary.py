@@ -17,7 +17,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # Connect to local trades database if present
-DB_CONN = sqlite3.connect(os.path.join(BASE_DIR, 'data', 'trades.db'))
+DB_CONN = sqlite3.connect(os.path.join(BASE_DIR, 'trades.db'))
 
 logger = logging.getLogger("weekly_summary")
 logger.setLevel(logging.INFO)
