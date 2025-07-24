@@ -546,23 +546,35 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         metrics_df, _ = load_csv(
             metrics_summary_path,
             required_columns=[
-                "Total Trades",
-                "Total Net PnL",
-                "Win Rate (%)",
-                "Average Return per Trade",
+                "total_trades",
+                "net_pnl",
+                "win_rate",
+                "expectancy",
+                "profit_factor",
+                "max_drawdown",
             ],
         )
 
         if metrics_df is not None and not metrics_df.empty:
-            total_trades = int(metrics_df["Total Trades"].iloc[-1])
-            total_pnl = metrics_df["Total Net PnL"].iloc[-1]
-            win_rate_val = metrics_df["Win Rate (%)"].iloc[-1]
-            expectancy = metrics_df["Average Return per Trade"].iloc[-1]
+            latest_metrics = metrics_df.iloc[-1]
+            total_trades = latest_metrics["total_trades"]
+            total_pnl = latest_metrics["net_pnl"]
+            win_rate_val = latest_metrics["win_rate"]
+            expectancy = latest_metrics["expectancy"]
+            profit_factor_val = latest_metrics["profit_factor"]
+            max_drawdown_val = latest_metrics["max_drawdown"]
         else:
             total_trades = len(trades_df)
             total_pnl = trades_df["pnl"].sum()
             win_rate_val = (trades_df["pnl"] > 0).mean() * 100
             expectancy = trades_df["pnl"].mean()
+            profit_factor_val = (
+                trades_df[trades_df["pnl"] > 0]["pnl"].sum()
+                / abs(trades_df[trades_df["pnl"] < 0]["pnl"].sum())
+                if not trades_df[trades_df["pnl"] < 0].empty
+                else 0
+            )
+            max_drawdown_val = trades_df["drawdown"].min() if "drawdown" in trades_df.columns else 0
 
         kpis = dbc.Row(
             [
@@ -606,11 +618,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     dbc.Card(
                         [
                             dbc.CardHeader("Profit Factor"),
-                            dbc.CardBody(
-                                html.H4(
-                                    f"{trades_df[trades_df['pnl']>0]['pnl'].sum()/abs(trades_df[trades_df['pnl']<0]['pnl'].sum()):.2f}"
-                                )
-                            ),
+                            dbc.CardBody(html.H4(f"{profit_factor_val:.2f}")),
                         ]
                     ),
                     width=2,
@@ -619,9 +627,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     dbc.Card(
                         [
                             dbc.CardHeader("Max Drawdown"),
-                            dbc.CardBody(
-                                html.H4(f"${trades_df['drawdown'].min():.2f}")
-                            ),
+                            dbc.CardBody(html.H4(f"${max_drawdown_val:.2f}")),
                         ]
                     ),
                     width=2,
@@ -778,14 +784,14 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         freshness = data_freshness_alert(top_candidates_path, "Top candidates")
 
         mtime = get_file_mtime(top_candidates_path)
-        minutes_since_update = (
-            (datetime.utcnow() - datetime.fromtimestamp(mtime, timezone.utc)).total_seconds() / 60
+        hours_since_update = (
+            (datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, timezone.utc)).total_seconds() / 3600
             if mtime
             else 0
         )
-        if minutes_since_update > 1440:
+        if hours_since_update > 24:
             stale_msg = html.Div(
-                "Screener updates nightly; data may appear outdated.",
+                "Warning: Screener updates nightly; data may appear outdated.",
                 style={"color": "orange"},
             )
         else:

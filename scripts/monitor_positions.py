@@ -187,15 +187,18 @@ def get_open_positions():
 def save_positions_csv(positions):
     csv_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
     try:
-        existing = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+        existing_positions_df = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
 
-        def get_entry_time(symbol: str, current: str) -> str:
-            if not existing.empty and symbol in existing.get("symbol", [] ).values:
+        def get_original_entry_time(symbol: str, current_entry_time: str) -> str:
+            if not existing_positions_df.empty and symbol in existing_positions_df.get("symbol", []).values:
                 try:
-                    return existing.loc[existing["symbol"] == symbol, "entry_time"].iloc[0]
+                    return existing_positions_df.loc[
+                        existing_positions_df["symbol"] == symbol,
+                        "entry_time",
+                    ].iloc[0]
                 except Exception:
-                    return current
-            return current
+                    return current_entry_time
+            return current_entry_time
 
         active_symbols = set()
         rows = []
@@ -211,7 +214,7 @@ def save_positions_csv(positions):
                 continue
             active_symbols.add(p.symbol)
             entry_time = getattr(p, "created_at", datetime.utcnow()).isoformat()
-            entry_time = get_entry_time(p.symbol, entry_time)
+            entry_time = get_original_entry_time(p.symbol, entry_time)
             rows.append(
                 {
                     "symbol": p.symbol,
@@ -254,8 +257,8 @@ def save_positions_csv(positions):
         df = df[columns]
 
         removed = []
-        if not existing.empty and "symbol" in existing.columns:
-            removed = sorted(set(existing["symbol"]) - active_symbols)
+        if not existing_positions_df.empty and "symbol" in existing_positions_df.columns:
+            removed = sorted(set(existing_positions_df["symbol"]) - active_symbols)
         if removed:
             msg = f"Removing inactive positions: {', '.join(removed)}"
             logger.info(msg)
@@ -506,6 +509,23 @@ def manage_trailing_stop(position):
         )
 
 
+def check_pending_orders():
+    """Log status of any open sell orders."""
+    try:
+        open_orders = trading_client.get_orders(status="open")
+        for order in open_orders:
+            try:
+                status = trading_client.get_order_by_id(order.id).status
+                if status in ["submitted", "pending"]:
+                    logger.info(
+                        f"Pending order {order.id} for {order.symbol} status: {status}."
+                    )
+            except Exception as exc:
+                logger.error("Failed to fetch status for %s: %s", order.id, exc)
+    except Exception as exc:
+        logger.error("Failed to list open orders: %s", exc)
+
+
 # Execute sell orders
 
 
@@ -519,14 +539,18 @@ def submit_sell_market_order(position, reason: str):
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
     try:
         try:
-            pos = trading_client.get_open_position(symbol)
-            available_qty = int(getattr(pos, "qty_available", pos.qty))
+            positions = trading_client.get_all_positions()
+            existing_symbols = {p.symbol: int(getattr(p, "qty_available", p.qty)) for p in positions}
+            available_qty = existing_symbols.get(symbol, 0)
         except Exception:
             available_qty = int(qty)
-        if available_qty <= 0:
-            logger.info("No available quantity to sell for %s. Skipping sell order.", symbol)
-            return
+
         order_qty = min(int(qty), available_qty)
+        if available_qty < order_qty or order_qty <= 0:
+            logger.info(
+                f"Skipped selling {symbol}: insufficient available quantity ({available_qty})."
+            )
+            return
         session = "extended" if is_extended_hours(now_et) else "regular"
         logger.info(
             "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
@@ -642,6 +666,8 @@ def monitor_positions():
                 process_positions_cycle()
             else:
                 update_open_positions()
+
+            check_pending_orders()
 
             logger.info("Updated open_positions.csv successfully.")
         except Exception as e:
