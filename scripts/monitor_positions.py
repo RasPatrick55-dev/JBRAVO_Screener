@@ -3,13 +3,13 @@
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time as dt_time
 import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest
+from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest, LimitOrderRequest
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -130,6 +130,11 @@ MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "7"))
 required_bars = 200
 
 
+def is_extended_hours(now_et: dt_time) -> bool:
+    """Return True if ``now_et`` falls within pre/post market."""
+    return dt_time(4, 0) <= now_et < dt_time(9, 30) or now_et >= dt_time(16, 0)
+
+
 def calculate_days_held(position) -> int:
     """Return the number of days the position has been held."""
     entry_ts = getattr(position, "created_at", None)
@@ -231,6 +236,12 @@ def save_positions_csv(positions):
         logger.info("Updated open_positions.csv successfully.")
     except Exception as e:
         logger.error("Failed to save positions CSV: %s", e)
+
+
+def update_open_positions():
+    """Fetch positions and persist to CSV."""
+    positions = get_open_positions()
+    save_positions_csv(positions)
 
 
 def fetch_indicators(symbol):
@@ -462,29 +473,34 @@ def manage_trailing_stop(position):
 
 
 def submit_sell_market_order(position, reason: str):
-    """Submit a market sell order and log the attempt."""
+    """Submit a limit sell order compatible with extended hours."""
     symbol = position.symbol
     qty = position.qty
     entry_price = float(position.avg_entry_price)
+    exit_price = float(getattr(position, "current_price", entry_price))
     entry_time = getattr(position, "created_at", datetime.utcnow()).isoformat()
+    now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
     try:
-        trading_client.submit_order(
+        order_request = LimitOrderRequest(
             symbol=symbol,
             qty=qty,
             side="sell",
-            type="market",
+            type="limit",
+            limit_price=exit_price,
             time_in_force="day",
+            extended_hours=is_extended_hours(now_et),
         )
-        logger.info("[EXIT] Market sell %s qty %s due to %s", symbol, qty, reason)
+        trading_client.submit_order(order_request)
+        logger.info("[EXIT] Limit sell %s qty %s at %.2f due to %s", symbol, qty, exit_price, reason)
         log_trade_exit(
             symbol,
             float(qty),
             entry_price,
-            "",
+            str(exit_price),
             entry_time,
             "",
             "submitted",
-            "market",
+            "limit",
             reason,
         )
     except Exception as e:
@@ -561,54 +577,32 @@ def process_positions_cycle():
 
 def monitor_positions():
     logger.info("Starting real-time position monitoring...")
-    try:
-        save_positions_csv(get_open_positions())
-    except Exception as e:
-        logger.error("Initial position fetch failed: %s", e)
-
-    in_market = False
-    off_hours_written = False
-    try:
-        while True:
+    while True:
+        try:
             now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ)
             market_hours = TRADING_START_HOUR <= now_et.hour < TRADING_END_HOUR
 
             log_if_stale(open_pos_path, "open_positions.csv")
 
-            if market_hours and not in_market:
-                logger.info("Entering market hours")
-                in_market = True
-                off_hours_written = False
-            elif not market_hours and in_market:
-                logger.info("Exiting market hours")
-                in_market = False
-
             if market_hours:
-                try:
-                    process_positions_cycle()
-                except Exception as e:
-                    logger.error("Error during monitoring cycle: %s", e)
-                sleep_time = SLEEP_INTERVAL
+                process_positions_cycle()
             else:
-                if not off_hours_written:
-                    current_positions = get_open_positions()
-                    save_positions_csv(current_positions)
-                    if current_positions:
-                        logger.info("Persisted open positions to CSV.")
-                    else:
-                        logger.info("No open positions found; CSV cleared.")
-                    off_hours_written = True
-                sleep_time = OFF_HOUR_SLEEP_INTERVAL
+                update_open_positions()
 
-            time.sleep(sleep_time)
-    except KeyboardInterrupt:
-        logger.info("Monitoring stopped by user.")
+            logger.info("Updated open_positions.csv successfully.")
+        except Exception as e:
+            logger.exception("Monitoring loop error")
+
+        sleep_time = SLEEP_INTERVAL if market_hours else OFF_HOUR_SLEEP_INTERVAL
+        time.sleep(sleep_time)
 
 
 if __name__ == "__main__":
     logger.info("Starting monitor_positions.py")
     print("Starting monitor_positions.py")
-    try:
-        monitor_positions()
-    except Exception as e:
-        logger.error(f"Script error: {e}")
+    while True:
+        try:
+            monitor_positions()
+        except Exception as e:
+            logger.exception("Monitoring loop error")
+        time.sleep(300)

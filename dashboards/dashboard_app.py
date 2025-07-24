@@ -33,7 +33,7 @@ execute_metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
 pipeline_log_path = os.path.join(screener_log_dir, "pipeline.log")
-monitor_log_path = os.path.join(screener_log_dir, "monitor.log")
+monitor_log_path = os.path.expanduser("~/jbravo_screener/logs/monitor.log")
 # Additional logs
 screener_log_path = os.path.join(screener_log_dir, "screener.log")
 backtest_log_path = os.path.join(screener_log_dir, "backtest.log")
@@ -282,6 +282,21 @@ def file_timestamp(path):
         return "N/A"
     ts = datetime.utcfromtimestamp(os.path.getmtime(path))
     return ts.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+
+
+def get_file_mtime(path: str) -> float:
+    """Return the modification time of ``path`` or 0."""
+    try:
+        return os.path.getmtime(path)
+    except Exception:
+        return 0.0
+
+
+def format_time(ts: float) -> str:
+    """Format a POSIX timestamp for display."""
+    if not ts:
+        return "N/A"
+    return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def pipeline_status_component():
@@ -612,7 +627,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         ) > os.path.getmtime(trades_log_path):
             latest_file = executed_trades_path
         timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(latest_file)}",
+            f"Last Updated: {format_time(get_file_mtime(latest_file))}",
             className="text-muted mb-2",
         )
 
@@ -744,7 +759,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         freshness = data_freshness_alert(top_candidates_path, "Top candidates")
 
         timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(top_candidates_path)}",
+            f"Last Updated: {format_time(get_file_mtime(top_candidates_path))}",
             className="text-muted mb-2",
         )
 
@@ -838,7 +853,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(executed_trades_path)}",
+            f"Last Updated: {format_time(get_file_mtime(executed_trades_path))}",
             className="text-muted mb-2",
         )
 
@@ -886,7 +901,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             ],
         )
         timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(trades_log_path)}",
+            f"Last Updated: {format_time(get_file_mtime(trades_log_path))}",
             className="text-muted mb-2",
         )
         components = [timestamp]
@@ -927,10 +942,16 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             [monitor_log_path, pipeline_log_path], threshold_minutes=30
         )
 
+        timestamp = html.Div(
+            f"Last Updated: {format_time(get_file_mtime(open_positions_path))}",
+            className="text-muted mb-2",
+        )
+
         return html.Div(
             [
                 freshness_alert if freshness_alert else html.Div(),
                 stale_warning_banner if stale_warning_banner else html.Div(),
+                timestamp,
                 positions_chart,
                 positions_table,
                 html.Hr(),
