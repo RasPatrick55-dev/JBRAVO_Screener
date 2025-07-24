@@ -261,6 +261,7 @@ def update_order_history():
 
             records.append(
                 {
+                    "order_id": str(order.id),
                     "symbol": symbol,
                     "qty": qty,
                     "avg_entry_price": entry_price,
@@ -279,6 +280,7 @@ def update_order_history():
             )
 
         cols = [
+            "order_id",
             "symbol",
             "qty",
             "avg_entry_price",
@@ -394,10 +396,42 @@ def validate_open_positions():
         logger.exception("Failed to validate open positions: %s", e)
 
 
+def update_order_status_in_csv(order_id: str, status: str) -> None:
+    """Update the order status for ``order_id`` in executed_trades.csv."""
+    if not os.path.exists(EXECUTED_TRADES_CSV):
+        return
+    try:
+        df = pd.read_csv(EXECUTED_TRADES_CSV)
+        if "order_id" not in df.columns:
+            return
+        mask = df["order_id"] == str(order_id)
+        if mask.any():
+            df.loc[mask, "order_status"] = status
+            write_csv_atomic(EXECUTED_TRADES_CSV, df)
+    except Exception as exc:
+        logger.error("Failed updating CSV for order %s: %s", order_id, exc)
+
+
+def update_pending_orders():
+    """Poll open orders and refresh their status in CSV."""
+    try:
+        open_orders = trading_client.get_orders(status="open")
+        for order in open_orders:
+            current = trading_client.get_order_by_id(order.id).status
+            logger.info(
+                "Order %s for %s currently %s", order.id, order.symbol, current
+            )
+            if current in ["filled", "canceled", "expired", "rejected"]:
+                update_order_status_in_csv(order.id, current)
+    except Exception as exc:
+        logger.error("Failed updating open order statuses: %s", exc)
+
+
 if __name__ == "__main__":
     init_db()
     update_open_positions()
     update_order_history()
+    update_pending_orders()
     update_metrics_summary()
     validate_open_positions()
     for pth, name in [

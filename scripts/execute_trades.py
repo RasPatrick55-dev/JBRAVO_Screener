@@ -129,6 +129,7 @@ exec_trades_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
 if not os.path.exists(exec_trades_path):
     pd.DataFrame(
         columns=[
+            "order_id",
             "symbol",
             "qty",
             "entry_price",
@@ -325,12 +326,19 @@ def update_trades_log():
         logger.error("Failed to update trades log: %s", e)
 
 def record_executed_trade(
-    symbol, qty, entry_price, order_type, side, order_status="submitted"
+    symbol,
+    qty,
+    entry_price,
+    order_type,
+    side,
+    order_id="",
+    order_status="submitted",
 ):
     """Append executed trade details to CSV using the unified schema."""
 
     csv_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
     row = {
+        "order_id": order_id,
         "symbol": symbol,
         "qty": qty,
         "entry_price": entry_price,
@@ -427,9 +435,17 @@ def submit_trades():
             return
     submitted = 0
     skipped = 0
+    existing_positions = trading_client.get_all_positions()
+    existing_symbols = [p.symbol for p in existing_positions]
+
     for _, row in df.iterrows():
         sym = row.symbol
         metrics["symbols_processed"] += 1
+        if sym in existing_symbols:
+            logger.info("Skipped %s: position already exists.", sym)
+            skipped += 1
+            metrics["symbols_skipped"] += 1
+            continue
         alloc, reason = allocate_position(sym)
         if alloc is None:
             skipped += 1
@@ -485,6 +501,7 @@ def submit_trades():
                 price,
                 order_type="limit",
                 side="buy",
+                order_id=str(order.id),
                 order_status=status,
             )
             if status == "filled":
@@ -517,6 +534,7 @@ def submit_trades():
                         retry_price,
                         order_type="limit",
                         side="buy",
+                        order_id=str(order.id),
                         order_status=status,
                     )
                     if status == "filled":
@@ -567,13 +585,14 @@ def attach_trailing_stops():
                 trail_percent=TRAIL_PERCENT,
                 time_in_force=TimeInForce.GTC
             )
-            trading_client.submit_order(request)
+            order = trading_client.submit_order(request)
             record_executed_trade(
                 symbol,
                 int(pos.qty),
                 pos.avg_entry_price,
                 order_type="trailing_stop",
                 side="sell",
+                order_id=str(order.id),
             )
         except Exception as e:
             logger.error("Failed to create trailing stop for %s: %s", symbol, e)
@@ -634,6 +653,7 @@ def daily_exit_check():
                     pos.current_price,
                     order_type="market",
                     side="sell",
+                    order_id=str(order.id),
                     order_status=status,
                 )
                 if status == "filled":
@@ -665,6 +685,7 @@ def daily_exit_check():
                             pos.current_price,
                             order_type="market",
                             side="sell",
+                            order_id=str(order.id),
                             order_status=status,
                         )
                         if status == "filled":

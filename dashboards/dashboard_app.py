@@ -543,13 +543,26 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             title="Drawdown Over Time",
         )
 
-        metrics_df, _ = load_csv(metrics_summary_path)
-        if not metrics_df.empty:
-            total_trades = int(metrics_df["Total Trades"][0])
-            total_pnl = metrics_df["Total Net PnL"][0]
+        metrics_df, _ = load_csv(
+            metrics_summary_path,
+            required_columns=[
+                "Total Trades",
+                "Total Net PnL",
+                "Win Rate (%)",
+                "Average Return per Trade",
+            ],
+        )
+
+        if metrics_df is not None and not metrics_df.empty:
+            total_trades = int(metrics_df["Total Trades"].iloc[-1])
+            total_pnl = metrics_df["Total Net PnL"].iloc[-1]
+            win_rate_val = metrics_df["Win Rate (%)"].iloc[-1]
+            expectancy = metrics_df["Average Return per Trade"].iloc[-1]
         else:
             total_trades = len(trades_df)
             total_pnl = trades_df["pnl"].sum()
+            win_rate_val = (trades_df["pnl"] > 0).mean() * 100
+            expectancy = trades_df["pnl"].mean()
 
         kpis = dbc.Row(
             [
@@ -575,9 +588,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     dbc.Card(
                         [
                             dbc.CardHeader("Win Rate"),
-                            dbc.CardBody(
-                                html.H4(f"{(trades_df['pnl'] > 0).mean()*100:.2f}%")
-                            ),
+                            dbc.CardBody(html.H4(f"{win_rate_val:.2f}%")),
                         ]
                     ),
                     width=2,
@@ -586,7 +597,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     dbc.Card(
                         [
                             dbc.CardHeader("Expectancy"),
-                            dbc.CardBody(html.H4(f"${trades_df['pnl'].mean():.2f}")),
+                            dbc.CardBody(html.H4(f"${expectancy:.2f}")),
                         ]
                     ),
                     width=2,
@@ -766,8 +777,22 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         status = pipeline_status_component()
         freshness = data_freshness_alert(top_candidates_path, "Top candidates")
 
+        mtime = get_file_mtime(top_candidates_path)
+        minutes_since_update = (
+            (datetime.utcnow() - datetime.fromtimestamp(mtime, timezone.utc)).total_seconds() / 60
+            if mtime
+            else 0
+        )
+        if minutes_since_update > 1440:
+            stale_msg = html.Div(
+                "Screener updates nightly; data may appear outdated.",
+                style={"color": "orange"},
+            )
+        else:
+            stale_msg = html.Div()
+
         timestamp = html.Div(
-            f"Last Updated: {format_time(get_file_mtime(top_candidates_path))}",
+            f"Last Updated: {format_time(mtime)}",
             className="text-muted mb-2",
         )
 
@@ -776,6 +801,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         components.extend([table, scored_table, status])
         if freshness:
             components.append(freshness)
+        components.append(stale_msg)
         components.extend([pipeline_log, screener_log, backtest_log, metrics_log])
 
         return dbc.Container(components, fluid=True)
@@ -841,6 +867,16 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             else None
         )
 
+        trades_skipped = metrics_data.get("symbols_skipped", 0)
+        skipped_warning = (
+            html.Div(
+                f"{trades_skipped} trades skipped due to max open positions limit ({MAX_OPEN_TRADES}).",
+                style={"color": "red"},
+            )
+            if trades_skipped > 0 and len(positions_df) >= MAX_OPEN_TRADES
+            else None
+        )
+
         metrics_view = html.Div([
             html.H5("Execute Trades Metrics"),
             html.Ul([
@@ -878,6 +914,8 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         components = [timestamp, download, table, html.Hr()]
         if trade_limit_alert:
             components.append(trade_limit_alert)
+        if skipped_warning:
+            components.append(skipped_warning)
         if api_error_alert:
             components.append(api_error_alert)
         components.append(metrics_view)

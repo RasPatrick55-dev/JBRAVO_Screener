@@ -189,6 +189,14 @@ def save_positions_csv(positions):
     try:
         existing = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
 
+        def get_entry_time(symbol: str, current: str) -> str:
+            if not existing.empty and symbol in existing.get("symbol", [] ).values:
+                try:
+                    return existing.loc[existing["symbol"] == symbol, "entry_time"].iloc[0]
+                except Exception:
+                    return current
+            return current
+
         active_symbols = set()
         rows = []
         for p in positions:
@@ -202,6 +210,8 @@ def save_positions_csv(positions):
                 )
                 continue
             active_symbols.add(p.symbol)
+            entry_time = getattr(p, "created_at", datetime.utcnow()).isoformat()
+            entry_time = get_entry_time(p.symbol, entry_time)
             rows.append(
                 {
                     "symbol": p.symbol,
@@ -210,7 +220,7 @@ def save_positions_csv(positions):
                     "current_price": p.current_price,
                     "unrealized_pl": p.unrealized_pl,
                     "entry_price": p.avg_entry_price,
-                    "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
+                    "entry_time": entry_time,
                     "side": getattr(p, "side", "long"),
                     "order_status": "open",
                     "net_pnl": p.unrealized_pl,
