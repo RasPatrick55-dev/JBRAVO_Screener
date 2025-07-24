@@ -96,7 +96,7 @@ def fetch_positions_api():
         return pd.DataFrame()
 
 
-def load_csv(filepath, required_columns=None):
+def load_csv(filepath, required_columns=None, alert_prefix: str | None = None):
     """Load a CSV file from ``filepath`` and validate required columns.
 
     Returns a tuple of (DataFrame, alert_component). If the file is missing or
@@ -104,8 +104,9 @@ def load_csv(filepath, required_columns=None):
     returned so the UI can gracefully inform the user.
     """
     filename = os.path.basename(filepath)
+    prefix = f"{alert_prefix}: " if alert_prefix else ""
     if not os.path.exists(filepath):
-        alert = dbc.Alert(f"{filename} not found.", color="warning", className="m-2")
+        alert = dbc.Alert(f"{prefix}{filename} not found.", color="warning", className="m-2")
         return pd.DataFrame(), alert
 
     try:
@@ -115,26 +116,30 @@ def load_csv(filepath, required_columns=None):
     except pd.errors.EmptyDataError:
         app.logger.warning("No data in %s", filepath)
         alert = dbc.Alert(
-            f"No data available in {filename}.", color="warning", className="m-2"
+            f"{prefix}No data available in {filename}.",
+            color="warning",
+            className="m-2",
         )
         return pd.DataFrame(), alert
     except Exception as e:
         alert = dbc.Alert(
-            f"Error reading {filename}: {e}", color="danger", className="m-2"
+            f"{prefix}Error reading {filename}: {e}", color="danger", className="m-2"
         )
         return pd.DataFrame(), alert
 
     if required_columns:
         missing = [c for c in required_columns if c not in df.columns]
         if missing:
-            msg = f"{filename} missing columns: {', '.join(missing)}"
+            msg = f"{prefix}{filename} missing columns: {', '.join(missing)}"
             app.logger.error(msg)
             alert = dbc.Alert(msg, color="danger", className="m-2")
             return pd.DataFrame(), alert
 
     if df.empty:
         alert = dbc.Alert(
-            f"No data available in {filename}.", color="warning", className="m-2"
+            f"{prefix}No data available in {filename}.",
+            color="warning",
+            className="m-2",
         )
         return df, alert
 
@@ -169,6 +174,87 @@ def format_log_lines(lines):
         else:
             formatted.append(html.Span(line))
     return formatted
+
+
+def add_days_in_trade(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a ``days_in_trade`` column based on ``entry_time``."""
+    entry_times = pd.to_datetime(df["entry_time"], utc=True, errors="coerce")
+    df["days_in_trade"] = (pd.Timestamp.utcnow() - entry_times).dt.days
+    df["entry_time"] = entry_times.dt.strftime("%Y-%m-%d %H:%M") + " UTC"
+    return df
+
+
+def create_open_positions_chart(df: pd.DataFrame) -> dcc.Graph:
+    """Return a bar chart showing open position P/L."""
+    pnl_col = "unrealized_pl" if "unrealized_pl" in df.columns else "pnl"
+    fig = px.bar(
+        df,
+        x="symbol",
+        y=pnl_col,
+        color=df[pnl_col] > 0,
+        color_discrete_map={True: "#4DB6AC", False: "#E57373"},
+        template="plotly_dark",
+        title="Open Positions P/L",
+    )
+    return dcc.Graph(figure=fig)
+
+
+def create_open_positions_table(df: pd.DataFrame) -> dash_table.DataTable:
+    """Return a styled Dash DataTable for open positions."""
+    pnl_col = "unrealized_pl" if "unrealized_pl" in df.columns else "pnl"
+    columns = [{"name": c.replace("_", " ").title(), "id": c} for c in df.columns]
+    return dash_table.DataTable(
+        data=df.to_dict("records"),
+        columns=columns,
+        style_table={"overflowX": "auto"},
+        style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+        style_data_conditional=[
+            {
+                "if": {"filter_query": f"{{{pnl_col}}} < 0", "column_id": pnl_col},
+                "color": "#E57373",
+            },
+            {
+                "if": {"filter_query": f"{{{pnl_col}}} > 0", "column_id": pnl_col},
+                "color": "#4DB6AC",
+            },
+        ],
+    )
+
+
+def log_box(title: str, lines: list[str], element_id: str) -> html.Div:
+    """Return a styled log display box."""
+    return html.Div(
+        [
+            html.H5(title, className="text-light"),
+            html.Pre(
+                format_log_lines(lines),
+                id=element_id,
+                style={
+                    "maxHeight": "200px",
+                    "overflowY": "auto",
+                    "backgroundColor": "#272B30",
+                    "color": "#E0E0E0",
+                    "padding": "0.5rem",
+                },
+            ),
+        ],
+        className="mb-3",
+    )
+
+
+def stale_warning(paths: list[str], threshold_minutes: int = 30) -> html.Div | None:
+    """Return a warning banner if any of ``paths`` are older than the threshold."""
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        mtime = datetime.utcfromtimestamp(os.path.getmtime(path))
+        age = (datetime.utcnow() - mtime).total_seconds() / 60
+        if age > threshold_minutes:
+            return html.Div(
+                "Warning: Monitoring service is stale or scheduled tasks have errors!",
+                style={"color": "red"},
+            )
+    return None
 
 
 def get_version_string():
@@ -304,13 +390,14 @@ app.layout = dbc.Container(
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                     className="custom-tab",
                 ),
-                dbc.Tab(
-                    label="Open Positions",
-                    tab_id="tab-positions",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
-                ),
+                # Consolidated into Monitoring Positions tab
+                # dbc.Tab(
+                #     label="Open Positions",
+                #     tab_id="tab-positions",
+                #     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                #     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                #     className="custom-tab",
+                # ),
                 dbc.Tab(
                     label="Symbol Performance",
                     tab_id="tab-symbols",
@@ -319,7 +406,7 @@ app.layout = dbc.Container(
                     className="custom-tab",
                 ),
                 dbc.Tab(
-                    label="Monitor Log",
+                    label="Monitoring Positions",
                     tab_id="tab-monitor",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
@@ -761,149 +848,6 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         components.append(metrics_view)
         return dbc.Container(components, fluid=True)
 
-    elif tab == "tab-positions":
-        positions_df, alert = load_csv(
-            open_positions_path,
-            required_columns=["symbol", "entry_price", "entry_time"],
-        )
-        freshness = data_freshness_alert(open_positions_path, "Open positions")
-        exec_fresh = data_freshness_alert(executed_trades_path, "Executed trades")
-        if positions_df.empty:
-            fallback_df = fetch_positions_api()
-            if not fallback_df.empty:
-                positions_df = fallback_df
-                alert = dbc.Alert(
-                    "open_positions.csv empty; loaded positions from Alpaca API as fallback.",
-                    color="warning",
-                    className="m-2",
-                )
-                logger.info(
-                    "open_positions.csv empty; loaded positions from Alpaca API as fallback."
-                )
-            elif alert:
-                return alert
-        if alert and not positions_df.empty:
-            alert = None
-        pnl_col = (
-            "unrealized_pl"
-            if "unrealized_pl" in positions_df.columns
-            else "pnl" if "pnl" in positions_df.columns else None
-        )
-        if pnl_col is None:
-            return dbc.Alert(
-                "open_positions.csv missing unrealized P/L data.",
-                color="warning",
-                className="m-2",
-            )
-        entry_times = pd.to_datetime(positions_df["entry_time"], utc=True)
-        positions_df["days_in_trade"] = (pd.Timestamp.utcnow() - entry_times).dt.days
-        positions_df["entry_time"] = entry_times.dt.strftime("%Y-%m-%d %H:%M") + " UTC"
-        columns = [
-            {"name": c.replace("_", " ").title(), "id": c} for c in positions_df.columns
-        ]
-        positions_fig = px.bar(
-            positions_df,
-            x="symbol",
-            y=pnl_col,
-            color=positions_df[pnl_col] > 0,
-            color_discrete_map={True: "#4DB6AC", False: "#E57373"},
-            template="plotly_dark",
-            title="Open Positions P/L",
-        )
-        table = dash_table.DataTable(
-            data=positions_df.to_dict("records"),
-            columns=columns,
-            style_table={"overflowX": "auto"},
-            style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-            style_data_conditional=[
-                {
-                    "if": {"filter_query": f"{{{pnl_col}}} < 0", "column_id": pnl_col},
-                    "color": "#E57373",
-                },
-                {
-                    "if": {"filter_query": f"{{{pnl_col}}} > 0", "column_id": pnl_col},
-                    "color": "#4DB6AC",
-                },
-            ],
-        )
-        exec_df, exec_alert = load_csv(
-            executed_trades_path,
-            required_columns=["symbol", "order_status", "entry_time"],
-        )
-        if exec_alert:
-            exec_table = exec_alert
-        else:
-            exec_df["entry_time"] = (
-                pd.to_datetime(exec_df["entry_time"]).dt.strftime("%Y-%m-%d %H:%M")
-                + " UTC"
-            )
-            e_cols = [
-                {"name": c.replace("_", " ").title(), "id": c}
-                for c in ["symbol", "side", "order_status", "entry_time"]
-                if c in exec_df.columns
-            ]
-            exec_table = dash_table.DataTable(
-                data=exec_df[["symbol", "side", "order_status", "entry_time"]].to_dict(
-                    "records"
-                ),
-                columns=e_cols,
-                page_size=10,
-                style_table={"overflowX": "auto"},
-                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-            )
-        latest_file = open_positions_path
-        if os.path.exists(executed_trades_path) and os.path.getmtime(
-            executed_trades_path
-        ) > os.path.getmtime(open_positions_path):
-            latest_file = executed_trades_path
-        timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(latest_file)}",
-            className="text-muted mb-2",
-        )
-        limit_info = html.Div(
-            f"Max Open Trades Limit: {MAX_OPEN_TRADES}",
-            style={"font-weight": "bold"},
-        )
-        limit_alert = (
-            dbc.Alert(
-                "Warning: Maximum open trades limit reached, new trades skipped!",
-                color="danger",
-                className="m-2",
-            )
-            if len(positions_df) >= MAX_OPEN_TRADES
-            else None
-        )
-        data_stale = is_log_stale(monitor_log_path) or is_log_stale(pipeline_log_path)
-        stale_warning = (
-            html.Div(
-                "Warning: Monitoring service is stale or scheduled tasks have errors!",
-                style={"color": "red"},
-            )
-            if data_stale
-            else None
-        )
-
-        components = [timestamp, limit_info]
-        if stale_warning:
-            components.append(stale_warning)
-        if limit_alert:
-            components.append(limit_alert)
-        if freshness:
-            components.append(freshness)
-        if alert:
-            components.append(alert)
-        components.extend(
-            [
-                dcc.Graph(figure=positions_fig),
-                table,
-                html.Hr(),
-                html.H5("Recent Order Status", className="text-light"),
-                exec_table,
-            ]
-        )
-        if exec_fresh:
-            components.append(exec_fresh)
-        return dbc.Container(components, fluid=True)
 
     elif tab == "tab-symbols":
         trades_df, alert = load_csv(trades_log_path, required_columns=["symbol", "pnl"])
@@ -952,101 +896,45 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-monitor":
-        closed_df, alert = load_csv(
-            trades_log_path, required_columns=["symbol", "exit_time", "pnl"]
+        # Load open positions
+        positions_df, freshness_alert = load_csv(
+            open_positions_path,
+            required_columns=["symbol", "entry_time", "qty"],
+            alert_prefix="Open positions",
         )
-        freshness = data_freshness_alert(trades_log_path, "Trade log")
-        if alert:
-            closed_table = alert
+
+        if positions_df is not None:
+            positions_df = add_days_in_trade(positions_df)
+            positions_chart = create_open_positions_chart(positions_df)
+            positions_table = create_open_positions_table(positions_df)
         else:
-            closed_df["exit_time"] = (
-                pd.to_datetime(closed_df["exit_time"])
-                .dt.strftime("%Y-%m-%d %H:%M")
-                + " UTC"
-            )
-            closed_df.sort_values("exit_time", ascending=False, inplace=True)
-            recent_trades = closed_df.head(10)
-            columns = [
-                {"name": c.replace("_", " ").title(), "id": c}
-                for c in recent_trades.columns
-            ]
-            closed_table = dash_table.DataTable(
-                data=recent_trades.to_dict("records"),
-                columns=columns,
-                page_size=10,
-                filter_action="native",
-                sort_action="native",
-                style_table={"overflowX": "auto"},
-                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-            )
+            positions_chart = html.Div("No open positions available.")
+            positions_table = html.Div()
 
-        monitor_lines = read_recent_lines(monitor_log_path, num_lines=100)[::-1]
-        exec_lines = read_recent_lines(execute_trades_log_path, num_lines=50)[::-1]
-        error_lines = read_recent_lines(error_log_path, num_lines=50)[::-1]
-        trade_errors = [
-            l for l in exec_lines if "rejected" in l.lower() or "error" in l.lower()
-        ]
+        monitor_lines = read_recent_lines(monitor_log_path, num_lines=100)
+        exec_lines = read_recent_lines(execute_trades_log_path, num_lines=100)
+        error_lines = read_recent_lines(error_log_path, num_lines=100)
 
-        def log_box(title, lines):
-            return html.Div(
-                [
-                    html.H5(title, className="text-light"),
-                    html.Pre(
-                        format_log_lines(lines),
-                        style={
-                            "maxHeight": "200px",
-                            "overflowY": "auto",
-                            "backgroundColor": "#272B30",
-                            "color": "#E0E0E0",
-                            "padding": "0.5rem",
-                        },
-                    ),
-                ],
-                className="mb-3",
-            )
+        monitor_log_box = log_box("Monitor Log", monitor_lines, "monitor-log")
+        exec_log_box = log_box("Execution Log", exec_lines, "exec-log")
+        error_log_box = log_box("Errors", error_lines, "error-log")
 
-        heartbeat = html.Div(
-            [
-                html.Span(
-                    f"Last pipeline run: {file_timestamp(pipeline_log_path)}",
-                    className="me-3",
-                ),
-                html.Span(f"Last monitor update: {file_timestamp(monitor_log_path)}"),
-            ],
-            className="text-muted",
+        stale_warning_banner = stale_warning(
+            [monitor_log_path, pipeline_log_path], threshold_minutes=30
         )
 
-        timestamp = html.Div(
-            f"Data last refreshed: {file_timestamp(trades_log_path)}",
-            className="text-muted mb-2",
-        )
-
-        components = [timestamp]
-        if freshness:
-            components.append(freshness)
-        components.extend(
+        return html.Div(
             [
-                html.H5("Recently Closed Positions", className="text-light"),
-                closed_table,
+                freshness_alert if freshness_alert else html.Div(),
+                stale_warning_banner if stale_warning_banner else html.Div(),
+                positions_chart,
+                positions_table,
                 html.Hr(),
-                html.H6("Recent Trade Errors", className="text-light"),
-                html.Pre(
-                    "".join(trade_errors[-5:]) if trade_errors else "No trade errors.",
-                    style={
-                        "maxHeight": "120px",
-                        "overflowY": "auto",
-                        "backgroundColor": "#272B30",
-                        "color": "#E0E0E0",
-                        "padding": "0.5rem",
-                    },
-                ),
-                log_box("Monitor Log", monitor_lines),
-                log_box("Execution Log", exec_lines),
-                log_box("Errors", error_lines),
-                heartbeat,
+                monitor_log_box,
+                exec_log_box,
+                error_log_box,
             ]
         )
-        return dbc.Container(components, fluid=True)
 
 
 # Callback for modal interaction
