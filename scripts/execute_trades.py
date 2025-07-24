@@ -16,7 +16,7 @@ import pandas as pd
 import json
 from datetime import datetime, timedelta, timezone, time
 import pytz
-import time
+from time import sleep
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import LimitOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
@@ -92,6 +92,11 @@ metrics = {
     "api_failures": 0,
 }
 metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
+
+
+def is_extended_hours(now_et: time) -> bool:
+    """Return True if ``now_et`` falls in extended trading hours."""
+    return time(4, 0) <= now_et < time(9, 30) or now_et >= time(16, 0)
 
 # Candidate selection happens dynamically from ``top_candidates.csv``.
 
@@ -329,7 +334,7 @@ def poll_order_until_complete(order_id: str) -> str:
         if status in {"filled", "canceled", "expired"}:
             break
         logger.info("Polling order %s, status: %s", order_id, status)
-        time.sleep(10)
+        sleep(10)
     logger.info("Order %s completed with status %s", order_id, status)
     return status
 
@@ -426,6 +431,7 @@ def submit_trades():
         )
         try:
             latest_trade = trading_client.get_stock_latest_trade(sym)
+            now_et = datetime.now(pytz.timezone("US/Eastern")).time()
             order_request = LimitOrderRequest(
                 symbol=sym,
                 qty=qty,
@@ -433,7 +439,7 @@ def submit_trades():
                 type="limit",
                 limit_price=latest_trade.price,
                 time_in_force=TimeInForce.DAY,
-                extended_hours=True,
+                extended_hours=is_extended_hours(now_et),
             )
             order = trading_client.submit_order(order_request)
             status = poll_order_until_complete(order.id)
@@ -539,6 +545,8 @@ def daily_exit_check():
     positions = get_open_positions()
     request = GetOrdersRequest(status=QueryOrderStatus.CLOSED)
     orders = trading_client.get_orders(filter=request)
+    now_et = datetime.now(pytz.timezone("US/Eastern")).time()
+    extended = is_extended_hours(now_et)
 
     for symbol, pos in positions.items():
         entry_orders = [o for o in orders if o.symbol == symbol and o.side == 'buy']
@@ -570,7 +578,7 @@ def daily_exit_check():
                     type="limit",
                     limit_price=valid_exit_price,
                     time_in_force=TimeInForce.DAY,
-                    extended_hours=True,
+                    extended_hours=extended,
                 )
                 order = trading_client.submit_order(order_request)
                 status = poll_order_until_complete(order.id)
@@ -633,6 +641,7 @@ def daily_exit_check():
             logger.info("Early exit signal for %s", symbol)
             try:
                 valid_exit_price = float(pos.current_price)
+                now_et = datetime.now(pytz.timezone("US/Eastern")).time()
                 order_request = LimitOrderRequest(
                     symbol=symbol,
                     qty=pos.qty,
@@ -640,7 +649,7 @@ def daily_exit_check():
                     type="limit",
                     limit_price=valid_exit_price,
                     time_in_force=TimeInForce.DAY,
-                    extended_hours=True,
+                    extended_hours=is_extended_hours(now_et),
                 )
                 order = trading_client.submit_order(order_request)
                 status = poll_order_until_complete(order.id)
@@ -706,6 +715,13 @@ if __name__ == '__main__':
             logger.info("Execution metrics saved to %s", metrics_path)
         except Exception as exc:
             logger.error("Failed to save execution metrics: %s", exc)
+
+        logger.info(
+            "Metrics - processed: %d, submitted: %d, skipped: %d",
+            metrics["symbols_processed"],
+            metrics["orders_submitted"],
+            metrics["symbols_skipped"],
+        )
 
         # Run historical trades script after executing trades
         history_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fetch_trades_history.py')
