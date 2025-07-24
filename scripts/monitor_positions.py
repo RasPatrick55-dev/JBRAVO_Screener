@@ -5,6 +5,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone, time as dt_time
 import pandas as pd
+from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
@@ -59,6 +60,26 @@ def log_if_stale(file_path: str, name: str, threshold_minutes: int = 15):
         msg = f"{name} is stale ({minutes:.1f} minutes old)"
         logger.warning(msg)
         send_alert(msg)
+
+
+def round_price(value: float) -> float:
+    """Return ``value`` rounded to two decimal places."""
+    return float(Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def cancel_order_safe(order_id: str, symbol: str):
+    """Attempt to cancel ``order_id`` using available client methods."""
+    if hasattr(trading_client, "cancel_order"):
+        try:
+            trading_client.cancel_order(order_id)
+            return
+        except Exception as exc:  # pragma: no cover - API errors
+            logger.error("Failed to cancel order %s: %s", order_id, exc)
+    if hasattr(trading_client, "close_position"):
+        try:
+            trading_client.close_position(symbol)
+        except Exception as exc:  # pragma: no cover - API errors
+            logger.error("Failed to close position %s: %s", symbol, exc)
 
 
 open_pos_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
@@ -440,7 +461,7 @@ def manage_trailing_stop(position):
     if gain_pct > GAIN_THRESHOLD_ADJUST:
         new_trail = str(TRAIL_TIGHT_PERCENT)
         try:
-            trading_client.cancel_order(trailing_order.id)
+            cancel_order_safe(trailing_order.id, symbol)
             logger.info(
                 f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct={new_trail}"
             )
@@ -477,10 +498,18 @@ def submit_sell_market_order(position, reason: str):
     symbol = position.symbol
     qty = position.qty
     entry_price = float(position.avg_entry_price)
-    exit_price = float(getattr(position, "current_price", entry_price))
+    exit_price = round_price(float(getattr(position, "current_price", entry_price)))
     entry_time = getattr(position, "created_at", datetime.utcnow()).isoformat()
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
     try:
+        session = "extended" if is_extended_hours(now_et) else "regular"
+        logger.info(
+            "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
+            symbol,
+            qty,
+            exit_price,
+            session,
+        )
         order_request = LimitOrderRequest(
             symbol=symbol,
             qty=qty,
@@ -525,7 +554,7 @@ def process_positions_cycle():
             trailing_order = get_trailing_stop_order(symbol)
             if trailing_order:
                 try:
-                    trading_client.cancel_order(trailing_order.id)
+                    cancel_order_safe(trailing_order.id, symbol)
                     logger.info(
                         "Cancelled trailing stop for %s due to max hold exit",
                         symbol,
@@ -563,7 +592,7 @@ def process_positions_cycle():
             trailing_order = get_trailing_stop_order(symbol)
             if trailing_order:
                 try:
-                    trading_client.cancel_order(trailing_order.id)
+                    cancel_order_safe(trailing_order.id, symbol)
                 except Exception as e:
                     logger.error(
                         "Failed to cancel trailing stop for %s: %s", symbol, e
@@ -582,7 +611,7 @@ def monitor_positions():
             now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ)
             market_hours = TRADING_START_HOUR <= now_et.hour < TRADING_END_HOUR
 
-            log_if_stale(open_pos_path, "open_positions.csv")
+            log_if_stale(open_pos_path, "open_positions.csv", threshold_minutes=10)
 
             if market_hours:
                 process_positions_cycle()
