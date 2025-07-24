@@ -96,8 +96,8 @@ metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 
 
 def round_price(value: float) -> float:
-    """Return ``value`` rounded to two decimal places."""
-    return float(Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    """Return ``value`` rounded to the nearest cent."""
+    return round(value + 1e-6, 2)
 
 
 def get_latest_price(symbol: str) -> float | None:
@@ -369,7 +369,11 @@ def allocate_position(symbol):
         return None, reason
     if len(open_positions) >= MAX_OPEN_TRADES:
         reason = "max open trades reached"
-        logger.debug("Skipping %s: %s", symbol, reason)
+        logger.info(
+            "Skipped %s due to reaching max open trades (%s).",
+            symbol,
+            MAX_OPEN_TRADES,
+        )
         return None, reason
 
     buying_power = get_buying_power()

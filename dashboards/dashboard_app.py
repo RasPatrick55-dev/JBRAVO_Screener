@@ -4,7 +4,7 @@ import dash
 from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
-from datetime import datetime
+from datetime import datetime, timezone
 import subprocess
 import json
 from alpaca.trading.client import TradingClient
@@ -242,19 +242,27 @@ def log_box(title: str, lines: list[str], element_id: str) -> html.Div:
     )
 
 
-def stale_warning(paths: list[str], threshold_minutes: int = 30) -> html.Div | None:
-    """Return a warning banner if any of ``paths`` are older than the threshold."""
+def stale_warning(paths: list[str], threshold_minutes: int = 30) -> html.Div:
+    """Return a warning banner if the newest of ``paths`` is older than the threshold."""
+    latest_update = 0.0
     for path in paths:
-        if not os.path.exists(path):
-            continue
-        mtime = datetime.utcfromtimestamp(os.path.getmtime(path))
-        age = (datetime.utcnow() - mtime).total_seconds() / 60
-        if age > threshold_minutes:
-            return html.Div(
-                "Warning: Monitoring service is stale or scheduled tasks have errors!",
-                style={"color": "red"},
-            )
-    return None
+        latest_update = max(latest_update, get_file_mtime(path))
+
+    if not latest_update:
+        return html.Div(
+            "Warning: Monitoring service is stale!",
+            style={"color": "red"},
+        )
+
+    age_minutes = (
+        datetime.now(timezone.utc) - datetime.fromtimestamp(latest_update, timezone.utc)
+    ).total_seconds() / 60
+    if age_minutes > threshold_minutes:
+        return html.Div(
+            "Warning: Monitoring service is stale!",
+            style={"color": "red"},
+        )
+    return html.Div()
 
 
 def get_version_string():
@@ -823,6 +831,16 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             else None
         )
 
+        positions_df = pd.read_csv(open_positions_path) if os.path.exists(open_positions_path) else pd.DataFrame()
+        trade_limit_alert = (
+            html.Div(
+                f"Max open trades limit reached ({MAX_OPEN_TRADES}).",
+                style={"color": "orange"},
+            )
+            if len(positions_df) >= MAX_OPEN_TRADES
+            else None
+        )
+
         metrics_view = html.Div([
             html.H5("Execute Trades Metrics"),
             html.Ul([
@@ -858,6 +876,8 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         components = [timestamp, download, table, html.Hr()]
+        if trade_limit_alert:
+            components.append(trade_limit_alert)
         if api_error_alert:
             components.append(api_error_alert)
         components.append(metrics_view)
@@ -939,7 +959,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         error_log_box = log_box("Errors", error_lines, "error-log")
 
         stale_warning_banner = stale_warning(
-            [monitor_log_path, pipeline_log_path], threshold_minutes=30
+            [monitor_log_path, open_positions_path], threshold_minutes=10
         )
 
         timestamp = html.Div(

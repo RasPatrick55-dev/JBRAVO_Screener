@@ -63,13 +63,19 @@ def log_if_stale(file_path: str, name: str, threshold_minutes: int = 15):
 
 
 def round_price(value: float) -> float:
-    """Return ``value`` rounded to two decimal places."""
-    return float(Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    """Return ``value`` rounded to the nearest cent."""
+    return round(value + 1e-6, 2)
 
 
 def cancel_order_safe(order_id: str, symbol: str):
     """Attempt to cancel ``order_id`` using available client methods."""
-    if hasattr(trading_client, "cancel_order"):
+    if hasattr(trading_client, "cancel_order_by_id"):
+        try:
+            trading_client.cancel_order_by_id(order_id)
+            return
+        except Exception as exc:  # pragma: no cover - API errors
+            logger.error("Failed to cancel order %s: %s", order_id, exc)
+    elif hasattr(trading_client, "cancel_order"):
         try:
             trading_client.cancel_order(order_id)
             return
@@ -502,17 +508,26 @@ def submit_sell_market_order(position, reason: str):
     entry_time = getattr(position, "created_at", datetime.utcnow()).isoformat()
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
     try:
+        try:
+            pos = trading_client.get_open_position(symbol)
+            available_qty = int(getattr(pos, "qty_available", pos.qty))
+        except Exception:
+            available_qty = int(qty)
+        if available_qty <= 0:
+            logger.info("No available quantity to sell for %s. Skipping sell order.", symbol)
+            return
+        order_qty = min(int(qty), available_qty)
         session = "extended" if is_extended_hours(now_et) else "regular"
         logger.info(
             "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
             symbol,
-            qty,
+            order_qty,
             exit_price,
             session,
         )
         order_request = LimitOrderRequest(
             symbol=symbol,
-            qty=qty,
+            qty=order_qty,
             side="sell",
             type="limit",
             limit_price=exit_price,
@@ -520,10 +535,10 @@ def submit_sell_market_order(position, reason: str):
             extended_hours=is_extended_hours(now_et),
         )
         trading_client.submit_order(order_request)
-        logger.info("[EXIT] Limit sell %s qty %s at %.2f due to %s", symbol, qty, exit_price, reason)
+        logger.info("[EXIT] Limit sell %s qty %s at %.2f due to %s", symbol, order_qty, exit_price, reason)
         log_trade_exit(
             symbol,
-            float(qty),
+            float(order_qty),
             entry_price,
             str(exit_price),
             entry_time,
