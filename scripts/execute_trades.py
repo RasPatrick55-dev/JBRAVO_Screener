@@ -475,6 +475,7 @@ def submit_trades():
                 metrics["symbols_skipped"] += 1
                 continue
             price = round_price(price)
+            price = round(price + 1e-6, 2)
             now_et = datetime.now(pytz.timezone("US/Eastern")).time()
             session = "extended" if is_extended_hours(now_et) else "regular"
             logger.info(
@@ -515,6 +516,7 @@ def submit_trades():
                 logger.warning("Retrying %s without extended_hours flag.", sym)
                 try:
                     retry_price = round_price(entry_price)
+                    retry_price = round(retry_price + 1e-6, 2)
                     retry_order = LimitOrderRequest(
                         symbol=sym,
                         qty=qty,
@@ -627,6 +629,7 @@ def daily_exit_check():
             logger.info("Exiting %s after %s days", symbol, days_held)
             try:
                 valid_exit_price = round_price(float(pos.current_price))
+                valid_exit_price = round(valid_exit_price + 1e-6, 2)
                 session = "extended" if extended else "regular"
                 logger.info(
                     "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
@@ -707,6 +710,7 @@ def daily_exit_check():
             logger.info("Early exit signal for %s", symbol)
             try:
                 valid_exit_price = round_price(float(pos.current_price))
+                valid_exit_price = round(valid_exit_price + 1e-6, 2)
                 now_et = datetime.now(pytz.timezone("US/Eastern")).time()
                 extended_now = is_extended_hours(now_et)
                 session = "extended" if extended_now else "regular"
