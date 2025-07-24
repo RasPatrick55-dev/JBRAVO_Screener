@@ -33,7 +33,7 @@ execute_metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
 pipeline_log_path = os.path.join(screener_log_dir, "pipeline.log")
-monitor_log_path = os.path.join(screener_log_dir, "monitor_positions.log")
+monitor_log_path = os.path.join(screener_log_dir, "monitor.log")
 # Additional logs
 screener_log_path = os.path.join(screener_log_dir, "screener.log")
 backtest_log_path = os.path.join(screener_log_dir, "backtest.log")

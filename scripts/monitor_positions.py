@@ -22,7 +22,6 @@ from tempfile import NamedTemporaryFile
 
 
 from dotenv import load_dotenv
-import logging
 import pytz
 import requests
 
@@ -45,20 +44,20 @@ def send_alert(message: str):
     try:
         requests.post(ALERT_WEBHOOK_URL, json={"text": message}, timeout=5)
     except Exception as exc:
-        logging.error("Failed to send alert: %s", exc)
+        logger.error("Failed to send alert: %s", exc)
 
 
 def log_if_stale(file_path: str, name: str, threshold_minutes: int = 15):
     """Log a warning if ``file_path`` is older than ``threshold_minutes``."""
     if not os.path.exists(file_path):
-        logging.warning("%s missing: %s", name, file_path)
+        logger.warning("%s missing: %s", name, file_path)
         send_alert(f"{name} missing: {file_path}")
         return
     age = datetime.utcnow() - datetime.utcfromtimestamp(os.path.getmtime(file_path))
     if age > timedelta(minutes=threshold_minutes):
         minutes = age.total_seconds() / 60
         msg = f"{name} is stale ({minutes:.1f} minutes old)"
-        logging.warning(msg)
+        logger.warning(msg)
         send_alert(msg)
 
 
@@ -107,7 +106,7 @@ API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
 
 if not API_KEY or not API_SECRET:
-    logging.error("Missing Alpaca API credentials.")
+    logger.error("Missing Alpaca API credentials.")
     raise SystemExit(1)
 
 # Initialize Alpaca clients
@@ -148,7 +147,7 @@ def get_open_positions():
     try:
         return trading_client.get_all_positions()
     except Exception as e:
-        logging.error("Failed to fetch open positions: %s", e)
+        logger.error("Failed to fetch open positions: %s", e)
         return []
 
 
@@ -166,7 +165,7 @@ def save_positions_csv(positions):
             except Exception:
                 qty = 0
             if qty <= 0:
-                logging.warning(
+                logger.warning(
                     "Skipping %s due to non-positive quantity: %s", p.symbol, qty
                 )
                 continue
@@ -217,7 +216,7 @@ def save_positions_csv(positions):
             removed = sorted(set(existing["symbol"]) - active_symbols)
         if removed:
             msg = f"Removing inactive positions: {', '.join(removed)}"
-            logging.info(msg)
+            logger.info(msg)
             send_alert(msg)
 
         if df.empty:
@@ -228,28 +227,29 @@ def save_positions_csv(positions):
         df.to_csv(tmp.name, index=False)
         tmp.close()
         shutil.move(tmp.name, csv_path)
-        logging.debug("Saved open positions to %s", csv_path)
-        logging.info("Updated open_positions.csv successfully.")
+        logger.debug("Saved open positions to %s", csv_path)
+        logger.info("Updated open_positions.csv successfully.")
     except Exception as e:
-        logging.error("Failed to save positions CSV: %s", e)
+        logger.error("Failed to save positions CSV: %s", e)
 
 
 def fetch_indicators(symbol):
     """Fetch recent daily bars and compute indicators."""
     try:
-        start = (datetime.now(timezone.utc) - timedelta(days=750)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Day, data_client).df
+        start_date = datetime.now(timezone.utc) - timedelta(days=750)
+        bars = fetch_bars_with_cutoff(symbol, start_date, TimeFrame.Day, data_client).df
+        logger.info(f"Successfully fetched bars for {symbol}")
     except Exception as e:
-        logging.error("Failed to fetch bars for %s: %s", symbol, e)
+        logger.exception(f"Failed to fetch bars for {symbol}: {e}")
         return None
 
-    logging.debug(
+    logger.debug(
         f"{symbol}: Screener-bar-count={len(bars)}, Monitor-threshold={required_bars}"
     )
 
     if bars.empty or len(bars) < required_bars:
-        logging.warning("Not enough bars for %s indicator calculation", symbol)
-        logging.info(
+        logger.warning("Not enough bars for %s indicator calculation", symbol)
+        logger.info(
             "Skipping indicator evaluation for %s due to insufficient bars.",
             symbol,
         )
@@ -291,10 +291,10 @@ def check_sell_signal(indicators) -> list:
 
     reasons = []
     if price < ema20:
-        logging.info("Price %.2f below EMA20 %.2f", price, ema20)
+        logger.info("Price %.2f below EMA20 %.2f", price, ema20)
         reasons.append("EMA20 cross")
     if rsi > 70:
-        logging.info("RSI %.2f above 70", rsi)
+        logger.info("RSI %.2f above 70", rsi)
         reasons.append("RSI > 70")
     return reasons
 
@@ -304,7 +304,7 @@ def get_open_orders(symbol):
     try:
         return trading_client.get_orders(filter=request)
     except Exception as e:
-        logging.error("Failed to fetch open orders for %s: %s", symbol, e)
+        logger.error("Failed to fetch open orders for %s: %s", symbol, e)
         return []
 
 
@@ -326,7 +326,7 @@ def last_filled_trailing_stop(symbol):
             if getattr(o, "order_type", "") == "trailing_stop" and o.status == "filled":
                 return o
     except Exception as e:
-        logging.error("Failed to fetch order history for %s: %s", symbol, e)
+        logger.error("Failed to fetch order history for %s: %s", symbol, e)
     return None
 
 
@@ -359,7 +359,7 @@ def log_trade_exit(
         try:
             pd.DataFrame([row]).to_csv(path, mode="a", header=False, index=False)
         except Exception as exc:
-            logging.error("Failed to log trade to %s: %s", path, exc)
+            logger.error("Failed to log trade to %s: %s", path, exc)
 
 
 def has_pending_sell_order(symbol):
@@ -372,35 +372,35 @@ def has_pending_sell_order(symbol):
 
 def manage_trailing_stop(position):
     symbol = position.symbol
-    logging.info(f"Evaluating trailing stop for {symbol}")
+    logger.info(f"Evaluating trailing stop for {symbol}")
     if symbol.upper() == "ARQQ":
         # Explicit log entry requested to verify ARQQ trailing stop evaluation
-        logging.info("[INFO] Evaluating trailing stop for ARQQ")
+        logger.info("[INFO] Evaluating trailing stop for ARQQ")
     qty = position.qty
-    logging.info(f"Evaluating trailing stop for {symbol} – qty: {qty}")
+    logger.info(f"Evaluating trailing stop for {symbol} – qty: {qty}")
     entry = float(position.avg_entry_price)
     current = float(position.current_price)
     gain_pct = (current - entry) / entry * 100 if entry else 0
     if not qty or float(qty) <= 0:
-        logging.info(
+        logger.info(
             f"Skipping trailing stop for {symbol} due to non-positive quantity: {qty}."
         )
         return
-    logging.debug(
+    logger.debug(
         f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}."
     )
-    logging.info(f"Checking existing orders for {symbol}.")
+    logger.info(f"Checking existing orders for {symbol}.")
     trailing_order = get_trailing_stop_order(symbol)
     if not trailing_order:
-        logging.info(f"No active trailing stop for {symbol}.")
+        logger.info(f"No active trailing stop for {symbol}.")
         last_filled = last_filled_trailing_stop(symbol)
         if last_filled:
-            logging.info(
+            logger.info(
                 "Previous trailing stop filled for %s at %s",
                 symbol,
                 getattr(last_filled, "filled_avg_price", "n/a"),
             )
-        logging.info(
+        logger.info(
             f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct={TRAIL_START_PERCENT}"
         )
         try:
@@ -412,25 +412,25 @@ def manage_trailing_stop(position):
                 trail_percent=str(TRAIL_START_PERCENT),
             )
             trading_client.submit_order(order_data=request)
-            logging.info(f"Placed new trailing stop for {symbol} at {TRAIL_START_PERCENT}%.")
+            logger.info(f"Placed new trailing stop for {symbol} at {TRAIL_START_PERCENT}%.")
         except Exception as e:
-            logging.error("Failed to create trailing stop for %s: %s", symbol, e)
+            logger.error("Failed to create trailing stop for %s: %s", symbol, e)
         return
     else:
-        logging.info(
+        logger.info(
             "Existing trailing stop for %s (order id %s, status %s, trail %% %s)",
             symbol,
             trailing_order.id,
             trailing_order.status,
             getattr(trailing_order, "trail_percent", "n/a"),
         )
-        logging.info(f"Skipping creation of new trailing stop for {symbol}.")
+        logger.info(f"Skipping creation of new trailing stop for {symbol}.")
 
     if gain_pct > GAIN_THRESHOLD_ADJUST:
         new_trail = str(TRAIL_TIGHT_PERCENT)
         try:
             trading_client.cancel_order(trailing_order.id)
-            logging.info(
+            logger.info(
                 f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct={new_trail}"
             )
             request = TrailingStopOrderRequest(
@@ -441,7 +441,7 @@ def manage_trailing_stop(position):
                 trail_percent=new_trail,
             )
             trading_client.submit_order(order_data=request)
-            logging.info(
+            logger.info(
                 "Adjusted trailing stop for %s from %s%% to %s%% (gain: %.2f%%).",
                 symbol,
                 TRAIL_START_PERCENT,
@@ -449,9 +449,9 @@ def manage_trailing_stop(position):
                 gain_pct,
             )
         except Exception as e:
-            logging.error("Failed to adjust trailing stop for %s: %s", symbol, e)
+            logger.error("Failed to adjust trailing stop for %s: %s", symbol, e)
     else:
-        logging.info(
+        logger.info(
             "No trailing stop adjustment needed for %s (gain: %.2f%%)",
             symbol,
             gain_pct,
@@ -475,7 +475,7 @@ def submit_sell_market_order(position, reason: str):
             type="market",
             time_in_force="day",
         )
-        logging.info("[EXIT] Market sell %s qty %s due to %s", symbol, qty, reason)
+        logger.info("[EXIT] Market sell %s qty %s due to %s", symbol, qty, reason)
         log_trade_exit(
             symbol,
             float(qty),
@@ -488,34 +488,34 @@ def submit_sell_market_order(position, reason: str):
             reason,
         )
     except Exception as e:
-        logging.error("Error submitting sell order for %s: %s", symbol, e)
+        logger.error("Error submitting sell order for %s: %s", symbol, e)
 
 
 def process_positions_cycle():
     positions = get_open_positions()
     save_positions_csv(positions)
     if not positions:
-        logging.info("No open positions found.")
+        logger.info("No open positions found.")
         return
     for position in positions:
         symbol = position.symbol
         days_held = calculate_days_held(position)
-        logging.info("%s held for %d days", symbol, days_held)
+        logger.info("%s held for %d days", symbol, days_held)
         if days_held >= MAX_HOLD_DAYS:
             if has_pending_sell_order(symbol):
-                logging.info("Sell order already pending for %s", symbol)
+                logger.info("Sell order already pending for %s", symbol)
                 continue
 
             trailing_order = get_trailing_stop_order(symbol)
             if trailing_order:
                 try:
                     trading_client.cancel_order(trailing_order.id)
-                    logging.info(
+                    logger.info(
                         "Cancelled trailing stop for %s due to max hold exit",
                         symbol,
                     )
                 except Exception as e:
-                    logging.error(
+                    logger.error(
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
 
@@ -524,13 +524,13 @@ def process_positions_cycle():
 
         indicators = fetch_indicators(symbol)
         if not indicators:
-            logging.info(
+            logger.info(
                 "Indicators unavailable for %s. Trailing-stop logic will be skipped.",
                 symbol,
             )
             continue
 
-        logging.info(
+        logger.info(
             "Evaluating sell conditions for %s - price: %.2f, EMA20: %.2f, RSI: %.2f",
             symbol,
             indicators["close"],
@@ -541,7 +541,7 @@ def process_positions_cycle():
         reasons = check_sell_signal(indicators)
         if reasons:
             if has_pending_sell_order(symbol):
-                logging.info("Sell order already pending for %s", symbol)
+                logger.info("Sell order already pending for %s", symbol)
                 continue
 
             trailing_order = get_trailing_stop_order(symbol)
@@ -549,22 +549,22 @@ def process_positions_cycle():
                 try:
                     trading_client.cancel_order(trailing_order.id)
                 except Exception as e:
-                    logging.error(
+                    logger.error(
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
             reason_text = "; ".join(reasons)
             submit_sell_market_order(position, reason=reason_text)
         else:
-            logging.info(f"No sell signal for {symbol}; managing trailing stop.")
+            logger.info(f"No sell signal for {symbol}; managing trailing stop.")
             manage_trailing_stop(position)
 
 
 def monitor_positions():
-    logging.info("Starting real-time position monitoring...")
+    logger.info("Starting real-time position monitoring...")
     try:
         save_positions_csv(get_open_positions())
     except Exception as e:
-        logging.error("Initial position fetch failed: %s", e)
+        logger.error("Initial position fetch failed: %s", e)
 
     in_market = False
     off_hours_written = False
@@ -576,39 +576,39 @@ def monitor_positions():
             log_if_stale(open_pos_path, "open_positions.csv")
 
             if market_hours and not in_market:
-                logging.info("Entering market hours")
+                logger.info("Entering market hours")
                 in_market = True
                 off_hours_written = False
             elif not market_hours and in_market:
-                logging.info("Exiting market hours")
+                logger.info("Exiting market hours")
                 in_market = False
 
             if market_hours:
                 try:
                     process_positions_cycle()
                 except Exception as e:
-                    logging.error("Error during monitoring cycle: %s", e)
+                    logger.error("Error during monitoring cycle: %s", e)
                 sleep_time = SLEEP_INTERVAL
             else:
                 if not off_hours_written:
                     current_positions = get_open_positions()
                     save_positions_csv(current_positions)
                     if current_positions:
-                        logging.info("Persisted open positions to CSV.")
+                        logger.info("Persisted open positions to CSV.")
                     else:
-                        logging.info("No open positions found; CSV cleared.")
+                        logger.info("No open positions found; CSV cleared.")
                     off_hours_written = True
                 sleep_time = OFF_HOUR_SLEEP_INTERVAL
 
             time.sleep(sleep_time)
     except KeyboardInterrupt:
-        logging.info("Monitoring stopped by user.")
+        logger.info("Monitoring stopped by user.")
 
 
 if __name__ == "__main__":
-    logging.info("Starting monitor_positions.py")
+    logger.info("Starting monitor_positions.py")
     print("Starting monitor_positions.py")
     try:
         monitor_positions()
     except Exception as e:
-        logging.error(f"Script error: {e}")
+        logger.error(f"Script error: {e}")

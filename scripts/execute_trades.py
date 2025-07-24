@@ -562,13 +562,13 @@ def daily_exit_check():
         if days_held >= MAX_HOLD_DAYS:
             logger.info("Exiting %s after %s days", symbol, days_held)
             try:
-                exit_price = float(pos.current_price)
+                valid_exit_price = float(pos.current_price)
                 order_request = LimitOrderRequest(
                     symbol=symbol,
                     qty=pos.qty,
                     side=OrderSide.SELL,
                     type="limit",
-                    limit_price=exit_price,
+                    limit_price=valid_exit_price,
                     time_in_force=TimeInForce.DAY,
                     extended_hours=True,
                 )
@@ -593,7 +593,7 @@ def daily_exit_check():
                     try:
                         retry_req = LimitOrderRequest(
                             type="limit",
-                            limit_price=exit_price,
+                            limit_price=valid_exit_price,
                             symbol=symbol,
                             qty=pos.qty,
                             side=OrderSide.SELL,
@@ -632,13 +632,13 @@ def daily_exit_check():
         elif should_exit_early(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache")):
             logger.info("Early exit signal for %s", symbol)
             try:
-                exit_price = float(pos.current_price)
+                valid_exit_price = float(pos.current_price)
                 order_request = LimitOrderRequest(
                     symbol=symbol,
                     qty=pos.qty,
                     side=OrderSide.SELL,
                     type="limit",
-                    limit_price=exit_price,
+                    limit_price=valid_exit_price,
                     time_in_force=TimeInForce.DAY,
                     extended_hours=True,
                 )
@@ -647,7 +647,7 @@ def daily_exit_check():
                 record_executed_trade(
                     symbol,
                     int(pos.qty),
-                    exit_price,
+                    valid_exit_price,
                     order_type="limit",
                     side="sell",
                     order_status=status,
@@ -662,7 +662,7 @@ def daily_exit_check():
                     try:
                         retry_req = LimitOrderRequest(
                             type="limit",
-                            limit_price=exit_price,
+                            limit_price=valid_exit_price,
                             symbol=symbol,
                             qty=pos.qty,
                             side=OrderSide.SELL,
@@ -676,7 +676,7 @@ def daily_exit_check():
                         record_executed_trade(
                             symbol,
                             int(pos.qty),
-                            exit_price,
+                            valid_exit_price,
                             order_type="limit",
                             side="sell",
                         )
