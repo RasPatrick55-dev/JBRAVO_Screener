@@ -903,7 +903,11 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             alert_prefix="Open positions",
         )
 
-        if positions_df is not None:
+        if positions_df is not None and not positions_df.empty:
+            positions_df["entry_time"] = pd.to_datetime(
+                positions_df["entry_time"], utc=True, errors="coerce"
+            )
+            positions_df.sort_values("entry_time", ascending=False, inplace=True)
             positions_df = add_days_in_trade(positions_df)
             positions_chart = create_open_positions_chart(positions_df)
             positions_table = create_open_positions_table(positions_df)
@@ -911,9 +915,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             positions_chart = html.Div("No open positions available.")
             positions_table = html.Div()
 
-        monitor_lines = read_recent_lines(monitor_log_path, num_lines=100)
-        exec_lines = read_recent_lines(execute_trades_log_path, num_lines=100)
-        error_lines = read_recent_lines(error_log_path, num_lines=100)
+        monitor_lines = read_recent_lines(monitor_log_path, num_lines=100)[::-1]
+        exec_lines = read_recent_lines(execute_trades_log_path, num_lines=100)[::-1]
+        error_lines = read_recent_lines(error_log_path, num_lines=100)[::-1]
 
         monitor_log_box = log_box("Monitor Log", monitor_lines, "monitor-log")
         exec_log_box = log_box("Execution Log", exec_lines, "exec-log")
