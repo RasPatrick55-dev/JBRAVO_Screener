@@ -15,7 +15,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from utils import fetch_bars_with_cutoff
+from scripts.utils import fetch_bars_with_cutoff
 from utils.logger_utils import init_logging
 import shutil
 from tempfile import NamedTemporaryFile
