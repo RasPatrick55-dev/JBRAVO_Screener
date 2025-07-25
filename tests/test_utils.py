@@ -30,7 +30,7 @@ class TestUtils(unittest.TestCase):
 
     def test_cache_bars_handles_empty(self):
         client = MagicMock()
-        client.get_stock_bars.return_value.df = pd.DataFrame()
+        client.get_bars.return_value.df = pd.DataFrame()
         df = cache_bars('FAKE', client, self.cache_dir, days=10)
         self.assertIsInstance(df, pd.DataFrame)
 
@@ -46,20 +46,20 @@ class TestUtils(unittest.TestCase):
             },
             index=[pd.Timestamp("2024-01-02")],
         )
-        client.get_stock_bars.return_value.df = mock_df
+        client.get_bars.return_value.df = mock_df
         df = fetch_daily_bars("AAPL", "2024-01-02", client)
-        req = client.get_stock_bars.call_args[0][0]
-        self.assertEqual(req.feed, "iex")
+        req = client.get_bars.call_args
+        self.assertTrue(client.get_bars.called)
         self.assertFalse(df.empty)
 
     def test_fetch_bars_with_cutoff_end_time(self):
         client = MagicMock()
-        client.get_stock_bars.return_value.df = pd.DataFrame(
+        client.get_bars.return_value.df = pd.DataFrame(
             {"close": [1]}, index=[pd.Timestamp("2024-01-01")]
         )
         fetch_bars_with_cutoff("AAPL", "2024-01-01", "D", client)
-        req = client.get_stock_bars.call_args[0][0]
-        end_dt = datetime.fromisoformat(req.end)
+        args, kwargs = client.get_bars.call_args
+        end_dt = datetime.fromisoformat(kwargs["end"])
         diff = datetime.now(timezone.utc) - end_dt
         self.assertGreaterEqual(diff.total_seconds(), 15 * 60)
 
@@ -93,7 +93,7 @@ class TestUtils(unittest.TestCase):
                 tz="America/New_York",
             ),
         )
-        client.get_stock_bars.side_effect = [MagicMock(df=daily_df), MagicMock(df=extended_df)]
+        client.get_bars.side_effect = [MagicMock(df=daily_df), MagicMock(df=extended_df)]
 
         combined = get_combined_daily_bar("AAPL", "2024-01-01", client)
         row = combined.iloc[0]

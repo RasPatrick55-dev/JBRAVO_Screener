@@ -1,19 +1,25 @@
 # metrics.py (enhanced with comprehensive metrics)
 import sys
 import os
+import logging
+from datetime import datetime
+
+import pandas as pd
+from utils import write_csv_atomic
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
-from utils.logger_utils import init_logging  # Fix import by adjusting the Python path correctly
-
-logger = init_logging(__name__, "metrics.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(os.path.join(BASE_DIR, "logs", "metrics.log")),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger(__name__)
 logger.info("Metrics script started.")
-
-import pandas as pd
-import logging
-from utils import write_csv_atomic
-from datetime import datetime
 
 start_time = datetime.utcnow()
 
@@ -42,6 +48,10 @@ def calculate_metrics(trades_df: pd.DataFrame) -> dict:
             trades_df = trades_df.rename(columns={"net_pnl": "pnl"})
         else:
             trades_df["pnl"] = 0.0
+    trades_df["pnl"] = pd.to_numeric(trades_df["pnl"], errors="coerce").fillna(0.0)
+    for col in ("entry_time", "exit_time"):
+        if col in trades_df.columns:
+            trades_df[col] = pd.to_datetime(trades_df[col], errors="coerce")
 
     total_trades = len(trades_df)
     net_pnl = trades_df["pnl"].sum()
@@ -167,7 +177,13 @@ def main():
     )
 
     trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
-    trades_df = pd.read_csv(trades_log_path) if os.path.exists(trades_log_path) else pd.DataFrame()
+    if os.path.exists(trades_log_path):
+        trades_df = pd.read_csv(
+            trades_log_path,
+            parse_dates=["entry_time", "exit_time"],
+        )
+    else:
+        trades_df = pd.DataFrame()
     metrics_summary = calculate_metrics(trades_df)
     save_metrics_summary(metrics_summary, ranked_df['symbol'].tolist())
     logger.info(

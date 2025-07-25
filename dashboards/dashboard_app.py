@@ -44,6 +44,7 @@ pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json
 
 # Threshold in minutes to consider a log stale
 STALE_THRESHOLD_MINUTES = 1440  # 24 hours
+ERROR_RETENTION_DAYS = 3
 
 # Displayed configuration values
 MAX_OPEN_TRADES = 10
@@ -146,10 +147,11 @@ def load_csv(filepath, required_columns=None, alert_prefix: str | None = None):
     return df, None
 
 
-def read_recent_lines(filepath, num_lines=50):
-    """Return the last ``num_lines`` lines of ``filepath``.
-    If the file is missing or unreadable, an informative message is returned
-    instead.
+def read_recent_lines(filepath, num_lines=50, since_days=None):
+    """Return recent lines from ``filepath``.
+
+    ``since_days`` filters out log entries older than the given number of days
+    based on the leading timestamp of each line.
     """
     filename = os.path.basename(filepath)
     if not os.path.exists(filepath):
@@ -157,7 +159,19 @@ def read_recent_lines(filepath, num_lines=50):
 
     try:
         with open(filepath, "r") as f:
-            lines = f.readlines()[-num_lines:]
+            lines = f.readlines()
+        if since_days is not None:
+            cutoff = datetime.utcnow() - timedelta(days=since_days)
+            filtered = []
+            for line in lines:
+                try:
+                    ts = datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+                    if ts >= cutoff:
+                        filtered.append(line)
+                except Exception:
+                    filtered.append(line)
+            lines = filtered
+        lines = lines[-num_lines:]
         return lines if lines else [f"No entries in {filename}.\n"]
     except Exception as e:
         return [f"Error reading {filename}: {e}\n"]
@@ -480,6 +494,7 @@ app.layout = dbc.Container(
     ],
 )
 def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
+    app.logger.info("Rendering tab %s", tab)
     if tab == "tab-overview":
         trades_df, alert = load_csv(
             trades_log_path, required_columns=["pnl", "entry_time"]
@@ -487,6 +502,8 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         freshness = data_freshness_alert(trades_log_path, "Trade log")
         if alert:
             return alert
+
+        app.logger.info("Loaded %d trades for overview", len(trades_df))
 
         trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"])
         trades_df["cumulative_pnl"] = trades_df["pnl"].cumsum()
@@ -935,16 +952,26 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
 
     elif tab == "tab-symbols":
-        trades_df, alert = load_csv(trades_log_path, required_columns=["symbol", "pnl"])
+        trades_df, alert = load_csv(
+            trades_log_path,
+            required_columns=["symbol", "pnl", "entry_time", "exit_time"],
+        )
         freshness = data_freshness_alert(trades_log_path, "Trade log")
         if alert:
             return alert
+        app.logger.info("Loaded %d trades for symbol performance", len(trades_df))
+        trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"], errors="coerce")
+        trades_df["exit_time"] = pd.to_datetime(trades_df["exit_time"], errors="coerce")
         symbol_perf = (
             trades_df.groupby("symbol")
-            .agg({"pnl": ["count", "mean", "sum"]})
+            .agg(
+                pnl=("pnl", "sum"),
+                entry_time=("entry_time", "min"),
+                exit_time=("exit_time", "max"),
+            )
             .reset_index()
         )
-        symbol_perf.columns = ["Symbol", "Trades", "Avg P/L", "Total P/L"]
+        symbol_perf.columns = ["Symbol", "Total P/L", "First Entry", "Last Exit"]
         symbol_fig = px.bar(
             symbol_perf,
             x="Symbol",
@@ -1002,7 +1029,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         monitor_lines = read_recent_lines(monitor_log_path, num_lines=100)[::-1]
         exec_lines = read_recent_lines(execute_trades_log_path, num_lines=100)[::-1]
-        error_lines = read_recent_lines(error_log_path, num_lines=100)[::-1]
+        error_lines = read_recent_lines(
+            error_log_path, num_lines=100, since_days=ERROR_RETENTION_DAYS
+        )[::-1]
 
         monitor_log_box = log_box("Monitor Log", monitor_lines, "monitor-log")
         exec_log_box = log_box("Execution Log", exec_lines, "exec-log")

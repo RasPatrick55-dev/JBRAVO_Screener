@@ -113,12 +113,12 @@ def get_latest_price(symbol: str) -> float | None:
         except Exception as exc:  # pragma: no cover - API errors
             logger.warning("get_stock_latest_trade failed for %s: %s", symbol, exc)
     try:
-        bars_req = StockBarsRequest(
-            symbol_or_symbols=symbol,
+        bars = data_client.get_bars(
+            symbol,
             timeframe=TimeFrame.Minute,
             limit=1,
-        )
-        bars = data_client.get_stock_bars(bars_req).df
+            feed="sip",
+        ).df
         if not bars.empty:
             return float(bars["close"].iloc[-1])
     except Exception as exc:  # pragma: no cover - API errors
@@ -164,6 +164,7 @@ if not os.path.exists(open_pos_path):
             "unrealized_pl",
             "entry_price",
             "entry_time",
+            "days_in_trade",
             "side",
             "order_status",
             "net_pnl",
@@ -246,6 +247,8 @@ def save_open_positions_csv():
         for p in positions:
             ts = getattr(p, 'created_at', None)
             entry_iso = ts.isoformat() if ts is not None else 'N/A'
+            entry_dt = pd.to_datetime(get_entry_time(p.symbol, entry_iso), utc=True, errors='coerce')
+            days_in_trade = (pd.Timestamp.utcnow() - entry_dt).days if not pd.isna(entry_dt) else 0
             data.append({
                 'symbol': p.symbol,
                 'qty': p.qty,
@@ -254,6 +257,7 @@ def save_open_positions_csv():
                 'unrealized_pl': p.unrealized_pl,
                 'entry_price': p.avg_entry_price,
                 'entry_time': get_entry_time(p.symbol, entry_iso),
+                'days_in_trade': days_in_trade,
                 'side': getattr(p, 'side', 'long'),
                 'order_status': 'open',
                 'net_pnl': p.unrealized_pl,
@@ -269,6 +273,7 @@ def save_open_positions_csv():
             'unrealized_pl',
             'entry_price',
             'entry_time',
+            'days_in_trade',
             'side',
             'order_status',
             'net_pnl',
