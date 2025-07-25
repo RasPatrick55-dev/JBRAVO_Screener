@@ -21,7 +21,7 @@ class TestFetchBarsWithCutoff(unittest.TestCase):
                 "2024-01-03",
             ], utc=True),
         )
-        client.get_bars.return_value.df = df
+        client.get_stock_bars.return_value.df = df
         cutoff = datetime.datetime(2024, 1, 2, tzinfo=datetime.timezone.utc)
 
         result = fetch_bars_with_cutoff("FAKE", client, cutoff)
