@@ -954,24 +954,25 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     elif tab == "tab-symbols":
         trades_df, alert = load_csv(
             trades_log_path,
-            required_columns=["symbol", "pnl", "entry_time", "exit_time"],
+            required_columns=["symbol", "pnl"],
         )
         freshness = data_freshness_alert(trades_log_path, "Trade log")
         if alert:
             return alert
         app.logger.info("Loaded %d trades for symbol performance", len(trades_df))
-        trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"], errors="coerce")
-        trades_df["exit_time"] = pd.to_datetime(trades_df["exit_time"], errors="coerce")
-        symbol_perf = (
-            trades_df.groupby("symbol")
-            .agg(
-                pnl=("pnl", "sum"),
-                entry_time=("entry_time", "min"),
-                exit_time=("exit_time", "max"),
-            )
-            .reset_index()
+
+        grouped = trades_df.groupby("symbol")["pnl"]
+        avg_pnl = grouped.mean()
+        total_pnl = grouped.sum()
+        trade_count = grouped.count()
+        symbol_perf = pd.DataFrame(
+            {
+                "Symbol": avg_pnl.index,
+                "Average P/L": avg_pnl.values,
+                "Total P/L": total_pnl.values,
+                "Trades": trade_count.values,
+            }
         )
-        symbol_perf.columns = ["Symbol", "Total P/L", "First Entry", "Last Exit"]
         symbol_fig = px.bar(
             symbol_perf,
             x="Symbol",
