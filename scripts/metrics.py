@@ -1,14 +1,16 @@
 # metrics.py (enhanced with comprehensive metrics)
 import sys
 import os
+
+# Ensure project root is on ``sys.path`` before third-party imports
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
+
 import logging
 from datetime import datetime
 
 import pandas as pd
 from utils import write_csv_atomic
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, BASE_DIR)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,6 +24,16 @@ logger = logging.getLogger(__name__)
 logger.info("Metrics script started.")
 
 start_time = datetime.utcnow()
+
+# Columns expected in ``metrics_summary.csv``
+REQUIRED_COLUMNS = [
+    "total_trades",
+    "net_pnl",
+    "win_rate",
+    "expectancy",
+    "profit_factor",
+    "max_drawdown",
+]
 
 
 # Load backtest results
@@ -126,14 +138,8 @@ def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
 # Save overall metrics summary
 def save_metrics_summary(metrics_summary, symbols, output_file="metrics_summary.csv"):
     metrics_summary_df = pd.DataFrame(
-        {
-            "total_trades": [metrics_summary["total_trades"]],
-            "net_pnl": [metrics_summary["net_pnl"]],
-            "win_rate": [metrics_summary["win_rate"]],
-            "expectancy": [metrics_summary["expectancy"]],
-            "profit_factor": [metrics_summary["profit_factor"]],
-            "max_drawdown": [metrics_summary["max_drawdown"]],
-        }
+        [[metrics_summary.get(col, 0) for col in REQUIRED_COLUMNS]],
+        columns=REQUIRED_COLUMNS,
     )
     csv_path = os.path.join(BASE_DIR, "data", output_file)
     metrics_summary_df.to_csv(csv_path, index=False)
