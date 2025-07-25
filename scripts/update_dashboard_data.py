@@ -9,7 +9,7 @@ from tempfile import NamedTemporaryFile
 import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
-from alpaca.trading.enums import QueryOrderStatus
+from alpaca.trading.enums import OrderStatus
 from dotenv import load_dotenv
 import requests
 
@@ -161,9 +161,23 @@ def update_open_positions():
         ]
 
         positions = trading_client.get_all_positions()
+        existing_df = (
+            pd.read_csv(OPEN_POSITIONS_CSV) if os.path.exists(OPEN_POSITIONS_CSV) else pd.DataFrame()
+        )
+
+        def get_entry_time(sym: str, default: str) -> str:
+            if not existing_df.empty and sym in existing_df.get("symbol", []).values:
+                try:
+                    return existing_df.loc[existing_df["symbol"] == sym, "entry_time"].iloc[0]
+                except Exception:
+                    return default
+            return default
+
         rows = []
         for p in positions:
             try:
+                ts = getattr(p, "created_at", None)
+                default_time = ts.isoformat() if ts is not None else datetime.utcnow().isoformat()
                 rows.append(
                     {
                         "symbol": p.symbol,
@@ -172,7 +186,7 @@ def update_open_positions():
                         "current_price": float(p.current_price),
                         "unrealized_pl": float(p.unrealized_pl),
                         "entry_price": float(p.avg_entry_price),
-                        "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
+                        "entry_time": get_entry_time(p.symbol, default_time),
                         "side": getattr(p, "side", "long"),
                         "order_status": "open",
                         "net_pnl": float(p.unrealized_pl),
@@ -208,7 +222,7 @@ def fetch_all_orders(limit=500):
     end = None
     while True:
         req = GetOrdersRequest(
-            status=QueryOrderStatus.ALL, limit=limit, until=end, direction="desc"
+            status=OrderStatus.ALL, limit=limit, until=end, direction="desc"
         )
         chunk = trading_client.get_orders(filter=req)
         if not chunk:
@@ -415,7 +429,9 @@ def update_order_status_in_csv(order_id: str, status: str) -> None:
 def update_pending_orders():
     """Poll open orders and refresh their status in CSV."""
     try:
-        open_orders = trading_client.get_orders(status="open")
+        open_orders = trading_client.get_orders(
+            filter=GetOrdersRequest(status=OrderStatus.OPEN)
+        )
         for order in open_orders:
             current = trading_client.get_order_by_id(order.id).status
             logger.info(

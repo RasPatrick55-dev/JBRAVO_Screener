@@ -9,7 +9,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce
+from alpaca.trading.enums import OrderStatus, OrderSide, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest, LimitOrderRequest
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -351,7 +351,7 @@ def check_sell_signal(indicators) -> list:
 
 
 def get_open_orders(symbol):
-    request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+    request = GetOrdersRequest(status=OrderStatus.OPEN, symbols=[symbol])
     try:
         return trading_client.get_orders(filter=request)
     except Exception as e:
@@ -369,7 +369,7 @@ def get_trailing_stop_order(symbol):
 
 def last_filled_trailing_stop(symbol):
     request = GetOrdersRequest(
-        status=QueryOrderStatus.CLOSED, symbols=[symbol], limit=10
+        status=OrderStatus.CLOSED, symbols=[symbol], limit=10
     )
     try:
         orders = trading_client.get_orders(filter=request)
@@ -512,7 +512,9 @@ def manage_trailing_stop(position):
 def check_pending_orders():
     """Log status of any open sell orders."""
     try:
-        open_orders = trading_client.get_orders(status="open")
+        open_orders = trading_client.get_orders(
+            filter=GetOrdersRequest(status=OrderStatus.OPEN)
+        )
         for order in open_orders:
             try:
                 status = trading_client.get_order_by_id(order.id).status
