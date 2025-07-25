@@ -26,7 +26,7 @@ def cache_bars(symbol: str, bars_or_df, cache_dir: str = "cache") -> None:
 
 
 def fetch_bars_with_cutoff(
-    symbol: str, data_client, cutoff_ts: datetime.datetime
+    symbol: str, cutoff_ts: datetime.datetime, data_client
 ) -> pd.DataFrame:
     """Fetch daily bars up to ``cutoff_ts`` inclusive.
 
