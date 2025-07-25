@@ -1,23 +1,21 @@
 # metrics.py (enhanced with comprehensive metrics)
-import os
 import sys
+import os
 
-# Ensure project root is first in Python path
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
+from utils.logger_utils import init_logging  # Fix import by adjusting the Python path correctly
+
+logger = init_logging(__name__, "metrics.log")
+logger.info("Metrics script started.")
+
 import pandas as pd
 import logging
-
-from utils.logger_utils import init_logging
 from utils import write_csv_atomic
 from datetime import datetime
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-logger = init_logging(__name__, "metrics.log")
 start_time = datetime.utcnow()
-logger.info("Script started")
 
 
 # Load backtest results
@@ -116,16 +114,20 @@ def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
         logger.error(f"Missing columns: {missing_cols}")
 
 # Save overall metrics summary
-def save_metrics_summary(metrics_summary, symbols, output_file='metrics_summary.csv'):
-    summary_df = pd.DataFrame([metrics_summary])
-    summary_df['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-    summary_df['symbols'] = ';'.join(symbols)
-    csv_path = os.path.join(BASE_DIR, 'data', output_file)
-    try:
-        write_csv_atomic(csv_path, summary_df)
-        logger.info("Successfully appended data to %s", csv_path)
-    except Exception as e:
-        logger.error("Failed appending to %s: %s", csv_path, e)
+def save_metrics_summary(metrics_summary, symbols, output_file="metrics_summary.csv"):
+    metrics_summary_df = pd.DataFrame(
+        {
+            "total_trades": [metrics_summary["total_trades"]],
+            "net_pnl": [metrics_summary["net_pnl"]],
+            "win_rate": [metrics_summary["win_rate"]],
+            "expectancy": [metrics_summary["expectancy"]],
+            "profit_factor": [metrics_summary["profit_factor"]],
+            "max_drawdown": [metrics_summary["max_drawdown"]],
+        }
+    )
+    csv_path = os.path.join(BASE_DIR, "data", output_file)
+    metrics_summary_df.to_csv(csv_path, index=False)
+    logger.info(f"Successfully updated metrics_summary.csv: {csv_path}")
 
 # Full execution of metrics calculation, ranking, and summary
 def main():
