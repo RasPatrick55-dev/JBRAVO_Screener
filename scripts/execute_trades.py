@@ -113,12 +113,14 @@ def get_latest_price(symbol: str) -> float | None:
         except Exception as exc:  # pragma: no cover - API errors
             logger.warning("get_stock_latest_trade failed for %s: %s", symbol, exc)
     try:
-        bars = data_client.get_bars(
-            symbol,
+        req = StockBarsRequest(
+            symbol_or_symbols=[symbol],
             timeframe=TimeFrame.Minute,
-            limit=1,
+            start=datetime.now(timezone.utc) - timedelta(minutes=5),
+            end=datetime.now(timezone.utc),
             feed="sip",
-        ).df
+        )
+        bars = data_client.get_stock_bars(req).df
         if not bars.empty:
             return float(bars["close"].iloc[-1])
     except Exception as exc:  # pragma: no cover - API errors
@@ -423,6 +425,7 @@ def allocate_position(symbol):
     buying_power = get_buying_power()
     alloc_amount = buying_power * ALLOC_PERCENT
     start = datetime.now(timezone.utc) - timedelta(hours=1, minutes=16)
+    last_close = None
     try:
         req = StockBarsRequest(
             symbol_or_symbols=[symbol],
@@ -440,14 +443,20 @@ def allocate_position(symbol):
             )
             prev_close = get_latest_price(symbol)
             if prev_close is None:
-                return None, "market data error"
-            bars = pd.DataFrame([{"close": prev_close}])
-            logger.info("Using previous close price for %s: %s", symbol, prev_close)
+                logger.error("Fallback price fetch failed for %s", symbol)
+            else:
+                last_close = float(prev_close)
+                bars = pd.DataFrame([{"close": prev_close}])
+                logger.info("Using previous close price for %s: %s", symbol, prev_close)
+        else:
+            last_close = float(bars['close'].iloc[-1])
     except Exception as e:
         logger.error("Error fetching bars for %s: %s", symbol, e)
         return None, "market data error"
 
-    last_close = bars['close'].iloc[-1]
+    if last_close is None:
+        return None, "market data error"
+
     qty = int(alloc_amount / last_close)
     if qty < 1:
         reason = "allocation insufficient"
@@ -510,13 +519,16 @@ def submit_trades():
             row.avg_return,
         )
         try:
-            price = get_latest_price(sym)
-            if price is None:
+            limit_price = get_latest_price(sym)
+            if limit_price is None:
+                logger.error("Latest price unavailable for %s", sym)
+                limit_price = entry_price
+            if limit_price is None:
                 logger.warning("[SKIPPED] %s: reason=market data unavailable", sym)
                 skipped += 1
                 metrics["symbols_skipped"] += 1
                 continue
-            price = round_price(price)
+            price = round_price(limit_price)
             price = round(price + 1e-6, 2)
             now_et = datetime.now(pytz.timezone("US/Eastern")).time()
             session = "extended" if is_extended_hours(now_et) else "regular"
@@ -613,8 +625,12 @@ def submit_trades():
 def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
-        request = GetOrdersRequest(status=OrderStatus.OPEN, symbols=[symbol])
-        orders = trading_client.get_orders(filter=request)
+        request = GetOrdersRequest(symbols=[symbol], nested=True)
+        try:
+            orders = trading_client.get_orders(filter=request)
+        except Exception as exc:
+            logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
+            continue
         has_trail = any(o.order_type == 'trailing_stop' for o in orders)
         if has_trail:
             logger.debug("Trailing stop already active for %s", symbol)

@@ -238,13 +238,14 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
         bars_df = pd.DataFrame()
         while attempt <= retries:
             try:
-                bars_df = data_client.get_bars(
-                    batch,
+                req = StockBarsRequest(
+                    symbol_or_symbols=batch,
                     timeframe=TimeFrame.Day,
                     start=min_start,
                     end=end_safe.isoformat(),
                     feed="sip",
-                ).df
+                )
+                bars_df = data_client.get_stock_bars(req).df
                 break
             except APIError as exc:
                 if getattr(exc, "status_code", None) == 429:
