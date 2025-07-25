@@ -88,13 +88,18 @@ def populate_dummy_data():
     df_top_candidates.to_csv(top_candidates_path, index=False)
 
     # Populate metrics_summary.csv
+    pnl_values = [t['pnl'] for t in trades]
+    wins = [p for p in pnl_values if p > 0]
+    losses = [p for p in pnl_values if p < 0]
+    cumulative = pd.Series(pnl_values).cumsum()
+
     metrics_summary = {
-        'Total Trades': len(trades),
-        'Total Wins': len([t for t in trades if t['pnl'] > 0]),
-        'Total Losses': len([t for t in trades if t['pnl'] <= 0]),
-        'Win Rate (%)': round(100 * len([t for t in trades if t['pnl'] > 0]) / len(trades), 2),
-        'Total Net PnL': round(sum([t['pnl'] for t in trades]), 2),
-        'Average Return per Trade': round(sum([t['pnl'] for t in trades])/len(trades), 2)
+        'total_trades': len(trades),
+        'net_pnl': round(sum(pnl_values), 2),
+        'win_rate': round(100 * len(wins) / len(trades), 2) if trades else 0.0,
+        'expectancy': round(sum(pnl_values) / len(trades), 2) if trades else 0.0,
+        'profit_factor': round(sum(wins) / abs(sum(losses)), 2) if losses else float('inf'),
+        'max_drawdown': round((cumulative - cumulative.cummax()).min(), 2) if not cumulative.empty else 0.0,
     }
     df_metrics_summary = pd.DataFrame([metrics_summary])
     metrics_summary_path = os.path.join(BASE_DIR, 'data', 'metrics_summary.csv')

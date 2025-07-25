@@ -3,17 +3,19 @@ import os
 import sys
 
 # Ensure project root is first in Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
 
 import pandas as pd
 import logging
 
-from utils import logger_utils, write_csv_atomic
+from utils.logger_utils import init_logging
+from utils import write_csv_atomic
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-logger = logger_utils.init_logging(__name__, "metrics.log")
+logger = init_logging(__name__, "metrics.log")
 start_time = datetime.utcnow()
 logger.info("Script started")
 
@@ -24,37 +26,43 @@ def load_results(csv_file='backtest_results.csv'):
     return pd.read_csv(csv_path)
 
 # Calculate additional performance metrics
-def calculate_metrics(df):
-    total_trades = df['trades'].sum() if 'trades' in df.columns else 0
-    if 'trades' not in df.columns:
-        logger.warning("Column 'trades' missing. Using 0 for total trades")
-    total_wins = df['wins'].sum() if 'wins' in df.columns else 0
-    if 'wins' not in df.columns:
-        logger.warning("Column 'wins' missing. Using 0 for wins")
-    total_losses = df['losses'].sum() if 'losses' in df.columns else 0
-    if 'losses' not in df.columns:
-        logger.warning("Column 'losses' missing. Using 0 for losses")
-    total_pnl = df['net_pnl'].sum() if 'net_pnl' in df.columns else 0
-    if 'net_pnl' not in df.columns:
-        logger.warning("Column 'net_pnl' missing. Using 0 for net_pnl")
+def calculate_metrics(trades_df: pd.DataFrame) -> dict:
+    """Return overall trading metrics from ``trades_df`` using dashboard schema."""
 
-    win_rate = (total_wins / total_trades) * 100 if total_trades else 0
-    avg_return_per_trade = df['net_pnl'].sum() / total_trades if total_trades and 'net_pnl' in df.columns else 0
-    avg_win = df[df['net_pnl'] > 0]['net_pnl'].mean() if 'net_pnl' in df.columns else 0
-    avg_loss = df[df['net_pnl'] < 0]['net_pnl'].mean() if 'net_pnl' in df.columns else 0
+    if trades_df.empty:
+        return {
+            "total_trades": 0,
+            "net_pnl": 0.0,
+            "win_rate": 0.0,
+            "expectancy": 0.0,
+            "profit_factor": 0.0,
+            "max_drawdown": 0.0,
+        }
 
-    metrics_summary = {
-        'Total Trades': total_trades,
-        'Total Wins': total_wins,
-        'Total Losses': total_losses,
-        'Win Rate (%)': win_rate,
-        'Total Net PnL': total_pnl,
-        'Average Return per Trade': avg_return_per_trade,
-        'Average Win': avg_win,
-        'Average Loss': avg_loss
+    if "pnl" not in trades_df.columns:
+        if "net_pnl" in trades_df.columns:
+            trades_df = trades_df.rename(columns={"net_pnl": "pnl"})
+        else:
+            trades_df["pnl"] = 0.0
+
+    total_trades = len(trades_df)
+    net_pnl = trades_df["pnl"].sum()
+    win_rate = (trades_df["pnl"] > 0).mean() * 100
+    expectancy = trades_df["pnl"].mean()
+    profits = trades_df[trades_df["pnl"] > 0]["pnl"].sum()
+    losses = trades_df[trades_df["pnl"] < 0]["pnl"].sum()
+    profit_factor = profits / abs(losses) if losses != 0 else float("inf")
+    cumulative = trades_df["pnl"].cumsum()
+    max_drawdown = (cumulative - cumulative.cummax()).min() if not cumulative.empty else 0.0
+
+    return {
+        "total_trades": int(total_trades),
+        "net_pnl": float(net_pnl),
+        "win_rate": float(win_rate),
+        "expectancy": float(expectancy),
+        "profit_factor": float(profit_factor),
+        "max_drawdown": float(max_drawdown),
     }
-
-    return metrics_summary
 
 # Scoring and ranking candidates based on performance metrics
 def rank_candidates(df):
@@ -156,13 +164,15 @@ def main():
         ranked_df[['symbol', 'score', 'win_rate', 'net_pnl']].head(15).to_string(index=False)
     )
 
-    metrics_summary = calculate_metrics(ranked_df)
+    trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
+    trades_df = pd.read_csv(trades_log_path) if os.path.exists(trades_log_path) else pd.DataFrame()
+    metrics_summary = calculate_metrics(trades_df)
     save_metrics_summary(metrics_summary, ranked_df['symbol'].tolist())
     logger.info(
         "Metrics summary: trades=%s win_rate=%.2f%% net_pnl=%.2f",
-        metrics_summary['Total Trades'],
-        metrics_summary['Win Rate (%)'],
-        metrics_summary['Total Net PnL'],
+        metrics_summary['total_trades'],
+        metrics_summary['win_rate'],
+        metrics_summary['net_pnl'],
     )
 
 if __name__ == "__main__":
