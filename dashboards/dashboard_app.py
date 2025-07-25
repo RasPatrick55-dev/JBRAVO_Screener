@@ -543,17 +543,23 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             title="Drawdown Over Time",
         )
 
-        metrics_df, _ = load_csv(
-            metrics_summary_path,
-            required_columns=[
-                "total_trades",
-                "net_pnl",
-                "win_rate",
-                "expectancy",
-                "profit_factor",
-                "max_drawdown",
-            ],
-        )
+        try:
+            metrics_df, alert_metrics = load_csv(
+                metrics_summary_path,
+                required_columns=[
+                    "total_trades",
+                    "net_pnl",
+                    "win_rate",
+                    "expectancy",
+                    "profit_factor",
+                    "max_drawdown",
+                ],
+                alert_prefix="Metrics",
+            )
+            if alert_metrics:
+                return alert_metrics
+        except Exception as e:
+            return dbc.Alert(f"Metrics Load Error: {str(e)}", color="danger", className="mt-3")
 
         if metrics_df is not None and not metrics_df.empty:
             latest_metrics = metrics_df.iloc[-1]

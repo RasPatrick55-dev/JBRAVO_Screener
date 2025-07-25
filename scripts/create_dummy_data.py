@@ -79,7 +79,9 @@ def populate_dummy_data():
         )
     df_trades_log = pd.DataFrame(normalized)
     trades_log_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
+    df_trades_log['pnl'] = pd.to_numeric(df_trades_log['pnl'], errors='coerce').fillna(0.0)
     df_trades_log.to_csv(trades_log_path, index=False)
+    print(f"[INFO] Trades log saved correctly: {trades_log_path}")
 
     # Populate top_candidates.csv
     top_candidates = [{'symbol': sym, 'score': round(random.uniform(50, 100), 2)} for sym in random.sample(['AAPL', 'MSFT', 'GOOG', 'AMZN', 'META'], 5)]
