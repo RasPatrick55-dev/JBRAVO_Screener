@@ -10,7 +10,7 @@ import time
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.common.exceptions import APIError
-from tvDatafeed import TvDatafeed, Interval
+from alpaca_trade_api.rest import REST as TradeREST, TimeFrame as RESTTimeFrame
 
 
 def has_datetime_index(idx) -> bool:
@@ -166,16 +166,22 @@ def cache_bars(
     if new_df.empty:
         logging.warning("cache_bars: %s returned empty data", symbol)
         try:
-            tv = TvDatafeed()
-            tv_df = tv.get_hist(symbol, exchange="NYSE", interval=Interval.in_daily, n_bars=days)
-            if not tv_df.empty:
-                tv_df.index = tv_df.index.tz_localize("America/New_York").tz_convert("UTC")
-                tv_df.rename(columns={"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"}, inplace=True)
-                new_df = tv_df
+            api_key = os.getenv("APCA_API_KEY_ID")
+            api_secret = os.getenv("APCA_API_SECRET_KEY")
+            base_url = os.getenv("APCA_API_BASE_URL")
+            rest_client = TradeREST(api_key, api_secret, base_url)
+            start_dt = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+            end_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            fallback_df = rest_client.get_bars(symbol, RESTTimeFrame.Day, start_dt, end_dt).df
+            if not fallback_df.empty:
+                fallback_df.index = pd.to_datetime(fallback_df.index)
+                if fallback_df.index.tzinfo is None:
+                    fallback_df.index = fallback_df.index.tz_localize("UTC")
+                new_df = fallback_df[["open", "high", "low", "close", "volume"]]
             else:
                 return df
-        except Exception as tv_exc:
-            logging.error("TradingView fallback failed for %s: %s", symbol, tv_exc)
+        except Exception as rest_exc:
+            logging.error("Alpaca REST fallback failed for %s: %s", symbol, rest_exc)
             return df
 
     if not new_df.empty:

@@ -60,3 +60,7 @@ cd /home/RasPatrick/jbravo_screener && /home/RasPatrick/.virtualenvs/jbravo-env/
 cd /home/RasPatrick/jbravo_screener && /home/RasPatrick/.virtualenvs/jbravo-env/bin/python scripts/weekly_summary.py
 cd /home/RasPatrick/jbravo_screener && /home/RasPatrick/.virtualenvs/jbravo-env/bin/python scripts/monitor_positions.py
 ```
+
+## Market Data
+
+Historical prices and volume are now fetched exclusively from the Alpaca Market Data API using the `alpaca_trade_api` library. The previous fallback to the `tvdatafeed` package has been removed.
