@@ -24,7 +24,7 @@ class TestFetchBarsWithCutoff(unittest.TestCase):
         client.get_stock_bars.return_value.df = df
         cutoff = datetime.datetime(2024, 1, 2, tzinfo=datetime.timezone.utc)
 
-        result = fetch_bars_with_cutoff("FAKE", client, cutoff)
+        result = fetch_bars_with_cutoff("FAKE", cutoff, client)
 
         self.assertTrue((result.index <= cutoff).all())
         self.assertEqual(len(result), 1)

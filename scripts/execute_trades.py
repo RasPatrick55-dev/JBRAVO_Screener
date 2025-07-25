@@ -26,11 +26,7 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.requests import StockBarsRequest
-
-try:  # Compatibility with alpaca-py and alpaca-trade-api
-    from alpaca_trade_api.rest import APIError  # type: ignore
-except Exception:  # pragma: no cover - fallback import
-    from alpaca.common.exceptions import APIError  # type: ignore
+from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
