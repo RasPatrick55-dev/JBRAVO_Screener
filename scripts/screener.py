@@ -89,12 +89,13 @@ top_init_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
 if not os.path.exists(top_init_path):
     write_csv_atomic(top_init_path, pd.DataFrame(columns=["symbol", "score"]))
 
+# Retrieve credentials early so tests can fail fast if missing
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
+BASE_URL = os.getenv("APCA_API_BASE_URL")
 
 if not API_KEY or not API_SECRET:
-    logger.error("Missing API credentials. Please set APCA_API_KEY_ID and APCA_API_SECRET_KEY in the .env file.")
-    raise SystemExit(1)
+    raise ValueError("Missing Alpaca credentials")
 
 # Initialize Alpaca clients
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)

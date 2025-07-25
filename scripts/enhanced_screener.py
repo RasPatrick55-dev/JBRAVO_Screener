@@ -129,10 +129,10 @@ from alpaca.data.historical import StockHistoricalDataClient
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
+BASE_URL = os.getenv("APCA_API_BASE_URL")
 
 if not API_KEY or not API_SECRET:
-    logging.error("Missing API credentials. Please set APCA_API_KEY_ID and APCA_API_SECRET_KEY in the .env file.")
-    raise SystemExit(1)
+    raise ValueError("Missing Alpaca credentials")
 
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)

@@ -69,6 +69,8 @@ def is_log_stale(log_path):
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
+if not API_KEY or not API_SECRET:
+    raise ValueError("Missing Alpaca credentials")
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 logger = logging.getLogger(__name__)
 

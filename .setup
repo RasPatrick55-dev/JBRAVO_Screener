@@ -2,4 +2,8 @@
 set -e
 apt-get update
 apt-get install -y build-essential
+# Provide dummy Alpaca credentials for test environment
+export APCA_API_KEY_ID="TEST_KEY"
+export APCA_API_SECRET_KEY="TEST_SECRET"
+export APCA_API_BASE_URL="https://paper-api.alpaca.markets"
 pip install -r requirements.txt

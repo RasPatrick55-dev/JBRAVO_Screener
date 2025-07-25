@@ -11,11 +11,12 @@ load_dotenv(dotenv_path)
 
 app = Flask(__name__)
 
-client = TradingClient(
-    os.getenv("APCA_API_KEY_ID"),
-    os.getenv("APCA_API_SECRET_KEY"),
-    paper=True
-)
+api_key = os.getenv("APCA_API_KEY_ID")
+api_secret = os.getenv("APCA_API_SECRET_KEY")
+if not api_key or not api_secret:
+    raise ValueError("Missing Alpaca credentials")
+
+client = TradingClient(api_key, api_secret, paper=True)
 
 @app.route('/webhook', methods=['POST'])
 def webhook_handler():
