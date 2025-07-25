@@ -40,7 +40,7 @@ import requests
 from utils.logger_utils import init_logging
 
 # Import scripts/utils explicitly
-from scripts.utils import fetch_bars_with_cutoff, cache_bars
+from scripts.utils import cache_bars
 
 # Explicit import from scripts directory
 from scripts.exit_signals import should_exit_early
@@ -424,7 +424,13 @@ def allocate_position(symbol):
     alloc_amount = buying_power * ALLOC_PERCENT
     start = datetime.now(timezone.utc) - timedelta(hours=1, minutes=16)
     try:
-        bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Minute, data_client).df
+        req = StockBarsRequest(
+            symbol_or_symbols=[symbol],
+            timeframe=TimeFrame.Minute,
+            start=start,
+            end=datetime.now(timezone.utc) - timedelta(minutes=16),
+        )
+        bars = data_client.get_stock_bars(req).df
         if bars.empty:
             logger.warning(
                 "No bars available for %s from %s to %s. Retrying with previous day's close.",

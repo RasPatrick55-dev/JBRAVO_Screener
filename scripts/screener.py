@@ -240,9 +240,9 @@ def main() -> None:
     for symbol in symbols:
         logger.info("Processing %s...", symbol)
         start = datetime.now(timezone.utc) - timedelta(days=1500)
-        bars = fetch_bars_with_cutoff(symbol, start, TimeFrame.Day, data_client)
+        bars_df = fetch_bars_with_cutoff(symbol, start, data_client)
         cache_bars(symbol, data_client, DATA_CACHE_DIR)
-        df = bars.df.reset_index()
+        df = bars_df.reset_index()
         logger.debug("%s has %d bars", symbol, len(df))
         try:
             rec = compute_score(symbol, df)

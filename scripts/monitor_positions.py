@@ -293,7 +293,7 @@ def fetch_indicators(symbol):
     """Fetch recent daily bars and compute indicators."""
     try:
         start_date = datetime.now(timezone.utc) - timedelta(days=750)
-        bars = fetch_bars_with_cutoff(symbol, start_date, TimeFrame.Day, data_client).df
+        bars = fetch_bars_with_cutoff(symbol, start_date, data_client)
         logger.info(f"Successfully fetched bars for {symbol}")
     except Exception as e:
         logger.exception(f"Failed to fetch bars for {symbol}: {e}")
