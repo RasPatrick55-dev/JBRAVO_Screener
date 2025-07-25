@@ -24,7 +24,7 @@ from alpaca.trading.requests import (
     GetOrdersRequest,
     TrailingStopOrderRequest,
 )
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.requests import StockBarsRequest
 
 try:  # Compatibility with alpaca-py and alpaca-trade-api
@@ -303,10 +303,15 @@ def save_open_positions_csv():
 def update_trades_log():
     """Fetch recent closed orders from Alpaca and save to trades_log.csv."""
     try:
-        request = GetOrdersRequest(status=OrderStatus.CLOSED, limit=100)
+        request = GetOrdersRequest(limit=100)
         orders = trading_client.get_orders(filter=request)
+        closed_orders = [
+            o
+            for o in orders
+            if getattr(o, "status", "").lower() in ("filled", "canceled", "rejected")
+        ]
         records = []
-        for order in orders:
+        for order in closed_orders:
             entry_price = order.filled_avg_price if order.side.value == 'buy' else ''
             exit_price = order.filled_avg_price if order.side.value == 'sell' else ''
 
@@ -325,6 +330,9 @@ def update_trades_log():
             qty = float(order.filled_qty or 0)
             pnl = (float(exit_price) - float(entry_price)) * qty if exit_price and entry_price else 0.0
 
+            status_val = (
+                order.status.value if hasattr(order.status, "value") else order.status
+            )
             records.append(
                 {
                     "symbol": order.symbol,
@@ -333,11 +341,11 @@ def update_trades_log():
                     "exit_price": exit_price,
                     "entry_time": entry_time,
                     "exit_time": exit_time,
-                    "order_status": order.status.value,
+                    "order_status": status_val,
                     "net_pnl": pnl,
                     "pnl": pnl,
                     "order_type": getattr(order, "order_type", ""),
-                    "side": order.side.value,
+                    "side": getattr(order.side, "value", order.side),
                 }
             )
 
@@ -395,7 +403,8 @@ def poll_order_until_complete(order_id: str) -> str:
     """Poll Alpaca for ``order_id`` until it is filled or cancelled."""
     while True:
         try:
-            status = trading_client.get_order_by_id(order_id).status.value
+            order = trading_client.get_order_by_id(order_id)
+            status = order.status.value if hasattr(order.status, "value") else order.status
         except Exception as exc:
             logger.error("Failed fetching status for %s: %s", order_id, exc)
             status = "unknown"
@@ -677,13 +686,22 @@ def attach_trailing_stops():
 
 def daily_exit_check():
     positions = get_open_positions()
-    request = GetOrdersRequest(status=OrderStatus.CLOSED)
+    request = GetOrdersRequest()
     orders = trading_client.get_orders(filter=request)
+    closed_orders = [
+        o
+        for o in orders
+        if getattr(o, "status", "").lower() in ("filled", "canceled", "rejected")
+    ]
     now_et = datetime.now(pytz.timezone("US/Eastern")).time()
     extended = is_extended_hours(now_et)
 
     for symbol, pos in positions.items():
-        entry_orders = [o for o in orders if o.symbol == symbol and o.side == 'buy']
+        entry_orders = [
+            o
+            for o in closed_orders
+            if o.symbol == symbol and getattr(o.side, "value", o.side) == "buy"
+        ]
         if not entry_orders:
             logger.warning("No entry order found for %s, skipping.", symbol)
             continue
