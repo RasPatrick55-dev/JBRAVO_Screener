@@ -193,17 +193,6 @@ def save_positions_csv(positions):
     try:
         existing_positions_df = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
 
-        def get_original_entry_time(symbol: str, current_entry_time: str) -> str:
-            if not existing_positions_df.empty and symbol in existing_positions_df.get("symbol", []).values:
-                try:
-                    return existing_positions_df.loc[
-                        existing_positions_df["symbol"] == symbol,
-                        "entry_time",
-                    ].iloc[0]
-                except Exception:
-                    return current_entry_time
-            return current_entry_time
-
         active_symbols = set()
         rows = []
         for p in positions:
@@ -218,26 +207,36 @@ def save_positions_csv(positions):
                 continue
             active_symbols.add(p.symbol)
             entry_time = getattr(p, "created_at", datetime.utcnow()).isoformat()
-            entry_time = get_original_entry_time(p.symbol, entry_time)
-            entry_dt = pd.to_datetime(entry_time, utc=True, errors="coerce")
-            days_in_trade = (datetime.now(timezone.utc) - entry_dt).days if not pd.isna(entry_dt) else 0
-            rows.append(
-                {
-                    "symbol": p.symbol,
-                    "qty": qty,
-                    "avg_entry_price": p.avg_entry_price,
-                    "current_price": p.current_price,
-                    "unrealized_pl": p.unrealized_pl,
-                    "entry_price": p.avg_entry_price,
-                    "entry_time": entry_time,
-                    "days_in_trade": days_in_trade,
-                    "side": getattr(p, "side", "long"),
-                    "order_status": "open",
-                    "net_pnl": p.unrealized_pl,
-                    "pnl": p.unrealized_pl,
-                    "order_type": getattr(p, "order_type", "market"),
-                }
-            )
+            updated_entry = {
+                "symbol": p.symbol,
+                "qty": qty,
+                "avg_entry_price": p.avg_entry_price,
+                "current_price": p.current_price,
+                "unrealized_pl": p.unrealized_pl,
+                "entry_price": p.avg_entry_price,
+                "entry_time": entry_time,
+                "side": getattr(p, "side", "long"),
+                "order_status": "open",
+                "net_pnl": p.unrealized_pl,
+                "pnl": p.unrealized_pl,
+                "order_type": getattr(p, "order_type", "market"),
+            }
+
+            # Preserve the original entry time if the position already exists
+            if (
+                not existing_positions_df.empty
+                and p.symbol in existing_positions_df.get("symbol", []).values
+            ):
+                try:
+                    original_entry_time = existing_positions_df.loc[
+                        existing_positions_df.symbol == p.symbol,
+                        "entry_time",
+                    ].values[0]
+                    updated_entry["entry_time"] = original_entry_time
+                except Exception:
+                    pass
+
+            rows.append(updated_entry)
 
         columns = [
             "symbol",
@@ -262,6 +261,9 @@ def save_positions_csv(positions):
         df['net_pnl'] = df.get('unrealized_pl', 0.0)
         df['pnl'] = df['net_pnl']
         df['order_type'] = df.get('order_type', 'limit')
+        df['days_in_trade'] = (
+            datetime.now() - pd.to_datetime(df['entry_time'])
+        ).dt.days
         df = df[columns]
 
         removed = []
