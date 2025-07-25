@@ -961,6 +961,12 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         freshness = data_freshness_alert(trades_log_path, "Trade log")
         if alert:
             return alert
+        if trades_df.empty:
+            return dbc.Alert(
+                "No trade data available in trades_log.csv.",
+                color="warning",
+                className="m-2",
+            )
         app.logger.info("Loaded %d trades for symbol performance", len(trades_df))
 
         grouped = trades_df.groupby("symbol")["pnl"]
