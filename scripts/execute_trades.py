@@ -625,15 +625,23 @@ def submit_trades():
 def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
-        request = GetOrdersRequest(symbols=[symbol], nested=True)
+        request = GetOrdersRequest(symbols=[symbol])
         try:
             orders = trading_client.get_orders(filter=request)
         except Exception as exc:
             logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
             continue
-        has_trail = any(o.order_type == 'trailing_stop' for o in orders)
-        if has_trail:
-            logger.debug("Trailing stop already active for %s", symbol)
+        open_orders = [
+            o for o in orders if o.status.lower() in ("open", "new", "accepted")
+        ]
+        if open_orders:
+            if any(o.order_type == "trailing_stop" for o in open_orders):
+                logger.debug("Trailing stop already active for %s", symbol)
+            else:
+                logger.info(
+                    "Skipping trailing stop for %s: already has open orders.",
+                    symbol,
+                )
             continue
 
         available_qty = get_available_qty(symbol)
