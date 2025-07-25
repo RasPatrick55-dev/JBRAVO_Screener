@@ -151,9 +151,9 @@ if __name__ == "__main__":
             mdf = pd.read_csv(metrics_file)
             if not mdf.empty:
                 last = mdf.iloc[-1]
-                total_trades = int(last.get("Total Trades", 0))
-                win_rate = round(last.get("Win Rate (%)", 0), 2)
-                net_pnl = round(last.get("Total Net PnL", 0), 2)
+                total_trades = int(last.get("total_trades", 0))
+                win_rate = round(last.get("win_rate", 0), 2)
+                net_pnl = round(last.get("net_pnl", 0), 2)
         except Exception:
             pass
 

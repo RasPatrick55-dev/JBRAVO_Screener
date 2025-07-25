@@ -863,7 +863,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             else None
         )
 
-        positions_df = pd.read_csv(open_positions_path) if os.path.exists(open_positions_path) else pd.DataFrame()
+        positions_df, _ = load_csv(open_positions_path)
         trade_limit_alert = (
             html.Div(
                 f"Max open trades limit reached ({MAX_OPEN_TRADES}).",
@@ -1042,7 +1042,10 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
         symbol = row.get("symbol")
         path = os.path.join(BASE_DIR, "data", "history_cache", f"{symbol}.csv")
         if os.path.exists(path):
-            df = pd.read_csv(path)
+            try:
+                df = pd.read_csv(path)
+            except Exception as exc:
+                return True, dbc.Alert(f"Error loading data for {symbol}: {exc}", color="danger")
             fig = go.Figure()
             fig.add_trace(
                 go.Candlestick(
@@ -1065,14 +1068,13 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
 # Periodically refresh screener table
 @app.callback(Output("screener-table", "data"), Input("interval-update", "n_intervals"))
 def update_screener_table(n):
-    if os.path.exists(top_candidates_path):
-        df = pd.read_csv(top_candidates_path)
-        logger.info(
-            "Screener table updated successfully with %d records.", len(df)
-        )
-        return df.to_dict("records")
-    logger.warning("%s not found when updating screener table", top_candidates_path)
-    return []
+    df, alert = load_csv(top_candidates_path)
+    if alert:
+        return []
+    logger.info(
+        "Screener table updated successfully with %d records.", len(df)
+    )
+    return df.to_dict("records") if not df.empty else []
 
 
 # Periodically refresh metrics log display
@@ -1097,11 +1099,11 @@ def update_metrics_logs(n):
     Input("interval-trades", "n_intervals"),
 )
 def refresh_trades_table(n):
-    if os.path.exists(executed_trades_path):
-        trades_df = pd.read_csv(executed_trades_path)
-        trades_df.sort_values("entry_time", ascending=False, inplace=True)
-        return trades_df.to_dict("records")
-    return []
+    df, alert = load_csv(executed_trades_path)
+    if alert or df.empty:
+        return []
+    df.sort_values("entry_time", ascending=False, inplace=True)
+    return df.to_dict("records")
 
 
 # Periodically update execution logs

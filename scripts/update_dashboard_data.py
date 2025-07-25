@@ -342,35 +342,42 @@ def update_metrics_summary():
         else:
             df = load_csv_with_pnl(TRADES_LOG_CSV)
 
-        if df.empty or "net_pnl" not in df.columns:
+        if "pnl" not in df.columns:
+            df["pnl"] = df.get("net_pnl", 0.0)
+
+        if df.empty:
             summary_df = pd.DataFrame(
                 [
                     {
-                        "Total Trades": 0,
-                        "Total Wins": 0,
-                        "Total Losses": 0,
-                        "Win Rate (%)": 0.0,
-                        "Total Net PnL": 0.0,
-                        "Average Return per Trade": 0.0,
+                        "total_trades": 0,
+                        "net_pnl": 0.0,
+                        "win_rate": 0.0,
+                        "expectancy": 0.0,
+                        "profit_factor": 0.0,
+                        "max_drawdown": 0.0,
                     }
                 ]
             )
         else:
             total_trades = len(df)
-            wins = len(df[df["net_pnl"] > 0])
-            losses = total_trades - wins
-            win_rate = (wins / total_trades) * 100 if total_trades else 0.0
-            total_pnl = df["net_pnl"].sum()
-            avg_return = df["net_pnl"].mean()
+            net_pnl = df["pnl"].sum()
+            win_rate = (df["pnl"] > 0).mean() * 100
+            expectancy = df["pnl"].mean()
+            profits = df[df["pnl"] > 0]["pnl"].sum()
+            losses = df[df["pnl"] < 0]["pnl"].sum()
+            profit_factor = profits / abs(losses) if losses != 0 else float("inf")
+            cumulative = df["pnl"].cumsum()
+            max_drawdown = (cumulative - cumulative.cummax()).min() if not cumulative.empty else 0.0
+
             summary_df = pd.DataFrame(
                 [
                     {
-                        "Total Trades": total_trades,
-                        "Total Wins": wins,
-                        "Total Losses": losses,
-                        "Win Rate (%)": round(win_rate, 2),
-                        "Total Net PnL": round(total_pnl, 2),
-                        "Average Return per Trade": round(avg_return, 2),
+                        "total_trades": int(total_trades),
+                        "net_pnl": round(net_pnl, 2),
+                        "win_rate": round(win_rate, 2),
+                        "expectancy": round(expectancy, 2),
+                        "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else profit_factor,
+                        "max_drawdown": round(max_drawdown, 2),
                     }
                 ]
             )

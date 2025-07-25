@@ -204,8 +204,8 @@ def calculate_weekly_summary() -> dict:
     if not metrics_row.empty:
         summary.update(
             {
-                "Overall Win Rate (%)": metrics_row.get("Win Rate (%)", 0),
-                "Overall Net PnL": metrics_row.get("Total Net PnL", 0),
+                "Overall Win Rate (%)": metrics_row.get("win_rate", 0),
+                "Overall Net PnL": metrics_row.get("net_pnl", 0),
             }
         )
 
