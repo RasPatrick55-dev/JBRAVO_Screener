@@ -9,7 +9,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.enums import OrderStatus, OrderSide, TimeInForce
+from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest, LimitOrderRequest
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -356,9 +356,10 @@ def check_sell_signal(indicators) -> list:
 
 
 def get_open_orders(symbol):
-    request = GetOrdersRequest(status=OrderStatus.OPEN, symbols=[symbol])
+    request = GetOrdersRequest(symbols=[symbol])
     try:
-        return trading_client.get_orders(filter=request)
+        orders = trading_client.get_orders(filter=request)
+        return [o for o in orders if getattr(o, "status", "").lower() == "open"]
     except Exception as e:
         logger.error("Failed to fetch open orders for %s: %s", symbol, e)
         return []
@@ -373,13 +374,16 @@ def get_trailing_stop_order(symbol):
 
 
 def last_filled_trailing_stop(symbol):
-    request = GetOrdersRequest(
-        status=OrderStatus.CLOSED, symbols=[symbol], limit=10
-    )
+    request = GetOrdersRequest(symbols=[symbol], limit=10)
     try:
         orders = trading_client.get_orders(filter=request)
-        for o in orders:
-            if getattr(o, "order_type", "") == "trailing_stop" and o.status == "filled":
+        closed_orders = [
+            o
+            for o in orders
+            if getattr(o, "status", "").lower() in ("filled", "canceled", "rejected")
+        ]
+        for o in closed_orders:
+            if getattr(o, "order_type", "") == "trailing_stop" and getattr(o, "status", "").lower() == "filled":
                 return o
     except Exception as e:
         logger.error("Failed to fetch order history for %s: %s", symbol, e)
@@ -529,12 +533,12 @@ def manage_trailing_stop(position):
 def check_pending_orders():
     """Log status of any open sell orders."""
     try:
-        open_orders = trading_client.get_orders(
-            filter=GetOrdersRequest(status=OrderStatus.OPEN)
-        )
+        open_orders = trading_client.get_orders()
+        open_orders = [o for o in open_orders if getattr(o, "status", "").lower() == "open"]
         for order in open_orders:
             try:
                 status = trading_client.get_order_by_id(order.id).status
+                status = status.value if hasattr(status, "value") else status
                 if status in ["submitted", "pending"]:
                     logger.info(
                         f"Pending order {order.id} for {order.symbol} status: {status}."
