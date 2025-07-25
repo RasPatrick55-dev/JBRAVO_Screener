@@ -9,8 +9,12 @@ from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, TrailingStopOrderRequest, LimitOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    TrailingStopOrderRequest,
+    LimitOrderRequest,
+)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -356,10 +360,10 @@ def check_sell_signal(indicators) -> list:
 
 
 def get_open_orders(symbol):
-    request = GetOrdersRequest(symbols=[symbol])
+    request = GetOrdersRequest(status=OrderStatus.OPEN, symbols=[symbol])
     try:
-        orders = trading_client.get_orders(filter=request)
-        return [o for o in orders if getattr(o, "status", "").lower() == "open"]
+        orders = trading_client.get_orders(request)
+        return list(orders)
     except Exception as e:
         logger.error("Failed to fetch open orders for %s: %s", symbol, e)
         return []
@@ -376,7 +380,7 @@ def get_trailing_stop_order(symbol):
 def last_filled_trailing_stop(symbol):
     request = GetOrdersRequest(symbols=[symbol], limit=10)
     try:
-        orders = trading_client.get_orders(filter=request)
+        orders = trading_client.get_orders(request)
         closed_orders = [
             o
             for o in orders
@@ -447,13 +451,24 @@ def manage_trailing_stop(position):
         )
         return
     try:
+        qty_avail_attr = int(getattr(position, "qty_available", qty))
+    except Exception:
+        qty_avail_attr = int(qty)
+    if qty_avail_attr <= 0:
+        logger.warning(
+            "Insufficient available qty for %s: %s",
+            symbol,
+            getattr(position, "qty_available", 0),
+        )
+        return
+    try:
         pos_list = trading_client.get_all_positions()
         qty_available = {
             p.symbol: int(getattr(p, "qty_available", p.qty)) for p in pos_list
-        }.get(symbol, 0)
+        }.get(symbol, qty_avail_attr)
     except Exception:
-        qty_available = int(qty)
-    if qty_available < int(qty):
+        qty_available = qty_avail_attr
+    if qty_available <= 0:
         logger.warning(
             "Insufficient available qty for %s: %s", symbol, qty_available
         )
@@ -533,8 +548,8 @@ def manage_trailing_stop(position):
 def check_pending_orders():
     """Log status of any open sell orders."""
     try:
-        open_orders = trading_client.get_orders()
-        open_orders = [o for o in open_orders if getattr(o, "status", "").lower() == "open"]
+        request = GetOrdersRequest(status=OrderStatus.OPEN)
+        open_orders = trading_client.get_orders(request)
         for order in open_orders:
             try:
                 status = trading_client.get_order_by_id(order.id).status
@@ -562,11 +577,20 @@ def submit_sell_market_order(position, reason: str):
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
     try:
         try:
+            available_qty_attr = int(getattr(position, "qty_available", qty))
+        except Exception:
+            available_qty_attr = int(qty)
+        if available_qty_attr <= 0:
+            logger.warning(
+                "Insufficient available qty for %s: %s", symbol, getattr(position, "qty_available", 0)
+            )
+            return
+        try:
             positions = trading_client.get_all_positions()
             existing_symbols = {p.symbol: int(getattr(p, "qty_available", p.qty)) for p in positions}
-            available_qty = existing_symbols.get(symbol, 0)
+            available_qty = existing_symbols.get(symbol, available_qty_attr)
         except Exception:
-            available_qty = int(qty)
+            available_qty = available_qty_attr
 
         order_qty = min(int(qty), available_qty)
         if available_qty < order_qty or order_qty <= 0:
