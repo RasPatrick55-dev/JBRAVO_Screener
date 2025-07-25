@@ -35,14 +35,13 @@ def fetch_bars_with_cutoff(symbol: str, start_date, timeframe, data_client):
     else:
         tf = timeframe
 
-    req = StockBarsRequest(
-        symbol_or_symbols=symbol,
+    return data_client.get_bars(
+        symbol,
         timeframe=tf,
         start=start_date,
         end=end_safe.isoformat(),
-        feed="iex",
+        feed="sip",
     )
-    return data_client.get_stock_bars(req)
 
 
 def get_last_trading_day_end(now: datetime | None = None) -> datetime:
@@ -235,7 +234,13 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
         bars_df = pd.DataFrame()
         while attempt <= retries:
             try:
-                bars_df = data_client.get_stock_bars(request_params).df
+                bars_df = data_client.get_bars(
+                    batch,
+                    timeframe=TimeFrame.Day,
+                    start=min_start,
+                    end=end_safe.isoformat(),
+                    feed="sip",
+                ).df
                 break
             except APIError as exc:
                 if getattr(exc, "status_code", None) == 429:

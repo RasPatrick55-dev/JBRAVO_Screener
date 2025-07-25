@@ -99,6 +99,7 @@ if not os.path.exists(open_pos_path):
             "unrealized_pl",
             "entry_price",
             "entry_time",
+            "days_in_trade",
             "side",
             "order_status",
             "net_pnl",
@@ -215,6 +216,8 @@ def save_positions_csv(positions):
             active_symbols.add(p.symbol)
             entry_time = getattr(p, "created_at", datetime.utcnow()).isoformat()
             entry_time = get_original_entry_time(p.symbol, entry_time)
+            entry_dt = pd.to_datetime(entry_time, utc=True, errors="coerce")
+            days_in_trade = (datetime.now(timezone.utc) - entry_dt).days if not pd.isna(entry_dt) else 0
             rows.append(
                 {
                     "symbol": p.symbol,
@@ -224,6 +227,7 @@ def save_positions_csv(positions):
                     "unrealized_pl": p.unrealized_pl,
                     "entry_price": p.avg_entry_price,
                     "entry_time": entry_time,
+                    "days_in_trade": days_in_trade,
                     "side": getattr(p, "side", "long"),
                     "order_status": "open",
                     "net_pnl": p.unrealized_pl,
@@ -240,6 +244,7 @@ def save_positions_csv(positions):
             "unrealized_pl",
             "entry_price",
             "entry_time",
+            "days_in_trade",
             "side",
             "order_status",
             "net_pnl",
@@ -437,6 +442,18 @@ def manage_trailing_stop(position):
             f"Skipping trailing stop for {symbol} due to non-positive quantity: {qty}."
         )
         return
+    try:
+        pos_list = trading_client.get_all_positions()
+        qty_available = {
+            p.symbol: int(getattr(p, "qty_available", p.qty)) for p in pos_list
+        }.get(symbol, 0)
+    except Exception:
+        qty_available = int(qty)
+    if qty_available < int(qty):
+        logger.warning(
+            "Insufficient available qty for %s: %s", symbol, qty_available
+        )
+        return
     logger.debug(
         f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}."
     )
@@ -457,7 +474,7 @@ def manage_trailing_stop(position):
         try:
             request = TrailingStopOrderRequest(
                 symbol=symbol,
-                qty=position.qty,
+                qty=qty_available,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.GTC,
                 trail_percent=str(TRAIL_START_PERCENT),
@@ -486,7 +503,7 @@ def manage_trailing_stop(position):
             )
             request = TrailingStopOrderRequest(
                 symbol=symbol,
-                qty=position.qty,
+                qty=qty_available,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.GTC,
                 trail_percent=new_trail,
