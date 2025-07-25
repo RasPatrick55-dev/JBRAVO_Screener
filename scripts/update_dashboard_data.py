@@ -9,7 +9,6 @@ from tempfile import NamedTemporaryFile
 import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
-from alpaca.trading.enums import OrderStatus
 from dotenv import load_dotenv
 import requests
 
@@ -222,7 +221,7 @@ def fetch_all_orders(limit=500):
     end = None
     while True:
         req = GetOrdersRequest(
-            status=OrderStatus.ALL, limit=limit, until=end, direction="desc"
+            status="all", limit=limit, until=end, direction="desc"
         )
         chunk = trading_client.get_orders(filter=req)
         if not chunk:
@@ -437,7 +436,7 @@ def update_pending_orders():
     """Poll open orders and refresh their status in CSV."""
     try:
         open_orders = trading_client.get_orders(
-            filter=GetOrdersRequest(status=OrderStatus.OPEN)
+            filter=GetOrdersRequest(status="open")
         )
         for order in open_orders:
             current = trading_client.get_order_by_id(order.id).status
