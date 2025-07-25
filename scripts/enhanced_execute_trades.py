@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, GetOrdersRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import TrailingStopOrderRequest
 
 from utils import write_csv_atomic
@@ -203,7 +203,7 @@ def attach_trailing_stops() -> None:
     """Attach a trailing stop order to each open position lacking one."""
     positions = get_open_positions()
     for symbol, pos in positions.items():
-        request = GetOrdersRequest(status=OrderStatus.OPEN, symbols=[symbol])
+        request = GetOrdersRequest(status="open", symbols=[symbol])
         orders = trading_client.get_orders(filter=request)
         if any(o.order_type == 'trailing_stop' for o in orders):
             continue
@@ -225,7 +225,7 @@ def attach_trailing_stops() -> None:
 def daily_exit_check() -> None:
     """Close positions that hit the max holding period or trigger early exit signals."""
     positions = get_open_positions()
-    request = GetOrdersRequest(status=OrderStatus.CLOSED)
+    request = GetOrdersRequest(status="closed")
     orders = trading_client.get_orders(filter=request)
     for symbol, pos in positions.items():
         entry_orders = [o for o in orders if o.symbol == symbol and o.side == 'buy']
