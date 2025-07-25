@@ -19,9 +19,13 @@ import pytz
 from time import sleep
 from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import LimitOrderRequest, GetOrdersRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
-from alpaca.trading.requests import TrailingStopOrderRequest
+from alpaca.trading.requests import (
+    LimitOrderRequest,
+    GetOrdersRequest,
+    TrailingStopOrderRequest,
+)
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.data.requests import StockBarsRequest
 
 try:  # Compatibility with alpaca-py and alpaca-trade-api
     from alpaca_trade_api.rest import APIError  # type: ignore
@@ -109,7 +113,12 @@ def get_latest_price(symbol: str) -> float | None:
         except Exception as exc:  # pragma: no cover - API errors
             logger.warning("get_stock_latest_trade failed for %s: %s", symbol, exc)
     try:
-        bars = data_client.get_stock_bars(symbol, TimeFrame.Minute, limit=1).df
+        bars_req = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=TimeFrame.Minute,
+            limit=1,
+        )
+        bars = data_client.get_stock_bars(bars_req).df
         if not bars.empty:
             return float(bars["close"].iloc[-1])
     except Exception as exc:  # pragma: no cover - API errors
@@ -172,6 +181,18 @@ def get_open_positions():
     return {p.symbol: p for p in positions}
 
 
+def get_available_qty(symbol: str) -> int:
+    """Return the available quantity for ``symbol`` or 0 on error."""
+    try:
+        positions = trading_client.get_all_positions()
+        for p in positions:
+            if p.symbol == symbol:
+                return int(getattr(p, "qty_available", p.qty))
+    except Exception as exc:
+        logger.error("Failed retrieving available qty for %s: %s", symbol, exc)
+    return 0
+
+
 
 def load_top_candidates() -> pd.DataFrame:
     """Load ranked candidates from ``top_candidates.csv`` and return the
@@ -210,8 +231,21 @@ def save_open_positions_csv():
     """Fetch current open positions from Alpaca and save to CSV."""
     try:
         positions = trading_client.get_all_positions()
+        csv_path = os.path.join(BASE_DIR, 'data', 'open_positions.csv')
+        existing_df = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+
+        def get_entry_time(sym: str, default: str) -> str:
+            if not existing_df.empty and sym in existing_df.get('symbol', []).values:
+                try:
+                    return existing_df.loc[existing_df['symbol'] == sym, 'entry_time'].iloc[0]
+                except Exception:
+                    return default
+            return default
+
         data = []
         for p in positions:
+            ts = getattr(p, 'created_at', None)
+            entry_iso = ts.isoformat() if ts is not None else 'N/A'
             data.append({
                 'symbol': p.symbol,
                 'qty': p.qty,
@@ -219,10 +253,7 @@ def save_open_positions_csv():
                 'current_price': p.current_price,
                 'unrealized_pl': p.unrealized_pl,
                 'entry_price': p.avg_entry_price,
-                # Safely convert timestamp to ISO format only when present
-                'entry_time': (
-                    ts.isoformat() if (ts := getattr(p, 'created_at', None)) is not None else 'N/A'
-                ),
+                'entry_time': get_entry_time(p.symbol, entry_iso),
                 'side': getattr(p, 'side', 'long'),
                 'order_status': 'open',
                 'net_pnl': p.unrealized_pl,
@@ -265,7 +296,7 @@ def save_open_positions_csv():
 def update_trades_log():
     """Fetch recent closed orders from Alpaca and save to trades_log.csv."""
     try:
-        request = GetOrdersRequest(status=QueryOrderStatus.CLOSED, limit=100)
+        request = GetOrdersRequest(status=OrderStatus.CLOSED, limit=100)
         orders = trading_client.get_orders(filter=request)
         records = []
         for order in orders:
@@ -571,18 +602,28 @@ def submit_trades():
 def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
-        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+        request = GetOrdersRequest(status=OrderStatus.OPEN, symbols=[symbol])
         orders = trading_client.get_orders(filter=request)
         has_trail = any(o.order_type == 'trailing_stop' for o in orders)
         if has_trail:
             logger.debug("Trailing stop already active for %s", symbol)
             continue
 
+        available_qty = get_available_qty(symbol)
+        qty = min(int(pos.qty), available_qty)
+        if qty <= 0:
+            logger.info(
+                "Skipped trailing stop for %s: available qty %s insufficient.",
+                symbol,
+                available_qty,
+            )
+            continue
+
         logger.info("Creating trailing stop for %s, qty=%s", symbol, pos.qty)
         try:
             request = TrailingStopOrderRequest(
                 symbol=symbol,
-                qty=pos.qty,
+                qty=qty,
                 side=OrderSide.SELL,
                 trail_percent=TRAIL_PERCENT,
                 time_in_force=TimeInForce.GTC
@@ -601,7 +642,7 @@ def attach_trailing_stops():
 
 def daily_exit_check():
     positions = get_open_positions()
-    request = GetOrdersRequest(status=QueryOrderStatus.CLOSED)
+    request = GetOrdersRequest(status=OrderStatus.CLOSED)
     orders = trading_client.get_orders(filter=request)
     now_et = datetime.now(pytz.timezone("US/Eastern")).time()
     extended = is_extended_hours(now_et)
@@ -630,6 +671,15 @@ def daily_exit_check():
             try:
                 valid_exit_price = round_price(float(pos.current_price))
                 valid_exit_price = round(valid_exit_price + 1e-6, 2)
+                available_qty = get_available_qty(symbol)
+                qty = min(int(pos.qty), available_qty)
+                if qty <= 0:
+                    logger.info(
+                        "Skipped exit for %s: available qty %s insufficient.",
+                        symbol,
+                        available_qty,
+                    )
+                    continue
                 session = "extended" if extended else "regular"
                 logger.info(
                     "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
@@ -640,7 +690,7 @@ def daily_exit_check():
                 )
                 order_request = LimitOrderRequest(
                     symbol=symbol,
-                    qty=pos.qty,
+                    qty=qty,
                     side=OrderSide.SELL,
                     type="limit",
                     limit_price=valid_exit_price,
@@ -652,7 +702,7 @@ def daily_exit_check():
                 logger.info("Order submitted successfully for %s", symbol)
                 record_executed_trade(
                     symbol,
-                    int(pos.qty),
+                    qty,
                     pos.current_price,
                     order_type="market",
                     side="sell",
@@ -711,6 +761,15 @@ def daily_exit_check():
             try:
                 valid_exit_price = round_price(float(pos.current_price))
                 valid_exit_price = round(valid_exit_price + 1e-6, 2)
+                available_qty = get_available_qty(symbol)
+                qty = min(int(pos.qty), available_qty)
+                if qty <= 0:
+                    logger.info(
+                        "Skipped exit for %s: available qty %s insufficient.",
+                        symbol,
+                        available_qty,
+                    )
+                    continue
                 now_et = datetime.now(pytz.timezone("US/Eastern")).time()
                 extended_now = is_extended_hours(now_et)
                 session = "extended" if extended_now else "regular"
@@ -723,7 +782,7 @@ def daily_exit_check():
                 )
                 order_request = LimitOrderRequest(
                     symbol=symbol,
-                    qty=pos.qty,
+                    qty=qty,
                     side=OrderSide.SELL,
                     type="limit",
                     limit_price=valid_exit_price,
@@ -734,7 +793,7 @@ def daily_exit_check():
                 status = poll_order_until_complete(order.id)
                 record_executed_trade(
                     symbol,
-                    int(pos.qty),
+                    qty,
                     valid_exit_price,
                     order_type="limit",
                     side="sell",

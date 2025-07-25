@@ -1,6 +1,6 @@
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
-from alpaca.trading.enums import QueryOrderStatus
+from alpaca.trading.enums import OrderStatus
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import pandas as pd
@@ -28,7 +28,7 @@ end = pd.Timestamp.utcnow().isoformat()
 
 while True:
     req = GetOrdersRequest(
-        status=QueryOrderStatus.CLOSED,
+        status=OrderStatus.CLOSED,
         until=end,
         limit=500,
         direction='desc',
