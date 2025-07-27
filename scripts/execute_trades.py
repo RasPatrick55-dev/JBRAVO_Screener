@@ -24,7 +24,7 @@ from alpaca.trading.requests import (
     GetOrdersRequest,
     TrailingStopOrderRequest,
 )
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
 from alpaca.data.requests import StockBarsRequest
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
@@ -299,7 +299,7 @@ def update_trades_log():
     """Fetch recent closed orders from Alpaca and save to trades_log.csv."""
     try:
         request = GetOrdersRequest(limit=100)
-        orders = trading_client.get_orders(filter=request)
+        orders = trading_client.get_orders(request)
         closed_orders = [
             o
             for o in orders
@@ -629,9 +629,9 @@ def submit_trades():
 def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
-        request = GetOrdersRequest(symbols=[symbol])
+        request = GetOrdersRequest(symbols=[symbol], statuses=[OrderStatus.OPEN])
         try:
-            orders = trading_client.get_orders(filter=request)
+            orders = trading_client.get_orders(request)
         except Exception as exc:
             logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
             continue
@@ -649,7 +649,10 @@ def attach_trailing_stops():
             continue
 
         available_qty = get_available_qty(symbol)
-        qty = min(int(pos.qty), available_qty)
+        if available_qty == 0 and int(pos.qty) > 0:
+            qty = int(pos.qty)
+        else:
+            qty = min(int(pos.qty), available_qty)
         if qty <= 0:
             logger.info(
                 "Skipped trailing stop for %s: available qty %s insufficient.",
@@ -678,11 +681,15 @@ def attach_trailing_stops():
             )
         except Exception as e:
             logger.error("Failed to create trailing stop for %s: %s", symbol, e)
+            try:
+                trading_client.close_position(symbol)
+            except Exception as exc:  # pragma: no cover - API errors
+                logger.error("Failed to close position %s: %s", symbol, exc)
 
 def daily_exit_check():
     positions = get_open_positions()
     request = GetOrdersRequest()
-    orders = trading_client.get_orders(filter=request)
+    orders = trading_client.get_orders(request)
     closed_orders = [
         o
         for o in orders
@@ -804,6 +811,10 @@ def daily_exit_check():
             except Exception as e:
                 logger.error("Order submission error for %s: %s", symbol, e)
                 metrics["api_failures"] += 1
+                try:
+                    trading_client.close_position(symbol)
+                except Exception as exc:  # pragma: no cover - API errors
+                    logger.error("Failed to close position %s: %s", symbol, exc)
         elif should_exit_early(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache")):
             logger.info("Early exit signal for %s", symbol)
             try:
@@ -885,6 +896,10 @@ def daily_exit_check():
             except Exception as e:
                 logger.error("Order submission error for %s: %s", symbol, e)
                 metrics["api_failures"] += 1
+                try:
+                    trading_client.close_position(symbol)
+                except Exception as exc:  # pragma: no cover - API errors
+                    logger.error("Failed to close position %s: %s", symbol, exc)
 
 if __name__ == '__main__':
     logger.info("Starting pre-market trade execution script")
