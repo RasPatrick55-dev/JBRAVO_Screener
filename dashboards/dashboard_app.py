@@ -4,7 +4,7 @@ import dash
 from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import subprocess
 import json
 from alpaca.trading.client import TradingClient
@@ -179,6 +179,32 @@ def read_recent_lines(filepath, num_lines=50, since_days=None):
         return [f"Error reading {filename}: {e}\n"]
 
 
+def read_error_log(path: str = error_log_path) -> pd.DataFrame:
+    """Return a DataFrame of error log entries from the last day."""
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=["timestamp", "level", "message"])
+    try:
+        records = []
+        with open(path, "r") as f:
+            for line in f:
+                parts = line.strip().split(" ", 2)
+                if len(parts) < 3:
+                    continue
+                ts = f"{parts[0]} {parts[1]}"
+                level_msg = parts[2].split(" ", 1)
+                level = level_msg[0]
+                msg = level_msg[1] if len(level_msg) > 1 else ""
+                records.append({"timestamp": ts, "level": level, "message": msg})
+        errors_df = pd.DataFrame(records)
+        if not errors_df.empty:
+            errors_df = errors_df[
+                pd.to_datetime(errors_df["timestamp"]) > datetime.now() - timedelta(days=1)
+            ]
+        return errors_df
+    except Exception:
+        return pd.DataFrame(columns=["timestamp", "level", "message"])
+
+
 def format_log_lines(lines):
     """Return a list of HTML spans with coloring for ERROR and WARNING lines."""
     formatted = []
@@ -317,10 +343,11 @@ def get_file_mtime(path: str) -> float:
 
 
 def format_time(ts: float) -> str:
-    """Format a POSIX timestamp for display."""
+    """Format a POSIX timestamp for display in America/Chicago."""
     if not ts:
         return "N/A"
-    return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M UTC")
+    utc_time = pd.to_datetime(ts, unit="s").tz_localize("UTC").tz_convert("America/Chicago")
+    return utc_time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 def pipeline_status_component():
@@ -827,7 +854,8 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="text-muted mb-2",
         )
 
-        components = [timestamp]
+        note = html.Div("Note: Screener runs daily at 03:00 UTC")
+        components = [timestamp, note]
         components.extend(alerts)
         components.extend([table, scored_table, status])
         if freshness:
