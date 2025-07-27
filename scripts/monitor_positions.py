@@ -361,7 +361,7 @@ def check_sell_signal(indicators) -> list:
 
 
 def get_open_orders(symbol):
-    request = GetOrdersRequest(status=OrderStatus.OPEN, symbols=[symbol])
+    request = GetOrdersRequest(statuses=[OrderStatus.OPEN], symbols=[symbol])
     try:
         orders = trading_client.get_orders(request)
         return list(orders)
@@ -474,6 +474,10 @@ def manage_trailing_stop(position):
             "Insufficient available qty for %s: %s", symbol, qty_available
         )
         return
+    if qty_available == 0 and float(qty) > 0:
+        use_qty = int(qty)
+    else:
+        use_qty = qty_available
     logger.debug(
         f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}."
     )
@@ -494,15 +498,21 @@ def manage_trailing_stop(position):
         try:
             request = TrailingStopOrderRequest(
                 symbol=symbol,
-                qty=qty_available,
+                qty=use_qty,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.GTC,
                 trail_percent=str(TRAIL_START_PERCENT),
             )
             trading_client.submit_order(order_data=request)
-            logger.info(f"Placed new trailing stop for {symbol} at {TRAIL_START_PERCENT}%.")
+            logger.info(
+                f"Placed new trailing stop for {symbol} at {TRAIL_START_PERCENT}%."
+            )
         except Exception as e:
             logger.error("Failed to create trailing stop for %s: %s", symbol, e)
+            try:
+                trading_client.close_position(symbol)
+            except Exception as exc:  # pragma: no cover - API errors
+                logger.error("Failed to close position %s: %s", symbol, exc)
         return
     else:
         logger.info(
@@ -523,7 +533,7 @@ def manage_trailing_stop(position):
             )
             request = TrailingStopOrderRequest(
                 symbol=symbol,
-                qty=qty_available,
+                qty=use_qty,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.GTC,
                 trail_percent=new_trail,
@@ -538,6 +548,10 @@ def manage_trailing_stop(position):
             )
         except Exception as e:
             logger.error("Failed to adjust trailing stop for %s: %s", symbol, e)
+            try:
+                trading_client.close_position(symbol)
+            except Exception as exc:  # pragma: no cover - API errors
+                logger.error("Failed to close position %s: %s", symbol, exc)
     else:
         logger.info(
             "No trailing stop adjustment needed for %s (gain: %.2f%%)",
@@ -549,7 +563,7 @@ def manage_trailing_stop(position):
 def check_pending_orders():
     """Log status of any open sell orders."""
     try:
-        request = GetOrdersRequest(status=OrderStatus.OPEN)
+        request = GetOrdersRequest(statuses=[OrderStatus.OPEN])
         open_orders = trading_client.get_orders(request)
         for order in open_orders:
             try:
@@ -617,7 +631,13 @@ def submit_sell_market_order(position, reason: str):
             extended_hours=is_extended_hours(now_et),
         )
         trading_client.submit_order(order_request)
-        logger.info("[EXIT] Limit sell %s qty %s at %.2f due to %s", symbol, order_qty, exit_price, reason)
+        logger.info(
+            "[EXIT] Limit sell %s qty %s at %.2f due to %s",
+            symbol,
+            order_qty,
+            exit_price,
+            reason,
+        )
         log_trade_exit(
             symbol,
             float(order_qty),
@@ -631,6 +651,10 @@ def submit_sell_market_order(position, reason: str):
         )
     except Exception as e:
         logger.error("Error submitting sell order for %s: %s", symbol, e)
+        try:
+            trading_client.close_position(symbol)
+        except Exception as exc:  # pragma: no cover - API errors
+            logger.error("Failed to close position %s: %s", symbol, exc)
 
 
 def process_positions_cycle():
