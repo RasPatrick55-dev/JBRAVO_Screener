@@ -199,8 +199,7 @@ def read_error_log(path: str = error_log_path) -> pd.DataFrame:
                 records.append({"timestamp": ts, "level": level, "message": msg})
         errors_df = pd.DataFrame(records)
         if not errors_df.empty:
-            cutoff = datetime.utcnow() - timedelta(days=1)
-            errors_df = errors_df[pd.to_datetime(errors_df["timestamp"]) > cutoff]
+            errors_df = errors_df[pd.to_datetime(errors_df["timestamp"]) >= datetime.now() - timedelta(days=1)]
         return errors_df
     except Exception:
         return pd.DataFrame(columns=["timestamp", "level", "message"])
@@ -343,12 +342,19 @@ def get_file_mtime(path: str) -> float:
         return 0.0
 
 
-def format_time(ts: float) -> str:
-    """Format a POSIX timestamp for display in America/Chicago."""
-    if not ts:
+def format_time(ts):
+    """Convert ``ts`` to America/Chicago time and return a formatted string."""
+    if ts is None or ts == 0:
         return "N/A"
-    utc_time = pd.to_datetime(ts, unit="s").tz_localize("UTC").tz_convert("America/Chicago")
-    return utc_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    try:
+        if isinstance(ts, (int, float)):
+            utc_time = pd.to_datetime(ts, unit="s", utc=True)
+        else:
+            utc_time = pd.to_datetime(ts, utc=True)
+        local_time = utc_time.tz_convert("America/Chicago")
+        return local_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    except Exception:
+        return str(ts)
 
 
 def pipeline_status_component():
@@ -862,7 +868,10 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="text-muted mb-2",
         )
 
-        note = html.Div("Note: Screener runs daily at 03:00 UTC")
+        note = html.Div(
+            "Note: Screener runs daily at 03:00 UTC",
+            className="text-muted small",
+        )
         components = [timestamp, note]
         components.extend(alerts)
         components.extend([table, scored_table, status])
