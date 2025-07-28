@@ -8,6 +8,7 @@ sys.path.insert(0, BASE_DIR)
 
 import logging
 from datetime import datetime
+import numpy as np
 
 import pandas as pd
 from utils import write_csv_atomic
@@ -182,21 +183,38 @@ def main():
         ranked_df[['symbol', 'score', 'win_rate', 'net_pnl']].head(15).to_string(index=False)
     )
 
-    trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
-    if os.path.exists(trades_log_path):
-        trades_df = pd.read_csv(
-            trades_log_path,
-            parse_dates=["entry_time", "exit_time"],
-        )
-    else:
-        trades_df = pd.DataFrame()
-    metrics_summary = calculate_metrics(trades_df)
-    save_metrics_summary(metrics_summary, ranked_df['symbol'].tolist())
+    df = pd.read_csv(os.path.join(BASE_DIR, "data", "trades_log.csv"))
+
+    total_trades = len(df)
+    net_pnl = df["net_pnl"].sum()
+    win_rate = (df["net_pnl"] > 0).mean() * 100
+    expectancy = net_pnl / total_trades if total_trades else 0
+    profit_factor = (
+        df[df["net_pnl"] > 0]["net_pnl"].sum()
+        / abs(df[df["net_pnl"] < 0]["net_pnl"].sum())
+        if len(df[df["net_pnl"] < 0])
+        else np.inf
+    )
+    max_drawdown = df["net_pnl"].cumsum().min()
+
+    metrics_summary = pd.DataFrame([
+        {
+            "total_trades": total_trades,
+            "net_pnl": net_pnl,
+            "win_rate": win_rate,
+            "expectancy": expectancy,
+            "profit_factor": profit_factor,
+            "max_drawdown": max_drawdown,
+        }
+    ])
+    metrics_summary.to_csv(
+        os.path.join(BASE_DIR, "data", "metrics_summary.csv"), index=False
+    )
     logger.info(
         "Metrics summary: trades=%s win_rate=%.2f%% net_pnl=%.2f",
-        metrics_summary['total_trades'],
-        metrics_summary['win_rate'],
-        metrics_summary['net_pnl'],
+        total_trades,
+        win_rate,
+        net_pnl,
     )
 
 if __name__ == "__main__":
