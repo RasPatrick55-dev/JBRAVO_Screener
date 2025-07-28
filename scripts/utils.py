@@ -35,25 +35,14 @@ def fetch_bars_with_cutoff(symbol: str, start, data_client) -> pd.DataFrame:
             symbol_or_symbols=[symbol],
             timeframe=TimeFrame.Day,
             start=start,
-            feed="sip",
-        )
-        bars = data_client.get_stock_bars(request_params).df
-        if bars.empty:
-            raise ValueError("No SIP data available")
-    except Exception as e:
-        logging.warning(
-            "SIP data unavailable for %s, falling back to IEX feed: %s",
-            symbol,
-            e,
-        )
-        request_params = StockBarsRequest(
-            symbol_or_symbols=[symbol],
-            timeframe=TimeFrame.Day,
-            start=start,
             feed="iex",
         )
         bars = data_client.get_stock_bars(request_params).df
-    if bars.empty:
+        if bars.empty:
+            logging.warning("No bars available for %s using IEX feed", symbol)
+            return pd.DataFrame()
+    except Exception as e:
+        logging.error("Failed to fetch bars for %s via IEX: %s", symbol, e)
         return pd.DataFrame()
     return bars
 
@@ -112,6 +101,7 @@ def cache_bars(
                 timeframe=TimeFrame.Minute,
                 start=start,
                 end=end_safe,
+                feed="iex",
             )
             df = data_client.get_stock_bars(req).df
             if df.empty:
@@ -242,16 +232,9 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
         bars_df = pd.DataFrame()
         while attempt <= retries:
             try:
-                req = StockBarsRequest(
-                    symbol_or_symbols=batch,
-                    timeframe=TimeFrame.Day,
-                    start=min_start,
-                    end=end_safe.isoformat(),
-                    feed="sip",
-                )
-                bars_df = data_client.get_stock_bars(req).df
+                bars_df = data_client.get_stock_bars(request_params).df
                 if bars_df.empty:
-                    raise ValueError("No SIP data available")
+                    logging.warning("No IEX bars returned for batch %s", batch)
                 break
             except APIError as exc:
                 if getattr(exc, "status_code", None) == 429:
@@ -262,22 +245,7 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
                 logging.error("Alpaca API error for batch %s: %s", batch, exc)
                 break
             except Exception as exc:
-                logging.warning(
-                    "SIP data unavailable for %s, falling back to IEX feed: %s",
-                    batch,
-                    exc,
-                )
-                try:
-                    req = StockBarsRequest(
-                        symbol_or_symbols=batch,
-                        timeframe=TimeFrame.Day,
-                        start=min_start,
-                        end=end_safe.isoformat(),
-                        feed="iex",
-                    )
-                    bars_df = data_client.get_stock_bars(req).df
-                except Exception as exc2:
-                    logging.error("Unexpected error for batch %s: %s", batch, exc2)
+                logging.error("Failed to fetch bars for batch %s via IEX: %s", batch, exc)
                 break
 
         if isinstance(bars_df.index, pd.MultiIndex) and "symbol" in bars_df.index.names:
@@ -341,6 +309,7 @@ def fetch_extended_hours_bars(symbol: str, trade_date: str, data_client) -> tupl
         timeframe=TimeFrame.Minute,
         start=start,
         end=end_dt,
+        feed="iex",
     )
     bars = data_client.get_stock_bars(req).df
     if isinstance(bars.index, pd.MultiIndex):
