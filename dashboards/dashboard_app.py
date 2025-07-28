@@ -46,7 +46,7 @@ pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json
 
 # Threshold in minutes to consider a log stale
 STALE_THRESHOLD_MINUTES = 1440  # 24 hours
-ERROR_RETENTION_DAYS = 3
+ERROR_RETENTION_DAYS = 1
 
 # Displayed configuration values
 MAX_OPEN_TRADES = 10
