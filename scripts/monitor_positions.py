@@ -9,7 +9,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.trading.requests import (
     GetOrdersRequest,
     TrailingStopOrderRequest,
@@ -361,7 +361,7 @@ def check_sell_signal(indicators) -> list:
 
 
 def get_open_orders(symbol):
-    request = GetOrdersRequest(statuses=[OrderStatus.OPEN], symbols=[symbol])
+    request = GetOrdersRequest(statuses=[QueryOrderStatus.OPEN], symbols=[symbol])
     try:
         orders = trading_client.get_orders(request)
         return list(orders)
@@ -563,7 +563,7 @@ def manage_trailing_stop(position):
 def check_pending_orders():
     """Log status of any open sell orders."""
     try:
-        request = GetOrdersRequest(statuses=[OrderStatus.OPEN])
+        request = GetOrdersRequest(statuses=[QueryOrderStatus.OPEN])
         open_orders = trading_client.get_orders(request)
         for order in open_orders:
             try:
