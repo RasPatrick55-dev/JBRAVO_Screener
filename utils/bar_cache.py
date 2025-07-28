@@ -42,25 +42,15 @@ def fetch_bars_with_cutoff(
             timeframe=TimeFrame.Day,
             start=None,
             end=cutoff_ts.isoformat(),
-            feed="sip",
-        )
-        bars = data_client.get_stock_bars(request).df
-        if bars.empty:
-            raise ValueError("No SIP data available")
-    except Exception as e:  # pragma: no cover - network errors
-        logging.warning(
-            "SIP data unavailable for %s, falling back to IEX feed: %s",
-            symbol,
-            e,
-        )
-        request = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,
-            start=None,
-            end=cutoff_ts.isoformat(),
             feed="iex",
         )
         bars = data_client.get_stock_bars(request).df
+        if bars.empty:
+            logging.warning("No bars available for %s using IEX feed", symbol)
+            return pd.DataFrame()
+    except Exception as e:  # pragma: no cover - network errors
+        logging.error("Failed to fetch bars for %s via IEX: %s", symbol, e)
+        return pd.DataFrame()
     if isinstance(bars.index, pd.MultiIndex):
         bars = (
             bars.droplevel("symbol") if "symbol" in bars.index.names else bars.droplevel(0)
