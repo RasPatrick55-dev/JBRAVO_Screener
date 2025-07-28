@@ -191,7 +191,9 @@ def get_open_positions():
 def save_positions_csv(positions):
     csv_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
     try:
-        existing_positions_df = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+        existing_positions_df = (
+            pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+        )
 
         active_symbols = set()
         rows = []
@@ -206,7 +208,31 @@ def save_positions_csv(positions):
                 )
                 continue
             active_symbols.add(p.symbol)
-            entry_time = getattr(p, "created_at", datetime.utcnow()).isoformat()
+            if (
+                not existing_positions_df.empty
+                and p.symbol in existing_positions_df.get("symbol", []).values
+            ):
+                try:
+                    entry_time = (
+                        existing_positions_df.loc[
+                            existing_positions_df["symbol"] == p.symbol,
+                            "entry_time",
+                        ].iloc[0]
+                    )
+                except Exception:
+                    entry_time = (
+                        getattr(p, "created_at", datetime.utcnow()).isoformat()
+                    )
+            else:
+                entry_attr = getattr(p, "created_at", None)
+                if entry_attr is None:
+                    entry_time = datetime.utcnow().isoformat()
+                else:
+                    entry_time = (
+                        entry_attr.isoformat()
+                        if hasattr(entry_attr, "isoformat")
+                        else str(entry_attr)
+                    )
             updated_entry = {
                 "symbol": p.symbol,
                 "qty": qty,
@@ -221,20 +247,6 @@ def save_positions_csv(positions):
                 "pnl": p.unrealized_pl,
                 "order_type": getattr(p, "order_type", "market"),
             }
-
-            # Preserve the original entry time if the position already exists
-            if (
-                not existing_positions_df.empty
-                and p.symbol in existing_positions_df.get("symbol", []).values
-            ):
-                try:
-                    original_entry_time = existing_positions_df.loc[
-                        existing_positions_df.symbol == p.symbol,
-                        "entry_time",
-                    ].values[0]
-                    updated_entry["entry_time"] = original_entry_time
-                except Exception:
-                    pass
 
             rows.append(updated_entry)
 
@@ -262,7 +274,7 @@ def save_positions_csv(positions):
         df['pnl'] = df['net_pnl']
         df['order_type'] = df.get('order_type', 'limit')
         df['days_in_trade'] = (
-            datetime.now() - pd.to_datetime(df['entry_time'])
+            pd.Timestamp.now() - pd.to_datetime(df['entry_time'])
         ).dt.days
         df = df[columns]
 
