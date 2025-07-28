@@ -116,10 +116,24 @@ def get_latest_price(symbol: str) -> float | None:
             feed="sip",
         )
         bars = data_client.get_stock_bars(req).df
-        if not bars.empty:
-            return float(bars["close"].iloc[-1])
+        if bars.empty:
+            raise ValueError("No SIP data available")
     except Exception as exc:  # pragma: no cover - API errors
-        logger.error("Fallback price fetch failed for %s: %s", symbol, exc)
+        logger.warning("SIP data unavailable for %s, falling back to IEX feed: %s", symbol, exc)
+        try:
+            req = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                timeframe=TimeFrame.Minute,
+                start=datetime.now(timezone.utc) - timedelta(minutes=5),
+                end=datetime.now(timezone.utc),
+                feed="iex",
+            )
+            bars = data_client.get_stock_bars(req).df
+        except Exception as exc2:
+            logger.error("Fallback price fetch failed for %s: %s", symbol, exc2)
+            return None
+    if not bars.empty:
+        return float(bars["close"].iloc[-1])
     return None
 
 
