@@ -3,6 +3,7 @@ from alpaca.trading.requests import GetOrdersRequest
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import pandas as pd
+import numpy as np
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -102,6 +103,13 @@ for order in orders_sorted:
 df = pd.DataFrame(records)
 data_dir = os.path.join(BASE_DIR, 'data')
 
+# Optional percent profit calculation
+with np.errstate(divide="ignore", invalid="ignore"):
+    df["pct_profit"] = (
+        df["net_pnl"] / (df["entry_price"].replace(0, np.nan) * df["qty"].replace(0, np.nan))
+    ) * 100
+    df["pct_profit"].fillna(0.0, inplace=True)
+
 cols = [
     'symbol',
     'qty',
@@ -116,10 +124,12 @@ cols = [
     'side',
 ]
 
-df[cols].to_csv(os.path.join(data_dir, 'trades_log.csv'), index=False)
+df[cols + ["pct_profit"]].to_csv(
+    os.path.join(data_dir, 'trades_log.csv'), index=False
+)
 
 executed_trades = df[df['qty'] > 0]
-executed_trades[cols].to_csv(
+executed_trades[cols + ["pct_profit"]].to_csv(
     os.path.join(data_dir, 'executed_trades.csv'),
     index=False,
 )
