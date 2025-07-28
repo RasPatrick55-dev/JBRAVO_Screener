@@ -449,6 +449,24 @@ def has_pending_sell_order(symbol):
     return False
 
 
+def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> None:
+    """Submit a trailing stop order for ``symbol``."""
+    try:
+        request = TrailingStopOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+            trail_percent=str(trail_percent),
+        )
+        trading_client.submit_order(order_data=request)
+        logger.info(
+            f"Placed trailing stop for {symbol}: qty={qty}, trail_pct={trail_percent}"
+        )
+    except Exception as exc:
+        logger.error("Failed to submit trailing stop for %s: %s", symbol, exc)
+
+
 def manage_trailing_stop(position):
     symbol = position.symbol
     logger.info(f"Evaluating trailing stop for {symbol}")
@@ -476,19 +494,36 @@ def manage_trailing_stop(position):
 
     try:
         request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
-        open_orders = trading_client.get_orders(filter=request)
+        existing_orders = trading_client.get_orders(filter=request)
         logger.info(
-            f"Fetched open orders for {symbol}: {len(open_orders)} found.")
-        trailing_orders = [
-            o for o in open_orders if getattr(o, "order_type", "") == "trailing_stop"
-        ]
-        for order in trailing_orders:
-            trading_client.cancel_order_by_id(order.id)
-            logger.info(
-                f"Cancelled existing trailing stop for {symbol} (order ID: {order.id})"
-            )
+            f"Fetched open orders for {symbol}: {len(existing_orders)} found.")
+        for order in existing_orders:
+            if getattr(order, "order_type", "") == "trailing_stop":
+                trading_client.cancel_order_by_id(order.id)
+                logger.info(
+                    f"Cancelled existing trailing-stop order {order.id} for {symbol}"
+                )
     except Exception as exc:
         logger.error("Failed to cancel existing trailing stop for %s: %s", symbol, exc)
+    try:
+        refreshed = trading_client.get_open_position(symbol)
+        available_qty = int(getattr(refreshed, "qty_available", 0))
+    except Exception as exc:
+        logger.error(
+            "Failed to fetch position for %s after cancelling trailing stop: %s",
+            symbol,
+            exc,
+        )
+        return
+
+    if available_qty > 0:
+        submit_new_trailing_stop(symbol, available_qty, TRAIL_START_PERCENT)
+    else:
+        logger.warning(
+            f"No available quantity for trailing stop on {symbol} after cancelling."
+        )
+        return
+
     logger.debug(
         f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}."
     )
@@ -503,27 +538,7 @@ def manage_trailing_stop(position):
                 symbol,
                 getattr(last_filled, "filled_avg_price", "n/a"),
             )
-        logger.info(
-            f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct={TRAIL_START_PERCENT}"
-        )
-        try:
-            request = TrailingStopOrderRequest(
-                symbol=symbol,
-                qty=use_qty,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.GTC,
-                trail_percent=str(TRAIL_START_PERCENT),
-            )
-            trading_client.submit_order(order_data=request)
-            logger.info(
-                f"Placed new trailing stop for {symbol} at {TRAIL_START_PERCENT}%."
-            )
-        except Exception as e:
-            logger.error("Failed to create trailing stop for %s: %s", symbol, e)
-            try:
-                trading_client.close_position(symbol)
-            except Exception as exc:  # pragma: no cover - API errors
-                logger.error("Failed to close position %s: %s", symbol, exc)
+        # Trailing stop already placed above
         return
     else:
         logger.info(
@@ -533,7 +548,6 @@ def manage_trailing_stop(position):
             trailing_order.status,
             getattr(trailing_order, "trail_percent", "n/a"),
         )
-        logger.info(f"Skipping creation of new trailing stop for {symbol}.")
 
     if gain_pct > GAIN_THRESHOLD_ADJUST:
         new_trail = str(TRAIL_TIGHT_PERCENT)

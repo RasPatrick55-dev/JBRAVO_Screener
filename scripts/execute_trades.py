@@ -394,6 +394,40 @@ def record_executed_trade(
     pd.DataFrame([row]).to_csv(csv_path, mode="a", header=False, index=False)
 
 
+def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> None:
+    """Submit a trailing stop sell order for ``symbol``."""
+    try:
+        position = trading_client.get_open_position(symbol)
+        entry_price = getattr(position, "avg_entry_price", 0)
+    except Exception:
+        entry_price = 0
+    try:
+        request = TrailingStopOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.SELL,
+            trail_percent=trail_percent,
+            time_in_force=TimeInForce.GTC,
+        )
+        order = trading_client.submit_order(request)
+        record_executed_trade(
+            symbol,
+            qty,
+            entry_price,
+            order_type="trailing_stop",
+            side="sell",
+            order_id=str(order.id),
+        )
+        logger.info(
+            "Placed trailing stop for %s: qty=%s, trail_pct=%s",
+            symbol,
+            qty,
+            trail_percent,
+        )
+    except Exception as exc:
+        logger.error("Failed to submit trailing stop for %s: %s", symbol, exc)
+
+
 def poll_order_until_complete(order_id: str) -> str:
     """Poll Alpaca for ``order_id`` until it is filled or cancelled."""
     while True:
@@ -629,37 +663,34 @@ def submit_trades():
 def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
+        # Fetch current open orders and cancel existing trailing stops
         try:
             request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
-            open_orders = trading_client.get_orders(filter=request)
-            logger.info(
-                f"Fetched open orders for {symbol}: {len(open_orders)} found.")
+            existing_orders = trading_client.get_orders(filter=request)
         except Exception as exc:
             logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
             continue
 
-        trailing_stops = [
-            o for o in open_orders if getattr(o, "order_type", "") == "trailing_stop"
-        ]
-        for order in trailing_stops:
-            try:
-                trading_client.cancel_order_by_id(order.id)
-                logger.info(
-                    "Cancelled existing trailing stop for %s (order ID: %s)",
-                    symbol,
-                    order.id,
-                )
-            except Exception as exc:  # pragma: no cover - API errors
-                logger.error(
-                    "Failed to cancel trailing stop for %s (order ID: %s): %s",
-                    symbol,
-                    order.id,
-                    exc,
-                )
+        for order in existing_orders:
+            if getattr(order, "order_type", "") == "trailing_stop":
+                try:
+                    trading_client.cancel_order_by_id(order.id)
+                    logger.info(
+                        "Cancelled existing trailing-stop order %s for %s",
+                        order.id,
+                        symbol,
+                    )
+                except Exception as cancel_exc:  # pragma: no cover - API errors
+                    logger.error(
+                        "Failed to cancel trailing stop %s for %s: %s",
+                        order.id,
+                        symbol,
+                        cancel_exc,
+                    )
 
         other_orders = [
             o
-            for o in open_orders
+            for o in existing_orders
             if getattr(o, "order_type", "") != "trailing_stop"
             and o.status.lower() in ("open", "new", "accepted")
         ]
@@ -667,47 +698,25 @@ def attach_trailing_stops():
             logger.info("Skipping trailing stop for %s: already has open orders.", symbol)
             continue
 
-        desired_qty = int(pos.qty)
-        if getattr(pos, "qty_available", None) and int(pos.qty_available) >= desired_qty:
-            qty = int(pos.qty_available)
+        # Re-check available quantity after cancellations
+        try:
+            position = trading_client.get_open_position(symbol)
+            available_qty = int(getattr(position, "qty_available", 0))
+        except Exception as exc:
+            logger.error(
+                "Failed to fetch position for %s after cancelling trailing stop: %s",
+                symbol,
+                exc,
+            )
+            continue
+
+        if available_qty > 0:
+            submit_new_trailing_stop(symbol, available_qty, TRAIL_PERCENT)
         else:
             logger.warning(
-                "Insufficient available qty for %s: %s", symbol, getattr(pos, "qty_available", 0)
-            )
-            continue
-
-        if qty <= 0:
-            logger.info(
-                "Skipped trailing stop for %s: available qty %s insufficient.",
+                "No available quantity for trailing stop on %s after cancelling.",
                 symbol,
-                qty,
             )
-            continue
-
-        logger.info("Creating trailing stop for %s, qty=%s", symbol, qty)
-        try:
-            request = TrailingStopOrderRequest(
-                symbol=symbol,
-                qty=qty,
-                side=OrderSide.SELL,
-                trail_percent=TRAIL_PERCENT,
-                time_in_force=TimeInForce.GTC,
-            )
-            order = trading_client.submit_order(request)
-            record_executed_trade(
-                symbol,
-                qty,
-                pos.avg_entry_price,
-                order_type="trailing_stop",
-                side="sell",
-                order_id=str(order.id),
-            )
-        except Exception as e:
-            logger.error("Failed to create trailing stop for %s: %s", symbol, e)
-            try:
-                trading_client.close_position(symbol)
-            except Exception as exc:  # pragma: no cover - API errors
-                logger.error("Failed to close position %s: %s", symbol, exc)
 
 def daily_exit_check():
     positions = get_open_positions()
