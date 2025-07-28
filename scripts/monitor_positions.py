@@ -373,10 +373,12 @@ def check_sell_signal(indicators) -> list:
 
 
 def get_open_orders(symbol):
-    request = GetOrdersRequest(statuses=[QueryOrderStatus.OPEN], symbols=[symbol])
+    request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
     try:
-        orders = trading_client.get_orders(request)
-        return list(orders)
+        open_orders = trading_client.get_orders(filter=request)
+        logger.info(
+            f"Fetched open orders for {symbol}: {len(open_orders)} found.")
+        return list(open_orders)
     except Exception as e:
         logger.error("Failed to fetch open orders for %s: %s", symbol, e)
         return []
@@ -473,9 +475,10 @@ def manage_trailing_stop(position):
         return
 
     try:
-        open_orders = trading_client.get_orders(
-            GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
-        )
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+        open_orders = trading_client.get_orders(filter=request)
+        logger.info(
+            f"Fetched open orders for {symbol}: {len(open_orders)} found.")
         trailing_orders = [
             o for o in open_orders if getattr(o, "order_type", "") == "trailing_stop"
         ]
@@ -571,8 +574,10 @@ def manage_trailing_stop(position):
 def check_pending_orders():
     """Log status of any open sell orders."""
     try:
-        request = GetOrdersRequest(statuses=[QueryOrderStatus.OPEN])
-        open_orders = trading_client.get_orders(request)
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        open_orders = trading_client.get_orders(filter=request)
+        logger.info(
+            f"Fetched open orders for all symbols: {len(open_orders)} found.")
         for order in open_orders:
             try:
                 status = trading_client.get_order_by_id(order.id).status

@@ -630,9 +630,10 @@ def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
         try:
-            open_orders = trading_client.get_orders(
-                GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
-            )
+            request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+            open_orders = trading_client.get_orders(filter=request)
+            logger.info(
+                f"Fetched open orders for {symbol}: {len(open_orders)} found.")
         except Exception as exc:
             logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
             continue
