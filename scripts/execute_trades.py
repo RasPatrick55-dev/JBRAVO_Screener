@@ -24,7 +24,7 @@ from alpaca.trading.requests import (
     GetOrdersRequest,
     TrailingStopOrderRequest,
 )
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.data.requests import StockBarsRequest
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
@@ -629,7 +629,7 @@ def submit_trades():
 def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
-        request = GetOrdersRequest(symbols=[symbol], statuses=[OrderStatus.OPEN])
+        request = GetOrdersRequest(symbols=[symbol], statuses=[QueryOrderStatus.OPEN])
         try:
             orders = trading_client.get_orders(request)
         except Exception as exc:
