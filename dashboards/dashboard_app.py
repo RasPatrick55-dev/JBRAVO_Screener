@@ -13,6 +13,7 @@ import logging
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
+import numpy as np
 import os
 
 # Base directory of the project (parent of this file)
@@ -29,6 +30,7 @@ metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
 executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
 historical_candidates_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
 execute_metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
+account_equity_path = os.path.join(BASE_DIR, "data", "account_equity.csv")
 
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
@@ -197,9 +199,8 @@ def read_error_log(path: str = error_log_path) -> pd.DataFrame:
                 records.append({"timestamp": ts, "level": level, "message": msg})
         errors_df = pd.DataFrame(records)
         if not errors_df.empty:
-            errors_df = errors_df[
-                pd.to_datetime(errors_df["timestamp"]) > datetime.now() - timedelta(days=1)
-            ]
+            cutoff = datetime.utcnow() - timedelta(days=1)
+            errors_df = errors_df[pd.to_datetime(errors_df["timestamp"]) > cutoff]
         return errors_df
     except Exception:
         return pd.DataFrame(columns=["timestamp", "level", "message"])
@@ -452,6 +453,13 @@ app.layout = dbc.Container(
                 dbc.Tab(
                     label="Execute Trades",
                     tab_id="tab-execute-trades",
+                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                    className="custom-tab",
+                ),
+                dbc.Tab(
+                    label="Account",
+                    tab_id="tab-account",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                     className="custom-tab",
@@ -1043,6 +1051,116 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             components.append(freshness)
         components.extend([dcc.Graph(figure=symbol_fig), table])
         return dbc.Container(components, fluid=True)
+
+    elif tab == "tab-account":
+        trades_df, alert = load_csv(
+            trades_log_path,
+            [
+                "symbol",
+                "entry_time",
+                "exit_time",
+                "entry_price",
+                "exit_price",
+                "qty",
+                "net_pnl",
+            ],
+        )
+        equity_df, equity_alert = load_csv(
+            account_equity_path, ["date", "equity"]
+        )
+
+        if alert:
+            return dbc.Alert(f"Trade log error: {alert.children}", color="warning", className="m-2")
+        if equity_alert:
+            return dbc.Alert(f"Equity data error: {equity_alert.children}", color="warning", className="m-2")
+
+        trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"])
+        trades_df["exit_time"] = pd.to_datetime(trades_df["exit_time"])
+        trades_df["pct_profit"] = (
+            trades_df["net_pnl"]
+            / (trades_df["entry_price"] * trades_df["qty"])
+        ) * 100
+        trades_df["pct_profit"].replace([np.inf, -np.inf], 0, inplace=True)
+        top_trades = trades_df[trades_df["net_pnl"] > 0].nlargest(10, "pct_profit")
+
+        equity_fig = px.line(
+            equity_df,
+            x="date",
+            y="equity",
+            title="Account Equity Over Time",
+            template="plotly_dark",
+        )
+
+        monthly_df = (
+            trades_df.groupby(trades_df["exit_time"].dt.to_period("M"))[
+                "net_pnl"
+            ]
+            .sum()
+            .reset_index()
+        )
+        monthly_df["exit_time"] = monthly_df["exit_time"].astype(str)
+        monthly_fig = px.bar(
+            monthly_df,
+            x="exit_time",
+            y="net_pnl",
+            title="Monthly Profit/Loss",
+            labels={"exit_time": "Month", "net_pnl": "Profit/Loss"},
+            template="plotly_dark",
+        )
+
+        top_trades_table = dash_table.DataTable(
+            columns=[
+                {"name": "Symbol", "id": "symbol"},
+                {"name": "Entry Date", "id": "entry_time"},
+                {"name": "Exit Date", "id": "exit_time"},
+                {
+                    "name": "Profit %",
+                    "id": "pct_profit",
+                    "type": "numeric",
+                    "format": {"specifier": ".2f"},
+                },
+                {
+                    "name": "Profit ($)",
+                    "id": "net_pnl",
+                    "type": "numeric",
+                    "format": {"specifier": ".2f"},
+                },
+            ],
+            data=top_trades.to_dict("records"),
+            style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+            style_table={"overflowX": "auto"},
+            style_data_conditional=[
+                {"if": {"filter_query": "{net_pnl} > 0"}, "color": "#4DB6AC"},
+                {"if": {"filter_query": "{net_pnl} < 0"}, "color": "#E57373"},
+            ],
+        )
+
+        last_3_months = monthly_df.tail(3)
+        profitable_months = (last_3_months["net_pnl"] > 0).all()
+        performance_text = (
+            "✅ Profitable for last 3 months." if profitable_months else "⚠️ Not profitable every month."
+        )
+        indicator = dbc.Alert(
+            performance_text,
+            color="success" if profitable_months else "warning",
+            className="m-2",
+        )
+
+        return dbc.Container(
+            [
+                html.Div(
+                    f"Last Updated: {format_time(get_file_mtime(trades_log_path))}",
+                    className="text-muted mb-2",
+                ),
+                indicator,
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=equity_fig), md=6),
+                    dbc.Col(dcc.Graph(figure=monthly_fig), md=6),
+                ]),
+                dbc.Row([dbc.Col(top_trades_table, width=12)], className="mt-4"),
+            ],
+            fluid=True,
+        )
 
     elif tab == "tab-monitor":
         # Load open positions

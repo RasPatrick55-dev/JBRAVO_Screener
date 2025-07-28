@@ -8,7 +8,7 @@ from tempfile import NamedTemporaryFile
 
 import pandas as pd
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import GetOrdersRequest
+from alpaca.trading.requests import GetOrdersRequest, GetPortfolioHistoryRequest
 from dotenv import load_dotenv
 import requests
 
@@ -42,6 +42,7 @@ DB_PATH = os.path.join(DATA_DIR, "dashboard.db")
 OPEN_POSITIONS_CSV = os.path.join(DATA_DIR, "open_positions.csv")
 TRADES_LOG_CSV = os.path.join(DATA_DIR, "trades_log.csv")
 EXECUTED_TRADES_CSV = os.path.join(DATA_DIR, "executed_trades.csv")
+ACCOUNT_EQUITY_CSV = os.path.join(DATA_DIR, "account_equity.csv")
 
 
 def load_csv_with_pnl(path: str, fallback_col: str | None = None) -> pd.DataFrame:
@@ -79,6 +80,27 @@ def log_if_stale(file_path: str, name: str, threshold_minutes: int = 15):
         msg = f"{name} is stale ({minutes:.1f} minutes old)"
         logger.warning(msg)
         send_alert(msg)
+
+
+def fetch_account_equity() -> None:
+    """Fetch recent account equity history and save to CSV."""
+    try:
+        client = TradingClient(API_KEY, API_SECRET, paper=True)
+        request = GetPortfolioHistoryRequest(period="3M", timeframe="1D")
+        history = client.get_portfolio_history(request)
+        equity = history.equity
+        df_equity = pd.DataFrame(
+            {
+                "date": pd.date_range(
+                    end=pd.Timestamp.now(), periods=len(equity)
+                ),
+                "equity": equity,
+            }
+        )
+        write_csv_atomic(ACCOUNT_EQUITY_CSV, df_equity)
+        logger.info("Updated account_equity.csv with %s rows", len(df_equity))
+    except Exception as exc:
+        logger.exception("Failed to fetch account equity: %s", exc)
 
 
 def init_db():
@@ -454,6 +476,7 @@ if __name__ == "__main__":
     update_open_positions()
     update_order_history()
     update_pending_orders()
+    fetch_account_equity()
     update_metrics_summary()
     validate_open_positions()
     for pth, name in [
