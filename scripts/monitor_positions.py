@@ -463,33 +463,29 @@ def manage_trailing_stop(position):
             f"Skipping trailing stop for {symbol} due to non-positive quantity: {qty}."
         )
         return
-    try:
-        qty_avail_attr = int(getattr(position, "qty_available", qty))
-    except Exception:
-        qty_avail_attr = int(qty)
-    if qty_avail_attr <= 0:
-        logger.warning(
-            "Insufficient available qty for %s: %s",
-            symbol,
-            getattr(position, "qty_available", 0),
-        )
-        return
-    try:
-        pos_list = trading_client.get_all_positions()
-        qty_available = {
-            p.symbol: int(getattr(p, "qty_available", p.qty)) for p in pos_list
-        }.get(symbol, qty_avail_attr)
-    except Exception:
-        qty_available = qty_avail_attr
-    if qty_available <= 0:
-        logger.warning(
-            "Insufficient available qty for %s: %s", symbol, qty_available
-        )
-        return
-    if qty_available == 0 and float(qty) > 0:
-        use_qty = int(qty)
+    desired_qty = int(qty)
+    if getattr(position, "qty_available", None) and int(position.qty_available) >= desired_qty:
+        use_qty = int(position.qty_available)
     else:
-        use_qty = qty_available
+        logger.warning(
+            f"Insufficient available qty for {symbol}: {getattr(position, 'qty_available', 0)}"
+        )
+        return
+
+    try:
+        open_orders = trading_client.get_orders(
+            GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+        )
+        trailing_orders = [
+            o for o in open_orders if getattr(o, "order_type", "") == "trailing_stop"
+        ]
+        for order in trailing_orders:
+            trading_client.cancel_order_by_id(order.id)
+            logger.info(
+                f"Cancelled existing trailing stop for {symbol} (order ID: {order.id})"
+            )
+    except Exception as exc:
+        logger.error("Failed to cancel existing trailing stop for %s: %s", symbol, exc)
     logger.debug(
         f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}."
     )
@@ -602,11 +598,21 @@ def submit_sell_market_order(position, reason: str):
     exit_price = round_price(float(getattr(position, "current_price", entry_price)))
     entry_time = getattr(position, "created_at", datetime.utcnow()).isoformat()
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
+
+    desired_qty = int(qty)
+    if getattr(position, "qty_available", None) and int(position.qty_available) >= desired_qty:
+        use_qty = int(position.qty_available)
+    else:
+        logger.warning(
+            f"Insufficient available qty for {symbol}: {getattr(position, 'qty_available', 0)}"
+        )
+        return
+
     try:
         try:
-            available_qty_attr = int(getattr(position, "qty_available", qty))
+            available_qty_attr = int(getattr(position, "qty_available", use_qty))
         except Exception:
-            available_qty_attr = int(qty)
+            available_qty_attr = int(use_qty)
         if available_qty_attr <= 0:
             logger.warning(
                 "Insufficient available qty for %s: %s", symbol, getattr(position, "qty_available", 0)
@@ -619,7 +625,7 @@ def submit_sell_market_order(position, reason: str):
         except Exception:
             available_qty = available_qty_attr
 
-        order_qty = min(int(qty), available_qty)
+        order_qty = min(int(use_qty), available_qty)
         if available_qty < order_qty or order_qty <= 0:
             logger.info(
                 f"Skipped selling {symbol}: insufficient available quantity ({available_qty})."

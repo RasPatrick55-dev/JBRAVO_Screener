@@ -629,51 +629,73 @@ def submit_trades():
 def attach_trailing_stops():
     positions = get_open_positions()
     for symbol, pos in positions.items():
-        request = GetOrdersRequest(symbols=[symbol], statuses=[QueryOrderStatus.OPEN])
         try:
-            orders = trading_client.get_orders(request)
+            open_orders = trading_client.get_orders(
+                GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+            )
         except Exception as exc:
             logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
             continue
-        open_orders = [
-            o for o in orders if o.status.lower() in ("open", "new", "accepted")
+
+        trailing_stops = [
+            o for o in open_orders if getattr(o, "order_type", "") == "trailing_stop"
         ]
-        if open_orders:
-            if any(o.order_type == "trailing_stop" for o in open_orders):
-                logger.debug("Trailing stop already active for %s", symbol)
-            else:
+        for order in trailing_stops:
+            try:
+                trading_client.cancel_order_by_id(order.id)
                 logger.info(
-                    "Skipping trailing stop for %s: already has open orders.",
+                    "Cancelled existing trailing stop for %s (order ID: %s)",
                     symbol,
+                    order.id,
                 )
+            except Exception as exc:  # pragma: no cover - API errors
+                logger.error(
+                    "Failed to cancel trailing stop for %s (order ID: %s): %s",
+                    symbol,
+                    order.id,
+                    exc,
+                )
+
+        other_orders = [
+            o
+            for o in open_orders
+            if getattr(o, "order_type", "") != "trailing_stop"
+            and o.status.lower() in ("open", "new", "accepted")
+        ]
+        if other_orders:
+            logger.info("Skipping trailing stop for %s: already has open orders.", symbol)
             continue
 
-        available_qty = get_available_qty(symbol)
-        if available_qty == 0 and int(pos.qty) > 0:
-            qty = int(pos.qty)
+        desired_qty = int(pos.qty)
+        if getattr(pos, "qty_available", None) and int(pos.qty_available) >= desired_qty:
+            qty = int(pos.qty_available)
         else:
-            qty = min(int(pos.qty), available_qty)
+            logger.warning(
+                "Insufficient available qty for %s: %s", symbol, getattr(pos, "qty_available", 0)
+            )
+            continue
+
         if qty <= 0:
             logger.info(
                 "Skipped trailing stop for %s: available qty %s insufficient.",
                 symbol,
-                available_qty,
+                qty,
             )
             continue
 
-        logger.info("Creating trailing stop for %s, qty=%s", symbol, pos.qty)
+        logger.info("Creating trailing stop for %s, qty=%s", symbol, qty)
         try:
             request = TrailingStopOrderRequest(
                 symbol=symbol,
                 qty=qty,
                 side=OrderSide.SELL,
                 trail_percent=TRAIL_PERCENT,
-                time_in_force=TimeInForce.GTC
+                time_in_force=TimeInForce.GTC,
             )
             order = trading_client.submit_order(request)
             record_executed_trade(
                 symbol,
-                int(pos.qty),
+                qty,
                 pos.avg_entry_price,
                 order_type="trailing_stop",
                 side="sell",
