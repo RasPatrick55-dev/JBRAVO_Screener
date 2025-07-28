@@ -217,7 +217,7 @@ def save_positions_csv(positions):
                         existing_positions_df.loc[
                             existing_positions_df["symbol"] == p.symbol,
                             "entry_time",
-                        ].iloc[0]
+                        ].values[0]
                     )
                 except Exception:
                     entry_time = (
@@ -225,14 +225,14 @@ def save_positions_csv(positions):
                     )
             else:
                 entry_attr = getattr(p, "created_at", None)
-                if entry_attr is None:
-                    entry_time = datetime.utcnow().isoformat()
-                else:
+                if entry_attr is not None:
                     entry_time = (
                         entry_attr.isoformat()
                         if hasattr(entry_attr, "isoformat")
                         else str(entry_attr)
                     )
+                else:
+                    entry_time = datetime.utcnow().isoformat()
             updated_entry = {
                 "symbol": p.symbol,
                 "qty": qty,
