@@ -472,14 +472,14 @@ app.layout = dbc.Container(
                 # ),
                 dbc.Tab(
                     label="Symbol Performance",
-                    tab_id="tab-symbols",
+                    tab_id="tab-symbol-performance",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                     className="custom-tab",
                 ),
                 dbc.Tab(
                     label="Monitoring Positions",
-                    tab_id="tab-monitor",
+                    tab_id="tab-monitor-positions",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                     className="custom-tab",
@@ -990,7 +990,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         return dbc.Container(components, fluid=True)
 
 
-    elif tab == "tab-symbols":
+    elif tab == "tab-symbol-performance":
         trades_df, alert = load_csv(
             trades_log_path,
             required_columns=["symbol", "pnl"],
@@ -1163,7 +1163,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             fluid=True,
         )
 
-    elif tab == "tab-monitor":
+    elif tab == "tab-monitor-positions":
         # Load open positions
         positions_df, freshness_alert = load_csv(
             open_positions_path,
@@ -1202,6 +1202,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="text-muted mb-2",
         )
 
+
         return html.Div(
             [
                 freshness_alert if freshness_alert else html.Div(),
@@ -1215,6 +1216,8 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 error_log_box,
             ]
         )
+    else:
+        return dbc.Alert("Unknown tab requested.", color="danger")
 
 
 # Callback for modal interaction
