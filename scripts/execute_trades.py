@@ -671,7 +671,7 @@ def attach_trailing_stops():
         # Fetch current open orders and cancel existing trailing stops
         try:
             request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
-            existing_orders = trading_client.get_orders(filter=request)
+            existing_orders = trading_client.get_orders(request)
         except Exception as exc:
             logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
             continue

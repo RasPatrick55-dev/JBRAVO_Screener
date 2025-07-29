@@ -375,7 +375,7 @@ def check_sell_signal(indicators) -> list:
 def get_open_orders(symbol):
     request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
     try:
-        open_orders = trading_client.get_orders(filter=request)
+        open_orders = trading_client.get_orders(request)
         logger.info(
             f"Fetched open orders for {symbol}: {len(open_orders)} found.")
         return list(open_orders)
@@ -494,7 +494,7 @@ def manage_trailing_stop(position):
 
     try:
         request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
-        existing_orders = trading_client.get_orders(filter=request)
+        existing_orders = trading_client.get_orders(request)
         logger.info(
             f"Fetched open orders for {symbol}: {len(existing_orders)} found.")
         for order in existing_orders:
@@ -589,7 +589,7 @@ def check_pending_orders():
     """Log status of any open sell orders."""
     try:
         request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
-        open_orders = trading_client.get_orders(filter=request)
+        open_orders = trading_client.get_orders(request)
         logger.info(
             f"Fetched open orders for all symbols: {len(open_orders)} found.")
         for order in open_orders:
