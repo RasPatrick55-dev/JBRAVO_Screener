@@ -191,6 +191,7 @@ def get_open_positions():
 def save_positions_csv(positions):
     csv_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
     try:
+        # Load existing file so we can retain each position's original entry time
         existing_positions_df = (
             pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
         )
@@ -217,7 +218,8 @@ def save_positions_csv(positions):
                         existing_positions_df.loc[
                             existing_positions_df["symbol"] == p.symbol,
                             "entry_time",
-                        ].values[0]
+                        ]
+                        .iloc[0]
                     )
                 except Exception:
                     entry_time = (
@@ -273,9 +275,8 @@ def save_positions_csv(positions):
         df['net_pnl'] = df.get('unrealized_pl', 0.0)
         df['pnl'] = df['net_pnl']
         df['order_type'] = df.get('order_type', 'limit')
-        df['days_in_trade'] = (
-            pd.Timestamp.now() - pd.to_datetime(df['entry_time'])
-        ).dt.days
+        entry_dt = pd.to_datetime(df['entry_time'], utc=True, errors='coerce')
+        df['days_in_trade'] = (pd.Timestamp.utcnow() - entry_dt).dt.days
         df = df[columns]
 
         removed = []
