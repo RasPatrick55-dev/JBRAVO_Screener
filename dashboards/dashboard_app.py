@@ -15,6 +15,7 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 import os
+import pytz
 
 # Base directory of the project (parent of this file)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -288,7 +289,9 @@ def stale_warning(paths: list[str], threshold_minutes: int = 30) -> html.Div:
     """Return a warning banner if the newest of ``paths`` is older than the threshold."""
     latest_update = 0.0
     for path in paths:
-        latest_update = max(latest_update, get_file_mtime(path))
+        mtime = get_file_mtime(path)
+        if mtime:
+            latest_update = max(latest_update, mtime)
 
     if not latest_update:
         return html.Div(
@@ -334,18 +337,21 @@ def file_timestamp(path):
     return ts.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
 
 
-def get_file_mtime(path: str) -> float:
-    """Return the modification time of ``path`` or 0."""
+def get_file_mtime(path: str):
+    """Return the modification time of ``path`` or ``None`` if unavailable."""
     try:
         return os.path.getmtime(path)
-    except Exception:
-        return 0.0
+    except Exception as e:
+        logger.error(f"Failed to get mtime for {path}: {e}")
+        return None
 
 
 def format_time(ts):
     """Return ``ts`` converted to CST/CDT (America/Chicago)."""
-    utc_time = pd.to_datetime(ts, utc=True)
-    local_time = utc_time.tz_convert("America/Chicago")
+    if not ts:
+        return "N/A"
+    utc_time = datetime.fromtimestamp(ts, tz=timezone.utc)
+    local_time = utc_time.astimezone(pytz.timezone("America/Chicago"))
     return local_time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
@@ -709,8 +715,10 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             executed_trades_path
         ) > os.path.getmtime(trades_log_path):
             latest_file = executed_trades_path
+
+        ts_value = format_time(get_file_mtime(latest_file))
         timestamp = html.Div(
-            f"Last Updated: {format_time(get_file_mtime(latest_file))}",
+            f"Last Updated: {ts_value}",
             className="text-muted mb-2",
         )
 
@@ -855,8 +863,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         else:
             stale_msg = html.Div()
 
+        ts_value = format_time(mtime)
         timestamp = html.Div(
-            f"Last Updated: {format_time(mtime)}",
+            f"Last Updated: {ts_value}",
             className="text-muted mb-2",
         )
 
@@ -974,8 +983,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="mb-2",
         )
 
+        ts_value = format_time(get_file_mtime(executed_trades_path))
         timestamp = html.Div(
-            f"Last Updated: {format_time(get_file_mtime(executed_trades_path))}",
+            f"Last Updated: {ts_value}",
             className="text-muted mb-2",
         )
 
@@ -1043,8 +1053,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 },
             ],
         )
+        ts_value = format_time(get_file_mtime(trades_log_path))
         timestamp = html.Div(
-            f"Last Updated: {format_time(get_file_mtime(trades_log_path))}",
+            f"Last Updated: {ts_value}",
             className="text-muted mb-2",
         )
         components = [timestamp]
@@ -1147,10 +1158,11 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="m-2",
         )
 
+        ts_value = format_time(get_file_mtime(trades_log_path))
         return dbc.Container(
             [
                 html.Div(
-                    f"Last Updated: {format_time(get_file_mtime(trades_log_path))}",
+                    f"Last Updated: {ts_value}",
                     className="text-muted mb-2",
                 ),
                 indicator,
@@ -1197,8 +1209,9 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             [monitor_log_path, open_positions_path], threshold_minutes=10
         )
 
+        ts_value = format_time(get_file_mtime(open_positions_path))
         timestamp = html.Div(
-            f"Last Updated: {format_time(get_file_mtime(open_positions_path))}",
+            f"Last Updated: {ts_value}",
             className="text-muted mb-2",
         )
 
