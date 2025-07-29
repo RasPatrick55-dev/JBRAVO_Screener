@@ -671,7 +671,7 @@ def attach_trailing_stops():
         # Fetch current open orders and cancel existing trailing stops
         try:
             request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
-            existing_orders = trading_client.get_orders(request)
+            existing_orders = trading_client.get_orders(filter=request)
         except Exception as exc:
             logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
             continue
@@ -681,9 +681,7 @@ def attach_trailing_stops():
                 try:
                     trading_client.cancel_order_by_id(order.id)
                     logger.info(
-                        "Cancelled existing trailing-stop order %s for %s",
-                        order.id,
-                        symbol,
+                        f"Cancelled existing trailing stop {order.id} for {symbol}"
                     )
                 except Exception as cancel_exc:  # pragma: no cover - API errors
                     logger.error(
@@ -715,13 +713,12 @@ def attach_trailing_stops():
             )
             continue
 
-        if available_qty > 0:
-            submit_new_trailing_stop(symbol, available_qty, TRAIL_PERCENT)
-        else:
+        if available_qty <= 0:
             logger.warning(
-                "No available quantity for trailing stop on %s after cancelling.",
-                symbol,
+                f"Insufficient available qty for {symbol}: {available_qty}"
             )
+            continue
+        submit_new_trailing_stop(symbol, available_qty, TRAIL_PERCENT)
 
 def daily_exit_check():
     positions = get_open_positions()
