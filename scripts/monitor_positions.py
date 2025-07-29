@@ -483,28 +483,19 @@ def manage_trailing_stop(position):
             f"Skipping trailing stop for {symbol} due to non-positive quantity: {qty}."
         )
         return
-    desired_qty = int(qty)
-    if getattr(position, "qty_available", None) and int(position.qty_available) >= desired_qty:
-        use_qty = int(position.qty_available)
-    else:
-        logger.warning(
-            f"Insufficient available qty for {symbol}: {getattr(position, 'qty_available', 0)}"
-        )
-        return
-
     try:
-        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
-        existing_orders = trading_client.get_orders(request)
-        logger.info(
-            f"Fetched open orders for {symbol}: {len(existing_orders)} found.")
-        for order in existing_orders:
+        open_orders_request = GetOrdersRequest(status=QueryOrderStatus.ALL, symbols=[symbol])
+        open_orders = trading_client.get_orders(open_orders_request)
+
+        for order in open_orders:
             if getattr(order, "order_type", "") == "trailing_stop":
                 trading_client.cancel_order_by_id(order.id)
                 logger.info(
-                    f"Cancelled existing trailing-stop order {order.id} for {symbol}"
+                    f"Cancelled existing trailing stop for {symbol}, order ID: {order.id}"
                 )
     except Exception as exc:
         logger.error("Failed to cancel existing trailing stop for %s: %s", symbol, exc)
+
     try:
         refreshed = trading_client.get_open_position(symbol)
         available_qty = int(getattr(refreshed, "qty_available", 0))
@@ -517,10 +508,11 @@ def manage_trailing_stop(position):
         return
 
     if available_qty > 0:
+        use_qty = available_qty
         submit_new_trailing_stop(symbol, available_qty, TRAIL_START_PERCENT)
     else:
         logger.warning(
-            f"No available quantity for trailing stop on {symbol} after cancelling."
+            f"No available qty for new trailing stop on {symbol} after cancelling."
         )
         return
 
