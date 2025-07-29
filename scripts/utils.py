@@ -7,7 +7,7 @@ from tempfile import NamedTemporaryFile
 from datetime import datetime, timedelta, timezone, time as dt_time
 import pytz
 import time
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.common.exceptions import APIError
 
@@ -24,27 +24,26 @@ def write_csv_atomic(path: str, df: pd.DataFrame) -> None:
     shutil.move(tmp.name, path)
 
 
-def fetch_bars_with_cutoff(symbol: str, start, data_client) -> pd.DataFrame:
-    """Return daily bars from ``start`` using ``get_stock_bars``."""
+def fetch_bars_with_cutoff(symbol: str, start_datetime, data_client) -> pd.DataFrame:
+    """Return daily bars from ``start_datetime`` using Alpaca's IEX feed."""
 
-    if not isinstance(start, datetime):
-        start = pd.to_datetime(start)
+    if not isinstance(start_datetime, datetime):
+        start_datetime = pd.to_datetime(start_datetime)
 
     try:
-        request_params = StockBarsRequest(
+        request = StockBarsRequest(
             symbol_or_symbols=[symbol],
             timeframe=TimeFrame.Day,
-            start=start,
-            feed="iex",
+            start=start_datetime,
+            feed="iex",  # explicitly use free IEX data
         )
-        bars = data_client.get_stock_bars(request_params).df
+        bars = data_client.get_stock_bars(request).df
         if bars.empty:
-            logging.warning("No bars available for %s using IEX feed", symbol)
-            return pd.DataFrame()
+            raise ValueError(f"No IEX data returned for {symbol}")
+        return bars
     except Exception as e:
-        logging.error("Failed to fetch bars for %s via IEX: %s", symbol, e)
+        logging.error("Market data fetch failed for %s: %s", symbol, e)
         return pd.DataFrame()
-    return bars
 
 
 def get_last_trading_day_end(now: datetime | None = None) -> datetime:
@@ -113,7 +112,11 @@ def cache_bars(
                     cutoff.isoformat(),
                 )
                 try:
-                    prev_close = data_client.get_latest_trade(symbol).price
+                    req = StockLatestTradeRequest(symbol_or_symbols=[symbol], feed="iex")
+                    trade_resp = data_client.get_stock_latest_trade(req)
+                    prev_close = (
+                        trade_resp[symbol].price if isinstance(trade_resp, dict) else trade_resp.price
+                    )
                     df = pd.DataFrame([{"close": prev_close}], index=[datetime.now(timezone.utc)])
                     logging.info("Using previous close price for %s: %s", symbol, prev_close)
                 except Exception as exc:
