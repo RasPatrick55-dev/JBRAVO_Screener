@@ -489,21 +489,20 @@ def manage_trailing_stop(position):
         )
         return
     try:
-        open_orders_request = GetOrdersRequest(status=QueryOrderStatus.ALL, symbols=[symbol])
-        open_orders = trading_client.get_orders(open_orders_request)
-
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+        open_orders = trading_client.get_orders(filter=request)
         for order in open_orders:
             if getattr(order, "order_type", "") == "trailing_stop":
                 trading_client.cancel_order_by_id(order.id)
                 logger.info(
-                    f"Cancelled existing trailing stop for {symbol}, order ID: {order.id}"
+                    f"Cancelled existing trailing stop {order.id} for {symbol}"
                 )
     except Exception as exc:
         logger.error("Failed to cancel existing trailing stop for %s: %s", symbol, exc)
 
     try:
-        refreshed = trading_client.get_open_position(symbol)
-        available_qty = int(getattr(refreshed, "qty_available", 0))
+        position = trading_client.get_open_position(symbol)
+        available_qty = int(getattr(position, "qty_available", 0))
     except Exception as exc:
         logger.error(
             "Failed to fetch position for %s after cancelling trailing stop: %s",
@@ -512,14 +511,13 @@ def manage_trailing_stop(position):
         )
         return
 
-    if available_qty > 0:
-        use_qty = available_qty
-        submit_new_trailing_stop(symbol, available_qty, TRAIL_START_PERCENT)
-    else:
+    if available_qty <= 0:
         logger.warning(
-            f"No available qty for new trailing stop on {symbol} after cancelling."
+            f"Insufficient available qty for {symbol}: {available_qty}"
         )
         return
+    use_qty = available_qty
+    submit_new_trailing_stop(symbol, available_qty, TRAIL_START_PERCENT)
 
     logger.debug(
         f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}."
