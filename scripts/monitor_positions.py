@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone, time as dt_time
 import pandas as pd
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Optional
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
@@ -112,6 +113,20 @@ if not os.path.exists(open_pos_path):
         ]
     ).to_csv(open_pos_path, index=False)
 
+# Load existing open positions once so we can preserve the original
+# entry time for positions that persist across cycles.
+existing_df = (
+    pd.read_csv(open_pos_path) if os.path.exists(open_pos_path) else pd.DataFrame()
+)
+
+
+def get_original_entry_time(symbol: str, current_created_at: Optional[str]) -> str:
+    """Return the previously recorded entry time for ``symbol`` if available."""
+    original_entry = existing_df.loc[existing_df["symbol"] == symbol, "entry_time"]
+    if not original_entry.empty:
+        return original_entry.iloc[0]
+    return current_created_at or datetime.now().isoformat()
+
 executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
 
@@ -209,32 +224,17 @@ def save_positions_csv(positions):
                 )
                 continue
             active_symbols.add(p.symbol)
-            if (
-                not existing_positions_df.empty
-                and p.symbol in existing_positions_df.get("symbol", []).values
-            ):
-                try:
-                    entry_time = (
-                        existing_positions_df.loc[
-                            existing_positions_df["symbol"] == p.symbol,
-                            "entry_time",
-                        ]
-                        .iloc[0]
-                    )
-                except Exception:
-                    entry_time = (
-                        getattr(p, "created_at", datetime.utcnow()).isoformat()
-                    )
+            entry_attr = getattr(p, "created_at", None)
+            if entry_attr is not None:
+                current_created = (
+                    entry_attr.isoformat()
+                    if hasattr(entry_attr, "isoformat")
+                    else str(entry_attr)
+                )
             else:
-                entry_attr = getattr(p, "created_at", None)
-                if entry_attr is not None:
-                    entry_time = (
-                        entry_attr.isoformat()
-                        if hasattr(entry_attr, "isoformat")
-                        else str(entry_attr)
-                    )
-                else:
-                    entry_time = datetime.utcnow().isoformat()
+                current_created = None
+
+            entry_time = get_original_entry_time(p.symbol, current_created)
             updated_entry = {
                 "symbol": p.symbol,
                 "qty": qty,
@@ -275,8 +275,9 @@ def save_positions_csv(positions):
         df['net_pnl'] = df.get('unrealized_pl', 0.0)
         df['pnl'] = df['net_pnl']
         df['order_type'] = df.get('order_type', 'limit')
-        entry_dt = pd.to_datetime(df['entry_time'], utc=True, errors='coerce')
-        df['days_in_trade'] = (pd.Timestamp.utcnow() - entry_dt).dt.days
+        df["days_in_trade"] = (
+            pd.Timestamp.now() - pd.to_datetime(df["entry_time"])
+        ).dt.days
         df = df[columns]
 
         removed = []
@@ -297,6 +298,9 @@ def save_positions_csv(positions):
         shutil.move(tmp.name, csv_path)
         logger.debug("Saved open positions to %s", csv_path)
         logger.info("Updated open_positions.csv successfully.")
+        # Update the cached dataframe so future cycles retain original entry times
+        global existing_df
+        existing_df = df.copy()
     except Exception as e:
         logger.error("Failed to save positions CSV: %s", e)
 
