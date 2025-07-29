@@ -1053,7 +1053,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 },
             ],
         )
-        ts_value = format_time(get_file_mtime(trades_log_path))
+        ts_value = format_time(get_file_mtime("data/trades_log.csv"))
         timestamp = html.Div(
             f"Last Updated: {ts_value}",
             className="text-muted mb-2",
@@ -1065,8 +1065,8 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-account":
-        trades_df, alert = load_csv(
-            trades_log_path,
+        trades_df, trade_alert = load_csv(
+            "data/trades_log.csv",
             [
                 "symbol",
                 "entry_time",
@@ -1078,13 +1078,13 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             ],
         )
         equity_df, equity_alert = load_csv(
-            account_equity_path, ["date", "equity"]
+            "data/account_equity.csv", ["date", "equity"]
         )
 
-        if alert:
-            return dbc.Alert(f"Trade log error: {alert.children}", color="warning", className="m-2")
+        if trade_alert:
+            return trade_alert
         if equity_alert:
-            return dbc.Alert(f"Equity data error: {equity_alert.children}", color="warning", className="m-2")
+            return equity_alert
 
         trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"])
         trades_df["exit_time"] = pd.to_datetime(trades_df["exit_time"])
@@ -1103,20 +1103,16 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             template="plotly_dark",
         )
 
-        monthly_df = (
-            trades_df.groupby(trades_df["exit_time"].dt.to_period("M"))[
-                "net_pnl"
-            ]
+        monthly_pnl = (
+            trades_df.groupby(trades_df["exit_time"].dt.strftime("%Y-%m"))["net_pnl"]
             .sum()
             .reset_index()
         )
-        monthly_df["exit_time"] = monthly_df["exit_time"].astype(str)
         monthly_fig = px.bar(
-            monthly_df,
+            monthly_pnl,
             x="exit_time",
             y="net_pnl",
             title="Monthly Profit/Loss",
-            labels={"exit_time": "Month", "net_pnl": "Profit/Loss"},
             template="plotly_dark",
         )
 
@@ -1147,30 +1143,24 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             ],
         )
 
-        last_3_months = monthly_df.tail(3)
-        profitable_months = (last_3_months["net_pnl"] > 0).all()
-        performance_text = (
-            "✅ Profitable for last 3 months." if profitable_months else "⚠️ Not profitable every month."
-        )
+        recent_months = monthly_pnl.tail(3)
+        profitable_recently = all(recent_months["net_pnl"] > 0)
         indicator = dbc.Alert(
-            performance_text,
-            color="success" if profitable_months else "warning",
-            className="m-2",
+            "✅ Profitable last 3 months!" if profitable_recently else "⚠️ Not profitable every recent month!",
+            color="success" if profitable_recently else "warning",
         )
 
-        ts_value = format_time(get_file_mtime(trades_log_path))
         return dbc.Container(
             [
                 html.Div(
-                    f"Last Updated: {ts_value}",
-                    className="text-muted mb-2",
+                    f"Last Updated: {format_time(get_file_mtime('data/trades_log.csv'))}"
                 ),
                 indicator,
                 dbc.Row([
                     dbc.Col(dcc.Graph(figure=equity_fig), md=6),
                     dbc.Col(dcc.Graph(figure=monthly_fig), md=6),
                 ]),
-                dbc.Row([dbc.Col(top_trades_table, width=12)], className="mt-4"),
+                dbc.Row([dbc.Col(top_trades_table, width=12)]),
             ],
             fluid=True,
         )
