@@ -183,39 +183,43 @@ def main():
         ranked_df[['symbol', 'score', 'win_rate', 'net_pnl']].head(15).to_string(index=False)
     )
 
-    df = pd.read_csv(os.path.join(BASE_DIR, "data", "trades_log.csv"))
+    trades_df = pd.read_csv(os.path.join(BASE_DIR, "data", "trades_log.csv"))
 
-    total_trades = len(df)
-    net_pnl = df["net_pnl"].sum()
-    win_rate = (df["net_pnl"] > 0).mean() * 100
-    expectancy = net_pnl / total_trades if total_trades else 0
-    profit_factor = (
-        df[df["net_pnl"] > 0]["net_pnl"].sum()
-        / abs(df[df["net_pnl"] < 0]["net_pnl"].sum())
-        if len(df[df["net_pnl"] < 0])
-        else np.inf
-    )
-    max_drawdown = df["net_pnl"].cumsum().min()
+    if trades_df.empty:
+        logger.warning("trades_log.csv is empty. Writing default metrics.")
+        metrics_summary = pd.DataFrame([
+            {
+                "total_trades": 0,
+                "net_pnl": 0.0,
+                "win_rate": 0.0,
+                "expectancy": 0.0,
+                "profit_factor": 0.0,
+                "max_drawdown": 0.0,
+            }
+        ])
+    else:
+        total_trades = len(trades_df)
+        net_pnl = trades_df["net_pnl"].sum()
+        wins = trades_df[trades_df["net_pnl"] > 0]
+        losses = trades_df[trades_df["net_pnl"] < 0]
+        win_rate = len(wins) / total_trades * 100 if total_trades > 0 else 0.0
+        expectancy = net_pnl / total_trades if total_trades > 0 else 0.0
+        profit_factor = wins["net_pnl"].sum() / abs(losses["net_pnl"].sum()) if not losses.empty else float("inf")
+        max_drawdown = trades_df["net_pnl"].cumsum().min()
 
-    metrics_summary = pd.DataFrame([
-        {
-            "total_trades": total_trades,
-            "net_pnl": net_pnl,
-            "win_rate": win_rate,
-            "expectancy": expectancy,
-            "profit_factor": profit_factor,
-            "max_drawdown": max_drawdown,
-        }
-    ])
-    metrics_summary.to_csv(
-        os.path.join(BASE_DIR, "data", "metrics_summary.csv"), index=False
-    )
-    logger.info(
-        "Metrics summary: trades=%s win_rate=%.2f%% net_pnl=%.2f",
-        total_trades,
-        win_rate,
-        net_pnl,
-    )
+        metrics_summary = pd.DataFrame([
+            {
+                "total_trades": total_trades,
+                "net_pnl": net_pnl,
+                "win_rate": win_rate,
+                "expectancy": expectancy,
+                "profit_factor": profit_factor,
+                "max_drawdown": max_drawdown,
+            }
+        ])
+
+    metrics_summary.to_csv(os.path.join(BASE_DIR, "data", "metrics_summary.csv"), index=False)
+    logger.info("Metrics summary CSV successfully updated.")
 
 if __name__ == "__main__":
     logger.info("Starting metrics calculation")
