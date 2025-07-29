@@ -343,18 +343,10 @@ def get_file_mtime(path: str) -> float:
 
 
 def format_time(ts):
-    """Convert ``ts`` to America/Chicago time and return a formatted string."""
-    if ts is None or ts == 0:
-        return "N/A"
-    try:
-        if isinstance(ts, (int, float)):
-            utc_time = pd.to_datetime(ts, unit="s", utc=True)
-        else:
-            utc_time = pd.to_datetime(ts, utc=True)
-        local_time = utc_time.tz_convert("America/Chicago")
-        return local_time.strftime("%Y-%m-%d %H:%M:%S %Z")
-    except Exception:
-        return str(ts)
+    """Return ``ts`` converted to CST/CDT (America/Chicago)."""
+    utc_time = pd.to_datetime(ts, utc=True)
+    local_time = utc_time.tz_convert("America/Chicago")
+    return local_time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 def pipeline_status_component():
@@ -869,7 +861,7 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         note = html.Div(
-            "Note: Screener runs daily at 03:00 UTC",
+            "Note: Screener runs nightly at 03:00 UTC",
             className="text-muted small",
         )
         components = [timestamp, note]
