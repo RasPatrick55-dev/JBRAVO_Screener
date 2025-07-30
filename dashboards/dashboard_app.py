@@ -1064,10 +1064,13 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             "data/account_equity.csv", ["date", "equity"]
         )
 
+        alerts = []
         if trade_alert:
-            return trade_alert
+            alerts.append(trade_alert)
         if equity_alert:
-            return equity_alert
+            alerts.append(equity_alert)
+        if alerts:
+            return dbc.Container(alerts, fluid=True)
 
         trades_df["exit_time"] = pd.to_datetime(trades_df["exit_time"])
         trades_df["pct_profit"] = (
@@ -1086,7 +1089,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         monthly_pnl = (
-            trades_df.groupby(trades_df["exit_time"].dt.strftime("%Y-%m"))["net_pnl"]
+            trades_df.groupby(
+                pd.to_datetime(trades_df["exit_time"]).dt.strftime("%Y-%m")
+            )["net_pnl"]
             .sum()
             .reset_index()
         )
@@ -1106,8 +1111,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             ],
             style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
             style_data_conditional=[
-                {"if": {"filter_query": "{net_pnl} > 0"}, "color": "#4DB6AC"},
-                {"if": {"filter_query": "{net_pnl} < 0"}, "color": "#E57373"},
+                {"if": {"filter_query": "{net_pnl} > 0"}, "color": "green"},
+                {"if": {"filter_query": "{net_pnl} < 0"}, "color": "red"},
             ],
         )
 
