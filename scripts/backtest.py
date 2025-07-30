@@ -358,58 +358,75 @@ def run_backtest(symbols: List[str]) -> dict:
         trail_pct=CONFIG.get('trail_pct', 0.03),
         max_hold_days=CONFIG.get('max_hold_days', 7),
     )
-    bt.run()
-
-    trades_df = bt.results()
-    # Ensure timestamp columns for dashboard compatibility
-    if "entry_time" not in trades_df.columns and "entry_date" in trades_df.columns:
-        trades_df["entry_time"] = trades_df["entry_date"]
-    if "exit_time" not in trades_df.columns and "exit_date" in trades_df.columns:
-        trades_df["exit_time"] = trades_df["exit_date"]
-    for col in ["entry_date", "exit_date"]:
-        if col in trades_df.columns:
-            trades_df.drop(columns=col, inplace=True)
-
-    equity_df = bt.equity()
-
-    # Aggregate per-symbol metrics from the trades log
-    if not trades_df.empty:
-        summary_df = (
-            trades_df.groupby("symbol")
-            .agg(
-                trades=("pnl", "size"),
-                wins=("pnl", lambda x: (x > 0).sum()),
-                losses=("pnl", lambda x: (x <= 0).sum()),
-                net_pnl=("pnl", "sum"),
-            )
-            .reset_index()
-        )
-        summary_df["win_rate"] = (
-            summary_df["wins"] / summary_df["trades"] * 100
-        )
-    else:
-        summary_df = pd.DataFrame(
-            columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
-        )
-
-    summary_df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    summary_df["symbols_tested"] = len(symbols)
-
-    for _, row in summary_df.iterrows():
-        logger.info(
-            "Backtest %s win_rate=%.2f%% net_pnl=%.2f",
-            row.symbol,
-            row.win_rate,
-            row.net_pnl,
-        )
 
     trades_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
     equity_path = os.path.join(BASE_DIR, "data", "equity_curve.csv")
     metrics_path = os.path.join(BASE_DIR, "data", "backtest_results.csv")
 
-    write_csv_atomic(trades_path, trades_df)
-    write_csv_atomic(equity_path, equity_df.reset_index())
-    write_csv_atomic(metrics_path, summary_df)
+    required_columns = ["symbol", "entry_time", "exit_time", "pnl", "net_pnl"]
+
+    try:
+        bt.run()
+        trades_df = bt.results()
+
+        if not trades_df.empty:
+            trades_df["net_pnl"] = trades_df["pnl"]
+        else:
+            trades_df["net_pnl"] = []
+
+        # Ensure timestamp columns for dashboard compatibility
+        if "entry_time" not in trades_df.columns and "entry_date" in trades_df.columns:
+            trades_df["entry_time"] = trades_df["entry_date"]
+        if "exit_time" not in trades_df.columns and "exit_date" in trades_df.columns:
+            trades_df["exit_time"] = trades_df["exit_date"]
+        for col in ["entry_date", "exit_date"]:
+            if col in trades_df.columns:
+                trades_df.drop(columns=col, inplace=True)
+
+        missing_columns = [col for col in required_columns if col not in trades_df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
+
+        equity_df = bt.equity()
+
+        # Aggregate per-symbol metrics from the trades log
+        if not trades_df.empty:
+            summary_df = (
+                trades_df.groupby("symbol")
+                .agg(
+                    trades=("pnl", "size"),
+                    wins=("pnl", lambda x: (x > 0).sum()),
+                    losses=("pnl", lambda x: (x <= 0).sum()),
+                    net_pnl=("pnl", "sum"),
+                )
+                .reset_index()
+            )
+            summary_df["win_rate"] = summary_df["wins"] / summary_df["trades"] * 100
+        else:
+            summary_df = pd.DataFrame(
+                columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
+            )
+
+        summary_df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        summary_df["symbols_tested"] = len(symbols)
+
+        for _, row in summary_df.iterrows():
+            logger.info(
+                "Backtest %s win_rate=%.2f%% net_pnl=%.2f",
+                row.symbol,
+                row.win_rate,
+                row.net_pnl,
+            )
+
+        write_csv_atomic(trades_path, trades_df)
+        write_csv_atomic(equity_path, equity_df.reset_index())
+        write_csv_atomic(metrics_path, summary_df)
+        logger.info(f"Trades log successfully updated with net_pnl at {trades_path}.")
+
+    except Exception as e:
+        logger.error(f"Error during backtest trades log generation: {e}", exc_info=True)
+        raise
+
 
     processed = len(valid_symbols)
     tested = len(data)
