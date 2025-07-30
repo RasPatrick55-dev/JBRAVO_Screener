@@ -436,7 +436,7 @@ app.layout = dbc.Container(
             )
         ),
         dbc.Tabs(
-            id="main-tabs",
+            id="tabs",
             active_tab="tab-overview",
             class_name="mb-3",
             children=[
@@ -525,16 +525,7 @@ app.layout = dbc.Container(
 
 
 # Callbacks for tabs content
-@app.callback(
-    Output("tabs-content", "children"),
-    [
-        Input("main-tabs", "active_tab"),
-        Input("interval-update", "n_intervals"),
-        Input("log-interval", "n_intervals"),
-        Input("refresh-button", "n_clicks"),
-    ],
-)
-def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
+def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     app.logger.info("Rendering tab %s", tab)
     if tab == "tab-overview":
         trades_df, alert = load_csv(
@@ -1221,6 +1212,48 @@ def render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
     else:
         return dbc.Alert("Unknown tab requested.", color="danger")
+
+
+def overview_layout():
+    return _render_tab("tab-overview", 0, 0, None)
+
+
+def account_layout():
+    return _render_tab("tab-account", 0, 0, None)
+
+
+def symbol_performance_layout():
+    return _render_tab("tab-symbol-performance", 0, 0, None)
+
+
+def monitor_positions_layout():
+    return _render_tab("tab-monitor-positions", 0, 0, None)
+
+
+def execute_trades_layout():
+    return _render_tab("tab-execute-trades", 0, 0, None)
+
+
+def screener_layout():
+    return _render_tab("tab-screener", 0, 0, None)
+
+
+@app.callback(Output("tabs-content", "children"), Input("tabs", "active_tab"))
+def render_tab(tab):
+    if tab == "tab-overview":
+        return overview_layout()
+    elif tab == "tab-account":
+        return account_layout()
+    elif tab == "tab-symbol-performance":
+        return symbol_performance_layout()
+    elif tab == "tab-monitor-positions":
+        return monitor_positions_layout()
+    elif tab == "tab-execute-trades":
+        return execute_trades_layout()
+    elif tab == "tab-screener":
+        return screener_layout()
+    else:
+        return dbc.Alert("Selected tab not found.", color="danger")
 
 
 # Callback for modal interaction
