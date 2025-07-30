@@ -342,7 +342,7 @@ def get_file_mtime(path):
     try:
         return os.path.getmtime(path)
     except Exception as e:
-        logging.error(f"Error getting modification time for {path}: {e}")
+        logger.error(f"Failed to get mtime for {path}: {e}")
         return None
 
 
@@ -350,7 +350,7 @@ def format_time(ts):
     """Return ``ts`` converted to CST/CDT (America/Chicago)."""
     if not ts:
         return "N/A"
-    utc_time = datetime.fromtimestamp(ts, tz=pytz.utc)
+    utc_time = datetime.fromtimestamp(ts, pytz.utc)
     local_time = utc_time.astimezone(pytz.timezone("America/Chicago"))
     return local_time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
@@ -707,9 +707,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         ) > os.path.getmtime(trades_log_path):
             latest_file = executed_trades_path
 
-        ts_value = format_time(get_file_mtime(latest_file))
+        last_updated = format_time(get_file_mtime(latest_file))
         timestamp = html.Div(
-            f"Last Updated: {ts_value}",
+            f"Last Updated: {last_updated}",
             className="text-muted mb-2",
         )
 
@@ -854,9 +854,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         else:
             stale_msg = html.Div()
 
-        ts_value = format_time(mtime)
+        last_updated = format_time(mtime)
         timestamp = html.Div(
-            f"Last Updated: {ts_value}",
+            f"Last Updated: {last_updated}",
             className="text-muted mb-2",
         )
 
@@ -974,9 +974,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="mb-2",
         )
 
-        ts_value = format_time(get_file_mtime(executed_trades_path))
+        last_updated = format_time(get_file_mtime(executed_trades_path))
         timestamp = html.Div(
-            f"Last Updated: {ts_value}",
+            f"Last Updated: {last_updated}",
             className="text-muted mb-2",
         )
 
@@ -1044,9 +1044,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 },
             ],
         )
-        ts_value = format_time(get_file_mtime("data/trades_log.csv"))
+        last_updated = format_time(get_file_mtime("data/trades_log.csv"))
         timestamp = html.Div(
-            f"Last Updated: {ts_value}",
+            f"Last Updated: {last_updated}",
             className="text-muted mb-2",
         )
         components = [timestamp]
@@ -1111,11 +1111,10 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             ],
         )
 
+        last_updated = format_time(get_file_mtime("data/account_equity.csv"))
         return dbc.Container(
             [
-                html.Div(
-                    f"Last Updated: {format_time(get_file_mtime('data/account_equity.csv'))}"
-                ),
+                html.Div(f"Last Updated: {last_updated}"),
                 dbc.Row([
                     dbc.Col(dcc.Graph(figure=equity_fig), md=6),
                     dbc.Col(dcc.Graph(figure=monthly_fig), md=6),
@@ -1159,9 +1158,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             [monitor_log_path, open_positions_path], threshold_minutes=10
         )
 
-        ts_value = format_time(get_file_mtime(open_positions_path))
+        last_updated = format_time(get_file_mtime(open_positions_path))
         timestamp = html.Div(
-            f"Last Updated: {ts_value}",
+            f"Last Updated: {last_updated}",
             className="text-muted mb-2",
         )
 
