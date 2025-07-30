@@ -1058,15 +1058,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     elif tab == "tab-account":
         trades_df, trade_alert = load_csv(
             "data/trades_log.csv",
-            [
-                "symbol",
-                "entry_time",
-                "exit_time",
-                "entry_price",
-                "exit_price",
-                "qty",
-                "net_pnl",
-            ],
+            ["symbol", "entry_price", "exit_price", "qty", "net_pnl"],
         )
         equity_df, equity_alert = load_csv(
             "data/account_equity.csv", ["date", "equity"]
@@ -1077,7 +1069,6 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         if equity_alert:
             return equity_alert
 
-        trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"])
         trades_df["exit_time"] = pd.to_datetime(trades_df["exit_time"])
         trades_df["pct_profit"] = (
             trades_df["net_pnl"]
@@ -1108,45 +1099,23 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         top_trades_table = dash_table.DataTable(
-            columns=[
-                {"name": "Symbol", "id": "symbol"},
-                {"name": "Entry Date", "id": "entry_time"},
-                {"name": "Exit Date", "id": "exit_time"},
-                {
-                    "name": "Profit %",
-                    "id": "pct_profit",
-                    "type": "numeric",
-                    "format": {"specifier": ".2f"},
-                },
-                {
-                    "name": "Profit ($)",
-                    "id": "net_pnl",
-                    "type": "numeric",
-                    "format": {"specifier": ".2f"},
-                },
-            ],
             data=top_trades.to_dict("records"),
+            columns=[
+                {"name": i.title(), "id": i}
+                for i in ["symbol", "entry_price", "exit_price", "pct_profit", "net_pnl"]
+            ],
             style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-            style_table={"overflowX": "auto"},
             style_data_conditional=[
                 {"if": {"filter_query": "{net_pnl} > 0"}, "color": "#4DB6AC"},
                 {"if": {"filter_query": "{net_pnl} < 0"}, "color": "#E57373"},
             ],
         )
 
-        recent_months = monthly_pnl.tail(3)
-        profitable_recently = all(recent_months["net_pnl"] > 0)
-        indicator = dbc.Alert(
-            "✅ Profitable last 3 months!" if profitable_recently else "⚠️ Not profitable every recent month!",
-            color="success" if profitable_recently else "warning",
-        )
-
         return dbc.Container(
             [
                 html.Div(
-                    f"Last Updated: {format_time(get_file_mtime('data/trades_log.csv'))}"
+                    f"Last Updated: {format_time(get_file_mtime('data/account_equity.csv'))}"
                 ),
-                indicator,
                 dbc.Row([
                     dbc.Col(dcc.Graph(figure=equity_fig), md=6),
                     dbc.Col(dcc.Graph(figure=monthly_fig), md=6),
