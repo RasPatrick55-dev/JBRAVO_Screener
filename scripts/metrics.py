@@ -12,18 +12,10 @@ import numpy as np
 
 import pandas as pd
 from pathlib import Path
-from utils import write_csv_atomic
+from utils import write_csv_atomic, logger_utils
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)s]: %(message)s",
-    handlers=[
-        logging.FileHandler("logs/metrics.log"),
-        logging.StreamHandler(),
-    ],
-)
-logger = logging.getLogger(__name__)
-logger.info("Metrics script started.")
+logger = logger_utils.init_logging(__name__, "metrics.log")
+logger.info("Metrics script started")
 
 start_time = datetime.utcnow()
 
@@ -41,36 +33,29 @@ REQUIRED_COLUMNS = [
 required_columns = ["symbol", "net_pnl", "entry_time", "exit_time"]
 
 
-def load_trades_log(file_path: str):
-    """Load trades log CSV with validation and error handling."""
+def load_trades_log(file_path: str) -> pd.DataFrame:
+    """Load ``trades_log.csv`` and validate required columns."""
     if not Path(file_path).exists():
-        logger.error(f"Trades log file not found: {file_path}")
-        return None
-    try:
-        df = pd.read_csv(file_path)
-        missing_cols = [col for col in required_columns if col not in df.columns]
-        if missing_cols:
-            logger.error(f"Trades log missing columns: {missing_cols}")
-            return None
-        return df
-    except Exception as e:
-        logger.error(f"Error loading trades log CSV: {e}")
-        return None
+        logger.error("Trades log file not found: %s", file_path)
+        raise FileNotFoundError(f"Trades log file not found: {file_path}")
+
+    df = pd.read_csv(file_path)
+    missing_cols = [col for col in required_columns if col not in df.columns]
+    if missing_cols:
+        logger.error("Trades log missing required columns: %s", missing_cols)
+        raise KeyError(f"Missing required columns: {missing_cols}")
+    return df
 
 
 def validate_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:
-    """Ensure a column contains numeric data, coercing errors to zero."""
-    try:
-        df[column] = pd.to_numeric(df[column], errors="coerce")
-        if df[column].isna().any():
-            invalid_count = df[column].isna().sum()
-            logger.warning(
-                f"{invalid_count} invalid numeric entries found in '{column}' replaced with zeros."
-            )
-            df[column].fillna(0, inplace=True)
-    except Exception as e:
-        logger.error(f"Error converting column '{column}' to numeric: {e}")
-        df[column] = 0
+    """Ensure a column contains numeric data and drop invalid rows."""
+    df[column] = pd.to_numeric(df[column], errors="coerce")
+    invalid_count = df[column].isna().sum()
+    if invalid_count:
+        logger.warning(
+            "%d rows dropped due to non-numeric %s values", invalid_count, column
+        )
+        df = df.dropna(subset=[column])
     return df
 
 
@@ -224,10 +209,9 @@ def main():
     metrics_summary_file = Path(BASE_DIR) / "data" / "metrics_summary.csv"
 
     trades_df = load_trades_log(trade_log_path)
-    if trades_df is None or trades_df.empty:
-        logger.warning(
-            "Trades DataFrame is empty or improperly loaded. Writing default metrics."
-        )
+
+    if trades_df.empty:
+        logger.warning("Trades log is empty. Writing default metrics.")
         metrics_summary = pd.DataFrame([
             {
                 "total_trades": 0,
@@ -273,9 +257,14 @@ def main():
         ])
 
         logger.info(
-            f"Calculated Metrics: Trades={total_trades}, Net PnL={net_pnl:.2f}, "
-            f"Win Rate={win_rate:.2f}%, Expectancy={expectancy:.2f}, "
-            f"Profit Factor={profit_factor}, Max Drawdown={max_drawdown:.2f}"
+            "Calculated Metrics: Trades=%s, Net PnL=%.2f, Win Rate=%.2f%%, "
+            "Expectancy=%.2f, Profit Factor=%s, Max Drawdown=%.2f",
+            total_trades,
+            net_pnl,
+            win_rate,
+            expectancy,
+            profit_factor,
+            max_drawdown,
         )
 
     try:
