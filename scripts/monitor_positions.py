@@ -489,13 +489,16 @@ def manage_trailing_stop(position):
         )
         return
     try:
-        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
-        open_orders = trading_client.get_orders(request)
+        existing_orders = trading_client.get_orders(
+            GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+        )
     except Exception as exc:
         logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
-        open_orders = []
+        existing_orders = []
 
-    trailing_stops = [order for order in open_orders if getattr(order, "order_type", "") == "trailing_stop"]
+    trailing_stops = [
+        order for order in existing_orders if getattr(order, "order_type", "") == "trailing_stop"
+    ]
 
     if len(trailing_stops) > 1:
         for order in trailing_stops[1:]:
@@ -511,6 +514,7 @@ def manage_trailing_stop(position):
                     symbol,
                     exc,
                 )
+    trailing_stops = trailing_stops[:1]
 
     if not trailing_stops:
         available_qty = int(getattr(position, "qty_available", 0))
