@@ -11,16 +11,10 @@ from datetime import datetime
 import numpy as np
 
 import pandas as pd
+from pathlib import Path
 from utils import write_csv_atomic
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(os.path.join(BASE_DIR, "logs", "metrics.log")),
-        logging.StreamHandler(),
-    ],
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.info("Metrics script started.")
 
@@ -183,10 +177,10 @@ def main():
         ranked_df[['symbol', 'score', 'win_rate', 'net_pnl']].head(15).to_string(index=False)
     )
 
-    trades_df = pd.read_csv(os.path.join(BASE_DIR, "data", "trades_log.csv"))
+    trade_log_path = Path(BASE_DIR) / "data" / "trades_log.csv"
+    metrics_summary_path = Path(BASE_DIR) / "data" / "metrics_summary.csv"
 
-    if trades_df.empty:
-        logger.warning("trades_log.csv is empty. Writing default metrics.")
+    if not trade_log_path.exists() or trade_log_path.stat().st_size == 0:
         metrics_summary = pd.DataFrame([
             {
                 "total_trades": 0,
@@ -197,15 +191,18 @@ def main():
                 "max_drawdown": 0.0,
             }
         ])
+        logger.warning("Trade log is missing or empty. Writing default metrics summary.")
     else:
+        trades_df = pd.read_csv(trade_log_path)
         total_trades = len(trades_df)
         net_pnl = trades_df["net_pnl"].sum()
         wins = trades_df[trades_df["net_pnl"] > 0]
         losses = trades_df[trades_df["net_pnl"] < 0]
-        win_rate = len(wins) / total_trades * 100 if total_trades > 0 else 0.0
-        expectancy = net_pnl / total_trades if total_trades > 0 else 0.0
+        win_rate = len(wins) / total_trades * 100 if total_trades else 0
+        expectancy = net_pnl / total_trades if total_trades else 0
         profit_factor = wins["net_pnl"].sum() / abs(losses["net_pnl"].sum()) if not losses.empty else float("inf")
-        max_drawdown = trades_df["net_pnl"].cumsum().min()
+        cumulative_pnl = trades_df["net_pnl"].cumsum()
+        max_drawdown = cumulative_pnl.min()
 
         metrics_summary = pd.DataFrame([
             {
@@ -218,8 +215,8 @@ def main():
             }
         ])
 
-    metrics_summary.to_csv(os.path.join(BASE_DIR, "data", "metrics_summary.csv"), index=False)
-    logger.info("Metrics summary CSV successfully updated.")
+    metrics_summary.to_csv(metrics_summary_path, index=False)
+    logger.info("Metrics summary successfully updated.")
 
 if __name__ == "__main__":
     logger.info("Starting metrics calculation")
