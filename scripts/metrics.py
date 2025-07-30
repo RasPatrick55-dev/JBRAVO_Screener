@@ -14,8 +14,8 @@ import pandas as pd
 from pathlib import Path
 from utils import write_csv_atomic
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 logger.info("Metrics script started.")
 
 start_time = datetime.utcnow()
@@ -180,29 +180,21 @@ def main():
     trade_log_path = Path(BASE_DIR) / "data" / "trades_log.csv"
     metrics_summary_path = Path(BASE_DIR) / "data" / "metrics_summary.csv"
 
-    if not trade_log_path.exists() or trade_log_path.stat().st_size == 0:
-        metrics_summary = pd.DataFrame([
-            {
-                "total_trades": 0,
-                "net_pnl": 0.0,
-                "win_rate": 0.0,
-                "expectancy": 0.0,
-                "profit_factor": 0.0,
-                "max_drawdown": 0.0,
-            }
-        ])
-        logger.warning("Trade log is missing or empty. Writing default metrics summary.")
-    else:
+    try:
         trades_df = pd.read_csv(trade_log_path)
+        if trades_df.empty:
+            raise ValueError("Trades log is empty.")
+
         total_trades = len(trades_df)
         net_pnl = trades_df["net_pnl"].sum()
-        wins = trades_df[trades_df["net_pnl"] > 0]
-        losses = trades_df[trades_df["net_pnl"] < 0]
-        win_rate = len(wins) / total_trades * 100 if total_trades else 0
+        win_rate = (trades_df["net_pnl"] > 0).mean() * 100
         expectancy = net_pnl / total_trades if total_trades else 0
-        profit_factor = wins["net_pnl"].sum() / abs(losses["net_pnl"].sum()) if not losses.empty else float("inf")
-        cumulative_pnl = trades_df["net_pnl"].cumsum()
-        max_drawdown = cumulative_pnl.min()
+        profit_factor = (
+            trades_df[trades_df["net_pnl"] > 0]["net_pnl"].sum() /
+            abs(trades_df[trades_df["net_pnl"] < 0]["net_pnl"].sum())
+            if len(trades_df[trades_df["net_pnl"] < 0]) else float("inf")
+        )
+        max_drawdown = trades_df["net_pnl"].cumsum().min()
 
         metrics_summary = pd.DataFrame([
             {
@@ -215,8 +207,21 @@ def main():
             }
         ])
 
+    except Exception as e:
+        logger.error(f"Error calculating metrics: {e}")
+        metrics_summary = pd.DataFrame([
+            {
+                "total_trades": 0,
+                "net_pnl": 0,
+                "win_rate": 0,
+                "expectancy": 0,
+                "profit_factor": 0,
+                "max_drawdown": 0,
+            }
+        ])
+
     metrics_summary.to_csv(metrics_summary_path, index=False)
-    logger.info("Metrics summary successfully updated.")
+    logger.info("Metrics summary CSV updated successfully.")
 
 if __name__ == "__main__":
     logger.info("Starting metrics calculation")
