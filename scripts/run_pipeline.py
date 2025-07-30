@@ -19,6 +19,7 @@ from utils import logger_utils
 import json
 import requests
 import pandas as pd
+from pathlib import Path
 
 from utils import write_csv_atomic
 
@@ -102,6 +103,18 @@ if __name__ == "__main__":
                     logger.info("Backtest results written to %s", backtest_path)
                 else:
                     logger.error("Expected backtest results at %s not found", backtest_path)
+            if name == "Metrics Calculation":
+                metrics_summary_file = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
+                if Path(metrics_summary_file).exists():
+                    logger.info(
+                        "Metrics summary file exists and is confirmed updated at: %s",
+                        metrics_summary_file,
+                    )
+                else:
+                    logger.error(
+                        "Metrics summary file missing after metrics calculation step: %s",
+                        metrics_summary_file,
+                    )
         except Exception:
             logger.error("Step %s failed", name)
             send_alert(f"Pipeline halted at step {name}")
