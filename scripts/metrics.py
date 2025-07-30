@@ -14,8 +14,15 @@ import pandas as pd
 from pathlib import Path
 from utils import write_csv_atomic
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s]: %(message)s",
+    handlers=[
+        logging.FileHandler("logs/metrics.log"),
+        logging.StreamHandler(),
+    ],
+)
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 logger.info("Metrics script started.")
 
 start_time = datetime.utcnow()
@@ -29,6 +36,42 @@ REQUIRED_COLUMNS = [
     "profit_factor",
     "max_drawdown",
 ]
+
+# Required columns expected in the trades log
+required_columns = ["symbol", "net_pnl", "entry_time", "exit_time"]
+
+
+def load_trades_log(file_path: str):
+    """Load trades log CSV with validation and error handling."""
+    if not Path(file_path).exists():
+        logger.error(f"Trades log file not found: {file_path}")
+        return None
+    try:
+        df = pd.read_csv(file_path)
+        missing_cols = [col for col in required_columns if col not in df.columns]
+        if missing_cols:
+            logger.error(f"Trades log missing columns: {missing_cols}")
+            return None
+        return df
+    except Exception as e:
+        logger.error(f"Error loading trades log CSV: {e}")
+        return None
+
+
+def validate_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Ensure a column contains numeric data, coercing errors to zero."""
+    try:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+        if df[column].isna().any():
+            invalid_count = df[column].isna().sum()
+            logger.warning(
+                f"{invalid_count} invalid numeric entries found in '{column}' replaced with zeros."
+            )
+            df[column].fillna(0, inplace=True)
+    except Exception as e:
+        logger.error(f"Error converting column '{column}' to numeric: {e}")
+        df[column] = 0
+    return df
 
 
 # Load backtest results
@@ -178,22 +221,44 @@ def main():
     )
 
     trade_log_path = Path(BASE_DIR) / "data" / "trades_log.csv"
-    metrics_summary_path = Path(BASE_DIR) / "data" / "metrics_summary.csv"
+    metrics_summary_file = Path(BASE_DIR) / "data" / "metrics_summary.csv"
 
-    try:
-        trades_df = pd.read_csv(trade_log_path)
-        if trades_df.empty:
-            raise ValueError("Trades log is empty.")
+    trades_df = load_trades_log(trade_log_path)
+    if trades_df is None or trades_df.empty:
+        logger.warning(
+            "Trades DataFrame is empty or improperly loaded. Writing default metrics."
+        )
+        metrics_summary = pd.DataFrame([
+            {
+                "total_trades": 0,
+                "net_pnl": 0.0,
+                "win_rate": 0.0,
+                "expectancy": 0.0,
+                "profit_factor": 0.0,
+                "max_drawdown": 0.0,
+            }
+        ])
+    else:
+        trades_df = validate_numeric(trades_df, "net_pnl")
 
         total_trades = len(trades_df)
         net_pnl = trades_df["net_pnl"].sum()
-        win_rate = (trades_df["net_pnl"] > 0).mean() * 100
-        expectancy = net_pnl / total_trades if total_trades else 0
-        profit_factor = (
-            trades_df[trades_df["net_pnl"] > 0]["net_pnl"].sum() /
-            abs(trades_df[trades_df["net_pnl"] < 0]["net_pnl"].sum())
-            if len(trades_df[trades_df["net_pnl"] < 0]) else float("inf")
-        )
+
+        wins = trades_df[trades_df["net_pnl"] > 0]
+        losses = trades_df[trades_df["net_pnl"] < 0]
+
+        win_rate = (len(wins) / total_trades * 100) if total_trades else 0.0
+        expectancy = (net_pnl / total_trades) if total_trades else 0.0
+
+        try:
+            profit_factor = (
+                wins["net_pnl"].sum() / abs(losses["net_pnl"].sum())
+                if not losses.empty
+                else np.inf
+            )
+        except ZeroDivisionError:
+            profit_factor = np.inf
+
         max_drawdown = trades_df["net_pnl"].cumsum().min()
 
         metrics_summary = pd.DataFrame([
@@ -207,21 +272,19 @@ def main():
             }
         ])
 
-    except Exception as e:
-        logger.error(f"Error calculating metrics: {e}")
-        metrics_summary = pd.DataFrame([
-            {
-                "total_trades": 0,
-                "net_pnl": 0,
-                "win_rate": 0,
-                "expectancy": 0,
-                "profit_factor": 0,
-                "max_drawdown": 0,
-            }
-        ])
+        logger.info(
+            f"Calculated Metrics: Trades={total_trades}, Net PnL={net_pnl:.2f}, "
+            f"Win Rate={win_rate:.2f}%, Expectancy={expectancy:.2f}, "
+            f"Profit Factor={profit_factor}, Max Drawdown={max_drawdown:.2f}"
+        )
 
-    metrics_summary.to_csv(metrics_summary_path, index=False)
-    logger.info("Metrics summary CSV updated successfully.")
+    try:
+        metrics_summary.to_csv(metrics_summary_file, index=False)
+        logger.info(
+            f"Metrics summary CSV successfully updated: {metrics_summary_file}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to write metrics_summary.csv: {e}")
 
 if __name__ == "__main__":
     logger.info("Starting metrics calculation")
