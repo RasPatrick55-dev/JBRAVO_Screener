@@ -337,12 +337,12 @@ def file_timestamp(path):
     return ts.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
 
 
-def get_file_mtime(path: str):
+def get_file_mtime(path):
     """Return the modification time of ``path`` or ``None`` if unavailable."""
     try:
         return os.path.getmtime(path)
     except Exception as e:
-        logger.error(f"Failed to get mtime for {path}: {e}")
+        logging.error(f"Error getting modification time for {path}: {e}")
         return None
 
 
@@ -350,7 +350,7 @@ def format_time(ts):
     """Return ``ts`` converted to CST/CDT (America/Chicago)."""
     if not ts:
         return "N/A"
-    utc_time = datetime.fromtimestamp(ts, tz=timezone.utc)
+    utc_time = datetime.fromtimestamp(ts, tz=pytz.utc)
     local_time = utc_time.astimezone(pytz.timezone("America/Chicago"))
     return local_time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
