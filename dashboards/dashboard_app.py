@@ -1207,7 +1207,7 @@ def screener_layout():
     return _render_tab("tab-screener", 0, 0, None)
 
 
-@app.callback(Output("tabs-content", "children"), Input("tabs", "active_tab"))
+@app.callback(Output("tabs-content", "children"), [Input("tabs", "active_tab")])
 def render_tab(tab):
     if tab == "tab-overview":
         return overview_layout()
@@ -1222,7 +1222,7 @@ def render_tab(tab):
     elif tab == "tab-screener":
         return screener_layout()
     else:
-        return dbc.Alert("Selected tab not found.", color="danger")
+        return dbc.Alert("Tab not found.", color="danger")
 
 
 # Callback for modal interaction
