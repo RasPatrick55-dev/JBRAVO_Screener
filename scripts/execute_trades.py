@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone, time
 import pytz
 from time import sleep
 import time
+from typing import Optional
 from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
@@ -128,7 +129,7 @@ def round_price(value: float) -> float:
     return round(value + 1e-6, 2)
 
 
-def get_latest_price(symbol: str) -> float | None:
+def get_latest_price(symbol: str) -> Optional[float]:
     """Return the most recent trade price for ``symbol``."""
     if hasattr(trading_client, "get_stock_latest_trade"):
         try:
@@ -156,7 +157,7 @@ def get_latest_price(symbol: str) -> float | None:
     return None
 
 
-def get_symbol_price(symbol: str, client, fallback_prices: dict[str, float]) -> float | None:
+def get_symbol_price(symbol: str, client, fallback_prices: dict[str, float]) -> Optional[float]:
     """Return a recent price for ``symbol`` using multiple fallbacks."""
     now_utc = datetime.utcnow()
     start_time = now_utc - timedelta(minutes=75)
@@ -652,7 +653,7 @@ def poll_order_status(
     order_id: str,
     timeout_seconds: int = ORDER_TIMEOUT_SECONDS,
     poll_interval: int = ORDER_POLL_INTERVAL,
-) -> "Order" | None:
+) -> Optional["Order"]:
     """Poll order ``order_id`` until completion or timeout.
 
     Returns the final order object on success or ``None`` on cancel/timeout.
@@ -730,7 +731,7 @@ def submit_order_with_polling(
     qty: int,
     limit_price: float,
     side: str = "buy",
-) -> "Order" | None:
+) -> Optional["Order"]:
     """Submit a limit order and poll until it completes or times out."""
 
     try:

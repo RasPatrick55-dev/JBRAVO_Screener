@@ -18,6 +18,7 @@ from utils import logger_utils
 
 import pandas as pd
 from alpaca.trading.client import TradingClient
+from typing import Optional
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
@@ -120,7 +121,7 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.rolling(period).mean()
 
 
-def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
+def compute_score(symbol: str, df: pd.DataFrame) -> Optional[dict]:
     try:
         logger.debug("Running compute_score for %s with %d rows", symbol, len(df))
         if len(df) < 2:

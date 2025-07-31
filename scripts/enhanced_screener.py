@@ -53,6 +53,7 @@ import requests
 
 from indicators import adx, aroon, macd, obv, rsi
 from utils import write_csv_atomic, cache_bars
+from typing import Optional
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -165,7 +166,7 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return atr
 
 
-def compute_score(symbol: str, df: pd.DataFrame) -> dict | None:
+def compute_score(symbol: str, df: pd.DataFrame) -> Optional[dict]:
     """Calculate a composite score for a single symbol.
 
     The scoring system sums up discrete points from multiple indicators.

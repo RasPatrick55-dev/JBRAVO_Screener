@@ -1,6 +1,7 @@
 import logging
 import os
 from logging.handlers import RotatingFileHandler
+from typing import Optional
 
 
 def init_logging(module_name: str, log_filename: str) -> logging.Logger:
@@ -26,7 +27,11 @@ def init_logging(module_name: str, log_filename: str) -> logging.Logger:
     return logger
 
 
-def get_logger(name: str | None = None, level=logging.INFO, filename: str | None = None) -> logging.Logger:
+def get_logger(
+    name: Optional[str] = None,
+    level=logging.INFO,
+    filename: Optional[str] = None,
+) -> logging.Logger:
     """Return a configured :class:`logging.Logger` instance.
 
     Parameters

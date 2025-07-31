@@ -31,6 +31,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import TrailingStopOrderRequest
+from typing import Optional
 
 from utils import write_csv_atomic
 from exit_signals import should_exit_early
@@ -111,7 +112,14 @@ if not os.path.exists(open_pos_path):
     ).to_csv(open_pos_path, index=False)
 
 
-def record_executed_trade(symbol: str, qty: int, price: float, order_type: str, side: str, exit_time: datetime | None = None) -> None:
+def record_executed_trade(
+    symbol: str,
+    qty: int,
+    price: float,
+    order_type: str,
+    side: str,
+    exit_time: Optional[datetime] = None,
+) -> None:
     """Append a single executed trade to executed_trades.csv.
 
     The ``exit_time`` parameter can be left as None for entry orders; it

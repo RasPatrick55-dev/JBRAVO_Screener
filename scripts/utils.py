@@ -10,6 +10,7 @@ import time
 from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.common.exceptions import APIError
+from typing import Optional
 
 
 def has_datetime_index(idx) -> bool:
@@ -46,7 +47,7 @@ def fetch_bars_with_cutoff(symbol: str, start_datetime, data_client) -> pd.DataF
         return pd.DataFrame()
 
 
-def get_last_trading_day_end(now: datetime | None = None) -> datetime:
+def get_last_trading_day_end(now: Optional[datetime] = None) -> datetime:
     """Return previous market close timestamp in UTC.
 
     This helps when running during weekends or outside market hours.
@@ -77,7 +78,7 @@ def cache_bars(
     cache_dir: str,
     days: int = 1500,
     timeframe: TimeFrame = TimeFrame.Day,
-) -> pd.DataFrame | None:
+) -> Optional[pd.DataFrame]:
     """Fetch and cache bars for ``symbol``.
 
     For ``TimeFrame.Day`` the behaviour mirrors the original implementation

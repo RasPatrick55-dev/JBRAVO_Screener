@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 import os
 import pytz
+from typing import Optional
 
 # Base directory of the project (parent of this file)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -102,7 +103,11 @@ def fetch_positions_api():
         return pd.DataFrame()
 
 
-def load_csv(filepath, required_columns=None, alert_prefix: str | None = None):
+def load_csv(
+    filepath,
+    required_columns=None,
+    alert_prefix: Optional[str] = None,
+):
     """Load a CSV file from ``filepath`` and validate required columns.
 
     Returns a tuple of (DataFrame, alert_component). If the file is missing or
