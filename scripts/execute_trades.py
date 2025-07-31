@@ -25,7 +25,7 @@ from alpaca.trading.requests import (
     TrailingStopOrderRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
@@ -37,6 +37,7 @@ from utils.logger_utils import init_logging
 
 # Import scripts/utils explicitly
 from scripts.utils import cache_bars
+from pathlib import Path
 
 # Explicit import from scripts directory
 from scripts.exit_signals import should_exit_early
@@ -94,6 +95,25 @@ metrics = {
 metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 
 
+def load_cached_prices(symbols: list[str], cache_dir: str = os.path.join(BASE_DIR, "data", "history_cache")) -> dict[str, float]:
+    """Return a mapping of symbol to the last cached close price."""
+    prices: dict[str, float] = {}
+    for sym in symbols:
+        path = Path(cache_dir) / f"{sym}.csv"
+        if path.exists():
+            try:
+                df = pd.read_csv(path)
+                if "close" in df.columns and not df.empty:
+                    prices[sym] = float(df["close"].iloc[-1])
+                else:
+                    logger.warning("No 'close' data found in cache for %s.", sym)
+            except Exception as exc:  # pragma: no cover - unexpected read errors
+                logger.error("Failed reading cache for %s: %s", sym, exc)
+        else:
+            logger.warning("No cache file found for %s.", sym)
+    return prices
+
+
 def round_price(value: float) -> float:
     """Return ``value`` rounded to the nearest cent."""
     return round(value + 1e-6, 2)
@@ -124,6 +144,52 @@ def get_latest_price(symbol: str) -> float | None:
         return None
     if not bars.empty:
         return float(bars["close"].iloc[-1])
+    return None
+
+
+def get_symbol_price(symbol: str, client, fallback_prices: dict[str, float]) -> float | None:
+    """Return a recent price for ``symbol`` using multiple fallbacks."""
+    now_utc = datetime.utcnow()
+    start_time = now_utc - timedelta(minutes=75)
+    end_time = now_utc - timedelta(minutes=15)
+
+    try:
+        request = StockBarsRequest(
+            symbol_or_symbols=[symbol],
+            timeframe=TimeFrame.Minute,
+            start=start_time,
+            end=end_time,
+            feed="iex",
+        )
+        bars = client.get_stock_bars(request).df
+        if isinstance(bars.index, pd.MultiIndex):
+            bars = bars.droplevel(0)
+        if not bars.empty:
+            price = float(bars["close"].iloc[-1])
+            logger.info("IEX intraday price for %s: %s", symbol, price)
+            return price
+        raise ValueError("No intraday bars available from IEX.")
+    except Exception as exc:  # pragma: no cover - network failures
+        logger.warning("IEX intraday data failed for %s: %s", symbol, exc)
+
+    try:
+        req = StockLatestTradeRequest(symbol_or_symbols=symbol, feed="iex")
+        trade_resp = client.get_stock_latest_trade(req)
+        trade_price = (
+            trade_resp[symbol].price if isinstance(trade_resp, dict) else getattr(trade_resp, "price", None)
+        )
+        if trade_price:
+            logger.info("Latest IEX trade price for %s: %s", symbol, trade_price)
+            return float(trade_price)
+    except Exception as exc:  # pragma: no cover - network failures
+        logger.warning("Latest trade fetch failed for %s: %s", symbol, exc)
+
+    if symbol in fallback_prices:
+        cached = fallback_prices[symbol]
+        logger.info("Using cached previous close for %s: %s", symbol, cached)
+        return cached
+
+    logger.error("No price available for %s. Skipping trade.", symbol)
     return None
 
 
@@ -459,7 +525,7 @@ def poll_order_until_complete(order_id: str) -> str:
     logger.info("Order %s completed with status %s", order_id, status)
     return status
 
-def allocate_position(symbol):
+def allocate_position(symbol: str, fallback_prices: dict[str, float]):
     open_positions = get_open_positions()
     if symbol in open_positions:
         reason = "already in open positions"
@@ -476,51 +542,24 @@ def allocate_position(symbol):
 
     buying_power = get_buying_power()
     alloc_amount = buying_power * ALLOC_PERCENT
-    start = datetime.now(timezone.utc) - timedelta(hours=1, minutes=16)
-    last_close = None
-    try:
-        req = StockBarsRequest(
-            symbol_or_symbols=[symbol],
-            timeframe=TimeFrame.Minute,
-            start=start,
-            end=datetime.now(timezone.utc) - timedelta(minutes=16),
-            feed="iex",
-        )
-        bars = data_client.get_stock_bars(req).df
-        if bars.empty:
-            logger.warning(
-                "No bars available for %s from %s to %s. Retrying with previous day's close.",
-                symbol,
-                start,
-                (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat(),
-            )
-            prev_close = get_latest_price(symbol)
-            if prev_close is None:
-                logger.error("Fallback price fetch failed for %s", symbol)
-            else:
-                last_close = float(prev_close)
-                bars = pd.DataFrame([{"close": prev_close}])
-                logger.info("Using previous close price for %s: %s", symbol, prev_close)
-        else:
-            last_close = float(bars['close'].iloc[-1])
-    except Exception as e:
-        logger.error("Error fetching bars for %s: %s", symbol, e)
+
+    last_price = get_symbol_price(symbol, data_client, fallback_prices)
+    if last_price is None:
         return None, "market data error"
 
-    if last_close is None:
-        return None, "market data error"
-
-    qty = int(alloc_amount / last_close)
+    qty = int(alloc_amount / last_price)
     if qty < 1:
         reason = "allocation insufficient"
         logger.debug("Skipping %s: %s", symbol, reason)
         return None, reason
 
-    logger.debug("Allocating %d shares of %s at %s", qty, symbol, last_close)
-    return (qty, round(last_close, 2)), None
+    logger.debug("Allocating %d shares of %s at %s", qty, symbol, last_price)
+    return (qty, round(last_price, 2)), None
 
 def submit_trades():
     df = load_top_candidates()
+    symbols = df['symbol'].tolist() if not df.empty else []
+    cached_prices = load_cached_prices(symbols)
     calendar_today = trading_client.get_calendar()[0]
     if calendar_today.open is None or calendar_today.close is None:
         logger.warning(
@@ -550,7 +589,7 @@ def submit_trades():
             skipped += 1
             metrics["symbols_skipped"] += 1
             continue
-        alloc, reason = allocate_position(sym)
+        alloc, reason = allocate_position(sym, cached_prices)
         if alloc is None:
             skipped += 1
             metrics["symbols_skipped"] += 1
@@ -572,7 +611,7 @@ def submit_trades():
             row.avg_return,
         )
         try:
-            limit_price = get_latest_price(sym)
+            limit_price = get_symbol_price(sym, data_client, cached_prices)
             if limit_price is None:
                 logger.error("Latest price unavailable for %s", sym)
                 limit_price = entry_price
