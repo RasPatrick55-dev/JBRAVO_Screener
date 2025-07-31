@@ -17,12 +17,14 @@ import json
 from datetime import datetime, timedelta, timezone, time
 import pytz
 from time import sleep
+import time
 from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     LimitOrderRequest,
     GetOrdersRequest,
     TrailingStopOrderRequest,
+    CancelOrderResponse,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
@@ -79,6 +81,11 @@ MAX_OPEN_TRADES = 10
 ALLOC_PERCENT = 0.03  # Changed allocation to 3%
 TRAIL_PERCENT = 3.0
 MAX_HOLD_DAYS = 7
+
+# Order handling constants
+ORDER_POLL_INTERVAL = 10  # seconds between status checks
+ORDER_TIMEOUT_SECONDS = 120  # total time to wait before cancelling and retrying
+MAX_ORDER_RETRIES = 3  # maximum number of retries per symbol
 
 # Directory used for caching market history
 DATA_CACHE_DIR = os.path.join(BASE_DIR, "data", "history_cache")
@@ -474,6 +481,99 @@ def record_executed_trade(
     pd.DataFrame([row]).to_csv(csv_path, mode="a", header=False, index=False)
 
 
+def submit_order_with_retry(
+    trading_client,
+    symbol: str,
+    qty: int,
+    limit_price: float,
+    side: str = "buy",
+    retries: int = 0,
+):
+    """Submit a limit order and retry with timeout if stuck."""
+
+    if retries > MAX_ORDER_RETRIES:
+        logger.error("Max retries exceeded for %s. Skipping.", symbol)
+        return None, "max_retries"
+
+    try:
+        order_data = LimitOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            type="limit",
+            time_in_force="day",
+            limit_price=limit_price,
+            extended_hours=False,
+        )
+        order = trading_client.submit_order(order_data)
+        order_id = order.id
+        logger.info(
+            "[SUBMIT] Order for %s: qty=%s, price=%s, session=regular, order_id=%s",
+            symbol,
+            qty,
+            limit_price,
+            order_id,
+        )
+    except Exception as exc:
+        logger.error("Failed to submit order for %s: %s", symbol, exc)
+        return None, "submit_failed"
+
+    start_time = datetime.utcnow()
+    status = "new"
+    while True:
+        try:
+            current_order = trading_client.get_order_by_id(order_id)
+            status = getattr(current_order, "status", "unknown")
+            logger.info("Polling order %s for %s, status: %s", order_id, symbol, status)
+
+            if status in ["filled", "partially_filled"]:
+                logger.info(
+                    "Order %s for %s executed successfully with status %s.",
+                    order_id,
+                    symbol,
+                    status,
+                )
+                break
+            if status in ["canceled", "rejected"]:
+                logger.warning("Order %s for %s was %s.", order_id, symbol, status)
+                break
+            if (datetime.utcnow() - start_time).total_seconds() > ORDER_TIMEOUT_SECONDS:
+                logger.warning(
+                    "Order %s for %s stuck in '%s' status for over %ss. Cancelling and retrying.",
+                    order_id,
+                    symbol,
+                    status,
+                    ORDER_TIMEOUT_SECONDS,
+                )
+                try:
+                    trading_client.cancel_order_by_id(order_id)
+                except Exception as cancel_exc:
+                    logger.error(
+                        "[ORDER ERROR] Failed to cancel order %s for %s: %s",
+                        order_id,
+                        symbol,
+                        cancel_exc,
+                    )
+                    break
+                time.sleep(5)
+                logger.info("[RETRY] Attempt #%s for order %s", retries + 1, symbol)
+                return submit_order_with_retry(
+                    trading_client,
+                    symbol,
+                    qty,
+                    limit_price,
+                    side,
+                    retries + 1,
+                )
+        except Exception as exc:
+            logger.error("Error polling order %s for %s: %s", order_id, symbol, exc)
+            break
+
+        time.sleep(ORDER_POLL_INTERVAL)
+
+    return order_id, status
+
+
 def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> None:
     """Submit a trailing stop sell order for ``symbol``."""
     try:
@@ -622,84 +722,34 @@ def submit_trades():
                 continue
             price = round_price(limit_price)
             price = round(price + 1e-6, 2)
-            now_et = datetime.now(pytz.timezone("US/Eastern")).time()
-            session = "extended" if is_extended_hours(now_et) else "regular"
-            logger.info(
-                "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
+
+            order_id, status = submit_order_with_retry(
+                trading_client,
                 sym,
                 qty,
                 price,
-                session,
+                side="buy",
             )
-            order_request = LimitOrderRequest(
-                symbol=sym,
-                qty=qty,
-                side=OrderSide.BUY,
-                type="limit",
-                limit_price=price,
-                time_in_force=TimeInForce.DAY,
-                extended_hours=is_extended_hours(now_et),
-            )
-            order = trading_client.submit_order(order_request)
-            status = poll_order_until_complete(order.id)
+
             record_executed_trade(
                 sym,
                 qty,
                 price,
                 order_type="limit",
                 side="buy",
-                order_id=str(order.id),
+                order_id=str(order_id) if order_id else "",
                 order_status=status,
             )
+
             if status == "filled":
                 attach_trailing_stops()
                 save_open_positions_csv()
                 update_trades_log()
-            submitted += 1
-            metrics["orders_submitted"] += 1
-        except APIError as e:
-            if "extended hours order must be DAY limit orders" in str(e):
-                logger.warning("Retrying %s without extended_hours flag.", sym)
-                try:
-                    retry_price = round_price(entry_price)
-                    retry_price = round(retry_price + 1e-6, 2)
-                    retry_order = LimitOrderRequest(
-                        symbol=sym,
-                        qty=qty,
-                        side=OrderSide.BUY,
-                        time_in_force=TimeInForce.DAY,
-                        limit_price=retry_price,
-                        extended_hours=False,
-                    )
-                    order = trading_client.submit_order(retry_order)
-                    status = poll_order_until_complete(order.id)
-                    logger.info(
-                        "Retry successful with regular hours order for %s", sym
-                    )
-                    record_executed_trade(
-                        sym,
-                        qty,
-                        retry_price,
-                        order_type="limit",
-                        side="buy",
-                        order_id=str(order.id),
-                        order_status=status,
-                    )
-                    if status == "filled":
-                        attach_trailing_stops()
-                        save_open_positions_csv()
-                        update_trades_log()
-                    submitted += 1
-                    metrics["orders_submitted"] += 1
-                    metrics["api_retries"] += 1
-                except APIError as retry_e:
-                    logger.error(
-                        "Retry order submission failed for %s: %s", sym, retry_e
-                    )
-                    skipped += 1
-                    metrics["api_failures"] += 1
+
+            if order_id:
+                submitted += 1
+                metrics["orders_submitted"] += 1
             else:
-                logger.error("Order failed for %s: %s", sym, e)
                 skipped += 1
                 metrics["api_failures"] += 1
         except Exception as e:
