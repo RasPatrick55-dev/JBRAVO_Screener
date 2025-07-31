@@ -121,27 +121,18 @@ if not os.path.exists(open_pos_path):
         ]
     ).to_csv(open_pos_path, index=False)
 
-# Load existing open positions once so we can preserve the original
-# entry time for positions that persist across cycles.
-existing_df = (
-    pd.read_csv(open_pos_path) if os.path.exists(open_pos_path) else pd.DataFrame()
-)
-existing_df = ensure_column_exists(existing_df, "entry_time", pd.Timestamp.now().isoformat())
+# No global entry time cache - load the CSV each cycle to preserve original
+# entry times even if other processes modify the file.
 
-
-def get_original_entry_time(symbol: str, current_created_at: Optional[str]) -> str:
+def get_original_entry_time(existing_df: pd.DataFrame, symbol: str, default_time: str) -> str:
     """Return the previously recorded entry time for ``symbol`` if available."""
-    if "entry_time" not in existing_df.columns:
-        logger.warning("existing_df missing 'entry_time' column. Using current timestamp.")
-        return current_created_at or datetime.now().isoformat()
-    try:
-        original_entry = existing_df.loc[existing_df["symbol"] == symbol, "entry_time"]
-    except KeyError:
-        logger.error("'entry_time' column missing when accessing existing_df", exc_info=True)
-        return current_created_at or datetime.now().isoformat()
-    if not original_entry.empty:
-        return original_entry.iloc[0]
-    return current_created_at or datetime.now().isoformat()
+    match = existing_df[existing_df["symbol"] == symbol]
+    if not match.empty and "entry_time" in match.columns:
+        try:
+            return match.iloc[0]["entry_time"]
+        except Exception:
+            pass
+    return default_time
 
 executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
@@ -253,7 +244,9 @@ def save_positions_csv(positions):
             else:
                 current_created = None
 
-            entry_time = get_original_entry_time(p.symbol, current_created)
+            entry_time = get_original_entry_time(
+                existing_positions_df, p.symbol, current_created or pd.Timestamp.now().isoformat()
+            )
             updated_entry = {
                 "symbol": p.symbol,
                 "qty": qty,
@@ -329,9 +322,6 @@ def save_positions_csv(positions):
         shutil.move(tmp.name, csv_path)
         logger.debug("Saved open positions to %s", csv_path)
         logger.info("Updated open_positions.csv successfully.")
-        # Update the cached dataframe so future cycles retain original entry times
-        global existing_df
-        existing_df = df.copy()
     except Exception as e:
         logger.error("Error saving positions CSV: %s", e, exc_info=True)
 
