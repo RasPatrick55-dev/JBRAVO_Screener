@@ -100,26 +100,27 @@ def ensure_column_exists(df: pd.DataFrame, column: str, default=None) -> pd.Data
         logger.warning("Added missing '%s' column with default %s", column, default)
     return df
 
+# Required columns for open_positions.csv
+REQUIRED_COLUMNS = [
+    "symbol",
+    "qty",
+    "avg_entry_price",
+    "entry_price",
+    "current_price",
+    "unrealized_pl",
+    "net_pnl",
+    "entry_time",
+    "days_in_trade",
+    "side",
+    "order_status",
+    "pnl",
+    "order_type",
+]
+
 
 open_pos_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 if not os.path.exists(open_pos_path):
-    pd.DataFrame(
-        columns=[
-            "symbol",
-            "qty",
-            "avg_entry_price",
-            "current_price",
-            "unrealized_pl",
-            "entry_price",
-            "entry_time",
-            "days_in_trade",
-            "side",
-            "order_status",
-            "net_pnl",
-            "pnl",
-            "order_type",
-        ]
-    ).to_csv(open_pos_path, index=False)
+    pd.DataFrame(columns=REQUIRED_COLUMNS).to_csv(open_pos_path, index=False)
 
 # No global entry time cache - load the CSV each cycle to preserve original
 # entry times even if other processes modify the file.
@@ -203,7 +204,9 @@ def calculate_days_held(position) -> int:
 # Fetch current positions
 def get_open_positions():
     try:
-        return trading_client.get_all_positions()
+        positions = trading_client.get_all_positions()
+        logger.info(f"Fetched {len(positions)} positions from Alpaca API.")
+        return positions
     except Exception as e:
         logger.error("Failed to fetch open positions: %s", e)
         return []
@@ -211,119 +214,70 @@ def get_open_positions():
 
 # Save open positions to CSV for dashboard consumption
 def save_positions_csv(positions):
+    """Save positions to ``open_positions.csv`` ensuring required columns exist."""
     csv_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
     try:
-        # Load existing file so we can retain each position's original entry time
-        existing_positions_df = (
-            pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
-        )
-        existing_positions_df = ensure_column_exists(
-            existing_positions_df, "entry_time", pd.Timestamp.now().isoformat()
-        )
+        if os.path.exists(csv_path):
+            existing_positions_df = pd.read_csv(csv_path)
+        else:
+            existing_positions_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
 
-        active_symbols = set()
         rows = []
-        for p in positions:
-            try:
-                qty = float(p.qty)
-            except Exception:
-                qty = 0
-            if qty <= 0:
-                logger.warning(
-                    "Skipping %s due to non-positive quantity: %s", p.symbol, qty
-                )
-                continue
-            active_symbols.add(p.symbol)
-            entry_attr = getattr(p, "created_at", None)
-            if entry_attr is not None:
-                current_created = (
-                    entry_attr.isoformat()
-                    if hasattr(entry_attr, "isoformat")
-                    else str(entry_attr)
-                )
-            else:
-                current_created = None
+        if positions:
+            for p in positions:
+                row = {
+                    "symbol": p.symbol,
+                    "qty": float(p.qty),
+                    "avg_entry_price": float(p.avg_entry_price),
+                    "entry_price": float(p.avg_entry_price),
+                    "current_price": float(p.current_price),
+                    "unrealized_pl": float(p.unrealized_pl),
+                    "net_pnl": float(p.unrealized_pl),
+                    "entry_time": pd.Timestamp.now().isoformat(),
+                    "days_in_trade": None,
+                    "side": p.side,
+                    "order_status": "open",
+                    "pnl": float(p.unrealized_pl),
+                    "order_type": "trailing_stop" if p.asset_class == "us_equity" else "market",
+                }
+                rows.append(row)
+        else:
+            logger.info("No open positions found. Created empty positions DataFrame with correct columns.")
 
-            entry_time = get_original_entry_time(
-                existing_positions_df, p.symbol, current_created or pd.Timestamp.now().isoformat()
-            )
-            updated_entry = {
-                "symbol": p.symbol,
-                "qty": qty,
-                "avg_entry_price": p.avg_entry_price,
-                "current_price": p.current_price,
-                "unrealized_pl": p.unrealized_pl,
-                "entry_price": p.avg_entry_price,
-                "entry_time": entry_time,
-                "side": getattr(p, "side", "long"),
-                "order_status": "open",
-                "net_pnl": p.unrealized_pl,
-                "pnl": p.unrealized_pl,
-                "order_type": getattr(p, "order_type", "market"),
-            }
+        positions_df = pd.DataFrame(rows)
 
-            rows.append(updated_entry)
+        for col in REQUIRED_COLUMNS:
+            if col not in positions_df.columns:
+                positions_df[col] = None
+                logger.warning(f"Missing column '{col}' added with default None.")
 
-        columns = [
-            "symbol",
-            "qty",
-            "avg_entry_price",
-            "current_price",
-            "unrealized_pl",
-            "entry_price",
-            "entry_time",
-            "days_in_trade",
-            "side",
-            "order_status",
-            "net_pnl",
-            "pnl",
-            "order_type",
-        ]
+        def get_entry_time(symbol: str, default_time: str) -> str:
+            if "symbol" in existing_positions_df.columns and symbol in existing_positions_df["symbol"].values:
+                original_time = existing_positions_df.loc[
+                    existing_positions_df["symbol"] == symbol, "entry_time"
+                ].iloc[0]
+                return original_time if pd.notnull(original_time) else default_time
+            return default_time
 
-        df = pd.DataFrame(rows)
+        for idx, row in positions_df.iterrows():
+            positions_df.at[idx, "entry_time"] = get_entry_time(row["symbol"], row["entry_time"])
 
-        if "entry_time" not in df.columns:
-            df["entry_time"] = pd.Timestamp.now().isoformat()
-            logger.warning("Added missing 'entry_time' column with current timestamp.")
-
-        required_columns = ["symbol", "qty", "avg_entry_price", "current_price", "net_pnl", "entry_time"]
-        missing_cols = [c for c in required_columns if c not in df.columns]
-        if missing_cols:
-            for col in missing_cols:
-                df[col] = None
-                logger.warning("Missing column '%s' added with default None.", col)
-
-        df['side'] = df.get('side', 'long')
-        df['order_status'] = df.get('order_status', 'open')
-        df['net_pnl'] = df.get('unrealized_pl', 0.0)
-        df['pnl'] = df['net_pnl']
-        df['order_type'] = df.get('order_type', 'limit')
-
-        df["days_in_trade"] = (
-            pd.Timestamp.now() - pd.to_datetime(df["entry_time"], errors="coerce")
+        positions_df["days_in_trade"] = (
+            pd.Timestamp.now() - pd.to_datetime(positions_df["entry_time"], errors="coerce")
         ).dt.days
-        df = df[columns]
 
-        removed = []
-        if not existing_positions_df.empty and "symbol" in existing_positions_df.columns:
-            removed = sorted(set(existing_positions_df["symbol"]) - active_symbols)
-        if removed:
-            msg = f"Removing inactive positions: {', '.join(removed)}"
-            logger.info(msg)
-            send_alert(msg)
+        positions_df = positions_df[REQUIRED_COLUMNS]
 
-        if df.empty:
-            df = pd.DataFrame(columns=columns)
-        tmp = NamedTemporaryFile(
-            "w", delete=False, dir=os.path.dirname(csv_path), newline=""
-        )
-        df.to_csv(tmp.name, index=False)
-        tmp.close()
-        shutil.move(tmp.name, csv_path)
-        logger.debug("Saved open positions to %s", csv_path)
-        logger.info("Updated open_positions.csv successfully.")
+        if positions_df.empty:
+            positions_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
+
+        positions_df.to_csv(csv_path, index=False)
+        if positions_df.empty:
+            logger.info("No positions open. CSV saved with headers only.")
+        else:
+            logger.info(f"Positions CSV updated clearly: {positions_df.shape[0]} rows.")
     except Exception as e:
-        logger.error("Error saving positions CSV: %s", e, exc_info=True)
+        logger.error(f"Failed to save positions CSV: {e}", exc_info=True)
 
 
 def update_open_positions():
