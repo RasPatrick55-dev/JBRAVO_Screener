@@ -93,6 +93,14 @@ def cancel_order_safe(order_id: str, symbol: str):
             logger.error("Failed to close position %s: %s", symbol, exc)
 
 
+def ensure_column_exists(df: pd.DataFrame, column: str, default=None) -> pd.DataFrame:
+    """Ensure ``column`` exists in ``df``; create with ``default`` if missing."""
+    if column not in df.columns:
+        df[column] = default
+        logger.warning("Added missing '%s' column with default %s", column, default)
+    return df
+
+
 open_pos_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 if not os.path.exists(open_pos_path):
     pd.DataFrame(
@@ -118,11 +126,19 @@ if not os.path.exists(open_pos_path):
 existing_df = (
     pd.read_csv(open_pos_path) if os.path.exists(open_pos_path) else pd.DataFrame()
 )
+existing_df = ensure_column_exists(existing_df, "entry_time", pd.Timestamp.now().isoformat())
 
 
 def get_original_entry_time(symbol: str, current_created_at: Optional[str]) -> str:
     """Return the previously recorded entry time for ``symbol`` if available."""
-    original_entry = existing_df.loc[existing_df["symbol"] == symbol, "entry_time"]
+    if "entry_time" not in existing_df.columns:
+        logger.warning("existing_df missing 'entry_time' column. Using current timestamp.")
+        return current_created_at or datetime.now().isoformat()
+    try:
+        original_entry = existing_df.loc[existing_df["symbol"] == symbol, "entry_time"]
+    except KeyError:
+        logger.error("'entry_time' column missing when accessing existing_df", exc_info=True)
+        return current_created_at or datetime.now().isoformat()
     if not original_entry.empty:
         return original_entry.iloc[0]
     return current_created_at or datetime.now().isoformat()
@@ -210,6 +226,9 @@ def save_positions_csv(positions):
         existing_positions_df = (
             pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
         )
+        existing_positions_df = ensure_column_exists(
+            existing_positions_df, "entry_time", pd.Timestamp.now().isoformat()
+        )
 
         active_symbols = set()
         rows = []
@@ -270,13 +289,25 @@ def save_positions_csv(positions):
 
         df = pd.DataFrame(rows)
 
+        if "entry_time" not in df.columns:
+            df["entry_time"] = pd.Timestamp.now().isoformat()
+            logger.warning("Added missing 'entry_time' column with current timestamp.")
+
+        required_columns = ["symbol", "qty", "avg_entry_price", "current_price", "net_pnl", "entry_time"]
+        missing_cols = [c for c in required_columns if c not in df.columns]
+        if missing_cols:
+            for col in missing_cols:
+                df[col] = None
+                logger.warning("Missing column '%s' added with default None.", col)
+
         df['side'] = df.get('side', 'long')
         df['order_status'] = df.get('order_status', 'open')
         df['net_pnl'] = df.get('unrealized_pl', 0.0)
         df['pnl'] = df['net_pnl']
         df['order_type'] = df.get('order_type', 'limit')
+
         df["days_in_trade"] = (
-            pd.Timestamp.now() - pd.to_datetime(df["entry_time"])
+            pd.Timestamp.now() - pd.to_datetime(df["entry_time"], errors="coerce")
         ).dt.days
         df = df[columns]
 
@@ -302,7 +333,7 @@ def save_positions_csv(positions):
         global existing_df
         existing_df = df.copy()
     except Exception as e:
-        logger.error("Failed to save positions CSV: %s", e)
+        logger.error("Error saving positions CSV: %s", e, exc_info=True)
 
 
 def update_open_positions():
