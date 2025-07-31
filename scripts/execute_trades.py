@@ -95,7 +95,9 @@ os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 metrics = {
     "symbols_processed": 0,
     "orders_submitted": 0,
-    "symbols_skipped": 0,
+    "symbols_skipped": 0,  # backward compatible total skips
+    "orders_skipped_existing_positions": 0,
+    "orders_skipped_pending_orders": 0,
     "api_retries": 0,
     "api_failures": 0,
 }
@@ -382,8 +384,8 @@ def save_open_positions_csv():
     except Exception as e:
         logger.error("Failed to save open positions: %s", e)
 
-def update_trades_log():
-    """Fetch recent closed orders from Alpaca and save to trades_log.csv."""
+def update_trades_log() -> None:
+    """Fetch recent closed orders and append to trades_log.csv."""
     try:
         request = GetOrdersRequest(limit=100)
         orders = trading_client.get_orders(request)
@@ -394,8 +396,8 @@ def update_trades_log():
         ]
         records = []
         for order in closed_orders:
-            entry_price = order.filled_avg_price if order.side.value == 'buy' else ''
-            exit_price = order.filled_avg_price if order.side.value == 'sell' else ''
+            entry_price = order.filled_avg_price if order.side.value == "buy" else ""
+            exit_price = order.filled_avg_price if order.side.value == "sell" else ""
 
             if order.side.value == 'buy':
                 ts = order.filled_at
@@ -431,7 +433,7 @@ def update_trades_log():
                 }
             )
 
-        df = pd.DataFrame(
+        df_new = pd.DataFrame(
             records,
             columns=[
                 "symbol",
@@ -447,9 +449,18 @@ def update_trades_log():
                 "side",
             ],
         )
-        csv_path = os.path.join(BASE_DIR, 'data', 'trades_log.csv')
+        csv_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
+        if os.path.exists(csv_path):
+            try:
+                existing_df = pd.read_csv(csv_path)
+                df = pd.concat([existing_df, df_new], ignore_index=True)
+            except Exception as exc:
+                logger.error("Failed reading existing trades log: %s", exc)
+                df = df_new
+        else:
+            df = df_new
         df.to_csv(csv_path, index=False)
-        logger.info("Saved trades log to %s", csv_path)
+        logger.info("Trades log updated successfully.")
     except Exception as e:
         logger.error("Failed to update trades log: %s", e)
 
@@ -656,7 +667,7 @@ def allocate_position(symbol: str, fallback_prices: dict[str, float]):
     logger.debug("Allocating %d shares of %s at %s", qty, symbol, last_price)
     return (qty, round(last_price, 2)), None
 
-def submit_trades():
+def submit_trades() -> list[dict]:
     df = load_top_candidates()
     symbols = df['symbol'].tolist() if not df.empty else []
     cached_prices = load_cached_prices(symbols)
@@ -679,24 +690,62 @@ def submit_trades():
     submitted = 0
     skipped = 0
     existing_positions = trading_client.get_all_positions()
-    existing_symbols = [p.symbol for p in existing_positions]
+    existing_symbols = {p.symbol for p in existing_positions}
+
+    open_orders_request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+    open_orders = trading_client.get_orders(open_orders_request)
+    open_order_symbols = {
+        o.symbol for o in open_orders
+        if getattr(o.side, "value", o.side) == "buy"
+    }
+    logger.info(f"Existing positions: {existing_symbols}")
+    logger.info(f"Open buy orders: {open_order_symbols}")
+
+    trade_log_entries = []
 
     for _, row in df.iterrows():
         sym = row.symbol
         metrics["symbols_processed"] += 1
+        entry = {
+            "symbol": sym,
+            "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "order_status": None,
+            "qty": None,
+            "entry_price": None,
+            "reason_skipped": None,
+        }
+
         if sym in existing_symbols:
-            logger.info("Skipped %s: position already exists.", sym)
+            logger.info(f"[SKIP] {sym}: Already existing position.")
             skipped += 1
             metrics["symbols_skipped"] += 1
+            metrics["orders_skipped_existing_positions"] += 1
+            entry["order_status"] = "skipped"
+            entry["reason_skipped"] = "existing position"
+            trade_log_entries.append(entry)
             continue
+
+        if sym in open_order_symbols:
+            logger.info(f"[SKIP] {sym}: Order already pending.")
+            skipped += 1
+            metrics["symbols_skipped"] += 1
+            metrics["orders_skipped_pending_orders"] += 1
+            entry["order_status"] = "skipped"
+            entry["reason_skipped"] = "pending order"
+            trade_log_entries.append(entry)
+            continue
+
         alloc, reason = allocate_position(sym, cached_prices)
         if alloc is None:
             skipped += 1
             metrics["symbols_skipped"] += 1
+            entry["order_status"] = "skipped"
+            entry["reason_skipped"] = reason
             if reason == "market data error":
                 logger.warning("Skipping %s: No bars available.", sym)
             else:
                 logger.warning("Trade skipped for %s: %s", sym, reason)
+            trade_log_entries.append(entry)
             continue
 
         qty, entry_price = alloc
@@ -716,9 +765,12 @@ def submit_trades():
                 logger.error("Latest price unavailable for %s", sym)
                 limit_price = entry_price
             if limit_price is None:
-                logger.warning("[SKIPPED] %s: reason=market data unavailable", sym)
+                logger.warning("[SKIP] %s: No valid price available after fallbacks.", sym)
                 skipped += 1
                 metrics["symbols_skipped"] += 1
+                entry["order_status"] = "skipped"
+                entry["reason_skipped"] = "no price"
+                trade_log_entries.append(entry)
                 continue
             price = round_price(limit_price)
             price = round(price + 1e-6, 2)
@@ -730,6 +782,10 @@ def submit_trades():
                 price,
                 side="buy",
             )
+            entry["order_status"] = "submitted"
+            entry["qty"] = qty
+            entry["entry_price"] = price
+            trade_log_entries.append(entry)
 
             record_executed_trade(
                 sym,
@@ -763,6 +819,26 @@ def submit_trades():
         skipped,
         errors,
     )
+
+    symbols_processed = len(df)
+    symbols_skipped_positions = metrics["orders_skipped_existing_positions"]
+    symbols_skipped_orders = metrics["orders_skipped_pending_orders"]
+    orders_submitted = metrics["orders_submitted"]
+
+    execute_metrics = {
+        "symbols_processed": symbols_processed,
+        "orders_submitted": orders_submitted,
+        "orders_skipped_existing_positions": symbols_skipped_positions,
+        "orders_skipped_pending_orders": symbols_skipped_orders,
+        "api_failures": errors,
+    }
+
+    with open(metrics_path, "w") as f:
+        json.dump(execute_metrics, f, indent=4)
+
+    logger.info(f"[METRICS] Execution results: {execute_metrics}")
+
+    return trade_log_entries
 
 def attach_trailing_stops():
     positions = get_open_positions()
@@ -1037,19 +1113,21 @@ def daily_exit_check():
 if __name__ == '__main__':
     logger.info("Starting pre-market trade execution script")
     try:
-        submit_trades()
+        trade_entries = submit_trades()
         attach_trailing_stops()
         daily_exit_check()
         save_open_positions_csv()
         update_trades_log()
-        # Persist metrics for dashboard
-        try:
-            with open(metrics_path, "w") as f:
-                json.dump(metrics, f)
-            logger.info("Execution metrics saved to %s", metrics_path)
-        except Exception as exc:
-            logger.error("Failed to save execution metrics: %s", exc)
-
+        if trade_entries:
+            try:
+                csv_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
+                existing = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+                new_df = pd.DataFrame(trade_entries)
+                combined = pd.concat([existing, new_df], ignore_index=True)
+                combined.to_csv(csv_path, index=False)
+                logger.info("Trades log updated successfully.")
+            except Exception as exc:
+                logger.error("Failed to append trade log entries: %s", exc)
         logger.info(
             "Metrics - processed: %d, submitted: %d, skipped: %d",
             metrics["symbols_processed"],
