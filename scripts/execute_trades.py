@@ -206,6 +206,16 @@ def is_extended_hours(now_et: time) -> bool:
     """Return True if ``now_et`` falls in extended trading hours."""
     return time(4, 0) <= now_et < time(9, 30) or now_et >= time(16, 0)
 
+
+def is_market_open(trading_client) -> bool:
+    """Return True if the market is currently open."""
+    try:
+        market_clock = trading_client.get_clock()
+        return bool(getattr(market_clock, "is_open", False))
+    except Exception as exc:  # pragma: no cover - API errors
+        logger.error("Failed to fetch market clock: %s", exc)
+        return False
+
 # Candidate selection happens dynamically from ``top_candidates.csv``.
 
 
@@ -636,6 +646,127 @@ def poll_order_until_complete(order_id: str) -> str:
     logger.info("Order %s completed with status %s", order_id, status)
     return status
 
+
+def poll_order_status(
+    trading_client: TradingClient,
+    order_id: str,
+    timeout_seconds: int = ORDER_TIMEOUT_SECONDS,
+    poll_interval: int = ORDER_POLL_INTERVAL,
+) -> "Order" | None:
+    """Poll order ``order_id`` until completion or timeout.
+
+    Returns the final order object on success or ``None`` on cancel/timeout.
+    """
+
+    start_time = datetime.now(pytz.utc)
+    while True:
+        try:
+            order = trading_client.get_order_by_id(order_id)
+            status = getattr(order, "status", "unknown")
+        except Exception as exc:  # pragma: no cover - API errors
+            logger.error("Failed fetching status for %s: %s", order_id, exc)
+            return None
+
+        if status in [
+            "filled",
+            "partially_filled",
+            "canceled",
+            "rejected",
+            "expired",
+        ]:
+            logger.info(
+                "Order %s for %s completed with status %s.", order_id, order.symbol, status
+            )
+            return order
+
+        elapsed = (datetime.now(pytz.utc) - start_time).total_seconds()
+        if elapsed > timeout_seconds:
+            logger.warning(
+                "Order %s for %s timed out after %s seconds. Attempting cancellation.",
+                order_id,
+                order.symbol,
+                timeout_seconds,
+            )
+            try:
+                trading_client.cancel_order_by_id(order_id)
+            except Exception as cancel_exc:  # pragma: no cover - API errors
+                logger.error(
+                    "Failed to cancel order %s for %s: %s",
+                    order_id,
+                    order.symbol,
+                    cancel_exc,
+                )
+            return None
+
+        if not is_market_open(trading_client):
+            logger.warning(
+                "Market closed while polling order %s for %s. Cancelling and exiting polling.",
+                order_id,
+                order.symbol,
+            )
+            try:
+                trading_client.cancel_order_by_id(order_id)
+            except Exception as cancel_exc:  # pragma: no cover - API errors
+                logger.error(
+                    "Failed to cancel order %s for %s: %s",
+                    order_id,
+                    order.symbol,
+                    cancel_exc,
+                )
+            return None
+
+        logger.info(
+            "Polling order %s for %s, status: %s",
+            order_id,
+            order.symbol,
+            status,
+        )
+        time.sleep(poll_interval)
+
+
+def submit_order_with_polling(
+    trading_client: TradingClient,
+    symbol: str,
+    qty: int,
+    limit_price: float,
+    side: str = "buy",
+) -> "Order" | None:
+    """Submit a limit order and poll until it completes or times out."""
+
+    try:
+        order = trading_client.submit_order(
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            type="limit",
+            time_in_force="day",
+            limit_price=limit_price,
+            extended_hours=False,
+        )
+        logger.info(
+            "[SUBMIT] Order for %s: qty=%s, price=%s, session=regular, order_id=%s",
+            symbol,
+            qty,
+            limit_price,
+            order.id,
+        )
+    except Exception as exc:
+        logger.error("Exception submitting order for %s: %s", symbol, exc)
+        return None
+
+    final_order = poll_order_status(trading_client, order.id)
+    if final_order is None:
+        logger.warning(
+            "[CANCELLED] Order for %s was cancelled or expired after timeout.", symbol
+        )
+    else:
+        logger.info(
+            "[FILLED] Order for %s executed successfully at price %s",
+            symbol,
+            getattr(final_order, "filled_avg_price", "N/A"),
+        )
+    return final_order
+
 def allocate_position(symbol: str, fallback_prices: dict[str, float]):
     open_positions = get_open_positions()
     if symbol in open_positions:
@@ -775,14 +906,14 @@ def submit_trades() -> list[dict]:
             price = round_price(limit_price)
             price = round(price + 1e-6, 2)
 
-            order_id, status = submit_order_with_retry(
+            final_order = submit_order_with_polling(
                 trading_client,
                 sym,
                 qty,
                 price,
                 side="buy",
             )
-            entry["order_status"] = "submitted"
+            entry["order_status"] = getattr(final_order, "status", "cancelled") if final_order else "cancelled"
             entry["qty"] = qty
             entry["entry_price"] = price
             trade_log_entries.append(entry)
@@ -793,16 +924,16 @@ def submit_trades() -> list[dict]:
                 price,
                 order_type="limit",
                 side="buy",
-                order_id=str(order_id) if order_id else "",
-                order_status=status,
+                order_id=str(final_order.id) if final_order else "",
+                order_status=getattr(final_order, "status", "cancelled") if final_order else "cancelled",
             )
 
-            if status == "filled":
+            if final_order and getattr(final_order, "status", "") == "filled":
                 attach_trailing_stops()
                 save_open_positions_csv()
                 update_trades_log()
 
-            if order_id:
+            if final_order:
                 submitted += 1
                 metrics["orders_submitted"] += 1
             else:
