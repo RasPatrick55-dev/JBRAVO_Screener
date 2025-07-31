@@ -1,12 +1,16 @@
 import os
 import csv
-from typing import Union
+from typing import Union, Optional
 
 import pandas as pd
 from atomicwrites import atomic_write
 
 
-def write_csv_atomic(path: str, rows: Union[pd.DataFrame, list[dict]], fieldnames: list[str] | None = None) -> None:
+def write_csv_atomic(
+    path: str,
+    rows: Union[pd.DataFrame, list[dict]],
+    fieldnames: Optional[list[str]] = None,
+) -> None:
     """Atomically writes rows (list of dicts) to a CSV file.
 
     Parameters:

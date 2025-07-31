@@ -11,6 +11,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest, GetPortfolioHistoryRequest
 from dotenv import load_dotenv
 import requests
+from typing import Optional
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -45,7 +46,7 @@ EXECUTED_TRADES_CSV = os.path.join(DATA_DIR, "executed_trades.csv")
 ACCOUNT_EQUITY_CSV = os.path.join(DATA_DIR, "account_equity.csv")
 
 
-def load_csv_with_pnl(path: str, fallback_col: str | None = None) -> pd.DataFrame:
+def load_csv_with_pnl(path: str, fallback_col: Optional[str] = None) -> pd.DataFrame:
     """Load a CSV ensuring a ``pnl`` column is present."""
     df = pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
     if "pnl" not in df.columns:
