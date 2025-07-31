@@ -603,12 +603,34 @@ def manage_trailing_stop(position):
 
 
 def check_pending_orders():
-    """Log status of any open sell orders."""
+    """Log status of open sell orders and remove redundant trailing stops."""
     try:
         request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
         open_orders = trading_client.get_orders(request)
         logger.info(
             f"Fetched open orders for all symbols: {len(open_orders)} found.")
+
+        trailing_stops = [
+            o for o in open_orders if getattr(o, "order_type", "") == "trailing_stop"
+        ]
+        unique_symbols = set()
+        for order in trailing_stops:
+            if order.symbol in unique_symbols:
+                try:
+                    trading_client.cancel_order_by_id(order.id)
+                    logger.info(
+                        f"Cancelled redundant trailing stop {order.id} for {order.symbol}"
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Failed to cancel trailing stop %s for %s: %s",
+                        order.id,
+                        order.symbol,
+                        exc,
+                    )
+            else:
+                unique_symbols.add(order.symbol)
+
         for order in open_orders:
             try:
                 status = trading_client.get_order_by_id(order.id).status
