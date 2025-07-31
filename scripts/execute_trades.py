@@ -174,6 +174,16 @@ if not os.path.exists(open_pos_path):
         ]
     ).to_csv(open_pos_path, index=False)
 
+# Warn if open_positions.csv hasn't been updated recently
+max_stale_minutes = 15
+if os.path.exists(open_pos_path):
+    last_update_time = os.path.getmtime(open_pos_path)
+    file_age_minutes = (datetime.now().timestamp() - last_update_time) / 60
+    if file_age_minutes > max_stale_minutes:
+        logger.warning(
+            "open_positions.csv is stale (%.1f minutes old)", file_age_minutes
+        )
+
 def get_buying_power():
     acc = trading_client.get_account()
     return float(acc.buying_power)
