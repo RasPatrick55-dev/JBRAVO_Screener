@@ -5,8 +5,19 @@ from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 import os
+import sys
+import logging
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+logfile = os.path.join(BASE_DIR, "logs", "fetch_trades_history.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s]: %(message)s",
+    handlers=[logging.FileHandler(logfile), logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
+logger.info("Fetching trade history")
 
 
 def safe_float(val, default=0.0):
@@ -33,7 +44,11 @@ while True:
         limit=500,
         direction='desc',
     )
-    chunk = client.get_orders(filter=req)
+    try:
+        chunk = client.get_orders(filter=req)
+    except Exception as e:
+        logger.error(f"Error encountered in fetch_trades_history loop: {e}")
+        raise
     if not chunk:
         break
     all_orders.extend(chunk)
@@ -126,12 +141,15 @@ cols = [
     'side',
 ]
 
-df[cols + ["pct_profit"]].to_csv(
-    os.path.join(data_dir, 'trades_log.csv'), index=False
-)
-
-executed_trades = df[df['qty'] > 0]
-executed_trades[cols + ["pct_profit"]].to_csv(
-    os.path.join(data_dir, 'executed_trades.csv'),
-    index=False,
-)
+try:
+    df[cols + ["pct_profit"]].to_csv(
+        os.path.join(data_dir, 'trades_log.csv'), index=False
+    )
+    executed_trades = df[df['qty'] > 0]
+    executed_trades[cols + ["pct_profit"]].to_csv(
+        os.path.join(data_dir, 'executed_trades.csv'),
+        index=False,
+    )
+except Exception as e:
+    logger.error(f"Error encountered in write_history_csv: {e}")
+    raise

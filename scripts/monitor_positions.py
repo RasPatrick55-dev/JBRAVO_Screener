@@ -22,7 +22,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from scripts.utils import fetch_bars_with_cutoff
-from utils.logger_utils import init_logging
+import logging
 import shutil
 from tempfile import NamedTemporaryFile
 
@@ -39,7 +39,13 @@ ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
-logger = init_logging(__name__, "monitor.log")
+logfile = os.path.join(BASE_DIR, "logs", "monitor.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s]: %(message)s",
+    handlers=[logging.FileHandler(logfile), logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
 logger.info("Monitoring service active.")
 
 
