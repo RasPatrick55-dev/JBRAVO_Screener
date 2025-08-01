@@ -106,9 +106,11 @@ data_dir = os.path.join(BASE_DIR, 'data')
 # Optional percent profit calculation
 with np.errstate(divide="ignore", invalid="ignore"):
     df["pct_profit"] = (
-        df["net_pnl"] / (df["entry_price"].replace(0, np.nan) * df["qty"].replace(0, np.nan))
-    ) * 100
-    df["pct_profit"].fillna(0.0, inplace=True)
+        df["net_pnl"]
+        / (
+            df["entry_price"].replace(0, np.nan) * df["qty"].replace(0, np.nan)
+        )
+    ).fillna(0.0) * 100
 
 cols = [
     'symbol',
