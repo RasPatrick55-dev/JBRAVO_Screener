@@ -738,17 +738,17 @@ def submit_order_with_polling(
     """Submit a limit order and poll until it completes or times out."""
 
     try:
-        order = trading_client.submit_order(
+        order_request = LimitOrderRequest(
             symbol=symbol,
             qty=qty,
-            side=side,
-            type="limit",
-            time_in_force="day",
+            side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
             limit_price=limit_price,
+            time_in_force=TimeInForce.DAY,
             extended_hours=False,
         )
+        order = trading_client.submit_order(order_request)
         logger.info(
-            "[SUBMIT] Order for %s: qty=%s, price=%s, session=regular, order_id=%s",
+            "[SUBMIT] Order submitted for %s qty=%s at price=%s, id=%s",
             symbol,
             qty,
             limit_price,
