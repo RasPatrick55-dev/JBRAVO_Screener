@@ -23,6 +23,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Absolute paths to CSV data files used throughout the dashboard
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
+trades_log_real_path = os.path.join(BASE_DIR, "data", "trades_log_real.csv")
 open_positions_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
 scored_candidates_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
@@ -103,57 +104,16 @@ def fetch_positions_api():
         return pd.DataFrame()
 
 
-def load_csv(
-    filepath,
-    required_columns=None,
-    alert_prefix: Optional[str] = None,
-):
-    """Load a CSV file from ``filepath`` and validate required columns.
-
-    Returns a tuple of (DataFrame, alert_component). If the file is missing or
-    columns are absent, an empty DataFrame and a Dash alert component are
-    returned so the UI can gracefully inform the user.
-    """
-    filename = os.path.basename(filepath)
-    prefix = f"{alert_prefix}: " if alert_prefix else ""
-    if not os.path.exists(filepath):
-        alert = dbc.Alert(f"{prefix}{filename} not found.", color="warning", className="m-2")
-        return pd.DataFrame(), alert
-
-    try:
-        df = pd.read_csv(filepath, sep=",", encoding="utf-8")
-        df.rename(columns=lambda c: c.strip(), inplace=True)
-        app.logger.info("Loaded columns: %s", df.columns.tolist())
-    except pd.errors.EmptyDataError:
-        app.logger.warning("No data in %s", filepath)
-        alert = dbc.Alert(
-            f"{prefix}No data available in {filename}.",
+def load_csv(csv_path, required_columns, alert_prefix=""):
+    if not os.path.exists(csv_path):
+        return pd.DataFrame(), dbc.Alert(f"{alert_prefix} file {csv_path} not found.", color="warning")
+    df = pd.read_csv(csv_path)
+    missing_cols = [col for col in required_columns if col not in df.columns]
+    if missing_cols:
+        return pd.DataFrame(), dbc.Alert(
+            f"{alert_prefix} missing columns: {missing_cols}",
             color="warning",
-            className="m-2",
         )
-        return pd.DataFrame(), alert
-    except Exception as e:
-        alert = dbc.Alert(
-            f"{prefix}Error reading {filename}: {e}", color="danger", className="m-2"
-        )
-        return pd.DataFrame(), alert
-
-    if required_columns:
-        missing = [c for c in required_columns if c not in df.columns]
-        if missing:
-            msg = f"{prefix}{filename} missing columns: {', '.join(missing)}"
-            app.logger.error(msg)
-            alert = dbc.Alert(msg, color="danger", className="m-2")
-            return pd.DataFrame(), alert
-
-    if df.empty:
-        alert = dbc.Alert(
-            f"{prefix}No data available in {filename}.",
-            color="warning",
-            className="m-2",
-        )
-        return df, alert
-
     return df, None
 
 
@@ -534,15 +494,18 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     app.logger.info("Rendering tab %s", tab)
     if tab == "tab-overview":
         trades_df, alert = load_csv(
-            trades_log_path, required_columns=["pnl", "entry_time"]
+            trades_log_real_path,
+            ["net_pnl", "entry_time"],
+            alert_prefix="Real trades",
         )
-        freshness = data_freshness_alert(trades_log_path, "Trade log")
+        freshness = data_freshness_alert(trades_log_real_path, "Trade log")
         if alert:
             return alert
 
         app.logger.info("Loaded %d trades for overview", len(trades_df))
 
         trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"])
+        trades_df["pnl"] = trades_df["net_pnl"]
         trades_df["cumulative_pnl"] = trades_df["pnl"].cumsum()
         trades_df["cummax"] = trades_df["cumulative_pnl"].cummax()
         trades_df["drawdown"] = trades_df["cumulative_pnl"] - trades_df["cummax"]
@@ -706,10 +669,10 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 dbc.Col(dcc.Graph(figure=dd_fig), md=12),
             ]
         )
-        latest_file = trades_log_path
+        latest_file = trades_log_real_path
         if os.path.exists(executed_trades_path) and os.path.getmtime(
             executed_trades_path
-        ) > os.path.getmtime(trades_log_path):
+        ) > os.path.getmtime(trades_log_real_path):
             latest_file = executed_trades_path
 
         last_updated = format_time(get_file_mtime(latest_file))
@@ -998,21 +961,22 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
     elif tab == "tab-symbol-performance":
         trades_df, alert = load_csv(
-            trades_log_path,
-            required_columns=["symbol", "pnl"],
+            trades_log_real_path,
+            ["symbol", "net_pnl"],
+            alert_prefix="Real trades",
         )
-        freshness = data_freshness_alert(trades_log_path, "Trade log")
+        freshness = data_freshness_alert(trades_log_real_path, "Trade log")
         if alert:
             return alert
         if trades_df.empty:
             return dbc.Alert(
-                "No trade data available in trades_log.csv.",
+                "No trade data available in trades_log_real.csv.",
                 color="warning",
                 className="m-2",
             )
         app.logger.info("Loaded %d trades for symbol performance", len(trades_df))
 
-        grouped = trades_df.groupby("symbol")["pnl"]
+        grouped = trades_df.groupby("symbol")["net_pnl"]
         avg_pnl = grouped.mean()
         total_pnl = grouped.sum()
         trade_count = grouped.count()
@@ -1049,7 +1013,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 },
             ],
         )
-        last_updated = format_time(get_file_mtime("data/trades_log.csv"))
+        last_updated = format_time(get_file_mtime(trades_log_real_path))
         timestamp = html.Div(
             f"Last Updated: {last_updated}",
             className="text-muted mb-2",
@@ -1062,8 +1026,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
     elif tab == "tab-account":
         trades_df, trade_alert = load_csv(
-            "data/trades_log.csv",
+            trades_log_real_path,
             ["symbol", "entry_price", "exit_price", "qty", "net_pnl"],
+            alert_prefix="Real trades",
         )
         equity_df, equity_alert = load_csv(
             "data/account_equity.csv", ["date", "equity"]
@@ -1138,8 +1103,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         # Load open positions
         positions_df, freshness_alert = load_csv(
             open_positions_path,
-            required_columns=["symbol", "entry_time", "qty"],
-            alert_prefix="Open positions",
+            ["symbol", "qty", "net_pnl"],
+            alert_prefix="Real positions",
         )
 
         if positions_df is not None and not positions_df.empty:
