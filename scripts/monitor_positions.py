@@ -430,7 +430,8 @@ def log_closed_positions(trading_client, closed_symbols, existing_positions_df, 
         }
 
         trades_log_df = pd.read_csv(trades_log_path)
-        trades_log_df = trades_log_df.append(trade_entry, ignore_index=True)
+        trade_entry_df = pd.DataFrame([trade_entry])
+        trades_log_df = pd.concat([trades_log_df, trade_entry_df], ignore_index=True)
         trades_log_df.to_csv(trades_log_path, index=False)
 
         logger.info(f"Closed position logged: {symbol}, qty={qty}, exit={exit_price}")
