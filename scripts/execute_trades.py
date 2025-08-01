@@ -538,11 +538,9 @@ def submit_order_with_retry(
         order_data = LimitOrderRequest(
             symbol=symbol,
             qty=qty,
-            side=side,
-            type="limit",
-            time_in_force="day",
+            side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
             limit_price=limit_price,
-            extended_hours=False,
+            time_in_force=TimeInForce.DAY,
         )
         order = trading_client.submit_order(order_data)
         order_id = order.id
@@ -1104,7 +1102,6 @@ def daily_exit_check():
                     symbol=symbol,
                     qty=qty,
                     side=OrderSide.SELL,
-                    type="limit",
                     limit_price=valid_exit_price,
                     time_in_force=TimeInForce.DAY,
                     extended_hours=extended,
@@ -1130,7 +1127,6 @@ def daily_exit_check():
                 if "extended hours order must be DAY limit orders" in str(e):
                     try:
                         retry_req = LimitOrderRequest(
-                            type="limit",
                             limit_price=valid_exit_price,
                             symbol=symbol,
                             qty=pos.qty,
@@ -1200,7 +1196,6 @@ def daily_exit_check():
                     symbol=symbol,
                     qty=qty,
                     side=OrderSide.SELL,
-                    type="limit",
                     limit_price=valid_exit_price,
                     time_in_force=TimeInForce.DAY,
                     extended_hours=extended_now,
@@ -1224,7 +1219,6 @@ def daily_exit_check():
                 if "extended hours order must be DAY limit orders" in str(e):
                     try:
                         retry_req = LimitOrderRequest(
-                            type="limit",
                             limit_price=valid_exit_price,
                             symbol=symbol,
                             qty=pos.qty,
