@@ -213,77 +213,54 @@ def get_open_positions():
 
 
 # Save open positions to CSV for dashboard consumption
-def save_positions_csv(positions):
+def save_positions_csv(positions, csv_path=None):
     """Save positions to ``open_positions.csv`` ensuring required columns exist."""
-    csv_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
+    if csv_path is None:
+        csv_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
+
     try:
-        if os.path.exists(csv_path):
-            existing_positions_df = pd.read_csv(csv_path)
-        else:
-            existing_positions_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
-
-        rows = []
         if positions:
-            for p in positions:
-                row = {
-                    "symbol": p.symbol,
-                    "qty": float(p.qty),
-                    "avg_entry_price": float(p.avg_entry_price),
-                    "entry_price": float(p.avg_entry_price),
-                    "current_price": float(p.current_price),
-                    "unrealized_pl": float(p.unrealized_pl),
-                    "net_pnl": float(p.unrealized_pl),
-                    "entry_time": pd.Timestamp.now().isoformat(),
-                    "days_in_trade": None,
-                    "side": p.side,
-                    "order_status": "open",
-                    "pnl": float(p.unrealized_pl),
-                    "order_type": "trailing_stop" if p.asset_class == "us_equity" else "market",
-                }
-                rows.append(row)
+            positions_df = pd.DataFrame([p.__dict__ for p in positions])
         else:
-            logger.info("No open positions found. Created empty positions DataFrame with correct columns.")
-
-        positions_df = pd.DataFrame(rows)
-
-        for col in REQUIRED_COLUMNS:
-            if col not in positions_df.columns:
-                positions_df[col] = None
-                logger.warning(f"Missing column '{col}' added with default None.")
-
-        def get_entry_time(symbol: str, default_time: str) -> str:
-            if "symbol" in existing_positions_df.columns and symbol in existing_positions_df["symbol"].values:
-                original_time = existing_positions_df.loc[
-                    existing_positions_df["symbol"] == symbol, "entry_time"
-                ].iloc[0]
-                return original_time if pd.notnull(original_time) else default_time
-            return default_time
-
-        for idx, row in positions_df.iterrows():
-            positions_df.at[idx, "entry_time"] = get_entry_time(row["symbol"], row["entry_time"])
-
-        positions_df["days_in_trade"] = (
-            pd.Timestamp.now() - pd.to_datetime(positions_df["entry_time"], errors="coerce")
-        ).dt.days
-
-        positions_df = positions_df[REQUIRED_COLUMNS]
-
-        if positions_df.empty:
             positions_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
+
+        for column in REQUIRED_COLUMNS:
+            if column not in positions_df.columns:
+                if column == "entry_time":
+                    positions_df[column] = datetime.now().isoformat()
+                else:
+                    positions_df[column] = None
+
+        positions_df = positions_df.reindex(columns=REQUIRED_COLUMNS)
+
+        positions_df["entry_time"] = pd.to_datetime(positions_df["entry_time"])
+        positions_df["days_in_trade"] = (datetime.now() - positions_df["entry_time"]).dt.days
 
         positions_df.to_csv(csv_path, index=False)
         if positions_df.empty:
-            logger.info("No positions open. CSV saved with headers only.")
+            logger.info("No open positions. open_positions.csv updated with headers only.")
         else:
-            logger.info(f"Positions CSV updated clearly: {positions_df.shape[0]} rows.")
+            logger.info(f"Positions saved successfully to {csv_path}")
     except Exception as e:
         logger.error(f"Failed to save positions CSV: {e}", exc_info=True)
 
 
 def update_open_positions():
-    """Fetch positions and persist to CSV."""
+    """Fetch positions, persist to CSV and log any closed trades."""
+    csv_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
+    if os.path.exists(csv_path):
+        existing_positions_df = pd.read_csv(csv_path)
+    else:
+        existing_positions_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
+
     positions = get_open_positions()
-    save_positions_csv(positions)
+    save_positions_csv(positions, csv_path)
+
+    existing_symbols = set(existing_positions_df.get("symbol", []))
+    current_symbols = set(p.symbol for p in positions)
+    closed_symbols = existing_symbols - current_symbols
+
+    log_closed_positions(trading_client, closed_symbols, existing_positions_df, trades_log_path)
 
 
 def fetch_indicators(symbol):
@@ -419,6 +396,44 @@ def log_trade_exit(
             pd.DataFrame([row]).to_csv(path, mode="a", header=False, index=False)
         except Exception as exc:
             logger.error("Failed to log trade to %s: %s", path, exc)
+
+
+def log_closed_positions(trading_client, closed_symbols, existing_positions_df, trades_log_path):
+    for symbol in closed_symbols:
+        existing_record = existing_positions_df[existing_positions_df["symbol"] == symbol].iloc[0]
+
+        entry_price = existing_record["entry_price"]
+        entry_time = existing_record["entry_time"]
+        qty = existing_record["qty"]
+
+        request = GetOrdersRequest(symbols=[symbol], statuses=[QueryOrderStatus.CLOSED])
+        closed_orders = trading_client.get_orders(request)
+
+        exit_price = closed_orders[0].filled_avg_price if closed_orders else None
+        exit_time = closed_orders[0].filled_at.isoformat() if closed_orders else datetime.now().isoformat()
+
+        if exit_price:
+            net_pnl = (float(exit_price) - float(entry_price)) * float(qty)
+        else:
+            net_pnl = None
+
+        trade_entry = {
+            "symbol": symbol,
+            "qty": qty,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "entry_time": entry_time,
+            "exit_time": exit_time,
+            "net_pnl": net_pnl,
+            "order_status": "closed",
+            "reason": "Position closed outside monitor",
+        }
+
+        trades_log_df = pd.read_csv(trades_log_path)
+        trades_log_df = trades_log_df.append(trade_entry, ignore_index=True)
+        trades_log_df.to_csv(trades_log_path, index=False)
+
+        logger.info(f"Closed position logged: {symbol}, qty={qty}, exit={exit_price}")
 
 
 def has_pending_sell_order(symbol):
@@ -688,8 +703,21 @@ def submit_sell_market_order(position, reason: str):
 
 
 def process_positions_cycle():
+    csv_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
+    if os.path.exists(csv_path):
+        existing_positions_df = pd.read_csv(csv_path)
+    else:
+        existing_positions_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
+
     positions = get_open_positions()
-    save_positions_csv(positions)
+    save_positions_csv(positions, csv_path)
+
+    existing_symbols = set(existing_positions_df.get("symbol", []))
+    current_symbols = set(p.symbol for p in positions)
+    closed_symbols = existing_symbols - current_symbols
+
+    log_closed_positions(trading_client, closed_symbols, existing_positions_df, trades_log_path)
+
     if not positions:
         logger.info("No open positions found.")
         return
