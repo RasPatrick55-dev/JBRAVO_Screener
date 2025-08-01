@@ -17,7 +17,6 @@ import json
 from datetime import datetime, timedelta, timezone, time
 import pytz
 from time import sleep
-import time
 from typing import Optional
 from decimal import Decimal, ROUND_HALF_UP
 from alpaca.trading.client import TradingClient
@@ -295,7 +294,7 @@ def get_available_qty(symbol: str) -> int:
 
 def load_top_candidates() -> pd.DataFrame:
     """Load ranked candidates from ``top_candidates.csv`` and return the
-    top entries based on ``MAX_OPEN_TRADES``.
+    top 3 entries for trading.
     """
 
     top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
@@ -317,10 +316,13 @@ def load_top_candidates() -> pd.DataFrame:
         ), "Missing columns in top_candidates.csv"
 
         candidates_df.sort_values("score", ascending=False, inplace=True)
-        selected_candidates = candidates_df.head(MAX_OPEN_TRADES)
-        symbols_list = selected_candidates['symbol'].tolist()
+        selected_candidates = candidates_df.sort_values(by="score", ascending=False).head(3)
+        symbols_list = selected_candidates["symbol"].tolist()
         logger.info("Loaded %s successfully", top_candidates_path)
-        logger.info("Candidate symbols loaded: %s", symbols_list)
+        logger.info(
+            "Selected top 3 symbols for trading: %s",
+            selected_candidates["symbol"].tolist(),
+        )
         return selected_candidates
     except Exception as exc:
         logger.error("Failed to read %s: %s", top_candidates_path, exc)
@@ -578,7 +580,7 @@ def submit_order_with_retry(
                         cancel_exc,
                     )
                     break
-                time.sleep(5)
+                sleep(5)
                 logger.info("[RETRY] Attempt #%s for order %s", retries + 1, symbol)
                 return submit_order_with_retry(
                     trading_client,
@@ -592,7 +594,7 @@ def submit_order_with_retry(
             logger.error("Error polling order %s for %s: %s", order_id, symbol, exc)
             break
 
-        time.sleep(ORDER_POLL_INTERVAL)
+        sleep(ORDER_POLL_INTERVAL)
 
     return order_id, status
 
@@ -723,7 +725,7 @@ def poll_order_status(
             order.symbol,
             status,
         )
-        time.sleep(poll_interval)
+        sleep(poll_interval)
 
 
 def submit_order_with_polling(
