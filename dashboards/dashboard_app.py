@@ -104,15 +104,19 @@ def fetch_positions_api():
         return pd.DataFrame()
 
 
-def load_csv(csv_path, required_columns, alert_prefix=""):
+def load_csv(csv_path, required_columns=None, alert_prefix=""):
+    """Load a CSV file and validate required columns."""
+    required_columns = required_columns or []
     if not os.path.exists(csv_path):
-        return pd.DataFrame(), dbc.Alert(f"{alert_prefix} file {csv_path} not found.", color="warning")
+        return None, dbc.Alert(f"File {csv_path} does not exist.", color="danger")
     df = pd.read_csv(csv_path)
+    if df.empty:
+        return None, dbc.Alert(f"No data available in {csv_path}.", color="warning")
     missing_cols = [col for col in required_columns if col not in df.columns]
     if missing_cols:
-        return pd.DataFrame(), dbc.Alert(
-            f"{alert_prefix} missing columns: {missing_cols}",
-            color="warning",
+        return None, dbc.Alert(
+            f"Missing required columns: {missing_cols}",
+            color="danger",
         )
     return df, None
 
@@ -421,7 +425,7 @@ app.layout = dbc.Container(
                 ),
                 dbc.Tab(
                     label="Execute Trades",
-                    tab_id="tab-execute-trades",
+                    tab_id="tab-execute",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                     className="custom-tab",
@@ -450,7 +454,7 @@ app.layout = dbc.Container(
                 ),
                 dbc.Tab(
                     label="Monitoring Positions",
-                    tab_id="tab-monitor-positions",
+                    tab_id="tab-monitor",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                     className="custom-tab",
@@ -695,7 +699,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         if scored_alert:
             alerts.append(scored_alert)
 
-        if not df.empty:
+        if df is not None and not df.empty:
             if "score" in df.columns:
                 df.sort_values("score", ascending=False, na_position="last", inplace=True)
             df = df.head(15)
@@ -714,7 +718,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         else:
             table = dbc.Alert("No candidates to display.", color="warning", className="m-2")
 
-        if not scored_df.empty:
+        if scored_df is not None and not scored_df.empty:
             scored_columns = [
                 {"name": c.replace("_", " ").title(), "id": c} for c in scored_df.columns
             ]
@@ -842,7 +846,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         return dbc.Container(components, fluid=True)
 
-    elif tab == "tab-execute-trades":
+    elif tab == "tab-execute":
         trades_df, alert = load_csv(executed_trades_path)
         if alert:
             table = alert
@@ -894,12 +898,13 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         positions_df, _ = load_csv(open_positions_path)
+        position_count = len(positions_df) if positions_df is not None else 0
         trade_limit_alert = (
             html.Div(
                 f"Max open trades limit reached ({MAX_OPEN_TRADES}).",
                 style={"color": "orange"},
             )
-            if len(positions_df) >= MAX_OPEN_TRADES
+            if position_count >= MAX_OPEN_TRADES
             else None
         )
 
@@ -909,7 +914,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 f"{trades_skipped} trades skipped due to max open positions limit ({MAX_OPEN_TRADES}).",
                 style={"color": "red"},
             )
-            if trades_skipped > 0 and len(positions_df) >= MAX_OPEN_TRADES
+            if trades_skipped > 0 and position_count >= MAX_OPEN_TRADES
             else None
         )
 
@@ -968,7 +973,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         freshness = data_freshness_alert(trades_log_real_path, "Trade log")
         if alert:
             return alert
-        if trades_df.empty:
+        if trades_df is None or trades_df.empty:
             return dbc.Alert(
                 "No trade data available in trades_log_real.csv.",
                 color="warning",
@@ -1099,7 +1104,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             fluid=True,
         )
 
-    elif tab == "tab-monitor-positions":
+    elif tab == "tab-monitor":
         # Load open positions
         positions_df, freshness_alert = load_csv(
             open_positions_path,
@@ -1170,11 +1175,11 @@ def symbol_performance_layout():
 
 
 def monitor_positions_layout():
-    return _render_tab("tab-monitor-positions", 0, 0, None)
+    return _render_tab("tab-monitor", 0, 0, None)
 
 
 def execute_trades_layout():
-    return _render_tab("tab-execute-trades", 0, 0, None)
+    return _render_tab("tab-execute", 0, 0, None)
 
 
 def screener_layout():
@@ -1184,16 +1189,22 @@ def screener_layout():
 @app.callback(Output("tabs-content", "children"), [Input("tabs", "active_tab")])
 def render_tab(tab):
     if tab == "tab-overview":
+        logger.info("Rendering content for tab: %s", tab)
         return overview_layout()
     elif tab == "tab-account":
+        logger.info("Rendering content for tab: %s", tab)
         return account_layout()
     elif tab == "tab-symbol-performance":
+        logger.info("Rendering content for tab: %s", tab)
         return symbol_performance_layout()
-    elif tab == "tab-monitor-positions":
+    elif tab == "tab-monitor":
+        logger.info("Rendering content for tab: %s", tab)
         return monitor_positions_layout()
-    elif tab == "tab-execute-trades":
+    elif tab == "tab-execute":
+        logger.info("Rendering content for tab: %s", tab)
         return execute_trades_layout()
     elif tab == "tab-screener":
+        logger.info("Rendering content for tab: %s", tab)
         return screener_layout()
     else:
         return dbc.Alert("Tab not found.", color="danger")
@@ -1247,7 +1258,7 @@ def update_screener_table(n):
     logger.info(
         "Screener table updated successfully with %d records.", len(df)
     )
-    return df.to_dict("records") if not df.empty else []
+    return df.to_dict("records") if df is not None and not df.empty else []
 
 
 # Periodically refresh metrics log display
@@ -1273,7 +1284,7 @@ def update_metrics_logs(n):
 )
 def refresh_trades_table(n):
     df, alert = load_csv(executed_trades_path)
-    if alert or df.empty:
+    if alert or df is None or df.empty:
         return []
     df.sort_values("entry_time", ascending=False, inplace=True)
     return df.to_dict("records")
