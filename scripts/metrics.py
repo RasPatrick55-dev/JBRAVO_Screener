@@ -12,9 +12,15 @@ import numpy as np
 
 import pandas as pd
 from pathlib import Path
-from utils import write_csv_atomic, logger_utils
+from utils import write_csv_atomic
 
-logger = logger_utils.init_logging(__name__, "metrics.log")
+logfile = os.path.join(BASE_DIR, "logs", "metrics.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s]: %(message)s",
+    handlers=[logging.FileHandler(logfile), logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
 logger.info("Metrics script started")
 
 start_time = datetime.utcnow()
@@ -170,11 +176,19 @@ def save_metrics_summary(metrics_summary, symbols, output_file="metrics_summary.
 
 # Full execution of metrics calculation, ranking, and summary
 def main():
-    results_df = load_results()
+    try:
+        results_df = load_results()
+    except Exception as e:
+        logger.error(f"Error encountered in load_results: {e}")
+        raise
 
     # Detect missing symbol-level metrics and compute from trades_log.csv
     if "net_pnl" not in results_df.columns:
-        trades_df = pd.read_csv(os.path.join(BASE_DIR, "data", "trades_log.csv"))
+        try:
+            trades_df = pd.read_csv(os.path.join(BASE_DIR, "data", "trades_log.csv"))
+        except Exception as e:
+            logger.error(f"Error encountered in load_trades_log CSV: {e}")
+            raise
         grouped = trades_df.groupby("symbol")["net_pnl"]
 
         symbol_metrics = grouped.agg(

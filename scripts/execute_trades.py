@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 # Alerting
 import requests
 # Import from the top-level utils package explicitly
-from utils.logger_utils import init_logging
+
 
 # Import scripts/utils explicitly
 from scripts.utils import cache_bars
@@ -46,11 +46,20 @@ from scripts.exit_signals import should_exit_early
 from scripts.monitor_positions import log_trade_exit
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+logfile = os.path.join(LOG_DIR, "execute_trades.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s]: %(message)s",
+    handlers=[logging.FileHandler(logfile), logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
+
 os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 
 dotenv_path = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path)
-logger = init_logging(__name__, 'execute_trades.log')
 start_time = datetime.utcnow()
 logger.info("Trade execution script started.")
 
