@@ -467,7 +467,12 @@ def update_trades_log() -> None:
         if os.path.exists(csv_path):
             try:
                 existing_df = pd.read_csv(csv_path)
-                df = pd.concat([existing_df, df_new], ignore_index=True)
+                if existing_df.empty:
+                    df = df_new.copy()
+                elif df_new.empty:
+                    df = existing_df.copy()
+                else:
+                    df = pd.concat([existing_df, df_new], ignore_index=True)
             except Exception as exc:
                 logger.error("Failed reading existing trades log: %s", exc)
                 df = df_new
