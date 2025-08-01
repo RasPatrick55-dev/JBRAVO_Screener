@@ -44,6 +44,7 @@ from pathlib import Path
 
 # Explicit import from scripts directory
 from scripts.exit_signals import should_exit_early
+from scripts.monitor_positions import log_trade_exit
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
@@ -821,17 +822,12 @@ def submit_trades() -> list[dict]:
             return
     submitted = 0
     skipped = 0
-    existing_positions = trading_client.get_all_positions()
-    existing_symbols = {p.symbol for p in existing_positions}
-
-    open_orders_request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
-    open_orders = trading_client.get_orders(open_orders_request)
-    open_order_symbols = {
-        o.symbol for o in open_orders
-        if getattr(o.side, "value", o.side) == "buy"
-    }
-    logger.info(f"Existing positions: {existing_symbols}")
-    logger.info(f"Open buy orders: {open_order_symbols}")
+    positions = trading_client.get_all_positions()
+    open_orders = trading_client.get_orders(
+        GetOrdersRequest(statuses=[QueryOrderStatus.OPEN])
+    )
+    open_symbols = {p.symbol for p in positions}.union({o.symbol for o in open_orders})
+    logger.info(f"Existing or pending symbols: {open_symbols}")
 
     trade_log_entries = []
 
@@ -847,23 +843,12 @@ def submit_trades() -> list[dict]:
             "reason_skipped": None,
         }
 
-        if sym in existing_symbols:
-            logger.info(f"[SKIP] {sym}: Already existing position.")
+        if sym in open_symbols:
+            logger.info(f"[SKIP] {sym}: Existing position or pending order detected.")
             skipped += 1
             metrics["symbols_skipped"] += 1
-            metrics["orders_skipped_existing_positions"] += 1
             entry["order_status"] = "skipped"
-            entry["reason_skipped"] = "existing position"
-            trade_log_entries.append(entry)
-            continue
-
-        if sym in open_order_symbols:
-            logger.info(f"[SKIP] {sym}: Order already pending.")
-            skipped += 1
-            metrics["symbols_skipped"] += 1
-            metrics["orders_skipped_pending_orders"] += 1
-            entry["order_status"] = "skipped"
-            entry["reason_skipped"] = "pending order"
+            entry["reason_skipped"] = "existing/pending"
             trade_log_entries.append(entry)
             continue
 
@@ -928,6 +913,21 @@ def submit_trades() -> list[dict]:
                 order_id=str(final_order.id) if final_order else "",
                 order_status=getattr(final_order, "status", "cancelled") if final_order else "cancelled",
             )
+
+            if final_order:
+                log_trade_exit(
+                    sym,
+                    qty,
+                    entry_price,
+                    price,
+                    entry["entry_time"],
+                    "",
+                    "submitted",
+                    "limit",
+                    "Pre-market entry",
+                    "buy",
+                    order_id=str(final_order.id),
+                )
 
             if final_order and getattr(final_order, "status", "") == "filled":
                 attach_trailing_stops()
