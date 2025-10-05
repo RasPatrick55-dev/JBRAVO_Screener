@@ -107,15 +107,16 @@ def fetch_positions_api():
 def load_csv(csv_path, required_columns=None, alert_prefix=""):
     """Load a CSV file and validate required columns."""
     required_columns = required_columns or []
+    prefix = f"{alert_prefix}: " if alert_prefix else ""
     if not os.path.exists(csv_path):
-        return None, dbc.Alert(f"File {csv_path} does not exist.", color="danger")
+        return None, dbc.Alert(f"{prefix}File {csv_path} does not exist.", color="danger")
     df = pd.read_csv(csv_path)
     if df.empty:
-        return None, dbc.Alert(f"No data available in {csv_path}.", color="warning")
+        return None, dbc.Alert(f"{prefix}No data available in {csv_path}.", color="warning")
     missing_cols = [col for col in required_columns if col not in df.columns]
     if missing_cols:
         return None, dbc.Alert(
-            f"Missing required columns: {missing_cols}",
+            f"{prefix}Missing required columns: {missing_cols}",
             color="danger",
         )
     return df, None
@@ -497,16 +498,43 @@ app.layout = dbc.Container(
 def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     app.logger.info("Rendering tab %s", tab)
     if tab == "tab-overview":
-        trades_df, alert = load_csv(
-            trades_log_real_path,
-            ["net_pnl", "entry_time"],
-            alert_prefix="Real trades",
-        )
-        freshness = data_freshness_alert(trades_log_real_path, "Trade log")
-        if alert:
-            return alert
+        overview_sources = [
+            ("Real trades", trades_log_real_path),
+            ("Executed trades", executed_trades_path),
+        ]
+        alerts = []
+        trades_df = None
+        source_label = ""
+        source_path = ""
 
-        app.logger.info("Loaded %d trades for overview", len(trades_df))
+        for label, path in overview_sources:
+            df, df_alert = load_csv(
+                path,
+                ["net_pnl", "entry_time"],
+                alert_prefix=label,
+            )
+            if df_alert:
+                alerts.append(df_alert)
+                continue
+            trades_df = df
+            source_label = label
+            source_path = path
+            break
+
+        if trades_df is None:
+            info_alert = dbc.Alert(
+                "No trade history available yet. Run the execution or monitoring jobs to populate trade logs.",
+                color="info",
+                className="m-3",
+            )
+            return dbc.Container([info_alert, *alerts], fluid=True)
+
+        freshness = data_freshness_alert(source_path, f"{source_label} log")
+        app.logger.info(
+            "Loaded %d trades for overview from %s",
+            len(trades_df),
+            source_label,
+        )
 
         trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"])
         trades_df["pnl"] = trades_df["net_pnl"]
@@ -673,21 +701,31 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 dbc.Col(dcc.Graph(figure=dd_fig), md=12),
             ]
         )
-        latest_file = trades_log_real_path
-        if os.path.exists(executed_trades_path) and os.path.getmtime(
-            executed_trades_path
-        ) > os.path.getmtime(trades_log_real_path):
-            latest_file = executed_trades_path
+        latest_file = source_path
+        latest_mtime = get_file_mtime(latest_file)
+        for contender in {trades_log_real_path, executed_trades_path}:
+            contender_mtime = get_file_mtime(contender)
+            if contender_mtime and (
+                latest_mtime is None or contender_mtime > latest_mtime
+            ):
+                latest_file = contender
+                latest_mtime = contender_mtime
 
-        last_updated = format_time(get_file_mtime(latest_file))
+        last_updated = format_time(latest_mtime)
         timestamp = html.Div(
             f"Last Updated: {last_updated}",
             className="text-muted mb-2",
         )
 
-        components = [timestamp]
+        source_note = html.Div(
+            f"Overview metrics use {source_label.lower()} data.",
+            className="text-muted small mb-2",
+        )
+
+        components = [timestamp, source_note]
         if freshness:
             components.append(freshness)
+        components.extend(alerts)
         components.extend([kpis, graphs])
         return dbc.Container(components, fluid=True)
 
