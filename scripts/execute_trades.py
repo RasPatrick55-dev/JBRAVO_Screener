@@ -109,6 +109,13 @@ metrics = {
     "symbols_skipped": 0,  # backward compatible total skips
     "orders_skipped_existing_positions": 0,
     "orders_skipped_pending_orders": 0,
+    "orders_skipped_existing_position": 0,
+    "orders_skipped_pending_order": 0,
+    "orders_skipped_risk_limit": 0,
+    "orders_skipped_market_data": 0,
+    "orders_skipped_session_window": 0,
+    "orders_skipped_duplicate_candidate": 0,
+    "orders_skipped_other": 0,
     "api_retries": 0,
     "api_failures": 0,
 }
@@ -139,6 +146,24 @@ def log_event(event: dict) -> None:
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload))
         f.write("\n")
+
+
+def skip(symbol: str, code: str, reason: str, **kvs) -> None:
+    """Record a skipped candidate and log the associated event."""
+
+    inc("symbols_skipped")
+    inc(f"orders_skipped_{code.lower()}")
+    log_event(
+        {
+            "ts": utcnow(),
+            "run_id": run_id,
+            "event": "CANDIDATE_SKIPPED",
+            "symbol": symbol,
+            "reason_code": code,
+            "reason_text": reason,
+            "kvs": kvs,
+        }
+    )
 
 
 def load_cached_prices(symbols: list[str], cache_dir: str = os.path.join(BASE_DIR, "data", "history_cache")) -> dict[str, float]:
@@ -867,7 +892,9 @@ def submit_trades() -> list[dict]:
     open_orders = trading_client.get_orders(
         GetOrdersRequest(statuses=[QueryOrderStatus.OPEN])
     )
-    open_symbols = {p.symbol for p in positions}.union({o.symbol for o in open_orders})
+    position_symbols = {p.symbol for p in positions}
+    open_order_symbols = {o.symbol for o in open_orders}
+    open_symbols = position_symbols.union(open_order_symbols)
     logger.info(f"Existing or pending symbols: {open_symbols}")
 
     trade_log_entries = []
@@ -887,22 +914,40 @@ def submit_trades() -> list[dict]:
         if sym in open_symbols:
             logger.info(f"[SKIP] {sym}: Existing position or pending order detected.")
             skipped += 1
-            metrics["symbols_skipped"] += 1
             entry["order_status"] = "skipped"
             entry["reason_skipped"] = "existing/pending"
+
+            if sym in position_symbols:
+                skip(sym, "EXISTING_POSITION", "Existing position detected.")
+                inc("orders_skipped_existing_positions")
+            elif sym in open_order_symbols:
+                skip(sym, "PENDING_ORDER", "Pending order detected.")
+                inc("orders_skipped_pending_orders")
+            else:
+                skip(sym, "OTHER", "Symbol flagged as already open without context.")
+
             trade_log_entries.append(entry)
             continue
 
         alloc, reason = allocate_position(sym, cached_prices)
         if alloc is None:
             skipped += 1
-            metrics["symbols_skipped"] += 1
             entry["order_status"] = "skipped"
             entry["reason_skipped"] = reason
+
             if reason == "market data error":
                 logger.warning("Skipping %s: No bars available.", sym)
+                skip(sym, "MARKET_DATA", reason)
+            elif reason in {"max open trades reached", "allocation insufficient"}:
+                logger.warning("Trade skipped for %s: %s", sym, reason)
+                skip(sym, "RISK_LIMIT", reason)
+            elif reason == "already in open positions":
+                logger.warning("Trade skipped for %s: %s", sym, reason)
+                skip(sym, "EXISTING_POSITION", reason)
             else:
                 logger.warning("Trade skipped for %s: %s", sym, reason)
+                skip(sym, "OTHER", reason, raw_reason=reason)
+
             trade_log_entries.append(entry)
             continue
 
@@ -925,9 +970,9 @@ def submit_trades() -> list[dict]:
             if limit_price is None:
                 logger.warning("[SKIP] %s: No valid price available after fallbacks.", sym)
                 skipped += 1
-                metrics["symbols_skipped"] += 1
                 entry["order_status"] = "skipped"
                 entry["reason_skipped"] = "no price"
+                skip(sym, "MARKET_DATA", "No valid price available after fallbacks.")
                 trade_log_entries.append(entry)
                 continue
             price = round_price(limit_price)
