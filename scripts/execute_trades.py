@@ -148,6 +148,86 @@ def log_event(event: dict) -> None:
         f.write("\n")
 
 
+def log_order_submit_event(
+    symbol: str,
+    side: str,
+    qty: int,
+    limit_price: float,
+    attempt: int,
+    session: str,
+) -> None:
+    """Log an ``ORDER_SUBMIT`` event with the provided context."""
+
+    log_event(
+        {
+            "event": "ORDER_SUBMIT",
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "limit_price": limit_price,
+            "attempt": attempt,
+            "session": session,
+        }
+    )
+
+
+def log_order_final_event(
+    symbol: str,
+    attempt: int,
+    status: str,
+    latency_ms: int,
+    filled_avg_price: Optional[float] = None,
+) -> None:
+    """Log an ``ORDER_FINAL`` event with the final status of the order."""
+
+    event = {
+        "event": "ORDER_FINAL",
+        "symbol": symbol,
+        "attempt": attempt,
+        "status": status,
+        "latency_ms": latency_ms,
+    }
+    if filled_avg_price is not None:
+        event["filled_avg_price"] = float(filled_avg_price)
+    log_event(event)
+
+
+def log_retry_event(
+    phase: str,
+    symbol: str,
+    attempt: int,
+    reason_code: str,
+    backoff_ms: int,
+) -> None:
+    """Increment retry metrics and log a ``RETRY`` event."""
+
+    inc("api_retries")
+    log_event(
+        {
+            "event": "RETRY",
+            "phase": phase,
+            "symbol": symbol,
+            "attempt": attempt,
+            "reason_code": reason_code,
+            "backoff_ms": backoff_ms,
+        }
+    )
+
+
+def log_api_error_event(phase: str, symbol: str, message: str) -> None:
+    """Increment failure metrics and log an ``API_ERROR`` event."""
+
+    inc("api_failures")
+    log_event(
+        {
+            "event": "API_ERROR",
+            "phase": phase,
+            "symbol": symbol,
+            "message": message,
+        }
+    )
+
+
 def skip(symbol: str, code: str, reason: str, **kvs) -> None:
     """Record a skipped candidate and log the associated event."""
 
@@ -586,6 +666,10 @@ def submit_order_with_retry(
         logger.error("Max retries exceeded for %s. Skipping.", symbol)
         return None, "max_retries"
 
+    attempt = retries + 1
+    session_label = "regular"
+    log_order_submit_event(symbol, side, qty, limit_price, attempt, session_label)
+    submit_ts = datetime.utcnow()
     try:
         order_data = LimitOrderRequest(
             symbol=symbol,
@@ -595,6 +679,7 @@ def submit_order_with_retry(
             time_in_force=TimeInForce.DAY,
         )
         order = trading_client.submit_order(order_data)
+        submit_ts = datetime.utcnow()
         order_id = order.id
         logger.info(
             "[SUBMIT] Order for %s: qty=%s, price=%s, session=regular, order_id=%s",
@@ -604,15 +689,19 @@ def submit_order_with_retry(
             order_id,
         )
     except Exception as exc:
+        log_api_error_event("submit", symbol, str(exc))
         logger.error("Failed to submit order for %s: %s", symbol, exc)
         return None, "submit_failed"
 
-    start_time = datetime.utcnow()
+    start_time = submit_ts
     status = "new"
+    final_logged = False
+    filled_avg_price = None
     while True:
         try:
             current_order = trading_client.get_order_by_id(order_id)
             status = getattr(current_order, "status", "unknown")
+            filled_avg_price = getattr(current_order, "filled_avg_price", None)
             logger.info("Polling order %s for %s, status: %s", order_id, symbol, status)
 
             if status in ["filled", "partially_filled"]:
@@ -622,9 +711,29 @@ def submit_order_with_retry(
                     symbol,
                     status,
                 )
+                final_ts = datetime.utcnow()
+                latency_ms = int((final_ts - submit_ts).total_seconds() * 1000)
+                log_order_final_event(
+                    symbol,
+                    attempt,
+                    status,
+                    latency_ms,
+                    filled_avg_price,
+                )
+                final_logged = True
                 break
             if status in ["canceled", "rejected"]:
                 logger.warning("Order %s for %s was %s.", order_id, symbol, status)
+                final_ts = datetime.utcnow()
+                latency_ms = int((final_ts - submit_ts).total_seconds() * 1000)
+                log_order_final_event(
+                    symbol,
+                    attempt,
+                    status,
+                    latency_ms,
+                    filled_avg_price,
+                )
+                final_logged = True
                 break
             if (datetime.utcnow() - start_time).total_seconds() > ORDER_TIMEOUT_SECONDS:
                 logger.warning(
@@ -637,15 +746,38 @@ def submit_order_with_retry(
                 try:
                     trading_client.cancel_order_by_id(order_id)
                 except Exception as cancel_exc:
+                    log_api_error_event("cancel", symbol, str(cancel_exc))
                     logger.error(
                         "[ORDER ERROR] Failed to cancel order %s for %s: %s",
                         order_id,
                         symbol,
                         cancel_exc,
                     )
+                    final_ts = datetime.utcnow()
+                    latency_ms = int((final_ts - submit_ts).total_seconds() * 1000)
+                    log_order_final_event(
+                        symbol,
+                        attempt,
+                        "cancel_failed",
+                        latency_ms,
+                        filled_avg_price,
+                    )
+                    final_logged = True
                     break
-                sleep(5)
+                final_ts = datetime.utcnow()
+                latency_ms = int((final_ts - submit_ts).total_seconds() * 1000)
+                log_order_final_event(
+                    symbol,
+                    attempt,
+                    "timeout",
+                    latency_ms,
+                    filled_avg_price,
+                )
+                final_logged = True
+                backoff_ms = 5000
+                sleep(backoff_ms / 1000)
                 logger.info("[RETRY] Attempt #%s for order %s", retries + 1, symbol)
+                log_retry_event("poll", symbol, attempt, "timeout", backoff_ms)
                 return submit_order_with_retry(
                     trading_client,
                     symbol,
@@ -655,10 +787,23 @@ def submit_order_with_retry(
                     retries + 1,
                 )
         except Exception as exc:
+            log_api_error_event("poll", symbol, str(exc))
             logger.error("Error polling order %s for %s: %s", order_id, symbol, exc)
+            status = "error"
             break
 
         sleep(ORDER_POLL_INTERVAL)
+
+    if not final_logged:
+        final_ts = datetime.utcnow()
+        latency_ms = int((final_ts - submit_ts).total_seconds() * 1000)
+        log_order_final_event(
+            symbol,
+            attempt,
+            status,
+            latency_ms,
+            filled_avg_price,
+        )
 
     return order_id, status
 
@@ -718,6 +863,9 @@ def poll_order_until_complete(order_id: str) -> str:
 def poll_order_status(
     trading_client: TradingClient,
     order_id: str,
+    symbol: str,
+    submit_ts: datetime,
+    attempt: int = 1,
     timeout_seconds: int = ORDER_TIMEOUT_SECONDS,
     poll_interval: int = ORDER_POLL_INTERVAL,
 ) -> Optional["Order"]:
@@ -726,13 +874,23 @@ def poll_order_status(
     Returns the final order object on success or ``None`` on cancel/timeout.
     """
 
-    start_time = datetime.now(pytz.utc)
+    start_time = datetime.utcnow()
     while True:
         try:
             order = trading_client.get_order_by_id(order_id)
             status = getattr(order, "status", "unknown")
+            filled_avg_price = getattr(order, "filled_avg_price", None)
         except Exception as exc:  # pragma: no cover - API errors
             logger.error("Failed fetching status for %s: %s", order_id, exc)
+            log_api_error_event("poll", symbol, str(exc))
+            final_ts = datetime.utcnow()
+            latency_ms = int((final_ts - submit_ts).total_seconds() * 1000)
+            log_order_final_event(
+                symbol,
+                attempt,
+                "poll_error",
+                latency_ms,
+            )
             return None
 
         if status in [
@@ -745,9 +903,18 @@ def poll_order_status(
             logger.info(
                 "Order %s for %s completed with status %s.", order_id, order.symbol, status
             )
+            final_ts = datetime.utcnow()
+            latency_ms = int((final_ts - submit_ts).total_seconds() * 1000)
+            log_order_final_event(
+                symbol,
+                attempt,
+                status,
+                latency_ms,
+                filled_avg_price,
+            )
             return order
 
-        elapsed = (datetime.now(pytz.utc) - start_time).total_seconds()
+        elapsed = (datetime.utcnow() - start_time).total_seconds()
         if elapsed > timeout_seconds:
             logger.warning(
                 "Order %s for %s timed out after %s seconds. Attempting cancellation.",
@@ -764,6 +931,16 @@ def poll_order_status(
                     order.symbol,
                     cancel_exc,
                 )
+                log_api_error_event("cancel", symbol, str(cancel_exc))
+            final_ts = datetime.utcnow()
+            latency_ms = int((final_ts - submit_ts).total_seconds() * 1000)
+            log_order_final_event(
+                symbol,
+                attempt,
+                "timeout",
+                latency_ms,
+                filled_avg_price,
+            )
             return None
 
         if not is_market_open(trading_client):
@@ -781,6 +958,16 @@ def poll_order_status(
                     order.symbol,
                     cancel_exc,
                 )
+                log_api_error_event("cancel", symbol, str(cancel_exc))
+            final_ts = datetime.utcnow()
+            latency_ms = int((final_ts - submit_ts).total_seconds() * 1000)
+            log_order_final_event(
+                symbol,
+                attempt,
+                "market_closed",
+                latency_ms,
+                filled_avg_price,
+            )
             return None
 
         logger.info(
@@ -801,6 +988,10 @@ def submit_order_with_polling(
 ) -> Optional["Order"]:
     """Submit a limit order and poll until it completes or times out."""
 
+    attempt = 1
+    session_label = "regular"
+    log_order_submit_event(symbol, side, qty, limit_price, attempt, session_label)
+    submit_ts = datetime.utcnow()
     try:
         order_request = LimitOrderRequest(
             symbol=symbol,
@@ -811,6 +1002,7 @@ def submit_order_with_polling(
             extended_hours=False,
         )
         order = trading_client.submit_order(order_request)
+        submit_ts = datetime.utcnow()
         logger.info(
             "[SUBMIT] Order submitted for %s qty=%s at price=%s, id=%s",
             symbol,
@@ -819,10 +1011,17 @@ def submit_order_with_polling(
             order.id,
         )
     except Exception as exc:
+        log_api_error_event("submit", symbol, str(exc))
         logger.error("Exception submitting order for %s: %s", symbol, exc)
         return None
 
-    final_order = poll_order_status(trading_client, order.id)
+    final_order = poll_order_status(
+        trading_client,
+        order.id,
+        symbol,
+        submit_ts,
+        attempt=attempt,
+    )
     if final_order is None:
         logger.warning(
             "[CANCELLED] Order for %s was cancelled or expired after timeout.", symbol
