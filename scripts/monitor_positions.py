@@ -49,6 +49,41 @@ logger = logging.getLogger(__name__)
 logger.info("Monitoring service active.")
 
 
+def log_trailing_stop_event(symbol: str, trail_percent: float, order_id: Optional[str], status: str) -> None:
+    """Emit the structured trailing-stop attachment log."""
+
+    payload = {
+        "symbol": symbol,
+        "trail_percent": trail_percent,
+        "order_id": order_id,
+        "status": status,
+    }
+    logger.info("TRAILING_STOP_ATTACH %s", payload)
+
+
+def log_exit_submit(symbol: str, qty: int, order_type: str, reason_code: str, side: str = "sell") -> None:
+    """Emit the EXIT_SUBMIT structured log."""
+
+    payload = {
+        "symbol": symbol,
+        "side": side,
+        "qty": qty,
+        "order_type": order_type,
+        "reason_code": reason_code,
+    }
+    logger.info("EXIT_SUBMIT %s", payload)
+
+
+def log_exit_final(status: str, latency_ms: int) -> None:
+    """Emit the EXIT_FINAL structured log."""
+
+    payload = {
+        "status": status,
+        "latency_ms": latency_ms,
+    }
+    logger.info("EXIT_FINAL %s", payload)
+
+
 def send_alert(message: str):
     """Send alert message to webhook if configured."""
     if not ALERT_WEBHOOK_URL:
@@ -76,6 +111,30 @@ def log_if_stale(file_path: str, name: str, threshold_minutes: int = 15):
 def round_price(value: float) -> float:
     """Return ``value`` rounded to the nearest cent."""
     return round(value + 1e-6, 2)
+
+
+def wait_for_order_terminal(order_id: str, poll_interval: int = 10, timeout_seconds: int = 600) -> str:
+    """Poll until ``order_id`` reaches a terminal state or times out."""
+
+    deadline = datetime.utcnow() + timedelta(seconds=timeout_seconds)
+    status = "unknown"
+    while datetime.utcnow() <= deadline:
+        try:
+            order = trading_client.get_order_by_id(order_id)
+            status_obj = getattr(order, "status", "unknown")
+            status = status_obj.value if hasattr(status_obj, "value") else str(status_obj)
+        except Exception as exc:
+            logger.error("Failed to fetch status for %s: %s", order_id, exc)
+            status = "error"
+            break
+
+        normalized = status.lower()
+        if normalized in {"filled", "canceled", "cancelled", "expired", "rejected"}:
+            break
+
+        time.sleep(poll_interval)
+
+    return status
 
 
 def cancel_order_safe(order_id: str, symbol: str):
@@ -472,12 +531,19 @@ def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> Non
             time_in_force=TimeInForce.GTC,
             trail_percent=str(trail_percent),
         )
-        trading_client.submit_order(order_data=request)
+        order = trading_client.submit_order(order_data=request)
         logger.info(
             f"Placed trailing stop for {symbol}: qty={qty}, trail_pct={trail_percent}"
         )
+        log_trailing_stop_event(
+            symbol,
+            float(trail_percent),
+            str(getattr(order, "id", None)),
+            "submitted",
+        )
     except Exception as exc:
         logger.error("Failed to submit trailing stop for %s: %s", symbol, exc)
+        log_trailing_stop_event(symbol, float(trail_percent), None, "error")
 
 
 def manage_trailing_stop(position):
@@ -495,6 +561,7 @@ def manage_trailing_stop(position):
         logger.info(
             f"Skipping trailing stop for {symbol} due to non-positive quantity: {qty}."
         )
+        log_trailing_stop_event(symbol, TRAIL_START_PERCENT, None, "skipped")
         return
     try:
         existing_orders = trading_client.get_orders(
@@ -530,6 +597,7 @@ def manage_trailing_stop(position):
             submit_new_trailing_stop(symbol, available_qty, TRAIL_START_PERCENT)
         else:
             logger.warning(f"No available quantity for trailing stop on {symbol}.")
+            log_trailing_stop_event(symbol, TRAIL_START_PERCENT, None, "skipped")
         return
 
     trailing_order = trailing_stops[0]
@@ -538,6 +606,12 @@ def manage_trailing_stop(position):
     if available_qty <= 0:
         logger.warning(
             f"Insufficient available qty for {symbol}: {available_qty}"
+        )
+        log_trailing_stop_event(
+            symbol,
+            float(getattr(trailing_order, "trail_percent", TRAIL_START_PERCENT)),
+            str(getattr(trailing_order, "id", None)),
+            "skipped",
         )
         return
     use_qty = available_qty
@@ -635,7 +709,7 @@ def check_pending_orders():
 # Execute sell orders
 
 
-def submit_sell_market_order(position, reason: str):
+def submit_sell_market_order(position, reason: str, reason_code: str):
     """Submit a limit sell order compatible with extended hours."""
     symbol = position.symbol
     qty = position.qty
@@ -693,7 +767,12 @@ def submit_sell_market_order(position, reason: str):
             time_in_force="day",
             extended_hours=is_extended_hours(now_et),
         )
+        submit_ts = datetime.utcnow()
         order = trading_client.submit_order(order_request)
+        log_exit_submit(symbol, order_qty, "limit", reason_code)
+        status = wait_for_order_terminal(str(getattr(order, "id", "")))
+        latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
+        log_exit_final(status, latency_ms)
         logger.info(
             "[EXIT] Limit sell %s qty %s at %.2f due to %s",
             symbol,
@@ -708,7 +787,7 @@ def submit_sell_market_order(position, reason: str):
             str(exit_price),
             entry_time,
             "",
-            "submitted",
+            status,
             "limit",
             reason,
             "sell",
@@ -763,7 +842,7 @@ def process_positions_cycle():
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
 
-            submit_sell_market_order(position, reason=f"Max Hold {days_held}d")
+            submit_sell_market_order(position, reason=f"Max Hold {days_held}d", reason_code="max_hold")
             continue
 
         indicators = fetch_indicators(symbol)
@@ -797,7 +876,7 @@ def process_positions_cycle():
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
             reason_text = "; ".join(reasons)
-            submit_sell_market_order(position, reason=reason_text)
+            submit_sell_market_order(position, reason=reason_text, reason_code="monitor")
         else:
             logger.info(f"No sell signal for {symbol}; managing trailing stop.")
             manage_trailing_stop(position)
