@@ -23,6 +23,7 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, timezone
+import time
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -73,6 +74,36 @@ MAX_OPEN_TRADES = 4
 ALLOC_PERCENT = 0.03  # 3% of available buying power per trade
 TRAIL_PERCENT = 3.0
 MAX_HOLD_DAYS = 7
+
+
+def log_trailing_stop_event(symbol: str, trail_percent: float, order_id: Optional[str], status: str) -> None:
+    payload = {
+        "symbol": symbol,
+        "trail_percent": trail_percent,
+        "order_id": order_id,
+        "status": status,
+    }
+    logging.info("TRAILING_STOP_ATTACH %s", payload)
+
+
+def log_exit_submit(symbol: str, qty: int, order_type: str, reason_code: str, side: str = "sell") -> None:
+    payload = {
+        "symbol": symbol,
+        "side": side,
+        "qty": qty,
+        "order_type": order_type,
+        "reason_code": reason_code,
+    }
+    logging.info("EXIT_SUBMIT %s", payload)
+
+
+def log_exit_final(status: str, latency_ms: int) -> None:
+    payload = {
+        "status": status,
+        "latency_ms": latency_ms,
+    }
+    logging.info("EXIT_FINAL %s", payload)
+
 
 # Ensure executed trades and open positions CSVs exist
 exec_trades_path = os.path.join(BASE_DIR, 'data', 'executed_trades.csv')
@@ -146,6 +177,30 @@ def record_executed_trade(
         logging.error("Failed to record executed trade for %s: %s", symbol, exc)
 
 
+def wait_for_order_terminal(order_id: str, poll_interval: int = 10, timeout_seconds: int = 600) -> str:
+    """Poll the Alpaca API until ``order_id`` hits a terminal status."""
+
+    deadline = datetime.utcnow() + timedelta(seconds=timeout_seconds)
+    status = "unknown"
+    while datetime.utcnow() <= deadline:
+        try:
+            order = trading_client.get_order_by_id(order_id)
+            status_obj = getattr(order, "status", "unknown")
+            status = status_obj.value if hasattr(status_obj, "value") else str(status_obj)
+        except Exception as exc:
+            logging.error("Failed to fetch status for %s: %s", order_id, exc)
+            status = "error"
+            break
+
+        normalized = status.lower()
+        if normalized in {"filled", "canceled", "cancelled", "expired", "rejected"}:
+            break
+
+        time.sleep(poll_interval)
+
+    return status
+
+
 def get_buying_power() -> float:
     acc = trading_client.get_account()
     return float(acc.buying_power)
@@ -213,6 +268,7 @@ def attach_trailing_stops() -> None:
         request = GetOrdersRequest(status="open", symbols=[symbol])
         orders = trading_client.get_orders(filter=request)
         if any(o.order_type == 'trailing_stop' for o in orders):
+            log_trailing_stop_event(symbol, TRAIL_PERCENT, None, "skipped")
             continue
         try:
             trail_req = TrailingStopOrderRequest(
@@ -222,11 +278,13 @@ def attach_trailing_stops() -> None:
                 trail_percent=TRAIL_PERCENT,
                 time_in_force=TimeInForce.GTC
             )
-            trading_client.submit_order(trail_req)
+            order = trading_client.submit_order(trail_req)
             record_executed_trade(symbol, int(pos.qty), pos.avg_entry_price, order_type="trailing_stop", side="sell")
             logging.info("Attached trailing stop to %s", symbol)
+            log_trailing_stop_event(symbol, TRAIL_PERCENT, str(getattr(order, "id", None)), "submitted")
         except Exception as exc:
             logging.error("Failed to attach trailing stop for %s: %s", symbol, exc)
+            log_trailing_stop_event(symbol, TRAIL_PERCENT, None, "error")
 
 
 def daily_exit_check() -> None:
@@ -255,7 +313,12 @@ def daily_exit_check() -> None:
                     time_in_force=TimeInForce.DAY,
                     extended_hours=True,
                 )
-                trading_client.submit_order(order_request)
+                submit_ts = datetime.utcnow()
+                order = trading_client.submit_order(order_request)
+                log_exit_submit(symbol, int(pos.qty), "market", "max_hold")
+                status = wait_for_order_terminal(str(getattr(order, "id", "")))
+                latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
+                log_exit_final(status, latency_ms)
                 record_executed_trade(symbol, int(pos.qty), pos.current_price, order_type="market", side="sell")
             except Exception as exc:
                 logging.error("Failed to submit time‑based exit for %s: %s", symbol, exc)
@@ -274,7 +337,12 @@ def daily_exit_check() -> None:
                     time_in_force=TimeInForce.DAY,
                     extended_hours=True,
                 )
-                trading_client.submit_order(order_request)
+                submit_ts = datetime.utcnow()
+                order = trading_client.submit_order(order_request)
+                log_exit_submit(symbol, int(pos.qty), "market", "monitor")
+                status = wait_for_order_terminal(str(getattr(order, "id", "")))
+                latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
+                log_exit_final(status, latency_ms)
                 record_executed_trade(symbol, int(pos.qty), pos.current_price, order_type="market", side="sell")
         except Exception as exc:
             logging.error("Error during early exit check for %s: %s", symbol, exc)

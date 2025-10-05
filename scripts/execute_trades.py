@@ -98,6 +98,44 @@ ORDER_POLL_INTERVAL = 10  # seconds between status checks
 ORDER_TIMEOUT_SECONDS = 120  # total time to wait before cancelling and retrying
 MAX_ORDER_RETRIES = 3  # maximum number of retries per symbol
 
+# Structured logging helpers -------------------------------------------------
+
+
+def log_trailing_stop_event(symbol: str, trail_percent: float, order_id: Optional[str], status: str) -> None:
+    """Emit a structured log entry for trailing-stop attachments."""
+
+    payload = {
+        "symbol": symbol,
+        "trail_percent": trail_percent,
+        "order_id": order_id,
+        "status": status,
+    }
+    logger.info("TRAILING_STOP_ATTACH %s", payload)
+
+
+def log_exit_submit(symbol: str, qty: int, order_type: str, reason_code: str, side: str = "sell") -> None:
+    """Emit the EXIT_SUBMIT log required for downstream monitoring."""
+
+    payload = {
+        "symbol": symbol,
+        "side": side,
+        "qty": qty,
+        "order_type": order_type,
+        "reason_code": reason_code,
+    }
+    logger.info("EXIT_SUBMIT %s", payload)
+
+
+def log_exit_final(status: str, latency_ms: int) -> None:
+    """Emit the EXIT_FINAL log when an exit order reaches a terminal state."""
+
+    payload = {
+        "status": status,
+        "latency_ms": latency_ms,
+    }
+    logger.info("EXIT_FINAL %s", payload)
+
+
 # Directory used for caching market history
 DATA_CACHE_DIR = os.path.join(BASE_DIR, "data", "history_cache")
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
@@ -838,8 +876,10 @@ def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> Non
             qty,
             trail_percent,
         )
+        log_trailing_stop_event(symbol, trail_percent, str(getattr(order, "id", None)), "submitted")
     except Exception as exc:
         logger.error("Failed to submit trailing stop for %s: %s", symbol, exc)
+        log_trailing_stop_event(symbol, trail_percent, None, "error")
 
 
 def poll_order_until_complete(order_id: str) -> str:
@@ -1266,6 +1306,7 @@ def attach_trailing_stops():
             existing_orders = trading_client.get_orders(filter=request)
         except Exception as exc:
             logger.error("Failed to fetch open orders for %s: %s", symbol, exc)
+            log_trailing_stop_event(symbol, TRAIL_PERCENT, None, "error")
             continue
 
         for order in existing_orders:
@@ -1291,6 +1332,7 @@ def attach_trailing_stops():
         ]
         if other_orders:
             logger.info("Skipping trailing stop for %s: already has open orders.", symbol)
+            log_trailing_stop_event(symbol, TRAIL_PERCENT, None, "skipped")
             continue
 
         # Re-check available quantity after cancellations
@@ -1303,12 +1345,14 @@ def attach_trailing_stops():
                 symbol,
                 exc,
             )
+            log_trailing_stop_event(symbol, TRAIL_PERCENT, None, "error")
             continue
 
         if available_qty <= 0:
             logger.warning(
                 f"Insufficient available qty for {symbol}: {available_qty}"
             )
+            log_trailing_stop_event(symbol, TRAIL_PERCENT, None, "skipped")
             continue
         submit_new_trailing_stop(symbol, available_qty, TRAIL_PERCENT)
 
@@ -1377,8 +1421,12 @@ def daily_exit_check():
                     time_in_force=TimeInForce.DAY,
                     extended_hours=extended,
                 )
+                submit_ts = datetime.utcnow()
                 order = trading_client.submit_order(order_request)
+                log_exit_submit(symbol, qty, "limit", "max_hold")
                 status = poll_order_until_complete(order.id)
+                latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
+                log_exit_final(status, latency_ms)
                 logger.info("Order submitted successfully for %s", symbol)
                 record_executed_trade(
                     symbol,
@@ -1405,8 +1453,12 @@ def daily_exit_check():
                             time_in_force=TimeInForce.DAY,
                             extended_hours=False,
                         )
+                        submit_ts = datetime.utcnow()
                         order = trading_client.submit_order(retry_req)
+                        log_exit_submit(symbol, int(pos.qty), "limit", "max_hold")
                         status = poll_order_until_complete(order.id)
+                        latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
+                        log_exit_final(status, latency_ms)
                         logger.info(
                             "Retry successful with regular hours order for %s",
                             symbol,
@@ -1471,14 +1523,19 @@ def daily_exit_check():
                     time_in_force=TimeInForce.DAY,
                     extended_hours=extended_now,
                 )
+                submit_ts = datetime.utcnow()
                 order = trading_client.submit_order(order_request)
+                log_exit_submit(symbol, qty, "limit", "monitor")
                 status = poll_order_until_complete(order.id)
+                latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
+                log_exit_final(status, latency_ms)
                 record_executed_trade(
                     symbol,
                     qty,
                     valid_exit_price,
                     order_type="limit",
                     side="sell",
+                    order_id=str(order.id),
                     order_status=status,
                 )
                 if status == "filled":
@@ -1497,7 +1554,12 @@ def daily_exit_check():
                             time_in_force=TimeInForce.DAY,
                             extended_hours=False,
                         )
-                        trading_client.submit_order(retry_req)
+                        submit_ts = datetime.utcnow()
+                        order = trading_client.submit_order(retry_req)
+                        log_exit_submit(symbol, int(pos.qty), "limit", "monitor")
+                        status = poll_order_until_complete(order.id)
+                        latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
+                        log_exit_final(status, latency_ms)
                         logger.info(
                             "Retry successful with regular hours order for %s", symbol
                         )
@@ -1507,6 +1569,8 @@ def daily_exit_check():
                             valid_exit_price,
                             order_type="limit",
                             side="sell",
+                            order_status=status,
+                            order_id=str(order.id),
                         )
                         metrics["orders_submitted"] += 1
                         metrics["api_retries"] += 1
