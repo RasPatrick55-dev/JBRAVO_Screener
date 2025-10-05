@@ -14,6 +14,7 @@ import subprocess
 import logging
 import pandas as pd
 import json
+import secrets
 from datetime import datetime, timedelta, timezone, time
 import pytz
 from time import sleep
@@ -112,6 +113,32 @@ metrics = {
     "api_failures": 0,
 }
 metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
+EVENTS_LOG_PATH = os.path.join(BASE_DIR, "data", "execute_events.jsonl")
+run_id = f"{datetime.utcnow().isoformat()}#{secrets.token_hex(3)}"
+
+
+def utcnow() -> str:
+    """Return the current UTC timestamp in ISO 8601 format."""
+
+    return datetime.utcnow().isoformat()
+
+
+def inc(metric: str, by: int = 1) -> None:
+    """Increment ``metric`` in the global metrics dictionary."""
+
+    current = metrics.get(metric, 0)
+    metrics[metric] = current + by
+
+
+def log_event(event: dict) -> None:
+    """Append ``event`` as a JSON line to the execute events log."""
+
+    payload = {"run_id": run_id, "timestamp": utcnow(), **event}
+    path = Path(EVENTS_LOG_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload))
+        f.write("\n")
 
 
 def load_cached_prices(symbols: list[str], cache_dir: str = os.path.join(BASE_DIR, "data", "history_cache")) -> dict[str, float]:
