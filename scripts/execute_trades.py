@@ -159,6 +159,25 @@ metrics = {
     "api_retries": 0,
     "api_failures": 0,
 }
+
+LEGACY_SKIP_METRIC_ALIASES = {
+    "orders_skipped_existing_positions": (
+        "orders_skipped_existing_positions",
+        "orders_skipped_existing_position",
+    ),
+    "orders_skipped_pending_orders": (
+        "orders_skipped_pending_orders",
+        "orders_skipped_pending_order",
+    ),
+    "orders_skipped_risk_limits": ("orders_skipped_risk_limits", "orders_skipped_risk_limit"),
+    "orders_skipped_market_data": ("orders_skipped_market_data",),
+    "orders_skipped_session": ("orders_skipped_session", "orders_skipped_session_window"),
+    "orders_skipped_duplicate": (
+        "orders_skipped_duplicate",
+        "orders_skipped_duplicate_candidate",
+    ),
+    "orders_skipped_other": ("orders_skipped_other",),
+}
 metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 EVENTS_LOG_PATH = os.path.join(BASE_DIR, "data", "execute_events.jsonl")
 run_id = f"{datetime.utcnow().isoformat()}#{secrets.token_hex(3)}"
@@ -189,6 +208,54 @@ def log_event(event: dict) -> None:
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload))
         f.write("\n")
+
+
+def _resolve_metric_alias(*names: str) -> int:
+    """Return the first non-zero metric value among ``names``."""
+
+    for name in names:
+        value = metrics.get(name, 0)
+        if value:
+            return value
+    return metrics.get(names[0], 0) if names else 0
+
+
+def build_execute_metrics_snapshot() -> dict[str, int]:
+    """Return the metrics payload compatible with the legacy dashboard."""
+
+    snapshot = {
+        "symbols_processed": metrics.get("symbols_processed", 0),
+        "orders_submitted": metrics.get("orders_submitted", 0),
+        "symbols_skipped": metrics.get("symbols_skipped", 0),
+        "api_retries": metrics.get("api_retries", 0),
+        "api_failures": metrics.get("api_failures", 0),
+    }
+
+    for legacy_key, aliases in LEGACY_SKIP_METRIC_ALIASES.items():
+        snapshot[legacy_key] = _resolve_metric_alias(*aliases)
+
+    latency_samples = order_latencies_ms
+    if latency_samples:
+        order_latency_ms_p50 = int(median(latency_samples))
+        if len(latency_samples) == 1:
+            order_latency_ms_p95 = order_latency_ms_p50
+        else:
+            order_latency_ms_p95 = int(
+                round(quantiles(latency_samples, n=100, method="inclusive")[94])
+            )
+    else:
+        order_latency_ms_p50 = 0
+        order_latency_ms_p95 = 0
+
+    snapshot.update(
+        {
+            "order_latency_ms_p50": order_latency_ms_p50,
+            "order_latency_ms_p95": order_latency_ms_p95,
+            "retry_backoff_ms_sum": retry_backoff_ms_total,
+        }
+    )
+
+    return snapshot
 
 
 def log_order_submit_event(
@@ -1285,39 +1352,7 @@ def submit_trades() -> list[dict]:
         errors,
     )
 
-    symbols_processed = len(df)
-    symbols_skipped_positions = metrics["orders_skipped_existing_positions"]
-    symbols_skipped_orders = metrics["orders_skipped_pending_orders"]
-    orders_submitted = metrics["orders_submitted"]
-
-    execute_metrics = {
-        "symbols_processed": symbols_processed,
-        "orders_submitted": orders_submitted,
-        "orders_skipped_existing_positions": symbols_skipped_positions,
-        "orders_skipped_pending_orders": symbols_skipped_orders,
-        "api_failures": errors,
-    }
-
-    latency_samples = order_latencies_ms
-    if latency_samples:
-        order_latency_ms_p50 = int(median(latency_samples))
-        if len(latency_samples) == 1:
-            order_latency_ms_p95 = order_latency_ms_p50
-        else:
-            order_latency_ms_p95 = int(
-                round(quantiles(latency_samples, n=100, method="inclusive")[94])
-            )
-    else:
-        order_latency_ms_p50 = 0
-        order_latency_ms_p95 = 0
-
-    execute_metrics.update(
-        {
-            "order_latency_ms_p50": order_latency_ms_p50,
-            "order_latency_ms_p95": order_latency_ms_p95,
-            "retry_backoff_ms_sum": retry_backoff_ms_total,
-        }
-    )
+    execute_metrics = build_execute_metrics_snapshot()
 
     with open(metrics_path, "w") as f:
         json.dump(execute_metrics, f, indent=4)

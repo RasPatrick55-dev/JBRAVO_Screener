@@ -170,3 +170,19 @@ Individual events may include additional keys inside the `details` object; these
 
 No dashboard changes are required for this documentation update. The Plotly Dash app continues to rely on the existing keys in `execute_metrics.json` that are already documented in the system guide and pipeline summary.
 
+## Contributing
+
+When you introduce a new reason code or execution metric, make sure the value flows from the runtime emitters all the way to the dashboards and documentation. The workflow generally looks like:
+
+1. Update the code that emits the structured event or metric (for example the helpers in `scripts/execute_trades.py`).
+2. Persist the new field in `data/execute_metrics.json` so downstream consumers can read it.
+3. Adjust any dashboards that visualize the metric or reason code to read the new key.
+4. Document the behavior in this guide so operators understand what the new data represents.
+
+Use the checklist below before submitting a change:
+
+- [ ] Code emits the new reason code or metric value.
+- [ ] The metric snapshot written to `execute_metrics.json` contains the new key.
+- [ ] Dashboards read and display the new field (or gracefully ignore it if optional).
+- [ ] `docs/logging_metrics.md` reflects the new reason code or metric, including sample payloads if applicable.
+
