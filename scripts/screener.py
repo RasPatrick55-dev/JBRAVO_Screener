@@ -44,6 +44,18 @@ DATA_CACHE_DIR = os.path.join(BASE_DIR, 'data', 'history_cache')
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 DB_PATH = os.path.join(BASE_DIR, 'data', 'pipeline.db')
 
+VALID_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
+
+
+def sanitize_row(row: dict) -> dict:
+    exchange = (row.get("exchange") or "").strip().upper()
+    symbol = (row.get("symbol") or "").strip().upper()
+    if not exchange or exchange not in VALID_EXCHANGES:
+        exchange = "UNKNOWN"
+    row["exchange"] = exchange
+    row["symbol"] = symbol
+    return row
+
 # Tunable strategy parameters
 RSI_OVERBOUGHT = 70
 RSI_BULLISH = 50
@@ -101,7 +113,21 @@ data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # Fetch all tradable symbols
 assets = trading_client.get_all_assets()
-symbols = [a.symbol for a in assets if a.tradable and a.status == "active" and a.exchange in ("NYSE", "NASDAQ")]
+symbols: list[str] = []
+for asset in assets:
+    if not getattr(asset, "tradable", False) or getattr(asset, "status", "") != "active":
+        continue
+    row = sanitize_row({
+        "symbol": getattr(asset, "symbol", ""),
+        "exchange": getattr(asset, "exchange", ""),
+    })
+    if row["exchange"] == "UNKNOWN":
+        logger.debug(
+            "Skipping %s due to unknown exchange '%s'", row.get("symbol") or "<UNKNOWN>", getattr(asset, "exchange", "")
+        )
+        continue
+    if row["symbol"]:
+        symbols.append(row["symbol"])
 
 
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
