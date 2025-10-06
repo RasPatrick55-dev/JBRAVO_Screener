@@ -2,23 +2,41 @@
 # Dynamically execute limit buys for the highest ranked candidates.
 # Trailing stops and max hold logic manage risk on open trades.
 
-import os
-import subprocess
-import sys
+# --- Minimal, import-proof telemetry using the bootstrap emitter ---
+import os, sys, subprocess, json
+from pathlib import Path
+from datetime import datetime, timezone
 
-subprocess.run(
-    [sys.executable, "-m", "bin.emit_event", "IMPORT_SENTINEL", "component=execute_trades"],
-    check=False,
-)
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def emit(evt: str, **kvs):
+    """Emit an event with NO project imports, via the bootstrap module."""
+
+    cmd = [sys.executable, "-m", "bin.emit_event", evt]
+    for k, v in kvs.items():
+        cmd.append(f"{k}={v}")
+    # best-effort: never raise here
+    try:
+        subprocess.run(cmd, check=False)
+    except Exception:
+        pass
+
+
+def utcnow():
+    return datetime.now(timezone.utc).isoformat()
+
+
+# Import sentinel: proves this module actually loaded
+emit("IMPORT_SENTINEL", component="execute_trades")
 
 import argparse
-
-from utils.telemetry import RunSentinel, log_event as telemetry_log_event, repo_root
 import logging
 import pandas as pd
-import json
 import secrets
-from datetime import datetime, timedelta, timezone, time
+from datetime import timedelta, time
 import pytz
 from time import sleep
 from typing import Optional
@@ -40,7 +58,6 @@ from dotenv import load_dotenv
 # Alerting
 import requests
 from .utils import cache_bars
-from pathlib import Path
 
 from .exit_signals import should_exit_early
 from .monitor_positions import log_trade_exit
@@ -64,9 +81,6 @@ start_time = datetime.utcnow()
 logger.info("Trade execution script started.")
 
 ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
-
-if os.environ.get("JBRAVO_IMPORT_SENTINEL") == "1":
-    telemetry_log_event({"event": "IMPORT_SENTINEL", "component": "execute_trades"})
 
 
 def send_alert(message: str) -> None:
@@ -219,7 +233,10 @@ COMPONENT_NAME = "execute_trades"
 def log_event(event: dict) -> None:
     payload = {"component": COMPONENT_NAME}
     payload.update(event)
-    telemetry_log_event(payload)
+    evt = payload.pop("event", None)
+    if not evt:
+        return
+    emit(evt, **{k: str(v) for k, v in payload.items()})
 
 
 def inc(metric: str, by: int = 1) -> None:
@@ -1745,101 +1762,119 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[list[str]] = None) -> int:
     """Entrypoint for executing the trade pipeline with market guardrails."""
 
-    args = parse_args(argv)
-    force_run = bool(getattr(args, "force", False))
+    raw_args = list(argv) if argv is not None else sys.argv[1:]
+    force_flag = "--force" in raw_args
+
+    try:
+        os.chdir(repo_root())
+    except Exception:
+        pass
+
+    emit("RUN_START", component=COMPONENT_NAME, force=str(force_flag).lower())
+
     trading_env = detect_trading_env()
 
-    os.chdir(repo_root())
+    guard_error: Optional[str] = None
+    clock_source = "unknown"
+    status = "UNKNOWN"
+    try:
+        is_open, clock_source, guard_error = get_clock_open(trading_env)
+        if guard_error is None:
+            status = "OPEN" if is_open else "CLOSED"
+    except Exception as exc:
+        logger.exception("Market guard helper raised an unexpected error; failing open.")
+        clock_source = "unknown"
+        guard_error = str(exc)
+        status = "UNKNOWN"
+        is_open = True
+
+    emit(
+        "MARKET_GUARD_STATUS",
+        component=COMPONENT_NAME,
+        status=status,
+        clock_source=clock_source,
+        force=str(force_flag).lower(),
+        error=guard_error or "",
+    )
+
+    if status == "CLOSED" and not force_flag:
+        logger.warning("Market is closed; aborting trade execution run.")
+        metrics["run_aborted_reason"] = "MARKET_CLOSED"
+        try:
+            mp = Path("data/execute_metrics.json")
+            mp.parent.mkdir(parents=True, exist_ok=True)
+            metrics_payload: dict[str, object] = {}
+            if mp.exists():
+                try:
+                    metrics_payload = json.loads(mp.read_text(encoding="utf-8"))
+                except Exception:
+                    metrics_payload = {}
+            metrics_payload["run_aborted_reason"] = "MARKET_CLOSED"
+            mp.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+        finally:
+            emit("RUN_ABORT", component=COMPONENT_NAME, reason_code="MARKET_CLOSED")
+            emit("RUN_END", component=COMPONENT_NAME, status="aborted")
+        return 0
+
+    if status == "CLOSED" and force_flag:
+        logger.warning("Market closed but proceeding due to --force flag.")
+
+    args = parse_args(raw_args)
+    force_flag = bool(getattr(args, "force", False))
 
     exit_code = 0
     try:
-        with RunSentinel(
-            component=COMPONENT_NAME, force=force_run, extra={"env": trading_env}
-        ) as rs:
-            guard_error: Optional[str] = None
-            try:
-                is_open, clock_source, guard_error = get_clock_open(trading_env)
-            except Exception as exc:
-                logger.exception("Market guard helper raised an unexpected error; failing open.")
-                clock_source = "unknown"
-                guard_error = str(exc)
-                is_open = True
-            status = "OPEN" if guard_error is None and is_open else ("CLOSED" if guard_error is None else "UNKNOWN")
-            rs.guard(
-                status=status,
-                env=trading_env,
-                clock_source=clock_source,
-                error=guard_error,
-                force=force_run,
+        run_start_time = datetime.utcnow()
+        logger.info("Starting pre-market trade execution script")
+
+        try:
+            trade_entries = submit_trades()
+            attach_trailing_stops()
+            daily_exit_check()
+            save_open_positions_csv()
+            update_trades_log()
+            if trade_entries:
+                try:
+                    csv_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
+                    existing = (
+                        pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+                    )
+                    new_df = pd.DataFrame(trade_entries)
+                    combined = pd.concat([existing, new_df], ignore_index=True)
+                    combined.to_csv(csv_path, index=False)
+                    logger.info("Trades log updated successfully.")
+                except Exception as exc:
+                    logger.error("Failed to append trade log entries: %s", exc)
+            logger.info(
+                "Metrics - processed: %d, submitted: %d, skipped: %d",
+                metrics["symbols_processed"],
+                metrics["orders_submitted"],
+                metrics["symbols_skipped"],
             )
 
-            if status == "CLOSED" and not force_run:
-                logger.warning("Market is closed; aborting trade execution run.")
-                metrics["run_aborted_reason"] = "MARKET_CLOSED"
-                persist_execute_metrics()
-                log_event(
-                    {
-                        "event": "RUN_ABORT",
-                        "reason_code": "MARKET_CLOSED",
-                        "guard": "alpaca_clock",
-                        "force": force_run,
-                        "version": rs.version,
-                    }
-                )
-                return 0
-
-            if status == "CLOSED" and force_run:
-                logger.warning("Market closed but proceeding due to --force flag.")
-
-            run_start_time = datetime.utcnow()
-            logger.info("Starting pre-market trade execution script")
-
+            history_script = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "fetch_trades_history.py"
+            )
             try:
-                trade_entries = submit_trades()
-                attach_trailing_stops()
-                daily_exit_check()
-                save_open_positions_csv()
-                update_trades_log()
-                if trade_entries:
-                    try:
-                        csv_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
-                        existing = (
-                            pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
-                        )
-                        new_df = pd.DataFrame(trade_entries)
-                        combined = pd.concat([existing, new_df], ignore_index=True)
-                        combined.to_csv(csv_path, index=False)
-                        logger.info("Trades log updated successfully.")
-                    except Exception as exc:
-                        logger.error("Failed to append trade log entries: %s", exc)
-                logger.info(
-                    "Metrics - processed: %d, submitted: %d, skipped: %d",
-                    metrics["symbols_processed"],
-                    metrics["orders_submitted"],
-                    metrics["symbols_skipped"],
-                )
-
-                history_script = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), "fetch_trades_history.py"
-                )
-                try:
-                    subprocess.run(["python", history_script], check=True)
-                    logger.info("Historical trades successfully fetched and CSV files updated.")
-                except subprocess.CalledProcessError as e:
-                    logger.error("Failed to run historical trade script: %s", e)
-            except Exception as exc:
-                logger.exception("Critical error occurred: %s", exc)
-                send_alert(str(exc))
-                exit_code = 1
-                raise
-            finally:
-                end_time = datetime.utcnow()
-                elapsed_time = end_time - run_start_time
-                logger.info("Script finished in %s", elapsed_time)
-                logger.info("Pre-market trade execution script complete")
+                subprocess.run(["python", history_script], check=True)
+                logger.info("Historical trades successfully fetched and CSV files updated.")
+            except subprocess.CalledProcessError as e:
+                logger.error("Failed to run historical trade script: %s", e)
+        except Exception as exc:
+            logger.exception("Critical error occurred: %s", exc)
+            send_alert(str(exc))
+            exit_code = 1
+            raise
+        finally:
+            end_time = datetime.utcnow()
+            elapsed_time = end_time - run_start_time
+            logger.info("Script finished in %s", elapsed_time)
+            logger.info("Pre-market trade execution script complete")
     except Exception:
+        emit("RUN_END", component=COMPONENT_NAME, status="error")
         return 1
 
+    emit("RUN_END", component=COMPONENT_NAME, status="ok")
     return exit_code
 
 
