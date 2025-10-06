@@ -37,10 +37,6 @@ management rules【514888614236530†L41-L53】.
 import os
 import sys
 
-# Ensure the root of the repository is on the Python path so we can
-# import shared modules such as ``indicators`` and ``utils``.
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 import logging
 import sqlite3
 from logging.handlers import RotatingFileHandler
@@ -51,7 +47,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 import requests
 
-from indicators import adx, aroon, macd, obv, rsi
+from .indicators import adx, aroon, macd, obv, rsi
 from utils import write_csv_atomic, cache_bars
 from typing import Optional
 
@@ -103,7 +99,7 @@ def send_alert(message: str) -> None:
         logging.error("Failed to send alert: %s", exc)
 
 
-from scripts.ensure_db_indicators import ensure_columns, REQUIRED_COLUMNS
+from .ensure_db_indicators import ensure_columns, REQUIRED_COLUMNS
 
 
 def init_db() -> None:

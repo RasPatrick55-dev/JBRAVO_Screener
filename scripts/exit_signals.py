@@ -24,8 +24,8 @@ import logging
 from typing import Optional
 import pandas as pd
 
-from indicators import rsi, macd
-from utils import cache_bars
+from .indicators import rsi, macd
+from .utils import cache_bars
 
 
 def should_exit_early(symbol: str, data_client, cache_dir: str, lookback: int = 100) -> bool:

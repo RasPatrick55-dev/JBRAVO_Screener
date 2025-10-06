@@ -2,6 +2,7 @@
 # Scheduled to run nightly around 9:00 PM Central Standard Time
 # after market close to process the most recent data.
 import os
+import subprocess
 import sys
 import traceback
 
@@ -15,7 +16,6 @@ os.chdir(BASE_DIR)
 # Add project root to sys.path so that sibling packages (like scripts) can be imported
 sys.path.insert(0, str(BASE_DIR))
 
-import subprocess
 import logging
 from datetime import datetime, timezone
 from utils import logger_utils
@@ -107,7 +107,7 @@ def main() -> int:
             log_event({"event": "PIPELINE_START"})
             try:
                 try:
-                    run_step("Screener", [sys.executable, "scripts/screener.py"])
+                    run_step("Screener", [sys.executable, "-m", "scripts.screener"])
                 except Exception:
                     logger.error("Screener step failed")
                     summarize = False
@@ -115,8 +115,8 @@ def main() -> int:
                     return exit_code
 
                 steps = [
-                    ("Backtest", [sys.executable, "scripts/backtest.py"]),
-                    ("Metrics Calculation", [sys.executable, "scripts/metrics.py"]),
+                    ("Backtest", [sys.executable, "-m", "scripts.backtest"]),
+                    ("Metrics Calculation", [sys.executable, "-m", "scripts.metrics"]),
                 ]
 
                 for name, cmd in steps:
@@ -146,7 +146,43 @@ def main() -> int:
                         exit_code = 1
                         break
 
-                from scripts.execute_trades import main as exec_main
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "bin.emit_event",
+                        "PIPELINE_BOOTSTRAP",
+                        "component=pipeline",
+                    ],
+                    check=False,
+                )
+
+                try:
+                    from scripts.execute_trades import main as exec_main
+                except Exception as exc:
+                    subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "bin.emit_event",
+                            "IMPORT_FAILURE",
+                            "component=execute_trades",
+                            f"error={str(exc).replace(' ', '_')}",
+                        ],
+                        check=False,
+                    )
+                    raise
+
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "bin.emit_event",
+                        "IMPORT_SUCCESS",
+                        "component=execute_trades",
+                    ],
+                    check=False,
+                )
 
                 exec_result = exec_main()
                 if isinstance(exec_result, int) and exec_result != 0:
