@@ -16,6 +16,7 @@ import logging
 import pandas as pd
 import json
 import secrets
+import traceback
 from datetime import datetime, timedelta, timezone, time
 import pytz
 from time import sleep
@@ -79,15 +80,22 @@ def send_alert(message: str) -> None:
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
-BASE_URL = os.getenv("APCA_API_BASE_URL")
+BASE_URL = os.getenv("APCA_API_BASE_URL") or os.getenv("ALPACA_BASE_URL")
 
-TRADING_ENV = os.getenv("TRADING_ENV")
-if TRADING_ENV:
-    TRADING_ENV = TRADING_ENV.lower()
-elif BASE_URL and "paper" in BASE_URL.lower():
-    TRADING_ENV = "paper"
-else:
-    TRADING_ENV = "live"
+
+def detect_trading_env() -> str:
+    """Detect the Alpaca trading environment (paper or live)."""
+
+    env = os.environ.get("TRADING_ENV")
+    if env:
+        env = env.lower()
+        if env in ("paper", "live"):
+            return env
+    base_url = BASE_URL or os.environ.get("ALPACA_BASE_URL", "")
+    return "paper" if base_url and "paper" in base_url.lower() else "live"
+
+
+TRADING_ENV = detect_trading_env()
 
 if not API_KEY or not API_SECRET:
     raise ValueError("Missing Alpaca credentials")
@@ -198,7 +206,21 @@ retry_backoff_ms_total = 0
 def utcnow() -> str:
     """Return the current UTC timestamp in ISO 8601 format."""
 
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
+
+
+def get_version() -> str:
+    """Return the short git SHA for telemetry or a fallback version string."""
+
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True
+        ).strip()
+        if sha:
+            return sha
+    except Exception:
+        pass
+    return os.environ.get("JBRAVO_VERSION", "unknown")
 
 
 def inc(metric: str, by: int = 1) -> None:
@@ -208,13 +230,16 @@ def inc(metric: str, by: int = 1) -> None:
     metrics[metric] = current + by
 
 
-def log_event(event: dict) -> None:
+def log_event(event: dict, path: Optional[str] = None) -> None:
     """Append ``event`` as a JSON line to the execute events log."""
 
-    payload = {"run_id": run_id, "timestamp": utcnow(), **event}
-    path = Path(EVENTS_LOG_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
+    payload = dict(event)
+    payload.setdefault("ts", utcnow())
+    payload.setdefault("timestamp", payload["ts"])
+    payload.setdefault("run_id", run_id)
+    target_path = Path(path or EVENTS_LOG_PATH)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    with target_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload))
         f.write("\n")
 
@@ -484,44 +509,37 @@ def is_extended_hours(now_et: time) -> bool:
     return time(4, 0) <= now_et < time(9, 30) or now_et >= time(16, 0)
 
 
-def is_market_open_via_alpaca() -> tuple[bool, str, str, Optional[str]]:
-    """Return the market status using Alpaca APIs and its clock source.
+def is_market_open_via_alpaca(trading_env: str) -> tuple[bool, str, Optional[str]]:
+    """Return ``(is_open, clock_source, error_message)`` for the market guard."""
 
-    Returns a tuple of ``(is_open, clock_source, status, error_message)`` where:
-
-    * ``is_open`` is the boolean guard decision (fail-open on unexpected errors).
-    * ``clock_source`` identifies the API used (``TradingClient`` or ``REST``).
-    * ``status`` is one of ``OPEN``, ``CLOSED``, or ``UNKNOWN``.
-    * ``error_message`` contains the failure reason when ``status`` is ``UNKNOWN``.
-    """
-
-    clock_source = "UNKNOWN"
+    clock_source = "unknown"
 
     try:
         clock_source = "TradingClient"
         market_clock = trading_client.get_clock()
         is_open = bool(getattr(market_clock, "is_open", False))
-        return is_open, clock_source, "OPEN" if is_open else "CLOSED", None
+        return is_open, clock_source, None
     except Exception as exc:  # pragma: no cover - API errors
         logger.warning("Trading client clock lookup failed: %s", exc)
 
     try:
-        clock_source = "REST"
+        clock_source = "RESTv2"
         import alpaca_trade_api as trade_api  # type: ignore import-not-found
 
-        api = trade_api.REST(API_KEY, API_SECRET, BASE_URL, api_version="v2")
+        base_url = BASE_URL or os.environ.get("ALPACA_BASE_URL", "")
+        api = trade_api.REST(API_KEY, API_SECRET, base_url, api_version="v2")
         market_clock = api.get_clock()
         is_open = bool(getattr(market_clock, "is_open", False))
-        return is_open, clock_source, "OPEN" if is_open else "CLOSED", None
+        return is_open, clock_source, None
     except Exception as exc:  # pragma: no cover - network failures
         logger.error("Failed to determine market status via Alpaca REST API: %s", exc)
-        return True, clock_source, "UNKNOWN", str(exc)
+        return True, clock_source, str(exc)
 
 
 def is_market_open(trading_client) -> bool:
     """Return True if the market is currently open."""
 
-    is_open, _, _, _ = is_market_open_via_alpaca()
+    is_open, _, _ = is_market_open_via_alpaca(TRADING_ENV)
     return is_open
 
 # Candidate selection happens dynamically from ``top_candidates.csv``.
@@ -1716,42 +1734,66 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     args = parse_args(argv)
     force_run = bool(getattr(args, "force", False))
+    trading_env = detect_trading_env()
+    app_version = get_version()
 
-    is_open, clock_source, status, error_message = is_market_open_via_alpaca()
+    log_event(
+        {
+            "event": "RUN_START",
+            "component": "execute_trades",
+            "version": app_version,
+            "force": force_run,
+            "env": trading_env,
+        }
+    )
+
+    guard_error: Optional[str] = None
+    try:
+        is_open, clock_source, guard_error = is_market_open_via_alpaca(trading_env)
+        guard_status = "OPEN" if is_open else ("CLOSED" if guard_error is None else "UNKNOWN")
+    except Exception:
+        guard_error = traceback.format_exc()
+        clock_source = "unknown"
+        guard_status = "UNKNOWN"
+        is_open = True  # fail open
+        logger.exception("Market guard helper raised an unexpected error; failing open.")
+
     guard_event = {
         "event": "MARKET_GUARD_STATUS",
-        "status": status,
-        "is_open": is_open,
-        "env": TRADING_ENV,
+        "status": guard_status,
+        "env": trading_env,
         "clock_source": clock_source,
         "force": force_run,
-        "now_utc": utcnow(),
+        "version": app_version,
     }
-    if error_message:
-        guard_event["error"] = error_message
+    if guard_error:
+        guard_event["error"] = guard_error
 
     logger.info(
         "Market guard status: %s", {k: v for k, v in guard_event.items() if k != "event"}
     )
     log_event(guard_event)
 
-    if not is_open and not force_run:
+    if guard_status == "CLOSED" and not force_run:
         logger.warning("Market is closed; aborting trade execution run.")
         metrics["run_aborted_reason"] = "MARKET_CLOSED"
+        persist_execute_metrics()
         log_event(
             {
                 "event": "RUN_ABORT",
                 "reason_code": "MARKET_CLOSED",
                 "guard": "alpaca_clock",
                 "force": force_run,
+                "version": app_version,
             }
         )
-        persist_execute_metrics()
+        log_event({"event": "RUN_END", "status": "aborted", "version": app_version})
         return 0
 
-    if not is_open and force_run:
+    if guard_status == "CLOSED" and force_run:
         logger.warning("Market closed but proceeding due to --force flag.")
 
+    run_start_time = datetime.utcnow()
     logger.info("Starting pre-market trade execution script")
 
     exit_code = 0
@@ -1791,9 +1833,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         exit_code = 1
     finally:
         end_time = datetime.utcnow()
-        elapsed_time = end_time - start_time
+        elapsed_time = end_time - run_start_time
         logger.info("Script finished in %s", elapsed_time)
         logger.info("Pre-market trade execution script complete")
+        status_text = "ok" if exit_code == 0 else "error"
+        log_event({"event": "RUN_END", "status": status_text, "version": app_version})
 
     return exit_code
 
