@@ -13,6 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import utils.telemetry as telemetry
+
 dummy_indicators = types.ModuleType("indicators")
 dummy_indicators.rsi = lambda series: series
 dummy_indicators.macd = lambda series: (series, series, series)
@@ -30,7 +32,8 @@ def execute_trades_module():
 def test_log_event_appends_valid_json(tmp_path, monkeypatch, execute_trades_module):
     module = execute_trades_module
     events_path = tmp_path / "execute_events.jsonl"
-    monkeypatch.setattr(module, "EVENTS_LOG_PATH", events_path)
+    monkeypatch.setattr(telemetry, "events_path", lambda: events_path)
+    monkeypatch.setattr(telemetry, "get_version", lambda: "test-version")
 
     module.log_event({"event": "first"})
     module.log_event({"event": "second", "value": 2})
@@ -45,14 +48,11 @@ def test_log_event_appends_valid_json(tmp_path, monkeypatch, execute_trades_modu
     assert second["event"] == "second"
     assert second["value"] == 2
 
-    assert first["run_id"] == second["run_id"] == module.run_id
+    assert first["component"] == second["component"] == "execute_trades"
 
     assert "ts" in first and "ts" in second
-    assert first["timestamp"] == first["ts"]
-    assert second["timestamp"] == second["ts"]
-
-    datetime.fromisoformat(first["timestamp"])
-    datetime.fromisoformat(second["timestamp"])
+    datetime.fromisoformat(first["ts"])
+    datetime.fromisoformat(second["ts"])
 
     assert json.loads(lines[0]) == first
     assert json.loads(lines[1]) == second
@@ -115,7 +115,8 @@ def test_metrics_backward_compat(execute_trades_module):
 def test_event_json_schema(tmp_path, monkeypatch, execute_trades_module):
     module = execute_trades_module
     events_path = tmp_path / "execute_events.jsonl"
-    monkeypatch.setattr(module, "EVENTS_LOG_PATH", events_path)
+    monkeypatch.setattr(telemetry, "events_path", lambda: events_path)
+    monkeypatch.setattr(telemetry, "get_version", lambda: "test-version")
 
     module.log_order_submit_event(
         symbol="AAPL",
@@ -144,7 +145,7 @@ def test_event_json_schema(tmp_path, monkeypatch, execute_trades_module):
 
     events = [json.loads(line) for line in events_path.read_text("utf-8").splitlines()]
 
-    assert all("run_id" in event and "timestamp" in event for event in events)
+    assert all(event.get("component") == "execute_trades" and "ts" in event for event in events)
 
     submit_event = events[0]
     assert submit_event["event"] == "ORDER_SUBMIT"
@@ -177,11 +178,12 @@ def _setup_market_guard_test(module, monkeypatch, tmp_path):
     events_path = tmp_path / "execute_events.jsonl"
     metrics_path = tmp_path / "metrics.json"
 
-    monkeypatch.setattr(module, "EVENTS_LOG_PATH", events_path)
+    monkeypatch.setattr(telemetry, "events_path", lambda: events_path)
+    monkeypatch.setattr(telemetry, "get_version", lambda: "test-version")
     monkeypatch.setattr(module, "metrics_path", str(metrics_path))
     monkeypatch.setattr(module, "metrics", module.metrics.copy())
     monkeypatch.setattr(module, "detect_trading_env", lambda: "paper")
-    monkeypatch.setattr(module, "get_version", lambda: "test-version")
+    monkeypatch.setattr(module, "repo_root", lambda: tmp_path)
 
     return events_path, metrics_path
 
@@ -213,7 +215,7 @@ def test_guard_open_always_emitted(tmp_path, monkeypatch, execute_trades_module)
 
     monkeypatch.setattr(
         module,
-        "is_market_open_via_alpaca",
+        "get_clock_open",
         lambda env: (True, "TradingClient", None),
     )
 
@@ -230,25 +232,29 @@ def test_guard_open_always_emitted(tmp_path, monkeypatch, execute_trades_module)
 
     run_start = events[0]
     assert run_start["event"] == "RUN_START"
+    assert run_start["component"] == "execute_trades"
     assert run_start["version"] == "test-version"
     assert run_start["env"] == "paper"
     assert run_start["force"] is False
 
     guard = events[1]
+    assert guard["component"] == "execute_trades"
     assert guard["status"] == "OPEN"
     assert guard["clock_source"] == "TradingClient"
     assert guard["force"] is False
     assert guard["env"] == "paper"
     assert guard["version"] == "test-version"
-    assert "error" not in guard
+    assert guard.get("error") is None
 
     run_end = events[-1]
     assert run_end["event"] == "RUN_END"
+    assert run_end["component"] == "execute_trades"
     assert run_end["status"] == "ok"
+    assert run_end["error"] is None
     assert run_end["version"] == "test-version"
 
 
-def test_guard_closed_abort(tmp_path, monkeypatch, execute_trades_module):
+def test_guard_closed_aborts(tmp_path, monkeypatch, execute_trades_module):
     module = execute_trades_module
     events_path, metrics_path = _setup_market_guard_test(module, monkeypatch, tmp_path)
 
@@ -262,8 +268,8 @@ def test_guard_closed_abort(tmp_path, monkeypatch, execute_trades_module):
     monkeypatch.setattr(module, "update_trades_log", lambda: None)
     monkeypatch.setattr(
         module,
-        "is_market_open_via_alpaca",
-        lambda env: (False, "RESTv2", None),
+        "get_clock_open",
+        lambda env: (False, "TradingClient", None),
     )
 
     exit_code = module.main([])
@@ -282,18 +288,24 @@ def test_guard_closed_abort(tmp_path, monkeypatch, execute_trades_module):
     ]
 
     guard = events[1]
+    assert guard["component"] == "execute_trades"
     assert guard["status"] == "CLOSED"
-    assert guard["clock_source"] == "RESTv2"
+    assert guard["clock_source"] == "TradingClient"
     assert guard["force"] is False
+    assert guard["env"] == "paper"
     assert guard["version"] == "test-version"
+    assert guard.get("error") is None
 
     abort_event = events[2]
     assert abort_event["event"] == "RUN_ABORT"
+    assert abort_event["component"] == "execute_trades"
     assert abort_event["reason_code"] == "MARKET_CLOSED"
     assert abort_event["version"] == "test-version"
 
     run_end = events[-1]
-    assert run_end["status"] == "aborted"
+    assert run_end["status"] == "ok"
+    assert run_end["component"] == "execute_trades"
+    assert run_end["error"] is None
     assert run_end["version"] == "test-version"
 
 
@@ -304,8 +316,8 @@ def test_guard_closed_force_runs(tmp_path, monkeypatch, execute_trades_module):
 
     monkeypatch.setattr(
         module,
-        "is_market_open_via_alpaca",
-        lambda env: (False, "RESTv2", None),
+        "get_clock_open",
+        lambda env: (False, "TradingClient", None),
     )
 
     exit_code = module.main(["--force"])
@@ -320,15 +332,20 @@ def test_guard_closed_force_runs(tmp_path, monkeypatch, execute_trades_module):
     ]
 
     guard = events[1]
+    assert guard["component"] == "execute_trades"
     assert guard["status"] == "CLOSED"
-    assert guard["clock_source"] == "RESTv2"
+    assert guard["clock_source"] == "TradingClient"
     assert guard["force"] is True
+    assert guard["env"] == "paper"
     assert guard["version"] == "test-version"
+    assert guard.get("error") is None
 
     assert all(event["event"] != "RUN_ABORT" for event in events)
 
     run_end = events[-1]
     assert run_end["status"] == "ok"
+    assert run_end["component"] == "execute_trades"
+    assert run_end["error"] is None
     assert run_end["version"] == "test-version"
 
 
@@ -340,7 +357,7 @@ def test_guard_unknown_failopen(tmp_path, monkeypatch, execute_trades_module):
     def raise_guard_error(env):
         raise RuntimeError("clock boom")
 
-    monkeypatch.setattr(module, "is_market_open_via_alpaca", raise_guard_error)
+    monkeypatch.setattr(module, "get_clock_open", raise_guard_error)
 
     exit_code = module.main([])
     assert exit_code == 0
@@ -354,12 +371,15 @@ def test_guard_unknown_failopen(tmp_path, monkeypatch, execute_trades_module):
     ]
 
     guard_event = events[1]
+    assert guard_event["component"] == "execute_trades"
     assert guard_event["status"] == "UNKNOWN"
     assert guard_event["clock_source"] == "unknown"
     assert guard_event["version"] == "test-version"
     assert guard_event["force"] is False
-    assert "clock boom" in guard_event["error"]
+    assert "clock boom" in guard_event.get("error", "")
 
     run_end = events[-1]
     assert run_end["status"] == "ok"
+    assert run_end["component"] == "execute_trades"
+    assert run_end["error"] is None
     assert run_end["version"] == "test-version"
