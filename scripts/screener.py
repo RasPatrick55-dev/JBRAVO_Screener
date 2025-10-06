@@ -8,6 +8,7 @@ short term swing trading.  Only Alpaca tradable assets are evaluated.
 
 import os
 import sys
+import subprocess
 
 import logging
 import sqlite3
@@ -122,8 +123,23 @@ for asset in assets:
         "exchange": getattr(asset, "exchange", ""),
     })
     if row["exchange"] == "UNKNOWN":
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "bin.emit_event",
+                "CANDIDATE_SKIPPED",
+                "component=screener",
+                "reason_code=MARKET_DATA",
+                "reason_text=Unknown_exchange",
+                f"symbol={row['symbol']}" if row.get("symbol") else "symbol=UNKNOWN",
+            ],
+            check=False,
+        )
         logger.debug(
-            "Skipping %s due to unknown exchange '%s'", row.get("symbol") or "<UNKNOWN>", getattr(asset, "exchange", "")
+            "Skipping %s due to unknown exchange '%s'",
+            row.get("symbol") or "<UNKNOWN>",
+            getattr(asset, "exchange", ""),
         )
         continue
     if row["symbol"]:
