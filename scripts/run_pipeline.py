@@ -1,6 +1,4 @@
-import os
-import subprocess
-import sys
+import os, sys, subprocess
 from pathlib import Path
 
 
@@ -15,35 +13,20 @@ def emit(evt, **kvs):
     subprocess.run(cmd, check=False)
 
 
-COMPONENT_NAME = "pipeline"
-
-
-def log_event(event: dict) -> None:
-    from utils.telemetry import log_event as telemetry_log_event
-
-    payload = {"component": COMPONENT_NAME}
-    payload.update(event)
-    telemetry_log_event(payload)
-
-
 def main():
     os.chdir(repo_root())
     emit("PIPELINE_START", component="pipeline")
 
     try:
-        # ---- screener step ----
-        # (call your screener cli / function here)
-        # if you currently import a module that fails, wrap in try/except:
+        # ---- screener step (wrap to log error instead of hard crash) ----
         try:
-            # example:
             # from scripts.screener import run as run_screener
             # run_screener()
-            pass
+            pass  # leave for now; we'll fix screener in step 4
         except Exception as e:
             emit("SCREENER_ERROR", component="pipeline", error=str(e).replace(" ", "_"))
-            # do NOT exit yet; proceed to executor after logging error
 
-        # ---- executor step ----
+        # ---- executor import ----
         try:
             from scripts.execute_trades import main as exec_main
             emit("IMPORT_SUCCESS", component="execute_trades")
@@ -51,6 +34,7 @@ def main():
             emit("IMPORT_FAILURE", component="execute_trades", error=str(e).replace(" ", "_"))
             raise
 
+        # ---- run executor (will log its own events once imports work) ----
         exec_main()
 
     except Exception as e:
