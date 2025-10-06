@@ -3,14 +3,17 @@
 # after market close to process the most recent data.
 import os
 import sys
+import traceback
+
+from pathlib import Path
 
 # Ensure the script runs from the repository root regardless of where it is
 # invoked from.
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = Path(__file__).resolve().parents[1]
 os.chdir(BASE_DIR)
 
 # Add project root to sys.path so that sibling packages (like scripts) can be imported
-sys.path.insert(0, BASE_DIR)
+sys.path.insert(0, str(BASE_DIR))
 
 import subprocess
 import logging
@@ -19,17 +22,29 @@ from utils import logger_utils
 import json
 import requests
 import pandas as pd
-from pathlib import Path
-
 from utils import write_csv_atomic
 
 
 logger = logger_utils.init_logging(__name__, "pipeline.log")
-start_time = datetime.utcnow()
+start_time = datetime.now(timezone.utc)
 logger.info("Pipeline execution started")
 error_log_path = os.path.join(BASE_DIR, "logs", "error.log")
 
 ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
+
+
+def log_event(event: dict) -> None:
+    """Append a structured event to the pipeline execution log."""
+
+    event_path = BASE_DIR / "data" / "execute_events.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **event,
+    }
+    with event_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload))
+        f.write("\n")
 
 
 def send_alert(msg: str) -> None:
@@ -41,7 +56,7 @@ def send_alert(msg: str) -> None:
         logger.error("Failed to send alert: %s", exc)
 
 def run_step(step_name, command):
-    start_time = datetime.utcnow()
+    start_time = datetime.now(timezone.utc)
     logger.info("Starting %s at %s", step_name, start_time.isoformat())
     try:
         result = subprocess.run(
@@ -51,13 +66,13 @@ def run_step(step_name, command):
             text=True,
             check=True,
         )
-        end_time = datetime.utcnow()
+        end_time = datetime.now(timezone.utc)
         duration = end_time - start_time
         logger.info("%s stdout:\n%s", step_name, result.stdout)
         logger.info("%s stderr:\n%s", step_name, result.stderr)
         logger.info("Completed %s successfully in %s", step_name, duration)
     except subprocess.CalledProcessError as e:
-        end_time = datetime.utcnow()
+        end_time = datetime.now(timezone.utc)
         duration = end_time - start_time
         logger.error("%s failed with exit %d after %s", step_name, e.returncode, duration)
         logger.error("%s stdout:\n%s", step_name, e.stdout)
@@ -67,7 +82,7 @@ def run_step(step_name, command):
         send_alert(f"Pipeline step {step_name} failed: {e}")
         raise
     except Exception as e:
-        end_time = datetime.utcnow()
+        end_time = datetime.now(timezone.utc)
         duration = end_time - start_time
         logger.error("Unexpected failure in %s after %s: %s", step_name, duration, e)
         with open(error_log_path, "a") as error_file:
@@ -76,138 +91,149 @@ def run_step(step_name, command):
         raise
 
 if __name__ == "__main__":
-
+    log_event({"event": "PIPELINE_START"})
     try:
-        run_step("Screener", [sys.executable, "scripts/screener.py"])
-    except Exception:
-        logger.error("Screener step failed")
-        sys.exit(1)
-
-    steps = [
-        (
-            "Backtest",
-            [sys.executable, "scripts/backtest.py"],
-        ),
-        (
-            "Metrics Calculation",
-            [sys.executable, "scripts/metrics.py"],
-        ),
-    ]
-
-    for name, cmd in steps:
         try:
-            run_step(name, cmd)
-            if name == "Backtest":
-                backtest_path = os.path.join(BASE_DIR, "data", "backtest_results.csv")
-                if os.path.exists(backtest_path):
-                    logger.info("Backtest results written to %s", backtest_path)
-                else:
-                    logger.error("Expected backtest results at %s not found", backtest_path)
-            if name == "Metrics Calculation":
-                metrics_summary_file = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
-                if Path(metrics_summary_file).exists():
-                    logger.info(
-                        "Metrics summary file exists and is confirmed updated at: %s",
-                        metrics_summary_file,
-                    )
-                else:
-                    logger.error(
-                        "Metrics summary file missing after metrics calculation step: %s",
-                        metrics_summary_file,
-                    )
+            run_step("Screener", [sys.executable, "scripts/screener.py"])
         except Exception:
-            logger.error("Step %s failed", name)
-            send_alert(f"Pipeline halted at step {name}")
-            break
+            logger.error("Screener step failed")
+            sys.exit(1)
 
-    # Update latest_candidates.csv with the newest results
-    source_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
-    target_path = os.path.join(BASE_DIR, 'data', 'latest_candidates.csv')
-    if os.path.exists(source_path):
-        try:
-            df = pd.read_csv(source_path)
-            write_csv_atomic(target_path, df)
-            logger.info(
-                "Updated latest_candidates.csv at %s",
-                datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(),
-            )
-        except Exception as exc:
-            logger.error("Failed to update latest_candidates.csv: %s", exc)
-            send_alert(f"Failed to update latest candidates: {exc}")
-    else:
-        msg = "top_candidates.csv not found; latest_candidates.csv was not updated."
-        logger.error(msg)
-        send_alert(msg)
+        steps = [
+            (
+                "Backtest",
+                [sys.executable, "scripts/backtest.py"],
+            ),
+            (
+                "Metrics Calculation",
+                [sys.executable, "scripts/metrics.py"],
+            ),
+        ]
 
-    # Summaries from generated artifacts
-    screener_processed = "N/A"
-    screener_skipped = "N/A"
-    scored_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
-    if os.path.exists(scored_path):
-        try:
-            screener_processed = len(pd.read_csv(scored_path))
-        except Exception:
-            screener_processed = "error"
+        for name, cmd in steps:
+            try:
+                run_step(name, cmd)
+                if name == "Backtest":
+                    backtest_path = os.path.join(BASE_DIR, "data", "backtest_results.csv")
+                    if os.path.exists(backtest_path):
+                        logger.info("Backtest results written to %s", backtest_path)
+                    else:
+                        logger.error("Expected backtest results at %s not found", backtest_path)
+                if name == "Metrics Calculation":
+                    metrics_summary_file = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
+                    if Path(metrics_summary_file).exists():
+                        logger.info(
+                            "Metrics summary file exists and is confirmed updated at: %s",
+                            metrics_summary_file,
+                        )
+                    else:
+                        logger.error(
+                            "Metrics summary file missing after metrics calculation step: %s",
+                            metrics_summary_file,
+                        )
+            except Exception:
+                logger.error("Step %s failed", name)
+                send_alert(f"Pipeline halted at step {name}")
+                break
 
-    backtest_tested = "N/A"
-    backtest_path = os.path.join(BASE_DIR, "data", "backtest_results.csv")
-    if os.path.exists(backtest_path):
-        try:
-            backtest_tested = len(pd.read_csv(backtest_path))
-        except Exception:
-            backtest_tested = "error"
+        # Update latest_candidates.csv with the newest results
+        source_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
+        target_path = os.path.join(BASE_DIR, 'data', 'latest_candidates.csv')
+        if os.path.exists(source_path):
+            try:
+                df = pd.read_csv(source_path)
+                write_csv_atomic(target_path, df)
+                logger.info(
+                    "Updated latest_candidates.csv at %s",
+                    datetime.now(timezone.utc).isoformat(),
+                )
+            except Exception as exc:
+                logger.error("Failed to update latest_candidates.csv: %s", exc)
+                send_alert(f"Failed to update latest candidates: {exc}")
+        else:
+            msg = "top_candidates.csv not found; latest_candidates.csv was not updated."
+            logger.error(msg)
+            send_alert(msg)
 
-    metrics_file = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
-    total_trades = win_rate = net_pnl = "N/A"
-    if os.path.exists(metrics_file):
-        try:
-            mdf = pd.read_csv(metrics_file)
-            if not mdf.empty:
-                last = mdf.iloc[-1]
-                total_trades = int(last.get("total_trades", 0))
-                win_rate = round(last.get("win_rate", 0), 2)
-                net_pnl = round(last.get("net_pnl", 0), 2)
-        except Exception:
-            pass
+        # Summaries from generated artifacts
+        screener_processed = "N/A"
+        screener_skipped = "N/A"
+        scored_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
+        if os.path.exists(scored_path):
+            try:
+                screener_processed = len(pd.read_csv(scored_path))
+            except Exception:
+                screener_processed = "error"
 
-    exec_metrics = {
-        "orders_submitted": "N/A",
-        "orders_skipped": "N/A",
-        "api_failures": "N/A",
-    }
-    exec_metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
-    if os.path.exists(exec_metrics_path):
-        try:
-            with open(exec_metrics_path) as f:
-                exec_metrics = json.load(f)
-        except Exception:
-            pass
+        backtest_tested = "N/A"
+        backtest_path = os.path.join(BASE_DIR, "data", "backtest_results.csv")
+        if os.path.exists(backtest_path):
+            try:
+                backtest_tested = len(pd.read_csv(backtest_path))
+            except Exception:
+                backtest_tested = "error"
 
-    end_time = datetime.utcnow()
-    total_duration = end_time - start_time
+        metrics_file = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
+        total_trades = win_rate = net_pnl = "N/A"
+        if os.path.exists(metrics_file):
+            try:
+                mdf = pd.read_csv(metrics_file)
+                if not mdf.empty:
+                    last = mdf.iloc[-1]
+                    total_trades = int(last.get("total_trades", 0))
+                    win_rate = round(last.get("win_rate", 0), 2)
+                    net_pnl = round(last.get("net_pnl", 0), 2)
+            except Exception:
+                pass
 
-    logger.info("Pipeline Summary:")
-    logger.info(
-        "Screener: %s processed, %s skipped",
-        screener_processed,
-        screener_skipped,
-    )
-    logger.info(
-        "Backtest: %s tested, %s skipped",
-        backtest_tested,
-        "N/A",
-    )
-    logger.info(
-        "Metrics: %s trades, win rate %s%%, net PnL $%s",
-        total_trades,
-        win_rate,
-        net_pnl,
-    )
-    logger.info(
-        "Execution: %s orders submitted, %s skipped, %s API errors",
-        exec_metrics.get("orders_submitted", "N/A"),
-        exec_metrics.get("symbols_skipped", "N/A"),
-        exec_metrics.get("api_failures", "N/A"),
-    )
-    logger.info("Total Pipeline Duration: %s", total_duration)
-    logger.info("Pipeline execution complete.")
+        exec_metrics = {
+            "orders_submitted": "N/A",
+            "orders_skipped": "N/A",
+            "api_failures": "N/A",
+        }
+        exec_metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
+        if os.path.exists(exec_metrics_path):
+            try:
+                with open(exec_metrics_path) as f:
+                    exec_metrics = json.load(f)
+            except Exception:
+                pass
+
+        end_time = datetime.now(timezone.utc)
+        total_duration = end_time - start_time
+
+        logger.info("Pipeline Summary:")
+        logger.info(
+            "Screener: %s processed, %s skipped",
+            screener_processed,
+            screener_skipped,
+        )
+        logger.info(
+            "Backtest: %s tested, %s skipped",
+            backtest_tested,
+            "N/A",
+        )
+        logger.info(
+            "Metrics: %s trades, win rate %s%%, net PnL $%s",
+            total_trades,
+            win_rate,
+            net_pnl,
+        )
+        logger.info(
+            "Execution: %s orders submitted, %s skipped, %s API errors",
+            exec_metrics.get("orders_submitted", "N/A"),
+            exec_metrics.get("symbols_skipped", "N/A"),
+            exec_metrics.get("api_failures", "N/A"),
+        )
+        logger.info("Total Pipeline Duration: %s", total_duration)
+        logger.info("Pipeline execution complete.")
+    except BaseException:
+        log_event(
+            {
+                "event": "PIPELINE_ERROR",
+                "traceback": traceback.format_exc(),
+            }
+        )
+        raise
+    finally:
+        log_event({"event": "PIPELINE_END"})
