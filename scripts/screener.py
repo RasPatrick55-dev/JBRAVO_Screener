@@ -9,12 +9,9 @@ short term swing trading.  Only Alpaca tradable assets are evaluated.
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from utils import logger_utils
 
 import pandas as pd
 from alpaca.trading.client import TradingClient
@@ -24,9 +21,9 @@ from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
 import requests
 
-from indicators import adx, aroon, macd, obv, rsi
-from utils import write_csv_atomic
-from scripts.utils import fetch_bars_with_cutoff, cache_bars
+from .indicators import adx, aroon, macd, obv, rsi
+from utils import logger_utils, write_csv_atomic
+from .utils import fetch_bars_with_cutoff, cache_bars
 
 
 
@@ -66,7 +63,7 @@ def send_alert(message: str) -> None:
         logger.error("Failed to send alert: %s", exc)
 
 
-from scripts.ensure_db_indicators import (
+from .ensure_db_indicators import (
     ensure_columns,
     sync_columns_from_dataframe,
     REQUIRED_COLUMNS,

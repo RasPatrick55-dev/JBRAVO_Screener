@@ -2,19 +2,30 @@
 # Dynamically execute limit buys for the highest ranked candidates.
 # Trailing stops and max hold logic manage risk on open trades.
 
+try:
+    import subprocess as _bootstrap_subprocess
+    import sys as _bootstrap_sys
+    from pathlib import Path as _bootstrap_Path
+
+    _bootstrap_subprocess.run(
+        [
+            _bootstrap_sys.executable,
+            "-m",
+            "bin.emit_event",
+            "IMPORT_SENTINEL",
+            "component=execute_trades",
+        ],
+        check=False,
+        cwd=_bootstrap_Path(__file__).resolve().parents[1],
+    )
+except Exception:
+    pass
+
 import argparse
 import os
 import sys
 
 from utils.telemetry import RunSentinel, log_event as telemetry_log_event, repo_root
-
-if os.environ.get("JBRAVO_IMPORT_SENTINEL") == "1":
-    telemetry_log_event({"event": "IMPORT_SENTINEL", "component": "execute_trades"})
-
-# Explicitly insert the project root at the front of sys.path
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 import subprocess
 import logging
@@ -42,16 +53,11 @@ from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
 # Alerting
 import requests
-# Import from the top-level utils package explicitly
-
-
-# Import scripts/utils explicitly
-from scripts.utils import cache_bars
+from .utils import cache_bars
 from pathlib import Path
 
-# Explicit import from scripts directory
-from scripts.exit_signals import should_exit_early
-from scripts.monitor_positions import log_trade_exit
+from .exit_signals import should_exit_early
+from .monitor_positions import log_trade_exit
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -72,6 +78,9 @@ start_time = datetime.utcnow()
 logger.info("Trade execution script started.")
 
 ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
+
+if os.environ.get("JBRAVO_IMPORT_SENTINEL") == "1":
+    telemetry_log_event({"event": "IMPORT_SENTINEL", "component": "execute_trades"})
 
 
 def send_alert(message: str) -> None:

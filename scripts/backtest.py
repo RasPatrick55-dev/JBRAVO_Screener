@@ -5,9 +5,6 @@ from __future__ import annotations
 import os
 import sys
 
-# Insert the project root directory into Python's module search path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 import logging
 import logging.handlers
 import math
@@ -24,8 +21,8 @@ from dotenv import load_dotenv
 from utils import logger_utils
 
 # Import indicator helpers from screener to keep the scoring consistent
-from scripts.indicators import adx, aroon, macd, obv, rsi, compute_indicators
-from scripts.utils import write_csv_atomic, cache_bars
+from .indicators import adx, aroon, macd, obv, rsi, compute_indicators
+from .utils import write_csv_atomic, cache_bars
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
