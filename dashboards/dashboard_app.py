@@ -63,7 +63,10 @@ def is_log_stale(log_path):
         with open(log_path) as file:
             lines = file.readlines()
         for line in reversed(lines):
-            if '[INFO]' in line or '[ERROR]' in line:
+            if any(
+                marker in line
+                for marker in ("[INFO]", "[ERROR]", "- INFO -", "- ERROR -")
+            ):
                 ts_str = line[:19]
                 ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
                 return (datetime.utcnow() - ts).total_seconds() > (STALE_THRESHOLD_MINUTES * 60)
