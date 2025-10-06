@@ -1,5 +1,5 @@
 # JBRAVO_Screener
-This repository contains a sample workflow for a swing trading automation project.
+This repository contains a sample workflow for a swing trading automation project. See the [logging metrics reference](docs/logging_metrics.md) for structured event documentation captured by the pipeline.
 
 The `dashboards/dashboard_app.py` file implements a full-featured monitoring
 dashboard built with Plotly Dash.  It visualizes trade performance, recent
