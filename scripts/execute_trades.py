@@ -20,6 +20,7 @@ import pytz
 from time import sleep
 from typing import Optional
 from decimal import Decimal, ROUND_HALF_UP
+from statistics import median, quantiles
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     LimitOrderRequest,
@@ -134,6 +135,7 @@ def log_exit_final(status: str, latency_ms: int) -> None:
         "latency_ms": latency_ms,
     }
     logger.info("EXIT_FINAL %s", payload)
+    order_latencies_ms.append(latency_ms)
 
 
 # Directory used for caching market history
@@ -160,6 +162,9 @@ metrics = {
 metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 EVENTS_LOG_PATH = os.path.join(BASE_DIR, "data", "execute_events.jsonl")
 run_id = f"{datetime.utcnow().isoformat()}#{secrets.token_hex(3)}"
+
+order_latencies_ms: list[int] = []
+retry_backoff_ms_total = 0
 
 
 def utcnow() -> str:
@@ -228,6 +233,7 @@ def log_order_final_event(
     if filled_avg_price is not None:
         event["filled_avg_price"] = float(filled_avg_price)
     log_event(event)
+    order_latencies_ms.append(latency_ms)
 
 
 def log_retry_event(
@@ -240,6 +246,8 @@ def log_retry_event(
     """Increment retry metrics and log a ``RETRY`` event."""
 
     inc("api_retries")
+    global retry_backoff_ms_total
+    retry_backoff_ms_total += backoff_ms
     log_event(
         {
             "event": "RETRY",
@@ -1289,6 +1297,27 @@ def submit_trades() -> list[dict]:
         "orders_skipped_pending_orders": symbols_skipped_orders,
         "api_failures": errors,
     }
+
+    latency_samples = order_latencies_ms
+    if latency_samples:
+        order_latency_ms_p50 = int(median(latency_samples))
+        if len(latency_samples) == 1:
+            order_latency_ms_p95 = order_latency_ms_p50
+        else:
+            order_latency_ms_p95 = int(
+                round(quantiles(latency_samples, n=100, method="inclusive")[94])
+            )
+    else:
+        order_latency_ms_p50 = 0
+        order_latency_ms_p95 = 0
+
+    execute_metrics.update(
+        {
+            "order_latency_ms_p50": order_latency_ms_p50,
+            "order_latency_ms_p95": order_latency_ms_p95,
+            "retry_backoff_ms_sum": retry_backoff_ms_total,
+        }
+    )
 
     with open(metrics_path, "w") as f:
         json.dump(execute_metrics, f, indent=4)
