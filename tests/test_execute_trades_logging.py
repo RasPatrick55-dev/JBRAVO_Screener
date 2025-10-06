@@ -169,28 +169,125 @@ def test_event_json_schema(tmp_path, monkeypatch, execute_trades_module):
         assert key in skip_event
 
 
-def test_market_guard_abort_writes_events(tmp_path, monkeypatch, execute_trades_module):
-    module = execute_trades_module
-
+def _setup_market_guard_test(module, monkeypatch, tmp_path):
     events_path = tmp_path / "execute_events.jsonl"
     metrics_path = tmp_path / "metrics.json"
 
     monkeypatch.setattr(module, "EVENTS_LOG_PATH", events_path)
     monkeypatch.setattr(module, "metrics_path", str(metrics_path))
-    monkeypatch.setattr(module, "is_market_open_via_alpaca", lambda client: False)
+    monkeypatch.setattr(module, "metrics", module.metrics.copy())
+
+    return events_path, metrics_path
+
+
+def _stub_execution_pipeline(module, monkeypatch, *, submit_return=None):
+    submit_calls = {"count": 0}
+
+    def submit_stub():
+        submit_calls["count"] += 1
+        return [] if submit_return is None else submit_return
+
+    monkeypatch.setattr(module, "submit_trades", submit_stub)
+    monkeypatch.setattr(module, "attach_trailing_stops", lambda: None)
+    monkeypatch.setattr(module, "daily_exit_check", lambda: None)
+    monkeypatch.setattr(module, "save_open_positions_csv", lambda: None)
+    monkeypatch.setattr(module, "update_trades_log", lambda: None)
+
+    return submit_calls
+
+
+def test_market_guard_status_always_emitted_open(tmp_path, monkeypatch, execute_trades_module):
+    module = execute_trades_module
+    events_path, _ = _setup_market_guard_test(module, monkeypatch, tmp_path)
+    submit_calls = _stub_execution_pipeline(module, monkeypatch)
+
+    monkeypatch.setattr(
+        module,
+        "is_market_open_via_alpaca",
+        lambda: (True, "TradingClient", "OPEN", None),
+    )
+
+    exit_code = module.main([])
+    assert exit_code == 0
+    assert submit_calls["count"] == 1, "Execution pipeline should run when market is open"
+
+    events = [json.loads(line) for line in events_path.read_text("utf-8").splitlines()]
+    guard_events = [event for event in events if event.get("event") == "MARKET_GUARD_STATUS"]
+    assert len(guard_events) == 1
+    guard = guard_events[0]
+    assert guard["status"] == "OPEN"
+    assert guard["is_open"] is True
+    assert guard["clock_source"] == "TradingClient"
+    assert guard["force"] is False
+    assert guard["env"] == module.TRADING_ENV
+    assert "now_utc" in guard
+
+    abort_events = [event for event in events if event.get("event") == "RUN_ABORT"]
+    assert not abort_events, "RUN_ABORT should not be emitted when market is open"
+
+
+def test_market_guard_status_emitted_closed_abort(tmp_path, monkeypatch, execute_trades_module):
+    module = execute_trades_module
+    events_path, metrics_path = _setup_market_guard_test(module, monkeypatch, tmp_path)
 
     def fail_submit_trades():
         raise AssertionError("submit_trades should not run when market is closed")
 
     monkeypatch.setattr(module, "submit_trades", fail_submit_trades)
+    monkeypatch.setattr(module, "attach_trailing_stops", lambda: None)
+    monkeypatch.setattr(module, "daily_exit_check", lambda: None)
+    monkeypatch.setattr(module, "save_open_positions_csv", lambda: None)
+    monkeypatch.setattr(module, "update_trades_log", lambda: None)
+    monkeypatch.setattr(
+        module,
+        "is_market_open_via_alpaca",
+        lambda: (False, "REST", "CLOSED", None),
+    )
 
     exit_code = module.main([])
     assert exit_code == 0
 
     assert metrics_path.exists()
+    metrics_payload = json.loads(metrics_path.read_text("utf-8"))
+    assert metrics_payload.get("run_aborted_reason") == "MARKET_CLOSED"
 
     events = [json.loads(line) for line in events_path.read_text("utf-8").splitlines()]
-    assert events[0]["event"] == "MARKET_GUARD_STATUS"
+    guard_events = [event for event in events if event.get("event") == "MARKET_GUARD_STATUS"]
+    assert len(guard_events) == 1
+    guard = guard_events[0]
+    assert guard["status"] == "CLOSED"
+    assert guard["is_open"] is False
+    assert guard["clock_source"] == "REST"
+    assert guard["force"] is False
 
     abort_events = [event for event in events if event.get("event") == "RUN_ABORT"]
-    assert abort_events, "Expected RUN_ABORT event when market is closed"
+    assert len(abort_events) == 1
+    assert abort_events[0]["reason_code"] == "MARKET_CLOSED"
+
+
+def test_market_guard_status_with_force(tmp_path, monkeypatch, execute_trades_module):
+    module = execute_trades_module
+    events_path, _ = _setup_market_guard_test(module, monkeypatch, tmp_path)
+    submit_calls = _stub_execution_pipeline(module, monkeypatch)
+
+    monkeypatch.setattr(
+        module,
+        "is_market_open_via_alpaca",
+        lambda: (False, "REST", "CLOSED", None),
+    )
+
+    exit_code = module.main(["--force"])
+    assert exit_code == 0
+    assert submit_calls["count"] == 1, "Execution pipeline should run with --force"
+
+    events = [json.loads(line) for line in events_path.read_text("utf-8").splitlines()]
+    guard_events = [event for event in events if event.get("event") == "MARKET_GUARD_STATUS"]
+    assert len(guard_events) == 1
+    guard = guard_events[0]
+    assert guard["status"] == "CLOSED"
+    assert guard["is_open"] is False
+    assert guard["clock_source"] == "REST"
+    assert guard["force"] is True
+
+    abort_events = [event for event in events if event.get("event") == "RUN_ABORT"]
+    assert not abort_events, "RUN_ABORT should not be emitted when --force is provided"

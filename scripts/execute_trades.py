@@ -264,6 +264,9 @@ def build_execute_metrics_snapshot() -> dict[str, int]:
         }
     )
 
+    if metrics.get("run_aborted_reason"):
+        snapshot["run_aborted_reason"] = metrics["run_aborted_reason"]
+
     return snapshot
 
 
@@ -481,45 +484,45 @@ def is_extended_hours(now_et: time) -> bool:
     return time(4, 0) <= now_et < time(9, 30) or now_et >= time(16, 0)
 
 
-def is_market_open_via_alpaca(trading_client: TradingClient) -> bool:
-    """Return True if the market is currently open using Alpaca APIs."""
+def is_market_open_via_alpaca() -> tuple[bool, str, str, Optional[str]]:
+    """Return the market status using Alpaca APIs and its clock source.
+
+    Returns a tuple of ``(is_open, clock_source, status, error_message)`` where:
+
+    * ``is_open`` is the boolean guard decision (fail-open on unexpected errors).
+    * ``clock_source`` identifies the API used (``TradingClient`` or ``REST``).
+    * ``status`` is one of ``OPEN``, ``CLOSED``, or ``UNKNOWN``.
+    * ``error_message`` contains the failure reason when ``status`` is ``UNKNOWN``.
+    """
+
+    clock_source = "UNKNOWN"
 
     try:
+        clock_source = "TradingClient"
         market_clock = trading_client.get_clock()
-        return bool(getattr(market_clock, "is_open", False))
+        is_open = bool(getattr(market_clock, "is_open", False))
+        return is_open, clock_source, "OPEN" if is_open else "CLOSED", None
     except Exception as exc:  # pragma: no cover - API errors
         logger.warning("Trading client clock lookup failed: %s", exc)
 
-    if not BASE_URL:
-        logger.error("BASE_URL not configured; cannot fall back to REST clock endpoint.")
-        return False
-
-    clock_url = f"{BASE_URL.rstrip('/')}/v2/clock"
-    headers = {
-        "APCA-API-KEY-ID": API_KEY,
-        "APCA-API-SECRET-KEY": API_SECRET,
-    }
-
     try:
-        response = requests.get(clock_url, headers=headers, timeout=5)
-        response.raise_for_status()
+        clock_source = "REST"
+        import alpaca_trade_api as trade_api  # type: ignore import-not-found
+
+        api = trade_api.REST(API_KEY, API_SECRET, BASE_URL, api_version="v2")
+        market_clock = api.get_clock()
+        is_open = bool(getattr(market_clock, "is_open", False))
+        return is_open, clock_source, "OPEN" if is_open else "CLOSED", None
     except Exception as exc:  # pragma: no cover - network failures
-        logger.error("Failed to fetch market clock via REST: %s", exc)
-        return False
-
-    try:
-        payload = response.json()
-    except ValueError as exc:  # pragma: no cover - parsing errors
-        logger.error("Non-JSON response from market clock endpoint: %s", exc)
-        return False
-
-    return bool(payload.get("is_open"))
+        logger.error("Failed to determine market status via Alpaca REST API: %s", exc)
+        return True, clock_source, "UNKNOWN", str(exc)
 
 
 def is_market_open(trading_client) -> bool:
     """Return True if the market is currently open."""
 
-    return is_market_open_via_alpaca(trading_client)
+    is_open, _, _, _ = is_market_open_via_alpaca()
+    return is_open
 
 # Candidate selection happens dynamically from ``top_candidates.csv``.
 
@@ -1714,36 +1717,39 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
     force_run = bool(getattr(args, "force", False))
 
-    market_is_open = is_market_open_via_alpaca(trading_client)
-    logger.info(
-        "Market guard status: is_open=%s, env=%s, forced=%s",
-        market_is_open,
-        TRADING_ENV,
-        force_run,
-    )
-    log_event(
-        {
-            "event": "MARKET_GUARD_STATUS",
-            "is_open": market_is_open,
-            "forced": force_run,
-            "env": TRADING_ENV,
-        }
-    )
+    is_open, clock_source, status, error_message = is_market_open_via_alpaca()
+    guard_event = {
+        "event": "MARKET_GUARD_STATUS",
+        "status": status,
+        "is_open": is_open,
+        "env": TRADING_ENV,
+        "clock_source": clock_source,
+        "force": force_run,
+        "now_utc": utcnow(),
+    }
+    if error_message:
+        guard_event["error"] = error_message
 
-    if not market_is_open and not force_run:
+    logger.info(
+        "Market guard status: %s", {k: v for k, v in guard_event.items() if k != "event"}
+    )
+    log_event(guard_event)
+
+    if not is_open and not force_run:
         logger.warning("Market is closed; aborting trade execution run.")
+        metrics["run_aborted_reason"] = "MARKET_CLOSED"
         log_event(
             {
                 "event": "RUN_ABORT",
-                "reason": "market_closed",
+                "reason_code": "MARKET_CLOSED",
                 "guard": "alpaca_clock",
-                "forced": False,
+                "force": force_run,
             }
         )
         persist_execute_metrics()
         return 0
 
-    if not market_is_open and force_run:
+    if not is_open and force_run:
         logger.warning("Market closed but proceeding due to --force flag.")
 
     logger.info("Starting pre-market trade execution script")
