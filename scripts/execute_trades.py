@@ -2,32 +2,18 @@
 # Dynamically execute limit buys for the highest ranked candidates.
 # Trailing stops and max hold logic manage risk on open trades.
 
-try:
-    import subprocess as _bootstrap_subprocess
-    import sys as _bootstrap_sys
-    from pathlib import Path as _bootstrap_Path
-
-    _bootstrap_subprocess.run(
-        [
-            _bootstrap_sys.executable,
-            "-m",
-            "bin.emit_event",
-            "IMPORT_SENTINEL",
-            "component=execute_trades",
-        ],
-        check=False,
-        cwd=_bootstrap_Path(__file__).resolve().parents[1],
-    )
-except Exception:
-    pass
-
-import argparse
 import os
+import subprocess
 import sys
 
-from utils.telemetry import RunSentinel, log_event as telemetry_log_event, repo_root
+subprocess.run(
+    [sys.executable, "-m", "bin.emit_event", "IMPORT_SENTINEL", "component=execute_trades"],
+    check=False,
+)
 
-import subprocess
+import argparse
+
+from utils.telemetry import RunSentinel, log_event as telemetry_log_event, repo_root
 import logging
 import pandas as pd
 import json
@@ -189,6 +175,21 @@ metrics = {
     "api_retries": 0,
     "api_failures": 0,
 }
+
+VALID_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
+
+
+def sanitize_candidate_row(row: dict) -> dict:
+    """Normalize symbol/exchange data sourced from screener outputs."""
+
+    symbol = (row.get("symbol") or "").strip().upper()
+    exchange = (row.get("exchange") or "").strip().upper()
+    if not exchange or exchange not in VALID_EXCHANGES:
+        exchange = "UNKNOWN"
+    row["symbol"] = symbol
+    row["exchange"] = exchange
+    return row
+
 
 LEGACY_SKIP_METRIC_ALIASES = {
     "orders_skipped_existing_positions": (
@@ -628,9 +629,33 @@ def load_top_candidates() -> pd.DataFrame:
             col in candidates_df.columns for col in expected_columns
         ), "Missing columns in top_candidates.csv"
 
+        if "symbol" in candidates_df.columns:
+            candidates_df["symbol"] = (
+                candidates_df["symbol"].fillna("")
+                .astype(str)
+                .str.strip()
+                .str.upper()
+            )
+
+        if "exchange" in candidates_df.columns:
+            columns = list(candidates_df.columns)
+            sanitized_records = []
+            for record in candidates_df.to_dict("records"):
+                record = sanitize_candidate_row(record)
+                if record.get("exchange") == "UNKNOWN":
+                    symbol = record.get("symbol") or "UNKNOWN"
+                    skip(symbol, "MARKET_DATA", "Unknown exchange")
+                    continue
+                sanitized_records.append(record)
+
+            if not sanitized_records:
+                logger.warning("All candidates skipped due to unknown exchange codes.")
+                return pd.DataFrame(columns=expected_columns)
+
+            candidates_df = pd.DataFrame(sanitized_records, columns=columns)
+
         candidates_df.sort_values("score", ascending=False, inplace=True)
         selected_candidates = candidates_df.sort_values(by="score", ascending=False).head(3)
-        symbols_list = selected_candidates["symbol"].tolist()
         logger.info("Loaded %s successfully", top_candidates_path)
         logger.info(
             "Selected top 3 symbols for trading: %s",
