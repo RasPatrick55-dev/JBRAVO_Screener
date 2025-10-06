@@ -921,6 +921,13 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             "symbols_skipped": 0,
             "api_retries": 0,
             "api_failures": 0,
+            "orders_skipped_existing_positions": 0,
+            "orders_skipped_pending_orders": 0,
+            "orders_skipped_risk_limits": 0,
+            "orders_skipped_market_data": 0,
+            "orders_skipped_session": 0,
+            "orders_skipped_duplicate": 0,
+            "orders_skipped_other": 0,
         }
         if os.path.exists(execute_metrics_path):
             try:
@@ -959,15 +966,32 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             else None
         )
 
+        metric_items = [
+            ("Symbols Processed", "symbols_processed"),
+            ("Trades Submitted", "orders_submitted"),
+            ("Trades Skipped", "symbols_skipped"),
+            ("Retries Attempted", "api_retries"),
+            ("API Failures", "api_failures"),
+            (
+                "Orders Skipped (Existing Positions)",
+                "orders_skipped_existing_positions",
+            ),
+            ("Orders Skipped (Pending Orders)", "orders_skipped_pending_orders"),
+            ("Orders Skipped (Risk Limits)", "orders_skipped_risk_limits"),
+            ("Orders Skipped (Market Data)", "orders_skipped_market_data"),
+            ("Orders Skipped (Session)", "orders_skipped_session"),
+            ("Orders Skipped (Duplicate)", "orders_skipped_duplicate"),
+            ("Orders Skipped (Other)", "orders_skipped_other"),
+        ]
+
         metrics_view = html.Div([
             html.H5("Execute Trades Metrics"),
-            html.Ul([
-                html.Li(f"Symbols Processed: {metrics_data['symbols_processed']}") ,
-                html.Li(f"Trades Submitted: {metrics_data['orders_submitted']}"),
-                html.Li(f"Trades Skipped: {metrics_data['symbols_skipped']}"),
-                html.Li(f"Retries Attempted: {metrics_data['api_retries']}"),
-                html.Li(f"API Failures: {metrics_data['api_failures']}")
-            ]),
+            html.Ul(
+                [
+                    html.Li(f"{label}: {metrics_data.get(key, 0) or 0}")
+                    for label, key in metric_items
+                ]
+            ),
             html.Pre(
                 id="execute-trades-log",
                 style={
