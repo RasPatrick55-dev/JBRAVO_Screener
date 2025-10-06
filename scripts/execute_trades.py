@@ -2,6 +2,7 @@
 # Dynamically execute limit buys for the highest ranked candidates.
 # Trailing stops and max hold logic manage risk on open trades.
 
+import argparse
 import os
 import sys
 
@@ -80,11 +81,19 @@ API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
 
+TRADING_ENV = os.getenv("TRADING_ENV")
+if TRADING_ENV:
+    TRADING_ENV = TRADING_ENV.lower()
+elif BASE_URL and "paper" in BASE_URL.lower():
+    TRADING_ENV = "paper"
+else:
+    TRADING_ENV = "live"
+
 if not API_KEY or not API_SECRET:
     raise ValueError("Missing Alpaca credentials")
 
 # Initialize Alpaca clients
-trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
+trading_client = TradingClient(API_KEY, API_SECRET, paper=TRADING_ENV == "paper")
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # Constants
@@ -255,6 +264,16 @@ def build_execute_metrics_snapshot() -> dict[str, int]:
         }
     )
 
+    return snapshot
+
+
+def persist_execute_metrics() -> dict[str, int]:
+    """Persist the current execution metrics snapshot to disk."""
+
+    snapshot = build_execute_metrics_snapshot()
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(snapshot, f, indent=4)
+    logger.info("[METRICS] Execution results: %s", snapshot)
     return snapshot
 
 
@@ -462,14 +481,45 @@ def is_extended_hours(now_et: time) -> bool:
     return time(4, 0) <= now_et < time(9, 30) or now_et >= time(16, 0)
 
 
-def is_market_open(trading_client) -> bool:
-    """Return True if the market is currently open."""
+def is_market_open_via_alpaca(trading_client: TradingClient) -> bool:
+    """Return True if the market is currently open using Alpaca APIs."""
+
     try:
         market_clock = trading_client.get_clock()
         return bool(getattr(market_clock, "is_open", False))
     except Exception as exc:  # pragma: no cover - API errors
-        logger.error("Failed to fetch market clock: %s", exc)
+        logger.warning("Trading client clock lookup failed: %s", exc)
+
+    if not BASE_URL:
+        logger.error("BASE_URL not configured; cannot fall back to REST clock endpoint.")
         return False
+
+    clock_url = f"{BASE_URL.rstrip('/')}/v2/clock"
+    headers = {
+        "APCA-API-KEY-ID": API_KEY,
+        "APCA-API-SECRET-KEY": API_SECRET,
+    }
+
+    try:
+        response = requests.get(clock_url, headers=headers, timeout=5)
+        response.raise_for_status()
+    except Exception as exc:  # pragma: no cover - network failures
+        logger.error("Failed to fetch market clock via REST: %s", exc)
+        return False
+
+    try:
+        payload = response.json()
+    except ValueError as exc:  # pragma: no cover - parsing errors
+        logger.error("Non-JSON response from market clock endpoint: %s", exc)
+        return False
+
+    return bool(payload.get("is_open"))
+
+
+def is_market_open(trading_client) -> bool:
+    """Return True if the market is currently open."""
+
+    return is_market_open_via_alpaca(trading_client)
 
 # Candidate selection happens dynamically from ``top_candidates.csv``.
 
@@ -1352,12 +1402,7 @@ def submit_trades() -> list[dict]:
         errors,
     )
 
-    execute_metrics = build_execute_metrics_snapshot()
-
-    with open(metrics_path, "w") as f:
-        json.dump(execute_metrics, f, indent=4)
-
-    logger.info(f"[METRICS] Execution results: {execute_metrics}")
+    execute_metrics = persist_execute_metrics()
 
     return trade_log_entries
 
@@ -1651,8 +1696,59 @@ def daily_exit_check():
                 except Exception as exc:  # pragma: no cover - API errors
                     logger.error("Failed to close position %s: %s", symbol, exc)
 
-if __name__ == '__main__':
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """Parse command line arguments for the trade execution script."""
+
+    parser = argparse.ArgumentParser(description="Execute Alpaca trades with guardrails")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run even if the market guard determines the market is closed.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """Entrypoint for executing the trade pipeline with market guardrails."""
+
+    args = parse_args(argv)
+    force_run = bool(getattr(args, "force", False))
+
+    market_is_open = is_market_open_via_alpaca(trading_client)
+    logger.info(
+        "Market guard status: is_open=%s, env=%s, forced=%s",
+        market_is_open,
+        TRADING_ENV,
+        force_run,
+    )
+    log_event(
+        {
+            "event": "MARKET_GUARD_STATUS",
+            "is_open": market_is_open,
+            "forced": force_run,
+            "env": TRADING_ENV,
+        }
+    )
+
+    if not market_is_open and not force_run:
+        logger.warning("Market is closed; aborting trade execution run.")
+        log_event(
+            {
+                "event": "RUN_ABORT",
+                "reason": "market_closed",
+                "guard": "alpaca_clock",
+                "forced": False,
+            }
+        )
+        persist_execute_metrics()
+        return 0
+
+    if not market_is_open and force_run:
+        logger.warning("Market closed but proceeding due to --force flag.")
+
     logger.info("Starting pre-market trade execution script")
+
+    exit_code = 0
     try:
         trade_entries = submit_trades()
         attach_trailing_stops()
@@ -1686,9 +1782,16 @@ if __name__ == '__main__':
     except Exception as exc:
         logger.exception("Critical error occurred: %s", exc)
         send_alert(str(exc))
+        exit_code = 1
     finally:
         end_time = datetime.utcnow()
         elapsed_time = end_time - start_time
         logger.info("Script finished in %s", elapsed_time)
         logger.info("Pre-market trade execution script complete")
+
+    return exit_code
+
+
+if __name__ == '__main__':
+    sys.exit(main())
 

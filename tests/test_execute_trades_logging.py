@@ -167,3 +167,30 @@ def test_event_json_schema(tmp_path, monkeypatch, execute_trades_module):
     assert skip_event["event"] == "CANDIDATE_SKIPPED"
     for key in ("symbol", "reason_code", "reason_text", "kvs"):
         assert key in skip_event
+
+
+def test_market_guard_abort_writes_events(tmp_path, monkeypatch, execute_trades_module):
+    module = execute_trades_module
+
+    events_path = tmp_path / "execute_events.jsonl"
+    metrics_path = tmp_path / "metrics.json"
+
+    monkeypatch.setattr(module, "EVENTS_LOG_PATH", events_path)
+    monkeypatch.setattr(module, "metrics_path", str(metrics_path))
+    monkeypatch.setattr(module, "is_market_open_via_alpaca", lambda client: False)
+
+    def fail_submit_trades():
+        raise AssertionError("submit_trades should not run when market is closed")
+
+    monkeypatch.setattr(module, "submit_trades", fail_submit_trades)
+
+    exit_code = module.main([])
+    assert exit_code == 0
+
+    assert metrics_path.exists()
+
+    events = [json.loads(line) for line in events_path.read_text("utf-8").splitlines()]
+    assert events[0]["event"] == "MARKET_GUARD_STATUS"
+
+    abort_events = [event for event in events if event.get("event") == "RUN_ABORT"]
+    assert abort_events, "Expected RUN_ABORT event when market is closed"
