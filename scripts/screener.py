@@ -184,36 +184,61 @@ def _create_data_client() -> "StockHistoricalDataClient":
     return StockHistoricalDataClient(api_key, api_secret)
 
 
-def _normalize_bars_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame(columns=INPUT_COLUMNS)
-    data = df.copy()
-    if isinstance(data.index, pd.MultiIndex):
-        data = data.reset_index()
+def normalize_bars_to_df(bars_obj) -> pd.DataFrame:
+    """Normalize Alpaca bars payloads into a standard DataFrame."""
+
+    required = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+
+    # SDK path (alpaca-py returns an object exposing ``.df``)
+    if hasattr(bars_obj, "df"):
+        df = bars_obj.df
+        if df.empty:
+            return pd.DataFrame(columns=required)
+        data = df.reset_index()
+        rename_map = {
+            "time": "timestamp",
+            "t": "timestamp",
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+            "S": "symbol",
+        }
+        data = data.rename(columns=rename_map)
+        missing = [col for col in required if col not in data.columns]
+        if missing:
+            raise ValueError(f"bars df missing expected columns: {missing}")
+        result = data[required].copy()
+        result["symbol"] = result["symbol"].astype(str).str.upper()
+        return result
+
+    # HTTP path - dictionary or iterable of dictionaries
+    if isinstance(bars_obj, dict) and "bars" in bars_obj:
+        records = bars_obj.get("bars") or []
     else:
-        data = data.reset_index()
-    if "symbol" not in data.columns:
-        if data.index.name == "symbol":
-            data.reset_index(inplace=True)
-        else:
-            data["symbol"] = ""
-    if "timestamp" not in data.columns and "time" in data.columns:
-        data.rename(columns={"time": "timestamp"}, inplace=True)
-    if "timestamp" not in data.columns and "t" in data.columns:
-        data.rename(columns={"t": "timestamp"}, inplace=True)
-    if "timestamp" in data.columns:
-        data["timestamp"] = pd.to_datetime(data["timestamp"], utc=True, errors="coerce")
-    required = {"open", "high", "low", "close", "volume"}
-    for col in required:
-        if col not in data.columns:
-            data[col] = np.nan
-    if "exchange" not in data.columns:
-        data["exchange"] = ""
-    result = data[[col for col in INPUT_COLUMNS if col in data.columns]].copy()
-    missing = [col for col in INPUT_COLUMNS if col not in result.columns]
-    for col in missing:
-        result[col] = "" if col in ("symbol", "exchange") else np.nan
-    return result[INPUT_COLUMNS]
+        records = bars_obj or []
+
+    records_list = list(records)
+    frame = pd.DataFrame(records_list) if records_list else pd.DataFrame(
+        columns=["S", "t", "o", "h", "l", "c", "v"]
+    )
+    frame = frame.rename(
+        columns={
+            "S": "symbol",
+            "t": "timestamp",
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+        }
+    )
+    if not set(required).issubset(frame.columns):
+        raise ValueError("HTTP bars missing required fields after rename")
+    result = frame[required].copy()
+    result["symbol"] = result["symbol"].astype(str).str.upper()
+    return result
 
 
 def _fetch_daily_bars(
@@ -269,9 +294,15 @@ def _fetch_daily_bars(
                         "Alpaca bars response missing DataFrame for batch of %d", len(batch)
                     )
                     break
-                normalized = _normalize_bars_dataframe(bars_df)
+                normalized = normalize_bars_to_df(response)
                 if not normalized.empty:
-                    frames.append(normalized)
+                    normalized = normalized.copy()
+                    normalized["timestamp"] = pd.to_datetime(
+                        normalized["timestamp"], utc=True, errors="coerce"
+                    )
+                    normalized.dropna(subset=["timestamp"], inplace=True)
+                    if not normalized.empty:
+                        frames.append(normalized)
                 success = True
                 break
             except Exception as exc:  # pragma: no cover - network errors exercised in integration
@@ -331,9 +362,19 @@ def _load_alpaca_universe(
     except Exception as exc:
         LOGGER.error("Failed to fetch Alpaca asset universe: %s", exc)
         return pd.DataFrame(columns=INPUT_COLUMNS), {}
+    asset_meta = {
+        str(symbol).strip().upper(): dict(meta or {})
+        for symbol, meta in (asset_meta or {}).items()
+    }
+    symbols = [str(sym).strip().upper() for sym in symbols]
 
     if limit is not None and limit > 0:
-        symbols = symbols[:limit]
+        limited = symbols[: limit]
+        if len(limited) != len(symbols):
+            LOGGER.info("Applying symbol limit: %d -> %d", len(symbols), len(limited))
+        symbols = limited
+        if asset_meta:
+            asset_meta = {sym: asset_meta.get(sym, {}) for sym in symbols if sym in asset_meta}
     LOGGER.info("Loaded assets: %d", len(symbols))
 
     if not symbols:
@@ -354,52 +395,54 @@ def _load_alpaca_universe(
     )
     if batch_failures:
         LOGGER.warning("Failed to fetch %d symbol batches from Alpaca market data.", batch_failures)
-    if not bars_df.empty and asset_meta:
-        meta_rows = [
-            (
-                str(symbol).strip().upper(),
-                str(meta.get("exchange", "") or "").strip().upper(),
-                str(meta.get("asset_class", "") or "").strip().upper(),
-                bool(meta.get("tradable", False)),
+    if not bars_df.empty:
+        bars_df = bars_df.copy()
+        bars_df["symbol"] = bars_df["symbol"].astype(str).str.strip().str.upper()
+        if asset_meta:
+            meta_rows = [
+                (
+                    str(symbol).strip().upper(),
+                    str((meta or {}).get("exchange", "") or "").strip().upper(),
+                    str((meta or {}).get("asset_class", "") or "").strip().upper(),
+                )
+                for symbol, meta in asset_meta.items()
+            ]
+            meta_df = (
+                pd.DataFrame(meta_rows, columns=["symbol", "exchange", "asset_class"])
+                if meta_rows
+                else pd.DataFrame(columns=["symbol", "exchange", "asset_class"])
             )
-            for symbol, meta in asset_meta.items()
-        ]
-        if meta_rows:
-            meta_df = pd.DataFrame(
-                meta_rows,
-                columns=["symbol", "exchange_meta", "asset_class", "tradable"],
-            )
-            meta_df.drop_duplicates(subset=["symbol"], keep="first", inplace=True)
-            bars_df = bars_df.copy()
-            bars_df["symbol"] = bars_df["symbol"].astype(str).str.strip().str.upper()
-            merged = bars_df.merge(meta_df, on="symbol", how="left")
-            if "exchange" not in merged.columns:
-                merged["exchange"] = ""
-            merged["exchange"] = merged["exchange"].fillna("").astype(str).str.strip().str.upper()
-            merged["exchange_meta"] = (
-                merged["exchange_meta"].fillna("").astype(str).str.strip().str.upper()
-            )
-            merged["asset_class"] = (
-                merged["asset_class"].fillna("").astype(str).str.strip().str.upper()
-            )
-            merged["tradable"] = merged["tradable"].fillna(False).astype(bool)
-            merged["exchange"] = merged["exchange"].where(
-                merged["exchange"].str.len() > 0,
-                merged["exchange_meta"],
-            )
-            exchange_for_kind = merged["exchange"].fillna("")
-            kind = exchange_for_kind.apply(classify_exchange)
-            promote_mask = (kind == "OTHER") & (
-                merged["asset_class"].isin(["US_EQUITY", "EQUITY"])
-            )
-            if promote_mask.any():
-                kind.loc[promote_mask] = "EQUITY"
-                blank_exchange = promote_mask & (merged["exchange"].str.len() == 0)
-                if blank_exchange.any():
-                    merged.loc[blank_exchange, "exchange"] = "EQUITY"
-            merged["kind"] = kind
-            merged.drop(columns=["exchange_meta"], inplace=True)
-            bars_df = merged
+            if not meta_df.empty:
+                meta_df = meta_df.drop_duplicates(subset=["symbol"], keep="first")
+                bars_df = bars_df.merge(meta_df, on="symbol", how="left")
+        if "exchange" not in bars_df.columns:
+            bars_df["exchange"] = ""
+        if "asset_class" not in bars_df.columns:
+            bars_df["asset_class"] = ""
+        bars_df["exchange"] = bars_df["exchange"].fillna("").astype(str).str.strip().str.upper()
+        bars_df["asset_class"] = (
+            bars_df["asset_class"].fillna("").astype(str).str.strip().str.upper()
+        )
+
+        known_equity = {"NASDAQ", "NYSE", "ARCA", "AMEX", "BATS", "NYSEARCA"}
+
+        def _classify_exchange(raw: str) -> str:
+            raw = (raw or "").strip().upper()
+            if raw in known_equity:
+                return "EQUITY"
+            if "CRYPTO" in raw:
+                return "CRYPTO"
+            return "OTHER"
+
+        exchange_kind = bars_df["exchange"].apply(_classify_exchange)
+        promote_mask = (exchange_kind == "OTHER") & (
+            bars_df["asset_class"].isin(["US_EQUITY", "EQUITY"])
+        )
+        if promote_mask.any():
+            bars_df.loc[promote_mask, "exchange"] = bars_df.loc[
+                promote_mask, "exchange"
+            ].mask(lambda s: s.str.len() == 0, "NASDAQ")
+        bars_df["kind"] = bars_df["exchange"].apply(_classify_exchange)
     return bars_df, asset_meta
 
 
@@ -886,11 +929,11 @@ def run_screener(
             len(promoted_symbols),
         )
 
-    if stats["candidates_out"] == 0 and reject_samples:
+    if stats["candidates_out"] == 0:
         sample = reject_samples[:10]
         LOGGER.info(
             "No candidates passed JBravo gates; sample rejections: %s",
-            json.dumps(sample, sort_keys=True),
+            json.dumps(sample, sort_keys=True) if sample else "[]",
         )
 
     return top_df, scored_df, stats, skip_reasons, reject_samples
