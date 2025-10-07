@@ -33,6 +33,8 @@ DEFAULT_FEED = (_DEFAULT_FEED or "iex").lower()
 
 try:  # pragma: no cover - optional Alpaca dependency import guard
     from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import GetAssetsRequest
+    from alpaca.trading.enums import AssetStatus, AssetClass
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
@@ -42,6 +44,9 @@ try:  # pragma: no cover - optional Alpaca dependency import guard
         DataFeed = None  # type: ignore
 except Exception:  # pragma: no cover - allow running without Alpaca SDK
     TradingClient = None  # type: ignore
+    GetAssetsRequest = None  # type: ignore
+    AssetStatus = None  # type: ignore
+    AssetClass = None  # type: ignore
     StockHistoricalDataClient = None  # type: ignore
     StockBarsRequest = None  # type: ignore
     TimeFrame = None  # type: ignore
@@ -321,6 +326,44 @@ def _load_alpaca_universe(
     )
     if batch_failures:
         LOGGER.warning("Failed to fetch %d symbol batches from Alpaca market data.", batch_failures)
+    if not bars_df.empty and asset_meta:
+        meta_rows = [
+            (
+                str(symbol).strip().upper(),
+                str(meta.get("exchange", "") or "").strip().upper(),
+                str(meta.get("asset_class", "") or "").strip().upper(),
+                bool(meta.get("tradable", False)),
+            )
+            for symbol, meta in asset_meta.items()
+        ]
+        if meta_rows:
+            meta_df = pd.DataFrame(
+                meta_rows,
+                columns=["symbol", "exchange_meta", "asset_class", "tradable"],
+            )
+            meta_df.drop_duplicates(subset=["symbol"], keep="first", inplace=True)
+            bars_df = bars_df.copy()
+            bars_df["symbol"] = bars_df["symbol"].astype(str).str.strip().str.upper()
+            merged = bars_df.merge(meta_df, on="symbol", how="left")
+            if "exchange" in merged.columns:
+                merged["exchange"] = (
+                    merged["exchange"].fillna("").astype(str).str.strip().str.upper()
+                )
+            else:
+                merged["exchange"] = ""
+            merged["exchange_meta"] = (
+                merged["exchange_meta"].fillna("").astype(str).str.strip().str.upper()
+            )
+            merged["exchange"] = merged["exchange"].where(
+                merged["exchange"].str.len() > 0,
+                merged["exchange_meta"],
+            )
+            merged.drop(columns=["exchange_meta"], inplace=True)
+            merged["asset_class"] = (
+                merged["asset_class"].fillna("").astype(str).str.strip().str.upper()
+            )
+            merged["tradable"] = merged["tradable"].fillna(False).astype(bool)
+            bars_df = merged
     return bars_df, asset_meta
 
 
@@ -426,6 +469,20 @@ def _filter_equity_assets(assets: Iterable[object]) -> Tuple[List[str], Dict[str
     return sorted(symbols), asset_meta
 
 
+def _fetch_assets_via_sdk(trading_client) -> Tuple[List[str], Dict[str, dict]]:
+    if trading_client is None:
+        raise RuntimeError("Trading client is unavailable")
+    if GetAssetsRequest is None or AssetStatus is None or AssetClass is None:
+        assets = trading_client.get_all_assets()
+    else:
+        request = GetAssetsRequest(
+            status=AssetStatus.ACTIVE,
+            asset_class=AssetClass.US_EQUITY,
+        )
+        assets = trading_client.get_all_assets(request)
+    return _filter_equity_assets(assets)
+
+
 def _fetch_assets_via_http() -> Tuple[List[str], Dict[str, dict]]:
     api_key, api_secret, _, _ = get_alpaca_creds()
     if not api_key or not api_secret:
@@ -465,16 +522,7 @@ def fetch_active_equity_symbols(
 
     cache_path = _assets_cache_path(base_dir)
     try:
-        assets = trading_client.get_all_assets()
-        equities = [
-            asset
-            for asset in assets
-            if getattr(asset, "tradable", True)
-            and str(getattr(asset, "class_", "") or getattr(asset, "asset_class", "") or "")
-            .strip()
-            .lower()
-            in {"us_equity", "equity"}
-        ]
+        symbols, asset_meta = _fetch_assets_via_sdk(trading_client)
     except Exception as exc:  # pragma: no cover - requires Alpaca SDK error
         LOGGER.warning("Alpaca assets validation failed; falling back to raw HTTP: %s", exc)
         symbols, asset_meta = _fetch_assets_via_http()
@@ -492,8 +540,6 @@ def fetch_active_equity_symbols(
 
         LOGGER.error("Failed to fetch Alpaca assets; continuing with empty universe.")
         return [], {}
-
-    symbols, asset_meta = _filter_equity_assets(equities)
 
     if symbols:
         _write_assets_cache(cache_path, symbols)
@@ -610,6 +656,12 @@ def run_screener(
     scored_records: list[dict[str, object]] = []
     asset_meta = {str(key).upper(): value for key, value in (asset_meta or {}).items()}
     promoted_symbols: set[str] = set()
+    reject_samples: list[dict[str, str]] = []
+
+    def record_reject(symbol: object, reason: str) -> None:
+        sym = str(symbol or "").strip().upper() or "<UNKNOWN>"
+        if len(reject_samples) < 50:
+            reject_samples.append({"symbol": sym, "reason": reason})
 
     if prepared.empty:
         LOGGER.info("No input rows supplied to screener; outputs will be empty.")
@@ -619,6 +671,7 @@ def run_screener(
             if group.empty:
                 skip_reasons["NAN_DATA"] += 1
                 LOGGER.info("[SKIP] %s has no rows", symbol or "<UNKNOWN>")
+                record_reject(symbol, "NAN_DATA")
                 continue
 
             bars: list[BarData] = []
@@ -631,7 +684,10 @@ def run_screener(
                     str(row.get("exchange") or "").strip().upper()
                     or str(meta.get("exchange", "") or "").strip().upper()
                 )
-                asset_class = str(meta.get("asset_class", "") or "").strip().upper()
+                asset_class = (
+                    str(row.get("asset_class") or "").strip().upper()
+                    or str(meta.get("asset_class", "") or "").strip().upper()
+                )
                 row["symbol"] = sym
                 row["exchange"] = exch
                 try:
@@ -639,6 +695,7 @@ def run_screener(
                 except ValidationError as exc:
                     LOGGER.warning("[SKIP] %s ValidationError: %s", row.get("symbol") or "<UNKNOWN>", exc)
                     skip_reasons["VALIDATION_ERROR"] += 1
+                    record_reject(sym, "VALIDATION_ERROR")
                     skip_symbol = True
                     break
                 kind = classify_exchange(bar.exchange)
@@ -655,6 +712,7 @@ def run_screener(
                                 kind,
                             )
                             skip_reasons["NON_EQUITY"] += 1
+                            record_reject(sym, "NON_EQUITY")
                             skip_symbol = True
                             break
                     else:
@@ -666,11 +724,14 @@ def run_screener(
                         )
                         key = "UNKNOWN_EXCHANGE" if kind == "OTHER" else "NON_EQUITY"
                         skip_reasons[key] += 1
+                        record_reject(sym, key)
                         skip_symbol = True
                         break
                 bars.append(bar)
 
             if skip_symbol or not bars:
+                if not bars and not skip_symbol:
+                    record_reject(symbol, "NAN_DATA")
                 continue
 
             bars_df = pd.DataFrame([bar.to_dict() for bar in bars])
@@ -685,12 +746,14 @@ def run_screener(
             if clean_df.empty:
                 skip_reasons["NAN_DATA"] += 1
                 LOGGER.info("[SKIP] %s dropped due to NaN close", symbol or "<UNKNOWN>")
+                record_reject(symbol, "NAN_DATA")
                 continue
 
             clean_df.dropna(subset=numeric_cols, inplace=True)
             if clean_df.empty:
                 skip_reasons["NAN_DATA"] += 1
                 LOGGER.info("[SKIP] %s dropped due to NaN data", symbol or "<UNKNOWN>")
+                record_reject(symbol, "NAN_DATA")
                 continue
 
             if len(clean_df) < min_history:
@@ -701,12 +764,14 @@ def run_screener(
                     len(clean_df),
                     min_history,
                 )
+                record_reject(symbol, "INSUFFICIENT_HISTORY")
                 continue
 
             _ensure_indicator_columns(clean_df)
 
             if len(clean_df) < 2:
                 LOGGER.info("[FILTER] %s does not have enough bars for crossover check", symbol)
+                record_reject(symbol, "INSUFFICIENT_HISTORY")
                 continue
 
             prev_row = clean_df.iloc[-2]
@@ -725,15 +790,25 @@ def run_screener(
                     "[FILTER] %s missing indicator data for JBravo criteria",
                     symbol or "<UNKNOWN>",
                 )
+                record_reject(symbol, "NAN_DATA")
                 continue
 
-            if not (
-                prev_row["close"] < prev_row["sma9"]
-                and curr_row["close"] > curr_row["sma9"]
-                and curr_row["sma9"] > curr_row["ema20"] > curr_row["sma180"]
-                and curr_row["rsi"] > 50
-            ):
-                LOGGER.info("[FILTER] %s does not meet JBravo entry criteria", symbol or "<UNKNOWN>")
+            crossed_up = prev_row["close"] < prev_row["sma9"] and curr_row["close"] > curr_row["sma9"]
+            if not crossed_up:
+                LOGGER.info("[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>")
+                record_reject(symbol, "FAILED_CROSS")
+                continue
+
+            stacked = curr_row["sma9"] > curr_row["ema20"] > curr_row["sma180"]
+            if not stacked:
+                LOGGER.info("[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>")
+                record_reject(symbol, "FAILED_SMA_STACK")
+                continue
+
+            strong_rsi = curr_row["rsi"] > 50
+            if not strong_rsi:
+                LOGGER.info("[FILTER] %s failed RSI threshold", symbol or "<UNKNOWN>")
+                record_reject(symbol, "FAILED_RSI")
                 continue
 
             clean_df.set_index("timestamp", inplace=True)
@@ -776,7 +851,14 @@ def run_screener(
             len(promoted_symbols),
         )
 
-    return top_df, scored_df, stats, skip_reasons
+    if stats["candidates_out"] == 0 and reject_samples:
+        sample = reject_samples[:10]
+        LOGGER.info(
+            "No candidates passed JBravo gates; sample rejections: %s",
+            json.dumps(sample, sort_keys=True),
+        )
+
+    return top_df, scored_df, stats, skip_reasons, reject_samples
 
 
 def _load_source_dataframe(path: Path) -> pd.DataFrame:
@@ -796,6 +878,7 @@ def write_outputs(
     scored_df: pd.DataFrame,
     stats: dict[str, int],
     skip_reasons: dict[str, int],
+    reject_samples: Optional[list[dict[str, str]]] = None,
     *,
     status: str = "ok",
     now: Optional[datetime] = None,
@@ -819,6 +902,10 @@ def write_outputs(
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
         "status": status,
     }
+    if reject_samples:
+        metrics["reject_samples"] = reject_samples[:10]
+    else:
+        metrics["reject_samples"] = []
     _write_json_atomic(metrics_path, metrics)
     return metrics_path
 
@@ -909,14 +996,23 @@ def main(
                 limit=args.limit,
                 now=now,
             )
-    top_df, scored_df, stats, skip_reasons = run_screener(
+    top_df, scored_df, stats, skip_reasons, reject_samples = run_screener(
         frame,
         top_n=args.top_n,
         min_history=args.min_history,
         now=now,
         asset_meta=asset_meta,
     )
-    write_outputs(base_dir, top_df, scored_df, stats, skip_reasons, status="ok", now=now)
+    write_outputs(
+        base_dir,
+        top_df,
+        scored_df,
+        stats,
+        skip_reasons,
+        reject_samples,
+        status="ok",
+        now=now,
+    )
     LOGGER.info(
         "Screener complete: %d symbols examined, %d candidates.",
         stats["symbols_in"],
