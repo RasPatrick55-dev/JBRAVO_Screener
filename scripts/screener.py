@@ -6,12 +6,14 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
+import requests
 
 from .utils.models import BarData, classify_exchange
+from utils.io_utils import atomic_write_bytes
 
 try:  # pragma: no cover - compatibility across pydantic versions
     from pydantic import ValidationError
@@ -83,6 +85,8 @@ SKIP_KEYS = [
 
 DEFAULT_TOP_N = 15
 DEFAULT_MIN_HISTORY = 30
+ASSET_CACHE_RELATIVE = Path("data") / "reference" / "assets_cache.json"
+ASSET_HTTP_TIMEOUT = 15
 
 
 def _ensure_logger() -> None:
@@ -91,6 +95,127 @@ def _ensure_logger() -> None:
             level=logging.INFO,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
+
+
+def _assets_cache_path(base_dir: Optional[Path] = None) -> Path:
+    base = base_dir or Path(__file__).resolve().parents[1]
+    return base / ASSET_CACHE_RELATIVE
+
+
+def _read_assets_cache(cache_path: Path) -> List[str]:
+    if not cache_path.exists():
+        return []
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - cache corruption is unexpected
+        LOGGER.warning("Failed to read assets cache %s: %s", cache_path, exc)
+        return []
+    symbols = payload.get("symbols") if isinstance(payload, dict) else None
+    if not isinstance(symbols, list):
+        return []
+    cleaned: List[str] = []
+    for raw in symbols:
+        symbol = str(raw or "").strip().upper()
+        if symbol:
+            cleaned.append(symbol)
+    return cleaned
+
+
+def _write_assets_cache(cache_path: Path, symbols: List[str]) -> None:
+    if not symbols:
+        return
+    payload = {
+        "cached_utc": _format_timestamp(datetime.now(timezone.utc)),
+        "symbols": sorted({str(sym).strip().upper() for sym in symbols if sym}),
+    }
+    atomic_write_bytes(cache_path, json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"))
+
+
+def _determine_alpaca_base_url() -> str:
+    base_url = os.environ.get("APCA_API_BASE_URL")
+    if base_url:
+        return base_url.rstrip("/")
+    env = os.environ.get("APCA_API_ENV", "").lower()
+    if env == "live":
+        return "https://api.alpaca.markets"
+    return "https://paper-api.alpaca.markets"
+
+
+def _fetch_assets_via_http() -> List[str]:
+    api_key = os.environ.get("APCA_API_KEY_ID")
+    api_secret = os.environ.get("APCA_API_SECRET_KEY")
+    if not api_key or not api_secret:
+        LOGGER.warning("Alpaca credentials missing; cannot fetch assets via HTTP fallback.")
+        return []
+
+    base_url = _determine_alpaca_base_url()
+    url = f"{base_url}/v2/assets"
+    try:
+        response = requests.get(
+            url,
+            params={"status": "active", "asset_class": "us_equity"},
+            headers={
+                "APCA-API-KEY-ID": api_key,
+                "APCA-API-SECRET-KEY": api_secret,
+            },
+            timeout=ASSET_HTTP_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        LOGGER.warning("Raw Alpaca asset fetch failed: %s", exc)
+        return []
+
+    if not isinstance(payload, list):
+        LOGGER.warning("Unexpected payload from Alpaca assets endpoint: %s", type(payload))
+        return []
+
+    symbols: set[str] = set()
+    for item in payload:
+        if isinstance(item, dict):
+            symbol = str(item.get("symbol", "")).strip().upper()
+            if symbol:
+                symbols.add(symbol)
+    return sorted(symbols)
+
+
+def fetch_active_equity_symbols(trading_client, *, base_dir: Optional[Path] = None) -> List[str]:
+    """Fetch active US equity symbols from Alpaca with resilient fallbacks."""
+
+    cache_path = _assets_cache_path(base_dir)
+    try:
+        assets = trading_client.get_all_assets(status="active", asset_class="us_equity")
+    except Exception as exc:  # pragma: no cover - requires Alpaca SDK error
+        LOGGER.warning("Alpaca assets validation failed; falling back to raw HTTP: %s", exc)
+        symbols = _fetch_assets_via_http()
+        if symbols:
+            _write_assets_cache(cache_path, symbols)
+            return symbols
+
+        cached = _read_assets_cache(cache_path)
+        if cached:
+            LOGGER.warning(
+                "Using cached Alpaca assets (%d symbols) after validation failure.",
+                len(cached),
+            )
+            return cached
+
+        LOGGER.error("Failed to fetch Alpaca assets; continuing with empty universe.")
+        return []
+
+    symbols: List[str] = []
+    for asset in assets:
+        symbol = getattr(asset, "symbol", None)
+        if not symbol:
+            continue
+        cleaned = str(symbol).strip().upper()
+        if cleaned:
+            symbols.append(cleaned)
+
+    if symbols:
+        _write_assets_cache(cache_path, symbols)
+
+    return sorted(set(symbols))
 
 
 def _prepare_input_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
@@ -117,16 +242,13 @@ def _format_timestamp(ts: datetime) -> str:
 
 
 def _write_csv_atomic(path: Path, df: pd.DataFrame) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    df.to_csv(tmp_path, index=False)
-    os.replace(tmp_path, path)
+    data = df.to_csv(index=False).encode("utf-8")
+    atomic_write_bytes(path, data)
 
 
 def _write_json_atomic(path: Path, payload: dict) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-    os.replace(tmp_path, path)
+    data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    atomic_write_bytes(path, data)
 
 
 def _score_symbol(df: pd.DataFrame) -> Tuple[float, str]:
