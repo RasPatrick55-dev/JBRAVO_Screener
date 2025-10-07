@@ -15,6 +15,7 @@ import requests
 
 try:  # pragma: no cover - preferred module execution path
     from .indicators import adx, aroon, macd, obv, rsi
+    from .utils.dataframe_utils import to_bars_df
     from .utils.models import BarData, classify_exchange
 except Exception:  # pragma: no cover - fallback for direct script execution
     import os as _os
@@ -22,6 +23,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
 
     _sys.path.append(_os.path.dirname(_os.path.dirname(__file__)))
     from scripts.indicators import adx, aroon, macd, obv, rsi  # type: ignore
+    from scripts.utils.dataframe_utils import to_bars_df  # type: ignore
     from scripts.utils.models import BarData, classify_exchange  # type: ignore
 
 from utils.env import load_env, get_alpaca_creds
@@ -184,63 +186,6 @@ def _create_data_client() -> "StockHistoricalDataClient":
     return StockHistoricalDataClient(api_key, api_secret)
 
 
-def normalize_bars_to_df(bars_obj) -> pd.DataFrame:
-    """Normalize Alpaca bars payloads into a standard DataFrame."""
-
-    required = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
-
-    # SDK path (alpaca-py returns an object exposing ``.df``)
-    if hasattr(bars_obj, "df"):
-        df = bars_obj.df
-        if df.empty:
-            return pd.DataFrame(columns=required)
-        data = df.reset_index()
-        rename_map = {
-            "time": "timestamp",
-            "t": "timestamp",
-            "o": "open",
-            "h": "high",
-            "l": "low",
-            "c": "close",
-            "v": "volume",
-            "S": "symbol",
-        }
-        data = data.rename(columns=rename_map)
-        missing = [col for col in required if col not in data.columns]
-        if missing:
-            raise ValueError(f"bars df missing expected columns: {missing}")
-        result = data[required].copy()
-        result["symbol"] = result["symbol"].astype(str).str.upper()
-        return result
-
-    # HTTP path - dictionary or iterable of dictionaries
-    if isinstance(bars_obj, dict) and "bars" in bars_obj:
-        records = bars_obj.get("bars") or []
-    else:
-        records = bars_obj or []
-
-    records_list = list(records)
-    frame = pd.DataFrame(records_list) if records_list else pd.DataFrame(
-        columns=["S", "t", "o", "h", "l", "c", "v"]
-    )
-    frame = frame.rename(
-        columns={
-            "S": "symbol",
-            "t": "timestamp",
-            "o": "open",
-            "h": "high",
-            "l": "low",
-            "c": "close",
-            "v": "volume",
-        }
-    )
-    if not set(required).issubset(frame.columns):
-        raise ValueError("HTTP bars missing required fields after rename")
-    result = frame[required].copy()
-    result["symbol"] = result["symbol"].astype(str).str.upper()
-    return result
-
-
 def _fetch_daily_bars(
     data_client: "StockHistoricalDataClient",
     symbols: List[str],
@@ -288,21 +233,25 @@ def _fetch_daily_bars(
         for attempt in range(BAR_MAX_RETRIES):
             try:
                 response = data_client.get_stock_bars(request)
-                bars_df = getattr(response, "df", None)
-                if bars_df is None:
+                normalized = to_bars_df(response)
+                if normalized.empty:
                     LOGGER.warning(
-                        "Alpaca bars response missing DataFrame for batch of %d", len(batch)
+                        "No bars returned for batch of %d symbols", len(batch)
+                    )
+                    success = True
+                    break
+                if "symbol" not in normalized.columns:
+                    LOGGER.error(
+                        "Normalized bars missing 'symbol' unexpectedly; skipping batch"
                     )
                     break
-                normalized = normalize_bars_to_df(response)
+                normalized = normalized.copy()
+                normalized["timestamp"] = pd.to_datetime(
+                    normalized["timestamp"], utc=True, errors="coerce"
+                )
+                normalized.dropna(subset=["timestamp"], inplace=True)
                 if not normalized.empty:
-                    normalized = normalized.copy()
-                    normalized["timestamp"] = pd.to_datetime(
-                        normalized["timestamp"], utc=True, errors="coerce"
-                    )
-                    normalized.dropna(subset=["timestamp"], inplace=True)
-                    if not normalized.empty:
-                        frames.append(normalized)
+                    frames.append(normalized)
                 success = True
                 break
             except Exception as exc:  # pragma: no cover - network errors exercised in integration
@@ -367,15 +316,20 @@ def _load_alpaca_universe(
         for symbol, meta in (asset_meta or {}).items()
     }
     symbols = [str(sym).strip().upper() for sym in symbols]
+    total_tradable = len(symbols)
+
+    if asset_meta:
+        meta_symbols = [sym for sym in symbols if sym in asset_meta]
+        if meta_symbols:
+            symbols = meta_symbols
 
     if limit is not None and limit > 0:
-        limited = symbols[: limit]
-        if len(limited) != len(symbols):
-            LOGGER.info("Applying symbol limit: %d -> %d", len(symbols), len(limited))
-        symbols = limited
-        if asset_meta:
-            asset_meta = {sym: asset_meta.get(sym, {}) for sym in symbols if sym in asset_meta}
-    LOGGER.info("Loaded assets: %d", len(symbols))
+        symbols = symbols[:limit]
+    LOGGER.info(
+        "Universe sample size: %d (of %d tradable equities)", len(symbols), total_tradable
+    )
+    if asset_meta:
+        asset_meta = {sym: asset_meta.get(sym, {}) for sym in symbols if sym in asset_meta}
 
     if not symbols:
         return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta
@@ -397,8 +351,14 @@ def _load_alpaca_universe(
         LOGGER.warning("Failed to fetch %d symbol batches from Alpaca market data.", batch_failures)
     if not bars_df.empty:
         bars_df = bars_df.copy()
+        if "symbol" not in bars_df.columns:
+            LOGGER.error(
+                "Normalized bars missing 'symbol' unexpectedly; skipping merge"
+            )
+            return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta
         bars_df["symbol"] = bars_df["symbol"].astype(str).str.strip().str.upper()
         if asset_meta:
+            bar_symbols = set(bars_df["symbol"].dropna().unique())
             meta_rows = [
                 (
                     str(symbol).strip().upper(),
@@ -406,6 +366,7 @@ def _load_alpaca_universe(
                     str((meta or {}).get("asset_class", "") or "").strip().upper(),
                 )
                 for symbol, meta in asset_meta.items()
+                if symbol in bar_symbols
             ]
             meta_df = (
                 pd.DataFrame(meta_rows, columns=["symbol", "exchange", "asset_class"])
