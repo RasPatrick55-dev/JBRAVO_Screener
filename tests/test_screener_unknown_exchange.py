@@ -74,7 +74,7 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     df = _sample_universe()
     now = datetime(2024, 1, 10, 14, tzinfo=timezone.utc)
 
-    top_df, scored_df, stats, skips = screener.run_screener(
+    top_df, scored_df, stats, skips, reject_samples = screener.run_screener(
         df,
         top_n=5,
         min_history=2,
@@ -87,7 +87,9 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     assert skips["NON_EQUITY"] >= 1
     assert "EQ1" in scored_df["symbol"].tolist()
 
-    metrics_path = screener.write_outputs(tmp_path, top_df, scored_df, stats, skips, now=now)
+    metrics_path = screener.write_outputs(
+        tmp_path, top_df, scored_df, stats, skips, reject_samples, now=now
+    )
 
     top_path = tmp_path / "data" / "top_candidates.csv"
     scored_path = tmp_path / "data" / "scored_candidates.csv"
@@ -98,5 +100,6 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     assert metrics["rows"] == scored_df.shape[0]
     assert metrics["skips"]["UNKNOWN_EXCHANGE"] >= 1
     assert metrics["status"] == "ok"
+    assert "reject_samples" in metrics
     if not top_df.empty:
         assert int(top_df["universe_count"].iloc[0]) == stats["symbols_in"]
