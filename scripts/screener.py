@@ -12,7 +12,17 @@ import numpy as np
 import pandas as pd
 import requests
 
-from .utils.models import BarData, classify_exchange
+try:  # pragma: no cover - preferred module execution path
+    from .indicators import adx, aroon, macd, obv, rsi
+    from .utils.models import BarData, classify_exchange
+except Exception:  # pragma: no cover - fallback for direct script execution
+    import os as _os
+    import sys as _sys
+
+    _sys.path.append(_os.path.dirname(_os.path.dirname(__file__)))
+    from scripts.indicators import adx, aroon, macd, obv, rsi  # type: ignore
+    from scripts.utils.models import BarData, classify_exchange  # type: ignore
+
 from utils.io_utils import atomic_write_bytes
 
 try:  # pragma: no cover - compatibility across pydantic versions
@@ -237,6 +247,49 @@ def _safe_float(value: object) -> Optional[float]:
         return None
 
 
+def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return tr.rolling(period).mean()
+
+
+def _ensure_indicator_columns(df: pd.DataFrame) -> None:
+    if "sma9" not in df.columns:
+        df["sma9"] = df["close"].rolling(9, min_periods=9).mean()
+    if "ema20" not in df.columns:
+        df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+    if "sma180" not in df.columns:
+        df["sma180"] = df["close"].rolling(180, min_periods=180).mean()
+    if "rsi" not in df.columns:
+        df["rsi"] = rsi(df["close"])
+    if "macd" not in df.columns or "macd_hist" not in df.columns:
+        macd_line, _, macd_hist = macd(df["close"])
+        if "macd" not in df.columns:
+            df["macd"] = macd_line
+        if "macd_hist" not in df.columns:
+            df["macd_hist"] = macd_hist
+    if "adx" not in df.columns:
+        df["adx"] = adx(df)
+    if "aroon_up" not in df.columns or "aroon_down" not in df.columns:
+        aroon_up, aroon_down = aroon(df)
+        if "aroon_up" not in df.columns:
+            df["aroon_up"] = aroon_up
+        if "aroon_down" not in df.columns:
+            df["aroon_down"] = aroon_down
+    if "atr" not in df.columns:
+        df["atr"] = _compute_atr(df)
+
+
 def _format_timestamp(ts: datetime) -> str:
     return ts.replace(microsecond=0).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -324,11 +377,21 @@ def run_screener(
             bars_df.sort_values("timestamp", inplace=True)
 
             numeric_cols = ["open", "high", "low", "close", "volume"]
-            clean_df = bars_df.dropna(subset=numeric_cols)
+            for col in numeric_cols:
+                bars_df[col] = pd.to_numeric(bars_df[col], errors="coerce")
+
+            clean_df = bars_df.dropna(subset=["close"]).copy()
+            if clean_df.empty:
+                skip_reasons["NAN_DATA"] += 1
+                LOGGER.info("[SKIP] %s dropped due to NaN close", symbol or "<UNKNOWN>")
+                continue
+
+            clean_df.dropna(subset=numeric_cols, inplace=True)
             if clean_df.empty:
                 skip_reasons["NAN_DATA"] += 1
                 LOGGER.info("[SKIP] %s dropped due to NaN data", symbol or "<UNKNOWN>")
                 continue
+
             if len(clean_df) < min_history:
                 skip_reasons["INSUFFICIENT_HISTORY"] += 1
                 LOGGER.info(
@@ -338,6 +401,8 @@ def run_screener(
                     min_history,
                 )
                 continue
+
+            _ensure_indicator_columns(clean_df)
 
             clean_df.set_index("timestamp", inplace=True)
             score, breakdown = _score_symbol(clean_df)
@@ -350,16 +415,16 @@ def run_screener(
                 "close": _safe_float(latest.get("close")),
                 "volume": _safe_float(latest.get("volume")),
                 "score_breakdown": breakdown,
-                "rsi": None,
-                "macd": None,
-                "macd_hist": None,
-                "adx": None,
-                "aroon_up": None,
-                "aroon_down": None,
-                "sma9": None,
-                "ema20": None,
-                "sma180": None,
-                "atr": None,
+                "rsi": _safe_float(latest.get("rsi")),
+                "macd": _safe_float(latest.get("macd")),
+                "macd_hist": _safe_float(latest.get("macd_hist")),
+                "adx": _safe_float(latest.get("adx")),
+                "aroon_up": _safe_float(latest.get("aroon_up")),
+                "aroon_down": _safe_float(latest.get("aroon_down")),
+                "sma9": _safe_float(latest.get("sma9")),
+                "ema20": _safe_float(latest.get("ema20")),
+                "sma180": _safe_float(latest.get("sma180")),
+                "atr": _safe_float(latest.get("atr")),
             }
             scored_records.append(record)
 

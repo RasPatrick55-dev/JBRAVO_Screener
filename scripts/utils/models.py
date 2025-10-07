@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover - fallback for Pydantic v1
     _PYDANTIC_V2 = False
 
 
-known_equity_exchanges = {
+KNOWN_EQUITY = {
     "NASDAQ",
     "NYSE",
     "ARCA",
@@ -33,7 +33,7 @@ def classify_exchange(raw: Any) -> str:
     code = str(raw).strip().upper()
     if not code:
         return "OTHER"
-    if code in known_equity_exchanges:
+    if code in KNOWN_EQUITY:
         return "EQUITY"
     return "CRYPTO" if "CRYPTO" in code else "OTHER"
 
@@ -138,4 +138,4 @@ else:
             return self.dict()
 
 
-__all__ = ["BarData", "classify_exchange", "known_equity_exchanges"]
+__all__ = ["BarData", "classify_exchange", "KNOWN_EQUITY"]
