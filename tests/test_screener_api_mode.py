@@ -54,7 +54,14 @@ def test_screener_api_mode_creates_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(
         screener,
         "fetch_active_equity_symbols",
-        lambda *args, **kwargs: ["GOOD", "UNKNOWN1", "CRYPTO1"],
+        lambda *args, **kwargs: (
+            ["GOOD", "UNKNOWN1", "CRYPTO1"],
+            {
+                "GOOD": {"exchange": "NASDAQ", "asset_class": "US_EQUITY", "tradable": True},
+                "UNKNOWN1": {"exchange": "PINK", "asset_class": "OTC", "tradable": True},
+                "CRYPTO1": {"exchange": "CRYPTO", "asset_class": "CRYPTO", "tradable": True},
+            },
+        ),
     )
     monkeypatch.setattr(
         screener,

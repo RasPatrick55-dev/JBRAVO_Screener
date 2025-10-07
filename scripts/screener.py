@@ -7,7 +7,7 @@ import os
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, List
+from typing import Iterable, Optional, Tuple, List, Dict
 
 import numpy as np
 import pandas as pd
@@ -268,11 +268,14 @@ def _fetch_daily_bars(
     combined = pd.concat(frames, ignore_index=True)
     combined.dropna(subset=["symbol", "timestamp"], inplace=True)
     combined.sort_values(["symbol", "timestamp"], inplace=True)
-    limited = (
-        combined.groupby("symbol", group_keys=False)
-        .apply(lambda g: g.sort_values("timestamp").tail(days))
-        .reset_index(drop=True)
-    )
+    grouped = combined.groupby("symbol", group_keys=False)
+    try:
+        limited = grouped.apply(
+            lambda g: g.sort_values("timestamp").tail(days), include_groups=False
+        )
+    except TypeError:  # pragma: no cover - for older pandas without include_groups
+        limited = grouped.apply(lambda g: g.sort_values("timestamp").tail(days))
+    limited = limited.reset_index(drop=True)
     return limited, batch_failures
 
 
@@ -283,31 +286,31 @@ def _load_alpaca_universe(
     feed: str,
     limit: Optional[int],
     now: datetime,
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, Dict[str, dict]]:
     try:
         trading_client = _create_trading_client()
     except Exception as exc:
         LOGGER.error("Unable to create Alpaca trading client: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS)
+        return pd.DataFrame(columns=INPUT_COLUMNS), {}
 
     try:
-        symbols = fetch_active_equity_symbols(trading_client, base_dir=base_dir)
+        symbols, asset_meta = fetch_active_equity_symbols(trading_client, base_dir=base_dir)
     except Exception as exc:
         LOGGER.error("Failed to fetch Alpaca asset universe: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS)
+        return pd.DataFrame(columns=INPUT_COLUMNS), {}
 
     if limit is not None and limit > 0:
         symbols = symbols[:limit]
     LOGGER.info("Loaded assets: %d", len(symbols))
 
     if not symbols:
-        return pd.DataFrame(columns=INPUT_COLUMNS)
+        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta
 
     try:
         data_client = _create_data_client()
     except Exception as exc:
         LOGGER.error("Unable to create Alpaca market data client: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS)
+        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta
 
     bars_df, batch_failures = _fetch_daily_bars(
         data_client,
@@ -318,7 +321,7 @@ def _load_alpaca_universe(
     )
     if batch_failures:
         LOGGER.warning("Failed to fetch %d symbol batches from Alpaca market data.", batch_failures)
-    return bars_df
+    return bars_df, asset_meta
 
 
 def _ensure_logger() -> None:
@@ -373,11 +376,61 @@ def _determine_alpaca_base_url() -> str:
     return "https://paper-api.alpaca.markets"
 
 
-def _fetch_assets_via_http() -> List[str]:
+def _asset_attr(asset: object, *names: str) -> object:
+    if isinstance(asset, dict):
+        for name in names:
+            if name in asset:
+                return asset.get(name)
+        return None
+    for name in names:
+        if hasattr(asset, name):
+            return getattr(asset, name)
+    return None
+
+
+def _filter_equity_assets(assets: Iterable[object]) -> Tuple[List[str], Dict[str, dict]]:
+    symbols: set[str] = set()
+    asset_meta: dict[str, dict[str, object]] = {}
+    for asset in assets:
+        tradable_raw = _asset_attr(asset, "tradable")
+        tradable = bool(tradable_raw) if tradable_raw is not None else True
+        if not tradable:
+            continue
+
+        status_raw = _asset_attr(asset, "status")
+        status = str(status_raw or "").strip().lower()
+        if status and status != "active":
+            continue
+
+        cls_raw = _asset_attr(asset, "class_", "asset_class", "class")
+        cls = str(cls_raw or "").strip().upper()
+        if cls.lower() not in {"us_equity", "equity"}:
+            continue
+
+        symbol_raw = _asset_attr(asset, "symbol")
+        symbol = str(symbol_raw or "").strip().upper()
+        if not symbol:
+            continue
+
+        exchange_raw = _asset_attr(asset, "exchange", "primary_exchange")
+        exchange = str(exchange_raw or "").strip().upper()
+
+        symbols.add(symbol)
+        asset_meta[symbol] = {
+            "exchange": exchange,
+            "asset_class": cls,
+            "tradable": tradable,
+        }
+
+    LOGGER.info("Asset meta ready: %d symbols", len(asset_meta))
+    return sorted(symbols), asset_meta
+
+
+def _fetch_assets_via_http() -> Tuple[List[str], Dict[str, dict]]:
     api_key, api_secret, _, _ = get_alpaca_creds()
     if not api_key or not api_secret:
         LOGGER.warning("Alpaca credentials missing; cannot fetch assets via HTTP fallback.")
-        return []
+        return [], {}
 
     base_url = _determine_alpaca_base_url()
     url = f"{base_url}/v2/assets"
@@ -395,41 +448,39 @@ def _fetch_assets_via_http() -> List[str]:
         payload = response.json()
     except Exception as exc:
         LOGGER.warning("Raw Alpaca asset fetch failed: %s", exc)
-        return []
+        return [], {}
 
     if not isinstance(payload, list):
         LOGGER.warning("Unexpected payload from Alpaca assets endpoint: %s", type(payload))
-        return []
+        return [], {}
 
-    symbols: set[str] = set()
-    for item in payload:
-        if isinstance(item, dict):
-            if not item.get("tradable", True):
-                continue
-            status = str(item.get("status", "")).strip().lower()
-            if status and status != "active":
-                continue
-            exchange = item.get("exchange", "")
-            if classify_exchange(exchange) == "CRYPTO":
-                continue
-            symbol = str(item.get("symbol", "")).strip().upper()
-            if symbol:
-                symbols.add(symbol)
-    return sorted(symbols)
+    filtered, asset_meta = _filter_equity_assets(payload)
+    return filtered, asset_meta
 
 
-def fetch_active_equity_symbols(trading_client, *, base_dir: Optional[Path] = None) -> List[str]:
+def fetch_active_equity_symbols(
+    trading_client, *, base_dir: Optional[Path] = None
+) -> Tuple[List[str], Dict[str, dict]]:
     """Fetch active US equity symbols from Alpaca with resilient fallbacks."""
 
     cache_path = _assets_cache_path(base_dir)
     try:
-        assets = trading_client.get_all_assets(status="active", asset_class="us_equity")
+        assets = trading_client.get_all_assets()
+        equities = [
+            asset
+            for asset in assets
+            if getattr(asset, "tradable", True)
+            and str(getattr(asset, "class_", "") or getattr(asset, "asset_class", "") or "")
+            .strip()
+            .lower()
+            in {"us_equity", "equity"}
+        ]
     except Exception as exc:  # pragma: no cover - requires Alpaca SDK error
         LOGGER.warning("Alpaca assets validation failed; falling back to raw HTTP: %s", exc)
-        symbols = _fetch_assets_via_http()
+        symbols, asset_meta = _fetch_assets_via_http()
         if symbols:
             _write_assets_cache(cache_path, symbols)
-            return symbols
+            return symbols, asset_meta
 
         cached = _read_assets_cache(cache_path)
         if cached:
@@ -437,32 +488,17 @@ def fetch_active_equity_symbols(trading_client, *, base_dir: Optional[Path] = No
                 "Using cached Alpaca assets (%d symbols) after validation failure.",
                 len(cached),
             )
-            return cached
+            return cached, {}
 
         LOGGER.error("Failed to fetch Alpaca assets; continuing with empty universe.")
-        return []
+        return [], {}
 
-    symbols: List[str] = []
-    for asset in assets:
-        symbol = getattr(asset, "symbol", None)
-        if not symbol:
-            continue
-        tradable = getattr(asset, "tradable", True)
-        status = str(getattr(asset, "status", "")).strip().lower()
-        if tradable is False or (status and status != "active"):
-            continue
-        exchange = getattr(asset, "exchange", "")
-        kind = classify_exchange(exchange)
-        if kind == "CRYPTO":
-            continue
-        cleaned = str(symbol).strip().upper()
-        if cleaned:
-            symbols.append(cleaned)
+    symbols, asset_meta = _filter_equity_assets(equities)
 
     if symbols:
         _write_assets_cache(cache_path, symbols)
 
-    return sorted(set(symbols))
+    return symbols, asset_meta
 
 
 def _prepare_input_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
@@ -563,6 +599,7 @@ def run_screener(
     top_n: int = DEFAULT_TOP_N,
     min_history: int = DEFAULT_MIN_HISTORY,
     now: Optional[datetime] = None,
+    asset_meta: Optional[Dict[str, dict]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, dict[str, int], dict[str, int]]:
     """Run the screener on ``df`` returning (top, scored, stats, skips)."""
 
@@ -571,6 +608,8 @@ def run_screener(
     stats = {"symbols_in": 0, "candidates_out": 0}
     skip_reasons = {key: 0 for key in SKIP_KEYS}
     scored_records: list[dict[str, object]] = []
+    asset_meta = {str(key).upper(): value for key, value in (asset_meta or {}).items()}
+    promoted_symbols: set[str] = set()
 
     if prepared.empty:
         LOGGER.info("No input rows supplied to screener; outputs will be empty.")
@@ -585,6 +624,16 @@ def run_screener(
             bars: list[BarData] = []
             skip_symbol = False
             for row in group.to_dict("records"):
+                row = dict(row)
+                sym = str(row.get("symbol") or symbol or "").strip().upper()
+                meta = asset_meta.get(sym, {})
+                exch = (
+                    str(row.get("exchange") or "").strip().upper()
+                    or str(meta.get("exchange", "") or "").strip().upper()
+                )
+                asset_class = str(meta.get("asset_class", "") or "").strip().upper()
+                row["symbol"] = sym
+                row["exchange"] = exch
                 try:
                     bar = BarData(**row)
                 except ValidationError as exc:
@@ -594,16 +643,31 @@ def run_screener(
                     break
                 kind = classify_exchange(bar.exchange)
                 if kind != "EQUITY":
-                    LOGGER.info(
-                        "[SKIP] %s exchange=%s kind=%s",
-                        bar.symbol or "<UNKNOWN>",
-                        bar.exchange or "",
-                        kind,
-                    )
-                    key = "UNKNOWN_EXCHANGE" if kind == "OTHER" else "NON_EQUITY"
-                    skip_reasons[key] += 1
-                    skip_symbol = True
-                    break
+                    if not bar.exchange:
+                        if asset_class in {"US_EQUITY", "EQUITY"}:
+                            kind = "EQUITY"
+                            promoted_symbols.add(sym)
+                        else:
+                            LOGGER.info(
+                                "[SKIP] %s exchange=%s kind=%s",
+                                bar.symbol or "<UNKNOWN>",
+                                bar.exchange or "",
+                                kind,
+                            )
+                            skip_reasons["NON_EQUITY"] += 1
+                            skip_symbol = True
+                            break
+                    else:
+                        LOGGER.info(
+                            "[SKIP] %s exchange=%s kind=%s",
+                            bar.symbol or "<UNKNOWN>",
+                            bar.exchange or "",
+                            kind,
+                        )
+                        key = "UNKNOWN_EXCHANGE" if kind == "OTHER" else "NON_EQUITY"
+                        skip_reasons[key] += 1
+                        skip_symbol = True
+                        break
                 bars.append(bar)
 
             if skip_symbol or not bars:
@@ -705,6 +769,12 @@ def run_screener(
     top_df = scored_df.head(top_n).copy()
     top_df["universe_count"] = stats["symbols_in"]
     top_df = top_df.reindex(columns=TOP_COLUMNS)
+
+    if promoted_symbols:
+        LOGGER.warning(
+            "Promoting blank exchange to EQUITY for %d symbols based on asset_class",
+            len(promoted_symbols),
+        )
 
     return top_df, scored_df, stats, skip_reasons
 
@@ -813,6 +883,7 @@ def main(
     now = datetime.now(timezone.utc)
 
     frame: pd.DataFrame
+    asset_meta: Dict[str, dict] = {}
     if input_df is not None:
         frame = input_df
     else:
@@ -831,7 +902,7 @@ def main(
                 )
                 universe_mode = "alpaca-active"
         if universe_mode == "alpaca-active":
-            frame = _load_alpaca_universe(
+            frame, asset_meta = _load_alpaca_universe(
                 base_dir=base_dir,
                 days=max(1, args.days),
                 feed=args.feed,
@@ -843,6 +914,7 @@ def main(
         top_n=args.top_n,
         min_history=args.min_history,
         now=now,
+        asset_meta=asset_meta,
     )
     write_outputs(base_dir, top_df, scored_df, stats, skip_reasons, status="ok", now=now)
     LOGGER.info(
