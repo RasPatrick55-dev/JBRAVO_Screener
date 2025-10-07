@@ -13,6 +13,9 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from utils import write_csv_atomic
+from utils.env import load_env
+
+load_env()
 
 logfile = os.path.join(BASE_DIR, "logs", "metrics.log")
 logging.basicConfig(
