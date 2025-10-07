@@ -4,7 +4,8 @@ import argparse
 import json
 import logging
 import os
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Iterable, Optional, Tuple, List
 
@@ -24,6 +25,22 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.utils.models import BarData, classify_exchange  # type: ignore
 
 from utils.io_utils import atomic_write_bytes
+
+try:  # pragma: no cover - optional Alpaca dependency import guard
+    from alpaca.trading.client import TradingClient
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+    try:  # pragma: no cover - enum availability varies across versions
+        from alpaca.data.enums import DataFeed
+    except Exception:  # pragma: no cover - ``DataFeed`` introduced later
+        DataFeed = None  # type: ignore
+except Exception:  # pragma: no cover - allow running without Alpaca SDK
+    TradingClient = None  # type: ignore
+    StockHistoricalDataClient = None  # type: ignore
+    StockBarsRequest = None  # type: ignore
+    TimeFrame = None  # type: ignore
+    DataFeed = None  # type: ignore
 
 try:  # pragma: no cover - compatibility across pydantic versions
     from pydantic import ValidationError
@@ -94,9 +111,205 @@ SKIP_KEYS = [
 ]
 
 DEFAULT_TOP_N = 15
-DEFAULT_MIN_HISTORY = 30
+DEFAULT_MIN_HISTORY = 180
 ASSET_CACHE_RELATIVE = Path("data") / "reference" / "assets_cache.json"
 ASSET_HTTP_TIMEOUT = 15
+BARS_BATCH_SIZE = 150
+BAR_RETRY_STATUSES = {429, 500, 502, 503, 504}
+BAR_MAX_RETRIES = 3
+
+
+def _chunked(items: List[str], size: int) -> Iterable[List[str]]:
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _resolve_feed(feed: str):
+    value = (feed or "").lower()
+    if DataFeed is not None:
+        try:  # pragma: no cover - depends on Alpaca SDK version
+            return DataFeed(value)
+        except Exception:
+            LOGGER.debug("Falling back to raw feed string for %s", feed)
+    return value
+
+
+def _create_trading_client() -> "TradingClient":
+    if TradingClient is None:
+        raise RuntimeError("alpaca-py TradingClient is unavailable")
+    api_key = os.environ.get("APCA_API_KEY_ID")
+    api_secret = os.environ.get("APCA_API_SECRET_KEY")
+    if not api_key or not api_secret:
+        raise RuntimeError("Missing Alpaca credentials for trading client")
+    env = os.environ.get("APCA_API_ENV", "paper").lower()
+    paper = env != "live"
+    return TradingClient(api_key, api_secret, paper=paper)
+
+
+def _create_data_client() -> "StockHistoricalDataClient":
+    if StockHistoricalDataClient is None:
+        raise RuntimeError("alpaca-py StockHistoricalDataClient is unavailable")
+    api_key = os.environ.get("APCA_API_KEY_ID")
+    api_secret = os.environ.get("APCA_API_SECRET_KEY")
+    if not api_key or not api_secret:
+        raise RuntimeError("Missing Alpaca credentials for data client")
+    return StockHistoricalDataClient(api_key, api_secret)
+
+
+def _normalize_bars_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=INPUT_COLUMNS)
+    data = df.copy()
+    if isinstance(data.index, pd.MultiIndex):
+        data = data.reset_index()
+    else:
+        data = data.reset_index()
+    if "symbol" not in data.columns:
+        if data.index.name == "symbol":
+            data.reset_index(inplace=True)
+        else:
+            data["symbol"] = ""
+    if "timestamp" not in data.columns and "time" in data.columns:
+        data.rename(columns={"time": "timestamp"}, inplace=True)
+    if "timestamp" not in data.columns and "t" in data.columns:
+        data.rename(columns={"t": "timestamp"}, inplace=True)
+    if "timestamp" in data.columns:
+        data["timestamp"] = pd.to_datetime(data["timestamp"], utc=True, errors="coerce")
+    required = {"open", "high", "low", "close", "volume"}
+    for col in required:
+        if col not in data.columns:
+            data[col] = np.nan
+    if "exchange" not in data.columns:
+        data["exchange"] = ""
+    result = data[[col for col in INPUT_COLUMNS if col in data.columns]].copy()
+    missing = [col for col in INPUT_COLUMNS if col not in result.columns]
+    for col in missing:
+        result[col] = "" if col in ("symbol", "exchange") else np.nan
+    return result[INPUT_COLUMNS]
+
+
+def _fetch_daily_bars(
+    data_client: "StockHistoricalDataClient",
+    symbols: List[str],
+    *,
+    days: int,
+    feed: str,
+    now: Optional[datetime] = None,
+) -> Tuple[pd.DataFrame, int]:
+    if not symbols:
+        return pd.DataFrame(columns=INPUT_COLUMNS), 0
+    if StockBarsRequest is None or TimeFrame is None:
+        raise RuntimeError("alpaca-py market data components unavailable")
+
+    window_days = max(days + 30, int(days * 1.5))
+    now = now or datetime.now(timezone.utc)
+    start = now - timedelta(days=window_days)
+    end = now
+
+    frames: List[pd.DataFrame] = []
+    batch_failures = 0
+    for batch in _chunked(symbols, BARS_BATCH_SIZE):
+        request = StockBarsRequest(
+            symbol_or_symbols=batch,
+            timeframe=TimeFrame.Day,
+            start=start,
+            end=end,
+            feed=_resolve_feed(feed),
+        )
+        success = False
+        last_error: Optional[Exception] = None
+        for attempt in range(BAR_MAX_RETRIES):
+            try:
+                response = data_client.get_stock_bars(request)
+                bars_df = getattr(response, "df", None)
+                if bars_df is None:
+                    LOGGER.warning(
+                        "Alpaca bars response missing DataFrame for batch of %d", len(batch)
+                    )
+                    break
+                normalized = _normalize_bars_dataframe(bars_df)
+                if not normalized.empty:
+                    frames.append(normalized)
+                success = True
+                break
+            except Exception as exc:  # pragma: no cover - network errors exercised in integration
+                last_error = exc
+                status = getattr(exc, "status_code", None)
+                if status in BAR_RETRY_STATUSES and attempt < BAR_MAX_RETRIES - 1:
+                    sleep_for = 2 ** attempt
+                    LOGGER.warning(
+                        "Retrying Alpaca bars fetch (batch size %d, attempt %d/%d) after error %s",
+                        len(batch),
+                        attempt + 1,
+                        BAR_MAX_RETRIES,
+                        exc,
+                    )
+                    time.sleep(sleep_for)
+                    continue
+                LOGGER.warning("Failed to fetch bars for batch starting %s: %s", batch[:3], exc)
+                break
+        if not success:
+            batch_failures += 1
+            if last_error is not None:
+                LOGGER.debug("Final error for batch %s: %s", batch[:3], last_error)
+
+    if not frames:
+        return pd.DataFrame(columns=INPUT_COLUMNS), batch_failures
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined.dropna(subset=["symbol", "timestamp"], inplace=True)
+    combined.sort_values(["symbol", "timestamp"], inplace=True)
+    limited = (
+        combined.groupby("symbol", group_keys=False)
+        .apply(lambda g: g.sort_values("timestamp").tail(days))
+        .reset_index(drop=True)
+    )
+    return limited, batch_failures
+
+
+def _load_alpaca_universe(
+    *,
+    base_dir: Path,
+    days: int,
+    feed: str,
+    limit: Optional[int],
+    now: datetime,
+) -> pd.DataFrame:
+    try:
+        trading_client = _create_trading_client()
+    except Exception as exc:
+        LOGGER.error("Unable to create Alpaca trading client: %s", exc)
+        return pd.DataFrame(columns=INPUT_COLUMNS)
+
+    try:
+        symbols = fetch_active_equity_symbols(trading_client, base_dir=base_dir)
+    except Exception as exc:
+        LOGGER.error("Failed to fetch Alpaca asset universe: %s", exc)
+        return pd.DataFrame(columns=INPUT_COLUMNS)
+
+    if limit is not None and limit > 0:
+        symbols = symbols[:limit]
+    LOGGER.info("Loaded assets: %d", len(symbols))
+
+    if not symbols:
+        return pd.DataFrame(columns=INPUT_COLUMNS)
+
+    try:
+        data_client = _create_data_client()
+    except Exception as exc:
+        LOGGER.error("Unable to create Alpaca market data client: %s", exc)
+        return pd.DataFrame(columns=INPUT_COLUMNS)
+
+    bars_df, batch_failures = _fetch_daily_bars(
+        data_client,
+        symbols,
+        days=days,
+        feed=feed,
+        now=now,
+    )
+    if batch_failures:
+        LOGGER.warning("Failed to fetch %d symbol batches from Alpaca market data.", batch_failures)
+    return bars_df
 
 
 def _ensure_logger() -> None:
@@ -183,6 +396,14 @@ def _fetch_assets_via_http() -> List[str]:
     symbols: set[str] = set()
     for item in payload:
         if isinstance(item, dict):
+            if not item.get("tradable", True):
+                continue
+            status = str(item.get("status", "")).strip().lower()
+            if status and status != "active":
+                continue
+            exchange = item.get("exchange", "")
+            if classify_exchange(exchange) == "CRYPTO":
+                continue
             symbol = str(item.get("symbol", "")).strip().upper()
             if symbol:
                 symbols.add(symbol)
@@ -217,6 +438,14 @@ def fetch_active_equity_symbols(trading_client, *, base_dir: Optional[Path] = No
     for asset in assets:
         symbol = getattr(asset, "symbol", None)
         if not symbol:
+            continue
+        tradable = getattr(asset, "tradable", True)
+        status = str(getattr(asset, "status", "")).strip().lower()
+        if tradable is False or (status and status != "active"):
+            continue
+        exchange = getattr(asset, "exchange", "")
+        kind = classify_exchange(exchange)
+        if kind == "CRYPTO":
             continue
         cleaned = str(symbol).strip().upper()
         if cleaned:
@@ -404,6 +633,37 @@ def run_screener(
 
             _ensure_indicator_columns(clean_df)
 
+            if len(clean_df) < 2:
+                LOGGER.info("[FILTER] %s does not have enough bars for crossover check", symbol)
+                continue
+
+            prev_row = clean_df.iloc[-2]
+            curr_row = clean_df.iloc[-1]
+            required_keys = [
+                prev_row.get("close"),
+                prev_row.get("sma9"),
+                curr_row.get("close"),
+                curr_row.get("sma9"),
+                curr_row.get("ema20"),
+                curr_row.get("sma180"),
+                curr_row.get("rsi"),
+            ]
+            if any(pd.isna(val) for val in required_keys):
+                LOGGER.info(
+                    "[FILTER] %s missing indicator data for JBravo criteria",
+                    symbol or "<UNKNOWN>",
+                )
+                continue
+
+            if not (
+                prev_row["close"] < prev_row["sma9"]
+                and curr_row["close"] > curr_row["sma9"]
+                and curr_row["sma9"] > curr_row["ema20"] > curr_row["sma180"]
+                and curr_row["rsi"] > 50
+            ):
+                LOGGER.info("[FILTER] %s does not meet JBravo entry criteria", symbol or "<UNKNOWN>")
+                continue
+
             clean_df.set_index("timestamp", inplace=True)
             score, breakdown = _score_symbol(clean_df)
             latest = clean_df.iloc[-1]
@@ -487,18 +747,46 @@ def write_outputs(
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the nightly screener")
+    source_default = os.environ.get("SCREENER_SOURCE")
+    parser.add_argument(
+        "--universe",
+        choices=["alpaca-active", "csv"],
+        default="alpaca-active",
+        help="Universe source to use for screener input",
+    )
+    parser.add_argument(
+        "--source-csv",
+        dest="source_csv",
+        help="Path to input OHLC CSV (used when --universe csv)",
+        default=source_default,
+    )
     parser.add_argument(
         "--source",
-        help="Path to input OHLC CSV (defaults to data/screener_source.csv)",
-        default=os.environ.get("SCREENER_SOURCE"),
+        help=argparse.SUPPRESS,
+        default=None,
     )
     parser.add_argument(
         "--output-dir",
         help="Directory to write outputs (defaults to repo root)",
     )
+    parser.add_argument("--days", type=int, default=750, help="Number of trading days to request")
+    parser.add_argument(
+        "--feed",
+        choices=["iex", "sip"],
+        default="iex",
+        help="Market data feed to request from Alpaca",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="Optional symbol limit for development/testing",
+    )
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     parser.add_argument("--min-history", type=int, default=DEFAULT_MIN_HISTORY)
-    return parser.parse_args(list(argv) if argv is not None else None)
+    parsed = parser.parse_args(list(argv) if argv is not None else None)
+    if getattr(parsed, "source", None):
+        parsed.source_csv = parsed.source
+    return parsed
 
 
 def main(
@@ -510,10 +798,34 @@ def main(
     _ensure_logger()
     args = parse_args(argv)
     base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
-    source_path = Path(args.source) if args.source else base_dir / "data" / "screener_source.csv"
     now = datetime.now(timezone.utc)
 
-    frame = input_df if input_df is not None else _load_source_dataframe(source_path)
+    frame: pd.DataFrame
+    if input_df is not None:
+        frame = input_df
+    else:
+        universe_mode = args.universe
+        frame = pd.DataFrame(columns=INPUT_COLUMNS)
+        if universe_mode == "csv":
+            csv_path = (
+                Path(args.source_csv)
+                if getattr(args, "source_csv", None)
+                else base_dir / "data" / "screener_source.csv"
+            )
+            frame = _load_source_dataframe(csv_path)
+            if frame.empty:
+                LOGGER.warning(
+                    "CSV universe empty or missing; falling back to Alpaca active universe."
+                )
+                universe_mode = "alpaca-active"
+        if universe_mode == "alpaca-active":
+            frame = _load_alpaca_universe(
+                base_dir=base_dir,
+                days=max(1, args.days),
+                feed=args.feed,
+                limit=args.limit,
+                now=now,
+            )
     top_df, scored_df, stats, skip_reasons = run_screener(
         frame,
         top_n=args.top_n,
