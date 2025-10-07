@@ -1,397 +1,346 @@
-"""Stock screener using a composite indicator based score.
+from __future__ import annotations
 
-This version expands on the previous basic moving average check and assigns
-points based on a variety of popular technical indicators.  The goal is to
-produce a ranked list of symbols with the strongest bullish characteristics for
-short term swing trading.  Only Alpaca tradable assets are evaluated.
-"""
-
-import os
-import sys
-import subprocess
-
+import argparse
+import json
 import logging
-import sqlite3
-from datetime import datetime, timedelta, timezone
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable, Optional, Tuple
 
+import numpy as np
 import pandas as pd
-from alpaca.trading.client import TradingClient
-from typing import Optional
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.timeframe import TimeFrame
-from dotenv import load_dotenv
-import requests
 
-from .indicators import adx, aroon, macd, obv, rsi
-from utils import logger_utils, write_csv_atomic
-from .utils import fetch_bars_with_cutoff, cache_bars
+from .utils.models import BarData, classify_exchange
+
+try:  # pragma: no cover - compatibility across pydantic versions
+    from pydantic import ValidationError
+except ImportError:  # pragma: no cover - older pydantic exposes it elsewhere
+    from pydantic.error_wrappers import ValidationError  # type: ignore
 
 
+LOGGER = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
+INPUT_COLUMNS = [
+    "symbol",
+    "exchange",
+    "timestamp",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+]
 
-logger = logger_utils.init_logging(__name__, 'screener.log')
-start_time = datetime.utcnow()
-logger.info('Script started')
+SCORED_COLUMNS = [
+    "symbol",
+    "exchange",
+    "timestamp",
+    "score",
+    "close",
+    "volume",
+    "score_breakdown",
+    "rsi",
+    "macd",
+    "macd_hist",
+    "adx",
+    "aroon_up",
+    "aroon_down",
+    "sma9",
+    "ema20",
+    "sma180",
+    "atr",
+]
 
-# Load environment variables
-dotenv_path = os.path.join(BASE_DIR, '.env')
-logger.info("Loading environment variables from %s", dotenv_path)
-load_dotenv(dotenv_path)
+TOP_COLUMNS = [
+    "timestamp",
+    "symbol",
+    "score",
+    "exchange",
+    "close",
+    "volume",
+    "universe_count",
+    "score_breakdown",
+    "rsi",
+    "macd",
+    "macd_hist",
+    "adx",
+    "aroon_up",
+    "aroon_down",
+    "sma9",
+    "ema20",
+    "sma180",
+    "atr",
+]
 
-ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
-DATA_CACHE_DIR = os.path.join(BASE_DIR, 'data', 'history_cache')
-os.makedirs(DATA_CACHE_DIR, exist_ok=True)
-DB_PATH = os.path.join(BASE_DIR, 'data', 'pipeline.db')
+SKIP_KEYS = [
+    "UNKNOWN_EXCHANGE",
+    "NON_EQUITY",
+    "VALIDATION_ERROR",
+    "NAN_DATA",
+    "INSUFFICIENT_HISTORY",
+]
 
-VALID_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
-
-
-def sanitize_row(row: dict) -> dict:
-    exchange = (row.get("exchange") or "").strip().upper()
-    symbol = (row.get("symbol") or "").strip().upper()
-    if not exchange or exchange not in VALID_EXCHANGES:
-        exchange = "UNKNOWN"
-    row["exchange"] = exchange
-    row["symbol"] = symbol
-    return row
-
-# Tunable strategy parameters
-RSI_OVERBOUGHT = 70
-RSI_BULLISH = 50
-SMA_SHORT = 9
-EMA_MID = 20
-SMA_LONG = 180
-TRAIL_PERCENT = 3.0
-MAX_HOLD_DAYS = 7
+DEFAULT_TOP_N = 15
+DEFAULT_MIN_HISTORY = 30
 
 
-def send_alert(message: str) -> None:
-    if not ALERT_WEBHOOK_URL:
-        return
+def _ensure_logger() -> None:
+    if not LOGGER.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
+
+
+def _prepare_input_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=INPUT_COLUMNS)
+    prepared = df.copy()
+    for column in INPUT_COLUMNS:
+        if column not in prepared.columns:
+            prepared[column] = pd.NA
+    return prepared[INPUT_COLUMNS]
+
+
+def _safe_float(value: object) -> Optional[float]:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return None
     try:
-        requests.post(ALERT_WEBHOOK_URL, json={"text": message}, timeout=5)
-    except Exception as exc:
-        logger.error("Failed to send alert: %s", exc)
-
-
-from .ensure_db_indicators import (
-    ensure_columns,
-    sync_columns_from_dataframe,
-    REQUIRED_COLUMNS,
-)
-
-
-def init_db() -> None:
-    """Ensure all required columns exist in the database."""
-    ensure_columns(DB_PATH, REQUIRED_COLUMNS)
-
-
-init_db()
-
-# Ensure historical candidates file exists
-hist_init_path = os.path.join(BASE_DIR, 'data', 'historical_candidates.csv')
-if not os.path.exists(hist_init_path):
-    write_csv_atomic(hist_init_path, pd.DataFrame(columns=['date', 'symbol', 'score']))
-
-# Ensure top candidates file exists
-top_init_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
-if not os.path.exists(top_init_path):
-    write_csv_atomic(top_init_path, pd.DataFrame(columns=["symbol", "score"]))
-
-# Retrieve credentials early so tests can fail fast if missing
-API_KEY = os.getenv("APCA_API_KEY_ID")
-API_SECRET = os.getenv("APCA_API_SECRET_KEY")
-BASE_URL = os.getenv("APCA_API_BASE_URL")
-
-if not API_KEY or not API_SECRET:
-    raise ValueError("Missing Alpaca credentials")
-
-# Initialize Alpaca clients
-trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
-data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
-
-# Fetch all tradable symbols
-assets = trading_client.get_all_assets()
-symbols: list[str] = []
-for asset in assets:
-    if not getattr(asset, "tradable", False) or getattr(asset, "status", "") != "active":
-        continue
-    row = sanitize_row({
-        "symbol": getattr(asset, "symbol", ""),
-        "exchange": getattr(asset, "exchange", ""),
-    })
-    if row["exchange"] == "UNKNOWN":
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "bin.emit_event",
-                "CANDIDATE_SKIPPED",
-                "component=screener",
-                "reason_code=MARKET_DATA",
-                "reason_text=Unknown_exchange",
-                f"symbol={row['symbol']}" if row.get("symbol") else "symbol=UNKNOWN",
-            ],
-            check=False,
-        )
-        logger.debug(
-            "Skipping %s due to unknown exchange '%s'",
-            row.get("symbol") or "<UNKNOWN>",
-            getattr(asset, "exchange", ""),
-        )
-        continue
-    if row["symbol"]:
-        symbols.append(row["symbol"])
-
-
-def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Return the Average True Range."""
-    high = df["high"]
-    low = df["low"]
-    close = df["close"]
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
-
-
-def compute_score(symbol: str, df: pd.DataFrame) -> Optional[dict]:
-    try:
-        logger.debug("Running compute_score for %s with %d rows", symbol, len(df))
-        if len(df) < 2:
-            logger.warning("Skipping %s: not enough bars (%d)", symbol, len(df))
-            return None
-        df = df.copy().sort_index()
-        df["ma50"] = df["close"].rolling(50).mean()
-        df["ma200"] = df["close"].rolling(200).mean()
-        df["rsi"] = rsi(df["close"])
-        macd_line, macd_signal, macd_hist = macd(df["close"])
-        df["macd"] = macd_line
-        df["macd_signal"] = macd_signal
-        df["macd_hist"] = macd_hist
-        df["adx"] = adx(df)
-        df["aroon_up"], df["aroon_down"] = aroon(df)
-        df["obv"] = obv(df)
-        df["vol_avg30"] = df["volume"].rolling(30).mean()
-        df["month_high"] = df["high"].rolling(21).max().shift(1)
-        df["sma9"] = df["close"].rolling(SMA_SHORT).mean()
-        df["ema20"] = df["close"].ewm(span=EMA_MID, adjust=False).mean()
-        df["sma180"] = df["close"].rolling(SMA_LONG).mean()
-        df["atr"] = compute_atr(df)
-        df["year_high"] = df["high"].rolling(252).max().shift(1)
-        df.fillna(method="ffill", inplace=True)
-        df.fillna(method="bfill", inplace=True)
-
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
-
-        score = 0.0
-        reasons: list[str] = []
-
-        def add(val: float, reason: str, condition: bool = True) -> None:
-            nonlocal score
-            if not condition:
-                return
-            score += val
-            reasons.append(f"{val:+g} {reason}")
-
-        add(1 if last["close"] > last["ma50"] else -1, "close vs MA50", pd.notna(last.get("ma50")))
-        add(1 if last["close"] > last["ma200"] else -1, "close vs MA200", pd.notna(last.get("ma200")))
-        add(1.5, "MA50 crossover", pd.notna(last.get("ma50")) and pd.notna(prev.get("ma50")) and pd.notna(last.get("ma200")) and pd.notna(prev.get("ma200")) and last["ma50"] > last["ma200"] and prev["ma50"] <= prev["ma200"])
-        add(1, "RSI > 50", pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")) and last["rsi"] > 50 and prev["rsi"] <= 50)
-        add(1, "RSI > 30", pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")) and last["rsi"] > 30 and prev["rsi"] <= 30)
-        add(-1, "RSI > 70", pd.notna(last.get("rsi")) and last["rsi"] > 70)
-        add(1 if last["macd"] > last["macd_signal"] else -1, "MACD cross", pd.notna(last.get("macd")) and pd.notna(last.get("macd_signal")))
-        add(1, "MACD hist rising", pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")) and last["macd_hist"] > prev["macd_hist"])
-        add(1, "ADX > 20", pd.notna(last.get("adx")) and last["adx"] > 20)
-        add(0.5, "ADX > 40", pd.notna(last.get("adx")) and last["adx"] > 40)
-        add(1, "Aroon up cross", all(pd.notna([last.get("aroon_up"), last.get("aroon_down"), prev.get("aroon_up"), prev.get("aroon_down")])) and last["aroon_up"] > last["aroon_down"] and prev["aroon_up"] <= prev["aroon_down"])
-        add(1, "Aroon > 70", pd.notna(last.get("aroon_up")) and last["aroon_up"] > 70)
-        add(1 if last.get("obv") > prev.get("obv") else -1, "OBV", pd.notna(last.get("obv")) and pd.notna(prev.get("obv")))
-        add(1, "Volume spike", pd.notna(last.get("volume")) and pd.notna(last.get("vol_avg30")) and last["volume"] > 2 * last["vol_avg30"])
-        add(1, "New month high", pd.notna(last.get("month_high")) and last["close"] > last["month_high"])
-        body = abs(last["close"] - last["open"])
-        lower = last["low"] - min(last["close"], last["open"])
-        upper = last["high"] - max(last["close"], last["open"])
-        add(1, "Hammer", lower > 2 * body and upper <= body)
-        prev_body = abs(prev["close"] - prev["open"])
-        engulf = (
-            prev["close"] < prev["open"]
-            and last["close"] > last["open"]
-            and last["close"] > prev["open"]
-            and last["open"] < prev["close"]
-            and prev_body > 0
-        )
-        add(1, "Bull engulf", engulf)
-
-        # === JBravo enhancements ===
-        add(2, "SMA9 crossover", pd.notna(last.get("sma9")) and pd.notna(prev.get("sma9")) and last["close"] > last["sma9"] and prev["close"] <= prev["sma9"])
-        add(2, "MA stack", all(pd.notna([last.get("sma9"), last.get("ema20"), last.get("sma180")])) and last["sma9"] > last["ema20"] and last["ema20"] > last["sma180"])
-        if pd.notna(last.get("sma9")) and pd.notna(prev.get("sma9")):
-            add(0.5 if last["sma9"] - prev["sma9"] > 0 else -0.5, "SMA9 slope")
-        if pd.notna(last.get("ema20")) and pd.notna(prev.get("ema20")):
-            add(0.5 if last["ema20"] - prev["ema20"] > 0 else -0.5, "EMA20 slope")
-        if pd.notna(last.get("rsi")):
-            add(1, "RSI > 60", last["rsi"] > 60)
-            add(0.5, "RSI > 50", 50 < last["rsi"] <= 60)
-            add(-2, "RSI overbought", last["rsi"] > RSI_OVERBOUGHT)
-        add(0.5, "MACD > 0", pd.notna(last.get("macd")) and last["macd"] > 0)
-        add(0.5, "MACD hist up", pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")) and last["macd_hist"] > 0 and last["macd_hist"] > prev["macd_hist"])
-        add(-0.5, "MACD hist down", pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")) and last["macd_hist"] < prev["macd_hist"])
-        atr_ratio = last["atr"] / last["close"] if last["close"] > 0 else 0
-        add(0.5, "Low ATR", pd.notna(atr_ratio) and atr_ratio < 0.05)
-        add(-0.5, "High ATR", pd.notna(atr_ratio) and atr_ratio > 0.07)
-        add(0.5, "Near 52w high", pd.notna(last.get("year_high")) and last["close"] >= 0.9 * last["year_high"])
-        add(1, "New 52w high", pd.notna(last.get("year_high")) and last["close"] >= last["year_high"])
-        add(-2, "Close < EMA20", all(pd.notna([last.get("ema20"), prev.get("ema20")])) and last["close"] < last["ema20"] and prev["close"] >= prev["ema20"])
-        add(-1, "MACD hist flip", pd.notna(last.get("macd_hist")) and pd.notna(prev.get("macd_hist")) and last["macd_hist"] < 0 and prev["macd_hist"] >= 0)
-        add(-0.5, "RSI falling", pd.notna(last.get("rsi")) and pd.notna(prev.get("rsi")) and last["rsi"] < prev["rsi"])
-
-        result = {
-            "symbol": symbol,
-            "score": round(score, 2),
-            "rsi": round(last.get("rsi", float("nan")), 2) if pd.notna(last.get("rsi")) else None,
-            "macd": round(last.get("macd", float("nan")), 2) if pd.notna(last.get("macd")) else None,
-            "macd_hist": round(last.get("macd_hist", float("nan")), 2) if pd.notna(last.get("macd_hist")) else None,
-            "adx": round(last.get("adx", float("nan")), 2) if pd.notna(last.get("adx")) else None,
-            "aroon_up": round(last.get("aroon_up", float("nan")), 2) if pd.notna(last.get("aroon_up")) else None,
-            "aroon_down": round(last.get("aroon_down", float("nan")), 2) if pd.notna(last.get("aroon_down")) else None,
-            "sma9": round(last.get("sma9", float("nan")), 2) if pd.notna(last.get("sma9")) else None,
-            "ema20": round(last.get("ema20", float("nan")), 2) if pd.notna(last.get("ema20")) else None,
-            "sma180": round(last.get("sma180", float("nan")), 2) if pd.notna(last.get("sma180")) else None,
-            "atr": round(last.get("atr", float("nan")), 2) if pd.notna(last.get("atr")) else None,
-            "score_breakdown": "; ".join(reasons),
-        }
-        logger.debug("compute_score for %s returned %s", symbol, result)
-        return result
-    except Exception as exc:
-        logger.error("%s processing failed: %s", symbol, exc)
-        send_alert(f"Screener failed for {symbol}: {exc}")
+        return float(value)
+    except (TypeError, ValueError):
         return None
 
 
-def main() -> None:
-    records: list[dict] = []
-    skipped = 0
-    for symbol in symbols:
-        logger.info("Processing %s...", symbol)
-        start = datetime.now(timezone.utc) - timedelta(days=1500)
-        bars_df = fetch_bars_with_cutoff(symbol, start, data_client)
-        cache_bars(symbol, data_client, DATA_CACHE_DIR)
-        df = bars_df.reset_index()
-        logger.debug("%s has %d bars", symbol, len(df))
+def _format_timestamp(ts: datetime) -> str:
+    return ts.replace(microsecond=0).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _write_csv_atomic(path: Path, df: pd.DataFrame) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    df.to_csv(tmp_path, index=False)
+    os.replace(tmp_path, path)
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+    os.replace(tmp_path, path)
+
+
+def _score_symbol(df: pd.DataFrame) -> Tuple[float, str]:
+    returns = df["close"].pct_change().dropna()
+    recent_return = returns.tail(5).mean() if not returns.empty else 0.0
+    baseline_window = min(len(df), 30)
+    baseline = df["close"].rolling(baseline_window).mean().iloc[-1]
+    latest_close = df["close"].iloc[-1]
+    if pd.isna(baseline) or baseline == 0:
+        trend = 0.0
+    else:
+        trend = (latest_close / baseline) - 1
+    volatility = returns.tail(20).std() if len(returns) >= 2 else 0.0
+    score = (np.nan_to_num(recent_return) + np.nan_to_num(trend)) * 100 - np.nan_to_num(volatility) * 10
+    breakdown = f"recent_return={recent_return:.4f}; trend={trend:.4f}; vol={volatility:.4f}"
+    return round(float(score), 2), breakdown
+
+
+def run_screener(
+    df: pd.DataFrame,
+    *,
+    top_n: int = DEFAULT_TOP_N,
+    min_history: int = DEFAULT_MIN_HISTORY,
+    now: Optional[datetime] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame, dict[str, int], dict[str, int]]:
+    """Run the screener on ``df`` returning (top, scored, stats, skips)."""
+
+    now = now or datetime.now(timezone.utc)
+    prepared = _prepare_input_frame(df)
+    stats = {"symbols_in": 0, "candidates_out": 0}
+    skip_reasons = {key: 0 for key in SKIP_KEYS}
+    scored_records: list[dict[str, object]] = []
+
+    if prepared.empty:
+        LOGGER.info("No input rows supplied to screener; outputs will be empty.")
+    else:
+        for symbol, group in prepared.groupby("symbol"):
+            stats["symbols_in"] += 1
+            if group.empty:
+                skip_reasons["NAN_DATA"] += 1
+                LOGGER.info("[SKIP] %s has no rows", symbol or "<UNKNOWN>")
+                continue
+
+            bars: list[BarData] = []
+            skip_symbol = False
+            for row in group.to_dict("records"):
+                try:
+                    bar = BarData(**row)
+                except ValidationError as exc:
+                    LOGGER.warning("[SKIP] %s ValidationError: %s", row.get("symbol") or "<UNKNOWN>", exc)
+                    skip_reasons["VALIDATION_ERROR"] += 1
+                    skip_symbol = True
+                    break
+                kind = classify_exchange(bar.exchange)
+                if kind != "EQUITY":
+                    LOGGER.info(
+                        "[SKIP] %s exchange=%s kind=%s",
+                        bar.symbol or "<UNKNOWN>",
+                        bar.exchange or "",
+                        kind,
+                    )
+                    key = "UNKNOWN_EXCHANGE" if kind == "OTHER" else "NON_EQUITY"
+                    skip_reasons[key] += 1
+                    skip_symbol = True
+                    break
+                bars.append(bar)
+
+            if skip_symbol or not bars:
+                continue
+
+            bars_df = pd.DataFrame([bar.to_dict() for bar in bars])
+            bars_df["timestamp"] = pd.to_datetime(bars_df["timestamp"], utc=True)
+            bars_df.sort_values("timestamp", inplace=True)
+
+            numeric_cols = ["open", "high", "low", "close", "volume"]
+            clean_df = bars_df.dropna(subset=numeric_cols)
+            if clean_df.empty:
+                skip_reasons["NAN_DATA"] += 1
+                LOGGER.info("[SKIP] %s dropped due to NaN data", symbol or "<UNKNOWN>")
+                continue
+            if len(clean_df) < min_history:
+                skip_reasons["INSUFFICIENT_HISTORY"] += 1
+                LOGGER.info(
+                    "[SKIP] %s insufficient history (%d < %d)",
+                    symbol or "<UNKNOWN>",
+                    len(clean_df),
+                    min_history,
+                )
+                continue
+
+            clean_df.set_index("timestamp", inplace=True)
+            score, breakdown = _score_symbol(clean_df)
+            latest = clean_df.iloc[-1]
+            record = {
+                "symbol": symbol,
+                "exchange": latest.get("exchange", ""),
+                "timestamp": _format_timestamp(now),
+                "score": score,
+                "close": _safe_float(latest.get("close")),
+                "volume": _safe_float(latest.get("volume")),
+                "score_breakdown": breakdown,
+                "rsi": None,
+                "macd": None,
+                "macd_hist": None,
+                "adx": None,
+                "aroon_up": None,
+                "aroon_down": None,
+                "sma9": None,
+                "ema20": None,
+                "sma180": None,
+                "atr": None,
+            }
+            scored_records.append(record)
+
+    scored_df = pd.DataFrame(scored_records)
+    if not scored_df.empty:
+        scored_df.sort_values("score", ascending=False, inplace=True)
+    scored_df = scored_df.reindex(columns=SCORED_COLUMNS)
+    stats["candidates_out"] = int(scored_df.shape[0])
+
+    top_df = scored_df.head(top_n).copy()
+    top_df["universe_count"] = stats["symbols_in"]
+    top_df = top_df.reindex(columns=TOP_COLUMNS)
+
+    return top_df, scored_df, stats, skip_reasons
+
+
+def _load_source_dataframe(path: Path) -> pd.DataFrame:
+    if path.exists():
         try:
-            rec = compute_score(symbol, df)
-            if rec is not None:
-                records.append(rec)
-            else:
-                skipped += 1
-                logger.info("Skipping %s: compute_score returned None", symbol)
-        except Exception as e:
-            skipped += 1
-            logger.error("compute_score failed for %s: %s", symbol, e, exc_info=True)
+            return pd.read_csv(path)
+        except Exception as exc:  # pragma: no cover - file corruption is rare
+            LOGGER.error("Failed to read screener source %s: %s", path, exc)
+            return pd.DataFrame(columns=INPUT_COLUMNS)
+    LOGGER.warning("Screener source %s missing; proceeding with empty frame.", path)
+    return pd.DataFrame(columns=INPUT_COLUMNS)
 
-    # Convert to DataFrame and rank
-    logger.info(
-        "Processed %d symbols, %d scored, %d skipped",
-        len(symbols),
-        len(records),
-        skipped,
+
+def write_outputs(
+    base_dir: Path,
+    top_df: pd.DataFrame,
+    scored_df: pd.DataFrame,
+    stats: dict[str, int],
+    skip_reasons: dict[str, int],
+    *,
+    status: str = "ok",
+    now: Optional[datetime] = None,
+) -> Path:
+    now = now or datetime.now(timezone.utc)
+    data_dir = base_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    top_path = data_dir / "top_candidates.csv"
+    scored_path = data_dir / "scored_candidates.csv"
+    metrics_path = data_dir / "screener_metrics.json"
+
+    _write_csv_atomic(top_path, top_df)
+    _write_csv_atomic(scored_path, scored_df)
+
+    metrics = {
+        "last_run_utc": _format_timestamp(now),
+        "rows": int(scored_df.shape[0]),
+        "symbols_in": int(stats.get("symbols_in", 0)),
+        "candidates_out": int(stats.get("candidates_out", 0)),
+        "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
+        "status": status,
+    }
+    _write_json_atomic(metrics_path, metrics)
+    return metrics_path
+
+
+def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the nightly screener")
+    parser.add_argument(
+        "--source",
+        help="Path to input OHLC CSV (defaults to data/screener_source.csv)",
+        default=os.environ.get("SCREENER_SOURCE"),
     )
-    if not records:
-        logger.error("All symbols skipped; no valid output.")
-        sys.exit(1)
-
-    ranked_df = pd.DataFrame(records)
-    logger.debug("Screener output columns: %s", ranked_df.columns.tolist())
-    if "score" not in ranked_df.columns:
-        logger.error(
-            "Screener output missing 'score'. DataFrame columns: %s",
-            ranked_df.columns.tolist(),
-        )
-        sys.exit(1)
-    if ranked_df.empty or ranked_df["score"].isnull().all():
-        logger.error(
-            "Screener output missing valid scores. DataFrame columns: %s",
-            ranked_df.columns.tolist(),
-        )
-        sys.exit(1)
-    ranked_df.sort_values(by="score", ascending=False, inplace=True)
-
-# Save full scored list
-    scored_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
-    write_csv_atomic(scored_path, ranked_df)
-    logger.info("All scored candidates saved to %s", scored_path)
-
-# Log details for top symbols
-    for _, row in ranked_df.head(15).iterrows():
-        logger.info("%s score %.2f: %s", row.symbol, row.score, row.score_breakdown)
-
-# Prepare top candidates with timestamp and universe info
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    top15 = ranked_df.head(15).copy()
-    top15.insert(0, "timestamp", timestamp)
-    top15["universe_count"] = len(symbols)
-
-    cols = [
-        "symbol",
-        "score",
-        "timestamp",
-    ] + [c for c in top15.columns if c not in ["symbol", "score", "timestamp"]]
-    top15 = top15[cols]
-
-    csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
-    write_csv_atomic(csv_path, top15)
-    logger.info(
-        "Top candidates updated: %d records written to %s",
-        len(top15),
-        csv_path,
+    parser.add_argument(
+        "--output-dir",
+        help="Directory to write outputs (defaults to repo root)",
     )
+    parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
+    parser.add_argument("--min-history", type=int, default=DEFAULT_MIN_HISTORY)
+    return parser.parse_args(list(argv) if argv is not None else None)
 
-# Append to historical candidates log
-    hist_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
-    append_df = top15.copy()
-    append_df.insert(0, "date", datetime.now().strftime("%Y-%m-%d"))
-    write_csv_atomic(hist_path, append_df)
-    logger.info("Historical candidates updated at %s", hist_path)
-    # Synchronize SQLite schema to match the DataFrame before insertion
-    sync_columns_from_dataframe(append_df, DB_PATH)
-    with sqlite3.connect(DB_PATH) as conn:
-        append_df.to_sql("historical_candidates", conn, if_exists="append", index=False)
 
-# Update screener summary CSV
-    summary = "; ".join([
-        f"{r.symbol}({r.score}: {r.score_breakdown})" for r in top15.itertuples()
-    ])
-    summary_path = os.path.join(BASE_DIR, "data", "screener_summary.csv")
-    if os.path.exists(summary_path):
-        summary_df = pd.read_csv(summary_path)
-    else:
-        summary_df = pd.DataFrame(columns=["date", "time", "summary"])
-    new_row = pd.DataFrame(
-        [[datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%H:%M"), summary]],
-        columns=["date", "time", "summary"],
+def main(
+    argv: Optional[Iterable[str]] = None,
+    *,
+    input_df: Optional[pd.DataFrame] = None,
+    output_dir: Optional[Path] = None,
+) -> int:
+    _ensure_logger()
+    args = parse_args(argv)
+    base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
+    source_path = Path(args.source) if args.source else base_dir / "data" / "screener_source.csv"
+    now = datetime.now(timezone.utc)
+
+    frame = input_df if input_df is not None else _load_source_dataframe(source_path)
+    top_df, scored_df, stats, skip_reasons = run_screener(
+        frame,
+        top_n=args.top_n,
+        min_history=args.min_history,
+        now=now,
     )
-    summary_df = pd.concat([summary_df, new_row], ignore_index=True)
-    write_csv_atomic(summary_path, summary_df)
-    logger.info("Screener script finished.")
+    write_outputs(base_dir, top_df, scored_df, stats, skip_reasons, status="ok", now=now)
+    LOGGER.info(
+        "Screener complete: %d symbols examined, %d candidates.",
+        stats["symbols_in"],
+        stats["candidates_out"],
+    )
+    return 0
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logger.error("Unhandled exception in Screener: %s", e, exc_info=True)
-        sys.exit(1)
-    else:
-        logger.info("Screener completed successfully")
-    finally:
-        end_time = datetime.utcnow()
-        elapsed_time = end_time - start_time
-        logger.info("Script finished in %s", elapsed_time)
-        sys.exit(0)
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
+    raise SystemExit(main())

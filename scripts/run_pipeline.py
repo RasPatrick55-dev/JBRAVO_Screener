@@ -1,5 +1,11 @@
-import os, sys, subprocess
+import os
+import sys
+import subprocess
 from pathlib import Path
+
+import pandas as pd
+
+from utils import write_csv_atomic
 
 
 def repo_root() -> Path:
@@ -14,17 +20,51 @@ def emit(evt, **kvs):
 
 
 def main():
-    os.chdir(repo_root())
+    root = repo_root()
+    os.chdir(root)
     emit("PIPELINE_START", component="pipeline")
 
     try:
-        # ---- screener step (wrap to log error instead of hard crash) ----
-        try:
-            # from scripts.screener import run as run_screener
-            # run_screener()
-            pass  # leave for now; we'll fix screener in step 4
-        except Exception as e:
-            emit("SCREENER_ERROR", component="pipeline", error=str(e).replace(" ", "_"))
+        # ---- screener step ----
+        result = subprocess.run(
+            [sys.executable, "scripts/screener.py"],
+            cwd=root,
+        )
+
+        if result.returncode != 0:
+            emit(
+                "SCREENER_ERROR",
+                component="pipeline",
+                returncode=str(result.returncode),
+            )
+            print("Screener step failed (non-zero exit); dashboard will show stale.")
+        else:
+            emit("SCREENER_SUCCESS", component="pipeline")
+            top_path = root / "data" / "top_candidates.csv"
+            latest_path = root / "data" / "latest_candidates.csv"
+            if top_path.exists():
+                try:
+                    df = pd.read_csv(top_path)
+                    write_csv_atomic(str(latest_path), df)
+                    emit(
+                        "LATEST_UPDATED",
+                        component="pipeline",
+                        rows=str(len(df)),
+                    )
+                    print(
+                        f"Copied {len(df)} rows from top_candidates.csv to latest_candidates.csv."
+                    )
+                except Exception as copy_exc:
+                    emit(
+                        "LATEST_COPY_FAILED",
+                        component="pipeline",
+                        error=str(copy_exc).replace(" ", "_"),
+                    )
+            else:
+                emit("TOP_MISSING", component="pipeline")
+                print(
+                    "top_candidates.csv not found after screener run; latest_candidates.csv left untouched."
+                )
 
         # ---- executor import ----
         try:
