@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from scripts.utils.dataframe_utils import to_bars_df
+from scripts.utils.dataframe_utils import BARS_COLUMNS, to_bars_df
 
 
 pytestmark = pytest.mark.alpaca_optional
@@ -29,15 +29,7 @@ def test_to_bars_df_handles_multiindex():
             self.data = {"AAPL": [], "MSFT": []}
 
     out = to_bars_df(Obj(df))
-    assert list(out.columns) == [
-        "symbol",
-        "timestamp",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-    ]
+    assert list(out.columns) == BARS_COLUMNS
     assert out["symbol"].tolist() == ["AAPL", "MSFT"]
 
 
@@ -56,6 +48,7 @@ def test_to_bars_df_handles_dict_of_lists():
             self.data = {"aapl": [Bar("AAPL")], "msft": []}
 
     out = to_bars_df(Container())
+    assert list(out.columns) == BARS_COLUMNS
     assert out.shape == (1, 7)
     assert out.loc[0, "symbol"] == "AAPL"
 
@@ -65,13 +58,22 @@ def test_to_bars_df_handles_http_payload():
         {"S": "msft", "t": "2024-10-01T00:00:00Z", "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 200}
     ]
     out = to_bars_df(payload)
+    assert list(out.columns) == BARS_COLUMNS
     assert out.loc[0, "symbol"] == "MSFT"
-    assert list(out.columns) == [
-        "symbol",
-        "timestamp",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-    ]
+
+
+def test_to_bars_df_handles_dataframe_with_named_index():
+    df = pd.DataFrame(
+        {
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.05],
+            "volume": [1000],
+        },
+        index=pd.MultiIndex.from_tuples([("spy", "2024-10-01")], names=["symbol", "timestamp"]),
+    )
+
+    out = to_bars_df(df)
+    assert list(out.columns) == BARS_COLUMNS
+    assert out.loc[0, "symbol"] == "SPY"

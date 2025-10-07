@@ -278,6 +278,14 @@ def _collect_batch_pages(
             return [], page_count, paged, columns_desc, False
         page_count += 1
         df = to_bars_df(response)
+        if "symbol" not in df.columns:
+            LOGGER.error(
+                "Bars normalize failed: type=%s has attributes df=%s data=%s; df_cols=%s",
+                type(response).__name__,
+                hasattr(response, "df"),
+                hasattr(response, "data"),
+                list(getattr(getattr(response, "df", pd.DataFrame()), "columns", [])),
+            )
         columns_desc = ",".join(df.columns)
         if df.empty or "symbol" not in df.columns:
             return [], page_count, paged, columns_desc, False
@@ -369,10 +377,7 @@ def _fetch_daily_bars(
                     request = _make_stock_bars_request(**request_kwargs)
                     token_bucket.acquire()
                     response = data_client.get_stock_bars(request)
-                    df = to_bars_df(response)
-                    if "symbol" not in df.columns:
-                        df = df.copy()
-                        df["symbol"] = symbol
+                    df = to_bars_df(response, symbol_hint=symbol)
                     return symbol, df
                 except Exception as exc:  # pragma: no cover - network errors hit in integration
                     status = getattr(exc, "status_code", None)
@@ -403,6 +408,15 @@ def _fetch_daily_bars(
                     sym = symbol
                     df = pd.DataFrame(columns=BARS_COLUMNS)
                 pages += 1
+                if df.empty:
+                    local_prescreened[sym] = "NAN_DATA"
+                    continue
+                if "symbol" not in df.columns:
+                    LOGGER.error(
+                        "Normalized bars missing 'symbol'; skipping symbol %s", sym
+                    )
+                    local_prescreened[sym] = "NAN_DATA"
+                    continue
                 normalized = _normalize_bars_frame(df)
                 if normalized.empty:
                     local_prescreened[sym] = "NAN_DATA"
@@ -456,7 +470,13 @@ def _fetch_daily_bars(
                     prescreened[sym] = "NAN_DATA"
 
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
+    if not combined.empty and "symbol" not in combined.columns:
+        LOGGER.error("Normalized bars missing 'symbol'; dropping combined frame")
+        combined = pd.DataFrame(columns=BARS_COLUMNS)
     combined = _normalize_bars_frame(combined)
+    if not combined.empty and "symbol" not in combined.columns:
+        LOGGER.error("Normalized bars missing 'symbol' after normalization; clearing frame")
+        combined = pd.DataFrame(columns=BARS_COLUMNS)
     if not combined.empty:
         try:
             combined = (
