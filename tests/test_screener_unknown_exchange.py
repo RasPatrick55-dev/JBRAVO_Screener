@@ -1,8 +1,6 @@
 import json
 from datetime import datetime, timezone
 
-import json
-
 import numpy as np
 import pandas as pd
 
@@ -74,7 +72,14 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     df = _sample_universe()
     now = datetime(2024, 1, 10, 14, tzinfo=timezone.utc)
 
-    top_df, scored_df, stats, skips, reject_samples = screener.run_screener(
+    (
+        top_df,
+        scored_df,
+        stats,
+        skips,
+        reject_samples,
+        gate_counters,
+    ) = screener.run_screener(
         df,
         top_n=5,
         min_history=2,
@@ -88,7 +93,16 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     assert "EQ1" in scored_df["symbol"].tolist()
 
     metrics_path = screener.write_outputs(
-        tmp_path, top_df, scored_df, stats, skips, reject_samples, now=now
+        tmp_path,
+        top_df,
+        scored_df,
+        stats,
+        skips,
+        reject_samples,
+        now=now,
+        gate_counters=gate_counters,
+        fetch_metrics={},
+        asset_metrics={},
     )
 
     top_path = tmp_path / "data" / "top_candidates.csv"

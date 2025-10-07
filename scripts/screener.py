@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, List, Dict
+from typing import Iterable, Optional, Tuple, List, Dict, Any, Callable
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -15,16 +19,16 @@ import requests
 
 try:  # pragma: no cover - preferred module execution path
     from .indicators import adx, aroon, macd, obv, rsi
-    from .utils.dataframe_utils import to_bars_df
-    from .utils.models import BarData, classify_exchange
+    from .utils.dataframe_utils import to_bars_df, BARS_COLUMNS
+    from .utils.models import BarData, classify_exchange, KNOWN_EQUITY
 except Exception:  # pragma: no cover - fallback for direct script execution
     import os as _os
     import sys as _sys
 
     _sys.path.append(_os.path.dirname(_os.path.dirname(__file__)))
     from scripts.indicators import adx, aroon, macd, obv, rsi  # type: ignore
-    from scripts.utils.dataframe_utils import to_bars_df  # type: ignore
-    from scripts.utils.models import BarData, classify_exchange  # type: ignore
+    from scripts.utils.dataframe_utils import to_bars_df, BARS_COLUMNS  # type: ignore
+    from scripts.utils.models import BarData, classify_exchange, KNOWN_EQUITY  # type: ignore
 
 from utils.env import load_env, get_alpaca_creds
 from utils.io_utils import atomic_write_bytes
@@ -160,6 +164,48 @@ def _resolve_feed(feed: str):
     return value
 
 
+class _TokenBucket:
+    def __init__(self, max_per_minute: int) -> None:
+        self.max_per_minute = max(1, int(max_per_minute or 1))
+        self.timestamps = collections.deque()
+        self.lock = threading.Lock()
+
+    def acquire(self) -> None:
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                cutoff = now - 60
+                while self.timestamps and self.timestamps[0] < cutoff:
+                    self.timestamps.popleft()
+                if len(self.timestamps) < self.max_per_minute:
+                    self.timestamps.append(now)
+                    return
+                sleep_for = max(self.timestamps[0] + 60 - now, 0.01)
+            time.sleep(min(sleep_for, 0.5))
+
+
+def _make_stock_bars_request(**kwargs: Any):
+    if StockBarsRequest is None:
+        raise RuntimeError("alpaca-py market data components unavailable")
+    attempts: list[dict[str, Any]] = []
+    base = dict(kwargs)
+    attempts.append(base)
+    attempts.append({k: v for k, v in base.items() if k != "adjustment"})
+    attempts.append({k: v for k, v in base.items() if k not in {"adjustment", "feed"}})
+    attempts.append({k: v for k, v in base.items() if k not in {"adjustment", "feed", "page_token"}})
+    attempts.append({k: v for k, v in base.items() if k not in {"adjustment", "feed", "page_token", "limit"}})
+    last_exc: Optional[Exception] = None
+    for attempt in attempts:
+        try:
+            return StockBarsRequest(**attempt)
+        except TypeError as exc:  # pragma: no cover - depends on SDK version
+            last_exc = exc
+            continue
+    if last_exc:
+        raise last_exc
+    return StockBarsRequest(**base)
+
+
 def _create_trading_client() -> "TradingClient":
     if TradingClient is None:
         raise RuntimeError("alpaca-py TradingClient is unavailable")
@@ -186,16 +232,89 @@ def _create_data_client() -> "StockHistoricalDataClient":
     return StockHistoricalDataClient(api_key, api_secret)
 
 
+def _normalize_bars_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    frame = df.copy()
+    frame["symbol"] = frame["symbol"].astype(str).str.strip().str.upper()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+    frame.dropna(subset=["symbol", "timestamp"], inplace=True)
+    if frame.empty:
+        return frame
+    frame.sort_values(["symbol", "timestamp"], inplace=True)
+    return frame
+
+
+def _collect_batch_pages(
+    data_client: "StockHistoricalDataClient",
+    request_kwargs: dict[str, Any],
+) -> Tuple[list[pd.DataFrame], int, bool, str, bool]:
+    frames: list[pd.DataFrame] = []
+    next_token: Optional[str] = None
+    page_count = 0
+    paged = False
+    columns_desc = ""
+    while True:
+        kwargs = dict(request_kwargs)
+        if next_token:
+            kwargs["page_token"] = next_token
+        try:
+            request = _make_stock_bars_request(**kwargs)
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to build StockBarsRequest for batch starting %s: %s",
+                request_kwargs.get("symbol_or_symbols"),
+                exc,
+            )
+            return [], page_count, paged, columns_desc, False
+        try:
+            response = data_client.get_stock_bars(request)
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to fetch bars for batch starting %s: %s",
+                request_kwargs.get("symbol_or_symbols"),
+                exc,
+            )
+            return [], page_count, paged, columns_desc, False
+        page_count += 1
+        df = to_bars_df(response)
+        columns_desc = ",".join(df.columns)
+        if df.empty or "symbol" not in df.columns:
+            return [], page_count, paged, columns_desc, False
+        normalized = _normalize_bars_frame(df)
+        if not normalized.empty:
+            frames.append(normalized)
+        next_token = getattr(response, "next_page_token", None)
+        if next_token:
+            paged = True
+        else:
+            break
+    return frames, page_count, paged, columns_desc, True
+
+
 def _fetch_daily_bars(
     data_client: "StockHistoricalDataClient",
     symbols: List[str],
     *,
     days: int,
     feed: str,
+    fetch_mode: str,
+    batch_size: int,
+    max_workers: int,
+    min_history: int,
     now: Optional[datetime] = None,
-) -> Tuple[pd.DataFrame, int]:
+) -> Tuple[pd.DataFrame, dict[str, int | list[str]], Dict[str, str]]:
     if not symbols:
-        return pd.DataFrame(columns=INPUT_COLUMNS), 0
+        return pd.DataFrame(columns=INPUT_COLUMNS), {
+            "batches_total": 0,
+            "batches_paged": 0,
+            "pages_total": 0,
+            "bars_rows_total": 0,
+            "symbols_with_bars": 0,
+            "symbols_no_bars": [],
+            "fallback_batches": 0,
+            "insufficient_history": 0,
+        }, {}
     if StockBarsRequest is None or TimeFrame is None:
         raise RuntimeError("alpaca-py market data components unavailable")
 
@@ -214,82 +333,220 @@ def _fetch_daily_bars(
     start = _as_midnight(start_session)
     end = _as_midnight(last_session) + timedelta(days=1)
 
-    frames: List[pd.DataFrame] = []
-    batch_failures = 0
-    for batch in _chunked(symbols, BARS_BATCH_SIZE):
-        request_kwargs = {
-            "symbol_or_symbols": batch,
-            "timeframe": TimeFrame.Day,
-            "start": start,
-            "end": end,
-            "feed": _resolve_feed(feed),
-        }
-        try:
-            request = StockBarsRequest(limit=days, **request_kwargs)
-        except TypeError:  # pragma: no cover - limit added in newer SDKs
-            request = StockBarsRequest(**request_kwargs)
-        success = False
-        last_error: Optional[Exception] = None
-        for attempt in range(BAR_MAX_RETRIES):
-            try:
-                response = data_client.get_stock_bars(request)
-                normalized = to_bars_df(response)
+    unique_symbols = [str(sym or "").strip().upper() for sym in symbols if sym]
+    unique_symbols = list(dict.fromkeys(unique_symbols))
+    metrics: dict[str, int | list[str]] = {
+        "batches_total": 0,
+        "batches_paged": 0,
+        "pages_total": 0,
+        "bars_rows_total": 0,
+        "symbols_with_bars": 0,
+        "symbols_no_bars": [],
+        "fallback_batches": 0,
+        "insufficient_history": 0,
+    }
+    prescreened: dict[str, str] = {}
+
+    frames: list[pd.DataFrame] = []
+
+    def fetch_single_collection(target_symbols: List[str]) -> Tuple[pd.DataFrame, int, Dict[str, str]]:
+        token_bucket = _TokenBucket(200)
+        local_frames: list[pd.DataFrame] = []
+        local_prescreened: dict[str, str] = {}
+
+        def _worker(symbol: str) -> Tuple[str, pd.DataFrame]:
+            request_kwargs = {
+                "symbol_or_symbols": symbol,
+                "timeframe": TimeFrame.Day,
+                "start": start,
+                "end": end,
+                "feed": _resolve_feed(feed),
+                "adjustment": "raw",
+                "limit": days,
+            }
+            for attempt in range(BAR_MAX_RETRIES):
+                try:
+                    request = _make_stock_bars_request(**request_kwargs)
+                    token_bucket.acquire()
+                    response = data_client.get_stock_bars(request)
+                    df = to_bars_df(response)
+                    if "symbol" not in df.columns:
+                        df = df.copy()
+                        df["symbol"] = symbol
+                    return symbol, df
+                except Exception as exc:  # pragma: no cover - network errors hit in integration
+                    status = getattr(exc, "status_code", None)
+                    if status in BAR_RETRY_STATUSES and attempt < BAR_MAX_RETRIES - 1:
+                        sleep_for = 2 ** attempt
+                        LOGGER.warning(
+                            "Retrying single-symbol fetch for %s (attempt %d/%d) after %s",
+                            symbol,
+                            attempt + 1,
+                            BAR_MAX_RETRIES,
+                            exc,
+                        )
+                        time.sleep(sleep_for)
+                        continue
+                    LOGGER.warning("Failed to fetch single-symbol bars for %s: %s", symbol, exc)
+                    break
+            return symbol, pd.DataFrame(columns=BARS_COLUMNS)
+
+        pages = 0
+        with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
+            futures = {executor.submit(_worker, symbol): symbol for symbol in target_symbols}
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    sym, df = future.result()
+                except Exception as exc:  # pragma: no cover - unexpected failure path
+                    LOGGER.error("Single-symbol worker failed for %s: %s", symbol, exc)
+                    sym = symbol
+                    df = pd.DataFrame(columns=BARS_COLUMNS)
+                pages += 1
+                normalized = _normalize_bars_frame(df)
                 if normalized.empty:
-                    LOGGER.warning(
-                        "No bars returned for batch of %d symbols", len(batch)
-                    )
-                    success = True
-                    break
-                if "symbol" not in normalized.columns:
-                    LOGGER.error(
-                        "Normalized bars missing 'symbol' unexpectedly; skipping batch"
-                    )
-                    break
-                normalized = normalized.copy()
-                normalized["timestamp"] = pd.to_datetime(
-                    normalized["timestamp"], utc=True, errors="coerce"
-                )
-                normalized.dropna(subset=["timestamp"], inplace=True)
-                if not normalized.empty:
-                    frames.append(normalized)
-                success = True
-                break
-            except Exception as exc:  # pragma: no cover - network errors exercised in integration
-                last_error = exc
-                status = getattr(exc, "status_code", None)
-                if status in BAR_RETRY_STATUSES and attempt < BAR_MAX_RETRIES - 1:
-                    sleep_for = 2 ** attempt
-                    LOGGER.warning(
-                        "Retrying Alpaca bars fetch (batch size %d, attempt %d/%d) after error %s",
-                        len(batch),
-                        attempt + 1,
-                        BAR_MAX_RETRIES,
-                        exc,
-                    )
-                    time.sleep(sleep_for)
+                    local_prescreened[sym] = "NAN_DATA"
                     continue
-                LOGGER.warning("Failed to fetch bars for batch starting %s: %s", batch[:3], exc)
-                break
-        if not success:
-            batch_failures += 1
-            if last_error is not None:
-                LOGGER.debug("Final error for batch %s: %s", batch[:3], last_error)
+                local_frames.append(normalized)
 
-    if not frames:
-        return pd.DataFrame(columns=INPUT_COLUMNS), batch_failures
+        merged = pd.concat(local_frames, ignore_index=True) if local_frames else pd.DataFrame(columns=BARS_COLUMNS)
+        return merged, pages, local_prescreened
 
-    combined = pd.concat(frames, ignore_index=True)
-    combined.dropna(subset=["symbol", "timestamp"], inplace=True)
-    combined.sort_values(["symbol", "timestamp"], inplace=True)
-    grouped = combined.groupby("symbol", group_keys=False)
-    try:
-        limited = grouped.apply(
-            lambda g: g.sort_values("timestamp").tail(days), include_groups=False
-        )
-    except TypeError:  # pragma: no cover - for older pandas without include_groups
-        limited = grouped.apply(lambda g: g.sort_values("timestamp").tail(days))
-    limited = limited.reset_index(drop=True)
-    return limited, batch_failures
+    if fetch_mode == "single":
+        single_frame, single_pages, single_prescreened = fetch_single_collection(unique_symbols)
+        frames.append(single_frame)
+        metrics["pages_total"] += single_pages
+        prescreened.update(single_prescreened)
+    else:
+        batches = list(_chunked(unique_symbols, max(1, batch_size)))
+        metrics["batches_total"] = len(batches)
+        for index, batch in enumerate(batches, start=1):
+            request_kwargs = {
+                "symbol_or_symbols": batch if len(batch) > 1 else batch[0],
+                "timeframe": TimeFrame.Day,
+                "start": start,
+                "end": end,
+                "feed": _resolve_feed(feed),
+                "adjustment": "raw",
+            }
+            batch_frames, page_count, paged, columns_desc, batch_success = _collect_batch_pages(
+                data_client, request_kwargs
+            )
+            metrics["pages_total"] += page_count
+            if paged:
+                metrics["batches_paged"] += 1
+            if batch_success and batch_frames:
+                frames.append(pd.concat(batch_frames, ignore_index=True))
+                continue
+            if fetch_mode == "auto":
+                metrics["fallback_batches"] += 1
+                LOGGER.warning(
+                    "[WARN] Batch %d/%d: bars normalize failed (cols=%s); falling back to single-symbol fetch for %d symbols",
+                    index,
+                    len(batches),
+                    columns_desc or "<unknown>",
+                    len(batch),
+                )
+                single_frame, single_pages, single_prescreened = fetch_single_collection(batch)
+                frames.append(single_frame)
+                metrics["pages_total"] += single_pages
+                prescreened.update(single_prescreened)
+            else:
+                for sym in batch:
+                    prescreened[sym] = "NAN_DATA"
+
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
+    combined = _normalize_bars_frame(combined)
+    if not combined.empty:
+        try:
+            combined = (
+                combined.groupby("symbol", group_keys=False)
+                .apply(lambda g: g.sort_values("timestamp").tail(days), include_groups=False)
+            )
+        except TypeError:  # pragma: no cover - for older pandas without include_groups
+            combined = combined.groupby("symbol", group_keys=False).apply(
+                lambda g: g.sort_values("timestamp").tail(days)
+            )
+        combined = combined.reset_index(drop=True)
+
+    if not combined.empty and min_history > 0:
+        counts = combined.groupby("symbol")["timestamp"].count()
+        insufficient = [sym for sym, count in counts.items() if count < min_history]
+        if insufficient:
+            metrics["insufficient_history"] = len(insufficient)
+            for sym in insufficient:
+                prescreened.setdefault(sym, "INSUFFICIENT_HISTORY")
+            combined = combined[~combined["symbol"].isin(insufficient)]
+
+    symbols_with_bars = set(combined["symbol"].unique()) if not combined.empty else set()
+    metrics["bars_rows_total"] = int(combined.shape[0])
+    metrics["symbols_with_bars"] = len(symbols_with_bars)
+    missing = [sym for sym in unique_symbols if sym not in symbols_with_bars]
+    for sym in missing:
+        prescreened.setdefault(sym, "NAN_DATA")
+    metrics["symbols_no_bars"] = missing[:10]
+
+    return combined, metrics, prescreened
+
+
+def merge_asset_metadata(bars_df: pd.DataFrame, asset_meta: Dict[str, dict]) -> pd.DataFrame:
+    if bars_df.empty:
+        if not asset_meta:
+            return bars_df
+        result = bars_df.copy()
+    else:
+        result = bars_df.copy()
+        result["symbol"] = result["symbol"].astype(str).str.strip().str.upper()
+
+    if asset_meta:
+        meta_rows: list[dict[str, object]] = []
+        for symbol, meta in asset_meta.items():
+            if not symbol:
+                continue
+            cleaned_symbol = str(symbol).strip().upper()
+            details = meta or {}
+            meta_rows.append(
+                {
+                    "symbol": cleaned_symbol,
+                    "exchange": str(details.get("exchange", "") or "").strip().upper(),
+                    "asset_class": str(details.get("asset_class", "") or "").strip().upper(),
+                    "tradable": bool(details.get("tradable", True)),
+                }
+            )
+        meta_df = pd.DataFrame(meta_rows)
+        if not meta_df.empty:
+            meta_df = meta_df.drop_duplicates(subset=["symbol"], keep="first")
+            result = result.merge(meta_df, on="symbol", how="left")
+
+    for column in ["exchange", "asset_class"]:
+        if column not in result.columns:
+            result[column] = ""
+        result[column] = result[column].fillna("").astype(str).str.strip().str.upper()
+    if "tradable" not in result.columns:
+        result["tradable"] = True
+    else:
+        result["tradable"] = result["tradable"].fillna(True).astype(bool)
+
+    def _kind_from_row(row: pd.Series) -> str:
+        exchange = str(row.get("exchange", "") or "").strip().upper()
+        asset_class = str(row.get("asset_class", "") or "").strip().upper()
+        if exchange in KNOWN_EQUITY:
+            return "EQUITY"
+        if not exchange and asset_class in {"US_EQUITY", "EQUITY"}:
+            return "EQUITY"
+        if exchange:
+            classified = classify_exchange(exchange)
+            if classified == "EQUITY":
+                return classified
+            if classified == "OTHER" and asset_class in {"US_EQUITY", "EQUITY"}:
+                return "EQUITY"
+            return classified
+        if asset_class in {"US_EQUITY", "EQUITY"}:
+            return "EQUITY"
+        return "OTHER"
+
+    result["kind"] = result.apply(_kind_from_row, axis=1)
+    return result
 
 
 def _load_alpaca_universe(
@@ -298,19 +555,61 @@ def _load_alpaca_universe(
     days: int,
     feed: str,
     limit: Optional[int],
+    fetch_mode: str,
+    batch_size: int,
+    max_workers: int,
+    min_history: int,
+    exclude_otc: bool,
     now: datetime,
-) -> Tuple[pd.DataFrame, Dict[str, dict]]:
+) -> Tuple[
+    pd.DataFrame,
+    Dict[str, dict],
+    dict[str, int | list[str]],
+    Dict[str, str],
+    dict[str, int | list[str]],
+]:
+    empty_metrics = {
+        "batches_total": 0,
+        "batches_paged": 0,
+        "pages_total": 0,
+        "bars_rows_total": 0,
+        "symbols_with_bars": 0,
+        "symbols_no_bars": [],
+        "fallback_batches": 0,
+        "insufficient_history": 0,
+    }
+    empty_asset_metrics = {
+        "assets_total": 0,
+        "assets_tradable_equities": 0,
+        "assets_after_filters": 0,
+    }
     try:
         trading_client = _create_trading_client()
     except Exception as exc:
         LOGGER.error("Unable to create Alpaca trading client: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS), {}
+        return pd.DataFrame(columns=INPUT_COLUMNS), {}, empty_metrics, {}, empty_asset_metrics
 
     try:
-        symbols, asset_meta = fetch_active_equity_symbols(trading_client, base_dir=base_dir)
+        symbols, asset_meta, asset_metrics = fetch_active_equity_symbols(
+            trading_client,
+            base_dir=base_dir,
+            exclude_otc=exclude_otc,
+        )
     except Exception as exc:
         LOGGER.error("Failed to fetch Alpaca asset universe: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS), {}
+        return pd.DataFrame(columns=INPUT_COLUMNS), {}, empty_metrics, {}, empty_asset_metrics
+
+    LOGGER.info(
+        "Asset metrics: total=%d tradable_equities=%d after_filters=%d",
+        int(asset_metrics.get("assets_total", 0)),
+        int(asset_metrics.get("assets_tradable_equities", 0)),
+        int(asset_metrics.get("assets_after_filters", 0)),
+    )
+    if asset_meta:
+        sample = list(asset_meta.items())[:5]
+        sample_str = ", ".join(f"{sym}:{meta.get('exchange', '')}" for sym, meta in sample)
+        LOGGER.info("Asset sample: %s", sample_str)
+
     asset_meta = {
         str(symbol).strip().upper(): dict(meta or {})
         for symbol, meta in (asset_meta or {}).items()
@@ -332,79 +631,56 @@ def _load_alpaca_universe(
         asset_meta = {sym: asset_meta.get(sym, {}) for sym in symbols if sym in asset_meta}
 
     if not symbols:
-        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta
+        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, empty_metrics, {}, asset_metrics
 
     try:
         data_client = _create_data_client()
     except Exception as exc:
         LOGGER.error("Unable to create Alpaca market data client: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta
+        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, empty_metrics, {}, asset_metrics
 
-    bars_df, batch_failures = _fetch_daily_bars(
+    bars_df, fetch_metrics, prescreened = _fetch_daily_bars(
         data_client,
         symbols,
         days=days,
         feed=feed,
+        fetch_mode=fetch_mode,
+        batch_size=max(1, batch_size),
+        max_workers=max(1, max_workers),
+        min_history=min_history,
         now=now,
     )
-    if batch_failures:
-        LOGGER.warning("Failed to fetch %d symbol batches from Alpaca market data.", batch_failures)
+    LOGGER.info(
+        "Bars fetch metrics: batches=%d paged=%d pages=%d rows=%d symbols_with_bars=%d",
+        int(fetch_metrics.get("batches_total", 0)),
+        int(fetch_metrics.get("batches_paged", 0)),
+        int(fetch_metrics.get("pages_total", 0)),
+        int(fetch_metrics.get("bars_rows_total", 0)),
+        int(fetch_metrics.get("symbols_with_bars", 0)),
+    )
+    missing_symbols = fetch_metrics.get("symbols_no_bars", [])
+    if missing_symbols:
+        LOGGER.info("Symbols without bars (sample): %s", list(missing_symbols)[:10])
+    if fetch_metrics.get("fallback_batches"):
+        LOGGER.info(
+            "Fallback batches invoked: %d",
+            int(fetch_metrics.get("fallback_batches", 0)),
+        )
+    if fetch_metrics.get("insufficient_history"):
+        LOGGER.info(
+            "Symbols dropped for insufficient history: %d",
+            int(fetch_metrics.get("insufficient_history", 0)),
+        )
+
     if not bars_df.empty:
         bars_df = bars_df.copy()
         if "symbol" not in bars_df.columns:
             LOGGER.error(
                 "Normalized bars missing 'symbol' unexpectedly; skipping merge"
             )
-            return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta
-        bars_df["symbol"] = bars_df["symbol"].astype(str).str.strip().str.upper()
-        if asset_meta:
-            bar_symbols = set(bars_df["symbol"].dropna().unique())
-            meta_rows = [
-                (
-                    str(symbol).strip().upper(),
-                    str((meta or {}).get("exchange", "") or "").strip().upper(),
-                    str((meta or {}).get("asset_class", "") or "").strip().upper(),
-                )
-                for symbol, meta in asset_meta.items()
-                if symbol in bar_symbols
-            ]
-            meta_df = (
-                pd.DataFrame(meta_rows, columns=["symbol", "exchange", "asset_class"])
-                if meta_rows
-                else pd.DataFrame(columns=["symbol", "exchange", "asset_class"])
-            )
-            if not meta_df.empty:
-                meta_df = meta_df.drop_duplicates(subset=["symbol"], keep="first")
-                bars_df = bars_df.merge(meta_df, on="symbol", how="left")
-        if "exchange" not in bars_df.columns:
-            bars_df["exchange"] = ""
-        if "asset_class" not in bars_df.columns:
-            bars_df["asset_class"] = ""
-        bars_df["exchange"] = bars_df["exchange"].fillna("").astype(str).str.strip().str.upper()
-        bars_df["asset_class"] = (
-            bars_df["asset_class"].fillna("").astype(str).str.strip().str.upper()
-        )
-
-        known_equity = {"NASDAQ", "NYSE", "ARCA", "AMEX", "BATS", "NYSEARCA"}
-
-        def _classify_exchange(raw: str) -> str:
-            raw = (raw or "").strip().upper()
-            if raw in known_equity:
-                return "EQUITY"
-            if "CRYPTO" in raw:
-                return "CRYPTO"
-            return "OTHER"
-
-        exchange_kind = bars_df["exchange"].apply(_classify_exchange)
-        promote_mask = (exchange_kind == "OTHER") & (
-            bars_df["asset_class"].isin(["US_EQUITY", "EQUITY"])
-        )
-        if promote_mask.any():
-            bars_df.loc[promote_mask, "exchange"] = bars_df.loc[
-                promote_mask, "exchange"
-            ].mask(lambda s: s.str.len() == 0, "NASDAQ")
-        bars_df["kind"] = bars_df["exchange"].apply(_classify_exchange)
-    return bars_df, asset_meta
+            return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, fetch_metrics, prescreened, asset_metrics
+        bars_df = merge_asset_metadata(bars_df, asset_meta)
+    return bars_df, asset_meta, fetch_metrics, prescreened, asset_metrics
 
 
 def _ensure_logger() -> None:
@@ -471,10 +747,19 @@ def _asset_attr(asset: object, *names: str) -> object:
     return None
 
 
-def _filter_equity_assets(assets: Iterable[object]) -> Tuple[List[str], Dict[str, dict]]:
+def _filter_equity_assets(
+    assets: Iterable[object], *, exclude_otc: bool
+) -> Tuple[List[str], Dict[str, dict], dict[str, int]]:
+    allowed_exchanges = {"NASDAQ", "NYSE", "ARCA", "AMEX", "BATS", "NYSEARCA"}
     symbols: set[str] = set()
     asset_meta: dict[str, dict[str, object]] = {}
+    metrics = {
+        "assets_total": 0,
+        "assets_tradable_equities": 0,
+        "assets_after_filters": 0,
+    }
     for asset in assets:
+        metrics["assets_total"] += 1
         tradable_raw = _asset_attr(asset, "tradable")
         tradable = bool(tradable_raw) if tradable_raw is not None else True
         if not tradable:
@@ -488,11 +773,15 @@ def _filter_equity_assets(assets: Iterable[object]) -> Tuple[List[str], Dict[str
         if cls not in {"US_EQUITY", "EQUITY"}:
             continue
 
+        metrics["assets_tradable_equities"] += 1
+
         symbol = _enum_to_str(_asset_attr(asset, "symbol")).strip().upper()
         if not symbol:
             continue
 
         exchange = _enum_to_str(_asset_attr(asset, "exchange", "primary_exchange")).strip().upper()
+        if exclude_otc and exchange not in allowed_exchanges:
+            continue
 
         symbols.add(symbol)
         asset_meta[symbol] = {
@@ -500,12 +789,13 @@ def _filter_equity_assets(assets: Iterable[object]) -> Tuple[List[str], Dict[str
             "asset_class": cls,
             "tradable": tradable,
         }
+        metrics["assets_after_filters"] += 1
 
     LOGGER.info("Asset meta ready: %d symbols (tradable US equities)", len(asset_meta))
-    return sorted(symbols), asset_meta
+    return sorted(symbols), asset_meta, metrics
 
 
-def _fetch_assets_via_sdk(trading_client) -> Tuple[List[str], Dict[str, dict]]:
+def _fetch_assets_via_sdk(trading_client, *, exclude_otc: bool) -> Tuple[List[str], Dict[str, dict], dict[str, int]]:
     if trading_client is None:
         raise RuntimeError("Trading client is unavailable")
     try:
@@ -519,14 +809,14 @@ def _fetch_assets_via_sdk(trading_client) -> Tuple[List[str], Dict[str, dict]]:
             assets = trading_client.get_all_assets(request)
     except Exception as exc:
         raise RuntimeError(str(exc)) from exc
-    return _filter_equity_assets(assets)
+    return _filter_equity_assets(assets, exclude_otc=exclude_otc)
 
 
-def _fetch_assets_via_http() -> Tuple[List[str], Dict[str, dict]]:
+def _fetch_assets_via_http(exclude_otc: bool) -> Tuple[List[str], Dict[str, dict], dict[str, int]]:
     api_key, api_secret, _, _ = get_alpaca_creds()
     if not api_key or not api_secret:
         LOGGER.warning("Alpaca credentials missing; cannot fetch assets via HTTP fallback.")
-        return [], {}
+        return [], {}, {"assets_total": 0, "assets_tradable_equities": 0, "assets_after_filters": 0}
 
     base_url = _determine_alpaca_base_url()
     url = f"{base_url}/v2/assets"
@@ -536,38 +826,44 @@ def _fetch_assets_via_http() -> Tuple[List[str], Dict[str, dict]]:
             params={"status": "active", "asset_class": "us_equity"},
             headers={
                 "APCA-API-KEY-ID": api_key,
-                "APCA-API-SECRET-KEY": api_secret,
-            },
-            timeout=ASSET_HTTP_TIMEOUT,
-        )
+            "APCA-API-SECRET-KEY": api_secret,
+        },
+        timeout=ASSET_HTTP_TIMEOUT,
+    )
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
         LOGGER.warning("Raw Alpaca asset fetch failed: %s", exc)
-        return [], {}
+        return [], {}, {"assets_total": 0, "assets_tradable_equities": 0, "assets_after_filters": 0}
 
     if not isinstance(payload, list):
         LOGGER.warning("Unexpected payload from Alpaca assets endpoint: %s", type(payload))
-        return [], {}
+        return [], {}, {"assets_total": 0, "assets_tradable_equities": 0, "assets_after_filters": 0}
 
-    filtered, asset_meta = _filter_equity_assets(payload)
-    return filtered, asset_meta
+    filtered, asset_meta, metrics = _filter_equity_assets(payload, exclude_otc=exclude_otc)
+    return filtered, asset_meta, metrics
 
 
 def fetch_active_equity_symbols(
-    trading_client, *, base_dir: Optional[Path] = None
-) -> Tuple[List[str], Dict[str, dict]]:
+    trading_client,
+    *,
+    base_dir: Optional[Path] = None,
+    exclude_otc: bool = True,
+) -> Tuple[List[str], Dict[str, dict], dict[str, int]]:
     """Fetch active US equity symbols from Alpaca with resilient fallbacks."""
 
     cache_path = _assets_cache_path(base_dir)
+    metrics = {"assets_total": 0, "assets_tradable_equities": 0, "assets_after_filters": 0}
     try:
-        symbols, asset_meta = _fetch_assets_via_sdk(trading_client)
+        symbols, asset_meta, metrics = _fetch_assets_via_sdk(
+            trading_client, exclude_otc=exclude_otc
+        )
     except Exception as exc:  # pragma: no cover - requires Alpaca SDK error
         LOGGER.warning("SDK assets fetch failed (%s); falling back to HTTP", exc)
-        symbols, asset_meta = _fetch_assets_via_http()
+        symbols, asset_meta, metrics = _fetch_assets_via_http(exclude_otc)
         if symbols:
             _write_assets_cache(cache_path, symbols)
-            return symbols, asset_meta
+            return symbols, asset_meta, metrics
 
         cached = _read_assets_cache(cache_path)
         if cached:
@@ -575,15 +871,15 @@ def fetch_active_equity_symbols(
                 "Using cached Alpaca assets (%d symbols) after validation failure.",
                 len(cached),
             )
-            return cached, {}
+            return cached, {}, metrics
 
         LOGGER.error("Failed to fetch Alpaca assets; continuing with empty universe.")
-        return [], {}
+        return [], {}, metrics
 
     if symbols:
         _write_assets_cache(cache_path, symbols)
 
-    return symbols, asset_meta
+    return symbols, asset_meta, metrics
 
 
 def _prepare_input_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
@@ -685,13 +981,28 @@ def run_screener(
     min_history: int = DEFAULT_MIN_HISTORY,
     now: Optional[datetime] = None,
     asset_meta: Optional[Dict[str, dict]] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame, dict[str, int], dict[str, int]]:
+    prefiltered_skips: Optional[Dict[str, str]] = None,
+) -> Tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    dict[str, int],
+    dict[str, int],
+    list[dict[str, str]],
+    dict[str, int],
+]:
     """Run the screener on ``df`` returning (top, scored, stats, skips)."""
 
     now = now or datetime.now(timezone.utc)
     prepared = _prepare_input_frame(df)
     stats = {"symbols_in": 0, "candidates_out": 0}
     skip_reasons = {key: 0 for key in SKIP_KEYS}
+    gate_counters = {
+        "failed_sma_stack": 0,
+        "failed_rsi": 0,
+        "failed_cross": 0,
+        "nan_data": 0,
+        "insufficient_history": 0,
+    }
     scored_records: list[dict[str, object]] = []
     asset_meta = {str(key).upper(): value for key, value in (asset_meta or {}).items()}
     promoted_symbols: set[str] = set()
@@ -699,8 +1010,25 @@ def run_screener(
 
     def record_reject(symbol: object, reason: str) -> None:
         sym = str(symbol or "").strip().upper() or "<UNKNOWN>"
-        if len(reject_samples) < 50:
+        if len(reject_samples) < 10:
             reject_samples.append({"symbol": sym, "reason": reason})
+
+    prefiltered_map = {
+        str(sym or "").strip().upper(): str(reason or "").strip().upper()
+        for sym, reason in (prefiltered_skips or {}).items()
+    }
+    if prefiltered_map:
+        stats["symbols_in"] += len(prefiltered_map)
+        for sym, reason in prefiltered_map.items():
+            if reason in skip_reasons:
+                skip_reasons[reason] += 1
+            if reason == "NAN_DATA":
+                gate_counters["nan_data"] += 1
+            elif reason == "INSUFFICIENT_HISTORY":
+                gate_counters["insufficient_history"] += 1
+            record_reject(sym, reason or "PREFILTERED")
+        if not prepared.empty:
+            prepared = prepared[~prepared["symbol"].isin(prefiltered_map.keys())]
 
     if prepared.empty:
         LOGGER.info("No input rows supplied to screener; outputs will be empty.")
@@ -709,6 +1037,7 @@ def run_screener(
             stats["symbols_in"] += 1
             if group.empty:
                 skip_reasons["NAN_DATA"] += 1
+                gate_counters["nan_data"] += 1
                 LOGGER.info("[SKIP] %s has no rows", symbol or "<UNKNOWN>")
                 record_reject(symbol, "NAN_DATA")
                 continue
@@ -770,6 +1099,7 @@ def run_screener(
 
             if skip_symbol or not bars:
                 if not bars and not skip_symbol:
+                    gate_counters["nan_data"] += 1
                     record_reject(symbol, "NAN_DATA")
                 continue
 
@@ -784,6 +1114,7 @@ def run_screener(
             clean_df = bars_df.dropna(subset=["close"]).copy()
             if clean_df.empty:
                 skip_reasons["NAN_DATA"] += 1
+                gate_counters["nan_data"] += 1
                 LOGGER.info("[SKIP] %s dropped due to NaN close", symbol or "<UNKNOWN>")
                 record_reject(symbol, "NAN_DATA")
                 continue
@@ -791,12 +1122,14 @@ def run_screener(
             clean_df.dropna(subset=numeric_cols, inplace=True)
             if clean_df.empty:
                 skip_reasons["NAN_DATA"] += 1
+                gate_counters["nan_data"] += 1
                 LOGGER.info("[SKIP] %s dropped due to NaN data", symbol or "<UNKNOWN>")
                 record_reject(symbol, "NAN_DATA")
                 continue
 
             if len(clean_df) < min_history:
                 skip_reasons["INSUFFICIENT_HISTORY"] += 1
+                gate_counters["insufficient_history"] += 1
                 LOGGER.info(
                     "[SKIP] %s insufficient history (%d < %d)",
                     symbol or "<UNKNOWN>",
@@ -810,6 +1143,7 @@ def run_screener(
 
             if len(clean_df) < 2:
                 LOGGER.info("[FILTER] %s does not have enough bars for crossover check", symbol)
+                gate_counters["failed_cross"] += 1
                 record_reject(symbol, "INSUFFICIENT_HISTORY")
                 continue
 
@@ -829,24 +1163,28 @@ def run_screener(
                     "[FILTER] %s missing indicator data for JBravo criteria",
                     symbol or "<UNKNOWN>",
                 )
+                gate_counters["nan_data"] += 1
                 record_reject(symbol, "NAN_DATA")
                 continue
 
             crossed_up = prev_row["close"] < prev_row["sma9"] and curr_row["close"] > curr_row["sma9"]
             if not crossed_up:
                 LOGGER.info("[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>")
+                gate_counters["failed_cross"] += 1
                 record_reject(symbol, "FAILED_CROSS")
                 continue
 
             stacked = curr_row["sma9"] > curr_row["ema20"] > curr_row["sma180"]
             if not stacked:
                 LOGGER.info("[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>")
+                gate_counters["failed_sma_stack"] += 1
                 record_reject(symbol, "FAILED_SMA_STACK")
                 continue
 
             strong_rsi = curr_row["rsi"] > 50
             if not strong_rsi:
                 LOGGER.info("[FILTER] %s failed RSI threshold", symbol or "<UNKNOWN>")
+                gate_counters["failed_rsi"] += 1
                 record_reject(symbol, "FAILED_RSI")
                 continue
 
@@ -897,7 +1235,7 @@ def run_screener(
             json.dumps(sample, sort_keys=True) if sample else "[]",
         )
 
-    return top_df, scored_df, stats, skip_reasons, reject_samples
+    return top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters
 
 
 def _load_source_dataframe(path: Path) -> pd.DataFrame:
@@ -921,6 +1259,9 @@ def write_outputs(
     *,
     status: str = "ok",
     now: Optional[datetime] = None,
+    gate_counters: Optional[dict[str, int]] = None,
+    fetch_metrics: Optional[dict[str, int | list[str]]] = None,
+    asset_metrics: Optional[dict[str, int | list[str]]] = None,
 ) -> Path:
     now = now or datetime.now(timezone.utc)
     data_dir = base_dir / "data"
@@ -940,6 +1281,31 @@ def write_outputs(
         "candidates_out": int(stats.get("candidates_out", 0)),
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
         "status": status,
+    }
+    gate_counts = gate_counters or {}
+    metrics["gate_counters"] = {
+        "failed_sma_stack": int(gate_counts.get("failed_sma_stack", 0)),
+        "failed_rsi": int(gate_counts.get("failed_rsi", 0)),
+        "failed_cross": int(gate_counts.get("failed_cross", 0)),
+        "nan_data": int(gate_counts.get("nan_data", 0)),
+        "insufficient_history": int(gate_counts.get("insufficient_history", 0)),
+    }
+    fetch_payload = fetch_metrics or {}
+    metrics["fetch_metrics"] = {
+        "batches_total": int(fetch_payload.get("batches_total", 0)),
+        "batches_paged": int(fetch_payload.get("batches_paged", 0)),
+        "pages_total": int(fetch_payload.get("pages_total", 0)),
+        "bars_rows_total": int(fetch_payload.get("bars_rows_total", 0)),
+        "symbols_with_bars": int(fetch_payload.get("symbols_with_bars", 0)),
+        "symbols_no_bars": list(fetch_payload.get("symbols_no_bars", [])),
+        "fallback_batches": int(fetch_payload.get("fallback_batches", 0)),
+        "insufficient_history": int(fetch_payload.get("insufficient_history", 0)),
+    }
+    asset_payload = asset_metrics or {}
+    metrics["asset_metrics"] = {
+        "assets_total": int(asset_payload.get("assets_total", 0)),
+        "assets_tradable_equities": int(asset_payload.get("assets_tradable_equities", 0)),
+        "assets_after_filters": int(asset_payload.get("assets_after_filters", 0)),
     }
     if reject_samples:
         metrics["reject_samples"] = reject_samples[:10]
@@ -981,12 +1347,36 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Market data feed to request from Alpaca",
     )
     parser.add_argument(
+        "--fetch-mode",
+        choices=["auto", "batch", "single"],
+        default="auto",
+        help="Strategy for fetching bars: auto (default), batch, or single",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="Batch size for multi-symbol bar requests",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Maximum workers for single-symbol fallback",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         help="Optional symbol limit for development/testing",
     )
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     parser.add_argument("--min-history", type=int, default=DEFAULT_MIN_HISTORY)
+    parser.add_argument(
+        "--exclude-otc",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Exclude OTC symbols from the universe (default: true)",
+    )
     parsed = parser.parse_args(list(argv) if argv is not None else None)
     if getattr(parsed, "source", None):
         parsed.source_csv = parsed.source
@@ -1010,6 +1400,9 @@ def main(
 
     frame: pd.DataFrame
     asset_meta: Dict[str, dict] = {}
+    fetch_metrics: dict[str, int | list[str]] = {}
+    asset_metrics: dict[str, int | list[str]] = {}
+    prescreened: Dict[str, str] = {}
     if input_df is not None:
         frame = input_df
     else:
@@ -1028,19 +1421,31 @@ def main(
                 )
                 universe_mode = "alpaca-active"
         if universe_mode == "alpaca-active":
-            frame, asset_meta = _load_alpaca_universe(
+            (
+                frame,
+                asset_meta,
+                fetch_metrics,
+                prescreened,
+                asset_metrics,
+            ) = _load_alpaca_universe(
                 base_dir=base_dir,
                 days=max(1, args.days),
                 feed=args.feed,
                 limit=args.limit,
+                fetch_mode=args.fetch_mode,
+                batch_size=args.batch_size,
+                max_workers=args.max_workers,
+                min_history=args.min_history,
+                exclude_otc=args.exclude_otc,
                 now=now,
             )
-    top_df, scored_df, stats, skip_reasons, reject_samples = run_screener(
+    top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters = run_screener(
         frame,
         top_n=args.top_n,
         min_history=args.min_history,
         now=now,
         asset_meta=asset_meta,
+        prefiltered_skips=prescreened,
     )
     write_outputs(
         base_dir,
@@ -1051,6 +1456,9 @@ def main(
         reject_samples,
         status="ok",
         now=now,
+        gate_counters=gate_counters,
+        fetch_metrics=fetch_metrics,
+        asset_metrics=asset_metrics,
     )
     LOGGER.info(
         "Screener complete: %d symbols examined, %d candidates.",

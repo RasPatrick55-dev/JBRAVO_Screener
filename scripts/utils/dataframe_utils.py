@@ -1,10 +1,15 @@
 """DataFrame helpers for screener normalization."""
 from __future__ import annotations
 
+from __future__ import annotations
+
+import logging
 from typing import Iterable
 
 import pandas as pd
 
+
+LOGGER = logging.getLogger(__name__)
 
 BARS_COLUMNS = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
 
@@ -58,6 +63,12 @@ def to_bars_df(bars) -> pd.DataFrame:
         for column in BARS_COLUMNS:
             if column not in result.columns:
                 result[column] = pd.NA
+        if "symbol" not in result.columns:
+            LOGGER.warning(
+                "Unable to locate symbol column when normalizing bars; type=%s columns=%s",
+                type(bars),
+                list(result.columns),
+            )
         result["symbol"] = result["symbol"].astype(str).str.upper()
         return result[BARS_COLUMNS].copy()
 
@@ -105,6 +116,12 @@ def to_bars_df(bars) -> pd.DataFrame:
     for column in BARS_COLUMNS:
         if column not in frame.columns:
             frame[column] = pd.NA
+    if "symbol" not in frame.columns:
+        LOGGER.warning(
+            "HTTP bars payload missing symbol column after normalization; type=%s columns=%s",
+            type(bars),
+            list(frame.columns),
+        )
     frame["symbol"] = frame["symbol"].astype(str).str.upper()
     return frame[BARS_COLUMNS].copy()
 
