@@ -24,7 +24,12 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.indicators import adx, aroon, macd, obv, rsi  # type: ignore
     from scripts.utils.models import BarData, classify_exchange  # type: ignore
 
+from utils.env import load_env, get_alpaca_creds
 from utils.io_utils import atomic_write_bytes
+
+load_env()
+_, _, _, _DEFAULT_FEED = get_alpaca_creds()
+DEFAULT_FEED = (_DEFAULT_FEED or "iex").lower()
 
 try:  # pragma: no cover - optional Alpaca dependency import guard
     from alpaca.trading.client import TradingClient
@@ -137,20 +142,24 @@ def _resolve_feed(feed: str):
 def _create_trading_client() -> "TradingClient":
     if TradingClient is None:
         raise RuntimeError("alpaca-py TradingClient is unavailable")
-    api_key = os.environ.get("APCA_API_KEY_ID")
-    api_secret = os.environ.get("APCA_API_SECRET_KEY")
+    api_key, api_secret, base_url, _ = get_alpaca_creds()
     if not api_key or not api_secret:
         raise RuntimeError("Missing Alpaca credentials for trading client")
     env = os.environ.get("APCA_API_ENV", "paper").lower()
     paper = env != "live"
+    if base_url:
+        lowered = base_url.lower()
+        if "paper" in lowered:
+            paper = True
+        elif "live" in lowered:
+            paper = False
     return TradingClient(api_key, api_secret, paper=paper)
 
 
 def _create_data_client() -> "StockHistoricalDataClient":
     if StockHistoricalDataClient is None:
         raise RuntimeError("alpaca-py StockHistoricalDataClient is unavailable")
-    api_key = os.environ.get("APCA_API_KEY_ID")
-    api_secret = os.environ.get("APCA_API_SECRET_KEY")
+    api_key, api_secret, _, _ = get_alpaca_creds()
     if not api_key or not api_secret:
         raise RuntimeError("Missing Alpaca credentials for data client")
     return StockHistoricalDataClient(api_key, api_secret)
@@ -355,7 +364,7 @@ def _write_assets_cache(cache_path: Path, symbols: List[str]) -> None:
 
 
 def _determine_alpaca_base_url() -> str:
-    base_url = os.environ.get("APCA_API_BASE_URL")
+    _, _, base_url, _ = get_alpaca_creds()
     if base_url:
         return base_url.rstrip("/")
     env = os.environ.get("APCA_API_ENV", "").lower()
@@ -365,8 +374,7 @@ def _determine_alpaca_base_url() -> str:
 
 
 def _fetch_assets_via_http() -> List[str]:
-    api_key = os.environ.get("APCA_API_KEY_ID")
-    api_secret = os.environ.get("APCA_API_SECRET_KEY")
+    api_key, api_secret, _, _ = get_alpaca_creds()
     if not api_key or not api_secret:
         LOGGER.warning("Alpaca credentials missing; cannot fetch assets via HTTP fallback.")
         return []
@@ -773,7 +781,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--feed",
         choices=["iex", "sip"],
-        default="iex",
+        default=DEFAULT_FEED,
         help="Market data feed to request from Alpaca",
     )
     parser.add_argument(
@@ -797,6 +805,10 @@ def main(
 ) -> int:
     _ensure_logger()
     args = parse_args(argv)
+    api_key, api_secret, _, _ = get_alpaca_creds()
+    if not api_key or not api_secret:
+        LOGGER.error("Missing Alpaca credentials; set APCA_API_KEY_ID and APCA_API_SECRET_KEY.")
+        return 2
     base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
     now = datetime.now(timezone.utc)
 

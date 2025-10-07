@@ -48,13 +48,13 @@ from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
-from dotenv import load_dotenv
 # Alerting
 import requests
 from .utils import cache_bars
 
 from .exit_signals import should_exit_early
 from .monitor_positions import log_trade_exit
+from utils.env import load_env, get_alpaca_creds
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -69,8 +69,7 @@ logger = logging.getLogger(__name__)
 
 os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
 
-dotenv_path = os.path.join(BASE_DIR, '.env')
-load_dotenv(dotenv_path)
+load_env()
 start_time = datetime.utcnow()
 logger.info("Trade execution script started.")
 
@@ -85,9 +84,7 @@ def send_alert(message: str) -> None:
     except Exception as exc:
         logger.error("Failed to send alert: %s", exc)
 
-API_KEY = os.getenv("APCA_API_KEY_ID")
-API_SECRET = os.getenv("APCA_API_SECRET_KEY")
-BASE_URL = os.getenv("APCA_API_BASE_URL") or os.getenv("ALPACA_BASE_URL")
+API_KEY, API_SECRET, BASE_URL, _ = get_alpaca_creds()
 
 
 def detect_trading_env() -> str:

@@ -17,22 +17,20 @@ import json
 import numpy as np
 import pandas as pd
 
-from dotenv import load_dotenv
 from utils import logger_utils
+from utils.env import load_env, get_alpaca_creds
 
 # Import indicator helpers from screener to keep the scoring consistent
 from .indicators import adx, aroon, macd, obv, rsi, compute_indicators
 from .utils import write_csv_atomic, cache_bars
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_env()
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
 logger = logger_utils.init_logging(__name__, "backtest.log")
 start_time = datetime.utcnow()
 logger.info("Script started")
-
-dotenv_path = os.path.join(BASE_DIR, ".env")
-load_dotenv(dotenv_path)
 
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
 CONFIG = {}
@@ -40,13 +38,15 @@ if os.path.exists(CONFIG_PATH):
     with open(CONFIG_PATH) as f:
         CONFIG = json.load(f)
 
-API_KEY = os.getenv("APCA_API_KEY_ID")
-API_SECRET = os.getenv("APCA_API_SECRET_KEY")
+API_KEY, API_SECRET, _, _ = get_alpaca_creds()
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
-
-    data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
+    if API_KEY and API_SECRET:
+        data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
+    else:
+        data_client = None
+        logger.error("Missing Alpaca credentials; data client unavailable.")
 except Exception as exc:  # pragma: no cover - optional dependency
     data_client = None
     logger.error("Alpaca client unavailable: %s", exc)

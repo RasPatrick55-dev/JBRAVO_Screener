@@ -7,7 +7,10 @@ from typing import Optional
 
 import pandas as pd
 
+from utils.env import load_env
 from utils.io_utils import atomic_write_bytes
+
+load_env()
 
 
 def repo_root() -> Path:
@@ -66,20 +69,22 @@ def main() -> int:
             if top_path.exists():
                 try:
                     csv_bytes = top_path.read_bytes()
-                    atomic_write_bytes(latest_path, csv_bytes)
                     df = pd.read_csv(io.BytesIO(csv_bytes))
-                    emit(
-                        "LATEST_UPDATED",
-                        component="pipeline",
-                        rows=str(len(df)),
-                    )
                     rows = len(df)
                     if rows:
+                        atomic_write_bytes(latest_path, csv_bytes)
+                        emit(
+                            "LATEST_UPDATED",
+                            component="pipeline",
+                            rows=str(rows),
+                        )
                         print(
                             f"Screener produced {rows} candidates; refreshed latest_candidates.csv."
                         )
                     else:
-                        print("Screener completed with 0 candidates; refreshed latest_candidates.csv.")
+                        print(
+                            "Screener produced 0 candidates; latest_candidates.csv left untouched."
+                        )
                 except Exception as copy_exc:
                     emit(
                         "LATEST_COPY_FAILED",
