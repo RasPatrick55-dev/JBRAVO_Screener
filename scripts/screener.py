@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import collections
 import json
 import logging
 import os
-import threading
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -19,7 +17,9 @@ import requests
 
 try:  # pragma: no cover - preferred module execution path
     from .indicators import adx, aroon, macd, obv, rsi
-    from .utils.dataframe_utils import to_bars_df, BARS_COLUMNS
+    from .utils.normalize import to_bars_df, BARS_COLUMNS
+    from .utils.http_alpaca import fetch_bars_http
+    from .utils.rate import TokenBucket
     from .utils.models import BarData, classify_exchange, KNOWN_EQUITY
 except Exception:  # pragma: no cover - fallback for direct script execution
     import os as _os
@@ -27,7 +27,9 @@ except Exception:  # pragma: no cover - fallback for direct script execution
 
     _sys.path.append(_os.path.dirname(_os.path.dirname(__file__)))
     from scripts.indicators import adx, aroon, macd, obv, rsi  # type: ignore
-    from scripts.utils.dataframe_utils import to_bars_df, BARS_COLUMNS  # type: ignore
+    from scripts.utils.normalize import to_bars_df, BARS_COLUMNS  # type: ignore
+    from scripts.utils.http_alpaca import fetch_bars_http  # type: ignore
+    from scripts.utils.rate import TokenBucket  # type: ignore
     from scripts.utils.models import BarData, classify_exchange, KNOWN_EQUITY  # type: ignore
 
 from utils.env import load_env, get_alpaca_creds
@@ -162,66 +164,6 @@ def _resolve_feed(feed: str):
         except Exception:
             LOGGER.debug("Falling back to raw feed string for %s", feed)
     return value
-
-
-class _TokenBucket:
-    def __init__(self, max_per_minute: int) -> None:
-        self.max_per_minute = max(1, int(max_per_minute or 1))
-        self.timestamps = collections.deque()
-        self.lock = threading.Lock()
-
-    def acquire(self) -> None:
-        while True:
-            with self.lock:
-                now = time.monotonic()
-                cutoff = now - 60
-                while self.timestamps and self.timestamps[0] < cutoff:
-                    self.timestamps.popleft()
-                if len(self.timestamps) < self.max_per_minute:
-                    self.timestamps.append(now)
-                    return
-                sleep_for = max(self.timestamps[0] + 60 - now, 0.01)
-            time.sleep(min(sleep_for, 0.5))
-
-
-def fetch_bars_http(
-    symbols: list[str],
-    start: str,
-    end: str,
-    timeframe: str = "1Day",
-    feed: str = "iex",
-    limit_per_page: int = 10000,
-) -> list[dict]:
-    import os as _os
-
-    base = _os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/")
-    url = f"{base}/v2/stocks/bars"
-    key = _os.getenv("APCA_API_KEY_ID")
-    sec = _os.getenv("APCA_API_SECRET_KEY")
-    headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec}
-    out: list[dict] = []
-    for chunk in (symbols[i : i + 50] for i in range(0, len(symbols), 50)):
-        page: Optional[str] = None
-        while True:
-            params = {
-                "symbols": ",".join(chunk),
-                "timeframe": timeframe,
-                "start": start,
-                "end": end,
-                "limit": limit_per_page,
-                "feed": feed,
-            }
-            if page:
-                params["page_token"] = page
-            response = requests.get(url, headers=headers, params=params, timeout=30)
-            response.raise_for_status()
-            payload = response.json()
-            bars = payload.get("bars") or []
-            out.extend(bars)
-            page = payload.get("next_page_token")
-            if not page:
-                break
-    return out
 
 
 def _make_stock_bars_request(**kwargs: Any):
@@ -360,7 +302,8 @@ def _fetch_daily_bars(
             "pages_total": 0,
             "bars_rows_total": 0,
             "symbols_with_bars": 0,
-            "symbols_no_bars": [],
+            "symbols_no_bars": 0,
+            "symbols_no_bars_sample": [],
             "fallback_batches": 0,
             "insufficient_history": 0,
         }, {}
@@ -403,7 +346,8 @@ def _fetch_daily_bars(
         "pages_total": 0,
         "bars_rows_total": 0,
         "symbols_with_bars": 0,
-        "symbols_no_bars": [],
+        "symbols_no_bars": 0,
+        "symbols_no_bars_sample": [],
         "fallback_batches": 0,
         "insufficient_history": 0,
     }
@@ -416,7 +360,7 @@ def _fetch_daily_bars(
     ) -> Tuple[pd.DataFrame, int, Dict[str, str]]:
         local_frames: list[pd.DataFrame] = []
         local_prescreened: dict[str, str] = {}
-        token_bucket = _TokenBucket(200) if not use_http else None
+        token_bucket = TokenBucket(200) if not use_http else None
 
         def _http_worker(symbol: str) -> Tuple[str, pd.DataFrame]:
             try:
@@ -622,7 +566,8 @@ def _fetch_daily_bars(
     missing = [sym for sym in unique_symbols if sym not in symbols_with_bars]
     for sym in missing:
         prescreened.setdefault(sym, "NAN_DATA")
-    metrics["symbols_no_bars"] = missing[:10]
+    metrics["symbols_no_bars"] = len(missing)
+    metrics["symbols_no_bars_sample"] = missing[:10]
 
     return combined, metrics, prescreened
 
@@ -699,6 +644,8 @@ def _load_alpaca_universe(
     min_history: int,
     bars_source: str,
     exclude_otc: bool,
+    iex_only: bool,
+    liquidity_top: int,
     now: datetime,
 ) -> Tuple[
     pd.DataFrame,
@@ -713,7 +660,8 @@ def _load_alpaca_universe(
         "pages_total": 0,
         "bars_rows_total": 0,
         "symbols_with_bars": 0,
-        "symbols_no_bars": [],
+        "symbols_no_bars": 0,
+        "symbols_no_bars_sample": [],
         "fallback_batches": 0,
         "insufficient_history": 0,
     }
@@ -721,6 +669,7 @@ def _load_alpaca_universe(
         "assets_total": 0,
         "assets_tradable_equities": 0,
         "assets_after_filters": 0,
+        "symbols_after_iex_filter": 0,
     }
     try:
         trading_client = _create_trading_client()
@@ -753,21 +702,46 @@ def _load_alpaca_universe(
         str(symbol).strip().upper(): dict(meta or {})
         for symbol, meta in (asset_meta or {}).items()
     }
-    symbols = [str(sym).strip().upper() for sym in symbols]
-    total_tradable = len(symbols)
-
-    if asset_meta:
-        meta_symbols = [sym for sym in symbols if sym in asset_meta]
-        if meta_symbols:
-            symbols = meta_symbols
+    raw_symbols = [str(sym).strip().upper() for sym in symbols]
+    ordered_symbols = raw_symbols or list(asset_meta.keys())
+    seen: set[str] = set()
+    iex_exchanges = {"NASDAQ", "NYSE", "ARCA", "AMEX"}
+    filtered_symbols: list[str] = []
+    for sym in ordered_symbols:
+        if sym in seen:
+            continue
+        meta = asset_meta.get(sym, {})
+        tradable = bool(meta.get("tradable", True))
+        asset_class = str(meta.get("asset_class", "") or "").strip().upper()
+        exchange = str(meta.get("exchange", "") or "").strip().upper()
+        if not tradable:
+            continue
+        if asset_class not in {"US_EQUITY", "EQUITY"}:
+            continue
+        if iex_only and exchange not in iex_exchanges:
+            continue
+        filtered_symbols.append(sym)
+        seen.add(sym)
 
     if limit is not None and limit > 0:
-        symbols = symbols[:limit]
+        filtered_symbols = filtered_symbols[:limit]
+
+    asset_metrics["symbols_after_iex_filter"] = len(filtered_symbols)
+    asset_metrics["assets_total"] = int(asset_metrics.get("assets_total", len(asset_meta)))
+    asset_metrics["assets_after_filters"] = len(filtered_symbols)
+    total_tradable = len(raw_symbols)
     LOGGER.info(
-        "Universe sample size: %d (of %d tradable equities)", len(symbols), total_tradable
+        "Universe sample size: %d (of %d tradable equities)",
+        len(filtered_symbols),
+        total_tradable or asset_metrics.get("assets_tradable_equities", 0),
     )
     if asset_meta:
-        asset_meta = {sym: asset_meta.get(sym, {}) for sym in symbols if sym in asset_meta}
+        asset_meta = {
+            sym: asset_meta.get(sym, {})
+            for sym in filtered_symbols
+            if sym in asset_meta
+        }
+    symbols = filtered_symbols
 
     if not symbols:
         return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, empty_metrics, {}, asset_metrics
@@ -806,9 +780,9 @@ def _load_alpaca_universe(
         int(fetch_metrics.get("bars_rows_total", 0)),
         int(fetch_metrics.get("symbols_with_bars", 0)),
     )
-    missing_symbols = fetch_metrics.get("symbols_no_bars", [])
-    if missing_symbols:
-        LOGGER.info("Symbols without bars (sample): %s", list(missing_symbols)[:10])
+    missing_sample = fetch_metrics.get("symbols_no_bars_sample", [])
+    if missing_sample:
+        LOGGER.info("Symbols without bars (sample): %s", list(missing_sample)[:10])
     if fetch_metrics.get("fallback_batches"):
         LOGGER.info(
             "Fallback batches invoked: %d",
@@ -827,6 +801,26 @@ def _load_alpaca_universe(
                 "Normalized bars missing 'symbol' unexpectedly; skipping merge"
             )
             return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, fetch_metrics, prescreened, asset_metrics
+        if liquidity_top and liquidity_top > 0:
+            try:
+                bars_df.sort_values(["symbol", "timestamp"], inplace=True)
+                try:
+                    recent = bars_df.groupby("symbol", group_keys=False).apply(
+                        lambda g: g.tail(20), include_groups=False
+                    )
+                except TypeError:
+                    recent = bars_df.groupby("symbol", group_keys=False).apply(lambda g: g.tail(20))
+                recent = recent.copy()
+                recent["volume"] = pd.to_numeric(recent["volume"], errors="coerce")
+                adv = recent.groupby("symbol")["volume"].mean().fillna(0)
+                top_symbols = set(adv.sort_values(ascending=False).head(liquidity_top).index)
+                if top_symbols:
+                    bars_df = bars_df[bars_df["symbol"].isin(top_symbols)]
+                    metrics["symbols_with_bars"] = min(
+                        int(metrics.get("symbols_with_bars", 0)), len(top_symbols)
+                    )
+            except Exception as exc:
+                LOGGER.warning("Failed liquidity filter computation: %s", exc)
         bars_df = merge_asset_metadata(bars_df, asset_meta)
     return bars_df, asset_meta, fetch_metrics, prescreened, asset_metrics
 
@@ -1424,41 +1418,38 @@ def write_outputs(
 
     metrics = {
         "last_run_utc": _format_timestamp(now),
+        "status": status,
         "rows": int(scored_df.shape[0]),
         "symbols_in": int(stats.get("symbols_in", 0)),
         "candidates_out": int(stats.get("candidates_out", 0)),
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
-        "status": status,
     }
     gate_counts = gate_counters or {}
-    metrics["gate_counters"] = {
-        "failed_sma_stack": int(gate_counts.get("failed_sma_stack", 0)),
-        "failed_rsi": int(gate_counts.get("failed_rsi", 0)),
-        "failed_cross": int(gate_counts.get("failed_cross", 0)),
-        "nan_data": int(gate_counts.get("nan_data", 0)),
-        "insufficient_history": int(gate_counts.get("insufficient_history", 0)),
-    }
+    metrics.update(
+        {
+            "failed_sma_stack": int(gate_counts.get("failed_sma_stack", 0)),
+            "failed_rsi": int(gate_counts.get("failed_rsi", 0)),
+            "failed_cross": int(gate_counts.get("failed_cross", 0)),
+            "nan_data": int(gate_counts.get("nan_data", 0)),
+            "insufficient_history": int(gate_counts.get("insufficient_history", 0)),
+        }
+    )
     fetch_payload = fetch_metrics or {}
-    metrics["fetch_metrics"] = {
-        "batches_total": int(fetch_payload.get("batches_total", 0)),
-        "batches_paged": int(fetch_payload.get("batches_paged", 0)),
-        "pages_total": int(fetch_payload.get("pages_total", 0)),
-        "bars_rows_total": int(fetch_payload.get("bars_rows_total", 0)),
-        "symbols_with_bars": int(fetch_payload.get("symbols_with_bars", 0)),
-        "symbols_no_bars": list(fetch_payload.get("symbols_no_bars", [])),
-        "fallback_batches": int(fetch_payload.get("fallback_batches", 0)),
-        "insufficient_history": int(fetch_payload.get("insufficient_history", 0)),
-    }
+    metrics.update(
+        {
+            "bars_rows_total": int(fetch_payload.get("bars_rows_total", 0)),
+            "symbols_with_bars": int(fetch_payload.get("symbols_with_bars", 0)),
+            "symbols_no_bars": int(fetch_payload.get("symbols_no_bars", 0)),
+        }
+    )
     asset_payload = asset_metrics or {}
-    metrics["asset_metrics"] = {
-        "assets_total": int(asset_payload.get("assets_total", 0)),
-        "assets_tradable_equities": int(asset_payload.get("assets_tradable_equities", 0)),
-        "assets_after_filters": int(asset_payload.get("assets_after_filters", 0)),
-    }
-    if reject_samples:
-        metrics["reject_samples"] = reject_samples[:10]
-    else:
-        metrics["reject_samples"] = []
+    metrics.update(
+        {
+            "assets_total": int(asset_payload.get("assets_total", 0)),
+            "symbols_after_iex_filter": int(asset_payload.get("symbols_after_iex_filter", 0)),
+        }
+    )
+    metrics["reject_samples"] = (reject_samples or [])[:10]
     _write_json_atomic(metrics_path, metrics)
     return metrics_path
 
@@ -1509,8 +1500,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=100,
-        help="Batch size for multi-symbol bar requests",
+        default=50,
+        help="Maximum symbols per batch for bar requests",
     )
     parser.add_argument(
         "--max-workers",
@@ -1526,6 +1517,18 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     parser.add_argument("--min-history", type=int, default=DEFAULT_MIN_HISTORY)
     parser.add_argument(
+        "--iex-only",
+        choices=["true", "false"],
+        default="true",
+        help="Restrict universe to exchanges covered by IEX (default: true)",
+    )
+    parser.add_argument(
+        "--liquidity-top",
+        type=int,
+        default=500,
+        help="Keep only the top N symbols by recent volume (0 disables)",
+    )
+    parser.add_argument(
         "--exclude-otc",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -1534,6 +1537,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parsed = parser.parse_args(list(argv) if argv is not None else None)
     if getattr(parsed, "source", None):
         parsed.source_csv = parsed.source
+    if isinstance(parsed.iex_only, str):
+        parsed.iex_only = parsed.iex_only.lower() != "false"
     return parsed
 
 
@@ -1592,6 +1597,8 @@ def main(
                 min_history=args.min_history,
                 bars_source=args.bars_source,
                 exclude_otc=args.exclude_otc,
+                iex_only=args.iex_only,
+                liquidity_top=args.liquidity_top,
                 now=now,
             )
     top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters = run_screener(
