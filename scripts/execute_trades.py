@@ -1,8 +1,4 @@
-# execute_trades.py
-# Dynamically execute limit buys for the highest ranked candidates.
-# Trailing stops and max hold logic manage risk on open trades.
-
-# --- Minimal, import-proof telemetry using the bootstrap emitter ---
+# --- Minimal, import-proof telemetry header (NO project imports) ---
 import os, sys, subprocess, json
 from pathlib import Path
 from datetime import datetime, timezone
@@ -13,12 +9,10 @@ def repo_root() -> Path:
 
 
 def emit(evt: str, **kvs):
-    """Emit an event with NO project imports, via the bootstrap module."""
-
+    """Write an event via bootstrap emitter; never throw."""
     cmd = [sys.executable, "-m", "bin.emit_event", evt]
     for k, v in kvs.items():
         cmd.append(f"{k}={v}")
-    # best-effort: never raise here
     try:
         subprocess.run(cmd, check=False)
     except Exception:
@@ -29,7 +23,7 @@ def utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
-# Import sentinel: proves this module actually loaded
+# Import sentinel to prove this module loaded
 emit("IMPORT_SENTINEL", component="execute_trades")
 
 import argparse
@@ -1763,30 +1757,49 @@ def main(argv: Optional[list[str]] = None) -> int:
     """Entrypoint for executing the trade pipeline with market guardrails."""
 
     raw_args = list(argv) if argv is not None else sys.argv[1:]
-    force_flag = "--force" in raw_args
 
     try:
         os.chdir(repo_root())
     except Exception:
         pass
 
+    force_flag = "--force" in raw_args
     emit("RUN_START", component=COMPONENT_NAME, force=str(force_flag).lower())
 
-    trading_env = detect_trading_env()
-
-    guard_error: Optional[str] = None
-    clock_source = "unknown"
     status = "UNKNOWN"
+    clock_source = "unknown"
+    err: Optional[str] = None
+
     try:
-        is_open, clock_source, guard_error = get_clock_open(trading_env)
-        if guard_error is None:
-            status = "OPEN" if is_open else "CLOSED"
+        key_id = os.environ.get("ALPACA_KEY_ID") or os.environ.get("APCA_API_KEY_ID")
+        secret_key = os.environ.get("ALPACA_SECRET_KEY") or os.environ.get("APCA_API_SECRET_KEY")
+        base_url_env = os.environ.get("ALPACA_BASE_URL") or os.environ.get("APCA_API_BASE_URL") or ""
+        if not key_id or not secret_key:
+            raise KeyError("Missing ALPACA credentials")
+        try:
+            from alpaca.trading.client import TradingClient
+
+            clock_source = "TradingClient"
+            tc = TradingClient(
+                key_id,
+                secret_key,
+                paper="paper" in base_url_env.lower(),
+            )
+            status = "OPEN" if bool(tc.get_clock().is_open) else "CLOSED"
+        except Exception:
+            import alpaca_trade_api as a
+
+            clock_source = "RESTv2"
+            api = a.REST(
+                key_id,
+                secret_key,
+                base_url_env,
+                api_version="v2",
+            )
+            status = "OPEN" if bool(api.get_clock().is_open) else "CLOSED"
     except Exception as exc:
-        logger.exception("Market guard helper raised an unexpected error; failing open.")
-        clock_source = "unknown"
-        guard_error = str(exc)
+        err = str(exc)
         status = "UNKNOWN"
-        is_open = True
 
     emit(
         "MARKET_GUARD_STATUS",
@@ -1794,26 +1807,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         status=status,
         clock_source=clock_source,
         force=str(force_flag).lower(),
-        error=guard_error or "",
+        error=err or "",
     )
 
     if status == "CLOSED" and not force_flag:
         logger.warning("Market is closed; aborting trade execution run.")
         metrics["run_aborted_reason"] = "MARKET_CLOSED"
-        try:
-            mp = Path("data/execute_metrics.json")
-            mp.parent.mkdir(parents=True, exist_ok=True)
-            metrics_payload: dict[str, object] = {}
-            if mp.exists():
-                try:
-                    metrics_payload = json.loads(mp.read_text(encoding="utf-8"))
-                except Exception:
-                    metrics_payload = {}
-            metrics_payload["run_aborted_reason"] = "MARKET_CLOSED"
-            mp.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
-        finally:
-            emit("RUN_ABORT", component=COMPONENT_NAME, reason_code="MARKET_CLOSED")
-            emit("RUN_END", component=COMPONENT_NAME, status="aborted")
+        mp = Path("data/execute_metrics.json")
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        metrics_payload: dict[str, object] = {}
+        if mp.exists():
+            try:
+                metrics_payload = json.loads(mp.read_text(encoding="utf-8"))
+            except Exception:
+                metrics_payload = {}
+        metrics_payload["run_aborted_reason"] = "MARKET_CLOSED"
+        mp.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+        emit("RUN_ABORT", component=COMPONENT_NAME, reason_code="MARKET_CLOSED")
+        emit("RUN_END", component=COMPONENT_NAME, status="aborted")
         return 0
 
     if status == "CLOSED" and force_flag:

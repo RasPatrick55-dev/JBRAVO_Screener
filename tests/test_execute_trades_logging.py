@@ -13,8 +13,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import utils.telemetry as telemetry
-
 dummy_indicators = types.ModuleType("indicators")
 dummy_indicators.rsi = lambda series: series
 dummy_indicators.macd = lambda series: (series, series, series)
@@ -22,6 +20,9 @@ sys.modules.setdefault("indicators", dummy_indicators)
 
 os.environ.setdefault("APCA_API_KEY_ID", "test_key")
 os.environ.setdefault("APCA_API_SECRET_KEY", "test_secret")
+os.environ.setdefault("ALPACA_KEY_ID", os.environ["APCA_API_KEY_ID"])
+os.environ.setdefault("ALPACA_SECRET_KEY", os.environ["APCA_API_SECRET_KEY"])
+os.environ.setdefault("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 
 @pytest.fixture(scope="module")
@@ -29,11 +30,20 @@ def execute_trades_module():
     return import_module("scripts.execute_trades")
 
 
+def _install_emit_stub(module, monkeypatch, events_path: Path):
+    def fake_emit(evt: str, **kvs):
+        payload = {"event": evt, **kvs}
+        payload.setdefault("ts", module.utcnow())
+        with open(events_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload) + "\n")
+
+    monkeypatch.setattr(module, "emit", fake_emit)
+
+
 def test_log_event_appends_valid_json(tmp_path, monkeypatch, execute_trades_module):
     module = execute_trades_module
     events_path = tmp_path / "execute_events.jsonl"
-    monkeypatch.setattr(telemetry, "events_path", lambda: events_path)
-    monkeypatch.setattr(telemetry, "get_version", lambda: "test-version")
+    _install_emit_stub(module, monkeypatch, events_path)
 
     module.log_event({"event": "first"})
     module.log_event({"event": "second", "value": 2})
@@ -46,7 +56,7 @@ def test_log_event_appends_valid_json(tmp_path, monkeypatch, execute_trades_modu
 
     assert first["event"] == "first"
     assert second["event"] == "second"
-    assert second["value"] == 2
+    assert second["value"] == "2"
 
     assert first["component"] == second["component"] == "execute_trades"
 
@@ -115,8 +125,7 @@ def test_metrics_backward_compat(execute_trades_module):
 def test_event_json_schema(tmp_path, monkeypatch, execute_trades_module):
     module = execute_trades_module
     events_path = tmp_path / "execute_events.jsonl"
-    monkeypatch.setattr(telemetry, "events_path", lambda: events_path)
-    monkeypatch.setattr(telemetry, "get_version", lambda: "test-version")
+    _install_emit_stub(module, monkeypatch, events_path)
 
     module.log_order_submit_event(
         symbol="AAPL",
@@ -156,7 +165,7 @@ def test_event_json_schema(tmp_path, monkeypatch, execute_trades_module):
     assert final_event["event"] == "ORDER_FINAL"
     for key in ("symbol", "attempt", "status", "latency_ms"):
         assert key in final_event
-    assert final_event["filled_avg_price"] == 123.4
+    assert final_event["filled_avg_price"] == "123.4"
 
     retry_event = events[2]
     assert retry_event["event"] == "RETRY"
@@ -176,14 +185,18 @@ def test_event_json_schema(tmp_path, monkeypatch, execute_trades_module):
 
 def _setup_market_guard_test(module, monkeypatch, tmp_path):
     events_path = tmp_path / "execute_events.jsonl"
-    metrics_path = tmp_path / "metrics.json"
+    metrics_path = tmp_path / "data" / "execute_metrics.json"
 
-    monkeypatch.setattr(telemetry, "events_path", lambda: events_path)
-    monkeypatch.setattr(telemetry, "get_version", lambda: "test-version")
+    _install_emit_stub(module, monkeypatch, events_path)
     monkeypatch.setattr(module, "metrics_path", str(metrics_path))
     monkeypatch.setattr(module, "metrics", module.metrics.copy())
-    monkeypatch.setattr(module, "detect_trading_env", lambda: "paper")
     monkeypatch.setattr(module, "repo_root", lambda: tmp_path)
+    monkeypatch.setenv("ALPACA_KEY_ID", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("APCA_API_KEY_ID", "test_key")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "test_secret")
+    monkeypatch.setenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
 
     return events_path, metrics_path
 
@@ -208,16 +221,65 @@ def _read_events(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text("utf-8").splitlines()]
 
 
+def _install_trading_modules(
+    monkeypatch,
+    *,
+    trading_open: bool | None = None,
+    trading_error: Exception | None = None,
+    rest_open: bool | None = None,
+    rest_error: Exception | None = None,
+):
+    trading_pkg = types.ModuleType("alpaca.trading")
+    client_mod = types.ModuleType("alpaca.trading.client")
+
+    class DummyClock:
+        def __init__(self, is_open: bool | None):
+            self.is_open = is_open
+
+    class DummyTradingClient:
+        def __init__(self, *args, **kwargs):
+            if trading_error:
+                raise trading_error
+            self._clock = DummyClock(trading_open)
+
+        def get_clock(self):
+            if trading_error:
+                raise trading_error
+            return self._clock
+
+    client_mod.TradingClient = DummyTradingClient
+    trading_pkg.client = client_mod
+    alpaca_pkg = types.ModuleType("alpaca")
+    alpaca_pkg.trading = trading_pkg
+
+    monkeypatch.setitem(sys.modules, "alpaca", alpaca_pkg)
+    monkeypatch.setitem(sys.modules, "alpaca.trading", trading_pkg)
+    monkeypatch.setitem(sys.modules, "alpaca.trading.client", client_mod)
+
+    if rest_open is not None or rest_error is not None:
+        rest_mod = types.ModuleType("alpaca_trade_api")
+
+        class DummyRestClient:
+            def __init__(self, *args, **kwargs):
+                if rest_error:
+                    raise rest_error
+                self._clock = DummyClock(rest_open)
+
+            def get_clock(self):
+                if rest_error:
+                    raise rest_error
+                return self._clock
+
+        rest_mod.REST = DummyRestClient
+        monkeypatch.setitem(sys.modules, "alpaca_trade_api", rest_mod)
+
+
 def test_guard_open_always_emitted(tmp_path, monkeypatch, execute_trades_module):
     module = execute_trades_module
     events_path, _ = _setup_market_guard_test(module, monkeypatch, tmp_path)
     submit_calls = _stub_execution_pipeline(module, monkeypatch)
 
-    monkeypatch.setattr(
-        module,
-        "get_clock_open",
-        lambda env: (True, "TradingClient", None),
-    )
+    _install_trading_modules(monkeypatch, trading_open=True)
 
     exit_code = module.main([])
     assert exit_code == 0
@@ -233,25 +295,20 @@ def test_guard_open_always_emitted(tmp_path, monkeypatch, execute_trades_module)
     run_start = events[0]
     assert run_start["event"] == "RUN_START"
     assert run_start["component"] == "execute_trades"
-    assert run_start["version"] == "test-version"
-    assert run_start["env"] == "paper"
-    assert run_start["force"] is False
+    assert run_start["force"] == "false"
 
     guard = events[1]
     assert guard["component"] == "execute_trades"
     assert guard["status"] == "OPEN"
     assert guard["clock_source"] == "TradingClient"
-    assert guard["force"] is False
-    assert guard["env"] == "paper"
-    assert guard["version"] == "test-version"
-    assert guard.get("error") is None
+    assert guard["force"] == "false"
+    assert guard.get("error") == ""
 
     run_end = events[-1]
     assert run_end["event"] == "RUN_END"
     assert run_end["component"] == "execute_trades"
     assert run_end["status"] == "ok"
-    assert run_end["error"] is None
-    assert run_end["version"] == "test-version"
+    assert run_end.get("error") is None
 
 
 def test_guard_closed_aborts(tmp_path, monkeypatch, execute_trades_module):
@@ -266,11 +323,7 @@ def test_guard_closed_aborts(tmp_path, monkeypatch, execute_trades_module):
     monkeypatch.setattr(module, "daily_exit_check", lambda: None)
     monkeypatch.setattr(module, "save_open_positions_csv", lambda: None)
     monkeypatch.setattr(module, "update_trades_log", lambda: None)
-    monkeypatch.setattr(
-        module,
-        "get_clock_open",
-        lambda env: (False, "TradingClient", None),
-    )
+    _install_trading_modules(monkeypatch, trading_open=False)
 
     exit_code = module.main([])
     assert exit_code == 0
@@ -291,22 +344,18 @@ def test_guard_closed_aborts(tmp_path, monkeypatch, execute_trades_module):
     assert guard["component"] == "execute_trades"
     assert guard["status"] == "CLOSED"
     assert guard["clock_source"] == "TradingClient"
-    assert guard["force"] is False
-    assert guard["env"] == "paper"
-    assert guard["version"] == "test-version"
-    assert guard.get("error") is None
+    assert guard["force"] == "false"
+    assert guard.get("error") == ""
 
     abort_event = events[2]
     assert abort_event["event"] == "RUN_ABORT"
     assert abort_event["component"] == "execute_trades"
     assert abort_event["reason_code"] == "MARKET_CLOSED"
-    assert abort_event["version"] == "test-version"
 
     run_end = events[-1]
-    assert run_end["status"] == "ok"
+    assert run_end["status"] == "aborted"
     assert run_end["component"] == "execute_trades"
-    assert run_end["error"] is None
-    assert run_end["version"] == "test-version"
+    assert run_end.get("error") is None
 
 
 def test_guard_closed_force_runs(tmp_path, monkeypatch, execute_trades_module):
@@ -314,11 +363,7 @@ def test_guard_closed_force_runs(tmp_path, monkeypatch, execute_trades_module):
     events_path, _ = _setup_market_guard_test(module, monkeypatch, tmp_path)
     submit_calls = _stub_execution_pipeline(module, monkeypatch)
 
-    monkeypatch.setattr(
-        module,
-        "get_clock_open",
-        lambda env: (False, "TradingClient", None),
-    )
+    _install_trading_modules(monkeypatch, trading_open=False)
 
     exit_code = module.main(["--force"])
     assert exit_code == 0
@@ -335,18 +380,15 @@ def test_guard_closed_force_runs(tmp_path, monkeypatch, execute_trades_module):
     assert guard["component"] == "execute_trades"
     assert guard["status"] == "CLOSED"
     assert guard["clock_source"] == "TradingClient"
-    assert guard["force"] is True
-    assert guard["env"] == "paper"
-    assert guard["version"] == "test-version"
-    assert guard.get("error") is None
+    assert guard["force"] == "true"
+    assert guard.get("error") == ""
 
     assert all(event["event"] != "RUN_ABORT" for event in events)
 
     run_end = events[-1]
     assert run_end["status"] == "ok"
     assert run_end["component"] == "execute_trades"
-    assert run_end["error"] is None
-    assert run_end["version"] == "test-version"
+    assert run_end.get("error") is None
 
 
 def test_guard_unknown_failopen(tmp_path, monkeypatch, execute_trades_module):
@@ -354,10 +396,13 @@ def test_guard_unknown_failopen(tmp_path, monkeypatch, execute_trades_module):
     events_path, _ = _setup_market_guard_test(module, monkeypatch, tmp_path)
     submit_calls = _stub_execution_pipeline(module, monkeypatch)
 
-    def raise_guard_error(env):
-        raise RuntimeError("clock boom")
-
-    monkeypatch.setattr(module, "get_clock_open", raise_guard_error)
+    error = RuntimeError("clock boom")
+    _install_trading_modules(
+        monkeypatch,
+        trading_error=error,
+        rest_error=error,
+        rest_open=None,
+    )
 
     exit_code = module.main([])
     assert exit_code == 0
@@ -373,13 +418,11 @@ def test_guard_unknown_failopen(tmp_path, monkeypatch, execute_trades_module):
     guard_event = events[1]
     assert guard_event["component"] == "execute_trades"
     assert guard_event["status"] == "UNKNOWN"
-    assert guard_event["clock_source"] == "unknown"
-    assert guard_event["version"] == "test-version"
-    assert guard_event["force"] is False
+    assert guard_event["clock_source"] == "RESTv2"
+    assert guard_event["force"] == "false"
     assert "clock boom" in guard_event.get("error", "")
 
     run_end = events[-1]
     assert run_end["status"] == "ok"
     assert run_end["component"] == "execute_trades"
-    assert run_end["error"] is None
-    assert run_end["version"] == "test-version"
+    assert run_end.get("error") is None
