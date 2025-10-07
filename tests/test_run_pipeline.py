@@ -1,25 +1,36 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import utils.telemetry as telemetry
-
 os.environ.setdefault("APCA_API_KEY_ID", "test")
 os.environ.setdefault("APCA_API_SECRET_KEY", "test")
+os.environ.setdefault("ALPACA_KEY_ID", os.environ["APCA_API_KEY_ID"])
+os.environ.setdefault("ALPACA_SECRET_KEY", os.environ["APCA_API_SECRET_KEY"])
+os.environ.setdefault("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 from scripts import run_pipeline
 
 
+def _stub_emit(monkeypatch, events_path: Path):
+    def fake_emit(evt: str, **kvs):
+        payload = {"event": evt, **kvs}
+        payload.setdefault("ts", datetime.now(timezone.utc).isoformat())
+        with open(events_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload) + "\n")
+
+    monkeypatch.setattr(run_pipeline, "emit", fake_emit)
+
+
 def test_log_event_appends_and_valid_json(tmp_path, monkeypatch):
     events_path = tmp_path / "execute_events.jsonl"
-    monkeypatch.setattr(telemetry, "events_path", lambda: events_path)
-    monkeypatch.setattr(telemetry, "get_version", lambda: "test-version")
+    _stub_emit(monkeypatch, events_path)
 
-    run_pipeline.log_event({"event": "FIRST"})
-    run_pipeline.log_event({"event": "SECOND"})
+    run_pipeline.emit("FIRST", component="pipeline")
+    run_pipeline.emit("SECOND", component="pipeline")
 
     assert events_path.exists()
 
@@ -29,7 +40,7 @@ def test_log_event_appends_and_valid_json(tmp_path, monkeypatch):
     first_event = json.loads(lines[0])
     second_event = json.loads(lines[1])
 
-    assert first_event["event"] == "FIRST"
-    assert second_event["event"] == "SECOND"
+    assert first_event == {"event": "FIRST", "component": "pipeline", "ts": first_event["ts"]}
+    assert second_event == {"event": "SECOND", "component": "pipeline", "ts": second_event["ts"]}
     assert first_event["component"] == second_event["component"] == "pipeline"
     assert "ts" in first_event

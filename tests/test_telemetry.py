@@ -1,5 +1,6 @@
 import importlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,6 +61,22 @@ def test_import_sentinel(tmp_path, monkeypatch):
     monkeypatch.setattr(telemetry, "events_path", lambda: events_path)
     monkeypatch.setattr(telemetry, "get_version", lambda: "test-version")
     monkeypatch.setenv("JBRAVO_IMPORT_SENTINEL", "1")
+
+    def fake_run(cmd, check=False):
+        if len(cmd) >= 4 and cmd[2] == "bin.emit_event":
+            event_name = cmd[3]
+            kvs = {}
+            for arg in cmd[4:]:
+                if "=" in arg:
+                    key, value = arg.split("=", 1)
+                    kvs[key] = value
+            payload = {"event": event_name, **kvs}
+            payload.setdefault("ts", telemetry.utcnow())
+            with open(events_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload) + "\n")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
 
     module = importlib.import_module("scripts.execute_trades")
     importlib.reload(module)
