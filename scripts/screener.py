@@ -21,6 +21,7 @@ try:  # pragma: no cover - preferred module execution path
     from .utils.http_alpaca import fetch_bars_http
     from .utils.rate import TokenBucket
     from .utils.models import BarData, classify_exchange, KNOWN_EQUITY
+    from .utils.env import trading_base_url
 except Exception:  # pragma: no cover - fallback for direct script execution
     import os as _os
     import sys as _sys
@@ -31,6 +32,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.utils.http_alpaca import fetch_bars_http  # type: ignore
     from scripts.utils.rate import TokenBucket  # type: ignore
     from scripts.utils.models import BarData, classify_exchange, KNOWN_EQUITY  # type: ignore
+    from scripts.utils.env import trading_base_url  # type: ignore
 
 from utils.env import load_env, get_alpaca_creds
 from utils.io_utils import atomic_write_bytes
@@ -306,6 +308,7 @@ def _fetch_daily_bars(
             "symbols_no_bars_sample": [],
             "fallback_batches": 0,
             "insufficient_history": 0,
+            "rate_limited": 0,
         }, {}
 
     source = (bars_source or "http").strip().lower()
@@ -350,6 +353,7 @@ def _fetch_daily_bars(
         "symbols_no_bars_sample": [],
         "fallback_batches": 0,
         "insufficient_history": 0,
+        "rate_limited": 0,
     }
     prescreened: dict[str, str] = {}
 
@@ -357,21 +361,36 @@ def _fetch_daily_bars(
 
     def fetch_single_collection(
         target_symbols: List[str], *, use_http: bool
-    ) -> Tuple[pd.DataFrame, int, Dict[str, str]]:
+    ) -> Tuple[pd.DataFrame, int, Dict[str, str], dict[str, int]]:
         local_frames: list[pd.DataFrame] = []
         local_prescreened: dict[str, str] = {}
         token_bucket = TokenBucket(200) if not use_http else None
+        local_metrics: dict[str, int] = {
+            "rate_limited": 0,
+            "pages": 0,
+            "requests": 0,
+            "chunks": 0,
+        }
 
-        def _http_worker(symbol: str) -> Tuple[str, pd.DataFrame]:
+        def _merge_metrics(payload: dict[str, int]) -> None:
+            for key, value in (payload or {}).items():
+                if not isinstance(value, int):
+                    continue
+                local_metrics[key] = local_metrics.get(key, 0) + int(value)
+
+        def _http_worker(symbol: str) -> Tuple[str, pd.DataFrame, dict[str, int]]:
             try:
-                raw = fetch_bars_http([symbol], start_iso, end_iso, timeframe="1Day", feed=feed)
+                raw, http_stats = fetch_bars_http(
+                    [symbol], start_iso, end_iso, timeframe="1Day", feed=feed
+                )
                 df = to_bars_df(raw, symbol_hint=symbol)
+                return symbol, df, http_stats
             except Exception as exc:  # pragma: no cover - network errors hit in integration
                 LOGGER.warning("Failed HTTP bars fetch for %s: %s", symbol, exc)
                 df = pd.DataFrame(columns=BARS_COLUMNS)
-            return symbol, df
+                return symbol, df, {"rate_limited": 0, "pages": 0, "requests": 0, "chunks": 0}
 
-        def _sdk_worker(symbol: str) -> Tuple[str, pd.DataFrame]:
+        def _sdk_worker(symbol: str) -> Tuple[str, pd.DataFrame, dict[str, int]]:
             assert data_client is not None  # for type checker
             request_kwargs = {
                 "symbol_or_symbols": symbol,
@@ -389,7 +408,7 @@ def _fetch_daily_bars(
                     token_bucket.acquire()
                     response = data_client.get_stock_bars(request)
                     df = to_bars_df(response, symbol_hint=symbol)
-                    return symbol, df
+                    return symbol, df, {"rate_limited": 0, "pages": 1, "requests": 1, "chunks": 1}
                 except Exception as exc:  # pragma: no cover - network errors hit in integration
                     status = getattr(exc, "status_code", None)
                     if status in BAR_RETRY_STATUSES and attempt < BAR_MAX_RETRIES - 1:
@@ -405,7 +424,12 @@ def _fetch_daily_bars(
                         continue
                     LOGGER.warning("Failed to fetch single-symbol bars for %s: %s", symbol, exc)
                     break
-            return symbol, pd.DataFrame(columns=BARS_COLUMNS)
+            return symbol, pd.DataFrame(columns=BARS_COLUMNS), {
+                "rate_limited": 0,
+                "pages": 0,
+                "requests": 0,
+                "chunks": 0,
+            }
 
         worker = _http_worker if use_http else _sdk_worker
         pages = 0
@@ -414,12 +438,14 @@ def _fetch_daily_bars(
             for future in as_completed(futures):
                 symbol = futures[future]
                 try:
-                    sym, df = future.result()
+                    sym, df, http_stats = future.result()
                 except Exception as exc:  # pragma: no cover - unexpected failure path
                     LOGGER.error("Single-symbol worker failed for %s: %s", symbol, exc)
                     sym = symbol
                     df = pd.DataFrame(columns=BARS_COLUMNS)
-                pages += 1
+                    http_stats = {"rate_limited": 0, "pages": 0, "requests": 0, "chunks": 0}
+                _merge_metrics(http_stats)
+                pages += int(http_stats.get("pages", 0)) or 0
                 if df.empty:
                     local_prescreened[sym] = "NAN_DATA"
                     continue
@@ -440,14 +466,18 @@ def _fetch_daily_bars(
             if local_frames
             else pd.DataFrame(columns=BARS_COLUMNS)
         )
-        return merged, pages, local_prescreened
+        return merged, pages, local_prescreened, local_metrics
 
     if fetch_mode == "single":
-        single_frame, single_pages, single_prescreened = fetch_single_collection(
-            unique_symbols, use_http=(source == "http")
-        )
+        (
+            single_frame,
+            single_pages,
+            single_prescreened,
+            single_metrics,
+        ) = fetch_single_collection(unique_symbols, use_http=(source == "http"))
         frames.append(single_frame)
         metrics["pages_total"] += single_pages
+        metrics["rate_limited"] += int(single_metrics.get("rate_limited", 0))
         prescreened.update(single_prescreened)
     else:
         batches = list(_chunked(unique_symbols, max(1, batch_size)))
@@ -455,7 +485,9 @@ def _fetch_daily_bars(
         for index, batch in enumerate(batches, start=1):
             if source == "http":
                 try:
-                    raw = fetch_bars_http(batch, start_iso, end_iso, timeframe="1Day", feed=feed)
+                    raw, http_stats = fetch_bars_http(
+                        batch, start_iso, end_iso, timeframe="1Day", feed=feed
+                    )
                 except Exception as exc:
                     LOGGER.warning(
                         "HTTP batch fetch failed for batch %d/%d (size=%d): %s",
@@ -465,14 +497,20 @@ def _fetch_daily_bars(
                         exc,
                     )
                     metrics["fallback_batches"] += 1
-                    fallback_frame, fallback_pages, fallback_prescreened = fetch_single_collection(
-                        batch, use_http=True
+                    fallback_frame, fallback_pages, fallback_prescreened, fallback_metrics = (
+                        fetch_single_collection(batch, use_http=True)
                     )
                     if not fallback_frame.empty:
                         frames.append(fallback_frame)
                     metrics["pages_total"] += fallback_pages
+                    metrics["rate_limited"] += int(fallback_metrics.get("rate_limited", 0))
                     prescreened.update(fallback_prescreened)
                     continue
+                metrics["rate_limited"] += int(http_stats.get("rate_limited", 0))
+                pages_seen = int(http_stats.get("pages", 0))
+                metrics["pages_total"] += pages_seen
+                if pages_seen > 1:
+                    metrics["batches_paged"] += 1
                 bars_df = to_bars_df(raw)
                 if "symbol" not in bars_df.columns:
                     LOGGER.error(
@@ -480,12 +518,13 @@ def _fetch_daily_bars(
                         list(bars_df.columns),
                     )
                     metrics["fallback_batches"] += 1
-                    fallback_frame, fallback_pages, fallback_prescreened = fetch_single_collection(
-                        batch, use_http=True
+                    fallback_frame, fallback_pages, fallback_prescreened, fallback_metrics = (
+                        fetch_single_collection(batch, use_http=True)
                     )
                     if not fallback_frame.empty:
                         frames.append(fallback_frame)
                     metrics["pages_total"] += fallback_pages
+                    metrics["rate_limited"] += int(fallback_metrics.get("rate_limited", 0))
                     prescreened.update(fallback_prescreened)
                     continue
                 normalized = _normalize_bars_frame(bars_df)
@@ -494,7 +533,6 @@ def _fetch_daily_bars(
                         prescreened.setdefault(sym, "NAN_DATA")
                     continue
                 frames.append(normalized)
-                metrics["pages_total"] += 1
                 continue
 
             request_kwargs = {
@@ -523,12 +561,13 @@ def _fetch_daily_bars(
                 columns_desc or "<unknown>",
                 len(batch),
             )
-            fallback_frame, fallback_pages, fallback_prescreened = fetch_single_collection(
-                batch, use_http=True
+            fallback_frame, fallback_pages, fallback_prescreened, fallback_metrics = (
+                fetch_single_collection(batch, use_http=True)
             )
             if not fallback_frame.empty:
                 frames.append(fallback_frame)
             metrics["pages_total"] += fallback_pages
+            metrics["rate_limited"] += int(fallback_metrics.get("rate_limited", 0))
             prescreened.update(fallback_prescreened)
 
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
@@ -664,6 +703,7 @@ def _load_alpaca_universe(
         "symbols_no_bars_sample": [],
         "fallback_batches": 0,
         "insufficient_history": 0,
+        "rate_limited": 0,
     }
     empty_asset_metrics = {
         "assets_total": 0,
@@ -707,6 +747,7 @@ def _load_alpaca_universe(
     seen: set[str] = set()
     iex_exchanges = {"NASDAQ", "NYSE", "ARCA", "AMEX"}
     filtered_symbols: list[str] = []
+    filtered_skips: Dict[str, str] = {}
     for sym in ordered_symbols:
         if sym in seen:
             continue
@@ -715,10 +756,16 @@ def _load_alpaca_universe(
         asset_class = str(meta.get("asset_class", "") or "").strip().upper()
         exchange = str(meta.get("exchange", "") or "").strip().upper()
         if not tradable:
+            filtered_skips.setdefault(sym, "NON_EQUITY")
             continue
         if asset_class not in {"US_EQUITY", "EQUITY"}:
+            reason = "NON_EQUITY"
+            if asset_class in {"OTC"} and exchange:
+                reason = "UNKNOWN_EXCHANGE"
+            filtered_skips.setdefault(sym, reason)
             continue
         if iex_only and exchange not in iex_exchanges:
+            filtered_skips.setdefault(sym, "UNKNOWN_EXCHANGE")
             continue
         filtered_symbols.append(sym)
         seen.add(sym)
@@ -793,6 +840,10 @@ def _load_alpaca_universe(
             "Symbols dropped for insufficient history: %d",
             int(fetch_metrics.get("insufficient_history", 0)),
         )
+
+    if filtered_skips:
+        for sym, reason in filtered_skips.items():
+            prescreened.setdefault(sym, reason)
 
     if not bars_df.empty:
         bars_df = bars_df.copy()
@@ -871,10 +922,7 @@ def _determine_alpaca_base_url() -> str:
     _, _, base_url, _ = get_alpaca_creds()
     if base_url:
         return base_url.rstrip("/")
-    env = os.environ.get("APCA_API_ENV", "").lower()
-    if env == "live":
-        return "https://api.alpaca.markets"
-    return "https://paper-api.alpaca.markets"
+    return trading_base_url()
 
 
 def _asset_attr(asset: object, *names: str) -> object:
@@ -1098,6 +1146,15 @@ def _write_csv_atomic(path: Path, df: pd.DataFrame) -> None:
 def _write_json_atomic(path: Path, payload: dict) -> None:
     data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
     atomic_write_bytes(path, data)
+
+
+def _coerce_int(value: object) -> int:
+    if isinstance(value, (list, tuple, set)):
+        return len(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _score_symbol(df: pd.DataFrame) -> Tuple[float, str]:
@@ -1437,16 +1494,19 @@ def write_outputs(
     fetch_payload = fetch_metrics or {}
     metrics.update(
         {
-            "bars_rows_total": int(fetch_payload.get("bars_rows_total", 0)),
-            "symbols_with_bars": int(fetch_payload.get("symbols_with_bars", 0)),
-            "symbols_no_bars": int(fetch_payload.get("symbols_no_bars", 0)),
+            "bars_rows_total": _coerce_int(fetch_payload.get("bars_rows_total", 0)),
+            "symbols_with_bars": _coerce_int(fetch_payload.get("symbols_with_bars", 0)),
+            "symbols_no_bars": _coerce_int(fetch_payload.get("symbols_no_bars", 0)),
+            "rate_limited": _coerce_int(fetch_payload.get("rate_limited", 0)),
         }
     )
     asset_payload = asset_metrics or {}
     metrics.update(
         {
-            "assets_total": int(asset_payload.get("assets_total", 0)),
-            "symbols_after_iex_filter": int(asset_payload.get("symbols_after_iex_filter", 0)),
+            "assets_total": _coerce_int(asset_payload.get("assets_total", 0)),
+            "symbols_after_iex_filter": _coerce_int(
+                asset_payload.get("symbols_after_iex_filter", 0)
+            ),
         }
     )
     metrics["reject_samples"] = (reject_samples or [])[:10]
