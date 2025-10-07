@@ -2,10 +2,12 @@ import os
 import sys
 import subprocess
 from pathlib import Path
+import io
+from typing import Optional
 
 import pandas as pd
 
-from utils import write_csv_atomic
+from utils.io_utils import atomic_write_bytes
 
 
 def repo_root() -> Path:
@@ -19,9 +21,19 @@ def emit(evt, **kvs):
     subprocess.run(cmd, check=False)
 
 
-def _run_step(name: str, module: str, success_event: str, error_event: str, cwd: Path) -> bool:
+def _run_step(
+    name: str,
+    module: str,
+    success_event: str,
+    error_event: str,
+    cwd: Path,
+    extra_args: Optional[list[str]] = None,
+) -> bool:
     print(f"Starting {name} step...")
-    result = subprocess.run([sys.executable, "-m", module], cwd=cwd)
+    cmd = [sys.executable, "-m", module]
+    if extra_args:
+        cmd.extend(extra_args)
+    result = subprocess.run(cmd, cwd=cwd)
     if result.returncode != 0:
         emit(error_event, component="pipeline", returncode=str(result.returncode))
         print(f"{name} step failed with exit code {result.returncode}.")
@@ -45,6 +57,7 @@ def main() -> int:
             "SCREENER_SUCCESS",
             "SCREENER_ERROR",
             root,
+            extra_args=["--universe", "alpaca-active", "--days", "750", "--feed", "iex"],
         )
 
         if screener_ok:
@@ -52,16 +65,21 @@ def main() -> int:
             latest_path = root / "data" / "latest_candidates.csv"
             if top_path.exists():
                 try:
-                    df = pd.read_csv(top_path)
-                    write_csv_atomic(str(latest_path), df)
+                    csv_bytes = top_path.read_bytes()
+                    atomic_write_bytes(latest_path, csv_bytes)
+                    df = pd.read_csv(io.BytesIO(csv_bytes))
                     emit(
                         "LATEST_UPDATED",
                         component="pipeline",
                         rows=str(len(df)),
                     )
-                    print(
-                        f"Copied {len(df)} rows from top_candidates.csv to latest_candidates.csv."
-                    )
+                    rows = len(df)
+                    if rows:
+                        print(
+                            f"Screener produced {rows} candidates; refreshed latest_candidates.csv."
+                        )
+                    else:
+                        print("Screener completed with 0 candidates; refreshed latest_candidates.csv.")
                 except Exception as copy_exc:
                     emit(
                         "LATEST_COPY_FAILED",
