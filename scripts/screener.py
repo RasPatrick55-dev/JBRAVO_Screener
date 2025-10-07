@@ -184,6 +184,46 @@ class _TokenBucket:
             time.sleep(min(sleep_for, 0.5))
 
 
+def fetch_bars_http(
+    symbols: list[str],
+    start: str,
+    end: str,
+    timeframe: str = "1Day",
+    feed: str = "iex",
+    limit_per_page: int = 10000,
+) -> list[dict]:
+    import os as _os
+
+    base = _os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/")
+    url = f"{base}/v2/stocks/bars"
+    key = _os.getenv("APCA_API_KEY_ID")
+    sec = _os.getenv("APCA_API_SECRET_KEY")
+    headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec}
+    out: list[dict] = []
+    for chunk in (symbols[i : i + 50] for i in range(0, len(symbols), 50)):
+        page: Optional[str] = None
+        while True:
+            params = {
+                "symbols": ",".join(chunk),
+                "timeframe": timeframe,
+                "start": start,
+                "end": end,
+                "limit": limit_per_page,
+                "feed": feed,
+            }
+            if page:
+                params["page_token"] = page
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response.raise_for_status()
+            payload = response.json()
+            bars = payload.get("bars") or []
+            out.extend(bars)
+            page = payload.get("next_page_token")
+            if not page:
+                break
+    return out
+
+
 def _make_stock_bars_request(**kwargs: Any):
     if StockBarsRequest is None:
         raise RuntimeError("alpaca-py market data components unavailable")
@@ -301,7 +341,7 @@ def _collect_batch_pages(
 
 
 def _fetch_daily_bars(
-    data_client: "StockHistoricalDataClient",
+    data_client: Optional["StockHistoricalDataClient"],
     symbols: List[str],
     *,
     days: int,
@@ -310,6 +350,7 @@ def _fetch_daily_bars(
     batch_size: int,
     max_workers: int,
     min_history: int,
+    bars_source: str,
     now: Optional[datetime] = None,
 ) -> Tuple[pd.DataFrame, dict[str, int | list[str]], Dict[str, str]]:
     if not symbols:
@@ -323,8 +364,15 @@ def _fetch_daily_bars(
             "fallback_batches": 0,
             "insufficient_history": 0,
         }, {}
-    if StockBarsRequest is None or TimeFrame is None:
-        raise RuntimeError("alpaca-py market data components unavailable")
+
+    source = (bars_source or "http").strip().lower()
+    if source not in {"http", "sdk"}:
+        source = "http"
+    if source == "sdk":
+        if StockBarsRequest is None or TimeFrame is None:
+            raise RuntimeError("alpaca-py market data components unavailable")
+        if data_client is None:
+            raise RuntimeError("StockHistoricalDataClient required when bars_source=sdk")
 
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     days = max(1, int(days))
@@ -340,6 +388,12 @@ def _fetch_daily_bars(
     )
     start = _as_midnight(start_session)
     end = _as_midnight(last_session) + timedelta(days=1)
+
+    def _to_iso(value: datetime) -> str:
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    start_iso = _to_iso(start)
+    end_iso = _to_iso(end)
 
     unique_symbols = [str(sym or "").strip().upper() for sym in symbols if sym]
     unique_symbols = list(dict.fromkeys(unique_symbols))
@@ -357,12 +411,24 @@ def _fetch_daily_bars(
 
     frames: list[pd.DataFrame] = []
 
-    def fetch_single_collection(target_symbols: List[str]) -> Tuple[pd.DataFrame, int, Dict[str, str]]:
-        token_bucket = _TokenBucket(200)
+    def fetch_single_collection(
+        target_symbols: List[str], *, use_http: bool
+    ) -> Tuple[pd.DataFrame, int, Dict[str, str]]:
         local_frames: list[pd.DataFrame] = []
         local_prescreened: dict[str, str] = {}
+        token_bucket = _TokenBucket(200) if not use_http else None
 
-        def _worker(symbol: str) -> Tuple[str, pd.DataFrame]:
+        def _http_worker(symbol: str) -> Tuple[str, pd.DataFrame]:
+            try:
+                raw = fetch_bars_http([symbol], start_iso, end_iso, timeframe="1Day", feed=feed)
+                df = to_bars_df(raw, symbol_hint=symbol)
+            except Exception as exc:  # pragma: no cover - network errors hit in integration
+                LOGGER.warning("Failed HTTP bars fetch for %s: %s", symbol, exc)
+                df = pd.DataFrame(columns=BARS_COLUMNS)
+            return symbol, df
+
+        def _sdk_worker(symbol: str) -> Tuple[str, pd.DataFrame]:
+            assert data_client is not None  # for type checker
             request_kwargs = {
                 "symbol_or_symbols": symbol,
                 "timeframe": TimeFrame.Day,
@@ -375,6 +441,7 @@ def _fetch_daily_bars(
             for attempt in range(BAR_MAX_RETRIES):
                 try:
                     request = _make_stock_bars_request(**request_kwargs)
+                    assert token_bucket is not None
                     token_bucket.acquire()
                     response = data_client.get_stock_bars(request)
                     df = to_bars_df(response, symbol_hint=symbol)
@@ -384,7 +451,7 @@ def _fetch_daily_bars(
                     if status in BAR_RETRY_STATUSES and attempt < BAR_MAX_RETRIES - 1:
                         sleep_for = 2 ** attempt
                         LOGGER.warning(
-                            "Retrying single-symbol fetch for %s (attempt %d/%d) after %s",
+                            "Retrying single-symbol SDK fetch for %s (attempt %d/%d) after %s",
                             symbol,
                             attempt + 1,
                             BAR_MAX_RETRIES,
@@ -396,9 +463,10 @@ def _fetch_daily_bars(
                     break
             return symbol, pd.DataFrame(columns=BARS_COLUMNS)
 
+        worker = _http_worker if use_http else _sdk_worker
         pages = 0
         with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
-            futures = {executor.submit(_worker, symbol): symbol for symbol in target_symbols}
+            futures = {executor.submit(worker, symbol): symbol for symbol in target_symbols}
             for future in as_completed(futures):
                 symbol = futures[future]
                 try:
@@ -413,7 +481,7 @@ def _fetch_daily_bars(
                     continue
                 if "symbol" not in df.columns:
                     LOGGER.error(
-                        "Normalized bars missing 'symbol'; skipping symbol %s", sym
+                        "Normalize returned unexpected shape; got columns=%s", list(df.columns)
                     )
                     local_prescreened[sym] = "NAN_DATA"
                     continue
@@ -423,11 +491,17 @@ def _fetch_daily_bars(
                     continue
                 local_frames.append(normalized)
 
-        merged = pd.concat(local_frames, ignore_index=True) if local_frames else pd.DataFrame(columns=BARS_COLUMNS)
+        merged = (
+            pd.concat(local_frames, ignore_index=True)
+            if local_frames
+            else pd.DataFrame(columns=BARS_COLUMNS)
+        )
         return merged, pages, local_prescreened
 
     if fetch_mode == "single":
-        single_frame, single_pages, single_prescreened = fetch_single_collection(unique_symbols)
+        single_frame, single_pages, single_prescreened = fetch_single_collection(
+            unique_symbols, use_http=(source == "http")
+        )
         frames.append(single_frame)
         metrics["pages_total"] += single_pages
         prescreened.update(single_prescreened)
@@ -435,6 +509,50 @@ def _fetch_daily_bars(
         batches = list(_chunked(unique_symbols, max(1, batch_size)))
         metrics["batches_total"] = len(batches)
         for index, batch in enumerate(batches, start=1):
+            if source == "http":
+                try:
+                    raw = fetch_bars_http(batch, start_iso, end_iso, timeframe="1Day", feed=feed)
+                except Exception as exc:
+                    LOGGER.warning(
+                        "HTTP batch fetch failed for batch %d/%d (size=%d): %s",
+                        index,
+                        len(batches),
+                        len(batch),
+                        exc,
+                    )
+                    metrics["fallback_batches"] += 1
+                    fallback_frame, fallback_pages, fallback_prescreened = fetch_single_collection(
+                        batch, use_http=True
+                    )
+                    if not fallback_frame.empty:
+                        frames.append(fallback_frame)
+                    metrics["pages_total"] += fallback_pages
+                    prescreened.update(fallback_prescreened)
+                    continue
+                bars_df = to_bars_df(raw)
+                if "symbol" not in bars_df.columns:
+                    LOGGER.error(
+                        "Normalize returned unexpected shape; got columns=%s",
+                        list(bars_df.columns),
+                    )
+                    metrics["fallback_batches"] += 1
+                    fallback_frame, fallback_pages, fallback_prescreened = fetch_single_collection(
+                        batch, use_http=True
+                    )
+                    if not fallback_frame.empty:
+                        frames.append(fallback_frame)
+                    metrics["pages_total"] += fallback_pages
+                    prescreened.update(fallback_prescreened)
+                    continue
+                normalized = _normalize_bars_frame(bars_df)
+                if normalized.empty:
+                    for sym in batch:
+                        prescreened.setdefault(sym, "NAN_DATA")
+                    continue
+                frames.append(normalized)
+                metrics["pages_total"] += 1
+                continue
+
             request_kwargs = {
                 "symbol_or_symbols": batch if len(batch) > 1 else batch[0],
                 "timeframe": TimeFrame.Day,
@@ -452,22 +570,22 @@ def _fetch_daily_bars(
             if batch_success and batch_frames:
                 frames.append(pd.concat(batch_frames, ignore_index=True))
                 continue
-            if fetch_mode == "auto":
-                metrics["fallback_batches"] += 1
-                LOGGER.warning(
-                    "[WARN] Batch %d/%d: bars normalize failed (cols=%s); falling back to single-symbol fetch for %d symbols",
-                    index,
-                    len(batches),
-                    columns_desc or "<unknown>",
-                    len(batch),
-                )
-                single_frame, single_pages, single_prescreened = fetch_single_collection(batch)
-                frames.append(single_frame)
-                metrics["pages_total"] += single_pages
-                prescreened.update(single_prescreened)
-            else:
-                for sym in batch:
-                    prescreened[sym] = "NAN_DATA"
+
+            metrics["fallback_batches"] += 1
+            LOGGER.warning(
+                "[WARN] Batch %d/%d: bars normalize failed (cols=%s); falling back to single-symbol HTTP for %d symbols",
+                index,
+                len(batches),
+                columns_desc or "<unknown>",
+                len(batch),
+            )
+            fallback_frame, fallback_pages, fallback_prescreened = fetch_single_collection(
+                batch, use_http=True
+            )
+            if not fallback_frame.empty:
+                frames.append(fallback_frame)
+            metrics["pages_total"] += fallback_pages
+            prescreened.update(fallback_prescreened)
 
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
     if not combined.empty and "symbol" not in combined.columns:
@@ -579,6 +697,7 @@ def _load_alpaca_universe(
     batch_size: int,
     max_workers: int,
     min_history: int,
+    bars_source: str,
     exclude_otc: bool,
     now: datetime,
 ) -> Tuple[
@@ -653,11 +772,19 @@ def _load_alpaca_universe(
     if not symbols:
         return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, empty_metrics, {}, asset_metrics
 
-    try:
-        data_client = _create_data_client()
-    except Exception as exc:
-        LOGGER.error("Unable to create Alpaca market data client: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, empty_metrics, {}, asset_metrics
+    data_client: Optional["StockHistoricalDataClient"] = None
+    if (bars_source or "http").strip().lower() == "sdk":
+        try:
+            data_client = _create_data_client()
+        except Exception as exc:
+            LOGGER.error("Unable to create Alpaca market data client: %s", exc)
+            return (
+                pd.DataFrame(columns=INPUT_COLUMNS),
+                asset_meta,
+                empty_metrics,
+                {},
+                asset_metrics,
+            )
 
     bars_df, fetch_metrics, prescreened = _fetch_daily_bars(
         data_client,
@@ -668,6 +795,7 @@ def _load_alpaca_universe(
         batch_size=max(1, batch_size),
         max_workers=max(1, max_workers),
         min_history=min_history,
+        bars_source=bars_source,
         now=now,
     )
     LOGGER.info(
@@ -1367,6 +1495,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Market data feed to request from Alpaca",
     )
     parser.add_argument(
+        "--bars-source",
+        choices=["http", "sdk"],
+        default="http",
+        help="Source for fetching bars data",
+    )
+    parser.add_argument(
         "--fetch-mode",
         choices=["auto", "batch", "single"],
         default="auto",
@@ -1456,6 +1590,7 @@ def main(
                 batch_size=args.batch_size,
                 max_workers=args.max_workers,
                 min_history=args.min_history,
+                bars_source=args.bars_source,
                 exclude_otc=args.exclude_otc,
                 now=now,
             )

@@ -61,12 +61,26 @@ def test_screener_api_mode_creates_outputs(tmp_path, monkeypatch):
                 "UNKNOWN1": {"exchange": "PINK", "asset_class": "OTC", "tradable": True},
                 "CRYPTO1": {"exchange": "CRYPTO", "asset_class": "CRYPTO", "tradable": True},
             },
+            {"assets_total": 3, "assets_tradable_equities": 1, "assets_after_filters": 1},
         ),
     )
     monkeypatch.setattr(
         screener,
         "_fetch_daily_bars",
-        lambda *args, **kwargs: (mock_bars.copy(), 0),
+        lambda *args, **kwargs: (
+            mock_bars.copy(),
+            {
+                "batches_total": 0,
+                "batches_paged": 0,
+                "pages_total": 0,
+                "bars_rows_total": int(mock_bars.shape[0]),
+                "symbols_with_bars": 1,
+                "symbols_no_bars": [],
+                "fallback_batches": 0,
+                "insufficient_history": 0,
+            },
+            {},
+        ),
     )
 
     exit_code = screener.main([], output_dir=tmp_path)

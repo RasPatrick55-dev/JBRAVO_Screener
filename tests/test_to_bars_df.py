@@ -7,7 +7,7 @@ from scripts.utils.dataframe_utils import BARS_COLUMNS, to_bars_df
 pytestmark = pytest.mark.alpaca_optional
 
 
-def test_to_bars_df_handles_multiindex():
+def test_to_bars_df_sdk_multiindex():
     idx = pd.MultiIndex.from_tuples(
         [("AAPL", "2024-10-01"), ("MSFT", "2024-10-01")],
         names=["symbol", "timestamp"],
@@ -53,7 +53,7 @@ def test_to_bars_df_handles_dict_of_lists():
     assert out.loc[0, "symbol"] == "AAPL"
 
 
-def test_to_bars_df_handles_http_payload():
+def test_to_bars_df_http_renames():
     payload = [
         {"S": "msft", "t": "2024-10-01T00:00:00Z", "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 200}
     ]
