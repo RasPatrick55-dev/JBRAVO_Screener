@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from scripts.utils.dataframe_utils import BARS_COLUMNS, to_bars_df
+from scripts.utils.normalize import BARS_COLUMNS, to_bars_df
 
 
 pytestmark = pytest.mark.alpaca_optional
