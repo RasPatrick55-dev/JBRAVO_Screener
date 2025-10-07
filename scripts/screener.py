@@ -124,7 +124,7 @@ DEFAULT_TOP_N = 15
 DEFAULT_MIN_HISTORY = 180
 ASSET_CACHE_RELATIVE = Path("data") / "reference" / "assets_cache.json"
 ASSET_HTTP_TIMEOUT = 15
-BARS_BATCH_SIZE = 150
+BARS_BATCH_SIZE = 200
 BAR_RETRY_STATUSES = {429, 500, 502, 503, 504}
 BAR_MAX_RETRIES = 3
 
@@ -132,6 +132,20 @@ BAR_MAX_RETRIES = 3
 def _chunked(items: List[str], size: int) -> Iterable[List[str]]:
     for start in range(0, len(items), size):
         yield items[start : start + size]
+
+
+def _enum_to_str(value: object) -> str:
+    if value is None:
+        return ""
+    try:  # pragma: no cover - depends on enum type
+        return str(value.name).upper()
+    except Exception:
+        pass
+    try:  # pragma: no cover - some enums expose ``value``
+        return str(value.value).upper()
+    except Exception:
+        pass
+    return str(value).upper()
 
 
 def _resolve_feed(feed: str):
@@ -215,21 +229,35 @@ def _fetch_daily_bars(
     if StockBarsRequest is None or TimeFrame is None:
         raise RuntimeError("alpaca-py market data components unavailable")
 
-    window_days = max(days + 30, int(days * 1.5))
-    now = now or datetime.now(timezone.utc)
-    start = now - timedelta(days=window_days)
-    end = now
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    days = max(1, int(days))
+
+    def _as_midnight(date_like: np.datetime64) -> datetime:
+        ts = pd.Timestamp(date_like).to_pydatetime()
+        return datetime.combine(ts.date(), datetime.min.time(), tzinfo=timezone.utc)
+
+    current_day = np.datetime64(now.date(), "D")
+    last_session = np.busday_offset(current_day, 0, roll="backward")
+    start_session = (
+        np.busday_offset(last_session, -(days - 1), roll="backward") if days > 1 else last_session
+    )
+    start = _as_midnight(start_session)
+    end = _as_midnight(last_session) + timedelta(days=1)
 
     frames: List[pd.DataFrame] = []
     batch_failures = 0
     for batch in _chunked(symbols, BARS_BATCH_SIZE):
-        request = StockBarsRequest(
-            symbol_or_symbols=batch,
-            timeframe=TimeFrame.Day,
-            start=start,
-            end=end,
-            feed=_resolve_feed(feed),
-        )
+        request_kwargs = {
+            "symbol_or_symbols": batch,
+            "timeframe": TimeFrame.Day,
+            "start": start,
+            "end": end,
+            "feed": _resolve_feed(feed),
+        }
+        try:
+            request = StockBarsRequest(limit=days, **request_kwargs)
+        except TypeError:  # pragma: no cover - limit added in newer SDKs
+            request = StockBarsRequest(**request_kwargs)
         success = False
         last_error: Optional[Exception] = None
         for attempt in range(BAR_MAX_RETRIES):
@@ -345,24 +373,32 @@ def _load_alpaca_universe(
             bars_df = bars_df.copy()
             bars_df["symbol"] = bars_df["symbol"].astype(str).str.strip().str.upper()
             merged = bars_df.merge(meta_df, on="symbol", how="left")
-            if "exchange" in merged.columns:
-                merged["exchange"] = (
-                    merged["exchange"].fillna("").astype(str).str.strip().str.upper()
-                )
-            else:
+            if "exchange" not in merged.columns:
                 merged["exchange"] = ""
+            merged["exchange"] = merged["exchange"].fillna("").astype(str).str.strip().str.upper()
             merged["exchange_meta"] = (
                 merged["exchange_meta"].fillna("").astype(str).str.strip().str.upper()
             )
-            merged["exchange"] = merged["exchange"].where(
-                merged["exchange"].str.len() > 0,
-                merged["exchange_meta"],
-            )
-            merged.drop(columns=["exchange_meta"], inplace=True)
             merged["asset_class"] = (
                 merged["asset_class"].fillna("").astype(str).str.strip().str.upper()
             )
             merged["tradable"] = merged["tradable"].fillna(False).astype(bool)
+            merged["exchange"] = merged["exchange"].where(
+                merged["exchange"].str.len() > 0,
+                merged["exchange_meta"],
+            )
+            exchange_for_kind = merged["exchange"].fillna("")
+            kind = exchange_for_kind.apply(classify_exchange)
+            promote_mask = (kind == "OTHER") & (
+                merged["asset_class"].isin(["US_EQUITY", "EQUITY"])
+            )
+            if promote_mask.any():
+                kind.loc[promote_mask] = "EQUITY"
+                blank_exchange = promote_mask & (merged["exchange"].str.len() == 0)
+                if blank_exchange.any():
+                    merged.loc[blank_exchange, "exchange"] = "EQUITY"
+            merged["kind"] = kind
+            merged.drop(columns=["exchange_meta"], inplace=True)
             bars_df = merged
     return bars_df, asset_meta
 
@@ -440,23 +476,19 @@ def _filter_equity_assets(assets: Iterable[object]) -> Tuple[List[str], Dict[str
         if not tradable:
             continue
 
-        status_raw = _asset_attr(asset, "status")
-        status = str(status_raw or "").strip().lower()
-        if status and status != "active":
+        status = _enum_to_str(_asset_attr(asset, "status")).strip().upper()
+        if status and status not in {"ACTIVE", ""}:
             continue
 
-        cls_raw = _asset_attr(asset, "class_", "asset_class", "class")
-        cls = str(cls_raw or "").strip().upper()
-        if cls.lower() not in {"us_equity", "equity"}:
+        cls = _enum_to_str(_asset_attr(asset, "asset_class", "class_", "class")).strip().upper()
+        if cls not in {"US_EQUITY", "EQUITY"}:
             continue
 
-        symbol_raw = _asset_attr(asset, "symbol")
-        symbol = str(symbol_raw or "").strip().upper()
+        symbol = _enum_to_str(_asset_attr(asset, "symbol")).strip().upper()
         if not symbol:
             continue
 
-        exchange_raw = _asset_attr(asset, "exchange", "primary_exchange")
-        exchange = str(exchange_raw or "").strip().upper()
+        exchange = _enum_to_str(_asset_attr(asset, "exchange", "primary_exchange")).strip().upper()
 
         symbols.add(symbol)
         asset_meta[symbol] = {
@@ -465,21 +497,24 @@ def _filter_equity_assets(assets: Iterable[object]) -> Tuple[List[str], Dict[str
             "tradable": tradable,
         }
 
-    LOGGER.info("Asset meta ready: %d symbols", len(asset_meta))
+    LOGGER.info("Asset meta ready: %d symbols (tradable US equities)", len(asset_meta))
     return sorted(symbols), asset_meta
 
 
 def _fetch_assets_via_sdk(trading_client) -> Tuple[List[str], Dict[str, dict]]:
     if trading_client is None:
         raise RuntimeError("Trading client is unavailable")
-    if GetAssetsRequest is None or AssetStatus is None or AssetClass is None:
-        assets = trading_client.get_all_assets()
-    else:
-        request = GetAssetsRequest(
-            status=AssetStatus.ACTIVE,
-            asset_class=AssetClass.US_EQUITY,
-        )
-        assets = trading_client.get_all_assets(request)
+    try:
+        if GetAssetsRequest is None or AssetStatus is None or AssetClass is None:
+            assets = trading_client.get_all_assets()
+        else:
+            request = GetAssetsRequest(
+                status=AssetStatus.ACTIVE,
+                asset_class=AssetClass.US_EQUITY,
+            )
+            assets = trading_client.get_all_assets(request)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
     return _filter_equity_assets(assets)
 
 
@@ -524,7 +559,7 @@ def fetch_active_equity_symbols(
     try:
         symbols, asset_meta = _fetch_assets_via_sdk(trading_client)
     except Exception as exc:  # pragma: no cover - requires Alpaca SDK error
-        LOGGER.warning("Alpaca assets validation failed; falling back to raw HTTP: %s", exc)
+        LOGGER.warning("SDK assets fetch failed (%s); falling back to HTTP", exc)
         symbols, asset_meta = _fetch_assets_via_http()
         if symbols:
             _write_assets_cache(cache_path, symbols)
