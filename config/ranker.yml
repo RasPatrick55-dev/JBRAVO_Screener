@@ -1,0 +1,40 @@
+weights:
+  trend: 0.25
+  momentum: 0.2
+  breakout: 0.12
+  pivot_trend: 0.1
+  multi_horizon: 0.08
+  rsi: 0.07
+  adx: 0.06
+  aroon: 0.04
+  vol_contraction: 0.04
+  volume_expansion: 0.03
+  gap_penalty: -0.04
+  liquidity_penalty: -0.05
+
+components:
+  trend: TS
+  momentum: MS
+  breakout: BP
+  pivot_trend: PT
+  multi_horizon: MH
+  rsi: RSI
+  adx: ADX
+  aroon: AROON
+  vol_contraction: VCP
+  volume_expansion: VOLexp
+  gap_penalty: GAPpen
+  liquidity_penalty: LIQpen
+
+gates:
+  min_history: 20
+  min_rsi: 52
+  max_rsi: 68
+  min_adx: 18
+  min_aroon: 40
+  min_volexp: 0.8
+  max_gap: 0.08
+  max_liq_penalty: 0.00001
+  require_sma_stack: true
+  min_score: null
+  history_column: history
