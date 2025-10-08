@@ -10,13 +10,14 @@ pytestmark = pytest.mark.alpaca_optional
 
 def _make_synthetic_bars(rows: int = 220) -> pd.DataFrame:
     symbols = ["AAA", "BBB"]
+    rng = np.random.default_rng(42)
     frames = []
     for symbol in symbols:
         idx = pd.date_range("2023-01-01", periods=rows, freq="B", tz="UTC")
         base = np.linspace(10, 50, num=rows)
         noise = np.sin(np.linspace(0, np.pi * 4, num=rows))
         close = base + noise
-        open_ = close + np.random.default_rng(0).normal(0, 0.5, size=rows)
+        open_ = close + rng.normal(0, 0.5, size=rows)
         high = np.maximum(open_, close) + 0.5
         low = np.minimum(open_, close) - 0.5
         volume = np.linspace(100_000, 250_000, num=rows) * (1 + 0.1 * noise)
