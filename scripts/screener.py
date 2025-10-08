@@ -455,16 +455,19 @@ def _fetch_daily_bars(
         *,
         from_cache: bool = False,
     ) -> None:
-        suffix = " (cache)" if from_cache else ""
+        total_width = max(len(str(batches_total)), 2)
+        batch_label = f"{batch_idx:0{total_width}d}"
+        total_label = f"{batches_total:0{total_width}d}"
+        cache_state = "hit" if from_cache else "miss"
         LOGGER.info(
-            "[INFO] bars: batch %d/%d symbols=%d pages=%d rows=~%d elapsed=%.1fs%s",
-            batch_idx,
-            batches_total,
+            "[INFO] bars: batch %s/%s syms=%d pages=%d rows=~%d elapsed=%.1fs cache=%s",
+            batch_label,
+            total_label,
             symbols_in_batch,
             pages,
             rows,
             elapsed,
-            suffix,
+            cache_state,
         )
 
     def _parse_iso(value: str) -> datetime:
@@ -493,6 +496,7 @@ def _fetch_daily_bars(
         "raw_bars_count": 0,
         "parsed_rows_count": 0,
         "cache_hits": 0,
+        "cache_misses": 0,
     }
     prescreened: dict[str, str] = {}
     symbols_with_history: set[str] = set()
@@ -809,6 +813,7 @@ def _fetch_daily_bars(
                         from_cache=True,
                     )
                     continue
+                metrics["cache_misses"] += 1
                 try:
                     hook = _acquire_verify_hook()
                     raw, http_stats = fetch_bars_http(
@@ -1898,6 +1903,69 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     atomic_write_bytes(path, data)
 
 
+def write_predictions(
+    ranked_df: Optional[pd.DataFrame],
+    run_meta: Optional[Mapping[str, object]],
+    top_n: int = 200,
+) -> None:
+    run_date = datetime.now(tz=timezone.utc).date().isoformat()
+    pred_dir = Path("data") / "predictions"
+    pred_dir.mkdir(parents=True, exist_ok=True)
+
+    keep = [
+        "symbol",
+        "Score",
+        "rank",
+        "timestamp",
+        "close",
+        "ATR14",
+        "ADV20",
+        "TS",
+        "MS",
+        "BP",
+        "PT",
+        "RSI",
+        "MH",
+        "ADX",
+        "AROON",
+        "VCP",
+        "VOLexp",
+        "GAPpen",
+        "LIQpen",
+        "score_breakdown",
+    ]
+    cols = ["run_date"] + keep + ["ranker_version", "gate_preset", "relax_gates"]
+
+    if isinstance(ranked_df, pd.DataFrame):
+        out = ranked_df.copy()
+    else:
+        out = pd.DataFrame(columns=keep)
+
+    if out.empty:
+        out = pd.DataFrame(columns=keep)
+    else:
+        out = out.reset_index(drop=True)
+
+    out["rank"] = range(1, len(out) + 1)
+    for column in keep:
+        if column not in out.columns:
+            out[column] = pd.NA
+
+    meta = run_meta or {}
+    out["run_date"] = run_date
+    out["ranker_version"] = str(meta.get("ranker_version", "1.0.0"))
+    out["gate_preset"] = str(meta.get("gate_preset", "standard"))
+    out["relax_gates"] = str(meta.get("relax_gates", "none"))
+
+    out = out[[col for col in cols if col in out.columns]]
+
+    head = out.head(top_n)
+    daily_path = pred_dir / f"{run_date}.csv"
+    head.to_csv(daily_path, index=False)
+    head.to_csv(pred_dir / "latest.csv", index=False)
+    LOGGER.info("[STAGE] predictions written: %s (top_n=%d)", daily_path, top_n)
+
+
 def _prepare_predictions_frame(
     scored_df: pd.DataFrame,
     *,
@@ -2105,9 +2173,13 @@ def run_screener(
             LOGGER.warning("Invalid dollar_vol_min override: %s", dollar_vol_min)
 
     timing_info: dict[str, float] = {}
+    LOGGER.info("[STAGE] features start")
     enriched = build_enriched_bars(prepared, ranker_cfg, timings=timing_info)
+    LOGGER.info("[STAGE] features end (rows=%d)", int(enriched.shape[0]))
     rank_timer = T()
+    LOGGER.info("[STAGE] rank start")
     scored_df = score_universe(enriched, ranker_cfg)
+    LOGGER.info("[STAGE] rank end (rows=%d)", int(scored_df.shape[0]))
     timing_info["rank_secs"] = timing_info.get("rank_secs", 0.0) + rank_timer.lap("rank_secs")
     if not scored_df.empty:
         scored_df["rank"] = np.arange(1, scored_df.shape[0] + 1, dtype=int)
@@ -2116,7 +2188,9 @@ def run_screener(
     scored_df["gates_passed"] = False
 
     gates_timer = T()
+    LOGGER.info("[STAGE] gates start")
     candidates_df, gate_fail_counts, gate_rejects = apply_gates(scored_df, ranker_cfg)
+    LOGGER.info("[STAGE] gates end (candidates=%d)", int(candidates_df.shape[0]))
     timing_info["gates_secs"] = timing_info.get("gates_secs", 0.0) + gates_timer.lap("gates_secs")
 
     if not candidates_df.empty:
@@ -2206,57 +2280,36 @@ def write_outputs(
     data_dir = base_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    if top_df is None:
+        top_df = pd.DataFrame(columns=TOP_CANDIDATE_COLUMNS)
+    if scored_df is None:
+        scored_df = pd.DataFrame()
+
     top_path = data_dir / "top_candidates.csv"
     scored_path = data_dir / "scored_candidates.csv"
     metrics_path = data_dir / "screener_metrics.json"
-    predictions_dir = data_dir / "predictions"
-    predictions_dir.mkdir(parents=True, exist_ok=True)
-    run_date_str = now.date().isoformat()
-    daily_predictions_path = predictions_dir / f"{run_date_str}.csv"
 
     _write_csv_atomic(top_path, top_df)
     _write_csv_atomic(scored_path, scored_df)
 
-    pred_cols = [
-        "symbol",
-        "Score",
-        "rank",
-        "timestamp",
-        "close",
-        "ATR14",
-        "ADV20",
-        "TS",
-        "MS",
-        "BP",
-        "PT",
-        "RSI",
-        "MH",
-        "ADX",
-        "AROON",
-        "VCP",
-        "VOLexp",
-        "GAPpen",
-        "LIQpen",
-        "score_breakdown",
-    ]
-    if scored_df is None or scored_df.empty:
-        predictions_out = pd.DataFrame(columns=["run_date"] + pred_cols)
-    else:
-        ranked_df = scored_df.copy()
-        ranked_df = ranked_df.reset_index(drop=True)
-        ranked_df["rank"] = range(1, len(ranked_df) + 1)
-        ranked_df["run_date"] = run_date_str
-        for col in pred_cols:
-            if col not in ranked_df.columns:
-                ranked_df[col] = pd.NA
-        predictions_out = ranked_df[[c for c in ["run_date"] + pred_cols if c in ranked_df.columns]].copy()
-        missing_cols = [c for c in pred_cols if c not in predictions_out.columns]
-        for col in missing_cols:
-            predictions_out[col] = pd.NA
-        predictions_out = predictions_out[["run_date"] + pred_cols]
-
-    _write_csv_atomic(daily_predictions_path, predictions_out)
-    _write_csv_atomic(predictions_dir / "latest.csv", predictions_out)
+    cfg_for_summary = ranker_cfg or _load_ranker_config()
+    gate_meta = gate_counters or {}
+    gate_preset_meta: Optional[str] = None
+    gate_relax_meta: Optional[str] = None
+    if isinstance(gate_meta, Mapping):
+        raw_preset = gate_meta.get("gate_preset") if gate_meta else None
+        raw_relax = gate_meta.get("gate_relax_mode") if gate_meta else None
+        gate_preset_meta = str(raw_preset) if raw_preset not in (None, "") else None
+        gate_relax_meta = str(raw_relax) if raw_relax not in (None, "") else None
+    if isinstance(ranker_cfg, Mapping):
+        gate_preset_meta = gate_preset_meta or str(ranker_cfg.get("_gate_preset") or "") or None
+        gate_relax_meta = gate_relax_meta or str(ranker_cfg.get("_gate_relax_mode") or "") or None
+    run_meta = {
+        "ranker_version": str(cfg_for_summary.get("version", "unknown")),
+        "gate_preset": gate_preset_meta or "standard",
+        "relax_gates": gate_relax_meta or "none",
+    }
+    write_predictions(scored_df, run_meta)
 
     diagnostics_dir = data_dir / "diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
@@ -2288,7 +2341,6 @@ def write_outputs(
     diag_json = diag_frame.to_json(orient="records", indent=2)
     atomic_write_bytes(diag_json_path, diag_json.encode("utf-8"))
 
-    cfg_for_summary = ranker_cfg or _load_ranker_config()
     metrics = {
         "last_run_utc": _format_timestamp(now),
         "status": status,
@@ -2324,8 +2376,28 @@ def write_outputs(
             "raw_bars_count": _coerce_int(fetch_payload.get("raw_bars_count", 0)),
             "parsed_rows_count": _coerce_int(fetch_payload.get("parsed_rows_count", 0)),
             "cache_hits": _coerce_int(fetch_payload.get("cache_hits", 0)),
+            "cache_misses": _coerce_int(fetch_payload.get("cache_misses", 0)),
+            "batches_total": _coerce_int(fetch_payload.get("batches_total", 0)),
         }
     )
+    cache_hits = metrics.get("cache_hits", 0)
+    cache_misses = metrics.get("cache_misses", 0)
+    if not cache_misses:
+        batches_total = metrics.get("batches_total", 0)
+        try:
+            cache_misses = max(int(batches_total) - int(cache_hits), 0)
+        except Exception:
+            cache_misses = 0
+        metrics["cache_misses"] = cache_misses
+    metrics["cache"] = {
+        "batches_hit": int(cache_hits or 0),
+        "batches_miss": int(cache_misses or 0),
+    }
+    metrics["http"] = {
+        "429": int(metrics.get("rate_limited", 0) or 0),
+        "404": int(metrics.get("http_404_batches", 0) or 0),
+        "empty_pages": int(metrics.get("http_empty_batches", 0) or 0),
+    }
     window_attempts = fetch_payload.get("window_attempts", [])
     if isinstance(window_attempts, list):
         metrics["window_attempts"] = window_attempts
@@ -2363,7 +2435,7 @@ def write_outputs(
         else:
             pd.DataFrame([row]).to_csv(hist_path, mode="w", header=True, index=False)
     except Exception as exc:
-        logger.warning("Could not append metrics history: %s", exc)
+        LOGGER.warning("Could not append metrics history: %s", exc)
 
     return metrics_path
 
@@ -2525,6 +2597,7 @@ def main(
     if args.symbols:
         symbols_override = [s.strip() for s in str(args.symbols).split(",") if s.strip()]
 
+    LOGGER.info("[STAGE] fetch start")
     frame: pd.DataFrame
     asset_meta: Dict[str, dict] = {}
     fetch_metrics: dict[str, int | list[str]] = {}
@@ -2533,6 +2606,11 @@ def main(
     if input_df is not None:
         frame = input_df
         fetch_elapsed = pipeline_timer.lap("fetch_secs")
+        LOGGER.info(
+            "[STAGE] fetch end (rows=%d, elapsed=%.2fs)",
+            int(frame.shape[0]) if hasattr(frame, "shape") else 0,
+            fetch_elapsed,
+        )
     else:
         universe_mode = args.universe
         frame = pd.DataFrame(columns=INPUT_COLUMNS)
@@ -2575,6 +2653,11 @@ def main(
                 reuse_cache=bool(args.reuse_cache),
             )
             fetch_elapsed = pipeline_timer.lap("fetch_secs")
+        LOGGER.info(
+            "[STAGE] fetch end (rows=%d, elapsed=%.2fs)",
+            int(frame.shape[0]) if hasattr(frame, "shape") else 0,
+            fetch_elapsed,
+        )
     (
         top_df,
         scored_df,

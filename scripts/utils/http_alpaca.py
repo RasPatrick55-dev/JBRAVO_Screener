@@ -122,6 +122,7 @@ def fetch_bars_http(
     return out, {
         "http_404_batches": http_404,
         "http_empty_batches": http_empty,
+        "empty_pages": http_empty,
         "rate_limited": rate_limited,
         "pages": pages_total,
         "requests": requests_made,

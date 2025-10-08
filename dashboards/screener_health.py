@@ -372,14 +372,30 @@ def register_callbacks(app) -> None:
         screener_tail = _tail(LOG_DIR / "screener.log", 180)
         pipeline_tail = _tail(LOG_DIR / "pipeline.log", 180)
 
+        def _safe_int(value) -> int:
+            try:
+                return int(value or 0)
+            except Exception:
+                return 0
+
+        http_meta = (metrics.get("http") or {}) if isinstance(metrics.get("http"), dict) else {}
+        cache_meta = (metrics.get("cache") or {}) if isinstance(metrics.get("cache"), dict) else {}
+
         http_cards = _make_stat_cards(
             [
-                ("HTTP 404", f"{int(metrics.get('http_404_batches', 0) or 0):,}"),
-                ("HTTP Empty", f"{int(metrics.get('http_empty_batches', 0) or 0):,}"),
-                ("Rate Limited", f"{int(metrics.get('rate_limited', 0) or 0):,}"),
-                ("Cache Hits", f"{int(metrics.get('cache_hits', 0) or 0):,}"),
+                ("HTTP 429", f"{_safe_int(http_meta.get('429', metrics.get('rate_limited', 0))):,}"),
+                ("HTTP 404", f"{_safe_int(http_meta.get('404', metrics.get('http_404_batches', 0))):,}"),
+                (
+                    "HTTP Empty",
+                    f"{_safe_int(http_meta.get('empty_pages', metrics.get('http_empty_batches', 0))):,}",
+                ),
+                ("Cache Hit", f"{_safe_int(cache_meta.get('batches_hit', metrics.get('cache_hits', 0))):,}"),
+                (
+                    "Cache Miss",
+                    f"{_safe_int(cache_meta.get('batches_miss', metrics.get('cache_misses', 0))):,}",
+                ),
                 ("Window Used", str(metrics.get("window_used", "n/a"))),
-                ("No Bars", f"{int(metrics.get('symbols_no_bars', 0) or 0):,}"),
+                ("No Bars", f"{_safe_int(metrics.get('symbols_no_bars', 0)):,}"),
             ]
         )
 
