@@ -1680,6 +1680,32 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     atomic_write_bytes(path, data)
 
 
+def _prepare_predictions_frame(scored_df: pd.DataFrame) -> pd.DataFrame:
+    if scored_df is None or scored_df.empty:
+        columns = ["symbol", "Score", "rank", "gates_passed"]
+        return pd.DataFrame(columns=columns)
+
+    frame = scored_df.copy()
+    if "rank" not in frame.columns:
+        frame["rank"] = np.arange(1, frame.shape[0] + 1, dtype=int)
+    if "gates_passed" not in frame.columns:
+        frame["gates_passed"] = False
+    frame["gates_passed"] = frame["gates_passed"].fillna(False).astype(bool)
+
+    ordered_cols: list[str] = []
+    if "timestamp" in frame.columns:
+        ordered_cols.append("timestamp")
+    ordered_cols.extend(["symbol", "Score", "rank", "gates_passed"])
+
+    remaining = [col for col in frame.columns if col not in ordered_cols]
+    if "score_breakdown" in remaining:
+        remaining.remove("score_breakdown")
+        remaining.append("score_breakdown")
+
+    column_order = ordered_cols + remaining
+    return frame[column_order]
+
+
 def _coerce_int(value: object) -> int:
     if isinstance(value, (list, tuple, set)):
         return len(value)
@@ -1760,7 +1786,31 @@ def run_screener(
 
     enriched = build_enriched_bars(prepared, ranker_cfg)
     scored_df = score_universe(enriched, ranker_cfg)
+    if not scored_df.empty:
+        scored_df["rank"] = np.arange(1, scored_df.shape[0] + 1, dtype=int)
+    else:
+        scored_df["rank"] = pd.Series(dtype="int64")
+    scored_df["gates_passed"] = False
+
     candidates_df, gate_fail_counts, gate_rejects = apply_gates(scored_df, ranker_cfg)
+
+    if not candidates_df.empty:
+        def _gate_key(frame: pd.DataFrame) -> pd.Index:
+            symbols = frame.get("symbol", pd.Series(index=frame.index, dtype="object"))
+            symbols = symbols.astype(str).str.upper()
+            if "timestamp" in frame.columns:
+                timestamps = pd.to_datetime(
+                    frame["timestamp"], utc=True, errors="coerce"
+                )
+                timestamp_str = timestamps.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                timestamp_str = timestamp_str.fillna("")
+            else:
+                timestamp_str = pd.Series("", index=frame.index, dtype="object")
+            return symbols.str.cat(timestamp_str, sep="|")
+
+        passed_index = set(_gate_key(candidates_df))
+        scored_df_keys = _gate_key(scored_df)
+        scored_df["gates_passed"] = scored_df_keys.isin(passed_index)
 
     stats["candidates_out"] = int(candidates_df.shape[0])
 
@@ -1822,9 +1872,13 @@ def write_outputs(
     top_path = data_dir / "top_candidates.csv"
     scored_path = data_dir / "scored_candidates.csv"
     metrics_path = data_dir / "screener_metrics.json"
+    predictions_dir = data_dir / "predictions"
+    predictions_dir.mkdir(parents=True, exist_ok=True)
+    predictions_path = predictions_dir / f"{now.date().isoformat()}.csv"
 
     _write_csv_atomic(top_path, top_df)
     _write_csv_atomic(scored_path, scored_df)
+    _write_csv_atomic(predictions_path, _prepare_predictions_frame(scored_df))
 
     cfg_for_summary = ranker_cfg or _load_ranker_config()
     metrics = {
