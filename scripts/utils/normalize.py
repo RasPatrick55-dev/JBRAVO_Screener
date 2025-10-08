@@ -1,30 +1,16 @@
 """Normalization helpers for Alpaca bar payloads."""
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any
 
 import pandas as pd
 
+try:  # pragma: no cover - optional dependency handling
+    import pytz
+except Exception:  # pragma: no cover - pytz not required for functionality
+    pytz = None
+
 CANON = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
-
-
-def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
-    for column in CANON:
-        if column not in df.columns:
-            df[column] = pd.NA
-    return df
-
-
-def _coerce_symbol(df: pd.DataFrame, symbol_hint: str | None = None) -> pd.DataFrame:
-    if symbol_hint:
-        df["symbol"] = df["symbol"].fillna(symbol_hint)
-        mask = df["symbol"].astype(str).str.strip() == ""
-        if mask.any():
-            df.loc[mask, "symbol"] = symbol_hint
-    df["symbol"] = df["symbol"].astype("string").str.strip().str.upper()
-    df = df[df["symbol"].notna()]
-    df = df[df["symbol"] != ""]
-    return df
 
 
 def _rename_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -36,6 +22,9 @@ def _rename_columns(df: pd.DataFrame) -> pd.DataFrame:
             "T": "timestamp",
             "time": "timestamp",
             "Time": "timestamp",
+            "level_0": "symbol",
+            "level_1": "timestamp",
+            "index": "symbol",
             "o": "open",
             "Open": "open",
             "h": "high",
@@ -50,15 +39,14 @@ def _rename_columns(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _from_iterable(obj: Iterable[Any]) -> pd.DataFrame:
-    df = pd.DataFrame(obj)
-    df = _rename_columns(df)
+def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+    for column in CANON:
+        if column not in df.columns:
+            df[column] = pd.NA
     return df
 
 
 def to_bars_df(obj: Any, symbol_hint: str | None = None) -> pd.DataFrame:
-    """Normalize Alpaca Market Data bars to the canonical columns."""
-
     if isinstance(obj, dict) and "bars" in obj:
         obj = obj["bars"]
 
@@ -68,7 +56,7 @@ def to_bars_df(obj: Any, symbol_hint: str | None = None) -> pd.DataFrame:
             df = df.reset_index()
         df = _rename_columns(df)
     elif isinstance(obj, (list, tuple)):
-        df = _from_iterable(obj)
+        df = _rename_columns(pd.DataFrame(obj))
     elif hasattr(obj, "df") or hasattr(obj, "data"):
         try:
             if hasattr(obj, "df") and obj.df is not None:
@@ -99,11 +87,20 @@ def to_bars_df(obj: Any, symbol_hint: str | None = None) -> pd.DataFrame:
     else:
         df = pd.DataFrame(columns=CANON)
 
+    df = _rename_columns(df)
     df = _ensure_columns(df)
-    df = _coerce_symbol(df, symbol_hint)
+    if symbol_hint:
+        df["symbol"] = df["symbol"].fillna(symbol_hint)
+        mask = df["symbol"].astype(str).str.strip() == ""
+        if mask.any():
+            df.loc[mask, "symbol"] = symbol_hint
+    df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    if isinstance(df["timestamp"].dtype, pd.DatetimeTZDtype):
+        target_tz = pytz.UTC if pytz is not None else "UTC"
+        df["timestamp"] = df["timestamp"].dt.tz_convert(target_tz)
     for column in ["open", "high", "low", "close"]:
-        df[column] = pd.to_numeric(df[column], errors="coerce")
+        df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce").astype("Int64")
 
     return df[CANON]
