@@ -408,6 +408,36 @@ def compute_all_features(
     feature_cols = [*CORE_FEATURE_COLUMNS, *PENALTY_COLUMNS, *Z_SCORE_COLUMNS]
     df[feature_cols] = df[feature_cols].replace([np.inf, -np.inf], np.nan)
 
+    float32_cols = [
+        "SMA9",
+        "EMA20",
+        "SMA50",
+        "SMA100",
+        "ATR14",
+        "MACD",
+        "MACD_SIGNAL",
+        "MACD_HIST",
+        "AROON_UP",
+        "AROON_DN",
+        "+DI",
+        "-DI",
+        "TS",
+        "MS",
+        "BP",
+        "PT",
+        "RSI",
+        "MH",
+        "ADX",
+        "AROON",
+        "VCP",
+        "VOLexp",
+        "GAPpen",
+        "LIQpen",
+    ]
+    for col in float32_cols:
+        if col in df.columns:
+            df[col] = df[col].astype("float32")
+
     if not add_intermediate:
         cols = ["symbol", "timestamp", *feature_cols]
         return df[cols].copy()

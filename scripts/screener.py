@@ -91,6 +91,20 @@ except ImportError:  # pragma: no cover - older pydantic exposes it elsewhere
 
 LOGGER = logging.getLogger(__name__)
 
+
+class T:
+    def __init__(self) -> None:
+        self.t = time.time()
+        self.m: dict[str, float] = {}
+
+    def lap(self, key: str) -> float:
+        now = time.time()
+        elapsed = round(now - self.t, 3)
+        self.m[key] = elapsed
+        self.t = time.time()
+        return elapsed
+
+
 INPUT_COLUMNS = [
     "symbol",
     "exchange",
@@ -354,6 +368,8 @@ def _fetch_daily_bars(
     max_workers: int,
     min_history: int,
     bars_source: str,
+    run_date: Optional[str] = None,
+    reuse_cache: bool = True,
     verify_hook: Optional[Callable[[str, dict[str, object]], None]] = None,
 ) -> Tuple[pd.DataFrame, dict[str, int | list[str]], Dict[str, str]]:
     if not symbols:
@@ -381,6 +397,73 @@ def _fetch_daily_bars(
             raise RuntimeError("StockHistoricalDataClient required when bars_source=sdk")
 
     days = max(1, int(days))
+    cache_feed = (feed or "iex").strip().lower() or "iex"
+    cache_root = Path("data") / "cache" / f"bars_1d_{cache_feed}"
+    run_date_str = (
+        str(run_date)
+        if run_date
+        else datetime.now(timezone.utc).date().isoformat()
+    )
+
+    def _cache_paths(batch_idx: int) -> tuple[Path, Path]:
+        batch_dir = cache_root / run_date_str
+        batch_path = batch_dir / f"{batch_idx:04d}.parquet"
+        meta_path = batch_path.with_suffix(".json")
+        return batch_path, meta_path
+
+    def _load_batch_cache(batch_idx: int) -> tuple[Optional[pd.DataFrame], dict]:
+        if not reuse_cache:
+            return None, {}
+        cache_path, meta_path = _cache_paths(batch_idx)
+        if not cache_path.exists():
+            return None, {}
+        try:
+            cached = pd.read_parquet(cache_path)
+        except Exception as exc:  # pragma: no cover - cache corruption is rare
+            LOGGER.warning("Failed to read cached batch %s: %s", cache_path, exc)
+            return None, {}
+        meta: dict = {}
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8")) or {}
+            except Exception as exc:  # pragma: no cover - JSON corruption is rare
+                LOGGER.warning("Failed to read cache metadata %s: %s", meta_path, exc)
+                meta = {}
+        return cached, meta
+
+    def _write_batch_cache(batch_idx: int, frame: pd.DataFrame, meta: dict) -> None:
+        if frame is None or frame.empty:
+            return
+        cache_path, meta_path = _cache_paths(batch_idx)
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            frame.to_parquet(cache_path, index=False)
+            if meta:
+                meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception as exc:  # pragma: no cover - disk issues are unexpected
+            LOGGER.warning("Failed to persist batch cache %s: %s", cache_path, exc)
+
+    def _log_batch_progress(
+        batch_idx: int,
+        batches_total: int,
+        symbols_in_batch: int,
+        pages: int,
+        rows: int,
+        elapsed: float,
+        *,
+        from_cache: bool = False,
+    ) -> None:
+        suffix = " (cache)" if from_cache else ""
+        LOGGER.info(
+            "[INFO] bars: batch %d/%d symbols=%d pages=%d rows=~%d elapsed=%.1fs%s",
+            batch_idx,
+            batches_total,
+            symbols_in_batch,
+            pages,
+            rows,
+            elapsed,
+            suffix,
+        )
 
     def _parse_iso(value: str) -> datetime:
         cleaned = value.replace("Z", "+00:00")
@@ -407,6 +490,7 @@ def _fetch_daily_bars(
         "symbols_in": len(unique_symbols),
         "raw_bars_count": 0,
         "parsed_rows_count": 0,
+        "cache_hits": 0,
     }
     prescreened: dict[str, str] = {}
     symbols_with_history: set[str] = set()
@@ -669,6 +753,60 @@ def _fetch_daily_bars(
         metrics["batches_total"] = len(batches)
         for index, batch in enumerate(batches, start=1):
             if source == "http":
+                batch_start = time.time()
+                cached_frame, cached_meta = _load_batch_cache(index)
+                if cached_frame is not None:
+                    normalized_cached = _normalize_bars_frame(cached_frame)
+                    rows_cached = int(normalized_cached.shape[0])
+                    metrics["cache_hits"] += 1
+                    metrics["raw_bars_count"] += rows_cached
+                    metrics["parsed_rows_count"] += rows_cached
+                    metrics["bars_rows_total"] = metrics.get("bars_rows_total", 0) + rows_cached
+                    keep_cached = {
+                        str(sym).strip().upper()
+                        for sym in (cached_meta.get("keep") or [])
+                        if sym
+                    }
+                    if not keep_cached and not normalized_cached.empty:
+                        keep_cached = set(
+                            normalized_cached["symbol"].astype(str).str.upper().unique()
+                        )
+                    insufficient_cached = {
+                        str(sym).strip().upper()
+                        for sym in (cached_meta.get("insufficient") or [])
+                        if sym
+                    }
+                    missing_cached = {
+                        str(sym).strip().upper()
+                        for sym in (cached_meta.get("missing") or [])
+                        if sym
+                    }
+                    if not missing_cached:
+                        missing_cached = {str(sym).upper() for sym in batch} - keep_cached
+                    symbols_with_history.update(keep_cached)
+                    for sym in insufficient_cached:
+                        prescreened.setdefault(sym, "INSUFFICIENT_HISTORY")
+                    metrics["insufficient_history"] += len(insufficient_cached)
+                    for sym in missing_cached:
+                        prescreened.setdefault(sym, "NAN_DATA")
+                    if not normalized_cached.empty:
+                        frames.append(normalized_cached)
+                    elapsed_cached = time.time() - batch_start
+                    pages_logged = cached_meta.get("pages")
+                    pages_logged = int(pages_logged) if isinstance(pages_logged, int) else 0
+                    metrics["pages_total"] += pages_logged
+                    if pages_logged > 1:
+                        metrics["batches_paged"] += 1
+                    _log_batch_progress(
+                        index,
+                        len(batches),
+                        len(batch),
+                        pages_logged,
+                        rows_cached,
+                        elapsed_cached,
+                        from_cache=True,
+                    )
+                    continue
                 try:
                     hook = _acquire_verify_hook()
                     raw, http_stats = fetch_bars_http(
@@ -693,6 +831,9 @@ def _fetch_daily_bars(
                     )
                     if not fallback_frame.empty:
                         frames.append(fallback_frame)
+                        rows_logged = int(fallback_frame.shape[0])
+                    else:
+                        rows_logged = 0
                     metrics["pages_total"] += fallback_pages
                     for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
                         metrics[key] += int(fallback_metrics.get(key, 0))
@@ -703,6 +844,34 @@ def _fetch_daily_bars(
                         fallback_metrics.get("parsed_rows_count", 0)
                     )
                     prescreened.update(fallback_prescreened)
+                    keep_fallback = (
+                        set(fallback_frame["symbol"].astype(str).str.upper().unique())
+                        if not fallback_frame.empty
+                        else set()
+                    )
+                    insufficient_fallback = {
+                        str(sym).strip().upper()
+                        for sym, reason in (fallback_prescreened or {}).items()
+                        if str(reason).upper() == "INSUFFICIENT_HISTORY"
+                    }
+                    missing_fallback = {str(sym).upper() for sym in batch} - keep_fallback
+                    batch_meta = {
+                        "keep": sorted(keep_fallback),
+                        "insufficient": sorted(insufficient_fallback),
+                        "missing": sorted(missing_fallback),
+                        "rows": rows_logged,
+                        "pages": int(fallback_pages),
+                    }
+                    _write_batch_cache(index, fallback_frame, batch_meta)
+                    elapsed_fallback = time.time() - batch_start
+                    _log_batch_progress(
+                        index,
+                        len(batches),
+                        len(batch),
+                        int(fallback_pages),
+                        rows_logged,
+                        elapsed_fallback,
+                    )
                     continue
                 raw_bars_count = len(raw)
                 bars_df = to_bars_df(raw)
@@ -719,6 +888,10 @@ def _fetch_daily_bars(
                     LOGGER.error("Bars normalized but missing columns: %s", missing)
                     bars_df = bars_df.iloc[0:0]
                 _write_preview(raw, bars_df)
+                pages = int(http_stats.get("pages", 0)) if http_stats else 0
+                metrics["pages_total"] += pages
+                if pages > 1:
+                    metrics["batches_paged"] += 1
                 metrics["rate_limited"] += int(http_stats.get("rate_limited", 0))
                 metrics["http_404_batches"] += int(http_stats.get("http_404_batches", 0))
                 metrics["http_empty_batches"] += int(http_stats.get("http_empty_batches", 0))
@@ -753,6 +926,24 @@ def _fetch_daily_bars(
                         prescreened.setdefault(sym, "NAN_DATA")
                     continue
                 frames.append(normalized)
+                rows_logged = int(normalized.shape[0])
+                batch_meta = {
+                    "keep": sorted(keep),
+                    "insufficient": sorted(insufficient),
+                    "missing": sorted({str(sym).upper() for sym in batch} - set(keep)),
+                    "rows": rows_logged,
+                    "pages": pages,
+                }
+                _write_batch_cache(index, normalized, batch_meta)
+                elapsed_batch = time.time() - batch_start
+                _log_batch_progress(
+                    index,
+                    len(batches),
+                    len(batch),
+                    pages,
+                    rows_logged,
+                    elapsed_batch,
+                )
                 continue
 
             request_kwargs = {
@@ -945,6 +1136,7 @@ def _load_alpaca_universe(
     verify_request: bool = False,
     min_days_fallback: int = 365,
     min_days_final: int = 90,
+    reuse_cache: bool = True,
 ) -> Tuple[
     pd.DataFrame,
     Dict[str, dict],
@@ -965,6 +1157,7 @@ def _load_alpaca_universe(
         "rate_limited": 0,
         "http_404_batches": 0,
         "http_empty_batches": 0,
+        "cache_hits": 0,
         "window_attempts": [],
         "window_used": 0,
         "symbols_override": 0,
@@ -1162,6 +1355,8 @@ def _load_alpaca_universe(
             max_workers=max(1, max_workers),
             min_history=min_history,
             bars_source=bars_source,
+            run_date=last_day,
+            reuse_cache=reuse_cache,
             verify_hook=verify_hook_fn if use_verify else None,
         )
 
@@ -1573,9 +1768,19 @@ def _prepare_ranker_config(
     return cfg
 
 
-def build_enriched_bars(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.DataFrame:
+def build_enriched_bars(
+    bars_df: pd.DataFrame,
+    cfg: Mapping[str, object],
+    *,
+    timings: Optional[dict[str, float]] = None,
+) -> pd.DataFrame:
+    stage_timer = T()
     df = bars_df.copy() if bars_df is not None else pd.DataFrame(columns=INPUT_COLUMNS)
     if df.empty:
+        normalize_elapsed = stage_timer.lap("normalize_secs")
+        if timings is not None:
+            timings["normalize_secs"] = timings.get("normalize_secs", 0.0) + normalize_elapsed
+            timings.setdefault("feature_secs", timings.get("feature_secs", 0.0))
         columns = [
             "symbol",
             "timestamp",
@@ -1598,11 +1803,18 @@ def build_enriched_bars(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.
     df = df.dropna(subset=["symbol", "timestamp"])
     df = df[df["symbol"] != ""]
 
+    normalize_elapsed = stage_timer.lap("normalize_secs")
+    if timings is not None:
+        timings["normalize_secs"] = timings.get("normalize_secs", 0.0) + normalize_elapsed
+
     history_counts = (
         df.groupby("symbol", as_index=False)["timestamp"].size().rename(columns={"size": "history"})
     )
 
     features_df = compute_all_features(df, cfg)
+    feature_elapsed = stage_timer.lap("feature_secs")
+    if timings is not None:
+        timings["feature_secs"] = timings.get("feature_secs", 0.0) + feature_elapsed
     if features_df.empty:
         columns = [
             "symbol",
@@ -1738,6 +1950,7 @@ def run_screener(
     list[dict[str, str]],
     dict[str, Union[int, str]],
     dict[str, object],
+    dict[str, float],
 ]:
     """Run the screener pipeline returning scored outputs and diagnostics."""
 
@@ -1788,15 +2001,20 @@ def run_screener(
         min_history=min_history,
     )
 
-    enriched = build_enriched_bars(prepared, ranker_cfg)
+    timing_info: dict[str, float] = {}
+    enriched = build_enriched_bars(prepared, ranker_cfg, timings=timing_info)
+    rank_timer = T()
     scored_df = score_universe(enriched, ranker_cfg)
+    timing_info["rank_secs"] = timing_info.get("rank_secs", 0.0) + rank_timer.lap("rank_secs")
     if not scored_df.empty:
         scored_df["rank"] = np.arange(1, scored_df.shape[0] + 1, dtype=int)
     else:
         scored_df["rank"] = pd.Series(dtype="int64")
     scored_df["gates_passed"] = False
 
+    gates_timer = T()
     candidates_df, gate_fail_counts, gate_rejects = apply_gates(scored_df, ranker_cfg)
+    timing_info["gates_secs"] = timing_info.get("gates_secs", 0.0) + gates_timer.lap("gates_secs")
 
     if not candidates_df.empty:
         def _gate_key(frame: pd.DataFrame) -> pd.Index:
@@ -1840,7 +2058,16 @@ def run_screener(
         else:
             LOGGER.info("No candidates passed ranking gates.")
 
-    return top_df, scored_df, stats, skip_reasons, combined_rejects, gate_fail_counts, ranker_cfg
+    return (
+        top_df,
+        scored_df,
+        stats,
+        skip_reasons,
+        combined_rejects,
+        gate_fail_counts,
+        ranker_cfg,
+        timing_info,
+    )
 
 
 def _load_source_dataframe(path: Path) -> pd.DataFrame:
@@ -1868,6 +2095,7 @@ def write_outputs(
     fetch_metrics: Optional[dict[str, int | list[str]]] = None,
     asset_metrics: Optional[dict[str, int | list[str]]] = None,
     ranker_cfg: Optional[Mapping[str, object]] = None,
+    timings: Optional[Mapping[str, float]] = None,
 ) -> Path:
     now = now or datetime.now(timezone.utc)
     data_dir = base_dir / "data"
@@ -1883,6 +2111,36 @@ def write_outputs(
     _write_csv_atomic(top_path, top_df)
     _write_csv_atomic(scored_path, scored_df)
     _write_csv_atomic(predictions_path, _prepare_predictions_frame(scored_df))
+
+    diagnostics_dir = data_dir / "diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    run_date = now.date().isoformat()
+    diag_columns = [
+        "symbol",
+        "Score",
+        "TS",
+        "MS",
+        "BP",
+        "PT",
+        "RSI",
+        "MH",
+        "ADX",
+        "AROON",
+        "VCP",
+        "VOLexp",
+        "GAPpen",
+        "LIQpen",
+    ]
+    diag_frame = (
+        scored_df.reindex(columns=diag_columns, fill_value=pd.NA).head(10)
+        if not scored_df.empty
+        else pd.DataFrame(columns=diag_columns)
+    )
+    diag_csv_path = diagnostics_dir / f"top10_{run_date}.csv"
+    diag_json_path = diagnostics_dir / f"top10_{run_date}.json"
+    _write_csv_atomic(diag_csv_path, diag_frame)
+    diag_json = diag_frame.to_json(orient="records", indent=2)
+    atomic_write_bytes(diag_json_path, diag_json.encode("utf-8"))
 
     cfg_for_summary = ranker_cfg or _load_ranker_config()
     metrics = {
@@ -1919,6 +2177,7 @@ def write_outputs(
             "symbols_override": _coerce_int(fetch_payload.get("symbols_override", 0)),
             "raw_bars_count": _coerce_int(fetch_payload.get("raw_bars_count", 0)),
             "parsed_rows_count": _coerce_int(fetch_payload.get("parsed_rows_count", 0)),
+            "cache_hits": _coerce_int(fetch_payload.get("cache_hits", 0)),
         }
     )
     window_attempts = fetch_payload.get("window_attempts", [])
@@ -1936,6 +2195,8 @@ def write_outputs(
         }
     )
     metrics["reject_samples"] = (reject_samples or [])[:10]
+    timing_payload = {k: round(float(v), 3) for k, v in (timings or {}).items()}
+    metrics["timings"] = timing_payload
     _write_json_atomic(metrics_path, metrics)
     return metrics_path
 
@@ -2042,6 +2303,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Log and capture the first bars request for debugging",
     )
     parser.add_argument(
+        "--reuse-cache",
+        choices=["true", "false"],
+        default="true",
+        help="Reuse cached bars batches when available (default: true)",
+    )
+    parser.add_argument(
         "--gate-preset",
         choices=["conservative", "standard", "aggressive"],
         default="standard",
@@ -2058,6 +2325,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         parsed.source_csv = parsed.source
     if isinstance(parsed.iex_only, str):
         parsed.iex_only = parsed.iex_only.lower() != "false"
+    if isinstance(parsed.reuse_cache, str):
+        parsed.reuse_cache = parsed.reuse_cache.lower() != "false"
     return parsed
 
 
@@ -2075,6 +2344,8 @@ def main(
         return 2
     base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
     now = datetime.now(timezone.utc)
+    pipeline_timer = T()
+    fetch_elapsed = 0.0
 
     symbols_override: Optional[List[str]] = None
     if args.symbols:
@@ -2087,6 +2358,7 @@ def main(
     prescreened: Dict[str, str] = {}
     if input_df is not None:
         frame = input_df
+        fetch_elapsed = pipeline_timer.lap("fetch_secs")
     else:
         universe_mode = args.universe
         frame = pd.DataFrame(columns=INPUT_COLUMNS)
@@ -2126,7 +2398,9 @@ def main(
                 verify_request=args.verify_request,
                 min_days_fallback=args.min_days_fallback,
                 min_days_final=args.min_days_final,
+                reuse_cache=bool(args.reuse_cache),
             )
+            fetch_elapsed = pipeline_timer.lap("fetch_secs")
     (
         top_df,
         scored_df,
@@ -2135,6 +2409,7 @@ def main(
         reject_samples,
         gate_counters,
         ranker_cfg,
+        timing_info,
     ) = run_screener(
         frame,
         top_n=args.top_n,
@@ -2145,6 +2420,7 @@ def main(
         gate_preset=args.gate_preset,
         relax_gates=args.relax_gates,
     )
+    timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(fetch_elapsed, 3)
     write_outputs(
         base_dir,
         top_df,
@@ -2158,6 +2434,7 @@ def main(
         fetch_metrics=fetch_metrics,
         asset_metrics=asset_metrics,
         ranker_cfg=ranker_cfg,
+        timings=timing_info,
     )
     LOGGER.info(
         "Screener complete: %d symbols examined, %d candidates.",

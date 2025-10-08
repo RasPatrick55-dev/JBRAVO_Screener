@@ -59,6 +59,19 @@ def _configure_logger() -> logging.Logger:
 LOGGER = _configure_logger()
 
 
+class T:
+    def __init__(self) -> None:
+        self.t = time.time()
+        self.m: dict[str, float] = {}
+
+    def lap(self, key: str) -> float:
+        now = time.time()
+        elapsed = round(now - self.t, 3)
+        self.m[key] = elapsed
+        self.t = time.time()
+        return elapsed
+
+
 def _coerce_int(value: Any) -> int:
     try:
         return int(value)

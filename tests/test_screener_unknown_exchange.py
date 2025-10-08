@@ -80,6 +80,7 @@ def test_screener_skips_unknown_exchanges(tmp_path):
         reject_samples,
         gate_counters,
         ranker_cfg,
+        timings,
     ) = screener.run_screener(
         df,
         top_n=5,
@@ -105,12 +106,18 @@ def test_screener_skips_unknown_exchanges(tmp_path):
         fetch_metrics={},
         asset_metrics={},
         ranker_cfg=ranker_cfg,
+        timings=timings,
     )
 
     top_path = tmp_path / "data" / "top_candidates.csv"
     scored_path = tmp_path / "data" / "scored_candidates.csv"
+    diag_dir = tmp_path / "data" / "diagnostics"
+    diag_csv = diag_dir / f"top10_{now.date().isoformat()}.csv"
+    diag_json = diag_dir / f"top10_{now.date().isoformat()}.json"
     assert top_path.exists()
     assert scored_path.exists()
+    assert diag_csv.exists()
+    assert diag_json.exists()
 
     metrics = json.loads(metrics_path.read_text())
     assert metrics["rows"] == scored_df.shape[0]
@@ -118,6 +125,7 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     assert metrics["status"] == "ok"
     assert "reject_samples" in metrics
     assert "gate_fail_counts" in metrics
+    assert "timings" in metrics
     expected_gate_keys = {
         "failed_sma_stack",
         "failed_rsi",

@@ -7,6 +7,8 @@ from typing import Dict, List, Tuple
 
 import requests
 
+from .rate import TokenBucket
+
 
 def _flatten_to_canonical(data: Dict) -> List[Dict]:
     """
@@ -65,9 +67,15 @@ def fetch_bars_http(
     http_404 = 0
     http_empty = 0
     rate_limited = 0
+    requests_made = 0
+    pages_total = 0
+    token_bucket = TokenBucket(200)
     first = True
     for i in range(0, len(symbols), 50):
         chunk = symbols[i : i + 50]
+        chunk_pages = 0
+        consecutive_429 = 0
+        backoff = sleep_s
         page = None
         while True:
             params = {
@@ -84,11 +92,18 @@ def fetch_bars_http(
                 verify_hook(url, params)
                 first = False
 
+            token_bucket.acquire()
             resp = requests.get(url, headers=headers, params=params, timeout=30)
+            requests_made += 1
             if resp.status_code == 429:
                 rate_limited += 1
-                time.sleep(1.0)
-                resp = requests.get(url, headers=headers, params=params, timeout=30)
+                consecutive_429 += 1
+                if consecutive_429 >= 2:
+                    backoff = min(backoff * 2, 10.0)
+                time.sleep(backoff)
+                continue
+            consecutive_429 = 0
+            backoff = sleep_s
             if resp.status_code == 404:
                 http_404 += 1
                 break
@@ -97,15 +112,21 @@ def fetch_bars_http(
             flattened = _flatten_to_canonical(data if isinstance(data, dict) else {})
             if flattened:
                 out.extend(flattened)
+                chunk_pages += 1
             else:
                 http_empty += 1
             page = data.get("next_page_token") if isinstance(data, dict) else None
             if not page:
                 break
             time.sleep(sleep_s)
+        pages_total += chunk_pages
         time.sleep(sleep_s)
+    chunk_count = max(1, (len(symbols) + 49) // 50)
     return out, {
         "http_404_batches": http_404,
         "http_empty_batches": http_empty,
         "rate_limited": rate_limited,
+        "pages": pages_total,
+        "requests": requests_made,
+        "chunks": chunk_count,
     }
