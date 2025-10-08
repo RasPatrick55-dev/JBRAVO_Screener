@@ -479,7 +479,21 @@ def _fetch_daily_bars(
                     verify_hook=hook,
                 )
                 raw_bars_count = len(raw)
-                bars_df = to_bars_df(raw)
+                bars_df = to_bars_df(raw).reset_index(drop=True)
+
+                if "symbol" not in bars_df.columns:
+                    LOGGER.error(
+                        "FATAL: bars_df lacks 'symbol' after normalization; cols=%s idx_names=%s",
+                        list(bars_df.columns),
+                        getattr(bars_df.index, "names", None),
+                    )
+                    Path("debug").mkdir(parents=True, exist_ok=True)
+                    Path("debug/canonical_bars_sample.json").write_text(
+                        json.dumps(raw[:10], indent=2), encoding="utf-8"
+                    )
+                    bars_df = bars_df.assign(symbol=pd.Series(dtype="string"))
+                    # continue fail-open; symbols will fail history check
+
                 parsed_rows_count = int(bars_df.shape[0])
                 if raw_bars_count > 0 and parsed_rows_count == 0:
                     LOGGER.error(
@@ -495,7 +509,6 @@ def _fetch_daily_bars(
                 if missing:
                     LOGGER.error("Bars normalized but missing columns: %s", missing)
                     bars_df = bars_df.iloc[0:0]
-                bars_df = bars_df.reset_index(drop=True)
                 _write_preview(raw, bars_df)
                 stats_block = {
                     "symbols_in": 1,
@@ -689,7 +702,21 @@ def _fetch_daily_bars(
                     prescreened.update(fallback_prescreened)
                     continue
                 raw_bars_count = len(raw)
-                bars_df = to_bars_df(raw)
+                bars_df = to_bars_df(raw).reset_index(drop=True)
+
+                if "symbol" not in bars_df.columns:
+                    LOGGER.error(
+                        "FATAL: bars_df lacks 'symbol' after normalization; cols=%s idx_names=%s",
+                        list(bars_df.columns),
+                        getattr(bars_df.index, "names", None),
+                    )
+                    Path("debug").mkdir(parents=True, exist_ok=True)
+                    Path("debug/canonical_bars_sample.json").write_text(
+                        json.dumps(raw[:10], indent=2), encoding="utf-8"
+                    )
+                    bars_df = bars_df.assign(symbol=pd.Series(dtype="string"))
+                    # continue fail-open; symbols will fail history check
+
                 parsed_rows_count = int(bars_df.shape[0])
                 if raw_bars_count > 0 and parsed_rows_count == 0:
                     LOGGER.error(
@@ -700,7 +727,6 @@ def _fetch_daily_bars(
                 if missing:
                     LOGGER.error("Bars normalized but missing columns: %s", missing)
                     bars_df = bars_df.iloc[0:0]
-                bars_df = bars_df.reset_index(drop=True)
                 _write_preview(raw, bars_df)
                 metrics["rate_limited"] += int(http_stats.get("rate_limited", 0))
                 metrics["http_404_batches"] += int(http_stats.get("http_404_batches", 0))

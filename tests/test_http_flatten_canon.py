@@ -1,7 +1,7 @@
 from scripts.utils.http_alpaca import _flatten_to_canonical
 
 
-def test_flatten_dict_of_lists():
+def test_dict_of_lists_to_canon():
     data = {
         "bars": {
             "AAPL": [
@@ -12,18 +12,23 @@ def test_flatten_dict_of_lists():
             ],
         }
     }
-    flat = _flatten_to_canonical(data)
-    assert len(flat) == 2
-    assert {"symbol", "timestamp", "open", "high", "low", "close", "volume"}.issubset(
-        flat[0].keys()
-    )
+    out = _flatten_to_canonical(data)
+    assert len(out) == 2 and set(out[0].keys()) == {
+        "symbol",
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    }
 
 
-def test_flatten_list_of_dicts():
+def test_list_of_dicts_to_canon():
     data = {
         "bars": [
             {"S": "SPY", "t": "2024-01-02T00:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 5}
         ]
     }
-    flat = _flatten_to_canonical(data)
-    assert len(flat) == 1 and flat[0]["symbol"] == "SPY"
+    out = _flatten_to_canonical(data)
+    assert len(out) == 1 and out[0]["symbol"] == "SPY"

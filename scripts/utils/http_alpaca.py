@@ -7,30 +7,42 @@ from typing import Dict, List, Tuple
 
 import requests
 
-from .env import market_data_base_url
 
+def _flatten_to_canonical(data: Dict) -> List[Dict]:
+    """
+    Canonicalize to a flat list of dicts with keys:
+      symbol, timestamp, open, high, low, close, volume
+    Handles both:
+      A) {"bars": {"AAPL":[{t,o,h,l,c,v},...], "MSFT":[...]}}
+      B) {"bars": [{ "S":"AAPL", "t":..., "o":..., "h":..., "l":..., "c":..., "v":...}, ...]}
+    """
 
-def _flatten_bars_payload(data: dict | None) -> List[dict]:
-    """Return a flat list of bar dictionaries from an Alpaca bars payload."""
+    out: List[Dict] = []
+    bars = data.get("bars", []) if isinstance(data, dict) else []
 
-    if not isinstance(data, dict):
-        return []
-
-    bars = data.get("bars", [])
-    flat: List[dict] = []
+    def canon_one(sym: str, b: Dict) -> Dict:
+        return {
+            "symbol": (sym or b.get("S") or b.get("symbol") or "").upper(),
+            "timestamp": b.get("t") or b.get("T") or b.get("time") or b.get("timestamp"),
+            "open": b.get("o") or b.get("open"),
+            "high": b.get("h") or b.get("high"),
+            "low": b.get("l") or b.get("low"),
+            "close": b.get("c") or b.get("close"),
+            "volume": b.get("v") or b.get("volume"),
+        }
 
     if isinstance(bars, dict):
-        for symbol, items in bars.items():
-            for bar in items or []:
-                if not isinstance(bar, dict):
-                    continue
-                if "S" not in bar and "symbol" not in bar:
-                    bar = {**bar, "S": symbol}
-                flat.append(bar)
+        for sym, arr in bars.items():
+            for b in arr or []:
+                if isinstance(b, dict):
+                    out.append(canon_one(sym, b))
     elif isinstance(bars, list):
-        flat.extend(item for item in bars if isinstance(item, dict))
-
-    return flat
+        for b in bars:
+            if not isinstance(b, dict):
+                continue
+            sym = b.get("S") or b.get("symbol")
+            out.append(canon_one(sym, b))
+    return out
 
 
 def fetch_bars_http(
@@ -43,7 +55,7 @@ def fetch_bars_http(
     sleep_s: float = 0.35,
     verify_hook=None,
 ) -> Tuple[List[dict], Dict[str, int]]:
-    base = market_data_base_url()
+    base = (os.getenv("APCA_DATA_API_BASE_URL") or "https://data.alpaca.markets").rstrip("/")
     url = f"{base}/v2/stocks/bars"
     headers = {
         "APCA-API-KEY-ID": os.getenv("APCA_API_KEY_ID"),
@@ -82,7 +94,7 @@ def fetch_bars_http(
                 break
             resp.raise_for_status()
             data = resp.json()
-            flattened = _flatten_bars_payload(data if isinstance(data, dict) else {})
+            flattened = _flatten_to_canonical(data if isinstance(data, dict) else {})
             if flattened:
                 out.extend(flattened)
             else:

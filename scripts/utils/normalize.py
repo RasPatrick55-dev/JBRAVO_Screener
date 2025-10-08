@@ -16,12 +16,8 @@ def to_bars_df(obj: Any) -> pd.DataFrame:
 
     if isinstance(obj, pd.DataFrame):
         df = obj.copy()
-        if isinstance(df.index, pd.MultiIndex):
-            df = df.reset_index()
     elif hasattr(obj, "df") and isinstance(getattr(obj, "df"), pd.DataFrame):
         df = obj.df.copy()
-        if isinstance(df.index, pd.MultiIndex):
-            df = df.reset_index()
     elif hasattr(obj, "data") and isinstance(getattr(obj, "data"), dict):
         rows: list[dict[str, Any]] = []
         for symbol, items in obj.data.items():
@@ -44,16 +40,19 @@ def to_bars_df(obj: Any) -> pd.DataFrame:
         df = pd.DataFrame(rows)
     else:
         df = pd.DataFrame(obj or [])
-    rename_map = {
+
+    index_names = getattr(df.index, "names", None)
+    if index_names and any(name == "symbol" for name in index_names if name is not None):
+        df = df.reset_index()
+    elif getattr(df.index, "name", None) == "symbol":
+        df = df.reset_index()
+
+    rename = {
         "S": "symbol",
-        "Symbol": "symbol",
         "t": "timestamp",
         "T": "timestamp",
         "time": "timestamp",
         "Time": "timestamp",
-        "level_0": "symbol",
-        "level_1": "timestamp",
-        "index": "symbol",
         "o": "open",
         "h": "high",
         "l": "low",
@@ -64,23 +63,26 @@ def to_bars_df(obj: Any) -> pd.DataFrame:
         "Low": "low",
         "Close": "close",
         "Volume": "volume",
+        "Symbol": "symbol",
+        "level_0": "symbol",
+        "level_1": "timestamp",
+        "index": "symbol",
     }
-
-    df = df.rename(
-        columns={
-            **rename_map,
-        }
-    )
+    if df.columns.size:
+        df = df.rename(columns=rename)
 
     for column in CANON:
         if column not in df.columns:
             df[column] = pd.NA
 
-    df["symbol"] = df["symbol"].astype("string").str.strip().str.upper()
+    df["symbol"] = df["symbol"].astype("string").str.upper()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
     for column in ["open", "high", "low", "close"]:
         df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce").astype("Int64")
+
+    if hasattr(df.index, "names") and "symbol" in (df.index.names or []):
+        df = df.reset_index()
 
     return df[CANON]
 
