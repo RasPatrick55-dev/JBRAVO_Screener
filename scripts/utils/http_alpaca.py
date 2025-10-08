@@ -69,8 +69,11 @@ def fetch_bars_http(
                 break
             time.sleep(sleep_s)
         time.sleep(sleep_s)
+    total = len(out)
     return out, {
         "http_404_batches": http_404,
         "http_empty_batches": http_empty,
         "rate_limited": rate_limited,
+        "raw_bars_count": total,
+        "parsed_rows_count": total,
     }
