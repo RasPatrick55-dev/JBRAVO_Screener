@@ -16,6 +16,8 @@ from typing import Dict, List, Mapping, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from .features import compute_all_features
+
 
 DEFAULT_COMPONENT_MAP: Mapping[str, str] = {
     "trend": "TS",
@@ -355,5 +357,12 @@ def apply_gates(
     return candidates_df, gate_counts, reject_samples
 
 
-__all__ = ["score_universe", "apply_gates", "DEFAULT_COMPONENT_MAP", "DEFAULT_WEIGHTS", "DEFAULT_GATES"]
+__all__ = [
+    "score_universe",
+    "apply_gates",
+    "DEFAULT_COMPONENT_MAP",
+    "DEFAULT_WEIGHTS",
+    "DEFAULT_GATES",
+    "compute_all_features",
+]
 

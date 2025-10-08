@@ -25,7 +25,7 @@ try:  # pragma: no cover - preferred module execution path
     from .utils.models import BarData, classify_exchange, KNOWN_EQUITY
     from .utils.env import trading_base_url
     from .utils.frame_guards import ensure_symbol_column
-    from .features import compute_all_features, REQUIRED_FEATURE_COLUMNS
+    from .features import ALL_FEATURE_COLUMNS, compute_all_features, REQUIRED_FEATURE_COLUMNS
     from .ranking import (
         apply_gates,
         score_universe,
@@ -44,7 +44,11 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.utils.models import BarData, classify_exchange, KNOWN_EQUITY  # type: ignore
     from scripts.utils.env import trading_base_url  # type: ignore
     from scripts.utils.frame_guards import ensure_symbol_column  # type: ignore
-    from scripts.features import compute_all_features, REQUIRED_FEATURE_COLUMNS  # type: ignore
+    from scripts.features import (  # type: ignore
+        ALL_FEATURE_COLUMNS,
+        compute_all_features,
+        REQUIRED_FEATURE_COLUMNS,
+    )
     from scripts.ranking import (  # type: ignore
         apply_gates,
         score_universe,
@@ -1575,7 +1579,7 @@ def build_enriched_bars(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.
         columns = [
             "symbol",
             "timestamp",
-            *REQUIRED_FEATURE_COLUMNS,
+            *ALL_FEATURE_COLUMNS,
             "close",
             "volume",
             "exchange",
@@ -1603,7 +1607,7 @@ def build_enriched_bars(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.
         columns = [
             "symbol",
             "timestamp",
-            *REQUIRED_FEATURE_COLUMNS,
+            *ALL_FEATURE_COLUMNS,
             "close",
             "volume",
             "exchange",
