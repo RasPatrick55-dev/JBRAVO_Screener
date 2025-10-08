@@ -358,6 +358,7 @@ def _fetch_daily_bars(
     source = (bars_source or "http").strip().lower()
     if source not in {"http", "sdk"}:
         source = "http"
+    required_cols = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
     if source == "sdk":
         if StockBarsRequest is None or TimeFrame is None:
             raise RuntimeError("alpaca-py market data components unavailable")
@@ -460,54 +461,11 @@ def _fetch_daily_bars(
             "raw_bars_count": 0,
             "parsed_rows_count": 0,
         }
-
         def _merge_metrics(payload: dict[str, int]) -> None:
             for key, value in (payload or {}).items():
                 if not isinstance(value, int):
                     continue
                 local_metrics[key] = local_metrics.get(key, 0) + int(value)
-
-        def _finalize_http_payload(
-            symbols_sample: List[str],
-            bars_raw: object,
-            http_stats: dict[str, int],
-            *,
-            symbol_hint: str | None = None,
-        ) -> tuple[pd.DataFrame, dict[str, int]]:
-            http_stats = dict(http_stats or {})
-            if isinstance(bars_raw, list):
-                raw_list = list(bars_raw)
-            elif isinstance(bars_raw, dict):
-                raw_list = []
-                for symbol, items in bars_raw.items():
-                    for bar in items or []:
-                        if isinstance(bar, dict) and "S" not in bar and "symbol" not in bar:
-                            enriched = {**bar, "S": symbol}
-                        else:
-                            enriched = bar
-                        raw_list.append(enriched)
-            else:
-                raw_list = []
-            raw_bars_count = len(raw_list)
-            bars_df = to_bars_df(raw_list, symbol_hint=symbol_hint)
-            parsed_rows_count = int(bars_df.shape[0])
-            if raw_bars_count > 0 and parsed_rows_count == 0:
-                LOGGER.error(
-                    "Raw bars > 0 but parsed rows == 0; dumping debug artifacts."
-                )
-                _dump_parse_failure(raw_list, bars_df)
-            if parsed_rows_count > 0:
-                bars_df = bars_df.reset_index(drop=True)
-            metrics_block = {
-                "rate_limited": int(http_stats.get("rate_limited", 0)),
-                "http_404_batches": int(http_stats.get("http_404_batches", 0)),
-                "http_empty_batches": int(http_stats.get("http_empty_batches", 0)),
-                "raw_bars_count": raw_bars_count,
-                "parsed_rows_count": parsed_rows_count,
-                "symbols_in": len(symbols_sample),
-            }
-            _write_preview(raw_list, bars_df)
-            return bars_df, metrics_block
 
         def _http_worker(symbol: str) -> Tuple[str, pd.DataFrame, dict[str, int]]:
             try:
@@ -520,8 +478,34 @@ def _fetch_daily_bars(
                     feed=feed,
                     verify_hook=hook,
                 )
-                df, stats_block = _finalize_http_payload([symbol], raw, http_stats, symbol_hint=symbol)
-                return symbol, df, stats_block
+                raw_bars_count = len(raw)
+                bars_df = to_bars_df(raw)
+                parsed_rows_count = int(bars_df.shape[0])
+                if raw_bars_count > 0 and parsed_rows_count == 0:
+                    LOGGER.error(
+                        "Raw bars > 0 but parsed rows == 0; dumping debug artifacts."
+                    )
+                    _dump_parse_failure(raw, bars_df)
+                if not bars_df.empty and "symbol" in bars_df.columns:
+                    bars_df["symbol"] = bars_df["symbol"].fillna(symbol)
+                    mask = bars_df["symbol"].str.strip() == ""
+                    if mask.any():
+                        bars_df.loc[mask, "symbol"] = symbol
+                missing = [c for c in required_cols if c not in bars_df.columns]
+                if missing:
+                    LOGGER.error("Bars normalized but missing columns: %s", missing)
+                    bars_df = bars_df.iloc[0:0]
+                bars_df = bars_df.reset_index(drop=True)
+                _write_preview(raw, bars_df)
+                stats_block = {
+                    "symbols_in": 1,
+                    "rate_limited": int(http_stats.get("rate_limited", 0)),
+                    "http_404_batches": int(http_stats.get("http_404_batches", 0)),
+                    "http_empty_batches": int(http_stats.get("http_empty_batches", 0)),
+                    "raw_bars_count": raw_bars_count,
+                    "parsed_rows_count": parsed_rows_count,
+                }
+                return symbol, bars_df, stats_block
             except Exception as exc:  # pragma: no cover - network errors hit in integration
                 LOGGER.warning("Failed HTTP bars fetch for %s: %s", symbol, exc)
                 df = pd.DataFrame(columns=BARS_COLUMNS)
@@ -555,7 +539,12 @@ def _fetch_daily_bars(
                     assert token_bucket is not None
                     token_bucket.acquire()
                     response = data_client.get_stock_bars(request)
-                    df = to_bars_df(response, symbol_hint=symbol)
+                    df = to_bars_df(response)
+                    if not df.empty and "symbol" in df.columns and symbol:
+                        df["symbol"] = df["symbol"].fillna(symbol)
+                        mask = df["symbol"].str.strip() == ""
+                        if mask.any():
+                            df.loc[mask, "symbol"] = symbol
                     parsed_count = int(df.shape[0])
                     if parsed_count > 0:
                         df = df.reset_index(drop=True)
@@ -699,15 +688,57 @@ def _fetch_daily_bars(
                     )
                     prescreened.update(fallback_prescreened)
                     continue
-                bars_df, stats_block = _finalize_http_payload(batch, raw, http_stats)
-                for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
-                    metrics[key] += int(stats_block.get(key, 0))
-                metrics["symbols_in"] += int(stats_block.get("symbols_in", 0))
-                metrics["raw_bars_count"] += int(stats_block.get("raw_bars_count", 0))
-                metrics["parsed_rows_count"] += int(stats_block.get("parsed_rows_count", 0))
+                raw_bars_count = len(raw)
+                bars_df = to_bars_df(raw)
+                parsed_rows_count = int(bars_df.shape[0])
+                if raw_bars_count > 0 and parsed_rows_count == 0:
+                    LOGGER.error(
+                        "Raw bars > 0 but parsed rows == 0; dumping debug artifacts."
+                    )
+                    _dump_parse_failure(raw, bars_df)
+                missing = [c for c in required_cols if c not in bars_df.columns]
+                if missing:
+                    LOGGER.error("Bars normalized but missing columns: %s", missing)
+                    bars_df = bars_df.iloc[0:0]
+                bars_df = bars_df.reset_index(drop=True)
+                _write_preview(raw, bars_df)
+                metrics["rate_limited"] += int(http_stats.get("rate_limited", 0))
+                metrics["http_404_batches"] += int(http_stats.get("http_404_batches", 0))
+                metrics["http_empty_batches"] += int(http_stats.get("http_empty_batches", 0))
+                metrics["symbols_in"] += len(batch)
+                metrics["raw_bars_count"] += raw_bars_count
+                metrics["parsed_rows_count"] += parsed_rows_count
+
+                hist = (
+                    bars_df.dropna(subset=["timestamp"])
+                    .groupby("symbol", as_index=False)["timestamp"]
+                    .size()
+                    .rename(columns={"size": "n"})
+                    if not bars_df.empty
+                    else pd.DataFrame(columns=["symbol", "n"])
+                )
+                if hist.empty:
+                    keep: set[str] = set()
+                    insufficient: set[str] = set()
+                else:
+                    keep = set(hist.loc[hist["n"] >= min_history, "symbol"].tolist())
+                    insufficient = set(hist.loc[hist["n"] < min_history, "symbol"].tolist())
+                for sym in insufficient:
+                    prescreened.setdefault(sym, "INSUFFICIENT_HISTORY")
+                metrics["insufficient_history"] += len(insufficient)
+                bars_df = bars_df[bars_df["symbol"].isin(keep)] if keep else bars_df.iloc[0:0]
+                metrics["symbols_with_bars"] = metrics.get("symbols_with_bars", 0) + len(keep)
+                metrics["symbols_no_bars"] = max(
+                    int(metrics.get("symbols_in", 0))
+                    - int(metrics.get("symbols_with_bars", 0)),
+                    0,
+                )
+                metrics["bars_rows_total"] = metrics.get("bars_rows_total", 0) + int(
+                    len(bars_df)
+                )
                 normalized = _normalize_bars_frame(bars_df)
                 if normalized.empty:
-                    for sym in batch:
+                    for sym in keep:
                         prescreened.setdefault(sym, "NAN_DATA")
                     continue
                 frames.append(normalized)
@@ -800,13 +831,18 @@ def _fetch_daily_bars(
     else:
         keep = set(hist["symbol"].tolist()) if not hist.empty else set()
         insufficient = set()
+    existing_insufficient = {
+        sym for sym, reason in prescreened.items() if reason == "INSUFFICIENT_HISTORY"
+    }
+    insufficient = (insufficient | existing_insufficient)
     for sym in insufficient:
         prescreened.setdefault(sym, "INSUFFICIENT_HISTORY")
-    metrics["insufficient_history"] = len(insufficient)
     if keep:
         combined = combined[combined["symbol"].isin(keep)].copy()
     else:
         combined = combined.iloc[0:0]
+    if insufficient:
+        metrics["insufficient_history"] = len(insufficient)
 
     symbols_with_bars = len(keep)
     symbols_in_total = int(metrics.get("symbols_in", 0)) or len(unique_symbols)

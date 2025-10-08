@@ -1,11 +1,7 @@
 import pandas as pd
 import pytest
 
-import pandas as pd
-import pytest
-
 from scripts.utils.normalize import BARS_COLUMNS, to_bars_df
-
 
 pytestmark = pytest.mark.alpaca_optional
 
@@ -80,3 +76,22 @@ def test_to_bars_df_handles_dataframe_with_named_index():
     out = to_bars_df(df)
     assert list(out.columns) == BARS_COLUMNS
     assert out.loc[0, "symbol"] == "SPY"
+
+
+def test_to_bars_df_coercion():
+    flat = [
+        {
+            "S": "AAPL",
+            "t": "2024-01-02T00:00:00Z",
+            "o": "1",
+            "h": "2.5",
+            "l": "1",
+            "c": "2",
+            "v": "10",
+        }
+    ]
+    df = to_bars_df(flat)
+    assert list(df.columns) == ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+    assert df["open"].dtype.kind == "f"
+    assert isinstance(df["timestamp"].dtype, pd.DatetimeTZDtype)
+    assert "UTC" in str(df["timestamp"].dtype)
