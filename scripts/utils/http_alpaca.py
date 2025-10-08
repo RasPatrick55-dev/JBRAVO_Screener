@@ -10,21 +10,27 @@ import requests
 from .env import market_data_base_url
 
 
-def _flatten_bars_payload(bars: object) -> List[dict]:
-    if isinstance(bars, list):
-        return list(bars)
+def _flatten_bars_payload(data: dict | None) -> List[dict]:
+    """Return a flat list of bar dictionaries from an Alpaca bars payload."""
+
+    if not isinstance(data, dict):
+        return []
+
+    bars = data.get("bars", [])
+    flat: List[dict] = []
+
     if isinstance(bars, dict):
-        flat: List[dict] = []
         for symbol, items in bars.items():
             for bar in items or []:
                 if not isinstance(bar, dict):
                     continue
-                record = bar
-                if "S" not in record and "symbol" not in record:
-                    record = {**record, "S": symbol}
-                flat.append(record)
-        return flat
-    return []
+                if "S" not in bar and "symbol" not in bar:
+                    bar = {**bar, "S": symbol}
+                flat.append(bar)
+    elif isinstance(bars, list):
+        flat.extend(item for item in bars if isinstance(item, dict))
+
+    return flat
 
 
 def fetch_bars_http(
@@ -76,8 +82,7 @@ def fetch_bars_http(
                 break
             resp.raise_for_status()
             data = resp.json()
-            bars_payload = data.get("bars", []) if isinstance(data, dict) else []
-            flattened = _flatten_bars_payload(bars_payload)
+            flattened = _flatten_bars_payload(data if isinstance(data, dict) else {})
             if flattened:
                 out.extend(flattened)
             else:
