@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from scripts.ranking import apply_gates, score_universe
+from scripts.ranking import FAILURE_KEYS, apply_gates, score_universe
 
 
 pytestmark = pytest.mark.alpaca_optional
@@ -107,6 +107,6 @@ def test_apply_gates_counts():
     cfg = _load_ranker_cfg()
     ranked = score_universe(_sample_features(), cfg)
     candidates, fail_counts, rejects = apply_gates(ranked, cfg)
-    total_failures = sum(fail_counts.values())
+    total_failures = sum(int(fail_counts.get(key, 0)) for key in FAILURE_KEYS)
     assert total_failures + len(candidates) == len(ranked)
     assert len(rejects) <= len(ranked)

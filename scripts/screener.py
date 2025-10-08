@@ -8,7 +8,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePath
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1564,6 +1564,8 @@ def _prepare_ranker_config(
         pass
     gates.setdefault("history_column", "history")
     cfg["gates"] = gates
+    cfg["_gate_preset"] = (preset_key or "standard").strip().lower() or "standard"
+    cfg["_gate_relax_mode"] = (relax_mode or "none").strip().lower() or "none"
     return cfg
 
 
@@ -1704,7 +1706,7 @@ def run_screener(
     dict[str, int],
     dict[str, int],
     list[dict[str, str]],
-    dict[str, int],
+    dict[str, Union[int, str]],
     dict[str, object],
 ]:
     """Run the screener pipeline returning scored outputs and diagnostics."""
@@ -1762,8 +1764,10 @@ def run_screener(
 
     stats["candidates_out"] = int(candidates_df.shape[0])
 
-    skip_reasons["NAN_DATA"] += int(gate_fail_counts.get("nan_data", 0))
-    skip_reasons["INSUFFICIENT_HISTORY"] += int(gate_fail_counts.get("insufficient_history", 0))
+    skip_reasons["NAN_DATA"] += _coerce_int(gate_fail_counts.get("nan_data"))
+    skip_reasons["INSUFFICIENT_HISTORY"] += _coerce_int(
+        gate_fail_counts.get("insufficient_history")
+    )
 
     combined_rejects = list(initial_rejects)
     for entry in gate_rejects:
@@ -1806,7 +1810,7 @@ def write_outputs(
     *,
     status: str = "ok",
     now: Optional[datetime] = None,
-    gate_counters: Optional[dict[str, int]] = None,
+    gate_counters: Optional[dict[str, Union[int, str]]] = None,
     fetch_metrics: Optional[dict[str, int | list[str]]] = None,
     asset_metrics: Optional[dict[str, int | list[str]]] = None,
     ranker_cfg: Optional[Mapping[str, object]] = None,
@@ -1832,7 +1836,13 @@ def write_outputs(
         "candidates_out": int(stats.get("candidates_out", 0)),
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
     }
-    gate_counts = {str(key): int(value) for key, value in (gate_counters or {}).items()}
+    gate_counts: dict[str, Union[int, str]] = {}
+    for key, value in (gate_counters or {}).items():
+        str_key = str(key)
+        try:
+            gate_counts[str_key] = int(value)
+        except (TypeError, ValueError):
+            gate_counts[str_key] = value
     for key, value in gate_counts.items():
         metrics[key] = value
     metrics["gate_fail_counts"] = gate_counts
@@ -1977,13 +1987,13 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--gate-preset",
         choices=["conservative", "standard", "aggressive"],
         default="standard",
-        help="Preset for JBravo gates.",
+        help="Gate strictness preset to apply before scoring (default: standard)",
     )
     parser.add_argument(
         "--relax-gates",
         choices=["none", "sma_only", "cross_or_rsi"],
         default="none",
-        help="Temporarily relax gates for diagnostics.",
+        help="Optional relaxation override for diagnostics (default: none)",
     )
     parsed = parser.parse_args(list(argv) if argv is not None else None)
     if getattr(parsed, "source", None):

@@ -11,7 +11,7 @@ dependencies from the rest of that module.
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -79,6 +79,9 @@ FAILURE_KEYS: Tuple[str, ...] = (
 
 
 REJECT_SAMPLE_LIMIT = 10
+
+GateCountValue = Union[int, str]
+GateCounts = Dict[str, GateCountValue]
 
 
 def _standardize(series: pd.Series) -> pd.Series:
@@ -207,7 +210,7 @@ def _resolve_float(value: object) -> Optional[float]:
 def apply_gates(
     df: pd.DataFrame,
     cfg: Optional[Mapping[str, object]] = None,
-) -> Tuple[pd.DataFrame, Dict[str, int], List[Dict[str, str]]]:
+) -> Tuple[pd.DataFrame, GateCounts, List[Dict[str, str]]]:
     """Filter ``df`` according to the configured gate thresholds."""
 
     cfg = cfg or {}
@@ -216,7 +219,17 @@ def apply_gates(
 
     fail_counts = _initialise_fail_counts()
     if df is None or df.empty:
-        return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame(), fail_counts, []
+        gate_counts: GateCounts = dict(fail_counts)
+        gate_counts["gate_preset"] = str((cfg or {}).get("_gate_preset", "custom"))
+        gate_counts["gate_relax_mode"] = str((cfg or {}).get("_gate_relax_mode", "none"))
+        gate_counts["gate_total_evaluated"] = 0
+        gate_counts["gate_total_passed"] = 0
+        gate_counts["gate_total_failed"] = 0
+        return (
+            df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame(),
+            gate_counts,
+            [],
+        )
 
     gate_rows = []
     reject_samples: List[Dict[str, str]] = []
@@ -329,7 +342,17 @@ def apply_gates(
     candidates_df = df.loc[gate_rows].copy()
     candidates_df.sort_values("Score", ascending=False, inplace=True)
     candidates_df.reset_index(drop=True, inplace=True)
-    return candidates_df, fail_counts, reject_samples
+    gate_counts = dict(fail_counts)
+    preset_key = str((cfg or {}).get("_gate_preset", "custom"))
+    relax_mode = str((cfg or {}).get("_gate_relax_mode", "none"))
+    gate_counts["gate_preset"] = preset_key
+    gate_counts["gate_relax_mode"] = relax_mode
+    evaluated = int(df.shape[0])
+    passed = int(len(gate_rows))
+    gate_counts["gate_total_evaluated"] = evaluated
+    gate_counts["gate_total_passed"] = passed
+    gate_counts["gate_total_failed"] = max(evaluated - passed, 0)
+    return candidates_df, gate_counts, reject_samples
 
 
 __all__ = ["score_universe", "apply_gates", "DEFAULT_COMPONENT_MAP", "DEFAULT_WEIGHTS", "DEFAULT_GATES"]

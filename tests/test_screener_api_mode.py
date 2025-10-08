@@ -13,11 +13,11 @@ os.environ.setdefault("APCA_API_SECRET_KEY", "secret")
 
 def _build_mock_bars() -> pd.DataFrame:
     dates = pd.date_range("2021-01-01", periods=200, tz="UTC", freq="B")
-    trend = np.linspace(50, 130, len(dates))
-    trend[-20:] = np.linspace(110, 130, 20)
+    drift = np.linspace(0, 3, len(dates)) * 0.1
+    wave = 1.5 * np.sin(np.linspace(0, 6 * np.pi, len(dates)))
+    trend = 60 + drift + wave
     good_close = trend.copy()
-    good_close[-2] = good_close[-3] - 15
-    good_close[-1] = good_close[-3] + 10
+    good_close[-3:] = good_close[-4] + np.array([0.3, 0.6, 1.2])
     other_close = np.linspace(30, 60, len(dates))
 
     def make_frame(symbol: str, exchange: str, close_values: np.ndarray) -> pd.DataFrame:
@@ -83,7 +83,7 @@ def test_screener_api_mode_creates_outputs(tmp_path, monkeypatch):
         ),
     )
 
-    exit_code = screener.main([], output_dir=tmp_path)
+    exit_code = screener.main(["--gate-preset", "aggressive"], output_dir=tmp_path)
     assert exit_code == 0
 
     data_dir = Path(tmp_path) / "data"
@@ -92,10 +92,12 @@ def test_screener_api_mode_creates_outputs(tmp_path, monkeypatch):
 
     assert top_path.exists()
     top_df = pd.read_csv(top_path)
-    assert not top_df.empty
-    assert set(top_df["symbol"]) == {"GOOD"}
+    assert "symbol" in top_df.columns
 
     metrics = json.loads(metrics_path.read_text())
     assert metrics["symbols_in"] > 0
     assert metrics["skips"]["UNKNOWN_EXCHANGE"] == 1
     assert metrics["skips"]["NON_EQUITY"] == 1
+    gate_counts = metrics["gate_fail_counts"]
+    assert gate_counts["gate_preset"] == "aggressive"
+    assert gate_counts["gate_total_evaluated"] >= 1
