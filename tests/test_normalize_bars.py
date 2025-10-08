@@ -46,3 +46,32 @@ def test_groupby_safe():
     grouped = df.groupby("symbol", as_index=False)["timestamp"].count()
     assert "symbol" in grouped.columns
     assert grouped.loc[0, "timestamp"] == 2
+
+
+def test_normalize_coercion():
+    payload = [
+        {"S": "AAPL", "t": "2024-01-02T00:00:00Z", "o": "1", "h": "2", "l": "1", "c": "2", "v": "10"}
+    ]
+    df = to_bars_df(payload)
+    assert df["timestamp"].dtype.tz is not None
+    assert df["timestamp"].dtype.tz.zone in {"UTC", "utc"}
+    for col in ["open", "high", "low", "close"]:
+        assert str(df[col].dtype) == "float64"
+    assert str(df["volume"].dtype) == "Int64"
+
+
+def test_groupby_history():
+    payload = [
+        {"S": "spy", "t": "2024-01-01T00:00:00Z", "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 10},
+        {"S": "spy", "t": "2024-01-02T00:00:00Z", "o": 1.1, "h": 2.1, "l": 0.6, "c": 1.6, "v": 11},
+        {"S": "qqq", "t": "2024-01-02T00:00:00Z", "o": 2, "h": 3, "l": 1.5, "c": 2.5, "v": 5},
+    ]
+    df = to_bars_df(payload)
+    hist = (
+        df.dropna(subset=["timestamp"])
+        .groupby("symbol", as_index=False)["timestamp"]
+        .size()
+        .rename(columns={"size": "n"})
+    )
+    keep = set(hist.loc[hist["n"] >= 2, "symbol"])
+    assert keep == {"SPY"}

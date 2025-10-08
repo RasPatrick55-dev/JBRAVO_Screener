@@ -1,6 +1,9 @@
 import pandas as pd
 import pytest
 
+import pandas as pd
+import pytest
+
 from scripts.utils.normalize import BARS_COLUMNS, to_bars_df
 
 

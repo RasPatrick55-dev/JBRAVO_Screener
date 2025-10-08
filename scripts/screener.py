@@ -259,11 +259,14 @@ def _normalize_bars_frame(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     frame = df.copy()
-    frame["symbol"] = frame["symbol"].astype(str).str.strip().str.upper()
+    frame["symbol"] = frame["symbol"].astype("string").str.strip().str.upper()
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
     frame.dropna(subset=["symbol", "timestamp"], inplace=True)
+    frame = frame[frame["symbol"] != ""]
     if frame.empty:
         return frame
+    for column in ["open", "high", "low", "close"]:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
     frame.sort_values(["symbol", "timestamp"], inplace=True)
     return frame
 
@@ -386,6 +389,8 @@ def _fetch_daily_bars(
         "http_404_batches": 0,
         "http_empty_batches": 0,
         "symbols_in": 0,
+        "raw_bars_count": 0,
+        "parsed_rows_count": 0,
     }
     metrics["symbols_in"] = len(unique_symbols)
     prescreened: dict[str, str] = {}
@@ -422,6 +427,26 @@ def _fetch_daily_bars(
         except Exception as exc:  # pragma: no cover - diagnostics only
             LOGGER.debug("Could not write bars_preview.json: %s", exc)
 
+    def _dump_parse_failure(bars_raw: object, bars_df: pd.DataFrame) -> None:
+        try:
+            debug_dir = Path("debug")
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            if isinstance(bars_raw, dict) and "bars" in bars_raw:
+                sample = list(bars_raw.get("bars", []))[:10]
+            elif isinstance(bars_raw, (list, tuple)):
+                sample = list(bars_raw)[:10]
+            else:
+                sample = []
+            Path(debug_dir / "raw_bars_sample.json").write_text(
+                json.dumps(sample, indent=2), encoding="utf-8"
+            )
+            Path(debug_dir / "parsed_empty_schema.json").write_text(
+                json.dumps({"columns": list(bars_df.columns)}, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            LOGGER.debug("Could not write parse debug artifacts: %s", exc)
+
     def fetch_single_collection(
         target_symbols: List[str], *, use_http: bool
     ) -> Tuple[pd.DataFrame, int, Dict[str, str], dict[str, int]]:
@@ -432,6 +457,8 @@ def _fetch_daily_bars(
             "rate_limited": 0,
             "http_404_batches": 0,
             "http_empty_batches": 0,
+            "raw_bars_count": 0,
+            "parsed_rows_count": 0,
         }
 
         def _merge_metrics(payload: dict[str, int]) -> None:
@@ -451,11 +478,19 @@ def _fetch_daily_bars(
                     feed=feed,
                     verify_hook=hook,
                 )
+                http_stats = dict(http_stats or {})
+                raw_count = len(raw) if isinstance(raw, list) else 0
                 df = to_bars_df(raw, symbol_hint=symbol)
-                if "symbol" not in df.columns:
-                    LOGGER.error("normalize returned columns=%s", list(df.columns))
-                    df = df.assign(symbol=pd.Series(dtype=str))
-                df = df.reset_index(drop=True)
+                parsed_count = int(df.shape[0])
+                http_stats["raw_bars_count"] = raw_count
+                http_stats["parsed_rows_count"] = parsed_count
+                if raw_count > 0 and parsed_count == 0:
+                    LOGGER.error(
+                        "Raw bars > 0 but parsed rows == 0; dumping debug artifacts."
+                    )
+                    _dump_parse_failure(raw, df)
+                if parsed_count > 0:
+                    df = df.reset_index(drop=True)
                 _write_preview(raw, df)
                 return symbol, df, http_stats
             except Exception as exc:  # pragma: no cover - network errors hit in integration
@@ -468,6 +503,8 @@ def _fetch_daily_bars(
                         "rate_limited": 0,
                         "http_404_batches": 0,
                         "http_empty_batches": 0,
+                        "raw_bars_count": 0,
+                        "parsed_rows_count": 0,
                     },
                 )
 
@@ -489,12 +526,22 @@ def _fetch_daily_bars(
                     token_bucket.acquire()
                     response = data_client.get_stock_bars(request)
                     df = to_bars_df(response, symbol_hint=symbol)
-                    if "symbol" not in df.columns:
-                        LOGGER.error("normalize returned columns=%s", list(df.columns))
-                        df = df.assign(symbol=pd.Series(dtype=str))
-                    df = df.reset_index(drop=True)
+                    parsed_count = int(df.shape[0])
+                    if parsed_count > 0:
+                        df = df.reset_index(drop=True)
                     _write_preview(response, df)
-                    return symbol, df, {"rate_limited": 0, "pages": 1, "requests": 1, "chunks": 1}
+                    return (
+                        symbol,
+                        df,
+                        {
+                            "rate_limited": 0,
+                            "pages": 1,
+                            "requests": 1,
+                            "chunks": 1,
+                            "raw_bars_count": parsed_count,
+                            "parsed_rows_count": parsed_count,
+                        },
+                    )
                 except Exception as exc:  # pragma: no cover - network errors hit in integration
                     status = getattr(exc, "status_code", None)
                     if status in BAR_RETRY_STATUSES and attempt < BAR_MAX_RETRIES - 1:
@@ -514,6 +561,8 @@ def _fetch_daily_bars(
                 "rate_limited": 0,
                 "http_404_batches": 0,
                 "http_empty_batches": 0,
+                "raw_bars_count": 0,
+                "parsed_rows_count": 0,
             }
 
         worker = _http_worker if use_http else _sdk_worker
@@ -535,6 +584,8 @@ def _fetch_daily_bars(
                         "chunks": 0,
                         "http_404_batches": 0,
                         "http_empty_batches": 0,
+                        "raw_bars_count": 0,
+                        "parsed_rows_count": 0,
                     }
                 _merge_metrics(http_stats)
                 pages += int(http_stats.get("pages", 0)) or 0
@@ -571,6 +622,8 @@ def _fetch_daily_bars(
         metrics["pages_total"] += single_pages
         for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
             metrics[key] += int(single_metrics.get(key, 0))
+        metrics["raw_bars_count"] += int(single_metrics.get("raw_bars_count", 0))
+        metrics["parsed_rows_count"] += int(single_metrics.get("parsed_rows_count", 0))
         prescreened.update(single_prescreened)
     else:
         batches = list(_chunked(unique_symbols, max(1, batch_size)))
@@ -604,18 +657,31 @@ def _fetch_daily_bars(
                     metrics["pages_total"] += fallback_pages
                     for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
                         metrics[key] += int(fallback_metrics.get(key, 0))
+                    metrics["raw_bars_count"] += int(
+                        fallback_metrics.get("raw_bars_count", 0)
+                    )
+                    metrics["parsed_rows_count"] += int(
+                        fallback_metrics.get("parsed_rows_count", 0)
+                    )
                     prescreened.update(fallback_prescreened)
                     continue
+                http_stats = dict(http_stats or {})
                 for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
                     metrics[key] += int(http_stats.get(key, 0))
+                raw_count = len(raw) if isinstance(raw, list) else 0
+                http_stats.setdefault("raw_bars_count", raw_count)
                 bars_df = to_bars_df(raw)
-                if "symbol" not in bars_df.columns:
+                parsed_count = int(bars_df.shape[0])
+                http_stats.setdefault("parsed_rows_count", parsed_count)
+                metrics["raw_bars_count"] += int(http_stats.get("raw_bars_count", 0))
+                metrics["parsed_rows_count"] += int(http_stats.get("parsed_rows_count", 0))
+                if raw_count > 0 and parsed_count == 0:
                     LOGGER.error(
-                        "Normalize returned unexpected shape; got columns=%s",
-                        list(bars_df.columns),
+                        "Raw bars > 0 but parsed rows == 0; dumping debug artifacts."
                     )
-                    bars_df = bars_df.assign(symbol=pd.Series(dtype=str))
-                bars_df = bars_df.reset_index(drop=True)
+                    _dump_parse_failure(raw, bars_df)
+                if parsed_count > 0:
+                    bars_df = bars_df.reset_index(drop=True)
                 _write_preview(raw, bars_df)
                 normalized = _normalize_bars_frame(bars_df)
                 if normalized.empty:
@@ -640,6 +706,9 @@ def _fetch_daily_bars(
             if paged:
                 metrics["batches_paged"] += 1
             if batch_success and batch_frames:
+                parsed_rows = sum(frame.shape[0] for frame in batch_frames)
+                metrics["raw_bars_count"] += int(parsed_rows)
+                metrics["parsed_rows_count"] += int(parsed_rows)
                 frames.append(pd.concat(batch_frames, ignore_index=True))
                 continue
 
@@ -659,6 +728,10 @@ def _fetch_daily_bars(
             metrics["pages_total"] += fallback_pages
             for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
                 metrics[key] += int(fallback_metrics.get(key, 0))
+            metrics["raw_bars_count"] += int(fallback_metrics.get("raw_bars_count", 0))
+            metrics["parsed_rows_count"] += int(
+                fallback_metrics.get("parsed_rows_count", 0)
+            )
             prescreened.update(fallback_prescreened)
 
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
@@ -681,23 +754,45 @@ def _fetch_daily_bars(
             )
         combined = combined.reset_index(drop=True)
 
-    if not combined.empty and min_history > 0:
-        counts = combined.groupby("symbol")["timestamp"].count()
-        insufficient = [sym for sym, count in counts.items() if count < min_history]
-        if insufficient:
-            metrics["insufficient_history"] = len(insufficient)
-            for sym in insufficient:
-                prescreened.setdefault(sym, "INSUFFICIENT_HISTORY")
-            combined = combined[~combined["symbol"].isin(insufficient)]
+    required_cols = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+    if not combined.empty:
+        missing_cols = [col for col in required_cols if col not in combined.columns]
+        if missing_cols:
+            LOGGER.error("Bars frame missing columns: %s; skipping gating.", missing_cols)
+            combined = combined.iloc[0:0]
 
-    symbols_with_bars = set(combined["symbol"].unique()) if not combined.empty else set()
+    hist = (
+        combined.dropna(subset=["timestamp"])
+        .groupby("symbol", as_index=False)["timestamp"]
+        .size()
+        .rename(columns={"size": "n"})
+        if not combined.empty
+        else pd.DataFrame(columns=["symbol", "n"])
+    )
+    if min_history > 0 and not hist.empty:
+        keep = set(hist.loc[hist["n"] >= min_history, "symbol"].tolist())
+        insufficient = set(hist.loc[hist["n"] < min_history, "symbol"].tolist())
+    else:
+        keep = set(hist["symbol"].tolist()) if not hist.empty else set()
+        insufficient = set()
+    for sym in insufficient:
+        prescreened.setdefault(sym, "INSUFFICIENT_HISTORY")
+    metrics["insufficient_history"] = len(insufficient)
+    if keep:
+        combined = combined[combined["symbol"].isin(keep)].copy()
+    else:
+        combined = combined.iloc[0:0]
+
+    symbols_with_bars = keep
     metrics["bars_rows_total"] = int(combined.shape[0])
     metrics["symbols_with_bars"] = len(symbols_with_bars)
     missing = [sym for sym in unique_symbols if sym not in symbols_with_bars]
-    for sym in missing:
-        prescreened.setdefault(sym, "NAN_DATA")
     metrics["symbols_no_bars"] = len(missing)
     metrics["symbols_no_bars_sample"] = missing[:10]
+    for sym in missing:
+        if sym in insufficient:
+            continue
+        prescreened.setdefault(sym, "NAN_DATA")
 
     return combined, metrics, prescreened
 
@@ -1009,7 +1104,13 @@ def _load_alpaca_universe(
         for key, value in metrics_candidate.items():
             if isinstance(value, list):
                 continue
-            if key in {"bars_rows_total", "symbols_with_bars", "symbols_no_bars"}:
+            if key in {
+                "bars_rows_total",
+                "symbols_with_bars",
+                "symbols_no_bars",
+                "raw_bars_count",
+                "parsed_rows_count",
+            }:
                 continue
             agg_metrics[key] = agg_metrics.get(key, 0) + int(value)
 
@@ -1034,6 +1135,8 @@ def _load_alpaca_universe(
     agg_metrics["symbols_no_bars_sample"] = list(
         fetch_metrics.get("symbols_no_bars_sample", []) or []
     )
+    agg_metrics["raw_bars_count"] = _coerce_int(fetch_metrics.get("raw_bars_count", 0))
+    agg_metrics["parsed_rows_count"] = _coerce_int(fetch_metrics.get("parsed_rows_count", 0))
     agg_metrics["window_attempts"] = window_attempts
     agg_metrics["window_used"] = final_window
     agg_metrics["symbols_override"] = symbols_override_count
@@ -1450,6 +1553,34 @@ def run_screener(
         str(sym or "").strip().upper(): str(reason or "").strip().upper()
         for sym, reason in (prefiltered_skips or {}).items()
     }
+
+    required_columns = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+    missing_columns = [col for col in required_columns if col not in prepared.columns]
+    if missing_columns:
+        LOGGER.error("Bars frame missing columns: %s; skipping gating.", missing_columns)
+        prepared = prepared.iloc[0:0]
+    else:
+        prepared = prepared.copy()
+        prepared["symbol"] = prepared["symbol"].astype("string").str.strip().str.upper()
+        prepared["timestamp"] = pd.to_datetime(prepared["timestamp"], utc=True, errors="coerce")
+        numeric_cols = ["open", "high", "low", "close", "volume"]
+        for col in numeric_cols:
+            prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
+        non_numeric = [
+            col for col in ["open", "high", "low", "close"] if not pd.api.types.is_numeric_dtype(prepared[col])
+        ]
+        if non_numeric:
+            LOGGER.error("Bars frame non-numeric columns detected: %s; skipping gating.", non_numeric)
+            prepared = prepared.iloc[0:0]
+        else:
+            prepared = prepared.dropna(subset=["timestamp"])
+            prepared = prepared[prepared["symbol"].notna()]
+            prepared = prepared[prepared["symbol"] != ""]
+
+    input_symbols: set[str] = set(prefiltered_map.keys())
+    if not prepared.empty and "symbol" in prepared.columns:
+        input_symbols.update(prepared["symbol"].astype(str).tolist())
+    stats["symbols_in"] = len(input_symbols)
     if prefiltered_map:
         for sym, reason in prefiltered_map.items():
             if reason in skip_reasons:
@@ -1463,15 +1594,8 @@ def run_screener(
             prepared = prepared[~prepared["symbol"].isin(prefiltered_map.keys())]
 
     if prepared.empty:
-        stats["symbols_in"] = 0
         LOGGER.info("No input rows supplied to screener; outputs will be empty.")
     else:
-        unique_symbols = (
-            prepared["symbol"].astype(str).str.strip().str.upper().nunique()
-            if "symbol" in prepared.columns
-            else 0
-        )
-        stats["symbols_in"] = int(unique_symbols)
         for symbol, group in prepared.groupby("symbol"):
             if group.empty:
                 skip_reasons["NAN_DATA"] += 1
@@ -1480,9 +1604,22 @@ def run_screener(
                 record_reject(symbol, "NAN_DATA")
                 continue
 
+            ordered = group.sort_values("timestamp").reset_index(drop=True)
+            window_length = max(1, min_history) if min_history and min_history > 0 else len(ordered)
+            window_length = min(len(ordered), window_length)
+            recent = ordered.tail(window_length)
+            if recent[["open", "high", "low", "close"]].isna().any().any():
+                skip_reasons["NAN_DATA"] += 1
+                gate_counters["nan_data"] += 1
+                LOGGER.info(
+                    "[SKIP] %s has NaN data in the most recent window", symbol or "<UNKNOWN>"
+                )
+                record_reject(symbol, "NAN_DATA")
+                continue
+
             bars: list[BarData] = []
             skip_symbol = False
-            for row in group.to_dict("records"):
+            for row in ordered.to_dict("records"):
                 row = dict(row)
                 sym = str(row.get("symbol") or symbol or "").strip().upper()
                 meta = asset_meta.get(sym, {})
@@ -1557,7 +1694,7 @@ def run_screener(
                 record_reject(symbol, "NAN_DATA")
                 continue
 
-            clean_df.dropna(subset=numeric_cols, inplace=True)
+            clean_df.dropna(subset=["open", "high", "low", "close"], inplace=True)
             if clean_df.empty:
                 skip_reasons["NAN_DATA"] += 1
                 gate_counters["nan_data"] += 1
@@ -1741,6 +1878,8 @@ def write_outputs(
             "http_empty_batches": _coerce_int(fetch_payload.get("http_empty_batches", 0)),
             "window_used": _coerce_int(fetch_payload.get("window_used", 0)),
             "symbols_override": _coerce_int(fetch_payload.get("symbols_override", 0)),
+            "raw_bars_count": _coerce_int(fetch_payload.get("raw_bars_count", 0)),
+            "parsed_rows_count": _coerce_int(fetch_payload.get("parsed_rows_count", 0)),
         }
     )
     window_attempts = fetch_payload.get("window_attempts", [])
