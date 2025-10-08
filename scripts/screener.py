@@ -1571,6 +1571,7 @@ def run_screener(
     now: Optional[datetime] = None,
     asset_meta: Optional[Dict[str, dict]] = None,
     prefiltered_skips: Optional[Dict[str, str]] = None,
+    relax_gates: str = "none",
 ) -> Tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -1589,6 +1590,9 @@ def run_screener(
         "failed_sma_stack": 0,
         "failed_rsi": 0,
         "failed_cross": 0,
+        "failed_macd_hist": 0,
+        "failed_adx": 0,
+        "failed_aroon": 0,
         "nan_data": 0,
         "insufficient_history": 0,
     }
@@ -1596,6 +1600,7 @@ def run_screener(
     asset_meta = {str(key).upper(): value for key, value in (asset_meta or {}).items()}
     promoted_symbols: set[str] = set()
     reject_samples: list[dict[str, str]] = []
+    gate_mode = (relax_gates or "none").lower()
 
     def record_reject(symbol: object, reason: str) -> None:
         sym = str(symbol or "").strip().upper() or "<UNKNOWN>"
@@ -1796,25 +1801,75 @@ def run_screener(
                 continue
 
             crossed_up = prev_row["close"] < prev_row["sma9"] and curr_row["close"] > curr_row["sma9"]
-            if not crossed_up:
-                LOGGER.info("[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>")
-                gate_counters["failed_cross"] += 1
-                record_reject(symbol, "FAILED_CROSS")
-                continue
-
             stacked = curr_row["sma9"] > curr_row["ema20"] > curr_row["sma180"]
-            if not stacked:
-                LOGGER.info("[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>")
-                gate_counters["failed_sma_stack"] += 1
-                record_reject(symbol, "FAILED_SMA_STACK")
-                continue
+            rsi_value = curr_row.get("rsi")
+            macd_hist_value = curr_row.get("macd_hist")
+            strong_rsi = bool(pd.notna(rsi_value) and rsi_value > 50)
+            relaxed_rsi_range = bool(pd.notna(rsi_value) and 52 <= float(rsi_value) <= 68)
+            macd_hist_positive = bool(pd.notna(macd_hist_value) and float(macd_hist_value) > 0)
 
-            strong_rsi = curr_row["rsi"] > 50
-            if not strong_rsi:
-                LOGGER.info("[FILTER] %s failed RSI threshold", symbol or "<UNKNOWN>")
-                gate_counters["failed_rsi"] += 1
-                record_reject(symbol, "FAILED_RSI")
-                continue
+            if gate_mode == "sma_only":
+                if not crossed_up:
+                    LOGGER.info("[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>")
+                    gate_counters["failed_cross"] += 1
+                    record_reject(symbol, "FAILED_CROSS")
+                    continue
+                if not stacked:
+                    LOGGER.info(
+                        "[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>"
+                    )
+                    gate_counters["failed_sma_stack"] += 1
+                    record_reject(symbol, "FAILED_SMA_STACK")
+                    continue
+            elif gate_mode == "cross_or_rsi":
+                passes_crossover = crossed_up and stacked
+                passes_relaxed = relaxed_rsi_range and macd_hist_positive
+                if not (passes_crossover or passes_relaxed):
+                    if not crossed_up:
+                        LOGGER.info(
+                            "[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>"
+                        )
+                        gate_counters["failed_cross"] += 1
+                        record_reject(symbol, "FAILED_CROSS")
+                        continue
+                    if not stacked:
+                        LOGGER.info(
+                            "[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>"
+                        )
+                        gate_counters["failed_sma_stack"] += 1
+                        record_reject(symbol, "FAILED_SMA_STACK")
+                        continue
+                    if not relaxed_rsi_range:
+                        LOGGER.info(
+                            "[FILTER] %s outside relaxed RSI window", symbol or "<UNKNOWN>"
+                        )
+                        gate_counters["failed_rsi"] += 1
+                        record_reject(symbol, "FAILED_RELAX_RSI")
+                        continue
+                    LOGGER.info(
+                        "[FILTER] %s failed MACD histogram check", symbol or "<UNKNOWN>"
+                    )
+                    gate_counters["failed_macd_hist"] += 1
+                    record_reject(symbol, "FAILED_MACD_HIST")
+                    continue
+            else:
+                if not crossed_up:
+                    LOGGER.info("[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>")
+                    gate_counters["failed_cross"] += 1
+                    record_reject(symbol, "FAILED_CROSS")
+                    continue
+                if not stacked:
+                    LOGGER.info(
+                        "[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>"
+                    )
+                    gate_counters["failed_sma_stack"] += 1
+                    record_reject(symbol, "FAILED_SMA_STACK")
+                    continue
+                if not strong_rsi:
+                    LOGGER.info("[FILTER] %s failed RSI threshold", symbol or "<UNKNOWN>")
+                    gate_counters["failed_rsi"] += 1
+                    record_reject(symbol, "FAILED_RSI")
+                    continue
 
             clean_df.set_index("timestamp", inplace=True)
             score, breakdown = _score_symbol(clean_df)
@@ -1911,15 +1966,18 @@ def write_outputs(
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
     }
     gate_counts = gate_counters or {}
-    metrics.update(
-        {
-            "failed_sma_stack": int(gate_counts.get("failed_sma_stack", 0)),
-            "failed_rsi": int(gate_counts.get("failed_rsi", 0)),
-            "failed_cross": int(gate_counts.get("failed_cross", 0)),
-            "nan_data": int(gate_counts.get("nan_data", 0)),
-            "insufficient_history": int(gate_counts.get("insufficient_history", 0)),
-        }
-    )
+    gate_fail_counts = {
+        "failed_sma_stack": int(gate_counts.get("failed_sma_stack", 0)),
+        "failed_rsi": int(gate_counts.get("failed_rsi", 0)),
+        "failed_cross": int(gate_counts.get("failed_cross", 0)),
+        "failed_macd_hist": int(gate_counts.get("failed_macd_hist", 0)),
+        "failed_adx": int(gate_counts.get("failed_adx", 0)),
+        "failed_aroon": int(gate_counts.get("failed_aroon", 0)),
+        "nan_data": int(gate_counts.get("nan_data", 0)),
+        "insufficient_history": int(gate_counts.get("insufficient_history", 0)),
+    }
+    metrics.update(gate_fail_counts)
+    metrics["gate_fail_counts"] = gate_fail_counts
     fetch_payload = fetch_metrics or {}
     metrics.update(
         {
@@ -2055,6 +2113,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Log and capture the first bars request for debugging",
     )
+    parser.add_argument(
+        "--relax-gates",
+        choices=["none", "sma_only", "cross_or_rsi"],
+        default="none",
+        help="Temporarily relax gates for diagnostics.",
+    )
     parsed = parser.parse_args(list(argv) if argv is not None else None)
     if getattr(parsed, "source", None):
         parsed.source_csv = parsed.source
@@ -2136,6 +2200,7 @@ def main(
         now=now,
         asset_meta=asset_meta,
         prefiltered_skips=prescreened,
+        relax_gates=args.relax_gates,
     )
     write_outputs(
         base_dir,

@@ -115,5 +115,18 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     assert metrics["skips"]["UNKNOWN_EXCHANGE"] >= 1
     assert metrics["status"] == "ok"
     assert "reject_samples" in metrics
+    assert "gate_fail_counts" in metrics
+    assert set(
+        [
+            "failed_sma_stack",
+            "failed_rsi",
+            "failed_cross",
+            "failed_macd_hist",
+            "failed_adx",
+            "failed_aroon",
+            "nan_data",
+            "insufficient_history",
+        ]
+    ).issubset(metrics["gate_fail_counts"].keys())
     if not top_df.empty:
         assert int(top_df["universe_count"].iloc[0]) == stats["symbols_in"]
