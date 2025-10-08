@@ -60,7 +60,7 @@ presets:
     max_liq_penalty: 0.00001
   aggressive:
     min_rsi: 49
-    max_rsi: 70
+    max_rsi: null
     min_adx: 14
     min_aroon: 45
     min_volexp: 0.6

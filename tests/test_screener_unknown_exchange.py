@@ -79,6 +79,7 @@ def test_screener_skips_unknown_exchanges(tmp_path):
         skips,
         reject_samples,
         gate_counters,
+        ranker_cfg,
     ) = screener.run_screener(
         df,
         top_n=5,
@@ -103,6 +104,7 @@ def test_screener_skips_unknown_exchanges(tmp_path):
         gate_counters=gate_counters,
         fetch_metrics={},
         asset_metrics={},
+        ranker_cfg=ranker_cfg,
     )
 
     top_path = tmp_path / "data" / "top_candidates.csv"
@@ -116,17 +118,22 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     assert metrics["status"] == "ok"
     assert "reject_samples" in metrics
     assert "gate_fail_counts" in metrics
-    assert set(
-        [
-            "failed_sma_stack",
-            "failed_rsi",
-            "failed_cross",
-            "failed_macd_hist",
-            "failed_adx",
-            "failed_aroon",
-            "nan_data",
-            "insufficient_history",
-        ]
-    ).issubset(metrics["gate_fail_counts"].keys())
+    expected_gate_keys = {
+        "failed_sma_stack",
+        "failed_rsi",
+        "failed_adx",
+        "failed_aroon",
+        "failed_volexp",
+        "failed_gap",
+        "failed_liquidity",
+        "nan_data",
+        "insufficient_history",
+        "gate_preset",
+        "gate_relax_mode",
+        "gate_total_evaluated",
+        "gate_total_passed",
+        "gate_total_failed",
+    }
+    assert expected_gate_keys.issubset(metrics["gate_fail_counts"].keys())
     if not top_df.empty:
         assert int(top_df["universe_count"].iloc[0]) == stats["symbols_in"]
