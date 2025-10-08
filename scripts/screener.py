@@ -2211,24 +2211,52 @@ def write_outputs(
     metrics_path = data_dir / "screener_metrics.json"
     predictions_dir = data_dir / "predictions"
     predictions_dir.mkdir(parents=True, exist_ok=True)
-    predictions_path = predictions_dir / f"{now.date().isoformat()}.csv"
+    run_date_str = now.date().isoformat()
+    daily_predictions_path = predictions_dir / f"{run_date_str}.csv"
 
     _write_csv_atomic(top_path, top_df)
     _write_csv_atomic(scored_path, scored_df)
-    predictions_frame = _prepare_predictions_frame(
-        scored_df,
-        run_date=now,
-        gate_counters=gate_counters,
-        ranker_cfg=ranker_cfg,
-    )
-    _write_csv_atomic(predictions_path, predictions_frame)
-    latest_prediction = predictions_dir / "latest.csv"
-    try:
-        if latest_prediction.exists() or latest_prediction.is_symlink():
-            latest_prediction.unlink()
-        latest_prediction.symlink_to(predictions_path.name)
-    except OSError:
-        _write_csv_atomic(latest_prediction, predictions_frame)
+
+    pred_cols = [
+        "symbol",
+        "Score",
+        "rank",
+        "timestamp",
+        "close",
+        "ATR14",
+        "ADV20",
+        "TS",
+        "MS",
+        "BP",
+        "PT",
+        "RSI",
+        "MH",
+        "ADX",
+        "AROON",
+        "VCP",
+        "VOLexp",
+        "GAPpen",
+        "LIQpen",
+        "score_breakdown",
+    ]
+    if scored_df is None or scored_df.empty:
+        predictions_out = pd.DataFrame(columns=["run_date"] + pred_cols)
+    else:
+        ranked_df = scored_df.copy()
+        ranked_df = ranked_df.reset_index(drop=True)
+        ranked_df["rank"] = range(1, len(ranked_df) + 1)
+        ranked_df["run_date"] = run_date_str
+        for col in pred_cols:
+            if col not in ranked_df.columns:
+                ranked_df[col] = pd.NA
+        predictions_out = ranked_df[[c for c in ["run_date"] + pred_cols if c in ranked_df.columns]].copy()
+        missing_cols = [c for c in pred_cols if c not in predictions_out.columns]
+        for col in missing_cols:
+            predictions_out[col] = pd.NA
+        predictions_out = predictions_out[["run_date"] + pred_cols]
+
+    _write_csv_atomic(daily_predictions_path, predictions_out)
+    _write_csv_atomic(predictions_dir / "latest.csv", predictions_out)
 
     diagnostics_dir = data_dir / "diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
@@ -2316,6 +2344,27 @@ def write_outputs(
     timing_payload = {k: round(float(v), 3) for k, v in (timings or {}).items()}
     metrics["timings"] = timing_payload
     _write_json_atomic(metrics_path, metrics)
+
+    hist_path = data_dir / "screener_metrics_history.csv"
+    row = {
+        "run_utc": metrics.get("last_run_utc"),
+        "symbols_in": metrics.get("symbols_in", 0),
+        "symbols_with_bars": metrics.get("symbols_with_bars", 0),
+        "bars_rows_total": metrics.get("bars_rows_total", 0),
+        "rows": metrics.get("rows", 0),
+        "fetch_secs": timing_payload.get("fetch_secs", 0),
+        "feature_secs": timing_payload.get("feature_secs", 0),
+        "rank_secs": timing_payload.get("rank_secs", 0),
+        "gates_secs": timing_payload.get("gates_secs", 0),
+    }
+    try:
+        if hist_path.exists():
+            pd.DataFrame([row]).to_csv(hist_path, mode="a", header=False, index=False)
+        else:
+            pd.DataFrame([row]).to_csv(hist_path, mode="w", header=True, index=False)
+    except Exception as exc:
+        logger.warning("Could not append metrics history: %s", exc)
+
     return metrics_path
 
 
