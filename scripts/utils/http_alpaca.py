@@ -75,7 +75,6 @@ def fetch_bars_http(
         chunk = symbols[i : i + 50]
         chunk_pages = 0
         consecutive_429 = 0
-        backoff = sleep_s
         page = None
         while True:
             params = {
@@ -97,13 +96,11 @@ def fetch_bars_http(
             requests_made += 1
             if resp.status_code == 429:
                 rate_limited += 1
-                consecutive_429 += 1
-                if consecutive_429 >= 2:
-                    backoff = min(backoff * 2, 10.0)
-                time.sleep(backoff)
+                consecutive_429 = min(consecutive_429 + 1, 3)
+                delay = 1.5 if consecutive_429 >= 2 else max(sleep_s, 0.35)
+                time.sleep(delay)
                 continue
             consecutive_429 = 0
-            backoff = sleep_s
             if resp.status_code == 404:
                 http_404 += 1
                 break

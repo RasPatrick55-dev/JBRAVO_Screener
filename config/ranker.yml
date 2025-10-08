@@ -32,11 +32,13 @@ gates:
   min_history: 20
   min_rsi: 52
   max_rsi: 68
+  rsi_tolerance: 0.5
   min_adx: 18
   min_aroon: 40
   min_volexp: 0.8
   max_gap: 0.08
   max_liq_penalty: 0.00001
+  dollar_vol_min: 2000000    # default $2M (allow 3000000 via CLI/override)
   require_sma_stack: true
   min_score: null
   history_column: history
@@ -66,3 +68,9 @@ presets:
     min_volexp: 0.6
     max_gap: 0.12
     max_liq_penalty: 0.00002
+
+eval:
+  days: 60
+  label_horizon: 3
+  hit_threshold: 0.04
+  max_drawdown: 0.03

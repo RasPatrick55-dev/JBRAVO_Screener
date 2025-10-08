@@ -53,13 +53,15 @@ DEFAULT_WEIGHTS: Mapping[str, float] = {
 
 DEFAULT_GATES: Mapping[str, float | bool] = {
     "min_history": 20,
-    "min_rsi": 52.0,
-    "max_rsi": 68.0,
-    "min_adx": 18.0,
-    "min_aroon": 40.0,
-    "min_volexp": 0.8,
-    "max_gap": 0.08,
+    "min_rsi": None,
+    "max_rsi": None,
+    "rsi_tolerance": 0.5,
+    "min_adx": None,
+    "min_aroon": None,
+    "min_volexp": 0.0,
+    "max_gap": None,
     "max_liq_penalty": 0.00001,
+    "dollar_vol_min": None,
     "require_sma_stack": True,
     "min_score": None,
     "history_column": "history",
@@ -84,6 +86,8 @@ REJECT_SAMPLE_LIMIT = 10
 
 GateCountValue = Union[int, str]
 GateCounts = Dict[str, GateCountValue]
+
+FLOAT_TOL = 1e-6
 
 
 def _standardize(series: pd.Series) -> pd.Series:
@@ -235,6 +239,7 @@ def apply_gates(
             [],
         )
 
+    df = df.copy()
     gate_rows = []
     reject_samples: List[Dict[str, str]] = []
     history_col = str(gates_cfg.get("history_column") or "history")
@@ -242,12 +247,49 @@ def apply_gates(
     require_sma_stack = bool(gates_cfg.get("require_sma_stack", True))
     min_rsi = _resolve_float(gates_cfg.get("min_rsi"))
     max_rsi = _resolve_float(gates_cfg.get("max_rsi"))
+    rsi_tolerance = _resolve_float(gates_cfg.get("rsi_tolerance"))
+    if rsi_tolerance is None or not np.isfinite(rsi_tolerance):
+        rsi_tolerance = 0.0
+    else:
+        rsi_tolerance = max(rsi_tolerance, 0.0)
     min_adx = _resolve_float(gates_cfg.get("min_adx"))
     min_aroon = _resolve_float(gates_cfg.get("min_aroon"))
     min_volexp = _resolve_float(gates_cfg.get("min_volexp"))
     max_gap = _resolve_float(gates_cfg.get("max_gap"))
     max_liq_pen = _resolve_float(gates_cfg.get("max_liq_penalty"))
+    dollar_vol_min = _resolve_float(gates_cfg.get("dollar_vol_min"))
     min_score = _resolve_float(gates_cfg.get("min_score"))
+
+    total_symbols = int(df.shape[0])
+    if dollar_vol_min is not None and dollar_vol_min > 0 and "ADV20" in df.columns:
+        latest = df.copy()
+        if "timestamp" in latest.columns:
+            latest["timestamp"] = pd.to_datetime(latest["timestamp"], utc=True, errors="coerce")
+            latest = latest.sort_values(["symbol", "timestamp"])
+        if "symbol" in latest.columns:
+            latest = latest.groupby("symbol", as_index=False, group_keys=False).tail(1)
+        liquid_mask = pd.to_numeric(latest["ADV20"], errors="coerce") >= (dollar_vol_min - FLOAT_TOL)
+        latest_liquid = latest.loc[liquid_mask.fillna(False)]
+        liquid_symbols = set(latest_liquid["symbol"].astype(str).str.upper())
+        failed_liquidity = max(total_symbols - len(liquid_symbols), 0)
+        if failed_liquidity:
+            fail_counts["failed_liquidity"] += failed_liquidity
+            if "symbol" in latest.columns:
+                rejected_symbols = [
+                    str(sym).strip().upper()
+                    for sym in latest["symbol"].astype(str)
+                    if str(sym).strip().upper() not in liquid_symbols
+                ]
+                for sym in rejected_symbols:
+                    if len(reject_samples) >= REJECT_SAMPLE_LIMIT:
+                        break
+                    reject_samples.append({"symbol": sym, "reason": "LOW_LIQUIDITY"})
+        if liquid_symbols:
+            df = df[df["symbol"].astype(str).str.upper().isin(liquid_symbols)].copy()
+        else:
+            df = df.iloc[0:0].copy()
+    else:
+        liquid_symbols = set(df.get("symbol", pd.Series(dtype="object")).astype(str).str.upper())
 
     for idx, row in df.iterrows():
         symbol = str(row.get("symbol", "")).strip().upper() or "<UNKNOWN>"
@@ -267,7 +309,7 @@ def apply_gates(
             if score_value is None:
                 record_failure("nan_data", "MISSING_SCORE")
                 continue
-            if score_value < min_score:
+            if score_value + FLOAT_TOL < min_score:
                 record_failure("failed_score", "LOW_SCORE")
                 continue
 
@@ -289,10 +331,10 @@ def apply_gates(
             if rsi_value is None:
                 record_failure("nan_data", "MISSING_RSI")
                 continue
-            if min_rsi is not None and rsi_value < min_rsi:
+            if min_rsi is not None and rsi_value + FLOAT_TOL < (min_rsi - rsi_tolerance):
                 record_failure("failed_rsi", "LOW_RSI")
                 continue
-            if max_rsi is not None and rsi_value > max_rsi:
+            if max_rsi is not None and rsi_value - FLOAT_TOL > (max_rsi + rsi_tolerance):
                 record_failure("failed_rsi", "HIGH_RSI")
                 continue
 
@@ -301,16 +343,20 @@ def apply_gates(
             if adx_value is None:
                 record_failure("nan_data", "MISSING_ADX")
                 continue
-            if adx_value < min_adx:
+            if adx_value + FLOAT_TOL < min_adx:
                 record_failure("failed_adx", "LOW_ADX")
                 continue
 
         if min_aroon is not None:
             aroon_value = _resolve_float(row.get("AROON"))
+            if (aroon_value is None or aroon_value + FLOAT_TOL < min_aroon) and "AROON_UP" in row:
+                alt_value = _resolve_float(row.get("AROON_UP"))
+                if alt_value is not None:
+                    aroon_value = alt_value
             if aroon_value is None:
                 record_failure("nan_data", "MISSING_AROON")
                 continue
-            if aroon_value < min_aroon:
+            if aroon_value + FLOAT_TOL < min_aroon:
                 record_failure("failed_aroon", "LOW_AROON")
                 continue
 
@@ -319,7 +365,7 @@ def apply_gates(
             if volexp_value is None:
                 record_failure("nan_data", "MISSING_VOLEXP")
                 continue
-            if volexp_value < min_volexp:
+            if volexp_value + FLOAT_TOL < min_volexp:
                 record_failure("failed_volexp", "LOW_VOLEXP")
                 continue
 
@@ -328,7 +374,7 @@ def apply_gates(
             if gap_value is None:
                 record_failure("nan_data", "MISSING_GAP")
                 continue
-            if gap_value > max_gap:
+            if gap_value - FLOAT_TOL > max_gap:
                 record_failure("failed_gap", "HIGH_GAP")
                 continue
 
@@ -337,7 +383,7 @@ def apply_gates(
             if liq_value is None:
                 record_failure("nan_data", "MISSING_LIQUIDITY")
                 continue
-            if liq_value > max_liq_pen:
+            if liq_value - FLOAT_TOL > max_liq_pen:
                 record_failure("failed_liquidity", "LOW_LIQUIDITY")
                 continue
 
@@ -351,7 +397,7 @@ def apply_gates(
     relax_mode = str((cfg or {}).get("_gate_relax_mode", "none"))
     gate_counts["gate_preset"] = preset_key
     gate_counts["gate_relax_mode"] = relax_mode
-    evaluated = int(df.shape[0])
+    evaluated = total_symbols
     passed = int(len(gate_rows))
     gate_counts["gate_total_evaluated"] = evaluated
     gate_counts["gate_total_passed"] = passed

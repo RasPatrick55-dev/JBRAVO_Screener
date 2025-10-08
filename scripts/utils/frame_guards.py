@@ -33,7 +33,7 @@ def ensure_symbol_column(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     df = df.copy()
-    df["symbol"] = pd.Series(dtype="string")
+    df["symbol"] = pd.Index(df.index).map(lambda x: str(x).upper() if x is not None else "")
     return df
 
 
