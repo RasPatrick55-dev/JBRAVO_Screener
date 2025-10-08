@@ -1,0 +1,27 @@
+.sh-kpi {
+  background: #121212;
+  border: 1px solid #2d2d2d;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.sh-kpi-title {
+  color: #9aa0a6;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.sh-kpi-value {
+  color: #e8eaed;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.sh-kpi-sub {
+  color: #9aa0a6;
+  font-size: 12px;
+}
+
+.sh-row {
+  width: 100%;
+}

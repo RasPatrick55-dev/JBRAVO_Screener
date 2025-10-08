@@ -19,6 +19,9 @@ import pytz
 from pathlib import Path
 from typing import Optional
 
+from dashboards.screener_health import build_layout as build_screener_health
+from dashboards.screener_health import register_callbacks as register_screener_health
+
 # Base directory of the project (parent of this file)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -140,6 +143,17 @@ def load_prediction_history(limit: int = 7) -> list[tuple[str, pd.DataFrame]]:
             df = pd.read_csv(path)
         except Exception:
             continue
+        if not df.empty:
+            rename_map = {}
+            for col in df.columns:
+                lower = str(col).lower()
+                if lower == "gappen":
+                    rename_map[col] = "gap_pen"
+                elif lower == "liqpen":
+                    rename_map[col] = "liq_pen"
+                else:
+                    rename_map[col] = lower
+            df = df.rename(columns=rename_map)
         frames.append((path.stem, df))
     return frames[-limit:]
 
@@ -477,6 +491,13 @@ app.layout = dbc.Container(
             class_name="mb-3",
             children=[
                 dbc.Tab(
+                    label="Screener Health",
+                    tab_id="tab-screener-health",
+                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                    className="custom-tab",
+                ),
+                dbc.Tab(
                     label="Overview",
                     tab_id="tab-overview",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
@@ -558,6 +579,10 @@ app.layout = dbc.Container(
     ],
     fluid=True,
 )
+
+
+# Register Screener Health callbacks
+register_screener_health(app)
 
 
 # Callbacks for tabs content
@@ -1592,6 +1617,9 @@ def screener_layout():
 
 @app.callback(Output("tabs-content", "children"), [Input("tabs", "active_tab")])
 def render_tab(tab):
+    if tab == "tab-screener-health":
+        logger.info("Rendering content for tab: %s", tab)
+        return build_screener_health()
     if tab == "tab-overview":
         logger.info("Rendering content for tab: %s", tab)
         return overview_layout()
