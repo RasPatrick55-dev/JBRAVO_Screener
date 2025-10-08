@@ -1,3 +1,5 @@
+version: "2024.07"
+
 weights:
   trend: 0.25
   momentum: 0.2
@@ -38,3 +40,29 @@ gates:
   require_sma_stack: true
   min_score: null
   history_column: history
+
+presets:
+  conservative:
+    min_rsi: 55
+    max_rsi: 65
+    min_adx: 25
+    min_aroon: 70
+    min_volexp: 1.0
+    max_gap: 0.06
+    max_liq_penalty: 0.000008
+  standard:
+    min_rsi: 52
+    max_rsi: 68
+    min_adx: 18
+    min_aroon: 60
+    min_volexp: 0.8
+    max_gap: 0.08
+    max_liq_penalty: 0.00001
+  aggressive:
+    min_rsi: 49
+    max_rsi: 70
+    min_adx: 14
+    min_aroon: 45
+    min_volexp: 0.6
+    max_gap: 0.12
+    max_liq_penalty: 0.00002

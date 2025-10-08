@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePath
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -24,6 +25,12 @@ try:  # pragma: no cover - preferred module execution path
     from .utils.models import BarData, classify_exchange, KNOWN_EQUITY
     from .utils.env import trading_base_url
     from .utils.frame_guards import ensure_symbol_column
+    from .features import compute_all_features, REQUIRED_FEATURE_COLUMNS
+    from .ranking import (
+        apply_gates,
+        score_universe,
+        DEFAULT_COMPONENT_MAP,
+    )
 except Exception:  # pragma: no cover - fallback for direct script execution
     import os as _os
     import sys as _sys
@@ -37,6 +44,12 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.utils.models import BarData, classify_exchange, KNOWN_EQUITY  # type: ignore
     from scripts.utils.env import trading_base_url  # type: ignore
     from scripts.utils.frame_guards import ensure_symbol_column  # type: ignore
+    from scripts.features import compute_all_features, REQUIRED_FEATURE_COLUMNS  # type: ignore
+    from scripts.ranking import (  # type: ignore
+        apply_gates,
+        score_universe,
+        DEFAULT_COMPONENT_MAP,
+    )
 
 from utils.env import load_env, get_alpaca_creds
 from utils.io_utils import atomic_write_bytes
@@ -85,45 +98,41 @@ INPUT_COLUMNS = [
     "volume",
 ]
 
-SCORED_COLUMNS = [
-    "symbol",
-    "exchange",
-    "timestamp",
-    "score",
-    "close",
-    "volume",
-    "score_breakdown",
-    "rsi",
-    "macd",
-    "macd_hist",
-    "adx",
-    "aroon_up",
-    "aroon_down",
-    "sma9",
-    "ema20",
-    "sma180",
-    "atr",
+RANKER_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "ranker.yml"
+
+CORE_FEATURE_COLUMNS = [
+    "TS",
+    "MS",
+    "BP",
+    "PT",
+    "MH",
+    "RSI",
+    "ADX",
+    "AROON",
+    "VCP",
+    "VOLexp",
+    "GAPpen",
+    "LIQpen",
 ]
 
-TOP_COLUMNS = [
+TOP_CANDIDATE_COLUMNS = [
     "timestamp",
     "symbol",
-    "score",
+    "Score",
     "exchange",
     "close",
     "volume",
-    "universe_count",
     "score_breakdown",
-    "rsi",
-    "macd",
-    "macd_hist",
-    "adx",
-    "aroon_up",
-    "aroon_down",
-    "sma9",
-    "ema20",
-    "sma180",
-    "atr",
+    "RSI",
+    "ADX",
+    "AROON",
+    "VOLexp",
+    "VCP",
+    "SMA9",
+    "EMA20",
+    "SMA50",
+    "SMA100",
+    "ATR14",
 ]
 
 SKIP_KEYS = [
@@ -141,31 +150,6 @@ ASSET_HTTP_TIMEOUT = 15
 BARS_BATCH_SIZE = 200
 BAR_RETRY_STATUSES = {429, 500, 502, 503, 504}
 BAR_MAX_RETRIES = 3
-
-PRESETS: dict[str, dict[str, float]] = {
-    "conservative": {
-        "rsi_min": 55.0,
-        "rsi_max": 65.0,
-        "adx_min": 25.0,
-        "aroon_up_min": 70.0,
-        "macd_hist_min": 0.1,
-    },
-    "standard": {
-        "rsi_min": 52.0,
-        "rsi_max": 68.0,
-        "adx_min": 20.0,
-        "aroon_up_min": 60.0,
-        "macd_hist_min": 0.0,
-    },
-    "aggressive": {
-        "rsi_min": 50.0,
-        "rsi_max": 70.0,
-        "adx_min": 15.0,
-        "aroon_up_min": 50.0,
-        "macd_hist_min": -0.05,
-    },
-}
-
 
 def make_verify_hook(enabled: bool):
     if not enabled:
@@ -1496,56 +1480,188 @@ def _prepare_input_frame(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     return prepared[INPUT_COLUMNS]
 
 
-def _safe_float(value: object) -> Optional[float]:
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return None
+def _load_ranker_config(path: Optional[Path] = None) -> dict:
+    target = path or RANKER_CONFIG_PATH
+    if not target.exists():
+        LOGGER.warning("Ranker config %s missing; falling back to defaults.", target)
+        return {}
     try:
-        return float(value)
+        import yaml
+    except ImportError:
+        LOGGER.warning("PyYAML unavailable; using built-in ranker defaults.")
+        return {}
+    try:
+        with target.open("r", encoding="utf-8") as handle:
+            loaded = yaml.safe_load(handle) or {}
+    except Exception as exc:  # pragma: no cover - configuration issues are unexpected
+        LOGGER.error("Failed to load ranker config %s: %s", target, exc)
+        return {}
+    if not isinstance(loaded, dict):
+        LOGGER.error("Ranker config %s must be a mapping; ignoring.", target)
+        return {}
+    return loaded
+
+
+def _apply_preset_config(cfg: dict, preset_key: str) -> dict:
+    if not preset_key:
+        return cfg
+    presets = cfg.get("presets")
+    if not isinstance(presets, Mapping):
+        return cfg
+    preset = presets.get(str(preset_key).strip().lower())
+    if not isinstance(preset, Mapping):
+        return cfg
+    gates = dict(cfg.get("gates") or {})
+    for key, value in preset.items():
+        gates[key] = value
+    cfg["gates"] = gates
+    return cfg
+
+
+def _apply_relaxations(cfg: dict, mode: str) -> dict:
+    gates = dict(cfg.get("gates") or {})
+    mode = (mode or "none").strip().lower()
+    if mode == "sma_only":
+        gates["require_sma_stack"] = True
+        for key in [
+            "min_rsi",
+            "max_rsi",
+            "min_adx",
+            "min_aroon",
+            "min_volexp",
+            "max_gap",
+            "max_liq_penalty",
+            "min_score",
+        ]:
+            if key in gates:
+                gates[key] = None
+    elif mode == "cross_or_rsi":
+        gates["require_sma_stack"] = False
+    cfg["gates"] = gates
+    return cfg
+
+
+def _prepare_ranker_config(
+    base_cfg: Optional[Mapping[str, object]],
+    *,
+    preset_key: str,
+    relax_mode: str,
+    min_history: int,
+) -> dict:
+    cfg = copy.deepcopy(base_cfg or {})
+    if not isinstance(cfg.get("weights"), Mapping):
+        cfg["weights"] = dict(cfg.get("weights", {}))
+    if not isinstance(cfg.get("components"), Mapping):
+        cfg["components"] = dict(cfg.get("components", {}))
+    gates = dict(cfg.get("gates") or {})
+    cfg["gates"] = gates
+    cfg = _apply_preset_config(cfg, preset_key)
+    cfg = _apply_relaxations(cfg, relax_mode)
+    gates = dict(cfg.get("gates") or {})
+    try:
+        gates["min_history"] = max(int(min_history), 0)
     except (TypeError, ValueError):
-        return None
+        pass
+    gates.setdefault("history_column", "history")
+    cfg["gates"] = gates
+    return cfg
 
 
-def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    high = df["high"]
-    low = df["low"]
-    close = df["close"]
-    prev_close = close.shift(1)
-    tr = pd.concat(
-        [
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    return tr.rolling(period).mean()
+def build_enriched_bars(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.DataFrame:
+    df = bars_df.copy() if bars_df is not None else pd.DataFrame(columns=INPUT_COLUMNS)
+    if df.empty:
+        columns = [
+            "symbol",
+            "timestamp",
+            *REQUIRED_FEATURE_COLUMNS,
+            "close",
+            "volume",
+            "exchange",
+            "history",
+        ]
+        return pd.DataFrame(columns=columns)
+
+    df = df.copy()
+    df["symbol"] = df["symbol"].astype("string").str.strip().str.upper()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    for column in ["open", "high", "low", "close", "volume"]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    if "exchange" not in df.columns:
+        df["exchange"] = ""
+    df["exchange"] = df["exchange"].astype("string").fillna("").str.strip().str.upper()
+    df = df.dropna(subset=["symbol", "timestamp"])
+    df = df[df["symbol"] != ""]
+
+    history_counts = (
+        df.groupby("symbol", as_index=False)["timestamp"].size().rename(columns={"size": "history"})
+    )
+
+    features_df = compute_all_features(df, cfg)
+    if features_df.empty:
+        columns = [
+            "symbol",
+            "timestamp",
+            *REQUIRED_FEATURE_COLUMNS,
+            "close",
+            "volume",
+            "exchange",
+            "history",
+        ]
+        return pd.DataFrame(columns=columns)
+
+    base_cols = ["symbol", "timestamp", "close", "volume", "exchange"]
+    base_info = df[base_cols].drop_duplicates(subset=["symbol", "timestamp"], keep="last")
+
+    enriched = features_df.merge(base_info, on=["symbol", "timestamp"], how="left")
+    enriched = enriched.merge(history_counts, on="symbol", how="left")
+    enriched["history"] = pd.to_numeric(enriched["history"], errors="coerce").fillna(0)
+    enriched.sort_values(["symbol", "timestamp"], inplace=True)
+    enriched.reset_index(drop=True, inplace=True)
+
+    for column in ["close", "volume"]:
+        if column in enriched.columns:
+            enriched[column] = pd.to_numeric(enriched[column], errors="coerce")
+    if "exchange" in enriched.columns:
+        enriched["exchange"] = enriched["exchange"].astype("string").fillna("").str.upper()
+
+    return enriched
 
 
-def _ensure_indicator_columns(df: pd.DataFrame) -> None:
-    if "sma9" not in df.columns:
-        df["sma9"] = df["close"].rolling(9, min_periods=9).mean()
-    if "ema20" not in df.columns:
-        df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
-    if "sma180" not in df.columns:
-        df["sma180"] = df["close"].rolling(180, min_periods=180).mean()
-    if "rsi" not in df.columns:
-        df["rsi"] = rsi(df["close"])
-    if "macd" not in df.columns or "macd_hist" not in df.columns:
-        macd_line, _, macd_hist = macd(df["close"])
-        if "macd" not in df.columns:
-            df["macd"] = macd_line
-        if "macd_hist" not in df.columns:
-            df["macd_hist"] = macd_hist
-    if "adx" not in df.columns:
-        df["adx"] = adx(df)
-    if "aroon_up" not in df.columns or "aroon_down" not in df.columns:
-        aroon_up, aroon_down = aroon(df)
-        if "aroon_up" not in df.columns:
-            df["aroon_up"] = aroon_up
-        if "aroon_down" not in df.columns:
-            df["aroon_down"] = aroon_down
-    if "atr" not in df.columns:
-        df["atr"] = _compute_atr(df)
+def _prepare_top_frame(candidates_df: pd.DataFrame, top_n: int) -> pd.DataFrame:
+    if candidates_df is None or candidates_df.empty or top_n <= 0:
+        return pd.DataFrame(columns=TOP_CANDIDATE_COLUMNS)
+    subset = candidates_df.head(int(top_n)).copy()
+    for column in TOP_CANDIDATE_COLUMNS:
+        if column not in subset.columns:
+            subset[column] = pd.NA
+    subset = subset[TOP_CANDIDATE_COLUMNS]
+    return subset
+
+
+def _summarise_features(
+    scored_df: pd.DataFrame, cfg: Optional[Mapping[str, object]] = None
+) -> dict[str, dict[str, Optional[float]]]:
+    if scored_df is None or scored_df.empty:
+        return {}
+    cfg = cfg or {}
+    components = dict(DEFAULT_COMPONENT_MAP)
+    for key, value in (cfg.get("components") or {}).items():
+        if value:
+            components[str(key)] = str(value)
+    feature_cols = set(components.values()) | set(CORE_FEATURE_COLUMNS)
+    summary: dict[str, dict[str, Optional[float]]] = {}
+    for column in sorted(feature_cols):
+        if column not in scored_df.columns:
+            continue
+        series = pd.to_numeric(scored_df[column], errors="coerce")
+        mask = series.notna()
+        if not mask.any():
+            summary[column] = {"mean": None, "std": None}
+            continue
+        mean = float(series[mask].mean())
+        std = float(series[mask].std(ddof=0))
+        summary[column] = {"mean": round(mean, 4), "std": round(std, 4)}
+    return summary
 
 
 def _format_timestamp(ts: datetime) -> str:
@@ -1571,22 +1687,6 @@ def _coerce_int(value: object) -> int:
         return 0
 
 
-def _score_symbol(df: pd.DataFrame) -> Tuple[float, str]:
-    returns = df["close"].pct_change().dropna()
-    recent_return = returns.tail(5).mean() if not returns.empty else 0.0
-    baseline_window = min(len(df), 30)
-    baseline = df["close"].rolling(baseline_window).mean().iloc[-1]
-    latest_close = df["close"].iloc[-1]
-    if pd.isna(baseline) or baseline == 0:
-        trend = 0.0
-    else:
-        trend = (latest_close / baseline) - 1
-    volatility = returns.tail(20).std() if len(returns) >= 2 else 0.0
-    score = (np.nan_to_num(recent_return) + np.nan_to_num(trend)) * 100 - np.nan_to_num(volatility) * 10
-    breakdown = f"recent_return={recent_return:.4f}; trend={trend:.4f}; vol={volatility:.4f}"
-    return round(float(score), 2), breakdown
-
-
 def run_screener(
     df: pd.DataFrame,
     *,
@@ -1597,6 +1697,7 @@ def run_screener(
     prefiltered_skips: Optional[Dict[str, str]] = None,
     gate_preset: str = "standard",
     relax_gates: str = "none",
+    ranker_config: Optional[Mapping[str, object]] = None,
 ) -> Tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -1604,399 +1705,84 @@ def run_screener(
     dict[str, int],
     list[dict[str, str]],
     dict[str, int],
+    dict[str, object],
 ]:
-    """Run the screener on ``df`` returning (top, scored, stats, skips)."""
+    """Run the screener pipeline returning scored outputs and diagnostics."""
 
     now = now or datetime.now(timezone.utc)
     prepared = _prepare_input_frame(df)
-    stats = {"symbols_in": 0, "candidates_out": 0}
+    stats: dict[str, int] = {"symbols_in": 0, "candidates_out": 0}
     skip_reasons = {key: 0 for key in SKIP_KEYS}
-    gate_counters = {
-        "failed_sma_stack": 0,
-        "failed_rsi": 0,
-        "failed_cross": 0,
-        "failed_macd_hist": 0,
-        "failed_adx": 0,
-        "failed_aroon": 0,
-        "nan_data": 0,
-        "insufficient_history": 0,
-    }
-    scored_records: list[dict[str, object]] = []
-    asset_meta = {str(key).upper(): value for key, value in (asset_meta or {}).items()}
-    promoted_symbols: set[str] = set()
-    reject_samples: list[dict[str, str]] = []
-    gate_mode = (relax_gates or "none").lower()
-    preset_key = str(gate_preset or "standard").strip().lower()
-    if preset_key not in PRESETS:
-        preset_key = "standard"
-    preset_cfg = PRESETS[preset_key]
-    rsi_min = float(preset_cfg.get("rsi_min", 52.0))
-    rsi_max = float(preset_cfg.get("rsi_max", 68.0))
-    adx_min = float(preset_cfg.get("adx_min", 20.0))
-    aroon_up_min = float(preset_cfg.get("aroon_up_min", 60.0))
-    macd_hist_min = float(preset_cfg.get("macd_hist_min", 0.0))
-
-    def record_reject(symbol: object, reason: str) -> None:
-        sym = str(symbol or "").strip().upper() or "<UNKNOWN>"
-        if len(reject_samples) < 10:
-            reject_samples.append({"symbol": sym, "reason": reason})
 
     prefiltered_map = {
         str(sym or "").strip().upper(): str(reason or "").strip().upper()
         for sym, reason in (prefiltered_skips or {}).items()
     }
 
-    required_columns = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
-    missing_columns = [col for col in required_columns if col not in prepared.columns]
-    if missing_columns:
-        LOGGER.error("Bars frame missing columns: %s; skipping gating.", missing_columns)
-        prepared = prepared.iloc[0:0]
-    else:
-        prepared = prepared.copy()
-        prepared["symbol"] = prepared["symbol"].astype("string").str.strip().str.upper()
-        prepared["timestamp"] = pd.to_datetime(prepared["timestamp"], utc=True, errors="coerce")
-        numeric_cols = ["open", "high", "low", "close", "volume"]
-        for col in numeric_cols:
-            prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
-        non_numeric = [
-            col for col in ["open", "high", "low", "close"] if not pd.api.types.is_numeric_dtype(prepared[col])
-        ]
-        if non_numeric:
-            LOGGER.error("Bars frame non-numeric columns detected: %s; skipping gating.", non_numeric)
-            prepared = prepared.iloc[0:0]
-        else:
-            prepared = prepared.dropna(subset=["timestamp"])
-            prepared = prepared[prepared["symbol"].notna()]
-            prepared = prepared[prepared["symbol"] != ""]
+    initial_rejects: list[dict[str, str]] = []
+    for sym, reason in prefiltered_map.items():
+        if reason in skip_reasons:
+            skip_reasons[reason] += 1
+        if len(initial_rejects) < 10:
+            initial_rejects.append({"symbol": sym, "reason": reason or "PREFILTERED"})
 
-    input_symbols: set[str] = set(prefiltered_map.keys())
-    if not prepared.empty and "symbol" in prepared.columns:
-        input_symbols.update(prepared["symbol"].astype(str).tolist())
+    if not prepared.empty:
+        prepared_symbols = prepared["symbol"].astype("string").str.strip().str.upper()
+    else:
+        prepared_symbols = pd.Series(dtype="string")
+
+    input_symbols = {sym for sym in prepared_symbols.tolist() if sym}
+    input_symbols.update(prefiltered_map.keys())
     stats["symbols_in"] = len(input_symbols)
-    if prefiltered_map:
-        for sym, reason in prefiltered_map.items():
-            if reason in skip_reasons:
-                skip_reasons[reason] += 1
-            if reason == "NAN_DATA":
-                gate_counters["nan_data"] += 1
-            elif reason == "INSUFFICIENT_HISTORY":
-                gate_counters["insufficient_history"] += 1
-            record_reject(sym, reason or "PREFILTERED")
-        if not prepared.empty:
+
+    if not prepared.empty:
+        prepared = prepared.copy()
+        prepared["symbol"] = prepared_symbols
+        prepared["timestamp"] = pd.to_datetime(prepared["timestamp"], utc=True, errors="coerce")
+        for column in ["open", "high", "low", "close", "volume"]:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+        prepared = prepared.dropna(subset=["timestamp"])
+        prepared = prepared[prepared["symbol"] != ""]
+        if prefiltered_map:
             prepared = prepared[~prepared["symbol"].isin(prefiltered_map.keys())]
-
-    if prepared.empty:
-        LOGGER.info("No input rows supplied to screener; outputs will be empty.")
     else:
-        for symbol, group in prepared.groupby("symbol"):
-            if group.empty:
-                skip_reasons["NAN_DATA"] += 1
-                gate_counters["nan_data"] += 1
-                LOGGER.info("[SKIP] %s has no rows", symbol or "<UNKNOWN>")
-                record_reject(symbol, "NAN_DATA")
-                continue
+        prepared = pd.DataFrame(columns=INPUT_COLUMNS)
 
-            ordered = group.sort_values("timestamp").reset_index(drop=True)
-            window_length = max(1, min_history) if min_history and min_history > 0 else len(ordered)
-            window_length = min(len(ordered), window_length)
-            recent = ordered.tail(window_length)
-            if recent[["open", "high", "low", "close"]].isna().any().any():
-                skip_reasons["NAN_DATA"] += 1
-                gate_counters["nan_data"] += 1
-                LOGGER.info(
-                    "[SKIP] %s has NaN data in the most recent window", symbol or "<UNKNOWN>"
-                )
-                record_reject(symbol, "NAN_DATA")
-                continue
+    base_cfg = ranker_config or _load_ranker_config()
+    ranker_cfg = _prepare_ranker_config(
+        base_cfg,
+        preset_key=str(gate_preset or "standard"),
+        relax_mode=str(relax_gates or "none"),
+        min_history=min_history,
+    )
 
-            bars: list[BarData] = []
-            skip_symbol = False
-            for row in ordered.to_dict("records"):
-                row = dict(row)
-                sym = str(row.get("symbol") or symbol or "").strip().upper()
-                meta = asset_meta.get(sym, {})
-                exch = (
-                    str(row.get("exchange") or "").strip().upper()
-                    or str(meta.get("exchange", "") or "").strip().upper()
-                )
-                asset_class = (
-                    str(row.get("asset_class") or "").strip().upper()
-                    or str(meta.get("asset_class", "") or "").strip().upper()
-                )
-                row["symbol"] = sym
-                row["exchange"] = exch
-                try:
-                    bar = BarData(**row)
-                except ValidationError as exc:
-                    LOGGER.warning("[SKIP] %s ValidationError: %s", row.get("symbol") or "<UNKNOWN>", exc)
-                    skip_reasons["VALIDATION_ERROR"] += 1
-                    record_reject(sym, "VALIDATION_ERROR")
-                    skip_symbol = True
-                    break
-                kind = classify_exchange(bar.exchange)
-                if kind != "EQUITY":
-                    if not bar.exchange:
-                        if asset_class in {"US_EQUITY", "EQUITY"}:
-                            kind = "EQUITY"
-                            promoted_symbols.add(sym)
-                        else:
-                            LOGGER.info(
-                                "[SKIP] %s exchange=%s kind=%s",
-                                bar.symbol or "<UNKNOWN>",
-                                bar.exchange or "",
-                                kind,
-                            )
-                            skip_reasons["NON_EQUITY"] += 1
-                            record_reject(sym, "NON_EQUITY")
-                            skip_symbol = True
-                            break
-                    else:
-                        LOGGER.info(
-                            "[SKIP] %s exchange=%s kind=%s",
-                            bar.symbol or "<UNKNOWN>",
-                            bar.exchange or "",
-                            kind,
-                        )
-                        key = "UNKNOWN_EXCHANGE" if kind == "OTHER" else "NON_EQUITY"
-                        skip_reasons[key] += 1
-                        record_reject(sym, key)
-                        skip_symbol = True
-                        break
-                bars.append(bar)
+    enriched = build_enriched_bars(prepared, ranker_cfg)
+    scored_df = score_universe(enriched, ranker_cfg)
+    candidates_df, gate_fail_counts, gate_rejects = apply_gates(scored_df, ranker_cfg)
 
-            if skip_symbol or not bars:
-                if not bars and not skip_symbol:
-                    gate_counters["nan_data"] += 1
-                    record_reject(symbol, "NAN_DATA")
-                continue
+    stats["candidates_out"] = int(candidates_df.shape[0])
 
-            bars_df = pd.DataFrame([bar.to_dict() for bar in bars])
-            bars_df["timestamp"] = pd.to_datetime(bars_df["timestamp"], utc=True)
-            bars_df.sort_values("timestamp", inplace=True)
+    skip_reasons["NAN_DATA"] += int(gate_fail_counts.get("nan_data", 0))
+    skip_reasons["INSUFFICIENT_HISTORY"] += int(gate_fail_counts.get("insufficient_history", 0))
 
-            numeric_cols = ["open", "high", "low", "close", "volume"]
-            for col in numeric_cols:
-                bars_df[col] = pd.to_numeric(bars_df[col], errors="coerce")
+    combined_rejects = list(initial_rejects)
+    for entry in gate_rejects:
+        if len(combined_rejects) >= 10:
+            break
+        combined_rejects.append(entry)
 
-            clean_df = bars_df.dropna(subset=["close"]).copy()
-            if clean_df.empty:
-                skip_reasons["NAN_DATA"] += 1
-                gate_counters["nan_data"] += 1
-                LOGGER.info("[SKIP] %s dropped due to NaN close", symbol or "<UNKNOWN>")
-                record_reject(symbol, "NAN_DATA")
-                continue
-
-            clean_df.dropna(subset=["open", "high", "low", "close"], inplace=True)
-            if clean_df.empty:
-                skip_reasons["NAN_DATA"] += 1
-                gate_counters["nan_data"] += 1
-                LOGGER.info("[SKIP] %s dropped due to NaN data", symbol or "<UNKNOWN>")
-                record_reject(symbol, "NAN_DATA")
-                continue
-
-            if len(clean_df) < min_history:
-                skip_reasons["INSUFFICIENT_HISTORY"] += 1
-                gate_counters["insufficient_history"] += 1
-                LOGGER.info(
-                    "[SKIP] %s insufficient history (%d < %d)",
-                    symbol or "<UNKNOWN>",
-                    len(clean_df),
-                    min_history,
-                )
-                record_reject(symbol, "INSUFFICIENT_HISTORY")
-                continue
-
-            _ensure_indicator_columns(clean_df)
-
-            if len(clean_df) < 2:
-                LOGGER.info("[FILTER] %s does not have enough bars for crossover check", symbol)
-                gate_counters["failed_cross"] += 1
-                record_reject(symbol, "INSUFFICIENT_HISTORY")
-                continue
-
-            prev_row = clean_df.iloc[-2]
-            curr_row = clean_df.iloc[-1]
-            required_keys = [
-                prev_row.get("close"),
-                prev_row.get("sma9"),
-                curr_row.get("close"),
-                curr_row.get("sma9"),
-                curr_row.get("ema20"),
-                curr_row.get("sma180"),
-            ]
-            if gate_mode != "sma_only":
-                required_keys.extend(
-                    [
-                        curr_row.get("rsi"),
-                        curr_row.get("macd_hist"),
-                        curr_row.get("adx"),
-                        curr_row.get("aroon_up"),
-                    ]
-                )
-            if any(pd.isna(val) for val in required_keys):
-                LOGGER.info(
-                    "[FILTER] %s missing indicator data for JBravo criteria",
-                    symbol or "<UNKNOWN>",
-                )
-                gate_counters["nan_data"] += 1
-                record_reject(symbol, "NAN_DATA")
-                continue
-
-            crossed_up = prev_row["close"] < prev_row["sma9"] and curr_row["close"] > curr_row["sma9"]
-            sma_above_ema = curr_row["sma9"] > curr_row["ema20"]
-            ema_above_sma180 = curr_row["ema20"] > curr_row["sma180"]
-            stacked = sma_above_ema and ema_above_sma180
-            rsi_value = curr_row.get("rsi")
-            macd_hist_value = curr_row.get("macd_hist")
-            adx_value = curr_row.get("adx")
-            aroon_up_value = curr_row.get("aroon_up")
-
-            rsi_in_range = bool(pd.notna(rsi_value) and rsi_min <= float(rsi_value) <= rsi_max)
-            macd_hist_pass = bool(pd.notna(macd_hist_value) and float(macd_hist_value) >= macd_hist_min)
-            adx_pass = bool(pd.notna(adx_value) and float(adx_value) >= adx_min)
-            aroon_pass = bool(pd.notna(aroon_up_value) and float(aroon_up_value) >= aroon_up_min)
-
-            if gate_mode == "sma_only":
-                if not sma_above_ema:
-                    LOGGER.info(
-                        "[FILTER] %s failed SMA9>EMA20 condition", symbol or "<UNKNOWN>"
-                    )
-                    gate_counters["failed_sma_stack"] += 1
-                    record_reject(symbol, "FAILED_SMA_STACK")
-                    continue
-            elif gate_mode == "cross_or_rsi":
-                passes_crossover = crossed_up and stacked
-                passes_relaxed = rsi_in_range and macd_hist_pass
-                if not (passes_crossover or passes_relaxed):
-                    if not passes_crossover:
-                        if not crossed_up:
-                            LOGGER.info(
-                                "[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>"
-                            )
-                            gate_counters["failed_cross"] += 1
-                            record_reject(symbol, "FAILED_CROSS")
-                            continue
-                        if not stacked:
-                            LOGGER.info(
-                                "[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>"
-                            )
-                            gate_counters["failed_sma_stack"] += 1
-                            record_reject(symbol, "FAILED_SMA_STACK")
-                            continue
-                    if not passes_relaxed:
-                        if not rsi_in_range:
-                            LOGGER.info(
-                                "[FILTER] %s outside RSI window", symbol or "<UNKNOWN>"
-                            )
-                            gate_counters["failed_rsi"] += 1
-                            record_reject(symbol, "FAILED_RSI")
-                            continue
-                        LOGGER.info(
-                            "[FILTER] %s failed MACD histogram check", symbol or "<UNKNOWN>"
-                        )
-                        gate_counters["failed_macd_hist"] += 1
-                        record_reject(symbol, "FAILED_MACD_HIST")
-                        continue
-                if not adx_pass:
-                    LOGGER.info(
-                        "[FILTER] %s failed ADX threshold", symbol or "<UNKNOWN>"
-                    )
-                    gate_counters["failed_adx"] += 1
-                    record_reject(symbol, "FAILED_ADX")
-                    continue
-                if not aroon_pass:
-                    LOGGER.info(
-                        "[FILTER] %s failed Aroon Up threshold", symbol or "<UNKNOWN>"
-                    )
-                    gate_counters["failed_aroon"] += 1
-                    record_reject(symbol, "FAILED_AROON")
-                    continue
-            else:
-                if not crossed_up:
-                    LOGGER.info("[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>")
-                    gate_counters["failed_cross"] += 1
-                    record_reject(symbol, "FAILED_CROSS")
-                    continue
-                if not stacked:
-                    LOGGER.info(
-                        "[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>"
-                    )
-                    gate_counters["failed_sma_stack"] += 1
-                    record_reject(symbol, "FAILED_SMA_STACK")
-                    continue
-                if not rsi_in_range:
-                    LOGGER.info("[FILTER] %s failed RSI threshold", symbol or "<UNKNOWN>")
-                    gate_counters["failed_rsi"] += 1
-                    record_reject(symbol, "FAILED_RSI")
-                    continue
-                if not macd_hist_pass:
-                    LOGGER.info(
-                        "[FILTER] %s failed MACD histogram check", symbol or "<UNKNOWN>"
-                    )
-                    gate_counters["failed_macd_hist"] += 1
-                    record_reject(symbol, "FAILED_MACD_HIST")
-                    continue
-                if not adx_pass:
-                    LOGGER.info("[FILTER] %s failed ADX threshold", symbol or "<UNKNOWN>")
-                    gate_counters["failed_adx"] += 1
-                    record_reject(symbol, "FAILED_ADX")
-                    continue
-                if not aroon_pass:
-                    LOGGER.info(
-                        "[FILTER] %s failed Aroon Up threshold", symbol or "<UNKNOWN>"
-                    )
-                    gate_counters["failed_aroon"] += 1
-                    record_reject(symbol, "FAILED_AROON")
-                    continue
-
-            clean_df.set_index("timestamp", inplace=True)
-            score, breakdown = _score_symbol(clean_df)
-            latest = clean_df.iloc[-1]
-            record = {
-                "symbol": symbol,
-                "exchange": latest.get("exchange", ""),
-                "timestamp": _format_timestamp(now),
-                "score": score,
-                "close": _safe_float(latest.get("close")),
-                "volume": _safe_float(latest.get("volume")),
-                "score_breakdown": breakdown,
-                "rsi": _safe_float(latest.get("rsi")),
-                "macd": _safe_float(latest.get("macd")),
-                "macd_hist": _safe_float(latest.get("macd_hist")),
-                "adx": _safe_float(latest.get("adx")),
-                "aroon_up": _safe_float(latest.get("aroon_up")),
-                "aroon_down": _safe_float(latest.get("aroon_down")),
-                "sma9": _safe_float(latest.get("sma9")),
-                "ema20": _safe_float(latest.get("ema20")),
-                "sma180": _safe_float(latest.get("sma180")),
-                "atr": _safe_float(latest.get("atr")),
-            }
-            scored_records.append(record)
-
-    scored_df = pd.DataFrame(scored_records)
-    if not scored_df.empty:
-        scored_df.sort_values("score", ascending=False, inplace=True)
-    scored_df = scored_df.reindex(columns=SCORED_COLUMNS)
-    stats["candidates_out"] = int(scored_df.shape[0])
-
-    top_df = scored_df.head(top_n).copy()
-    top_df["universe_count"] = stats["symbols_in"]
-    top_df = top_df.reindex(columns=TOP_COLUMNS)
-
-    if promoted_symbols:
-        LOGGER.warning(
-            "Promoting blank exchange to EQUITY for %d symbols based on asset_class",
-            len(promoted_symbols),
-        )
+    top_df = _prepare_top_frame(candidates_df, top_n)
 
     if stats["candidates_out"] == 0:
-        sample = reject_samples[:10]
-        LOGGER.info(
-            "No candidates passed JBravo gates; sample rejections: %s",
-            json.dumps(sample, sort_keys=True) if sample else "[]",
-        )
+        if combined_rejects:
+            LOGGER.info(
+                "No candidates passed ranking gates; sample rejections: %s",
+                json.dumps(combined_rejects, sort_keys=True),
+            )
+        else:
+            LOGGER.info("No candidates passed ranking gates.")
 
-    return top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters
+    return top_df, scored_df, stats, skip_reasons, combined_rejects, gate_fail_counts, ranker_cfg
 
 
 def _load_source_dataframe(path: Path) -> pd.DataFrame:
@@ -2023,6 +1809,7 @@ def write_outputs(
     gate_counters: Optional[dict[str, int]] = None,
     fetch_metrics: Optional[dict[str, int | list[str]]] = None,
     asset_metrics: Optional[dict[str, int | list[str]]] = None,
+    ranker_cfg: Optional[Mapping[str, object]] = None,
 ) -> Path:
     now = now or datetime.now(timezone.utc)
     data_dir = base_dir / "data"
@@ -2035,27 +1822,22 @@ def write_outputs(
     _write_csv_atomic(top_path, top_df)
     _write_csv_atomic(scored_path, scored_df)
 
+    cfg_for_summary = ranker_cfg or _load_ranker_config()
     metrics = {
         "last_run_utc": _format_timestamp(now),
         "status": status,
-        "rows": int(scored_df.shape[0]),
+        "rows": int(top_df.shape[0]),
+        "ranked_rows": int(scored_df.shape[0]),
         "symbols_in": int(stats.get("symbols_in", 0)),
         "candidates_out": int(stats.get("candidates_out", 0)),
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
     }
-    gate_counts = gate_counters or {}
-    gate_fail_counts = {
-        "failed_sma_stack": int(gate_counts.get("failed_sma_stack", 0)),
-        "failed_rsi": int(gate_counts.get("failed_rsi", 0)),
-        "failed_cross": int(gate_counts.get("failed_cross", 0)),
-        "failed_macd_hist": int(gate_counts.get("failed_macd_hist", 0)),
-        "failed_adx": int(gate_counts.get("failed_adx", 0)),
-        "failed_aroon": int(gate_counts.get("failed_aroon", 0)),
-        "nan_data": int(gate_counts.get("nan_data", 0)),
-        "insufficient_history": int(gate_counts.get("insufficient_history", 0)),
-    }
-    metrics.update(gate_fail_counts)
-    metrics["gate_fail_counts"] = gate_fail_counts
+    gate_counts = {str(key): int(value) for key, value in (gate_counters or {}).items()}
+    for key, value in gate_counts.items():
+        metrics[key] = value
+    metrics["gate_fail_counts"] = gate_counts
+    metrics["ranker_version"] = str(cfg_for_summary.get("version", "unknown"))
+    metrics["feature_summary"] = _summarise_features(scored_df, cfg_for_summary)
     fetch_payload = fetch_metrics or {}
     metrics.update(
         {
@@ -2277,7 +2059,15 @@ def main(
                 min_days_fallback=args.min_days_fallback,
                 min_days_final=args.min_days_final,
             )
-    top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters = run_screener(
+    (
+        top_df,
+        scored_df,
+        stats,
+        skip_reasons,
+        reject_samples,
+        gate_counters,
+        ranker_cfg,
+    ) = run_screener(
         frame,
         top_n=args.top_n,
         min_history=args.min_history,
@@ -2299,6 +2089,7 @@ def main(
         gate_counters=gate_counters,
         fetch_metrics=fetch_metrics,
         asset_metrics=asset_metrics,
+        ranker_cfg=ranker_cfg,
     )
     LOGGER.info(
         "Screener complete: %d symbols examined, %d candidates.",
