@@ -142,6 +142,30 @@ BARS_BATCH_SIZE = 200
 BAR_RETRY_STATUSES = {429, 500, 502, 503, 504}
 BAR_MAX_RETRIES = 3
 
+PRESETS: dict[str, dict[str, float]] = {
+    "conservative": {
+        "rsi_min": 55.0,
+        "rsi_max": 65.0,
+        "adx_min": 25.0,
+        "aroon_up_min": 70.0,
+        "macd_hist_min": 0.1,
+    },
+    "standard": {
+        "rsi_min": 52.0,
+        "rsi_max": 68.0,
+        "adx_min": 20.0,
+        "aroon_up_min": 60.0,
+        "macd_hist_min": 0.0,
+    },
+    "aggressive": {
+        "rsi_min": 50.0,
+        "rsi_max": 70.0,
+        "adx_min": 15.0,
+        "aroon_up_min": 50.0,
+        "macd_hist_min": -0.05,
+    },
+}
+
 
 def make_verify_hook(enabled: bool):
     if not enabled:
@@ -1571,6 +1595,7 @@ def run_screener(
     now: Optional[datetime] = None,
     asset_meta: Optional[Dict[str, dict]] = None,
     prefiltered_skips: Optional[Dict[str, str]] = None,
+    gate_preset: str = "standard",
     relax_gates: str = "none",
 ) -> Tuple[
     pd.DataFrame,
@@ -1601,6 +1626,15 @@ def run_screener(
     promoted_symbols: set[str] = set()
     reject_samples: list[dict[str, str]] = []
     gate_mode = (relax_gates or "none").lower()
+    preset_key = str(gate_preset or "standard").strip().lower()
+    if preset_key not in PRESETS:
+        preset_key = "standard"
+    preset_cfg = PRESETS[preset_key]
+    rsi_min = float(preset_cfg.get("rsi_min", 52.0))
+    rsi_max = float(preset_cfg.get("rsi_max", 68.0))
+    adx_min = float(preset_cfg.get("adx_min", 20.0))
+    aroon_up_min = float(preset_cfg.get("aroon_up_min", 60.0))
+    macd_hist_min = float(preset_cfg.get("macd_hist_min", 0.0))
 
     def record_reject(symbol: object, reason: str) -> None:
         sym = str(symbol or "").strip().upper() or "<UNKNOWN>"
@@ -1789,8 +1823,16 @@ def run_screener(
                 curr_row.get("sma9"),
                 curr_row.get("ema20"),
                 curr_row.get("sma180"),
-                curr_row.get("rsi"),
             ]
+            if gate_mode != "sma_only":
+                required_keys.extend(
+                    [
+                        curr_row.get("rsi"),
+                        curr_row.get("macd_hist"),
+                        curr_row.get("adx"),
+                        curr_row.get("aroon_up"),
+                    ]
+                )
             if any(pd.isna(val) for val in required_keys):
                 LOGGER.info(
                     "[FILTER] %s missing indicator data for JBravo criteria",
@@ -1801,56 +1843,73 @@ def run_screener(
                 continue
 
             crossed_up = prev_row["close"] < prev_row["sma9"] and curr_row["close"] > curr_row["sma9"]
-            stacked = curr_row["sma9"] > curr_row["ema20"] > curr_row["sma180"]
+            sma_above_ema = curr_row["sma9"] > curr_row["ema20"]
+            ema_above_sma180 = curr_row["ema20"] > curr_row["sma180"]
+            stacked = sma_above_ema and ema_above_sma180
             rsi_value = curr_row.get("rsi")
             macd_hist_value = curr_row.get("macd_hist")
-            strong_rsi = bool(pd.notna(rsi_value) and rsi_value > 50)
-            relaxed_rsi_range = bool(pd.notna(rsi_value) and 52 <= float(rsi_value) <= 68)
-            macd_hist_positive = bool(pd.notna(macd_hist_value) and float(macd_hist_value) > 0)
+            adx_value = curr_row.get("adx")
+            aroon_up_value = curr_row.get("aroon_up")
+
+            rsi_in_range = bool(pd.notna(rsi_value) and rsi_min <= float(rsi_value) <= rsi_max)
+            macd_hist_pass = bool(pd.notna(macd_hist_value) and float(macd_hist_value) >= macd_hist_min)
+            adx_pass = bool(pd.notna(adx_value) and float(adx_value) >= adx_min)
+            aroon_pass = bool(pd.notna(aroon_up_value) and float(aroon_up_value) >= aroon_up_min)
 
             if gate_mode == "sma_only":
-                if not crossed_up:
-                    LOGGER.info("[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>")
-                    gate_counters["failed_cross"] += 1
-                    record_reject(symbol, "FAILED_CROSS")
-                    continue
-                if not stacked:
+                if not sma_above_ema:
                     LOGGER.info(
-                        "[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>"
+                        "[FILTER] %s failed SMA9>EMA20 condition", symbol or "<UNKNOWN>"
                     )
                     gate_counters["failed_sma_stack"] += 1
                     record_reject(symbol, "FAILED_SMA_STACK")
                     continue
             elif gate_mode == "cross_or_rsi":
                 passes_crossover = crossed_up and stacked
-                passes_relaxed = relaxed_rsi_range and macd_hist_positive
+                passes_relaxed = rsi_in_range and macd_hist_pass
                 if not (passes_crossover or passes_relaxed):
-                    if not crossed_up:
+                    if not passes_crossover:
+                        if not crossed_up:
+                            LOGGER.info(
+                                "[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>"
+                            )
+                            gate_counters["failed_cross"] += 1
+                            record_reject(symbol, "FAILED_CROSS")
+                            continue
+                        if not stacked:
+                            LOGGER.info(
+                                "[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>"
+                            )
+                            gate_counters["failed_sma_stack"] += 1
+                            record_reject(symbol, "FAILED_SMA_STACK")
+                            continue
+                    if not passes_relaxed:
+                        if not rsi_in_range:
+                            LOGGER.info(
+                                "[FILTER] %s outside RSI window", symbol or "<UNKNOWN>"
+                            )
+                            gate_counters["failed_rsi"] += 1
+                            record_reject(symbol, "FAILED_RSI")
+                            continue
                         LOGGER.info(
-                            "[FILTER] %s failed crossover condition", symbol or "<UNKNOWN>"
+                            "[FILTER] %s failed MACD histogram check", symbol or "<UNKNOWN>"
                         )
-                        gate_counters["failed_cross"] += 1
-                        record_reject(symbol, "FAILED_CROSS")
+                        gate_counters["failed_macd_hist"] += 1
+                        record_reject(symbol, "FAILED_MACD_HIST")
                         continue
-                    if not stacked:
-                        LOGGER.info(
-                            "[FILTER] %s failed moving-average stack", symbol or "<UNKNOWN>"
-                        )
-                        gate_counters["failed_sma_stack"] += 1
-                        record_reject(symbol, "FAILED_SMA_STACK")
-                        continue
-                    if not relaxed_rsi_range:
-                        LOGGER.info(
-                            "[FILTER] %s outside relaxed RSI window", symbol or "<UNKNOWN>"
-                        )
-                        gate_counters["failed_rsi"] += 1
-                        record_reject(symbol, "FAILED_RELAX_RSI")
-                        continue
+                if not adx_pass:
                     LOGGER.info(
-                        "[FILTER] %s failed MACD histogram check", symbol or "<UNKNOWN>"
+                        "[FILTER] %s failed ADX threshold", symbol or "<UNKNOWN>"
                     )
-                    gate_counters["failed_macd_hist"] += 1
-                    record_reject(symbol, "FAILED_MACD_HIST")
+                    gate_counters["failed_adx"] += 1
+                    record_reject(symbol, "FAILED_ADX")
+                    continue
+                if not aroon_pass:
+                    LOGGER.info(
+                        "[FILTER] %s failed Aroon Up threshold", symbol or "<UNKNOWN>"
+                    )
+                    gate_counters["failed_aroon"] += 1
+                    record_reject(symbol, "FAILED_AROON")
                     continue
             else:
                 if not crossed_up:
@@ -1865,10 +1924,29 @@ def run_screener(
                     gate_counters["failed_sma_stack"] += 1
                     record_reject(symbol, "FAILED_SMA_STACK")
                     continue
-                if not strong_rsi:
+                if not rsi_in_range:
                     LOGGER.info("[FILTER] %s failed RSI threshold", symbol or "<UNKNOWN>")
                     gate_counters["failed_rsi"] += 1
                     record_reject(symbol, "FAILED_RSI")
+                    continue
+                if not macd_hist_pass:
+                    LOGGER.info(
+                        "[FILTER] %s failed MACD histogram check", symbol or "<UNKNOWN>"
+                    )
+                    gate_counters["failed_macd_hist"] += 1
+                    record_reject(symbol, "FAILED_MACD_HIST")
+                    continue
+                if not adx_pass:
+                    LOGGER.info("[FILTER] %s failed ADX threshold", symbol or "<UNKNOWN>")
+                    gate_counters["failed_adx"] += 1
+                    record_reject(symbol, "FAILED_ADX")
+                    continue
+                if not aroon_pass:
+                    LOGGER.info(
+                        "[FILTER] %s failed Aroon Up threshold", symbol or "<UNKNOWN>"
+                    )
+                    gate_counters["failed_aroon"] += 1
+                    record_reject(symbol, "FAILED_AROON")
                     continue
 
             clean_df.set_index("timestamp", inplace=True)
@@ -2114,6 +2192,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Log and capture the first bars request for debugging",
     )
     parser.add_argument(
+        "--gate-preset",
+        choices=["conservative", "standard", "aggressive"],
+        default="standard",
+        help="Preset for JBravo gates.",
+    )
+    parser.add_argument(
         "--relax-gates",
         choices=["none", "sma_only", "cross_or_rsi"],
         default="none",
@@ -2200,6 +2284,7 @@ def main(
         now=now,
         asset_meta=asset_meta,
         prefiltered_skips=prescreened,
+        gate_preset=args.gate_preset,
         relax_gates=args.relax_gates,
     )
     write_outputs(

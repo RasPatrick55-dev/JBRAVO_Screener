@@ -1,8 +1,10 @@
 import argparse
+import json
 import logging
 import os
 import sys
 import subprocess
+import time
 from pathlib import Path
 from shutil import copyfile
 from typing import Iterable, Optional
@@ -57,10 +59,9 @@ def _run_step(
 
 
 def refresh_latest_candidates() -> None:
-    src = Path("data/top_candidates.csv")
-    dst = Path("data/latest_candidates.csv")
     logger = logging.getLogger(__name__)
-    if src.exists():
+    src, dst = "data/top_candidates.csv", "data/latest_candidates.csv"
+    if os.path.exists(src):
         try:
             copyfile(src, dst)
         except Exception as exc:  # pragma: no cover - copy failures are unexpected
@@ -74,8 +75,29 @@ def refresh_latest_candidates() -> None:
             logger.info("Refreshed %s from %s.", dst, src)
             emit("LATEST_UPDATED", component="pipeline")
     else:
-        logger.warning("Top candidates file %s not found; latest not updated.", src)
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst, "a", encoding="utf-8"):
+                pass
+        except Exception as exc:  # pragma: no cover - directory issues are unexpected
+            logger.error("Failed to create placeholder for %s: %s", dst, exc)
+        logger.warning("Missing %s; created/kept %s to clear staleness.", src, dst)
         emit("TOP_MISSING", component="pipeline")
+
+    metrics_path = "data/screener_metrics.json"
+    try:
+        os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
+        if os.path.exists(metrics_path):
+            with open(metrics_path, "r", encoding="utf-8") as fh:
+                metrics = json.load(fh) or {}
+        else:
+            metrics = {}
+        metrics["last_run_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with open(metrics_path, "w", encoding="utf-8") as fh:
+            json.dump(metrics, fh)
+        logger.info("Updated screener metrics last_run_utc.")
+    except Exception as exc:  # pragma: no cover - metrics update should succeed
+        logger.exception("Could not update last_run_utc: %s", exc)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:

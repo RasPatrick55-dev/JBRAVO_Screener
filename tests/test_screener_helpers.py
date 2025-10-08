@@ -133,3 +133,13 @@ def test_paginate(monkeypatch):
     assert "symbol" in columns_desc
     total_rows = sum(frame.shape[0] for frame in batch_frames)
     assert total_rows == 4
+
+
+def test_gate_presets_parsing():
+    parsed = screener.parse_args(["--gate-preset", "aggressive", "--relax-gates", "cross_or_rsi"])
+    assert parsed.gate_preset == "aggressive"
+    assert parsed.relax_gates == "cross_or_rsi"
+
+    defaults = screener.parse_args([])
+    assert defaults.gate_preset == "standard"
+    assert defaults.relax_gates == "none"
