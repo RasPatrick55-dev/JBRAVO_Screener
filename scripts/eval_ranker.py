@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -14,15 +13,20 @@ import pandas as pd
 
 from utils.io_utils import atomic_write_bytes
 
+try:  # pragma: no cover - PyYAML optional
+    import yaml
+except Exception:  # pragma: no cover - allow running without yaml
+    yaml = None
+
 PredictionFile = Tuple[date, Path]
 
 
 @dataclass(frozen=True)
 class EvaluationConfig:
-    days: int = 90
+    days: int = 60
     label_horizon: int = 3
     hit_threshold: float = 0.04
-    drawdown_threshold: Optional[float] = None
+    drawdown_threshold: Optional[float] = 0.03
     predictions_dir: Path = Path("data") / "predictions"
     prices_path: Path = Path("data") / "daily_prices.csv"
     output_dir: Path = Path("data") / "ranker_eval"
@@ -35,6 +39,22 @@ class EvaluationConfig:
 
 DATE_FORMAT = "%Y-%m-%d"
 PREDICTION_SUFFIX = ".csv"
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "ranker.yml"
+
+
+def _load_eval_defaults() -> Dict[str, object]:
+    if yaml is None:
+        return {}
+    try:
+        with CONFIG_PATH.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+    except Exception:  # pragma: no cover - config missing or invalid
+        return {}
+    eval_cfg = data.get("eval") if isinstance(data, dict) else {}
+    return eval_cfg if isinstance(eval_cfg, dict) else {}
+
+
+EVAL_DEFAULTS = _load_eval_defaults()
 
 
 def _parse_date_from_name(path: Path) -> Optional[date]:
@@ -126,6 +146,12 @@ def load_prediction_history(cfg: EvaluationConfig) -> pd.DataFrame:
         except Exception:
             continue
         df["as_of"] = file_date
+        if "score" in df.columns and "Score" not in df.columns:
+            df["Score"] = pd.to_numeric(df["score"], errors="coerce")
+        if "passed_gates" in df.columns and "gates_passed" not in df.columns:
+            df["gates_passed"] = df["passed_gates"].astype(bool)
+        if "score_breakdown_json" in df.columns and "score_breakdown" not in df.columns:
+            df["score_breakdown"] = df["score_breakdown_json"]
         if "timestamp" in df.columns:
             df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
         frames.append(df)
@@ -337,10 +363,14 @@ def compute_decile_lifts(y_true: np.ndarray, y_score: np.ndarray, deciles: int =
 
 
 def compile_metrics(labelled: pd.DataFrame, cfg: EvaluationConfig) -> Dict[str, object]:
-    usable = labelled.dropna(subset=["label"])
+    usable = labelled.dropna(subset=["label"]).copy()
     usable["label"] = usable["label"].astype(int)
     y_true = usable["label"].to_numpy(dtype=float)
-    scores = usable["Score"].to_numpy(dtype=float)
+    score_column = "Score" if "Score" in usable.columns else "score"
+    if score_column not in usable.columns:
+        scores = np.zeros(len(usable), dtype=float)
+    else:
+        scores = usable[score_column].to_numpy(dtype=float)
 
     auc = roc_auc_score(y_true, scores)
     pr = average_precision(y_true, scores)
@@ -384,14 +414,58 @@ def evaluate(cfg: EvaluationConfig) -> Dict[str, object]:
 
 def _parse_args(argv: Optional[Sequence[str]] = None) -> EvaluationConfig:
     parser = argparse.ArgumentParser(description="Evaluate nightly ranker predictions")
-    parser.add_argument("--days", type=int, default=90, help="Number of daily prediction files to evaluate")
-    parser.add_argument("--label-horizon", type=int, default=3, help="Days to look ahead when computing labels")
-    parser.add_argument("--hit-threshold", type=float, default=0.04, help="Return threshold to consider a hit")
+    defaults = {
+        "days": EVAL_DEFAULTS.get("days", EvaluationConfig.days),
+        "label_horizon": EVAL_DEFAULTS.get("label_horizon", EvaluationConfig.label_horizon),
+        "hit_threshold": EVAL_DEFAULTS.get("hit_threshold", EvaluationConfig.hit_threshold),
+        "max_drawdown": EVAL_DEFAULTS.get("max_drawdown", EVAL_DEFAULTS.get("drawdown_threshold", EvaluationConfig.drawdown_threshold)),
+    }
+    try:
+        defaults["days"] = int(defaults["days"])
+    except (TypeError, ValueError):
+        defaults["days"] = EvaluationConfig.days
+    try:
+        defaults["label_horizon"] = int(defaults["label_horizon"])
+    except (TypeError, ValueError):
+        defaults["label_horizon"] = EvaluationConfig.label_horizon
+    try:
+        defaults["hit_threshold"] = float(defaults["hit_threshold"])
+    except (TypeError, ValueError):
+        defaults["hit_threshold"] = EvaluationConfig.hit_threshold
+    try:
+        drawdown_default = (
+            float(defaults["max_drawdown"])
+            if defaults["max_drawdown"] is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        drawdown_default = EvaluationConfig.drawdown_threshold
+
     parser.add_argument(
-        "--drawdown-threshold",
+        "--days",
+        type=int,
+        default=defaults["days"],
+        help="Number of daily prediction files to evaluate (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--label-horizon",
+        type=int,
+        default=defaults["label_horizon"],
+        help="Days to look ahead when computing labels (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--hit-threshold",
         type=float,
-        default=None,
-        help="Maximum tolerated drawdown before marking a miss (defaults to hit threshold)",
+        default=defaults["hit_threshold"],
+        help="Return threshold to consider a hit (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--max-dd",
+        "--drawdown-threshold",
+        dest="drawdown_threshold",
+        type=float,
+        default=drawdown_default,
+        help="Maximum tolerated drawdown before marking a miss",
     )
     parser.add_argument(
         "--predictions-dir",
@@ -441,7 +515,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     target_date = cfg.as_of or datetime.now(timezone.utc).date()
     output_path = cfg.output_dir / f"{target_date.isoformat()}.json"
+    cfg.output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(output_path, metrics)
+    latest_path = cfg.output_dir / "latest.json"
+    try:
+        if latest_path.exists() or latest_path.is_symlink():
+            latest_path.unlink()
+        latest_path.symlink_to(output_path.name)
+    except OSError:
+        _write_json(latest_path, metrics)
     return 0
 
 

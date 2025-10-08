@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import os
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePath
@@ -151,6 +152,7 @@ TOP_CANDIDATE_COLUMNS = [
     "SMA50",
     "SMA100",
     "ATR14",
+    "universe_count",
 ]
 
 SKIP_KEYS = [
@@ -1896,9 +1898,40 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     atomic_write_bytes(path, data)
 
 
-def _prepare_predictions_frame(scored_df: pd.DataFrame) -> pd.DataFrame:
+def _prepare_predictions_frame(
+    scored_df: pd.DataFrame,
+    *,
+    run_date: datetime,
+    gate_counters: Optional[Mapping[str, object]] = None,
+    ranker_cfg: Optional[Mapping[str, object]] = None,
+    limit: int = 200,
+) -> pd.DataFrame:
+    columns = [
+        "run_date",
+        "symbol",
+        "rank",
+        "score",
+        "passed_gates",
+        "ranker_version",
+        "gate_preset",
+        "adv20",
+        "price_close",
+        "atr14",
+        "ts",
+        "ms",
+        "bp",
+        "pt",
+        "rsi",
+        "mh",
+        "adx",
+        "aroon",
+        "vcp",
+        "volexp",
+        "gap_pen",
+        "liq_pen",
+        "score_breakdown_json",
+    ]
     if scored_df is None or scored_df.empty:
-        columns = ["symbol", "Score", "rank", "gates_passed"]
         return pd.DataFrame(columns=columns)
 
     frame = scored_df.copy()
@@ -1908,18 +1941,54 @@ def _prepare_predictions_frame(scored_df: pd.DataFrame) -> pd.DataFrame:
         frame["gates_passed"] = False
     frame["gates_passed"] = frame["gates_passed"].fillna(False).astype(bool)
 
-    ordered_cols: list[str] = []
-    if "timestamp" in frame.columns:
-        ordered_cols.append("timestamp")
-    ordered_cols.extend(["symbol", "Score", "rank", "gates_passed"])
+    limit = max(1, int(limit)) if limit else frame.shape[0]
+    frame = frame.head(limit)
 
-    remaining = [col for col in frame.columns if col not in ordered_cols]
-    if "score_breakdown" in remaining:
-        remaining.remove("score_breakdown")
-        remaining.append("score_breakdown")
+    run_date_str = run_date.date().isoformat()
+    gate_preset = "custom"
+    if gate_counters and isinstance(gate_counters, Mapping):
+        gate_preset = str(gate_counters.get("gate_preset") or gate_preset)
+    ranker_version = None
+    if ranker_cfg and isinstance(ranker_cfg, Mapping):
+        ranker_version = ranker_cfg.get("version")
 
-    column_order = ordered_cols + remaining
-    return frame[column_order]
+    def _coerce_float(series: pd.Series) -> pd.Series:
+        return pd.to_numeric(series, errors="coerce")
+
+    score_breakdowns = frame.get("score_breakdown", pd.Series(dtype="string")).fillna("").astype(str)
+
+    payload = pd.DataFrame({
+        "run_date": run_date_str,
+        "symbol": frame.get("symbol", pd.Series(dtype="string")).astype(str).str.upper(),
+        "rank": pd.to_numeric(frame.get("rank"), errors="coerce").astype("Int64"),
+        "score": _coerce_float(frame.get("Score")),
+        "passed_gates": frame.get("gates_passed", pd.Series(dtype=bool)).astype(bool),
+        "ranker_version": str(ranker_version or ""),
+        "gate_preset": gate_preset,
+        "adv20": _coerce_float(frame.get("ADV20")),
+        "price_close": _coerce_float(frame.get("close")),
+        "atr14": _coerce_float(frame.get("ATR14")),
+        "ts": _coerce_float(frame.get("TS")),
+        "ms": _coerce_float(frame.get("MS")),
+        "bp": _coerce_float(frame.get("BP")),
+        "pt": _coerce_float(frame.get("PT")),
+        "rsi": _coerce_float(frame.get("RSI")),
+        "mh": _coerce_float(frame.get("MH")),
+        "adx": _coerce_float(frame.get("ADX")),
+        "aroon": _coerce_float(frame.get("AROON")),
+        "vcp": _coerce_float(frame.get("VCP")),
+        "volexp": _coerce_float(frame.get("VOLexp")),
+        "gap_pen": _coerce_float(frame.get("GAPpen")),
+        "liq_pen": _coerce_float(frame.get("LIQpen")),
+        "score_breakdown_json": score_breakdowns,
+    })
+
+    payload["score_breakdown_json"] = payload["score_breakdown_json"].apply(
+        lambda s: s[:1024] if isinstance(s, str) else ""
+    )
+    payload = payload.reindex(columns=columns)
+    payload["rank"] = payload["rank"].astype("Int64")
+    return payload
 
 
 def _coerce_int(value: object) -> int:
@@ -1941,6 +2010,7 @@ def run_screener(
     prefiltered_skips: Optional[Dict[str, str]] = None,
     gate_preset: str = "standard",
     relax_gates: str = "none",
+    dollar_vol_min: Optional[float] = None,
     ranker_config: Optional[Mapping[str, object]] = None,
 ) -> Tuple[
     pd.DataFrame,
@@ -1963,6 +2033,32 @@ def run_screener(
         str(sym or "").strip().upper(): str(reason or "").strip().upper()
         for sym, reason in (prefiltered_skips or {}).items()
     }
+
+    if not prefiltered_map and not prepared.empty:
+        allowed_exchanges = {"NASDAQ", "NYSE", "ARCA", "AMEX", "BATS", "IEX"}
+        auto_prefilter: dict[str, str] = {}
+        for sym_raw, exch_raw in prepared[["symbol", "exchange"]].itertuples(index=False):
+            sym = str(sym_raw or "").strip().upper()
+            if not sym:
+                continue
+            exchange = str(exch_raw or "").strip().upper()
+            reason: str | None
+            if not exchange:
+                reason = "UNKNOWN_EXCHANGE"
+            elif exchange in allowed_exchanges:
+                reason = None
+            elif exchange.startswith("OTC"):
+                reason = "NON_EQUITY"
+            elif exchange in {"CRYPTO", "CRYPTO1", "CRYPTOX"}:
+                reason = "NON_EQUITY"
+            elif exchange in {"PINK", "GREY", "OTCQB", "OTCQX"}:
+                reason = "NON_EQUITY"
+            else:
+                reason = "UNKNOWN_EXCHANGE"
+            if reason:
+                auto_prefilter.setdefault(sym, reason)
+        if auto_prefilter:
+            prefiltered_map.update(auto_prefilter)
 
     initial_rejects: list[dict[str, str]] = []
     for sym, reason in prefiltered_map.items():
@@ -2000,6 +2096,13 @@ def run_screener(
         relax_mode=str(relax_gates or "none"),
         min_history=min_history,
     )
+    if dollar_vol_min is not None:
+        try:
+            gates = dict(ranker_cfg.get("gates") or {})
+            gates["dollar_vol_min"] = float(dollar_vol_min)
+            ranker_cfg["gates"] = gates
+        except (TypeError, ValueError):
+            LOGGER.warning("Invalid dollar_vol_min override: %s", dollar_vol_min)
 
     timing_info: dict[str, float] = {}
     enriched = build_enriched_bars(prepared, ranker_cfg, timings=timing_info)
@@ -2048,6 +2151,8 @@ def run_screener(
         combined_rejects.append(entry)
 
     top_df = _prepare_top_frame(candidates_df, top_n)
+    if not top_df.empty:
+        top_df["universe_count"] = stats.get("symbols_in", 0)
 
     if stats["candidates_out"] == 0:
         if combined_rejects:
@@ -2110,7 +2215,20 @@ def write_outputs(
 
     _write_csv_atomic(top_path, top_df)
     _write_csv_atomic(scored_path, scored_df)
-    _write_csv_atomic(predictions_path, _prepare_predictions_frame(scored_df))
+    predictions_frame = _prepare_predictions_frame(
+        scored_df,
+        run_date=now,
+        gate_counters=gate_counters,
+        ranker_cfg=ranker_cfg,
+    )
+    _write_csv_atomic(predictions_path, predictions_frame)
+    latest_prediction = predictions_dir / "latest.csv"
+    try:
+        if latest_prediction.exists() or latest_prediction.is_symlink():
+            latest_prediction.unlink()
+        latest_prediction.symlink_to(predictions_path.name)
+    except OSError:
+        _write_csv_atomic(latest_prediction, predictions_frame)
 
     diagnostics_dir = data_dir / "diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
@@ -2271,6 +2389,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--limit",
         type=int,
+        default=450,
         help="Optional symbol limit for development/testing",
     )
     parser.add_argument(
@@ -2319,6 +2438,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         choices=["none", "sma_only", "cross_or_rsi"],
         default="none",
         help="Optional relaxation override for diagnostics (default: none)",
+    )
+    parser.add_argument(
+        "--dollar-vol-min",
+        type=float,
+        default=2000000,
+        help="Minimum ADV20 dollar volume required for gate pass (default: 2000000)",
     )
     parsed = parser.parse_args(list(argv) if argv is not None else None)
     if getattr(parsed, "source", None):
@@ -2419,6 +2544,7 @@ def main(
         prefiltered_skips=prescreened,
         gate_preset=args.gate_preset,
         relax_gates=args.relax_gates,
+        dollar_vol_min=args.dollar_vol_min,
     )
     timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(fetch_elapsed, 3)
     write_outputs(

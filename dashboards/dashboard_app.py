@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 import os
 import pytz
+from pathlib import Path
 from typing import Optional
 
 # Base directory of the project (parent of this file)
@@ -27,6 +28,8 @@ trades_log_real_path = os.path.join(BASE_DIR, "data", "trades_log_real.csv")
 open_positions_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
 scored_candidates_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
+screener_metrics_path = os.path.join(BASE_DIR, "data", "screener_metrics.json")
+predictions_dir_path = os.path.join(BASE_DIR, "data", "predictions")
 
 # Additional datasets introduced for monitoring
 metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
@@ -125,6 +128,22 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
     return df, None
 
 
+def load_prediction_history(limit: int = 7) -> list[tuple[str, pd.DataFrame]]:
+    directory = os.path.join(BASE_DIR, "data", "predictions")
+    if not os.path.isdir(directory):
+        return []
+    frames: list[tuple[str, pd.DataFrame]] = []
+    for path in sorted(Path(directory).glob("*.csv")):
+        if path.name == "latest.csv":
+            continue
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            continue
+        frames.append((path.stem, df))
+    return frames[-limit:]
+
+
 def read_recent_lines(filepath, num_lines=50, since_days=None):
     """Return recent lines from ``filepath``.
 
@@ -198,6 +217,50 @@ def add_days_in_trade(df: pd.DataFrame) -> pd.DataFrame:
     df["days_in_trade"] = (pd.Timestamp.utcnow() - entry_times).dt.days
     df["entry_time"] = entry_times.dt.strftime("%Y-%m-%d %H:%M") + " UTC"
     return df
+
+
+def explain_breakdown(json_str: str) -> str:
+    import json as _json
+
+    try:
+        data = _json.loads(json_str) if isinstance(json_str, str) else {}
+    except Exception:
+        return "n/a"
+
+    labels = {
+        "TS": "Trend",
+        "MS": "MA Stack",
+        "BP": "Near 20D High",
+        "PT": "Pullback Tight",
+        "RSI": "RSI",
+        "MH": "MACD Hist",
+        "ADX": "ADX",
+        "AROON": "Aroon",
+        "VCP": "VCP",
+        "VOLexp": "Vol Exp",
+        "GAPpen": "Gap Pen",
+        "LIQpen": "Liq Pen",
+    }
+    items = []
+    for key, value in (data or {}).items():
+        base_key = key.replace("_z", "")
+        if base_key not in labels:
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        items.append((labels[base_key], numeric))
+    if not items:
+        return "n/a"
+    items.sort(key=lambda kv: abs(kv[1]), reverse=True)
+    items = items[:4]
+
+    def _fmt(name: str, val: float) -> str:
+        arrow = "▲" if val >= 0 else "▼"
+        return f"{name} {arrow} {abs(val):.2f}"
+
+    return " • ".join(_fmt(name, val) for name, val in items)
 
 
 def create_open_positions_chart(df: pd.DataFrame) -> dcc.Graph:
@@ -732,159 +795,435 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         components.extend([kpis, graphs])
         return dbc.Container(components, fluid=True)
 
+
     elif tab == "tab-screener":
+        metrics_data: dict = {}
+        metrics_alert = None
+        if os.path.exists(screener_metrics_path):
+            try:
+                with open(screener_metrics_path, "r", encoding="utf-8") as handle:
+                    metrics_data = json.load(handle) or {}
+            except Exception as exc:
+                metrics_alert = dbc.Alert(
+                    f"Failed to read screener metrics: {exc}",
+                    color="danger",
+                )
+        else:
+            metrics_alert = dbc.Alert(
+                "Screener metrics not available yet.",
+                color="warning",
+            )
+
         df, alert = load_csv(top_candidates_path)
         scored_df, scored_alert = load_csv(scored_candidates_path)
 
-        alerts = [alert] if alert else []
-        if scored_alert:
-            alerts.append(scored_alert)
+        alerts = [a for a in (metrics_alert, alert, scored_alert) if a]
 
-        if df is not None and not df.empty:
-            if "score" in df.columns:
-                df.sort_values("score", ascending=False, na_position="last", inplace=True)
-            df = df.head(15)
+        def _safe_int(value) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
+        def _safe_float(value):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _format_value(value) -> str:
+            if value is None:
+                return "—"
+            if isinstance(value, str):
+                try:
+                    numeric = float(value)
+                except (TypeError, ValueError):
+                    return value
+            else:
+                try:
+                    numeric = float(value)
+                except (TypeError, ValueError):
+                    return str(value)
+            if abs(numeric - int(numeric)) < 1e-6:
+                return f"{int(numeric):,}"
+            return f"{numeric:,.2f}"
+
+        last_run_display = metrics_data.get("last_run_utc")
+        if isinstance(last_run_display, str):
+            try:
+                parsed = datetime.fromisoformat(last_run_display.replace("Z", "+00:00"))
+                last_run_display = parsed.strftime("%Y-%m-%d %H:%M UTC")
+            except Exception:
+                pass
+
+        health_items = [
+            ("Last Run (UTC)", last_run_display),
+            ("Symbols In", metrics_data.get("symbols_in")),
+            ("Symbols With Bars", metrics_data.get("symbols_with_bars")),
+            ("Bars Rows", metrics_data.get("bars_rows_total")),
+            ("Candidates", metrics_data.get("candidates_out")),
+        ]
+        health_columns = []
+        for idx, (label, value) in enumerate(health_items):
+            card = dbc.Card(
+                dbc.CardBody(
+                    [
+                        html.Div(label, className="card-metric-label"),
+                        html.Div(_format_value(value), className="card-metric-value"),
+                    ]
+                ),
+                className="bg-dark text-light h-100",
+            )
+            width = 4 if idx == 0 else 2
+            health_columns.append(dbc.Col(card, md=width, sm=6))
+        health_cards = dbc.Row(health_columns, className="g-3 mb-4")
+
+        timings = metrics_data.get("timings", {}) or {}
+        timing_labels = [
+            ("fetch_secs", "Fetch"),
+            ("normalize_secs", "Normalize"),
+            ("feature_secs", "Features"),
+            ("rank_secs", "Rank"),
+            ("gates_secs", "Gates"),
+        ]
+        timing_badges = []
+        for key, label in timing_labels:
+            value = _safe_float(timings.get(key))
+            text_value = f"{value:.2f}s" if value is not None else "—"
+            timing_badges.append(dbc.Badge(f"{label}: {text_value}", className="badge-small me-1"))
+        timing_card = dbc.Card(
+            dbc.CardBody(
+                [
+                    html.Div("Timings", className="card-metric-label mb-2"),
+                    html.Div(timing_badges),
+                ]
+            ),
+            className="bg-dark text-light h-100",
+        )
+
+        http_badges = [
+            dbc.Badge(f"429: {_safe_int(metrics_data.get('rate_limited'))}", className="badge-small me-1"),
+            dbc.Badge(f"404: {_safe_int(metrics_data.get('http_404_batches'))}", className="badge-small me-1"),
+            dbc.Badge(f"Empty: {_safe_int(metrics_data.get('http_empty_batches'))}", className="badge-small"),
+        ]
+        http_card = dbc.Card(
+            dbc.CardBody(
+                [
+                    html.Div("HTTP Status", className="card-metric-label mb-2"),
+                    html.Div(http_badges),
+                ]
+            ),
+            className="bg-dark text-light h-100",
+        )
+
+        cache_badges = [
+            dbc.Badge(f"Cache hits: {_safe_int(metrics_data.get('cache_hits'))}", className="badge-small me-1"),
+            dbc.Badge(f"Parsed rows: {_safe_int(metrics_data.get('parsed_rows_count'))}", className="badge-small"),
+        ]
+        cache_card = dbc.Card(
+            dbc.CardBody(
+                [
+                    html.Div("Cache", className="card-metric-label mb-2"),
+                    html.Div(cache_badges),
+                ]
+            ),
+            className="bg-dark text-light h-100",
+        )
+
+        info_row = dbc.Row(
+            [dbc.Col(timing_card, md=4), dbc.Col(http_card, md=4), dbc.Col(cache_card, md=4)],
+            className="g-3 mb-4",
+        )
+
+        gate_counts = metrics_data.get("gate_fail_counts", {}) or {}
+        gate_items = []
+        for key, value in gate_counts.items():
+            if not str(key).startswith("failed_"):
+                continue
+            count = _safe_int(value)
+            if count <= 0:
+                continue
+            label = str(key).replace("failed_", "").replace("_", " ").title()
+            gate_items.append({"reason": label, "count": count})
+        if gate_items:
+            gate_df = pd.DataFrame(gate_items).sort_values("count", ascending=False)
+            gate_fig = px.bar(
+                gate_df,
+                x="reason",
+                y="count",
+                text="count",
+                template="plotly_dark",
+            )
+            gate_fig.update_layout(
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=320,
+                xaxis_title="Gate",
+                yaxis_title="Failures",
+            )
+            gate_fig.update_traces(marker_color="#4DB6AC", textposition="outside")
+        else:
+            gate_fig = go.Figure()
+            gate_fig.add_annotation(
+                text="No gate failures recorded",
+                showarrow=False,
+                font=dict(color="#adb5bd"),
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.5,
+            )
+            gate_fig.update_layout(template="plotly_dark", margin=dict(l=20, r=20, t=40, b=20), height=320)
+
+        with_bars = _safe_int(metrics_data.get("symbols_with_bars"))
+        without_bars = _safe_int(metrics_data.get("symbols_no_bars"))
+        if with_bars + without_bars > 0:
+            coverage_fig = px.pie(
+                names=["With Bars", "No Bars"],
+                values=[with_bars, without_bars],
+                hole=0.5,
+                template="plotly_dark",
+            )
+            coverage_fig.update_traces(textinfo="label+percent")
+            coverage_fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), height=320)
+        else:
+            coverage_fig = go.Figure()
+            coverage_fig.add_annotation(
+                text="No universe coverage data",
+                showarrow=False,
+                font=dict(color="#adb5bd"),
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.5,
+            )
+            coverage_fig.update_layout(template="plotly_dark", margin=dict(l=20, r=20, t=40, b=20), height=320)
+
+        charts_row = dbc.Row(
+            [
+                dbc.Col(dcc.Graph(figure=gate_fig), md=8),
+                dbc.Col(dcc.Graph(figure=coverage_fig), md=4),
+            ],
+            className="g-3 mb-4",
+        )
+
+        top_table_component = dbc.Alert(
+            "No scored candidates available.", color="warning", className="m-2"
+        )
+        if scored_df is not None and not scored_df.empty:
+            scored_work = scored_df.copy()
+            scored_work["Score"] = pd.to_numeric(scored_work.get("Score"), errors="coerce")
+            scored_work["symbol"] = scored_work.get("symbol", "").astype(str)
+            scored_work["close"] = pd.to_numeric(scored_work.get("close"), errors="coerce")
+            scored_work["ADV20"] = pd.to_numeric(scored_work.get("ADV20"), errors="coerce")
+            scored_work["ATR14"] = pd.to_numeric(scored_work.get("ATR14"), errors="coerce")
+            scored_work.sort_values("Score", ascending=False, inplace=True)
+            atr_pct = (scored_work["ATR14"] / scored_work["close"]) * 100.0
+            atr_pct = atr_pct.replace([np.inf, -np.inf], np.nan)
+            breakdown_series = None
+            if "score_breakdown" in scored_work.columns:
+                breakdown_series = scored_work["score_breakdown"]
+            elif "score_breakdown_json" in scored_work.columns:
+                breakdown_series = scored_work["score_breakdown_json"]
+            if breakdown_series is None:
+                breakdown_series = pd.Series([None] * len(scored_work))
+            scored_work["Why"] = breakdown_series.fillna("").apply(explain_breakdown)
+            scored_work["ATR%"] = atr_pct
+            table_df = scored_work.loc[
+                :, ["symbol", "Score", "close", "ADV20", "ATR%", "Why"]
+            ].head(15)
+            table_df.rename(
+                columns={"symbol": "Symbol", "close": "Close", "ADV20": "ADV20"}, inplace=True
+            )
+            table_df["Score"] = table_df["Score"].round(3)
+            table_df["Close"] = table_df["Close"].round(2)
+            table_df["ADV20"] = table_df["ADV20"].round(0)
+            table_df["ATR%"] = table_df["ATR%"].round(1)
+            table_df.replace({np.nan: None}, inplace=True)
             columns = [
-                {"name": c.replace("_", " ").title(), "id": c} for c in df.columns
+                {"name": "Symbol", "id": "Symbol"},
+                {"name": "Score", "id": "Score"},
+                {"name": "Close", "id": "Close"},
+                {"name": "ADV20", "id": "ADV20"},
+                {"name": "ATR %", "id": "ATR%"},
+                {"name": "Why", "id": "Why"},
             ]
-            table = dash_table.DataTable(
-                id="screener-table",
-                data=df.to_dict("records"),
+            top_table_component = dash_table.DataTable(
+                id="screener-top-table",
+                data=table_df.to_dict("records"),
                 columns=columns,
                 page_size=15,
                 sort_action="native",
                 style_table={"overflowX": "auto"},
+                style_header={"backgroundColor": "#1b1e21", "fontWeight": "600"},
                 style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+                style_data_conditional=[
+                    {
+                        "if": {"column_id": "Score"},
+                        "color": "#4DB6AC",
+                        "fontWeight": "600",
+                    }
+                ],
             )
-        else:
-            table = dbc.Alert("No candidates to display.", color="warning", className="m-2")
 
-        if scored_df is not None and not scored_df.empty:
-            scored_columns = [
-                {"name": c.replace("_", " ").title(), "id": c} for c in scored_df.columns
-            ]
-            scored_table = dash_table.DataTable(
-                id="scored-candidates-table",
-                data=scored_df.to_dict("records"),
-                columns=scored_columns,
-                page_size=15,
-                sort_action="native",
-                style_table={"overflowX": "auto"},
-                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+        feature_summary = metrics_data.get("feature_summary") or {}
+        history_frames = load_prediction_history(limit=7)
+
+        def _feature_column(name: str) -> str:
+            mapping = {"VOLexp": "volexp", "GAPpen": "gap_pen", "LIQpen": "liq_pen"}
+            return mapping.get(name, name.lower())
+
+        feature_cards = []
+        if feature_summary:
+            sorted_features = sorted(
+                feature_summary.items(),
+                key=lambda kv: abs(kv[1].get("mean") or 0.0),
+                reverse=True,
             )
-        else:
-            scored_table = dbc.Alert("No scored candidates available.", color="warning", className="m-2")
+            for feature, stats in sorted_features[:6]:
+                mean_val = stats.get("mean")
+                std_val = stats.get("std")
+                history_values = []
+                for date_str, frame in history_frames:
+                    column_name = _feature_column(feature)
+                    if column_name not in frame.columns:
+                        continue
+                    series = pd.to_numeric(frame[column_name], errors="coerce")
+                    if series.dropna().empty:
+                        continue
+                    try:
+                        display_date = datetime.strptime(date_str, "%Y-%m-%d")
+                    except ValueError:
+                        continue
+                    history_values.append((display_date.strftime("%m-%d"), float(series.mean())))
+                history_values.sort(key=lambda item: item[0])
+                fig = go.Figure()
+                if history_values:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[item[0] for item in history_values],
+                            y=[item[1] for item in history_values],
+                            mode="lines+markers",
+                            line=dict(color="#4DB6AC"),
+                            marker=dict(size=4),
+                        )
+                    )
+                else:
+                    fig.add_annotation(
+                        text="No trend data",
+                        showarrow=False,
+                        font=dict(color="#adb5bd"),
+                        xref="paper",
+                        yref="paper",
+                        x=0.5,
+                        y=0.5,
+                    )
+                fig.update_layout(
+                    template="plotly_dark",
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    height=110,
+                    xaxis=dict(showgrid=False, tickfont=dict(size=9)),
+                    yaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=9)),
+                )
+                mean_display = "—" if mean_val is None else f"{mean_val:.2f}"
+                std_display = "—" if std_val is None else f"{std_val:.2f}"
+                subtitle = f"μ {mean_display} | σ {std_display}"
+                feature_cards.append(
+                    dbc.Col(
+                        html.Div(
+                            [
+                                html.Div(feature, className="sparkline-title"),
+                                html.Div(subtitle, className="sparkline-subtitle"),
+                                dcc.Graph(figure=fig, config={"displayModeBar": False}, style={"height": "90px"}),
+                            ],
+                            className="sparkline-card",
+                        ),
+                        md=2,
+                        sm=6,
+                    )
+                )
+        feature_section = (
+            dbc.Row(feature_cards, className="g-3 mb-4")
+            if feature_cards
+            else dbc.Alert(
+                "No feature diagnostics available yet.",
+                color="info",
+                className="m-2",
+            )
+        )
 
         pipeline_lines = read_recent_lines(pipeline_log_path)[::-1]
         screener_lines = read_recent_lines(screener_log_path, num_lines=20)[::-1]
         backtest_lines = read_recent_lines(backtest_log_path)[::-1]
 
-        def format_lines(lines):
-            return format_log_lines(lines)
-
-        pipeline_log = html.Div(
+        logs_row = dbc.Row(
             [
-                html.H5("Pipeline Log", className="text-light"),
-                html.Pre(
-                    format_lines(pipeline_lines),
-                    style={
-                        "maxHeight": "200px",
-                        "overflowY": "auto",
-                        "backgroundColor": "#272B30",
-                        "color": "#E0E0E0",
-                        "padding": "0.5rem",
-                    },
+                dbc.Col(
+                    html.Div(
+                        [
+                            html.H5("Pipeline Log", className="text-light"),
+                            html.Pre(
+                                format_log_lines(pipeline_lines),
+                                style={
+                                    "maxHeight": "220px",
+                                    "overflowY": "auto",
+                                    "backgroundColor": "#272B30",
+                                    "color": "#E0E0E0",
+                                    "padding": "0.5rem",
+                                },
+                            ),
+                        ]
+                    ),
+                    md=4,
+                ),
+                dbc.Col(
+                    html.Div(
+                        [
+                            html.H5("Screener Log", className="text-light"),
+                            html.Pre(
+                                format_log_lines(screener_lines),
+                                style={
+                                    "maxHeight": "220px",
+                                    "overflowY": "auto",
+                                    "backgroundColor": "#272B30",
+                                    "color": "#E0E0E0",
+                                    "padding": "0.5rem",
+                                },
+                            ),
+                        ]
+                    ),
+                    md=4,
+                ),
+                dbc.Col(
+                    html.Div(
+                        [
+                            html.H5("Backtest Log", className="text-light"),
+                            html.Pre(
+                                format_log_lines(backtest_lines),
+                                style={
+                                    "maxHeight": "220px",
+                                    "overflowY": "auto",
+                                    "backgroundColor": "#272B30",
+                                    "color": "#E0E0E0",
+                                    "padding": "0.5rem",
+                                },
+                            ),
+                        ]
+                    ),
+                    md=4,
                 ),
             ],
-            className="mb-3",
+            className="g-3 mb-4",
         )
 
-        screener_log = html.Div(
-            [
-                html.H5("Screener Log", className="text-light"),
-                html.Pre(
-                    format_lines(screener_lines),
-                    style={
-                        "maxHeight": "200px",
-                        "overflowY": "auto",
-                        "backgroundColor": "#272B30",
-                        "color": "#E0E0E0",
-                        "padding": "0.5rem",
-                    },
-                ),
-            ],
-            className="mb-3",
-        )
-
-        backtest_log = html.Div(
-            [
-                html.H5("Backtest Log", className="text-light"),
-                html.Pre(
-                    format_lines(backtest_lines),
-                    style={
-                        "maxHeight": "200px",
-                        "overflowY": "auto",
-                        "backgroundColor": "#272B30",
-                        "color": "#E0E0E0",
-                        "padding": "0.5rem",
-                    },
-                ),
-            ],
-            className="mb-3",
-        )
-
-        metrics_log = html.Div(
-            [
-                html.H5("Metrics Logs", className="text-light"),
-                html.Pre(
-                    id="metrics-logs",
-                    style={
-                        "maxHeight": "200px",
-                        "overflowY": "auto",
-                        "backgroundColor": "#272B30",
-                        "color": "#E0E0E0",
-                        "padding": "0.5rem",
-                    },
-                ),
-            ],
-            className="mb-3",
-        )
-
-        status = pipeline_status_component()
-        freshness = data_freshness_alert(top_candidates_path, "Top candidates")
-
-        mtime = get_file_mtime(top_candidates_path)
-        hours_since_update = (
-            (datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, timezone.utc)).total_seconds() / 3600
-            if mtime
-            else 0
-        )
-        if hours_since_update > 24:
-            stale_msg = html.Div(
-                "Warning: Screener updates nightly; data may appear outdated.",
-                style={"color": "orange"},
-            )
-        else:
-            stale_msg = html.Div()
-
-        last_updated = format_time(mtime)
-        timestamp = html.Div(
-            f"Last Updated: {last_updated}",
-            className="text-muted mb-2",
-        )
-
-        note = html.Div(
-            "Note: Screener runs nightly at 03:00 UTC",
-            className="text-muted small",
-        )
-        components = [timestamp, note]
+        components = []
         components.extend(alerts)
-        components.extend([table, scored_table, status])
-        if freshness:
-            components.append(freshness)
-        components.append(stale_msg)
-        components.extend([pipeline_log, screener_log, backtest_log, metrics_log])
-
+        if metrics_data:
+            components.extend([health_cards, info_row, charts_row])
+        components.append(html.H4("Top Candidates", className="text-light"))
+        components.append(top_table_component)
+        if metrics_data:
+            components.extend([html.Hr(), html.H4("Diagnostics", className="text-light"), feature_section])
+        components.extend([html.Hr(), logs_row])
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-execute":

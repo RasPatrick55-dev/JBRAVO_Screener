@@ -64,6 +64,7 @@ INTERMEDIATE_COLUMNS: Sequence[str] = (
     "SMA100",
     "H20",
     "L20",
+    "ADV20",
     "+DI",
     "-DI",
     "AROON_UP",
@@ -376,6 +377,7 @@ def compute_all_features(
         _gb(df)["close"].transform(lambda s: s.rolling(20, min_periods=1).mean())
         * _gb(df)["volume"].transform(lambda s: s.rolling(20, min_periods=1).mean())
     )
+    df["ADV20"] = adv20.astype("float64")
     LIQpen = (1_000_000 - adv20) / 1_000_000
     LIQpen = LIQpen.clip(lower=0)
 
