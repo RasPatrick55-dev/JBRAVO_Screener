@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+from .frame_guards import ensure_symbol_column
+
 CANON = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
 
 
@@ -17,10 +19,10 @@ def to_bars_df(obj: Any) -> pd.DataFrame:
     if isinstance(obj, pd.DataFrame):
         df = obj.copy()
     elif hasattr(obj, "df") and isinstance(getattr(obj, "df"), pd.DataFrame):
-        df = obj.df.copy()
+        df = getattr(obj, "df").copy()
     elif hasattr(obj, "data") and isinstance(getattr(obj, "data"), dict):
         rows: list[dict[str, Any]] = []
-        for symbol, items in obj.data.items():
+        for symbol, items in getattr(obj, "data").items():
             for bar in items or []:
                 rows.append(
                     {
@@ -39,52 +41,49 @@ def to_bars_df(obj: Any) -> pd.DataFrame:
                 )
         df = pd.DataFrame(rows)
     else:
-        df = pd.DataFrame(obj or [])
+        if obj is None:
+            df = pd.DataFrame([])
+        else:
+            df = pd.DataFrame(obj)
 
-    index_names = getattr(df.index, "names", None)
-    if index_names and any(name == "symbol" for name in index_names if name is not None):
-        df = df.reset_index()
-    elif getattr(df.index, "name", None) == "symbol":
-        df = df.reset_index()
+    # Backward tolerance: rename any variant into canon
+    df = df.rename(
+        columns={
+            "S": "symbol",
+            "Symbol": "symbol",
+            "t": "timestamp",
+            "T": "timestamp",
+            "time": "timestamp",
+            "Time": "timestamp",
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume",
+        }
+    )
 
-    rename = {
-        "S": "symbol",
-        "t": "timestamp",
-        "T": "timestamp",
-        "time": "timestamp",
-        "Time": "timestamp",
-        "o": "open",
-        "h": "high",
-        "l": "low",
-        "c": "close",
-        "v": "volume",
-        "Open": "open",
-        "High": "high",
-        "Low": "low",
-        "Close": "close",
-        "Volume": "volume",
-        "Symbol": "symbol",
-        "level_0": "symbol",
-        "level_1": "timestamp",
-        "index": "symbol",
-    }
-    if df.columns.size:
-        df = df.rename(columns=rename)
+    df = ensure_symbol_column(df)
 
+    # Ensure canon columns exist
     for column in CANON:
         if column not in df.columns:
             df[column] = pd.NA
 
+    # Dtypes
     df["symbol"] = df["symbol"].astype("string").str.upper()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
     for column in ["open", "high", "low", "close"]:
         df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce").astype("Int64")
 
-    if hasattr(df.index, "names") and "symbol" in (df.index.names or []):
-        df = df.reset_index()
-
-    return df[CANON]
+    # Return *flat* canon frame
+    return df[CANON].copy()
 
 
 CANONICAL_BAR_COLUMNS = CANON
