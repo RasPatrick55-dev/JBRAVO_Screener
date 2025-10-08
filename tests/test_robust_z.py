@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.utils.stats import robust_z
+from scripts.features import robust_z
 
 
 pytestmark = pytest.mark.alpaca_optional
