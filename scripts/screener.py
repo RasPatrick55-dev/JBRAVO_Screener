@@ -6,9 +6,8 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterable, Optional, Tuple, List, Dict, Any, Callable
-from urllib.parse import urlencode
+from pathlib import Path, PurePath
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -146,43 +145,22 @@ def make_verify_hook(enabled: bool):
     if not enabled:
         return None
 
-    debug_dir = Path("debug")
-    debug_dir.mkdir(parents=True, exist_ok=True)
+    from pathlib import Path
+
+    Path("debug").mkdir(parents=True, exist_ok=True)
 
     def hook(url: str, params: dict[str, object]):
-        safe_params = {str(k): str(v) for k, v in (params or {}).items()}
-        query = urlencode(sorted(safe_params.items()))
-        full_url = f"{url}?{query}" if query else url
-        LOGGER.info("Bars request preview: %s", full_url)
-        if safe_params:
-            curl = ["curl", "-sG", f"\"{url}\""]
-            for key, value in sorted(safe_params.items()):
-                curl.append(f"--data-urlencode '{key}={value}'")
-            LOGGER.info("Bars request curl: %s", " ".join(curl))
+        safe: dict[str, object] = {}
+        for key, value in (params or {}).items():
+            key_str = str(key)
+            if "secret" in key_str.lower():
+                safe[key_str] = "<redacted>"
+            else:
+                safe[key_str] = value
+        query = "&".join(f"{k}={safe[k]}" for k in safe)
+        LOGGER.info("Bars request preview: %s ? %s", url, query)
 
     return hook
-
-
-def make_preview_writer(enabled: bool):
-    if not enabled:
-        return None
-
-    debug_dir = Path("debug")
-    debug_dir.mkdir(parents=True, exist_ok=True)
-    preview_path = debug_dir / "bars_preview.json"
-    written = False
-
-    def _write(payload: Optional[dict]) -> None:
-        nonlocal written
-        if written or payload is None:
-            return
-        try:
-            preview_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-            written = True
-        except Exception:  # pragma: no cover - diagnostics only
-            LOGGER.warning("Failed to write bars preview", exc_info=True)
-
-    return _write
 
 
 def _fallback_daily_window(days: int, *, now: Optional[datetime] = None) -> tuple[str, str, str]:
@@ -359,7 +337,6 @@ def _fetch_daily_bars(
     min_history: int,
     bars_source: str,
     verify_hook: Optional[Callable[[str, dict[str, object]], None]] = None,
-    preview_callback: Optional[Callable[[dict], None]] = None,
 ) -> Tuple[pd.DataFrame, dict[str, int | list[str]], Dict[str, str]]:
     if not symbols:
         return pd.DataFrame(columns=INPUT_COLUMNS), {
@@ -408,12 +385,16 @@ def _fetch_daily_bars(
         "rate_limited": 0,
         "http_404_batches": 0,
         "http_empty_batches": 0,
+        "symbols_in": 0,
     }
+    metrics["symbols_in"] = len(unique_symbols)
     prescreened: dict[str, str] = {}
 
     frames: list[pd.DataFrame] = []
 
     verify_consumed = False
+    preview_enabled = bool(verify_hook)
+    preview_written = False
 
     def _acquire_verify_hook():
         nonlocal verify_consumed
@@ -422,12 +403,24 @@ def _fetch_daily_bars(
             return verify_hook
         return None
 
-    def _handle_preview(payload: Optional[dict]) -> None:
-        if preview_callback and payload is not None:
-            try:
-                preview_callback(payload)
-            except Exception:  # pragma: no cover - diagnostics only
-                LOGGER.debug("Preview callback failed", exc_info=True)
+    def _write_preview(bars_raw: object, bars_df: pd.DataFrame) -> None:
+        nonlocal preview_written
+        if not preview_enabled or preview_written:
+            return
+        preview_written = True
+        try:
+            if isinstance(bars_raw, dict) and "bars" in bars_raw:
+                sample = list(bars_raw.get("bars", []))[:5]
+            elif isinstance(bars_raw, list):
+                sample = list(bars_raw)[:5]
+            else:
+                sample = bars_df.head(5).to_dict("records")
+            preview_dir = Path("debug")
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            preview_path = Path(PurePath("debug", "bars_preview.json"))
+            preview_path.write_text(json.dumps({"bars": sample}, indent=2), encoding="utf-8")
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            LOGGER.debug("Could not write bars_preview.json: %s", exc)
 
     def fetch_single_collection(
         target_symbols: List[str], *, use_http: bool
@@ -437,9 +430,6 @@ def _fetch_daily_bars(
         token_bucket = TokenBucket(200) if not use_http else None
         local_metrics: dict[str, int] = {
             "rate_limited": 0,
-            "pages": 0,
-            "requests": 0,
-            "chunks": 0,
             "http_404_batches": 0,
             "http_empty_batches": 0,
         }
@@ -460,9 +450,13 @@ def _fetch_daily_bars(
                     timeframe="1Day",
                     feed=feed,
                     verify_hook=hook,
-                    first_page_callback=_handle_preview,
                 )
                 df = to_bars_df(raw, symbol_hint=symbol)
+                if "symbol" not in df.columns:
+                    LOGGER.error("normalize returned columns=%s", list(df.columns))
+                    df = df.assign(symbol=pd.Series(dtype=str))
+                df = df.reset_index(drop=True)
+                _write_preview(raw, df)
                 return symbol, df, http_stats
             except Exception as exc:  # pragma: no cover - network errors hit in integration
                 LOGGER.warning("Failed HTTP bars fetch for %s: %s", symbol, exc)
@@ -472,9 +466,6 @@ def _fetch_daily_bars(
                     df,
                     {
                         "rate_limited": 0,
-                        "pages": 0,
-                        "requests": 0,
-                        "chunks": 0,
                         "http_404_batches": 0,
                         "http_empty_batches": 0,
                     },
@@ -498,6 +489,11 @@ def _fetch_daily_bars(
                     token_bucket.acquire()
                     response = data_client.get_stock_bars(request)
                     df = to_bars_df(response, symbol_hint=symbol)
+                    if "symbol" not in df.columns:
+                        LOGGER.error("normalize returned columns=%s", list(df.columns))
+                        df = df.assign(symbol=pd.Series(dtype=str))
+                    df = df.reset_index(drop=True)
+                    _write_preview(response, df)
                     return symbol, df, {"rate_limited": 0, "pages": 1, "requests": 1, "chunks": 1}
                 except Exception as exc:  # pragma: no cover - network errors hit in integration
                     status = getattr(exc, "status_code", None)
@@ -516,9 +512,6 @@ def _fetch_daily_bars(
                     break
             return symbol, pd.DataFrame(columns=BARS_COLUMNS), {
                 "rate_limited": 0,
-                "pages": 0,
-                "requests": 0,
-                "chunks": 0,
                 "http_404_batches": 0,
                 "http_empty_batches": 0,
             }
@@ -593,7 +586,6 @@ def _fetch_daily_bars(
                         timeframe="1Day",
                         feed=feed,
                         verify_hook=hook,
-                        first_page_callback=_handle_preview,
                     )
                 except Exception as exc:
                     LOGGER.warning(
@@ -616,27 +608,15 @@ def _fetch_daily_bars(
                     continue
                 for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
                     metrics[key] += int(http_stats.get(key, 0))
-                pages_seen = int(http_stats.get("pages", 0))
-                metrics["pages_total"] += pages_seen
-                if pages_seen > 1:
-                    metrics["batches_paged"] += 1
                 bars_df = to_bars_df(raw)
                 if "symbol" not in bars_df.columns:
                     LOGGER.error(
                         "Normalize returned unexpected shape; got columns=%s",
                         list(bars_df.columns),
                     )
-                    metrics["fallback_batches"] += 1
-                    fallback_frame, fallback_pages, fallback_prescreened, fallback_metrics = (
-                        fetch_single_collection(batch, use_http=True)
-                    )
-                    if not fallback_frame.empty:
-                        frames.append(fallback_frame)
-                    metrics["pages_total"] += fallback_pages
-                    for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
-                        metrics[key] += int(fallback_metrics.get(key, 0))
-                    prescreened.update(fallback_prescreened)
-                    continue
+                    bars_df = bars_df.assign(symbol=pd.Series(dtype=str))
+                bars_df = bars_df.reset_index(drop=True)
+                _write_preview(raw, bars_df)
                 normalized = _normalize_bars_frame(bars_df)
                 if normalized.empty:
                     for sym in batch:
@@ -823,6 +803,7 @@ def _load_alpaca_universe(
         "window_attempts": [],
         "window_used": 0,
         "symbols_override": 0,
+        "symbols_in": 0,
     }
     empty_asset_metrics = {
         "assets_total": 0,
@@ -943,6 +924,8 @@ def _load_alpaca_universe(
     if not symbols:
         return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, empty_metrics, {}, asset_metrics
 
+    empty_metrics["symbols_in"] = len(symbols)
+
     data_client: Optional["StockHistoricalDataClient"] = None
     if (bars_source or "http").strip().lower() == "sdk":
         try:
@@ -958,7 +941,6 @@ def _load_alpaca_universe(
             )
 
     verify_hook_fn = make_verify_hook(bool(verify_request))
-    preview_writer = make_preview_writer(bool(verify_request))
     attempt_candidates = [days, min_days_fallback, min_days_final]
     attempt_days: list[int] = []
     for candidate in attempt_candidates:
@@ -1021,7 +1003,6 @@ def _load_alpaca_universe(
             min_history=min_history,
             bars_source=bars_source,
             verify_hook=verify_hook_fn if use_verify else None,
-            preview_callback=preview_writer if use_verify else None,
         )
 
         metrics_candidate = metrics_candidate or {}
@@ -1049,6 +1030,7 @@ def _load_alpaca_universe(
     agg_metrics["bars_rows_total"] = _coerce_int(fetch_metrics.get("bars_rows_total", 0))
     agg_metrics["symbols_with_bars"] = _coerce_int(fetch_metrics.get("symbols_with_bars", 0))
     agg_metrics["symbols_no_bars"] = _coerce_int(fetch_metrics.get("symbols_no_bars", 0))
+    agg_metrics["symbols_in"] = _coerce_int(fetch_metrics.get("symbols_in", agg_metrics.get("symbols_in", 0)))
     agg_metrics["symbols_no_bars_sample"] = list(
         fetch_metrics.get("symbols_no_bars_sample", []) or []
     )

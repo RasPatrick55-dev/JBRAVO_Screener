@@ -3,13 +3,24 @@ import pandas as pd
 from scripts.utils.normalize import to_bars_df
 
 
-def test_normalize_http_payload_infers_symbol():
-    payload = [
-        {"S": "aapl", "t": "2024-01-01T00:00:00Z", "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 1000}
-    ]
+def test_normalize_http_fields():
+    payload = {
+        "bars": [
+            {
+                "S": "aapl",
+                "t": "2024-01-01T00:00:00Z",
+                "o": 1,
+                "h": 2,
+                "l": 0.5,
+                "c": 1.5,
+                "v": 1000,
+            }
+        ]
+    }
     out = to_bars_df(payload)
     assert list(out.columns) == ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
     assert out.loc[0, "symbol"] == "AAPL"
+    assert out.loc[0, "close"] == 1.5
 
 
 def test_normalize_sdk_multiindex_resets_symbol():
@@ -24,3 +35,14 @@ def test_normalize_sdk_multiindex_resets_symbol():
     assert not out.empty
     assert "symbol" in out.columns
     assert out["symbol"].unique().tolist() == ["MSFT"]
+
+
+def test_groupby_safe():
+    payload = [
+        {"S": "spy", "t": "2024-01-01T00:00:00Z", "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 10},
+        {"S": "spy", "t": "2024-01-02T00:00:00Z", "o": 1.1, "h": 2.1, "l": 0.6, "c": 1.6, "v": 11},
+    ]
+    df = to_bars_df(payload)
+    grouped = df.groupby("symbol", as_index=False)["timestamp"].count()
+    assert "symbol" in grouped.columns
+    assert grouped.loc[0, "timestamp"] == 2

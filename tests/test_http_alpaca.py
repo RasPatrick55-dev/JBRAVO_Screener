@@ -28,7 +28,8 @@ def test_market_data_host(monkeypatch):
 
     assert captured_urls == ["https://data.alpaca.markets/v2/stocks/bars"]
     assert bars == []
-    assert metrics["pages"] == 1
+    assert metrics["http_empty_batches"] == 1
+    assert metrics["rate_limited"] == 0
 
 
 def test_normalize_http():
