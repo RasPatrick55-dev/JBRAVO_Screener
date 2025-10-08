@@ -174,7 +174,9 @@ def score_universe(bars_df: pd.DataFrame, cfg: Optional[Mapping[str, object]] = 
     standardized_df = standardized_df.reindex(columns=aligned_weights.index, fill_value=0.0)
 
     contributions = standardized_df.multiply(aligned_weights, axis=1)
-    score_series = contributions.sum(axis=1)
+    if contributions.isna().any().any():
+        contributions = contributions.fillna(0.0)
+    score_series = contributions.sum(axis=1).fillna(0.0)
 
     breakdown_strings = standardized_df.apply(
         lambda row: json.dumps({k: round(float(v), 4) for k, v in sorted(row.items())}),
