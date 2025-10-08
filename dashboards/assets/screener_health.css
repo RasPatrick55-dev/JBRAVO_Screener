@@ -1,27 +1,44 @@
+.sh-row {
+  margin-bottom: 16px;
+}
+
+.sh-kpi-wrap {
+  width: 100%;
+}
+
 .sh-kpi {
-  background: #121212;
-  border: 1px solid #2d2d2d;
-  border-radius: 8px;
-  padding: 10px;
+  background: rgba(23, 25, 35, 0.9);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .sh-kpi-title {
-  color: #9aa0a6;
-  font-size: 12px;
+  font-size: 0.8rem;
+  color: #8f9bb3;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .sh-kpi-value {
-  color: #e8eaed;
-  font-size: 22px;
+  font-size: 1.6rem;
   font-weight: 600;
+  color: #f4f6fb;
 }
 
 .sh-kpi-sub {
-  color: #9aa0a6;
-  font-size: 12px;
+  font-size: 0.85rem;
+  color: #9aa4bf;
 }
 
-.sh-row {
-  width: 100%;
+.sh-kpi .sh-kpi-sub:empty {
+  display: none;
+}
+
+.sh-kpi table {
+  color: inherit;
 }
