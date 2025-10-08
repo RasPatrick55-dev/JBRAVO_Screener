@@ -337,66 +337,92 @@ def average_precision(y_true: np.ndarray, y_score: np.ndarray) -> Optional[float
     return float(ap)
 
 
-def compute_decile_lifts(y_true: np.ndarray, y_score: np.ndarray, deciles: int = 10) -> Dict[str, Dict[str, float]]:
-    if len(y_true) == 0:
-        return {}
-    frame = pd.DataFrame({"label": y_true, "score": y_score})
-    frame.sort_values("score", ascending=False, inplace=True)
-    base_rate = frame["label"].mean()
-    results: Dict[str, Dict[str, float]] = {}
-    total = len(frame)
+def compute_decile_lifts(
+    frame: pd.DataFrame,
+    score_column: str,
+    deciles: int = 10,
+) -> Dict[str, List[Optional[float]]]:
+    summary: Dict[str, List[Optional[float]]] = {
+        "rank_decile": [],
+        "hit_rate": [],
+        "avg_return": [],
+        "count": [],
+    }
+    if frame is None or frame.empty or score_column not in frame.columns:
+        for idx in range(deciles):
+            summary["rank_decile"].append(idx + 1)
+            summary["hit_rate"].append(None)
+            summary["avg_return"].append(None)
+            summary["count"].append(0)
+        return summary
+
+    ordered = frame.sort_values(score_column, ascending=False).reset_index(drop=True)
+    total = len(ordered)
     start = 0
     for idx in range(deciles):
         remaining = deciles - idx
         chunk_size = max((total - start + remaining - 1) // remaining, 0)
-        end = start + chunk_size
-        subset = frame.iloc[start:end]
-        if subset.empty:
-            avg = float("nan")
-            lift = float("nan")
+        end = min(total, start + chunk_size)
+        if start >= total:
+            subset = ordered.iloc[0:0]
         else:
-            avg = float(subset["label"].mean())
-            lift = float("nan") if base_rate == 0 else float(avg / base_rate)
-        results[str(idx + 1)] = {"avg": avg, "lift": lift, "count": float(len(subset))}
+            subset = ordered.iloc[start:end]
+        if subset.empty:
+            hit_rate = None
+            avg_return = None
+            count = 0
+        else:
+            hit_rate = float(subset["label"].mean())
+            if "max_return" in subset.columns:
+                returns = subset["max_return"].dropna()
+                avg_return = float(returns.mean()) if not returns.empty else None
+            else:
+                avg_return = None
+            count = int(len(subset))
+        summary["rank_decile"].append(idx + 1)
+        summary["hit_rate"].append(hit_rate)
+        summary["avg_return"].append(avg_return)
+        summary["count"].append(count)
         start = end
-    return results
+    return summary
 
 
 def compile_metrics(labelled: pd.DataFrame, cfg: EvaluationConfig) -> Dict[str, object]:
     usable = labelled.dropna(subset=["label"]).copy()
+    if usable.empty:
+        return {}
     usable["label"] = usable["label"].astype(int)
-    y_true = usable["label"].to_numpy(dtype=float)
     score_column = "Score" if "Score" in usable.columns else "score"
     if score_column not in usable.columns:
-        scores = np.zeros(len(usable), dtype=float)
-    else:
-        scores = usable[score_column].to_numpy(dtype=float)
+        usable[score_column] = 0.0
+
+    y_true = usable["label"].to_numpy(dtype=float)
+    scores = usable[score_column].to_numpy(dtype=float)
 
     auc = roc_auc_score(y_true, scores)
     pr = average_precision(y_true, scores)
-    deciles = compute_decile_lifts(y_true, scores)
 
-    gate_rate = None
-    if "gates_passed" in usable.columns:
-        gate_rate = float(usable["gates_passed"].mean()) if len(usable) else None
+    deciles = compute_decile_lifts(usable, score_column)
 
-    metrics: Dict[str, object] = {
-        "as_of": (cfg.as_of or date.today()).isoformat(),
+    result: Dict[str, object] = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "samples": int(len(usable)),
-        "positives": int((usable["label"] == 1).sum()),
-        "positive_rate": float(usable["label"].mean()) if len(usable) else 0.0,
-        "auc": auc,
-        "average_precision": pr,
-        "deciles": deciles,
-        "hit_threshold": float(cfg.hit_threshold),
-        "drawdown_threshold": float(cfg.resolved_drawdown),
-        "label_horizon": int(cfg.label_horizon),
         "window_days": int(cfg.days),
+        "label_horizon_days": int(cfg.label_horizon),
+        "hit_threshold": float(cfg.hit_threshold),
+        "max_drawdown": float(cfg.resolved_drawdown),
+        "population": int(len(usable)),
+        "metrics": {
+            "auc": float(auc) if auc is not None else None,
+            "pr_auc": float(pr) if pr is not None else None,
+        },
+        "deciles": deciles,
     }
-    if gate_rate is not None:
-        metrics["gate_pass_rate"] = gate_rate
-    return metrics
+    if cfg.as_of:
+        result["as_of"] = cfg.as_of.isoformat()
+    if "gates_passed" in usable.columns and len(usable):
+        gate_rate = float(usable["gates_passed"].mean())
+        result.setdefault("metrics", {})["gate_pass_rate"] = gate_rate
+    return result
 
 
 def _write_json(path: Path, payload: Dict[str, object]) -> None:

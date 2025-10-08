@@ -38,14 +38,19 @@ path passed via `--prices`). For each prediction row:
 4. If a drawdown of `drawdown_threshold` (defaults to the hit threshold) occurs
    first, or the horizon expires without a hit, mark the row as a miss.
 
-The evaluator emits `data/ranker_eval/YYYY-MM-DD.json` containing:
+The evaluator emits `data/ranker_eval/YYYY-MM-DD.json` containing a compact
+summary with:
 
-- window parameters (`days`, `label_horizon`, thresholds)
-- sample counts and positive rate
-- ROC AUC, average precision, and decile lift summaries
-- gate pass rate if available
+- metadata fields (`generated_at_utc`, `window_days`, `label_horizon_days`,
+  thresholds, evaluated population)
+- a `metrics` object with ROC AUC (`auc`), precision-recall AUC (`pr_auc`),
+  and optional extras such as `gate_pass_rate`
+- a `deciles` object containing parallel arrays for `rank_decile`,
+  per-decile `hit_rate`, average forward return (`avg_return`), and sample
+  counts (`count`)
 
-All numeric metrics are serialised as native floats to simplify dashboarding.
+All numeric metrics are serialised as native floats (or `null` when not
+available) to simplify dashboarding.
 
 ## Autotuning workflow
 
