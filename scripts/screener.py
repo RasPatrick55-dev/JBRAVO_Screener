@@ -23,6 +23,7 @@ try:  # pragma: no cover - preferred module execution path
     from .utils.rate import TokenBucket
     from .utils.models import BarData, classify_exchange, KNOWN_EQUITY
     from .utils.env import trading_base_url
+    from .utils.frame_guards import ensure_symbol_column
 except Exception:  # pragma: no cover - fallback for direct script execution
     import os as _os
     import sys as _sys
@@ -35,6 +36,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.utils.rate import TokenBucket  # type: ignore
     from scripts.utils.models import BarData, classify_exchange, KNOWN_EQUITY  # type: ignore
     from scripts.utils.env import trading_base_url  # type: ignore
+    from scripts.utils.frame_guards import ensure_symbol_column  # type: ignore
 
 from utils.env import load_env, get_alpaca_creds
 from utils.io_utils import atomic_write_bytes
@@ -303,8 +305,8 @@ def _collect_batch_pages(
             )
             return [], page_count, paged, columns_desc, False
         page_count += 1
-        df = to_bars_df(response)
-        if "symbol" not in df.columns:
+        raw_df = to_bars_df(response)
+        if "symbol" not in raw_df.columns:
             LOGGER.error(
                 "Bars normalize failed: type=%s has attributes df=%s data=%s; df_cols=%s",
                 type(response).__name__,
@@ -312,8 +314,9 @@ def _collect_batch_pages(
                 hasattr(response, "data"),
                 list(getattr(getattr(response, "df", pd.DataFrame()), "columns", [])),
             )
+        df = ensure_symbol_column(raw_df)
         columns_desc = ",".join(df.columns)
-        if df.empty or "symbol" not in df.columns:
+        if df.empty:
             return [], page_count, paged, columns_desc, False
         normalized = _normalize_bars_frame(df)
         if not normalized.empty:
@@ -479,20 +482,7 @@ def _fetch_daily_bars(
                     verify_hook=hook,
                 )
                 raw_bars_count = len(raw)
-                bars_df = to_bars_df(raw).reset_index(drop=True)
-
-                if "symbol" not in bars_df.columns:
-                    LOGGER.error(
-                        "FATAL: bars_df lacks 'symbol' after normalization; cols=%s idx_names=%s",
-                        list(bars_df.columns),
-                        getattr(bars_df.index, "names", None),
-                    )
-                    Path("debug").mkdir(parents=True, exist_ok=True)
-                    Path("debug/canonical_bars_sample.json").write_text(
-                        json.dumps(raw[:10], indent=2), encoding="utf-8"
-                    )
-                    bars_df = bars_df.assign(symbol=pd.Series(dtype="string"))
-                    # continue fail-open; symbols will fail history check
+                bars_df = ensure_symbol_column(to_bars_df(raw)).reset_index(drop=True)
 
                 parsed_rows_count = int(bars_df.shape[0])
                 if raw_bars_count > 0 and parsed_rows_count == 0:
@@ -552,7 +542,7 @@ def _fetch_daily_bars(
                     assert token_bucket is not None
                     token_bucket.acquire()
                     response = data_client.get_stock_bars(request)
-                    df = to_bars_df(response)
+                    df = ensure_symbol_column(to_bars_df(response))
                     if not df.empty and "symbol" in df.columns and symbol:
                         df["symbol"] = df["symbol"].fillna(symbol)
                         mask = df["symbol"].str.strip() == ""
@@ -702,20 +692,7 @@ def _fetch_daily_bars(
                     prescreened.update(fallback_prescreened)
                     continue
                 raw_bars_count = len(raw)
-                bars_df = to_bars_df(raw).reset_index(drop=True)
-
-                if "symbol" not in bars_df.columns:
-                    LOGGER.error(
-                        "FATAL: bars_df lacks 'symbol' after normalization; cols=%s idx_names=%s",
-                        list(bars_df.columns),
-                        getattr(bars_df.index, "names", None),
-                    )
-                    Path("debug").mkdir(parents=True, exist_ok=True)
-                    Path("debug/canonical_bars_sample.json").write_text(
-                        json.dumps(raw[:10], indent=2), encoding="utf-8"
-                    )
-                    bars_df = bars_df.assign(symbol=pd.Series(dtype="string"))
-                    # continue fail-open; symbols will fail history check
+                bars_df = ensure_symbol_column(to_bars_df(raw)).reset_index(drop=True)
 
                 parsed_rows_count = int(bars_df.shape[0])
                 if raw_bars_count > 0 and parsed_rows_count == 0:
@@ -816,13 +793,8 @@ def _fetch_daily_bars(
             prescreened.update(fallback_prescreened)
 
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
-    if not combined.empty and "symbol" not in combined.columns:
-        LOGGER.error("Normalized bars missing 'symbol'; dropping combined frame")
-        combined = pd.DataFrame(columns=BARS_COLUMNS)
     combined = _normalize_bars_frame(combined)
-    if not combined.empty and "symbol" not in combined.columns:
-        LOGGER.error("Normalized bars missing 'symbol' after normalization; clearing frame")
-        combined = pd.DataFrame(columns=BARS_COLUMNS)
+    combined = ensure_symbol_column(combined)
     if not combined.empty:
         try:
             combined = (
@@ -836,21 +808,26 @@ def _fetch_daily_bars(
         combined = combined.reset_index(drop=True)
 
     required_cols = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
-    if not combined.empty:
-        missing_cols = [col for col in required_cols if col not in combined.columns]
-        if missing_cols:
-            LOGGER.error("Bars frame missing columns: %s; skipping gating.", missing_cols)
-            combined = combined.iloc[0:0]
+    missing_cols = [col for col in required_cols if col not in combined.columns]
+    if missing_cols:
+        LOGGER.error(
+            "Pre-gating frame missing columns: %s; aborting gating for this run",
+            missing_cols,
+        )
+        combined = pd.DataFrame(columns=required_cols)
 
-    bars_for_metrics = combined.copy()
-    hist = (
-        bars_for_metrics.dropna(subset=["timestamp"])
-        .groupby("symbol", as_index=False)["timestamp"]
-        .size()
-        .rename(columns={"size": "n"})
-        if not bars_for_metrics.empty
-        else pd.DataFrame(columns=["symbol", "n"])
-    )
+    combined = ensure_symbol_column(combined)
+
+    clean = combined.dropna(subset=["timestamp"]) if not combined.empty else combined
+    if not clean.empty:
+        hist = (
+            clean.groupby("symbol", as_index=False)["timestamp"]
+            .size()
+            .rename(columns={"size": "n"})
+        )
+    else:
+        hist = pd.DataFrame(columns=["symbol", "n"])
+
     if min_history > 0 and not hist.empty:
         keep = set(hist.loc[hist["n"] >= min_history, "symbol"].tolist())
         insufficient = set(hist.loc[hist["n"] < min_history, "symbol"].tolist())
@@ -871,15 +848,14 @@ def _fetch_daily_bars(
         metrics["insufficient_history"] = len(insufficient)
 
     symbols_with_bars = len(keep)
-    symbols_in_total = int(metrics.get("symbols_in", 0)) or len(unique_symbols)
-    symbols_no_bars = max(symbols_in_total - symbols_with_bars, 0)
-    bars_rows_total = int(bars_for_metrics[bars_for_metrics["symbol"].isin(keep)].shape[0]) if keep else 0
+    symbols_no_bars = max(len(unique_symbols) - symbols_with_bars, 0)
+    bars_rows_total = int(len(combined))
     metrics.update(
         {
+            "symbols_in": len(unique_symbols),
             "symbols_with_bars": symbols_with_bars,
             "symbols_no_bars": symbols_no_bars,
             "bars_rows_total": bars_rows_total,
-            "symbols_in": symbols_in_total,
         }
     )
     missing = [sym for sym in unique_symbols if sym not in keep]
@@ -893,33 +869,27 @@ def _fetch_daily_bars(
 
 
 def merge_asset_metadata(bars_df: pd.DataFrame, asset_meta: Dict[str, dict]) -> pd.DataFrame:
-    if bars_df.empty:
-        if not asset_meta:
-            return bars_df
-        result = bars_df.copy()
-    else:
-        result = bars_df.copy()
-        result["symbol"] = result["symbol"].astype(str).str.strip().str.upper()
+    result = ensure_symbol_column(bars_df.copy())
 
     if asset_meta:
-        meta_rows: list[dict[str, object]] = []
-        for symbol, meta in asset_meta.items():
-            if not symbol:
-                continue
-            cleaned_symbol = str(symbol).strip().upper()
-            details = meta or {}
-            meta_rows.append(
-                {
-                    "symbol": cleaned_symbol,
-                    "exchange": str(details.get("exchange", "") or "").strip().upper(),
-                    "asset_class": str(details.get("asset_class", "") or "").strip().upper(),
-                    "tradable": bool(details.get("tradable", True)),
-                }
-            )
-        meta_df = pd.DataFrame(meta_rows)
+        meta_df = pd.DataFrame.from_dict(asset_meta, orient="index")
         if not meta_df.empty:
-            meta_df = meta_df.drop_duplicates(subset=["symbol"], keep="first")
-            result = result.merge(meta_df, on="symbol", how="left")
+            meta_df = meta_df.reindex(columns=["exchange", "asset_class", "tradable"])
+            meta_df = meta_df.rename_axis("symbol").reset_index()
+            meta_df["symbol"] = meta_df["symbol"].astype(str).str.upper()
+            m_exchange = dict(zip(meta_df["symbol"], meta_df["exchange"]))
+            m_class = dict(zip(meta_df["symbol"], meta_df["asset_class"]))
+            tradable_map = (
+                dict(zip(meta_df["symbol"], meta_df["tradable"]))
+                if "tradable" in meta_df.columns
+                else {}
+            )
+            result["exchange"] = result["symbol"].map(m_exchange)
+            result["asset_class"] = result["symbol"].map(m_class)
+            if tradable_map:
+                result["tradable"] = result["symbol"].map(tradable_map)
+
+    result = ensure_symbol_column(result)
 
     for column in ["exchange", "asset_class"]:
         if column not in result.columns:
