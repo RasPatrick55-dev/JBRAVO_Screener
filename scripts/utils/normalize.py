@@ -63,6 +63,8 @@ def _normalize_multiindex(df: pd.DataFrame) -> pd.DataFrame:
             names[0] = "symbol"
         if len(names) >= 2 and not names[1]:
             names[1] = "timestamp"
+        if names:
+            df.index = df.index.set_names(names)
         df = df.reset_index()
     elif df.index.name in {"symbol", "timestamp"}:
         df = df.reset_index()

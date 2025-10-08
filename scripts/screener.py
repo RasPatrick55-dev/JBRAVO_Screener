@@ -5,9 +5,10 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Tuple, List, Dict, Any, Callable
+from urllib.parse import urlencode
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -18,6 +19,7 @@ import requests
 try:  # pragma: no cover - preferred module execution path
     from .indicators import adx, aroon, macd, obv, rsi
     from .utils.normalize import to_bars_df, BARS_COLUMNS
+    from .utils.calendar import calc_daily_window
     from .utils.http_alpaca import fetch_bars_http
     from .utils.rate import TokenBucket
     from .utils.models import BarData, classify_exchange, KNOWN_EQUITY
@@ -29,6 +31,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     _sys.path.append(_os.path.dirname(_os.path.dirname(__file__)))
     from scripts.indicators import adx, aroon, macd, obv, rsi  # type: ignore
     from scripts.utils.normalize import to_bars_df, BARS_COLUMNS  # type: ignore
+    from scripts.utils.calendar import calc_daily_window  # type: ignore
     from scripts.utils.http_alpaca import fetch_bars_http  # type: ignore
     from scripts.utils.rate import TokenBucket  # type: ignore
     from scripts.utils.models import BarData, classify_exchange, KNOWN_EQUITY  # type: ignore
@@ -137,6 +140,64 @@ ASSET_HTTP_TIMEOUT = 15
 BARS_BATCH_SIZE = 200
 BAR_RETRY_STATUSES = {429, 500, 502, 503, 504}
 BAR_MAX_RETRIES = 3
+
+
+def make_verify_hook(enabled: bool):
+    if not enabled:
+        return None
+
+    debug_dir = Path("debug")
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    def hook(url: str, params: dict[str, object]):
+        safe_params = {str(k): str(v) for k, v in (params or {}).items()}
+        query = urlencode(sorted(safe_params.items()))
+        full_url = f"{url}?{query}" if query else url
+        LOGGER.info("Bars request preview: %s", full_url)
+        if safe_params:
+            curl = ["curl", "-sG", f"\"{url}\""]
+            for key, value in sorted(safe_params.items()):
+                curl.append(f"--data-urlencode '{key}={value}'")
+            LOGGER.info("Bars request curl: %s", " ".join(curl))
+
+    return hook
+
+
+def make_preview_writer(enabled: bool):
+    if not enabled:
+        return None
+
+    debug_dir = Path("debug")
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    preview_path = debug_dir / "bars_preview.json"
+    written = False
+
+    def _write(payload: Optional[dict]) -> None:
+        nonlocal written
+        if written or payload is None:
+            return
+        try:
+            preview_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            written = True
+        except Exception:  # pragma: no cover - diagnostics only
+            LOGGER.warning("Failed to write bars preview", exc_info=True)
+
+    return _write
+
+
+def _fallback_daily_window(days: int, *, now: Optional[datetime] = None) -> tuple[str, str, str]:
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    days = max(1, int(days))
+    current_day = np.datetime64(current.date(), "D")
+    last_session = np.busday_offset(current_day, 0, roll="backward")
+    start_session = (
+        np.busday_offset(last_session, -(days - 1), roll="backward") if days > 1 else last_session
+    )
+    start_day = pd.Timestamp(start_session).date()
+    end_day = pd.Timestamp(last_session).date()
+    start_iso = f"{start_day.isoformat()}T00:00:00Z"
+    end_iso = f"{end_day.isoformat()}T23:59:59Z"
+    return start_iso, end_iso, end_day.isoformat()
 
 
 def _chunked(items: List[str], size: int) -> Iterable[List[str]]:
@@ -289,13 +350,16 @@ def _fetch_daily_bars(
     symbols: List[str],
     *,
     days: int,
+    start_iso: str,
+    end_iso: str,
     feed: str,
     fetch_mode: str,
     batch_size: int,
     max_workers: int,
     min_history: int,
     bars_source: str,
-    now: Optional[datetime] = None,
+    verify_hook: Optional[Callable[[str, dict[str, object]], None]] = None,
+    preview_callback: Optional[Callable[[dict], None]] = None,
 ) -> Tuple[pd.DataFrame, dict[str, int | list[str]], Dict[str, str]]:
     if not symbols:
         return pd.DataFrame(columns=INPUT_COLUMNS), {
@@ -320,26 +384,14 @@ def _fetch_daily_bars(
         if data_client is None:
             raise RuntimeError("StockHistoricalDataClient required when bars_source=sdk")
 
-    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     days = max(1, int(days))
 
-    def _as_midnight(date_like: np.datetime64) -> datetime:
-        ts = pd.Timestamp(date_like).to_pydatetime()
-        return datetime.combine(ts.date(), datetime.min.time(), tzinfo=timezone.utc)
+    def _parse_iso(value: str) -> datetime:
+        cleaned = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(cleaned).astimezone(timezone.utc)
 
-    current_day = np.datetime64(now.date(), "D")
-    last_session = np.busday_offset(current_day, 0, roll="backward")
-    start_session = (
-        np.busday_offset(last_session, -(days - 1), roll="backward") if days > 1 else last_session
-    )
-    start = _as_midnight(start_session)
-    end = _as_midnight(last_session) + timedelta(days=1)
-
-    def _to_iso(value: datetime) -> str:
-        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    start_iso = _to_iso(start)
-    end_iso = _to_iso(end)
+    start_dt = _parse_iso(start_iso)
+    end_dt = _parse_iso(end_iso)
 
     unique_symbols = [str(sym or "").strip().upper() for sym in symbols if sym]
     unique_symbols = list(dict.fromkeys(unique_symbols))
@@ -354,10 +406,28 @@ def _fetch_daily_bars(
         "fallback_batches": 0,
         "insufficient_history": 0,
         "rate_limited": 0,
+        "http_404_batches": 0,
+        "http_empty_batches": 0,
     }
     prescreened: dict[str, str] = {}
 
     frames: list[pd.DataFrame] = []
+
+    verify_consumed = False
+
+    def _acquire_verify_hook():
+        nonlocal verify_consumed
+        if verify_hook and not verify_consumed:
+            verify_consumed = True
+            return verify_hook
+        return None
+
+    def _handle_preview(payload: Optional[dict]) -> None:
+        if preview_callback and payload is not None:
+            try:
+                preview_callback(payload)
+            except Exception:  # pragma: no cover - diagnostics only
+                LOGGER.debug("Preview callback failed", exc_info=True)
 
     def fetch_single_collection(
         target_symbols: List[str], *, use_http: bool
@@ -370,6 +440,8 @@ def _fetch_daily_bars(
             "pages": 0,
             "requests": 0,
             "chunks": 0,
+            "http_404_batches": 0,
+            "http_empty_batches": 0,
         }
 
         def _merge_metrics(payload: dict[str, int]) -> None:
@@ -380,23 +452,41 @@ def _fetch_daily_bars(
 
         def _http_worker(symbol: str) -> Tuple[str, pd.DataFrame, dict[str, int]]:
             try:
+                hook = _acquire_verify_hook()
                 raw, http_stats = fetch_bars_http(
-                    [symbol], start_iso, end_iso, timeframe="1Day", feed=feed
+                    [symbol],
+                    start_iso,
+                    end_iso,
+                    timeframe="1Day",
+                    feed=feed,
+                    verify_hook=hook,
+                    first_page_callback=_handle_preview,
                 )
                 df = to_bars_df(raw, symbol_hint=symbol)
                 return symbol, df, http_stats
             except Exception as exc:  # pragma: no cover - network errors hit in integration
                 LOGGER.warning("Failed HTTP bars fetch for %s: %s", symbol, exc)
                 df = pd.DataFrame(columns=BARS_COLUMNS)
-                return symbol, df, {"rate_limited": 0, "pages": 0, "requests": 0, "chunks": 0}
+                return (
+                    symbol,
+                    df,
+                    {
+                        "rate_limited": 0,
+                        "pages": 0,
+                        "requests": 0,
+                        "chunks": 0,
+                        "http_404_batches": 0,
+                        "http_empty_batches": 0,
+                    },
+                )
 
         def _sdk_worker(symbol: str) -> Tuple[str, pd.DataFrame, dict[str, int]]:
             assert data_client is not None  # for type checker
             request_kwargs = {
                 "symbol_or_symbols": symbol,
                 "timeframe": TimeFrame.Day,
-                "start": start,
-                "end": end,
+                "start": start_dt,
+                "end": end_dt,
                 "feed": _resolve_feed(feed),
                 "adjustment": "raw",
                 "limit": days,
@@ -429,6 +519,8 @@ def _fetch_daily_bars(
                 "pages": 0,
                 "requests": 0,
                 "chunks": 0,
+                "http_404_batches": 0,
+                "http_empty_batches": 0,
             }
 
         worker = _http_worker if use_http else _sdk_worker
@@ -443,7 +535,14 @@ def _fetch_daily_bars(
                     LOGGER.error("Single-symbol worker failed for %s: %s", symbol, exc)
                     sym = symbol
                     df = pd.DataFrame(columns=BARS_COLUMNS)
-                    http_stats = {"rate_limited": 0, "pages": 0, "requests": 0, "chunks": 0}
+                    http_stats = {
+                        "rate_limited": 0,
+                        "pages": 0,
+                        "requests": 0,
+                        "chunks": 0,
+                        "http_404_batches": 0,
+                        "http_empty_batches": 0,
+                    }
                 _merge_metrics(http_stats)
                 pages += int(http_stats.get("pages", 0)) or 0
                 if df.empty:
@@ -477,7 +576,8 @@ def _fetch_daily_bars(
         ) = fetch_single_collection(unique_symbols, use_http=(source == "http"))
         frames.append(single_frame)
         metrics["pages_total"] += single_pages
-        metrics["rate_limited"] += int(single_metrics.get("rate_limited", 0))
+        for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
+            metrics[key] += int(single_metrics.get(key, 0))
         prescreened.update(single_prescreened)
     else:
         batches = list(_chunked(unique_symbols, max(1, batch_size)))
@@ -485,8 +585,15 @@ def _fetch_daily_bars(
         for index, batch in enumerate(batches, start=1):
             if source == "http":
                 try:
+                    hook = _acquire_verify_hook()
                     raw, http_stats = fetch_bars_http(
-                        batch, start_iso, end_iso, timeframe="1Day", feed=feed
+                        batch,
+                        start_iso,
+                        end_iso,
+                        timeframe="1Day",
+                        feed=feed,
+                        verify_hook=hook,
+                        first_page_callback=_handle_preview,
                     )
                 except Exception as exc:
                     LOGGER.warning(
@@ -503,10 +610,12 @@ def _fetch_daily_bars(
                     if not fallback_frame.empty:
                         frames.append(fallback_frame)
                     metrics["pages_total"] += fallback_pages
-                    metrics["rate_limited"] += int(fallback_metrics.get("rate_limited", 0))
+                    for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
+                        metrics[key] += int(fallback_metrics.get(key, 0))
                     prescreened.update(fallback_prescreened)
                     continue
-                metrics["rate_limited"] += int(http_stats.get("rate_limited", 0))
+                for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
+                    metrics[key] += int(http_stats.get(key, 0))
                 pages_seen = int(http_stats.get("pages", 0))
                 metrics["pages_total"] += pages_seen
                 if pages_seen > 1:
@@ -524,7 +633,8 @@ def _fetch_daily_bars(
                     if not fallback_frame.empty:
                         frames.append(fallback_frame)
                     metrics["pages_total"] += fallback_pages
-                    metrics["rate_limited"] += int(fallback_metrics.get("rate_limited", 0))
+                    for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
+                        metrics[key] += int(fallback_metrics.get(key, 0))
                     prescreened.update(fallback_prescreened)
                     continue
                 normalized = _normalize_bars_frame(bars_df)
@@ -538,8 +648,8 @@ def _fetch_daily_bars(
             request_kwargs = {
                 "symbol_or_symbols": batch if len(batch) > 1 else batch[0],
                 "timeframe": TimeFrame.Day,
-                "start": start,
-                "end": end,
+                "start": start_dt,
+                "end": end_dt,
                 "feed": _resolve_feed(feed),
                 "adjustment": "raw",
             }
@@ -567,7 +677,8 @@ def _fetch_daily_bars(
             if not fallback_frame.empty:
                 frames.append(fallback_frame)
             metrics["pages_total"] += fallback_pages
-            metrics["rate_limited"] += int(fallback_metrics.get("rate_limited", 0))
+            for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
+                metrics[key] += int(fallback_metrics.get(key, 0))
             prescreened.update(fallback_prescreened)
 
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
@@ -685,7 +796,10 @@ def _load_alpaca_universe(
     exclude_otc: bool,
     iex_only: bool,
     liquidity_top: int,
-    now: datetime,
+    symbols_override: Optional[List[str]] = None,
+    verify_request: bool = False,
+    min_days_fallback: int = 365,
+    min_days_final: int = 90,
 ) -> Tuple[
     pd.DataFrame,
     Dict[str, dict],
@@ -704,6 +818,11 @@ def _load_alpaca_universe(
         "fallback_batches": 0,
         "insufficient_history": 0,
         "rate_limited": 0,
+        "http_404_batches": 0,
+        "http_empty_batches": 0,
+        "window_attempts": [],
+        "window_used": 0,
+        "symbols_override": 0,
     }
     empty_asset_metrics = {
         "assets_total": 0,
@@ -742,52 +861,83 @@ def _load_alpaca_universe(
         str(symbol).strip().upper(): dict(meta or {})
         for symbol, meta in (asset_meta or {}).items()
     }
+    override_cleaned: list[str] = []
+    if symbols_override:
+        seen_override: set[str] = set()
+        for raw in symbols_override:
+            sym = str(raw or "").strip().upper()
+            if sym and sym not in seen_override:
+                seen_override.add(sym)
+                override_cleaned.append(sym)
+        if override_cleaned:
+            LOGGER.info(
+                "Symbols override enabled (%d): %s",
+                len(override_cleaned),
+                ", ".join(override_cleaned[:10]),
+            )
+
     raw_symbols = [str(sym).strip().upper() for sym in symbols]
-    ordered_symbols = raw_symbols or list(asset_meta.keys())
-    seen: set[str] = set()
     iex_exchanges = {"NASDAQ", "NYSE", "ARCA", "AMEX"}
     filtered_symbols: list[str] = []
     filtered_skips: Dict[str, str] = {}
-    for sym in ordered_symbols:
-        if sym in seen:
-            continue
-        meta = asset_meta.get(sym, {})
-        tradable = bool(meta.get("tradable", True))
-        asset_class = str(meta.get("asset_class", "") or "").strip().upper()
-        exchange = str(meta.get("exchange", "") or "").strip().upper()
-        if not tradable:
-            filtered_skips.setdefault(sym, "NON_EQUITY")
-            continue
-        if asset_class not in {"US_EQUITY", "EQUITY"}:
-            reason = "NON_EQUITY"
-            if asset_class in {"OTC"} and exchange:
-                reason = "UNKNOWN_EXCHANGE"
-            filtered_skips.setdefault(sym, reason)
-            continue
-        if iex_only and exchange not in iex_exchanges:
-            filtered_skips.setdefault(sym, "UNKNOWN_EXCHANGE")
-            continue
-        filtered_symbols.append(sym)
-        seen.add(sym)
 
-    if limit is not None and limit > 0:
-        filtered_symbols = filtered_symbols[:limit]
+    if override_cleaned:
+        seen_override: set[str] = set()
+        for sym in override_cleaned:
+            if sym in seen_override:
+                continue
+            seen_override.add(sym)
+            meta = asset_meta.get(sym, {})
+            exchange = str(meta.get("exchange", "") or "").strip().upper()
+            if iex_only and exchange and exchange not in iex_exchanges:
+                filtered_skips.setdefault(sym, "UNKNOWN_EXCHANGE")
+                continue
+            filtered_symbols.append(sym)
+        LOGGER.info("Universe sample size (override): %d", len(filtered_symbols))
+    else:
+        ordered_symbols = raw_symbols or list(asset_meta.keys())
+        seen: set[str] = set()
+        for sym in ordered_symbols:
+            if sym in seen:
+                continue
+            meta = asset_meta.get(sym, {})
+            tradable = bool(meta.get("tradable", True))
+            asset_class = str(meta.get("asset_class", "") or "").strip().upper()
+            exchange = str(meta.get("exchange", "") or "").strip().upper()
+            if not tradable:
+                filtered_skips.setdefault(sym, "NON_EQUITY")
+                continue
+            if asset_class not in {"US_EQUITY", "EQUITY"}:
+                reason = "NON_EQUITY"
+                if asset_class in {"OTC"} and exchange:
+                    reason = "UNKNOWN_EXCHANGE"
+                filtered_skips.setdefault(sym, reason)
+                continue
+            if iex_only and exchange not in iex_exchanges:
+                filtered_skips.setdefault(sym, "UNKNOWN_EXCHANGE")
+                continue
+            filtered_symbols.append(sym)
+            seen.add(sym)
+        if limit is not None and limit > 0:
+            filtered_symbols = filtered_symbols[:limit]
+        total_tradable = len(raw_symbols)
+        LOGGER.info(
+            "Universe sample size: %d (of %d tradable equities)",
+            len(filtered_symbols),
+            total_tradable or asset_metrics.get("assets_tradable_equities", 0),
+        )
 
     asset_metrics["symbols_after_iex_filter"] = len(filtered_symbols)
     asset_metrics["assets_total"] = int(asset_metrics.get("assets_total", len(asset_meta)))
     asset_metrics["assets_after_filters"] = len(filtered_symbols)
-    total_tradable = len(raw_symbols)
-    LOGGER.info(
-        "Universe sample size: %d (of %d tradable equities)",
-        len(filtered_symbols),
-        total_tradable or asset_metrics.get("assets_tradable_equities", 0),
-    )
+
     if asset_meta:
         asset_meta = {
             sym: asset_meta.get(sym, {})
             for sym in filtered_symbols
             if sym in asset_meta
         }
+
     symbols = filtered_symbols
 
     if not symbols:
@@ -807,73 +957,175 @@ def _load_alpaca_universe(
                 asset_metrics,
             )
 
-    bars_df, fetch_metrics, prescreened = _fetch_daily_bars(
-        data_client,
-        symbols,
-        days=days,
-        feed=feed,
-        fetch_mode=fetch_mode,
-        batch_size=max(1, batch_size),
-        max_workers=max(1, max_workers),
-        min_history=min_history,
-        bars_source=bars_source,
-        now=now,
+    verify_hook_fn = make_verify_hook(bool(verify_request))
+    preview_writer = make_preview_writer(bool(verify_request))
+    attempt_candidates = [days, min_days_fallback, min_days_final]
+    attempt_days: list[int] = []
+    for candidate in attempt_candidates:
+        try:
+            value = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        value = max(1, value)
+        if value not in attempt_days:
+            attempt_days.append(value)
+    if not attempt_days:
+        attempt_days.append(max(1, int(days)))
+
+    agg_metrics: dict[str, int | list[str]] = {}
+    for key, value in empty_metrics.items():
+        agg_metrics[key] = list(value) if isinstance(value, list) else int(value)
+
+    bars_df = pd.DataFrame(columns=BARS_COLUMNS)
+    prescreened: Dict[str, str] = {}
+    fetch_metrics: dict[str, int | list[str]] = {}
+    window_attempts: list[int] = []
+    final_window = 0
+    symbols_override_count = len(override_cleaned)
+
+    for idx, window_days in enumerate(attempt_days):
+        window_attempts.append(window_days)
+        try:
+            start_iso, end_iso, last_day = calc_daily_window(trading_client, window_days)
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to determine trading window for %d days: %s",
+                window_days,
+                exc,
+            )
+            start_iso, end_iso, last_day = _fallback_daily_window(window_days)
+            LOGGER.info(
+                "Using fallback trading window for %d days (%s → %s)",
+                window_days,
+                start_iso,
+                end_iso,
+            )
+        LOGGER.info(
+            "Requesting %d trading days ending %s (%s → %s)",
+            window_days,
+            last_day,
+            start_iso,
+            end_iso,
+        )
+        use_verify = bool(verify_request) and idx == 0
+        bars_df_candidate, metrics_candidate, prescreened_candidate = _fetch_daily_bars(
+            data_client,
+            symbols,
+            days=window_days,
+            start_iso=start_iso,
+            end_iso=end_iso,
+            feed=feed,
+            fetch_mode=fetch_mode,
+            batch_size=max(1, batch_size),
+            max_workers=max(1, max_workers),
+            min_history=min_history,
+            bars_source=bars_source,
+            verify_hook=verify_hook_fn if use_verify else None,
+            preview_callback=preview_writer if use_verify else None,
+        )
+
+        metrics_candidate = metrics_candidate or {}
+        for key, value in metrics_candidate.items():
+            if isinstance(value, list):
+                continue
+            if key in {"bars_rows_total", "symbols_with_bars", "symbols_no_bars"}:
+                continue
+            agg_metrics[key] = agg_metrics.get(key, 0) + int(value)
+
+        bars_df = bars_df_candidate
+        fetch_metrics = metrics_candidate
+        prescreened = prescreened_candidate
+        final_window = window_days
+
+        if int(metrics_candidate.get("bars_rows_total", 0)) > 0:
+            break
+        if idx < len(attempt_days) - 1:
+            LOGGER.info(
+                "No bars returned for %d-day window; retrying with %d-day fallback",
+                window_days,
+                attempt_days[idx + 1],
+            )
+
+    agg_metrics["bars_rows_total"] = _coerce_int(fetch_metrics.get("bars_rows_total", 0))
+    agg_metrics["symbols_with_bars"] = _coerce_int(fetch_metrics.get("symbols_with_bars", 0))
+    agg_metrics["symbols_no_bars"] = _coerce_int(fetch_metrics.get("symbols_no_bars", 0))
+    agg_metrics["symbols_no_bars_sample"] = list(
+        fetch_metrics.get("symbols_no_bars_sample", []) or []
     )
+    agg_metrics["window_attempts"] = window_attempts
+    agg_metrics["window_used"] = final_window
+    agg_metrics["symbols_override"] = symbols_override_count
+
     LOGGER.info(
         "Bars fetch metrics: batches=%d paged=%d pages=%d rows=%d symbols_with_bars=%d",
-        int(fetch_metrics.get("batches_total", 0)),
-        int(fetch_metrics.get("batches_paged", 0)),
-        int(fetch_metrics.get("pages_total", 0)),
-        int(fetch_metrics.get("bars_rows_total", 0)),
-        int(fetch_metrics.get("symbols_with_bars", 0)),
+        int(agg_metrics.get("batches_total", 0)),
+        int(agg_metrics.get("batches_paged", 0)),
+        int(agg_metrics.get("pages_total", 0)),
+        int(agg_metrics.get("bars_rows_total", 0)),
+        int(agg_metrics.get("symbols_with_bars", 0)),
     )
-    missing_sample = fetch_metrics.get("symbols_no_bars_sample", [])
+    LOGGER.info(
+        "Bars window attempts: %s → used=%d",
+        window_attempts or ["<none>"],
+        final_window,
+    )
+    if agg_metrics.get("http_404_batches"):
+        LOGGER.info(
+            "Bars HTTP 404 batches: %d",
+            int(agg_metrics.get("http_404_batches", 0)),
+        )
+    if agg_metrics.get("http_empty_batches"):
+        LOGGER.info(
+            "Bars HTTP empty batches: %d",
+            int(agg_metrics.get("http_empty_batches", 0)),
+        )
+    missing_sample = agg_metrics.get("symbols_no_bars_sample", [])
     if missing_sample:
         LOGGER.info("Symbols without bars (sample): %s", list(missing_sample)[:10])
-    if fetch_metrics.get("fallback_batches"):
+    if agg_metrics.get("fallback_batches"):
         LOGGER.info(
             "Fallback batches invoked: %d",
-            int(fetch_metrics.get("fallback_batches", 0)),
+            int(agg_metrics.get("fallback_batches", 0)),
         )
-    if fetch_metrics.get("insufficient_history"):
+    if agg_metrics.get("insufficient_history"):
         LOGGER.info(
             "Symbols dropped for insufficient history: %d",
-            int(fetch_metrics.get("insufficient_history", 0)),
+            int(agg_metrics.get("insufficient_history", 0)),
         )
 
     if filtered_skips:
         for sym, reason in filtered_skips.items():
             prescreened.setdefault(sym, reason)
 
-    if not bars_df.empty:
-        bars_df = bars_df.copy()
-        if "symbol" not in bars_df.columns:
-            LOGGER.error(
-                "Normalized bars missing 'symbol' unexpectedly; skipping merge"
-            )
-            return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, fetch_metrics, prescreened, asset_metrics
-        if liquidity_top and liquidity_top > 0:
+    if bars_df.empty:
+        return bars_df, asset_meta, agg_metrics, prescreened, asset_metrics
+
+    bars_df = bars_df.copy()
+    if "symbol" not in bars_df.columns:
+        LOGGER.error("Normalized bars missing 'symbol' unexpectedly; skipping merge")
+        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, agg_metrics, prescreened, asset_metrics
+    if liquidity_top and liquidity_top > 0:
+        try:
+            bars_df.sort_values(["symbol", "timestamp"], inplace=True)
             try:
-                bars_df.sort_values(["symbol", "timestamp"], inplace=True)
-                try:
-                    recent = bars_df.groupby("symbol", group_keys=False).apply(
-                        lambda g: g.tail(20), include_groups=False
-                    )
-                except TypeError:
-                    recent = bars_df.groupby("symbol", group_keys=False).apply(lambda g: g.tail(20))
-                recent = recent.copy()
-                recent["volume"] = pd.to_numeric(recent["volume"], errors="coerce")
-                adv = recent.groupby("symbol")["volume"].mean().fillna(0)
-                top_symbols = set(adv.sort_values(ascending=False).head(liquidity_top).index)
-                if top_symbols:
-                    bars_df = bars_df[bars_df["symbol"].isin(top_symbols)]
-                    metrics["symbols_with_bars"] = min(
-                        int(metrics.get("symbols_with_bars", 0)), len(top_symbols)
-                    )
-            except Exception as exc:
-                LOGGER.warning("Failed liquidity filter computation: %s", exc)
-        bars_df = merge_asset_metadata(bars_df, asset_meta)
-    return bars_df, asset_meta, fetch_metrics, prescreened, asset_metrics
+                recent = bars_df.groupby("symbol", group_keys=False).apply(
+                    lambda g: g.tail(20), include_groups=False
+                )
+            except TypeError:
+                recent = bars_df.groupby("symbol", group_keys=False).apply(lambda g: g.tail(20))
+            recent = recent.copy()
+            recent["volume"] = pd.to_numeric(recent["volume"], errors="coerce")
+            adv = recent.groupby("symbol")["volume"].mean().fillna(0)
+            top_symbols = set(adv.sort_values(ascending=False).head(liquidity_top).index)
+            if top_symbols:
+                bars_df = bars_df[bars_df["symbol"].isin(top_symbols)]
+                agg_metrics["symbols_with_bars"] = min(
+                    int(agg_metrics.get("symbols_with_bars", 0)), len(top_symbols)
+                )
+        except Exception as exc:
+            LOGGER.warning("Failed liquidity filter computation: %s", exc)
+    bars_df = merge_asset_metadata(bars_df, asset_meta)
+    return bars_df, asset_meta, agg_metrics, prescreened, asset_metrics
 
 
 def _ensure_logger() -> None:
@@ -1217,7 +1469,6 @@ def run_screener(
         for sym, reason in (prefiltered_skips or {}).items()
     }
     if prefiltered_map:
-        stats["symbols_in"] += len(prefiltered_map)
         for sym, reason in prefiltered_map.items():
             if reason in skip_reasons:
                 skip_reasons[reason] += 1
@@ -1230,10 +1481,16 @@ def run_screener(
             prepared = prepared[~prepared["symbol"].isin(prefiltered_map.keys())]
 
     if prepared.empty:
+        stats["symbols_in"] = 0
         LOGGER.info("No input rows supplied to screener; outputs will be empty.")
     else:
+        unique_symbols = (
+            prepared["symbol"].astype(str).str.strip().str.upper().nunique()
+            if "symbol" in prepared.columns
+            else 0
+        )
+        stats["symbols_in"] = int(unique_symbols)
         for symbol, group in prepared.groupby("symbol"):
-            stats["symbols_in"] += 1
             if group.empty:
                 skip_reasons["NAN_DATA"] += 1
                 gate_counters["nan_data"] += 1
@@ -1498,8 +1755,17 @@ def write_outputs(
             "symbols_with_bars": _coerce_int(fetch_payload.get("symbols_with_bars", 0)),
             "symbols_no_bars": _coerce_int(fetch_payload.get("symbols_no_bars", 0)),
             "rate_limited": _coerce_int(fetch_payload.get("rate_limited", 0)),
+            "http_404_batches": _coerce_int(fetch_payload.get("http_404_batches", 0)),
+            "http_empty_batches": _coerce_int(fetch_payload.get("http_empty_batches", 0)),
+            "window_used": _coerce_int(fetch_payload.get("window_used", 0)),
+            "symbols_override": _coerce_int(fetch_payload.get("symbols_override", 0)),
         }
     )
+    window_attempts = fetch_payload.get("window_attempts", [])
+    if isinstance(window_attempts, list):
+        metrics["window_attempts"] = window_attempts
+    else:
+        metrics["window_attempts"] = []
     asset_payload = asset_metrics or {}
     metrics.update(
         {
@@ -1540,6 +1806,18 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--days", type=int, default=750, help="Number of trading days to request")
     parser.add_argument(
+        "--min-days-fallback",
+        type=int,
+        default=365,
+        help="Fallback trading-day window when the primary request returns no bars",
+    )
+    parser.add_argument(
+        "--min-days-final",
+        type=int,
+        default=90,
+        help="Final trading-day window if the fallback still returns no bars",
+    )
+    parser.add_argument(
         "--feed",
         choices=["iex", "sip"],
         default=DEFAULT_FEED,
@@ -1574,6 +1852,10 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         type=int,
         help="Optional symbol limit for development/testing",
     )
+    parser.add_argument(
+        "--symbols",
+        help="Comma-separated list of symbols to override the Alpaca universe",
+    )
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     parser.add_argument("--min-history", type=int, default=DEFAULT_MIN_HISTORY)
     parser.add_argument(
@@ -1593,6 +1875,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Exclude OTC symbols from the universe (default: true)",
+    )
+    parser.add_argument(
+        "--verify-request",
+        action="store_true",
+        help="Log and capture the first bars request for debugging",
     )
     parsed = parser.parse_args(list(argv) if argv is not None else None)
     if getattr(parsed, "source", None):
@@ -1616,6 +1903,10 @@ def main(
         return 2
     base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
     now = datetime.now(timezone.utc)
+
+    symbols_override: Optional[List[str]] = None
+    if args.symbols:
+        symbols_override = [s.strip() for s in str(args.symbols).split(",") if s.strip()]
 
     frame: pd.DataFrame
     asset_meta: Dict[str, dict] = {}
@@ -1659,7 +1950,10 @@ def main(
                 exclude_otc=args.exclude_otc,
                 iex_only=args.iex_only,
                 liquidity_top=args.liquidity_top,
-                now=now,
+                symbols_override=symbols_override,
+                verify_request=args.verify_request,
+                min_days_fallback=args.min_days_fallback,
+                min_days_final=args.min_days_final,
             )
     top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters = run_screener(
         frame,
