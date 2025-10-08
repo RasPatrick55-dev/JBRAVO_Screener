@@ -392,11 +392,12 @@ def _fetch_daily_bars(
         "rate_limited": 0,
         "http_404_batches": 0,
         "http_empty_batches": 0,
-        "symbols_in": 0,
+        "symbols_in": len(unique_symbols),
         "raw_bars_count": 0,
         "parsed_rows_count": 0,
     }
     prescreened: dict[str, str] = {}
+    symbols_with_history: set[str] = set()
 
     frames: list[pd.DataFrame] = []
 
@@ -482,7 +483,8 @@ def _fetch_daily_bars(
                     verify_hook=hook,
                 )
                 raw_bars_count = len(raw)
-                bars_df = ensure_symbol_column(to_bars_df(raw)).reset_index(drop=True)
+                bars_df = to_bars_df(raw)
+                bars_df = ensure_symbol_column(bars_df).reset_index(drop=True)
 
                 parsed_rows_count = int(bars_df.shape[0])
                 if raw_bars_count > 0 and parsed_rows_count == 0:
@@ -542,7 +544,8 @@ def _fetch_daily_bars(
                     assert token_bucket is not None
                     token_bucket.acquire()
                     response = data_client.get_stock_bars(request)
-                    df = ensure_symbol_column(to_bars_df(response))
+                    df = to_bars_df(response)
+                    df = ensure_symbol_column(df)
                     if not df.empty and "symbol" in df.columns and symbol:
                         df["symbol"] = df["symbol"].fillna(symbol)
                         mask = df["symbol"].str.strip() == ""
@@ -646,7 +649,6 @@ def _fetch_daily_bars(
         metrics["pages_total"] += single_pages
         for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
             metrics[key] += int(single_metrics.get(key, 0))
-        metrics["symbols_in"] += int(single_metrics.get("symbols_in", 0))
         metrics["raw_bars_count"] += int(single_metrics.get("raw_bars_count", 0))
         metrics["parsed_rows_count"] += int(single_metrics.get("parsed_rows_count", 0))
         prescreened.update(single_prescreened)
@@ -682,7 +684,6 @@ def _fetch_daily_bars(
                     metrics["pages_total"] += fallback_pages
                     for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
                         metrics[key] += int(fallback_metrics.get(key, 0))
-                    metrics["symbols_in"] += int(fallback_metrics.get("symbols_in", 0))
                     metrics["raw_bars_count"] += int(
                         fallback_metrics.get("raw_bars_count", 0)
                     )
@@ -692,7 +693,8 @@ def _fetch_daily_bars(
                     prescreened.update(fallback_prescreened)
                     continue
                 raw_bars_count = len(raw)
-                bars_df = ensure_symbol_column(to_bars_df(raw)).reset_index(drop=True)
+                bars_df = to_bars_df(raw)
+                bars_df = ensure_symbol_column(bars_df).reset_index(drop=True)
 
                 parsed_rows_count = int(bars_df.shape[0])
                 if raw_bars_count > 0 and parsed_rows_count == 0:
@@ -708,7 +710,6 @@ def _fetch_daily_bars(
                 metrics["rate_limited"] += int(http_stats.get("rate_limited", 0))
                 metrics["http_404_batches"] += int(http_stats.get("http_404_batches", 0))
                 metrics["http_empty_batches"] += int(http_stats.get("http_empty_batches", 0))
-                metrics["symbols_in"] += len(batch)
                 metrics["raw_bars_count"] += raw_bars_count
                 metrics["parsed_rows_count"] += parsed_rows_count
 
@@ -726,16 +727,11 @@ def _fetch_daily_bars(
                 else:
                     keep = set(hist.loc[hist["n"] >= min_history, "symbol"].tolist())
                     insufficient = set(hist.loc[hist["n"] < min_history, "symbol"].tolist())
+                symbols_with_history.update(keep)
                 for sym in insufficient:
                     prescreened.setdefault(sym, "INSUFFICIENT_HISTORY")
                 metrics["insufficient_history"] += len(insufficient)
                 bars_df = bars_df[bars_df["symbol"].isin(keep)] if keep else bars_df.iloc[0:0]
-                metrics["symbols_with_bars"] = metrics.get("symbols_with_bars", 0) + len(keep)
-                metrics["symbols_no_bars"] = max(
-                    int(metrics.get("symbols_in", 0))
-                    - int(metrics.get("symbols_with_bars", 0)),
-                    0,
-                )
                 metrics["bars_rows_total"] = metrics.get("bars_rows_total", 0) + int(
                     len(bars_df)
                 )
@@ -762,7 +758,6 @@ def _fetch_daily_bars(
             if paged:
                 metrics["batches_paged"] += 1
             if batch_success and batch_frames:
-                metrics["symbols_in"] += len(batch)
                 parsed_rows = sum(frame.shape[0] for frame in batch_frames)
                 metrics["raw_bars_count"] += int(parsed_rows)
                 metrics["parsed_rows_count"] += int(parsed_rows)
@@ -785,7 +780,6 @@ def _fetch_daily_bars(
             metrics["pages_total"] += fallback_pages
             for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
                 metrics[key] += int(fallback_metrics.get(key, 0))
-            metrics["symbols_in"] += int(fallback_metrics.get("symbols_in", 0))
             metrics["raw_bars_count"] += int(fallback_metrics.get("raw_bars_count", 0))
             metrics["parsed_rows_count"] += int(
                 fallback_metrics.get("parsed_rows_count", 0)
@@ -796,22 +790,20 @@ def _fetch_daily_bars(
     combined = _normalize_bars_frame(combined)
     combined = ensure_symbol_column(combined)
     if not combined.empty:
-        try:
+        combined = combined.dropna(subset=["timestamp"])
+        if not combined.empty:
             combined = (
-                combined.groupby("symbol", group_keys=False)
-                .apply(lambda g: g.sort_values("timestamp").tail(days), include_groups=False)
+                combined.sort_values("timestamp")
+                .groupby("symbol", as_index=False, group_keys=False)
+                .tail(days)
             )
-        except TypeError:  # pragma: no cover - for older pandas without include_groups
-            combined = combined.groupby("symbol", group_keys=False).apply(
-                lambda g: g.sort_values("timestamp").tail(days)
-            )
-        combined = combined.reset_index(drop=True)
+        combined = ensure_symbol_column(combined).reset_index(drop=True)
 
     required_cols = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
     missing_cols = [col for col in required_cols if col not in combined.columns]
     if missing_cols:
         LOGGER.error(
-            "Pre-gating frame missing columns: %s; aborting gating for this run",
+            "Pre-gating frame missing columns: %s; gating skipped.",
             missing_cols,
         )
         combined = pd.DataFrame(columns=required_cols)
@@ -834,6 +826,7 @@ def _fetch_daily_bars(
     else:
         keep = set(hist["symbol"].tolist()) if not hist.empty else set()
         insufficient = set()
+    symbols_with_history = keep
     existing_insufficient = {
         sym for sym, reason in prescreened.items() if reason == "INSUFFICIENT_HISTORY"
     }
@@ -847,7 +840,7 @@ def _fetch_daily_bars(
     if insufficient:
         metrics["insufficient_history"] = len(insufficient)
 
-    symbols_with_bars = len(keep)
+    symbols_with_bars = len(symbols_with_history)
     symbols_no_bars = max(len(unique_symbols) - symbols_with_bars, 0)
     bars_rows_total = int(len(combined))
     metrics.update(
@@ -873,9 +866,9 @@ def merge_asset_metadata(bars_df: pd.DataFrame, asset_meta: Dict[str, dict]) -> 
 
     if asset_meta:
         meta_df = pd.DataFrame.from_dict(asset_meta, orient="index")
+        meta_df = meta_df.reindex(columns=["exchange", "asset_class", "tradable"])
+        meta_df = meta_df.rename_axis("symbol").reset_index()
         if not meta_df.empty:
-            meta_df = meta_df.reindex(columns=["exchange", "asset_class", "tradable"])
-            meta_df = meta_df.rename_axis("symbol").reset_index()
             meta_df["symbol"] = meta_df["symbol"].astype(str).str.upper()
             m_exchange = dict(zip(meta_df["symbol"], meta_df["exchange"]))
             m_class = dict(zip(meta_df["symbol"], meta_df["asset_class"]))
@@ -1059,8 +1052,6 @@ def _load_alpaca_universe(
                 continue
             filtered_symbols.append(sym)
             seen.add(sym)
-        if limit is not None and limit > 0:
-            filtered_symbols = filtered_symbols[:limit]
         total_tradable = len(raw_symbols)
         LOGGER.info(
             "Universe sample size: %d (of %d tradable equities)",
@@ -1072,19 +1063,16 @@ def _load_alpaca_universe(
     asset_metrics["assets_total"] = int(asset_metrics.get("assets_total", len(asset_meta)))
     asset_metrics["assets_after_filters"] = len(filtered_symbols)
 
-    if asset_meta:
-        asset_meta = {
-            sym: asset_meta.get(sym, {})
-            for sym in filtered_symbols
-            if sym in asset_meta
-        }
-
     symbols = filtered_symbols
+    sampled = symbols[:limit] if limit else symbols
 
-    if not symbols:
+    if asset_meta:
+        asset_meta = {sym: asset_meta.get(sym, {}) for sym in sampled if sym in asset_meta}
+
+    if not sampled:
         return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, empty_metrics, {}, asset_metrics
 
-    empty_metrics["symbols_in"] = len(symbols)
+    empty_metrics["symbols_in"] = len(sampled)
 
     data_client: Optional["StockHistoricalDataClient"] = None
     if (bars_source or "http").strip().lower() == "sdk":
@@ -1152,7 +1140,7 @@ def _load_alpaca_universe(
         use_verify = bool(verify_request) and idx == 0
         bars_df_candidate, metrics_candidate, prescreened_candidate = _fetch_daily_bars(
             data_client,
-            symbols,
+            sampled,
             days=window_days,
             start_iso=start_iso,
             end_iso=end_iso,
@@ -1257,13 +1245,13 @@ def _load_alpaca_universe(
     if liquidity_top and liquidity_top > 0:
         try:
             bars_df.sort_values(["symbol", "timestamp"], inplace=True)
-            try:
-                recent = bars_df.groupby("symbol", group_keys=False).apply(
-                    lambda g: g.tail(20), include_groups=False
-                )
-            except TypeError:
-                recent = bars_df.groupby("symbol", group_keys=False).apply(lambda g: g.tail(20))
-            recent = recent.copy()
+            recent = (
+                bars_df.dropna(subset=["timestamp"])
+                .sort_values("timestamp")
+                .groupby("symbol", as_index=False, group_keys=False)
+                .tail(20)
+            )
+            recent = ensure_symbol_column(recent).copy()
             recent["volume"] = pd.to_numeric(recent["volume"], errors="coerce")
             adv = recent.groupby("symbol")["volume"].mean().fillna(0)
             top_symbols = set(adv.sort_values(ascending=False).head(liquidity_top).index)
