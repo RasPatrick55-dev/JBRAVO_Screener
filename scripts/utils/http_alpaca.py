@@ -10,6 +10,23 @@ import requests
 from .env import market_data_base_url
 
 
+def _flatten_bars_payload(bars: object) -> List[dict]:
+    if isinstance(bars, list):
+        return list(bars)
+    if isinstance(bars, dict):
+        flat: List[dict] = []
+        for symbol, items in bars.items():
+            for bar in items or []:
+                if not isinstance(bar, dict):
+                    continue
+                record = bar
+                if "S" not in record and "symbol" not in record:
+                    record = {**record, "S": symbol}
+                flat.append(record)
+        return flat
+    return []
+
+
 def fetch_bars_http(
     symbols: List[str],
     start: str,
@@ -59,21 +76,19 @@ def fetch_bars_http(
                 break
             resp.raise_for_status()
             data = resp.json()
-            bars = data.get("bars", []) if isinstance(data, dict) else []
-            if not bars:
-                http_empty += 1
+            bars_payload = data.get("bars", []) if isinstance(data, dict) else []
+            flattened = _flatten_bars_payload(bars_payload)
+            if flattened:
+                out.extend(flattened)
             else:
-                out.extend(bars)
+                http_empty += 1
             page = data.get("next_page_token") if isinstance(data, dict) else None
             if not page:
                 break
             time.sleep(sleep_s)
         time.sleep(sleep_s)
-    total = len(out)
     return out, {
         "http_404_batches": http_404,
         "http_empty_batches": http_empty,
         "rate_limited": rate_limited,
-        "raw_bars_count": total,
-        "parsed_rows_count": total,
     }
