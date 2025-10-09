@@ -373,7 +373,7 @@ def _fetch_daily_bars(
     run_date: Optional[str] = None,
     reuse_cache: bool = True,
     verify_hook: Optional[Callable[[str, dict[str, object]], None]] = None,
-) -> Tuple[pd.DataFrame, dict[str, int | list[str]], Dict[str, str]]:
+) -> Tuple[pd.DataFrame, dict[str, Any], Dict[str, str]]:
     if not symbols:
         return pd.DataFrame(columns=INPUT_COLUMNS), {
             "batches_total": 0,
@@ -479,7 +479,7 @@ def _fetch_daily_bars(
 
     unique_symbols = [str(sym or "").strip().upper() for sym in symbols if sym]
     unique_symbols = list(dict.fromkeys(unique_symbols))
-    metrics: dict[str, int | list[str]] = {
+    metrics: dict[str, Any] = {
         "batches_total": 0,
         "batches_paged": 0,
         "pages_total": 0,
@@ -497,6 +497,7 @@ def _fetch_daily_bars(
         "parsed_rows_count": 0,
         "cache_hits": 0,
         "cache_misses": 0,
+        "cache": {"batches_hit": 0, "batches_miss": 0},
     }
     prescreened: dict[str, str] = {}
     symbols_with_history: set[str] = set()
@@ -765,6 +766,10 @@ def _fetch_daily_bars(
                     normalized_cached = _normalize_bars_frame(cached_frame)
                     rows_cached = int(normalized_cached.shape[0])
                     metrics["cache_hits"] += 1
+                    metrics.setdefault("cache", {})
+                    metrics["cache"]["batches_hit"] = int(
+                        metrics["cache"].get("batches_hit", 0)
+                    ) + 1
                     metrics["raw_bars_count"] += rows_cached
                     metrics["parsed_rows_count"] += rows_cached
                     metrics["bars_rows_total"] = metrics.get("bars_rows_total", 0) + rows_cached
@@ -814,6 +819,11 @@ def _fetch_daily_bars(
                     )
                     continue
                 metrics["cache_misses"] += 1
+                if reuse_cache:
+                    metrics.setdefault("cache", {})
+                    metrics["cache"]["batches_miss"] = int(
+                        metrics["cache"].get("batches_miss", 0)
+                    ) + 1
                 try:
                     hook = _acquire_verify_hook()
                     raw, http_stats = fetch_bars_http(
@@ -1147,9 +1157,9 @@ def _load_alpaca_universe(
 ) -> Tuple[
     pd.DataFrame,
     Dict[str, dict],
-    dict[str, int | list[str]],
+    dict[str, Any],
     Dict[str, str],
-    dict[str, int | list[str]],
+    dict[str, Any],
 ]:
     empty_metrics = {
         "batches_total": 0,
@@ -1169,6 +1179,8 @@ def _load_alpaca_universe(
         "window_used": 0,
         "symbols_override": 0,
         "symbols_in": 0,
+        "universe_prefix_counts": {},
+        "cache": {"batches_hit": 0, "batches_miss": 0},
     }
     empty_asset_metrics = {
         "assets_total": 0,
@@ -1275,16 +1287,40 @@ def _load_alpaca_universe(
     asset_metrics["assets_total"] = int(asset_metrics.get("assets_total", len(asset_meta)))
     asset_metrics["assets_after_filters"] = len(filtered_symbols)
 
-    symbols = filtered_symbols
-    sampled = symbols[:limit] if limit else symbols
+    assets_df = pd.DataFrame({"symbol": filtered_symbols})
+    seed = int(pd.Timestamp.utcnow().strftime("%Y%m%d"))
+    if limit and len(assets_df) > limit:
+        universe_df = assets_df.sample(n=limit, random_state=seed)
+    else:
+        universe_df = assets_df.copy()
+
+    universe_df = universe_df.reset_index(drop=True)
+    prefix_counts = (
+        universe_df["symbol"].astype(str).str.upper().str[0].value_counts().to_dict()
+        if not universe_df.empty
+        else {}
+    )
+    agg_metrics["universe_prefix_counts"] = dict(prefix_counts)
+    if prefix_counts:
+        LOGGER.info("Universe prefix counts: %s", prefix_counts)
+        letter, count = max(prefix_counts.items(), key=lambda kv: kv[1])
+        share = count / max(len(universe_df), 1)
+        if share > 0.70:
+            LOGGER.warning(
+                "ALERT: Universe draw biased toward '%s' (%.1f%%)",
+                letter,
+                100 * share,
+            )
+
+    symbols = universe_df["symbol"].astype(str).str.upper().tolist()
 
     if asset_meta:
-        asset_meta = {sym: asset_meta.get(sym, {}) for sym in sampled if sym in asset_meta}
+        asset_meta = {sym: asset_meta.get(sym, {}) for sym in symbols if sym in asset_meta}
 
-    if not sampled:
+    if not symbols:
         return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, empty_metrics, {}, asset_metrics
 
-    empty_metrics["symbols_in"] = len(sampled)
+    empty_metrics["symbols_in"] = len(symbols)
 
     data_client: Optional["StockHistoricalDataClient"] = None
     if (bars_source or "http").strip().lower() == "sdk":
@@ -1314,13 +1350,18 @@ def _load_alpaca_universe(
     if not attempt_days:
         attempt_days.append(max(1, int(days)))
 
-    agg_metrics: dict[str, int | list[str]] = {}
+    agg_metrics: dict[str, Any] = {}
     for key, value in empty_metrics.items():
-        agg_metrics[key] = list(value) if isinstance(value, list) else int(value)
+        if isinstance(value, list):
+            agg_metrics[key] = list(value)
+        elif isinstance(value, dict):
+            agg_metrics[key] = dict(value)
+        else:
+            agg_metrics[key] = int(value)
 
     bars_df = pd.DataFrame(columns=BARS_COLUMNS)
     prescreened: Dict[str, str] = {}
-    fetch_metrics: dict[str, int | list[str]] = {}
+    fetch_metrics: dict[str, Any] = {}
     window_attempts: list[int] = []
     final_window = 0
     symbols_override_count = len(override_cleaned)
@@ -1352,7 +1393,7 @@ def _load_alpaca_universe(
         use_verify = bool(verify_request) and idx == 0
         bars_df_candidate, metrics_candidate, prescreened_candidate = _fetch_daily_bars(
             data_client,
-            sampled,
+            symbols,
             days=window_days,
             start_iso=start_iso,
             end_iso=end_iso,
@@ -1378,6 +1419,9 @@ def _load_alpaca_universe(
                 "raw_bars_count",
                 "parsed_rows_count",
             }:
+                continue
+            if isinstance(value, dict):
+                agg_metrics[key] = dict(value)
                 continue
             agg_metrics[key] = agg_metrics.get(key, 0) + int(value)
 
@@ -2271,8 +2315,8 @@ def write_outputs(
     status: str = "ok",
     now: Optional[datetime] = None,
     gate_counters: Optional[dict[str, Union[int, str]]] = None,
-    fetch_metrics: Optional[dict[str, int | list[str]]] = None,
-    asset_metrics: Optional[dict[str, int | list[str]]] = None,
+    fetch_metrics: Optional[dict[str, Any]] = None,
+    asset_metrics: Optional[dict[str, Any]] = None,
     ranker_cfg: Optional[Mapping[str, object]] = None,
     timings: Optional[Mapping[str, float]] = None,
 ) -> Path:
@@ -2380,6 +2424,12 @@ def write_outputs(
             "batches_total": _coerce_int(fetch_payload.get("batches_total", 0)),
         }
     )
+    prefix_counts_payload = fetch_payload.get("universe_prefix_counts")
+    if isinstance(prefix_counts_payload, dict):
+        metrics["universe_prefix_counts"] = {
+            str(k): int(v) for k, v in prefix_counts_payload.items()
+        }
+    cache_payload = fetch_payload.get("cache")
     cache_hits = metrics.get("cache_hits", 0)
     cache_misses = metrics.get("cache_misses", 0)
     if not cache_misses:
@@ -2389,9 +2439,20 @@ def write_outputs(
         except Exception:
             cache_misses = 0
         metrics["cache_misses"] = cache_misses
+    batches_hit = int(cache_hits or 0)
+    batches_miss = int(cache_misses or 0)
+    if isinstance(cache_payload, dict):
+        try:
+            batches_hit = max(batches_hit, int(cache_payload.get("batches_hit", 0)))
+        except Exception:
+            pass
+        try:
+            batches_miss = max(batches_miss, int(cache_payload.get("batches_miss", 0)))
+        except Exception:
+            pass
     metrics["cache"] = {
-        "batches_hit": int(cache_hits or 0),
-        "batches_miss": int(cache_misses or 0),
+        "batches_hit": batches_hit,
+        "batches_miss": batches_miss,
     }
     metrics["http"] = {
         "429": int(metrics.get("rate_limited", 0) or 0),
@@ -2600,8 +2661,8 @@ def main(
     LOGGER.info("[STAGE] fetch start")
     frame: pd.DataFrame
     asset_meta: Dict[str, dict] = {}
-    fetch_metrics: dict[str, int | list[str]] = {}
-    asset_metrics: dict[str, int | list[str]] = {}
+    fetch_metrics: dict[str, Any] = {}
+    asset_metrics: dict[str, Any] = {}
     prescreened: Dict[str, str] = {}
     if input_df is not None:
         frame = input_df
