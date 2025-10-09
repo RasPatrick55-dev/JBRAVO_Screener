@@ -126,6 +126,9 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     assert "reject_samples" in metrics
     assert "gate_fail_counts" in metrics
     assert "timings" in metrics
+    assert metrics.get("http") == {"429": 0, "404": 0, "empty_pages": 0}
+    assert metrics.get("cache") == {"batches_hit": 0, "batches_miss": 0}
+    assert metrics.get("universe_prefix_counts") == {}
     expected_gate_keys = {
         "failed_sma_stack",
         "failed_rsi",

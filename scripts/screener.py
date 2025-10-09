@@ -3001,6 +3001,8 @@ def write_outputs(
         metrics["universe_prefix_counts"] = {
             str(k): int(v) for k, v in prefix_counts_payload.items()
         }
+    else:
+        metrics["universe_prefix_counts"] = {}
     cache_payload = fetch_payload.get("cache")
     cache_hits = metrics.get("cache_hits", 0)
     cache_misses = metrics.get("cache_misses", 0)

@@ -303,6 +303,10 @@ def refresh_latest_candidates() -> None:
                 metrics = json.load(fh) or {}
         else:
             metrics = {}
+        metrics.setdefault("universe_prefix_counts", {})
+        metrics.setdefault("http", {"429": 0, "404": 0, "empty_pages": 0})
+        metrics.setdefault("cache", {"batches_hit": 0, "batches_miss": 0})
+        metrics.setdefault("timings", {})
         metrics["last_run_utc"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         with metrics_path.open("w", encoding="utf-8") as fh:
             json.dump(metrics, fh)
