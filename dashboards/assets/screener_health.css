@@ -42,3 +42,40 @@
 .sh-kpi table {
   color: inherit;
 }
+
+.sh-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.sh-metric-card {
+  background: rgba(18, 20, 30, 0.85);
+  border-radius: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+}
+
+.sh-metric-card h4 {
+  margin: 0 0 6px 0;
+  font-size: 0.9rem;
+  color: #9aa4bf;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sh-metric-pre {
+  background: rgba(12, 14, 22, 0.95);
+  color: #d7d9e3;
+  font-family: "Source Code Pro", monospace;
+  font-size: 0.78rem;
+  border-radius: 6px;
+  padding: 8px;
+  margin: 0;
+  min-height: 90px;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+}

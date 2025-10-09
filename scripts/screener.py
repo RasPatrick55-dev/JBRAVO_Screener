@@ -567,6 +567,12 @@ def _fetch_daily_bars(
         "cache_hits": 0,
         "cache_misses": 0,
         "cache": {"batches_hit": 0, "batches_miss": 0},
+        "http": {
+            "requests": 0,
+            "rows": 0,
+            "rate_limit_hits": 0,
+            "retries": 0,
+        },
     }
     prescreened: dict[str, str] = {}
     symbols_with_history: set[str] = set()
@@ -636,6 +642,9 @@ def _fetch_daily_bars(
             "http_empty_batches": 0,
             "raw_bars_count": 0,
             "parsed_rows_count": 0,
+            "http_requests": 0,
+            "http_rows": 0,
+            "http_retries": 0,
         }
         def _merge_metrics(payload: dict[str, int]) -> None:
             for key, value in (payload or {}).items():
@@ -676,11 +685,16 @@ def _fetch_daily_bars(
                 _write_preview(raw, bars_df)
                 stats_block = {
                     "symbols_in": 1,
-                    "rate_limited": int(http_stats.get("rate_limited", 0)),
+                    "rate_limited": int(
+                        http_stats.get("rate_limit_hits", http_stats.get("rate_limited", 0))
+                    ),
                     "http_404_batches": int(http_stats.get("http_404_batches", 0)),
                     "http_empty_batches": int(http_stats.get("http_empty_batches", 0)),
                     "raw_bars_count": raw_bars_count,
                     "parsed_rows_count": parsed_rows_count,
+                    "http_requests": int(http_stats.get("requests", 0)),
+                    "http_rows": int(http_stats.get("rows", parsed_rows_count)),
+                    "http_retries": int(http_stats.get("retries", 0)),
                 }
                 return symbol, bars_df, stats_block
             except Exception as exc:  # pragma: no cover - network errors hit in integration
@@ -696,6 +710,9 @@ def _fetch_daily_bars(
                         "http_empty_batches": 0,
                         "raw_bars_count": 0,
                         "parsed_rows_count": 0,
+                        "http_requests": 0,
+                        "http_rows": 0,
+                        "http_retries": 0,
                     },
                 )
 
@@ -738,6 +755,9 @@ def _fetch_daily_bars(
                             "chunks": 1,
                             "raw_bars_count": parsed_count,
                             "parsed_rows_count": parsed_count,
+                            "http_requests": 1,
+                            "http_rows": parsed_count,
+                            "http_retries": 0,
                         },
                     )
                 except Exception as exc:  # pragma: no cover - network errors hit in integration
@@ -762,6 +782,9 @@ def _fetch_daily_bars(
                 "http_empty_batches": 0,
                 "raw_bars_count": 0,
                 "parsed_rows_count": 0,
+                "http_requests": 0,
+                "http_rows": 0,
+                "http_retries": 0,
             }
 
         worker = _http_worker if use_http else _sdk_worker
@@ -823,6 +846,12 @@ def _fetch_daily_bars(
             metrics[key] += int(single_metrics.get(key, 0))
         metrics["raw_bars_count"] += int(single_metrics.get("raw_bars_count", 0))
         metrics["parsed_rows_count"] += int(single_metrics.get("parsed_rows_count", 0))
+        metrics["http"]["requests"] += int(single_metrics.get("http_requests", 0))
+        metrics["http"]["rows"] += int(single_metrics.get("http_rows", 0))
+        metrics["http"]["rate_limit_hits"] += int(
+            single_metrics.get("rate_limit_hits", single_metrics.get("rate_limited", 0))
+        )
+        metrics["http"]["retries"] += int(single_metrics.get("http_retries", 0))
         prescreened.update(single_prescreened)
     else:
         batches = list(_chunked(unique_symbols, max(1, batch_size)))
@@ -929,6 +958,16 @@ def _fetch_daily_bars(
                     metrics["parsed_rows_count"] += int(
                         fallback_metrics.get("parsed_rows_count", 0)
                     )
+                    metrics["http"]["requests"] += int(
+                        fallback_metrics.get("http_requests", 0)
+                    )
+                    metrics["http"]["rows"] += int(fallback_metrics.get("http_rows", 0))
+                    metrics["http"]["rate_limit_hits"] += int(
+                        fallback_metrics.get("rate_limit_hits", fallback_metrics.get("rate_limited", 0))
+                    )
+                    metrics["http"]["retries"] += int(
+                        fallback_metrics.get("http_retries", 0)
+                    )
                     prescreened.update(fallback_prescreened)
                     keep_fallback = (
                         set(fallback_frame["symbol"].astype(str).str.upper().unique())
@@ -974,6 +1013,12 @@ def _fetch_daily_bars(
                     LOGGER.error("Bars normalized but missing columns: %s", missing)
                     bars_df = bars_df.iloc[0:0]
                 _write_preview(raw, bars_df)
+                metrics["http"]["requests"] += int(http_stats.get("requests", 0))
+                metrics["http"]["rows"] += int(http_stats.get("rows", parsed_rows_count))
+                metrics["http"]["rate_limit_hits"] += int(
+                    http_stats.get("rate_limit_hits", http_stats.get("rate_limited", 0))
+                )
+                metrics["http"]["retries"] += int(http_stats.get("retries", 0))
                 pages = int(http_stats.get("pages", 0)) if http_stats else 0
                 metrics["pages_total"] += pages
                 if pages > 1:
@@ -1073,6 +1118,12 @@ def _fetch_daily_bars(
             metrics["parsed_rows_count"] += int(
                 fallback_metrics.get("parsed_rows_count", 0)
             )
+            metrics["http"]["requests"] += int(fallback_metrics.get("http_requests", 0))
+            metrics["http"]["rows"] += int(fallback_metrics.get("http_rows", 0))
+            metrics["http"]["rate_limit_hits"] += int(
+                fallback_metrics.get("rate_limit_hits", fallback_metrics.get("rate_limited", 0))
+            )
+            metrics["http"]["retries"] += int(fallback_metrics.get("http_retries", 0))
             prescreened.update(fallback_prescreened)
 
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
@@ -2079,6 +2130,47 @@ def _write_coverage_table(path: Path, coverage: Mapping[str, Mapping[str, object
     _write_csv_atomic(path, frame)
 
 
+def _normalize_timings(timings: Optional[Mapping[str, object]] = None) -> dict[str, float]:
+    base_keys = {
+        "fetch_secs": 0.0,
+        "feature_secs": 0.0,
+        "rank_secs": 0.0,
+        "gates_secs": 0.0,
+    }
+    normalized: dict[str, float] = {key: float(value) for key, value in base_keys.items()}
+    extras: dict[str, float] = {}
+    for key, value in (timings or {}).items():
+        try:
+            val = round(float(value), 3)
+        except Exception:
+            continue
+        if key in normalized:
+            normalized[key] = val
+        else:
+            extras[key] = val
+    normalized.update(extras)
+    return normalized
+
+
+def _metrics_defaults() -> dict[str, Any]:
+    return {
+        "symbols_in": 0,
+        "symbols_with_bars": 0,
+        "bars_rows_total": 0,
+        "rows": 0,
+        "universe_prefix_counts": {},
+        "gate_fail_counts": {},
+        "timings": _normalize_timings({}),
+        "http": {
+            "requests": 0,
+            "rows": 0,
+            "rate_limit_hits": 0,
+            "retries": 0,
+        },
+        "cache": {"batches_hit": 0, "batches_miss": 0},
+    }
+
+
 def _merge_dict(target: MutableMapping[str, Any], payload: Mapping[str, Any]) -> MutableMapping[str, Any]:
     for key, value in payload.items():
         if isinstance(value, Mapping):
@@ -2104,6 +2196,7 @@ def _update_metrics_file(base_dir: Path, payload: Mapping[str, Any]) -> Path:
             LOGGER.warning("Failed to read metrics from %s: %s", metrics_path, exc)
             existing = {}
     merged: dict[str, Any] = dict(existing)
+    _merge_dict(merged, _metrics_defaults())
     _merge_dict(merged, payload)
     _write_json_atomic(metrics_path, merged)
     return metrics_path
@@ -2280,6 +2373,22 @@ def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
     output_dir = base_dir / "data" / "bars" / feed / "1d" / last_day
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    existing_rows = 0
+    if output_dir.exists():
+        for existing_file in sorted(output_dir.glob("*.parquet")):
+            try:
+                if existing_file.stat().st_size == 0:
+                    continue
+                existing_rows += int(pd.read_parquet(existing_file).shape[0])
+            except Exception as exc:  # pragma: no cover - best effort only
+                LOGGER.debug("[DELTA] Could not inspect %s: %s", existing_file, exc)
+                continue
+            if existing_rows > 0:
+                break
+    if existing_rows > 0:
+        LOGGER.info("[DELTA] No new bars for %s; skipping fetch.", last_day)
+        return 0
+
     metrics = {
         "mode": "delta-update",
         "run_utc": run_utc,
@@ -2405,13 +2514,30 @@ def _run_build_symbol_stats(args: argparse.Namespace, base_dir: Path) -> int:
 
     elapsed = round(time.time() - start_time, 3)
     now = datetime.now(timezone.utc)
+    symbols_total = int(stats_df["symbol"].nunique()) if not stats_df.empty else 0
+    prefix_counts = (
+        stats_df["symbol"].astype("string").str.upper().str[0].value_counts().to_dict()
+        if not stats_df.empty
+        else {}
+    )
     metrics_payload = {
         "mode": "build-symbol-stats",
         "last_run_utc": _format_timestamp(now),
         "symbol_stats": {"count": int(stats_df.shape[0])},
+        "symbols_in": symbols_total,
         "symbols_with_bars": int(bars_df["symbol"].nunique()) if not bars_df.empty else 0,
         "bars_rows_total": int(bars_df.shape[0]),
-        "timings": {"symbol_stats_secs": elapsed},
+        "rows": 0,
+        "universe_prefix_counts": prefix_counts,
+        "gate_fail_counts": {},
+        "http": {
+            "requests": 0,
+            "rows": 0,
+            "rate_limit_hits": 0,
+            "retries": 0,
+        },
+        "cache": {"batches_hit": 0, "batches_miss": 0},
+        "timings": _normalize_timings({"feature_secs": elapsed}),
     }
     _update_metrics_file(base_dir, metrics_payload)
 
@@ -2535,17 +2661,37 @@ def _run_coarse_features(args: argparse.Namespace, base_dir: Path) -> int:
     coarse_path.parent.mkdir(parents=True, exist_ok=True)
     _write_csv_atomic(coarse_path, coarse_output)
 
+    symbols_total = int(eligible["symbol"].nunique()) if not eligible.empty else 0
+    prefix_counts = (
+        eligible["symbol"].astype("string").str.upper().str[0].value_counts().to_dict()
+        if not eligible.empty
+        else {}
+    )
+    timing_base = _normalize_timings(
+        {
+            "feature_secs": timing_info.get("feature_secs", 0.0),
+            "rank_secs": coarse_rank_elapsed,
+        }
+    )
+    timing_base["coarse_rank_secs"] = round(float(coarse_rank_elapsed), 3)
     metrics_payload = {
         "mode": "coarse-features",
         "last_run_utc": _format_timestamp(datetime.now(timezone.utc)),
+        "symbols_in": symbols_total,
         "symbols_with_bars": int(bars_df["symbol"].nunique()) if not bars_df.empty else 0,
         "bars_rows_total": int(bars_df.shape[0]),
+        "rows": int(coarse_output.shape[0]) if coarse_output is not None else 0,
         "gate_fail_counts": {"liquidity": max(liquidity_fail, 0)},
         "coarse_ranked": int(coarse_scored.shape[0]) if coarse_scored is not None else 0,
-        "timings": {
-            "feature_secs": round(float(timing_info.get("feature_secs", 0.0)), 3),
-            "coarse_rank_secs": round(float(coarse_rank_elapsed), 3),
+        "universe_prefix_counts": prefix_counts,
+        "http": {
+            "requests": 0,
+            "rows": 0,
+            "rate_limit_hits": 0,
+            "retries": 0,
         },
+        "cache": {"batches_hit": 0, "batches_miss": 0},
+        "timings": timing_base,
         "shortlist_path": str(coarse_path),
     }
     _update_metrics_file(base_dir, metrics_payload)
@@ -3531,10 +3677,29 @@ def write_outputs(
         "batches_hit": batches_hit,
         "batches_miss": batches_miss,
     }
+    http_payload = fetch_payload.get("http")
+    if isinstance(http_payload, Mapping):
+        http_requests = int(http_payload.get("requests", 0) or 0)
+        http_rows = int(http_payload.get("rows", 0) or 0)
+        http_rl = int(
+            http_payload.get("rate_limit_hits", http_payload.get("rate_limited", 0) or 0)
+        )
+        http_retries = int(http_payload.get("retries", http_payload.get("http_retries", 0) or 0))
+    else:
+        http_requests = int(fetch_payload.get("http_requests", 0) or 0)
+        http_rows = int(fetch_payload.get("http_rows", 0) or 0)
+        http_rl = int(fetch_payload.get("rate_limit_hits", fetch_payload.get("rate_limited", 0) or 0))
+        http_retries = int(fetch_payload.get("http_retries", fetch_payload.get("retries", 0) or 0))
+    if not http_rows:
+        try:
+            http_rows = int(metrics.get("bars_rows_total", 0))
+        except Exception:
+            http_rows = 0
     metrics["http"] = {
-        "429": int(metrics.get("rate_limited", 0) or 0),
-        "404": int(metrics.get("http_404_batches", 0) or 0),
-        "empty_pages": int(metrics.get("http_empty_batches", 0) or 0),
+        "requests": http_requests,
+        "rows": http_rows,
+        "rate_limit_hits": http_rl,
+        "retries": http_retries,
     }
     window_attempts = fetch_payload.get("window_attempts", [])
     if isinstance(window_attempts, list):
@@ -3551,7 +3716,7 @@ def write_outputs(
         }
     )
     metrics["reject_samples"] = (reject_samples or [])[:10]
-    timing_payload = {k: round(float(v), 3) for k, v in (timings or {}).items()}
+    timing_payload = _normalize_timings(timings)
     metrics["timings"] = timing_payload
     _write_json_atomic(metrics_path, metrics)
 
