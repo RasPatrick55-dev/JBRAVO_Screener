@@ -256,14 +256,34 @@ def register_callbacks(app):
         top = _safe_csv(TOP_CSV)
         # augment top with ATR% and Why using scored CSV if ATR14/ADV20 missing
         if not top.empty:
-            if any(c not in top.columns for c in ["ATR14","ADV20","RSI14","MACD_HIST","AROON_UP","AROON_DN","ADX"]):
+            needed_cols = [
+                "ATR14",
+                "ADV20",
+                "RSI14",
+                "MACD_HIST",
+                "AROON_UP",
+                "AROON_DN",
+                "ADX",
+            ]
+            missing = [c for c in needed_cols if c not in top.columns]
+            if missing:
                 scored = _safe_csv(SCORED_CSV)
                 if not scored.empty:
-                    use_cols = [c for c in ["symbol","timestamp","ATR14","ADV20","RSI14","MACD_HIST","AROON_UP","AROON_DN","ADX"]
-                                if c in scored.columns]
-                    use = scored[use_cols].drop_duplicates(["symbol","timestamp"]) if use_cols else pd.DataFrame()
-                    if not use.empty:
-                        top = top.merge(use, on=["symbol","timestamp"], how="left")
+                    join_keys = [
+                        c
+                        for c in ["symbol", "timestamp"]
+                        if c in top.columns and c in scored.columns
+                    ]
+                    if not join_keys:
+                        join_keys = [
+                            c for c in ["symbol"] if c in top.columns and c in scored.columns
+                        ]
+                    indicator_cols = [c for c in needed_cols if c in scored.columns]
+                    select_cols = list(dict.fromkeys(join_keys + indicator_cols))
+                    if join_keys and select_cols:
+                        use = scored.loc[:, select_cols].drop_duplicates(subset=join_keys)
+                        if not use.empty:
+                            top = top.merge(use, on=join_keys, how="left")
             if "ATR14" in top.columns and "close" in top.columns:
                 top["ATR_pct"] = (top["ATR14"] / top["close"]).clip(lower=0)
             else:

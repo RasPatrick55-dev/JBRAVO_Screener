@@ -61,7 +61,7 @@ def test_pipeline_refresh_latest(tmp_path, monkeypatch):
     copied: dict[str, tuple[str, str]] = {}
 
     def fake_copy(src: str, dst: str) -> None:
-        copied["call"] = (src, dst)
+        copied["call"] = (str(src), str(dst))
         dest_path = tmp_path / dst
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_text("symbol\nAAPL\n", encoding="utf-8")
@@ -74,3 +74,7 @@ def test_pipeline_refresh_latest(tmp_path, monkeypatch):
     assert copied.get("call") == ("data/top_candidates.csv", "data/latest_candidates.csv")
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     assert "last_run_utc" in metrics and metrics["last_run_utc"]
+    assert metrics.get("http") == {"429": 0, "404": 0, "empty_pages": 0}
+    assert metrics.get("cache") == {"batches_hit": 0, "batches_miss": 0}
+    assert metrics.get("universe_prefix_counts") == {}
+    assert "timings" in metrics
