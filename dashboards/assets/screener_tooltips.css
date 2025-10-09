@@ -1,0 +1,7 @@
+/***** Dash DataTable tooltip tweaks *****/
+.dash-table-tooltip {
+  white-space: pre-wrap;
+  max-width: 520px;
+  font-size: 12px;
+  line-height: 1.35;
+}

@@ -72,6 +72,100 @@ def _why_from_breakdown(json_str: str) -> str:
         parts.append(f"{name} {arrow} {abs(val):.2f}")
     return " • ".join(parts) if parts else "n/a"
 
+def _fmt_millions(x):
+    try:
+        x = float(x)
+        return f"${x/1_000_000:.2f}M"
+    except Exception:
+        return "n/a"
+
+def _mk_why_tooltip(row: dict) -> dict:
+    """
+    Build a markdown tooltip for the 'Why' cell showing:
+    - Score (final composite)
+    - Top contributors (z-weighted)
+    - Raw indicators (RSI14, ADX, AROON, MACD_HIST, ATR%, ADV20)
+    Returns a dict mapping column-id -> {'value': md, 'type': 'markdown'}
+    """
+    # Contributions (same parsing used by Why string)
+    contrib_str = _why_from_breakdown(row.get("score_breakdown",""))
+    # Raw values with safe fallbacks
+    score = row.get("Score", None)
+    rsi14 = row.get("RSI14", row.get("RSI"))  # try raw first, fallback to z if needed
+    adx   = row.get("ADX_raw", row.get("ADX"))  # allow a raw alias if available
+    aup   = row.get("AROON_UP", None)
+    adn   = row.get("AROON_DN", None)
+    mh    = row.get("MACD_HIST", row.get("MH"))
+    atrp  = row.get("ATR_pct", None)
+    adv20 = row.get("ADV20", None)
+    close = row.get("close", None)
+
+    md = []
+    if score is not None:
+        try:
+            md.append(f"**Score:** `{float(score):.3f}`")
+        except Exception:
+            md.append(f"**Score:** `{score}`")
+    if contrib_str and contrib_str != "n/a":
+        md.append("**Contributions (z‑weighted):**")
+        # convert bullets nicely (already "• name ▲ 0.00")
+        for part in contrib_str.split("•"):
+            part = part.strip()
+            if part:
+                md.append(f"- {part}")
+    else:
+        md.append("_Contributions unavailable_")
+
+    md.append("**Raw indicators:**")
+    raw_lines = []
+    if close is not None:
+        try:
+            raw_lines.append(f"- Close: `{float(close):.2f}`")
+        except Exception:
+            raw_lines.append(f"- Close: `{close}`")
+    if rsi14 is not None:
+        try:
+            raw_lines.append(f"- RSI14: `{float(rsi14):.2f}`")
+        except Exception:
+            raw_lines.append(f"- RSI14: `{rsi14}`")
+    if adx is not None:
+        try:
+            raw_lines.append(f"- ADX: `{float(adx):.2f}`")
+        except Exception:
+            raw_lines.append(f"- ADX: `{adx}`")
+    if aup is not None and adn is not None:
+        try:
+            raw_lines.append(f"- Aroon Up/Dn: `{float(aup):.1f}` / `{float(adn):.1f}`")
+        except Exception:
+            raw_lines.append(f"- Aroon Up/Dn: `{aup}` / `{adn}`")
+    elif aup is not None:
+        try:
+            raw_lines.append(f"- Aroon Up: `{float(aup):.1f}`")
+        except Exception:
+            raw_lines.append(f"- Aroon Up: `{aup}`")
+    elif adn is not None:
+        try:
+            raw_lines.append(f"- Aroon Dn: `{float(adn):.1f}`")
+        except Exception:
+            raw_lines.append(f"- Aroon Dn: `{adn}`")
+    if mh is not None:
+        try:
+            raw_lines.append(f"- MACD Hist: `{float(mh):.4f}`")
+        except Exception:
+            raw_lines.append(f"- MACD Hist: `{mh}`")
+    if atrp is not None:
+        try:
+            raw_lines.append(f"- ATR%: `{float(atrp):.2%}`")
+        except Exception:
+            raw_lines.append(f"- ATR%: `{atrp}`")
+    if adv20 is not None:
+        raw_lines.append(f"- ADV20: `{_fmt_millions(adv20)}`")
+    if not raw_lines:
+        raw_lines.append("_No raw indicators available_")
+    md.extend(raw_lines)
+
+    return {"Why": {"value": "\n".join(md), "type": "markdown"}}
+
 def build_layout():
     return html.Div(
         [
@@ -100,6 +194,8 @@ def build_layout():
                 style_table={"overflowX":"auto"},
                 style_cell={"fontSize":"13px","whiteSpace":"nowrap",
                             "textOverflow":"ellipsis","maxWidth":220},
+                tooltip_data=[],
+                tooltip_duration=None,
                 columns=[
                     {"name":"symbol","id":"symbol"},
                     {"name":"Score","id":"Score","type":"numeric","format":{"specifier":".3f"}},
@@ -160,11 +256,14 @@ def register_callbacks(app):
         top = _safe_csv(TOP_CSV)
         # augment top with ATR% and Why using scored CSV if ATR14/ADV20 missing
         if not top.empty:
-            if "ATR14" not in top.columns or "ADV20" not in top.columns:
+            if any(c not in top.columns for c in ["ATR14","ADV20","RSI14","MACD_HIST","AROON_UP","AROON_DN","ADX"]):
                 scored = _safe_csv(SCORED_CSV)
                 if not scored.empty:
-                    use = scored[["symbol","timestamp","ATR14","ADV20"]].drop_duplicates(["symbol","timestamp"])
-                    top = top.merge(use, on=["symbol","timestamp"], how="left")
+                    use_cols = [c for c in ["symbol","timestamp","ATR14","ADV20","RSI14","MACD_HIST","AROON_UP","AROON_DN","ADX"]
+                                if c in scored.columns]
+                    use = scored[use_cols].drop_duplicates(["symbol","timestamp"]) if use_cols else pd.DataFrame()
+                    if not use.empty:
+                        top = top.merge(use, on=["symbol","timestamp"], how="left")
             if "ATR14" in top.columns and "close" in top.columns:
                 top["ATR_pct"] = (top["ATR14"] / top["close"]).clip(lower=0)
             else:
@@ -185,6 +284,7 @@ def register_callbacks(app):
         Output("sh-coverage","figure"),
         Output("sh-timings","figure"),
         Output("sh-top-table","data"),
+        Output("sh-top-table","tooltip_data"),
         Output("sh-trend-rows","figure"),
         Output("sh-deciles-hit","figure"),
         Output("sh-deciles-ret","figure"),
@@ -241,6 +341,10 @@ def register_callbacks(app):
 
         # ---------------- Top table ----------------
         top_data = top_rows or []
+        # Build tooltip_data aligned with top_data rows
+        tooltips = []
+        for r in (top_data or []):
+            tooltips.append(_mk_why_tooltip(r or {}))
 
         # ---------------- Trend (Rows & With-Bars %) ----------------
         if hist_rows:
@@ -284,6 +388,6 @@ def register_callbacks(app):
         s_tail = _tail(LOG_DIR / "screener.log", 180)
         p_tail = _tail(LOG_DIR / "pipeline.log", 180)
 
-        return (kpis, fig_gates, fig_cov, fig_tm, top_data,
+        return (kpis, fig_gates, fig_cov, fig_tm, top_data, tooltips,
                 fig_trend, hit_fig, ret_fig,
                 preds_head, s_tail, p_tail)
