@@ -199,6 +199,20 @@ BACKTEST_EXPECTANCY_WEIGHT = 5.0
 BACKTEST_WIN_RATE_WEIGHT = 1.0
 
 
+def _as_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "n", "off"}:
+            return False
+    if isinstance(value, (int, np.integer)):
+        return bool(value)
+    return default
+
+
 def _write_universe_prefix_metrics(
     universe_df: pd.DataFrame, metrics: MutableMapping[str, Any]
 ) -> Dict[str, int]:
@@ -2065,6 +2079,179 @@ def _write_coverage_table(path: Path, coverage: Mapping[str, Mapping[str, object
     _write_csv_atomic(path, frame)
 
 
+def _merge_dict(target: MutableMapping[str, Any], payload: Mapping[str, Any]) -> MutableMapping[str, Any]:
+    for key, value in payload.items():
+        if isinstance(value, Mapping):
+            node = target.setdefault(key, {})
+            if isinstance(node, MutableMapping):
+                _merge_dict(node, value)
+            else:
+                target[key] = dict(value)
+        else:
+            target[key] = value
+    return target
+
+
+def _update_metrics_file(base_dir: Path, payload: Mapping[str, Any]) -> Path:
+    metrics_dir = base_dir / "data"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = metrics_dir / "screener_metrics.json"
+    existing: dict[str, Any] = {}
+    if metrics_path.exists():
+        try:
+            existing = json.loads(metrics_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            LOGGER.warning("Failed to read metrics from %s: %s", metrics_path, exc)
+            existing = {}
+    merged: dict[str, Any] = dict(existing)
+    _merge_dict(merged, payload)
+    _write_json_atomic(metrics_path, merged)
+    return metrics_path
+
+
+def _latest_child_dir(root: Path) -> Optional[Path]:
+    if not root.exists():
+        return None
+    children = [child for child in root.iterdir() if child.is_dir()]
+    if not children:
+        return None
+    return sorted(children)[-1]
+
+
+def _read_parquet_safely(path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_parquet(path)
+    except Exception as exc:
+        LOGGER.warning("Failed to read parquet %s: %s", path, exc)
+        return pd.DataFrame(columns=INPUT_COLUMNS)
+
+
+def _load_local_bars(
+    base_dir: Path,
+    feed: str,
+    days: int,
+    *,
+    symbols: Optional[Sequence[str]] = None,
+    reuse_cache: bool = True,
+    limit: Optional[int] = None,
+) -> pd.DataFrame:
+    feed = (feed or DEFAULT_FEED).strip().lower() or DEFAULT_FEED
+    cache_root = base_dir / "data" / "cache" / f"bars_1d_{feed}"
+    delta_root = base_dir / "data" / "bars" / feed / "1d"
+
+    frames: list[pd.DataFrame] = []
+    latest_delta = _latest_child_dir(delta_root)
+    if latest_delta is not None:
+        for shard in sorted(latest_delta.glob("*.parquet")):
+            frames.append(_read_parquet_safely(shard))
+
+    if reuse_cache and cache_root.exists():
+        day_limit = max(int(days), 0) if days else 0
+        collected = 0
+        for day_dir in sorted(cache_root.iterdir(), reverse=True):
+            if not day_dir.is_dir():
+                continue
+            collected += 1
+            for shard in sorted(day_dir.glob("*.parquet")):
+                frames.append(_read_parquet_safely(shard))
+            if day_limit and collected >= day_limit:
+                break
+
+    if not frames:
+        return pd.DataFrame(columns=INPUT_COLUMNS)
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = _normalize_bars_frame(combined)
+    if "exchange" not in combined.columns:
+        combined["exchange"] = ""
+
+    if symbols:
+        symbol_set = {str(sym or "").strip().upper() for sym in symbols if sym}
+        if symbol_set:
+            combined = combined[combined["symbol"].isin(symbol_set)]
+
+    combined.dropna(subset=["timestamp"], inplace=True)
+    if days:
+        combined["session"] = combined["timestamp"].dt.normalize()
+        sessions = combined["session"].dropna().unique()
+        if len(sessions) > days:
+            keep = set(sorted(sessions)[-days:])
+            combined = combined[combined["session"].isin(keep)]
+        combined.drop(columns=["session"], inplace=True, errors="ignore")
+
+    if limit and not combined.empty:
+        try:
+            limit_val = max(int(limit), 0)
+        except (TypeError, ValueError):
+            limit_val = 0
+        if limit_val:
+            ordered = (
+                combined[["symbol", "timestamp"]]
+                .sort_values(["symbol", "timestamp"])
+                .drop_duplicates(subset=["symbol"], keep="last")
+            )
+            keep_symbols = ordered["symbol"].head(limit_val).tolist()
+            combined = combined[combined["symbol"].isin(keep_symbols)]
+
+    combined.sort_values(["symbol", "timestamp"], inplace=True)
+    combined.reset_index(drop=True, inplace=True)
+    return combined
+
+
+def _compute_symbol_stats_frame(bars_df: pd.DataFrame) -> pd.DataFrame:
+    columns = ["symbol", "close", "ADV20", "ATR_pct", "last_bar_date"]
+    if bars_df is None or bars_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = bars_df.copy()
+    df["symbol"] = df["symbol"].astype("string").str.upper()
+    for column in ["open", "high", "low", "close", "volume"]:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+    df.dropna(subset=["symbol", "timestamp", "close", "volume", "high", "low"], inplace=True)
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    df.sort_values(["symbol", "timestamp"], inplace=True)
+    df["close_volume"] = df["close"] * df["volume"]
+    df["ADV20"] = (
+        df.groupby("symbol", group_keys=False)["close_volume"].transform(
+            lambda s: s.rolling(20, min_periods=1).mean()
+        )
+    )
+    prev_close = df.groupby("symbol")[["close"]].shift(1)
+    true_range = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close["close"]).abs(),
+            (df["low"] - prev_close["close"]).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    df["TR"] = true_range
+    df["ATR14"] = df.groupby("symbol", group_keys=False)["TR"].transform(
+        lambda s: s.ewm(alpha=1 / 14, adjust=False, min_periods=1).mean()
+    )
+    latest = df.groupby("symbol", as_index=False).tail(1).copy()
+    latest["ATR_pct"] = (latest.get("ATR14", pd.Series(index=latest.index)) / latest["close"]).replace(
+        [np.inf, -np.inf], np.nan
+    )
+    latest["last_bar_date"] = latest["timestamp"].dt.date.astype("string")
+    result = latest.reindex(columns=columns, fill_value=pd.NA)
+    result.sort_values("symbol", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
+def _resolve_latest_session(bars_df: pd.DataFrame) -> str:
+    if bars_df is None or bars_df.empty or "timestamp" not in bars_df.columns:
+        return datetime.now(timezone.utc).date().isoformat()
+    sessions = pd.to_datetime(bars_df["timestamp"], utc=True, errors="coerce").dt.date.dropna()
+    if sessions.empty:
+        return datetime.now(timezone.utc).date().isoformat()
+    return max(sessions).isoformat()
+
+
 def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
     LOGGER.info("[DELTA] Starting delta update run")
     run_ts = datetime.now(timezone.utc)
@@ -2195,6 +2382,322 @@ def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
         metrics["batches"],
         metrics["http"]["requests"],
         metrics["http"]["rows"],
+    )
+
+    return 0
+
+
+def _run_build_symbol_stats(args: argparse.Namespace, base_dir: Path) -> int:
+    LOGGER.info("[MODE] build-symbol-stats start")
+    start_time = time.time()
+    feed = getattr(args, "feed", DEFAULT_FEED)
+    days = max(int(getattr(args, "prefilter_days", 120) or 120), 20)
+    reuse_cache = _as_bool(getattr(args, "reuse_cache", True), True)
+    limit = getattr(args, "limit", None)
+
+    bars_df = _load_local_bars(base_dir, feed, days, reuse_cache=reuse_cache, limit=limit)
+    stats_df = _compute_symbol_stats_frame(bars_df)
+
+    registry_dir = base_dir / "data" / "registry"
+    registry_dir.mkdir(parents=True, exist_ok=True)
+    stats_path = registry_dir / "symbol_stats.csv"
+    _write_csv_atomic(stats_path, stats_df)
+
+    elapsed = round(time.time() - start_time, 3)
+    now = datetime.now(timezone.utc)
+    metrics_payload = {
+        "mode": "build-symbol-stats",
+        "last_run_utc": _format_timestamp(now),
+        "symbol_stats": {"count": int(stats_df.shape[0])},
+        "symbols_with_bars": int(bars_df["symbol"].nunique()) if not bars_df.empty else 0,
+        "bars_rows_total": int(bars_df.shape[0]),
+        "timings": {"symbol_stats_secs": elapsed},
+    }
+    _update_metrics_file(base_dir, metrics_payload)
+
+    LOGGER.info(
+        "Symbol stats written to %s (rows=%d, elapsed=%.3fs)",
+        stats_path,
+        int(stats_df.shape[0]),
+        elapsed,
+    )
+    if stats_df.empty:
+        LOGGER.warning("Symbol stats output is empty; verify delta-update inputs are available.")
+    return 0
+
+
+def _prepare_coarse_rank_export(frame: pd.DataFrame) -> pd.DataFrame:
+    columns = ["symbol", "Score_coarse", "coarse_rank"]
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=columns)
+    df = frame.copy()
+    df["symbol"] = df["symbol"].astype("string").str.upper()
+    if "Score_coarse" not in df.columns and "Score" in df.columns:
+        df.rename(columns={"Score": "Score_coarse"}, inplace=True)
+    if "coarse_rank" not in df.columns:
+        df["coarse_rank"] = np.arange(1, df.shape[0] + 1, dtype=int)
+    z_cols = sorted(col for col in df.columns if col.endswith("_z"))
+    payload_cols = [*columns, *z_cols]
+    payload_cols = [col for col in payload_cols if col in df.columns]
+    ordered = df.reindex(columns=payload_cols, fill_value=pd.NA)
+    ordered.sort_values("coarse_rank", inplace=True)
+    ordered.reset_index(drop=True, inplace=True)
+    return ordered
+
+
+def _run_coarse_features(args: argparse.Namespace, base_dir: Path) -> int:
+    LOGGER.info("[MODE] coarse-features start")
+    stats_path = base_dir / "data" / "registry" / "symbol_stats.csv"
+    if not stats_path.exists():
+        LOGGER.error("Missing symbol stats at %s; run build-symbol-stats first.", stats_path)
+        return 1
+    try:
+        stats_df = pd.read_csv(stats_path)
+    except Exception as exc:
+        LOGGER.error("Failed to read %s: %s", stats_path, exc)
+        return 1
+
+    stats_df["symbol"] = stats_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    stats_df["ADV20"] = pd.to_numeric(stats_df.get("ADV20"), errors="coerce")
+    threshold = float(getattr(args, "dollar_vol_min", 0) or 0)
+    eligible = stats_df[stats_df["ADV20"] >= threshold] if threshold else stats_df
+    liquidity_fail = int(stats_df.shape[0] - eligible.shape[0])
+
+    limit = getattr(args, "limit", None)
+    if limit:
+        try:
+            limit_val = max(int(limit), 0)
+        except (TypeError, ValueError):
+            limit_val = 0
+        if limit_val:
+            eligible = eligible.head(limit_val)
+
+    symbols = (
+        eligible["symbol"].dropna().astype("string").str.upper().unique().tolist()
+        if not eligible.empty
+        else []
+    )
+
+    if not symbols:
+        LOGGER.warning("No eligible symbols after ADV20 filter; coarse features will be empty.")
+
+    days = max(int(getattr(args, "prefilter_days", 120) or 120), 1)
+    reuse_cache = _as_bool(getattr(args, "reuse_cache", True), True)
+    feed = getattr(args, "feed", DEFAULT_FEED)
+    bars_df = _load_local_bars(
+        base_dir,
+        feed,
+        days,
+        symbols=symbols if symbols else None,
+        reuse_cache=reuse_cache,
+        limit=limit,
+    )
+
+    ranker_cfg = _prepare_ranker_config(
+        _load_ranker_config(),
+        preset_key=str(getattr(args, "gate_preset", "standard") or "standard"),
+        relax_mode=str(getattr(args, "relax_gates", "none") or "none"),
+        min_history=int(getattr(args, "min_history", DEFAULT_MIN_HISTORY) or DEFAULT_MIN_HISTORY),
+    )
+    dollar_override = getattr(args, "dollar_vol_min", None)
+    if dollar_override is not None:
+        try:
+            gates = dict(ranker_cfg.get("gates") or {})
+            gates["dollar_vol_min"] = float(dollar_override)
+            ranker_cfg["gates"] = gates
+        except (TypeError, ValueError):
+            LOGGER.warning("Invalid dollar volume override: %s", dollar_override)
+
+    timing_info: dict[str, float] = {}
+    coarse_enriched = build_enriched_bars(
+        bars_df,
+        ranker_cfg,
+        timings=timing_info,
+        feature_columns=None,
+        include_intermediate=False,
+    )
+
+    run_date = _resolve_latest_session(bars_df if not bars_df.empty else coarse_enriched)
+    features_dir = base_dir / "data" / "features" / "1d"
+    features_dir.mkdir(parents=True, exist_ok=True)
+    features_path = features_dir / f"coarse_{run_date}.parquet"
+    coarse_enriched.to_parquet(features_path, index=False)
+
+    rank_timer = T()
+    coarse_scored = score_universe(coarse_enriched, ranker_cfg)
+    coarse_rank_elapsed = rank_timer.lap("coarse_rank_secs")
+    if not coarse_scored.empty and "coarse_rank" not in coarse_scored.columns:
+        coarse_scored["coarse_rank"] = np.arange(1, coarse_scored.shape[0] + 1, dtype=int)
+    coarse_scored.rename(columns={"Score": "Score_coarse"}, inplace=True)
+
+    coarse_output = _prepare_coarse_rank_export(coarse_scored)
+    coarse_path = base_dir / "data" / "tmp" / "coarse_rank.csv"
+    coarse_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_csv_atomic(coarse_path, coarse_output)
+
+    metrics_payload = {
+        "mode": "coarse-features",
+        "last_run_utc": _format_timestamp(datetime.now(timezone.utc)),
+        "symbols_with_bars": int(bars_df["symbol"].nunique()) if not bars_df.empty else 0,
+        "bars_rows_total": int(bars_df.shape[0]),
+        "gate_fail_counts": {"liquidity": max(liquidity_fail, 0)},
+        "coarse_ranked": int(coarse_scored.shape[0]) if coarse_scored is not None else 0,
+        "timings": {
+            "feature_secs": round(float(timing_info.get("feature_secs", 0.0)), 3),
+            "coarse_rank_secs": round(float(coarse_rank_elapsed), 3),
+        },
+        "shortlist_path": str(coarse_path),
+    }
+    _update_metrics_file(base_dir, metrics_payload)
+
+    LOGGER.info(
+        "Coarse features complete: eligible=%d symbols=%d rows=%d features=%s",
+        int(eligible.shape[0]),
+        len(symbols),
+        int(bars_df.shape[0]),
+        features_path,
+    )
+    if bars_df.empty:
+        LOGGER.warning("No bars available for coarse features; downstream stages may be empty.")
+    return 0
+
+
+def _run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
+    LOGGER.info("[MODE] full-nightly start")
+    coarse_path = base_dir / "data" / "tmp" / "coarse_rank.csv"
+    if not coarse_path.exists():
+        LOGGER.error("Missing coarse rank file at %s; run coarse-features first.", coarse_path)
+        return 1
+    try:
+        coarse_df = pd.read_csv(coarse_path)
+    except Exception as exc:
+        LOGGER.error("Failed to read coarse rank file %s: %s", coarse_path, exc)
+        return 1
+
+    coarse_df["symbol"] = coarse_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    if "coarse_rank" not in coarse_df.columns:
+        coarse_df = coarse_df.sort_values("Score_coarse", ascending=False).reset_index(drop=True)
+        coarse_df["coarse_rank"] = np.arange(1, coarse_df.shape[0] + 1, dtype=int)
+    shortlist_size = max(int(getattr(args, "prefilter_top", DEFAULT_SHORTLIST_SIZE) or DEFAULT_SHORTLIST_SIZE), 0)
+    shortlist_df = (
+        coarse_df.sort_values(["coarse_rank", "Score_coarse"], ascending=[True, False])
+        .head(shortlist_size)
+        .copy()
+    )
+
+    limit = getattr(args, "limit", None)
+    if limit:
+        try:
+            limit_val = max(int(limit), 0)
+        except (TypeError, ValueError):
+            limit_val = 0
+        if limit_val:
+            shortlist_df = shortlist_df.head(limit_val)
+
+    symbols = shortlist_df["symbol"].dropna().astype("string").str.upper().tolist()
+    if not symbols:
+        LOGGER.warning("Shortlist is empty; final ranking will have no candidates.")
+
+    days = max(int(getattr(args, "full_days", 750) or 750), 1)
+    try:
+        start_iso, end_iso, last_day = _fallback_daily_window(days)
+    except Exception as exc:  # pragma: no cover - fallback already guards
+        LOGGER.warning("Failed to determine fetch window: %s", exc)
+        start_iso, end_iso, last_day = _fallback_daily_window(days)
+
+    reuse_cache = _as_bool(getattr(args, "reuse_cache", True), True)
+    feed = getattr(args, "feed", DEFAULT_FEED)
+    fetch_mode = getattr(args, "fetch_mode", "auto")
+    batch_size = int(getattr(args, "batch_size", 50) or 50)
+    max_workers = int(getattr(args, "max_workers", 4) or 4)
+    min_history = int(getattr(args, "min_history", DEFAULT_MIN_HISTORY) or DEFAULT_MIN_HISTORY)
+    bars_source = getattr(args, "bars_source", "http")
+    verify_hook = make_verify_hook(bool(getattr(args, "verify_request", False)))
+
+    data_client = None
+    if bars_source == "sdk":
+        try:
+            data_client = _create_data_client()
+        except Exception as exc:
+            LOGGER.error("Could not create Alpaca data client: %s", exc)
+            return 1
+
+    fetch_timer = T()
+    bars_df, fetch_metrics, prefiltered = _fetch_daily_bars(
+        data_client,
+        symbols,
+        days=days,
+        start_iso=start_iso,
+        end_iso=end_iso,
+        feed=feed,
+        fetch_mode=fetch_mode,
+        batch_size=batch_size,
+        max_workers=max_workers,
+        min_history=min_history,
+        bars_source=bars_source,
+        run_date=last_day,
+        reuse_cache=reuse_cache,
+        verify_hook=verify_hook,
+    )
+    fetch_elapsed = fetch_timer.lap("fetch_secs")
+
+    if not bars_df.empty and symbols:
+        bars_df = bars_df[bars_df["symbol"].astype("string").str.upper().isin(set(symbols))]
+
+    fetch_metrics = fetch_metrics or {}
+    fetch_metrics["symbols_in"] = len(symbols)
+    _write_universe_prefix_metrics(pd.DataFrame({"symbol": shortlist_df["symbol"]}), fetch_metrics)
+
+    now = datetime.now(timezone.utc)
+    top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters, ranker_cfg, timing_info = run_screener(
+        bars_df,
+        top_n=int(getattr(args, "top_n", DEFAULT_TOP_N) or DEFAULT_TOP_N),
+        min_history=min_history,
+        now=now,
+        asset_meta={},
+        prefiltered_skips=prefiltered,
+        gate_preset=str(getattr(args, "gate_preset", "standard") or "standard"),
+        relax_gates=str(getattr(args, "relax_gates", "none") or "none"),
+        dollar_vol_min=getattr(args, "dollar_vol_min", None),
+        shortlist_size=shortlist_size,
+        shortlist_path=coarse_path,
+    )
+    timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(float(fetch_elapsed), 3)
+
+    output_path = write_outputs(
+        base_dir,
+        top_df,
+        scored_df,
+        stats,
+        skip_reasons,
+        reject_samples,
+        status="ok",
+        now=now,
+        gate_counters=gate_counters,
+        fetch_metrics=fetch_metrics,
+        asset_metrics={},
+        ranker_cfg=ranker_cfg,
+        timings=timing_info,
+    )
+    LOGGER.info("Full nightly outputs written to %s", output_path)
+
+    refresh_latest = _as_bool(getattr(args, "refresh_latest", True), True)
+    if refresh_latest:
+        try:
+            try:
+                from .run_pipeline import refresh_latest_candidates  # type: ignore
+            except Exception:  # pragma: no cover - fallback for script execution
+                from scripts.run_pipeline import refresh_latest_candidates  # type: ignore
+            refresh_latest_candidates()
+        except Exception as exc:  # pragma: no cover - copy failures unexpected
+            LOGGER.warning("Failed to refresh latest candidates: %s", exc)
+
+    _update_metrics_file(
+        base_dir,
+        {
+            "mode": "full-nightly",
+            "last_run_utc": _format_timestamp(datetime.now(timezone.utc)),
+        },
     )
 
     return 0
@@ -3082,9 +3585,15 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     source_default = os.environ.get("SCREENER_SOURCE")
     parser.add_argument(
         "--mode",
-        choices=["screener", "delta-update"],
-        default="screener",
-        help="Run the full screener (default) or nightly delta update pipeline",
+        choices=[
+            "screener",
+            "delta-update",
+            "build-symbol-stats",
+            "coarse-features",
+            "full-nightly",
+        ],
+        required=True,
+        help="Pipeline mode to run",
     )
     parser.add_argument(
         "--universe",
@@ -3108,6 +3617,24 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Directory to write outputs (defaults to repo root)",
     )
     parser.add_argument("--days", type=int, default=750, help="Number of trading days to request")
+    parser.add_argument(
+        "--prefilter-days",
+        type=int,
+        default=120,
+        help="Lookback window (trading days) for coarse prefilter inputs",
+    )
+    parser.add_argument(
+        "--prefilter-top",
+        type=int,
+        default=DEFAULT_SHORTLIST_SIZE,
+        help="Shortlist size to carry into the nightly stage",
+    )
+    parser.add_argument(
+        "--full-days",
+        type=int,
+        default=750,
+        help="Lookback window (trading days) for full feature computation",
+    )
     parser.add_argument(
         "--min-days-fallback",
         type=int,
@@ -3192,6 +3719,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Reuse cached bars batches when available (default: true)",
     )
     parser.add_argument(
+        "--refresh-latest",
+        choices=["true", "false"],
+        default="true",
+        help="Update latest_candidates.csv after full-nightly (default: true)",
+    )
+    parser.add_argument(
         "--gate-preset",
         choices=["conservative", "standard", "aggressive"],
         default="standard",
@@ -3213,9 +3746,9 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     if getattr(parsed, "source", None):
         parsed.source_csv = parsed.source
     if isinstance(parsed.iex_only, str):
-        parsed.iex_only = parsed.iex_only.lower() != "false"
-    if isinstance(parsed.reuse_cache, str):
-        parsed.reuse_cache = parsed.reuse_cache.lower() != "false"
+        parsed.iex_only = _as_bool(parsed.iex_only, True)
+    parsed.reuse_cache = _as_bool(getattr(parsed, "reuse_cache", True), True)
+    parsed.refresh_latest = _as_bool(getattr(parsed, "refresh_latest", True), True)
     return parsed
 
 
@@ -3226,15 +3759,32 @@ def main(
     output_dir: Optional[Path] = None,
 ) -> int:
     _ensure_logger()
-    args = parse_args(argv)
+    arg_list: Optional[List[str]]
+    if argv is None:
+        arg_list = None
+    else:
+        arg_list = list(argv)
+        if "--mode" not in {item for item in arg_list if isinstance(item, str)}:
+            arg_list = ["--mode", "screener", *arg_list]
+    args = parse_args(arg_list)
+    base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
+
+    mode = getattr(args, "mode", "screener")
+
+    if mode == "build-symbol-stats":
+        return _run_build_symbol_stats(args, base_dir)
+    if mode == "coarse-features":
+        return _run_coarse_features(args, base_dir)
+
     api_key, api_secret, _, _ = get_alpaca_creds()
     if not api_key or not api_secret:
         LOGGER.error("Missing Alpaca credentials; set APCA_API_KEY_ID and APCA_API_SECRET_KEY.")
         return 2
-    base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
 
-    if getattr(args, "mode", "screener") == "delta-update":
+    if mode == "delta-update":
         return _run_delta_update(args, base_dir)
+    if mode == "full-nightly":
+        return _run_full_nightly(args, base_dir)
 
     now = datetime.now(timezone.utc)
     pipeline_timer = T()
