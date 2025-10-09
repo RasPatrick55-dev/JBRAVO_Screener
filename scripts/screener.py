@@ -9,7 +9,18 @@ import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePath
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -170,6 +181,34 @@ ASSET_HTTP_TIMEOUT = 15
 BARS_BATCH_SIZE = 200
 BAR_RETRY_STATUSES = {429, 500, 502, 503, 504}
 BAR_MAX_RETRIES = 3
+
+
+def _write_universe_prefix_metrics(
+    universe_df: pd.DataFrame, metrics: MutableMapping[str, Any]
+) -> Dict[str, int]:
+    """Populate universe prefix counts and guardrail warnings for Alpaca draws."""
+    if metrics is None:
+        return {}
+    if "symbol" not in universe_df.columns or universe_df.empty:
+        metrics["universe_prefix_counts"] = {}
+        return {}
+
+    prefix_counts = (
+        universe_df["symbol"].astype(str).str.upper().str[0].value_counts().to_dict()
+    )
+    metrics["universe_prefix_counts"] = prefix_counts
+    if prefix_counts:
+        LOGGER.info("Universe prefix counts: %s", prefix_counts)
+        letter, count = max(prefix_counts.items(), key=lambda kv: kv[1])
+        share = count / max(len(universe_df), 1)
+        if share > 0.70:
+            LOGGER.warning(
+                "ALERT: Universe draw biased toward '%s' (%.1f%%)",
+                letter,
+                100 * share,
+            )
+    return prefix_counts
+
 
 def make_verify_hook(enabled: bool):
     if not enabled:
@@ -1154,6 +1193,7 @@ def _load_alpaca_universe(
     min_days_fallback: int = 365,
     min_days_final: int = 90,
     reuse_cache: bool = True,
+    metrics: Optional[MutableMapping[str, Any]] = None,
 ) -> Tuple[
     pd.DataFrame,
     Dict[str, dict],
@@ -1161,6 +1201,12 @@ def _load_alpaca_universe(
     Dict[str, str],
     dict[str, Any],
 ]:
+    """
+    Load eligible Alpaca symbols, apply filters, and return sampled bars metadata.
+
+    The caller provides a ``metrics`` mapping which is updated in place with
+    guardrail statistics such as ``universe_prefix_counts``.
+    """
     empty_metrics = {
         "batches_total": 0,
         "batches_paged": 0,
@@ -1188,11 +1234,19 @@ def _load_alpaca_universe(
         "assets_after_filters": 0,
         "symbols_after_iex_filter": 0,
     }
+    agg_metrics: MutableMapping[str, Any] = metrics if metrics is not None else {}
+    for key, value in empty_metrics.items():
+        if isinstance(value, list):
+            agg_metrics[key] = list(value)
+        elif isinstance(value, dict):
+            agg_metrics[key] = dict(value)
+        else:
+            agg_metrics[key] = int(value)
     try:
         trading_client = _create_trading_client()
     except Exception as exc:
         LOGGER.error("Unable to create Alpaca trading client: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS), {}, empty_metrics, {}, empty_asset_metrics
+        return pd.DataFrame(columns=INPUT_COLUMNS), {}, agg_metrics, {}, empty_asset_metrics
 
     try:
         symbols, asset_meta, asset_metrics = fetch_active_equity_symbols(
@@ -1202,7 +1256,7 @@ def _load_alpaca_universe(
         )
     except Exception as exc:
         LOGGER.error("Failed to fetch Alpaca asset universe: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS), {}, empty_metrics, {}, empty_asset_metrics
+        return pd.DataFrame(columns=INPUT_COLUMNS), {}, agg_metrics, {}, empty_asset_metrics
 
     LOGGER.info(
         "Asset metrics: total=%d tradable_equities=%d after_filters=%d",
@@ -1295,22 +1349,7 @@ def _load_alpaca_universe(
         universe_df = assets_df.copy()
 
     universe_df = universe_df.reset_index(drop=True)
-    prefix_counts = (
-        universe_df["symbol"].astype(str).str.upper().str[0].value_counts().to_dict()
-        if not universe_df.empty
-        else {}
-    )
-    agg_metrics["universe_prefix_counts"] = dict(prefix_counts)
-    if prefix_counts:
-        LOGGER.info("Universe prefix counts: %s", prefix_counts)
-        letter, count = max(prefix_counts.items(), key=lambda kv: kv[1])
-        share = count / max(len(universe_df), 1)
-        if share > 0.70:
-            LOGGER.warning(
-                "ALERT: Universe draw biased toward '%s' (%.1f%%)",
-                letter,
-                100 * share,
-            )
+    _write_universe_prefix_metrics(universe_df, agg_metrics)
 
     symbols = universe_df["symbol"].astype(str).str.upper().tolist()
 
@@ -1318,9 +1357,9 @@ def _load_alpaca_universe(
         asset_meta = {sym: asset_meta.get(sym, {}) for sym in symbols if sym in asset_meta}
 
     if not symbols:
-        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, empty_metrics, {}, asset_metrics
+        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, agg_metrics, {}, asset_metrics
 
-    empty_metrics["symbols_in"] = len(symbols)
+    agg_metrics["symbols_in"] = len(symbols)
 
     data_client: Optional["StockHistoricalDataClient"] = None
     if (bars_source or "http").strip().lower() == "sdk":
@@ -1331,7 +1370,7 @@ def _load_alpaca_universe(
             return (
                 pd.DataFrame(columns=INPUT_COLUMNS),
                 asset_meta,
-                empty_metrics,
+                agg_metrics,
                 {},
                 asset_metrics,
             )
@@ -1349,15 +1388,6 @@ def _load_alpaca_universe(
             attempt_days.append(value)
     if not attempt_days:
         attempt_days.append(max(1, int(days)))
-
-    agg_metrics: dict[str, Any] = {}
-    for key, value in empty_metrics.items():
-        if isinstance(value, list):
-            agg_metrics[key] = list(value)
-        elif isinstance(value, dict):
-            agg_metrics[key] = dict(value)
-        else:
-            agg_metrics[key] = int(value)
 
     bars_df = pd.DataFrame(columns=BARS_COLUMNS)
     prescreened: Dict[str, str] = {}
@@ -2712,6 +2742,7 @@ def main(
                 min_days_fallback=args.min_days_fallback,
                 min_days_final=args.min_days_final,
                 reuse_cache=bool(args.reuse_cache),
+                metrics=fetch_metrics,
             )
             fetch_elapsed = pipeline_timer.lap("fetch_secs")
         LOGGER.info(
