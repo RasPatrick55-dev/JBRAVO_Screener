@@ -177,6 +177,39 @@ def build_layout():
             html.Div(id="sh-kpis", className="sh-row"),
             html.Div(
                 [
+                    html.Div(
+                        [
+                            html.H4("Universe Prefix Counts"),
+                            html.Pre(id="sh-prefix-counts", className="sh-metric-pre"),
+                        ],
+                        className="sh-metric-card",
+                    ),
+                    html.Div(
+                        [
+                            html.H4("HTTP"),
+                            html.Pre(id="sh-http", className="sh-metric-pre"),
+                        ],
+                        className="sh-metric-card",
+                    ),
+                    html.Div(
+                        [
+                            html.H4("Cache"),
+                            html.Pre(id="sh-cache", className="sh-metric-pre"),
+                        ],
+                        className="sh-metric-card",
+                    ),
+                    html.Div(
+                        [
+                            html.H4("Timings"),
+                            html.Pre(id="sh-timings-json", className="sh-metric-pre"),
+                        ],
+                        className="sh-metric-card",
+                    ),
+                ],
+                className="sh-row sh-metric-grid",
+            ),
+            html.Div(
+                [
                     dcc.Graph(id="sh-gate-pressure", style={"height":"300px"}),
                     dcc.Graph(id="sh-coverage", style={"height":"300px"}),
                     dcc.Graph(id="sh-timings", style={"height":"300px"}),
@@ -300,6 +333,10 @@ def register_callbacks(app):
 
     @app.callback(
         Output("sh-kpis","children"),
+        Output("sh-prefix-counts","children"),
+        Output("sh-http","children"),
+        Output("sh-cache","children"),
+        Output("sh-timings-json","children"),
         Output("sh-gate-pressure","figure"),
         Output("sh-coverage","figure"),
         Output("sh-timings","figure"),
@@ -408,6 +445,31 @@ def register_callbacks(app):
         s_tail = _tail(LOG_DIR / "screener.log", 180)
         p_tail = _tail(LOG_DIR / "pipeline.log", 180)
 
-        return (kpis, fig_gates, fig_cov, fig_tm, top_data, tooltips,
-                fig_trend, hit_fig, ret_fig,
-                preds_head, s_tail, p_tail)
+        prefix_counts = json.dumps(m.get("universe_prefix_counts", {}) or {}, indent=2, sort_keys=True)
+        http_view = m.get("http", {}) or {}
+        cache_view = m.get("cache", {}) or {}
+        timings_dict = m.get("timings", {}) or {}
+        base_timings = {"fetch_secs": 0, "feature_secs": 0, "rank_secs": 0, "gates_secs": 0}
+        timings_view = {**base_timings, **timings_dict}
+        timings_json = json.dumps({k: timings_view.get(k) for k in sorted(timings_view)}, indent=2)
+        http_json = json.dumps(http_view, indent=2, sort_keys=True)
+        cache_json = json.dumps(cache_view, indent=2, sort_keys=True)
+
+        return (
+            kpis,
+            prefix_counts,
+            http_json,
+            cache_json,
+            timings_json,
+            fig_gates,
+            fig_cov,
+            fig_tm,
+            top_data,
+            tooltips,
+            fig_trend,
+            hit_fig,
+            ret_fig,
+            preds_head,
+            s_tail,
+            p_tail,
+        )

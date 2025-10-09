@@ -180,8 +180,23 @@ metrics = {
     "orders_skipped_other": 0,
     "api_retries": 0,
     "api_failures": 0,
+    "skips_time_window": 0,
 }
 skip_reason_counts: Counter[str] = Counter()
+
+CANDIDATE_SOURCE_DEFAULT = os.path.join(BASE_DIR, "data", "latest_candidates.csv")
+CANDIDATE_SOURCE_PATH = CANDIDATE_SOURCE_DEFAULT
+DRY_RUN = False
+
+
+def resolve_candidates_path(source: Optional[str] = None) -> Path:
+    """Return an absolute path for the candidates CSV."""
+
+    raw = source or CANDIDATE_SOURCE_PATH
+    candidate_path = Path(raw)
+    if not candidate_path.is_absolute():
+        candidate_path = Path(BASE_DIR) / candidate_path
+    return candidate_path
 
 VALID_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
 
@@ -286,6 +301,7 @@ def build_execute_metrics_snapshot() -> dict[str, int]:
 
     if metrics.get("run_aborted_reason"):
         snapshot["run_aborted_reason"] = metrics["run_aborted_reason"]
+    snapshot["skips_time_window"] = metrics.get("skips_time_window", 0)
 
     return snapshot
 
@@ -316,6 +332,19 @@ def persist_execute_metrics() -> dict[str, object]:
 
     if metrics.get("run_aborted_reason"):
         payload["run_aborted_reason"] = metrics["run_aborted_reason"]
+
+    summary = {
+        "orders_submitted": int(metrics.get("orders_submitted", 0)),
+        "skips_existing_position": int(skip_reason_counts.get("EXISTING_POSITION", 0)),
+        "skips_pending_order": int(skip_reason_counts.get("PENDING_ORDER", 0)),
+        "skips_time_window": int(
+            metrics.get("skips_time_window", 0)
+            or skip_reason_counts.get("SESSION_WINDOW", 0)
+        ),
+        "api_failures": int(metrics.get("api_failures", 0)),
+        "api_retries": int(metrics.get("api_retries", 0)),
+    }
+    payload.update(summary)
 
     metrics_file = Path(metrics_path)
     metrics_file.parent.mkdir(parents=True, exist_ok=True)
@@ -415,6 +444,8 @@ def skip(symbol: str, code: str, reason: str, **kvs) -> None:
     inc(f"orders_skipped_{code.lower()}")
     normalized_code = code.strip().upper() or "UNKNOWN"
     skip_reason_counts[normalized_code] += 1
+    if normalized_code == "SESSION_WINDOW":
+        inc("skips_time_window")
     log_event(
         {
             "event": "CANDIDATE_SKIPPED",
@@ -643,65 +674,62 @@ def get_available_qty(symbol: str) -> int:
 
 
 
-def load_top_candidates() -> pd.DataFrame:
-    """Load ranked candidates from ``top_candidates.csv`` and return the
-    top 3 entries for trading.
-    """
+def load_top_candidates(source_path: Optional[str] = None, limit: int = 3) -> pd.DataFrame:
+    """Load ranked candidates from the configured source CSV."""
 
-    top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
-    expected_columns = [
-        "symbol",
-        "score",
-        "win_rate",
-        "net_pnl",
-        "trades",
-        "wins",
-        "losses",
-        "avg_return",
-    ]
+    path = resolve_candidates_path(source_path)
+    if not path.exists():
+        logger.error("Candidates source missing: %s", path)
+        return pd.DataFrame(columns=["symbol", "score", "win_rate", "avg_return", "net_pnl"])
 
     try:
-        candidates_df = pd.read_csv(top_candidates_path)
-        assert all(
-            col in candidates_df.columns for col in expected_columns
-        ), "Missing columns in top_candidates.csv"
-
-        if "symbol" in candidates_df.columns:
-            candidates_df["symbol"] = (
-                candidates_df["symbol"].fillna("")
-                .astype(str)
-                .str.strip()
-                .str.upper()
-            )
-
-        if "exchange" in candidates_df.columns:
-            columns = list(candidates_df.columns)
-            sanitized_records = []
-            for record in candidates_df.to_dict("records"):
-                record = sanitize_candidate_row(record)
-                if record.get("exchange") == "UNKNOWN":
-                    symbol = record.get("symbol") or "UNKNOWN"
-                    skip(symbol, "MARKET_DATA", "Unknown exchange")
-                    continue
-                sanitized_records.append(record)
-
-            if not sanitized_records:
-                logger.warning("All candidates skipped due to unknown exchange codes.")
-                return pd.DataFrame(columns=expected_columns)
-
-            candidates_df = pd.DataFrame(sanitized_records, columns=columns)
-
-        candidates_df.sort_values("score", ascending=False, inplace=True)
-        selected_candidates = candidates_df.sort_values(by="score", ascending=False).head(3)
-        logger.info("Loaded %s successfully", top_candidates_path)
-        logger.info(
-            "Selected top 3 symbols for trading: %s",
-            selected_candidates["symbol"].tolist(),
-        )
-        return selected_candidates
+        candidates_df = pd.read_csv(path)
     except Exception as exc:
-        logger.error("Failed to read %s: %s", top_candidates_path, exc)
-        return pd.DataFrame(columns=expected_columns)
+        logger.error("Failed to read candidates from %s: %s", path, exc)
+        return pd.DataFrame(columns=["symbol", "score", "win_rate", "avg_return", "net_pnl"])
+
+    if "symbol" not in candidates_df.columns:
+        logger.error("Candidates file missing 'symbol' column: %s", path)
+        return pd.DataFrame(columns=["symbol", "score", "win_rate", "avg_return", "net_pnl"])
+
+    candidates_df["symbol"] = (
+        candidates_df["symbol"].fillna("").astype(str).str.strip().str.upper()
+    )
+
+    # Normalise score-related columns for downstream compatibility
+    if "score" not in candidates_df.columns and "Score" in candidates_df.columns:
+        candidates_df["score"] = candidates_df["Score"]
+    if "win_rate" not in candidates_df.columns:
+        if "backtest_win_rate" in candidates_df.columns:
+            candidates_df["win_rate"] = candidates_df["backtest_win_rate"]
+        else:
+            candidates_df["win_rate"] = 0.0
+    if "avg_return" not in candidates_df.columns and "backtest_expectancy" in candidates_df.columns:
+        candidates_df["avg_return"] = candidates_df["backtest_expectancy"]
+    if "net_pnl" not in candidates_df.columns:
+        candidates_df["net_pnl"] = candidates_df.get("pnl", 0.0)
+
+    if "exchange" in candidates_df.columns:
+        sanitized_records: list[dict] = []
+        for record in candidates_df.to_dict("records"):
+            record = sanitize_candidate_row(record)
+            if record.get("exchange") == "UNKNOWN":
+                symbol = record.get("symbol") or "UNKNOWN"
+                skip(symbol, "MARKET_DATA", "Unknown exchange")
+                continue
+            sanitized_records.append(record)
+        candidates_df = pd.DataFrame(sanitized_records) if sanitized_records else pd.DataFrame(columns=candidates_df.columns)
+
+    sort_col = "score" if "score" in candidates_df.columns else None
+    if sort_col:
+        candidates_df = candidates_df.sort_values(sort_col, ascending=False)
+    if limit:
+        candidates_df = candidates_df.head(limit)
+
+    logger.info("Loaded candidates from %s (rows=%d)", path, len(candidates_df))
+    if not candidates_df.empty:
+        logger.info("Selected symbols: %s", candidates_df["symbol"].tolist())
+    return candidates_df
 
 def save_open_positions_csv():
     """Fetch current open positions from Alpaca and save to CSV."""
@@ -1302,8 +1330,9 @@ def allocate_position(symbol: str, fallback_prices: dict[str, float]):
     return (qty, round(last_price, 2)), None
 
 def submit_trades() -> list[dict]:
-    df = load_top_candidates()
-    symbols = df['symbol'].tolist() if not df.empty else []
+    df = load_top_candidates(limit=3)
+    records = df.to_dict("records") if not df.empty else []
+    symbols = [rec.get("symbol") for rec in records if rec.get("symbol")]
     cached_prices = load_cached_prices(symbols)
     calendar_today = trading_client.get_calendar()[0]
     if calendar_today.open is None or calendar_today.close is None:
@@ -1320,7 +1349,11 @@ def submit_trades() -> list[dict]:
         else:
             logger.warning(
                 "Market is fully closed (not even in pre-market). Skipping trade execution.")
-            return
+            for rec in records:
+                sym = rec.get("symbol")
+                if sym:
+                    skip(sym, "SESSION_WINDOW", "Market closed outside allowed trading window.")
+            return []
     submitted = 0
     skipped = 0
     positions = trading_client.get_all_positions()
@@ -1334,8 +1367,10 @@ def submit_trades() -> list[dict]:
 
     trade_log_entries = []
 
-    for _, row in df.iterrows():
-        sym = row.symbol
+    for rec in records:
+        sym = rec.get("symbol")
+        if not sym:
+            continue
         metrics["symbols_processed"] += 1
         entry = {
             "symbol": sym,
@@ -1392,10 +1427,10 @@ def submit_trades() -> list[dict]:
             sym,
             qty,
             entry_price,
-            row.score,
-            row.win_rate,
-            row.net_pnl,
-            row.avg_return,
+            rec.get("score"),
+            rec.get("win_rate"),
+            rec.get("net_pnl"),
+            rec.get("avg_return"),
         )
         try:
             limit_price = get_symbol_price(sym, data_client, cached_prices)
@@ -1412,6 +1447,19 @@ def submit_trades() -> list[dict]:
                 continue
             price = round_price(limit_price)
             price = round(price + 1e-6, 2)
+
+            if DRY_RUN:
+                logger.info(
+                    "WOULD SUBMIT %s qty=%s limit=%s (dry-run)",
+                    sym,
+                    qty,
+                    price,
+                )
+                entry["order_status"] = "dry-run"
+                entry["qty"] = qty
+                entry["entry_price"] = price
+                trade_log_entries.append(entry)
+                continue
 
             final_order = submit_order_with_polling(
                 trading_client,
@@ -1776,6 +1824,16 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Run even if the market guard determines the market is closed.",
     )
+    parser.add_argument(
+        "--source",
+        default=CANDIDATE_SOURCE_DEFAULT,
+        help="Path to candidates CSV",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Do not submit orders; log intent instead",
+    )
     return parser.parse_args(argv)
 
 
@@ -1849,6 +1907,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     args = parse_args(raw_args)
     force_flag = bool(getattr(args, "force", False))
+    global DRY_RUN, CANDIDATE_SOURCE_PATH
+    DRY_RUN = bool(getattr(args, "dry_run", False))
+    CANDIDATE_SOURCE_PATH = str(getattr(args, "source", CANDIDATE_SOURCE_DEFAULT) or CANDIDATE_SOURCE_DEFAULT)
+    if DRY_RUN:
+        logger.info("Running in dry-run mode; no orders will be submitted.")
 
     exit_code = 0
     try:
@@ -1857,11 +1920,14 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         try:
             trade_entries = submit_trades()
-            attach_trailing_stops()
-            daily_exit_check()
-            save_open_positions_csv()
-            update_trades_log()
-            if trade_entries:
+            if not DRY_RUN:
+                attach_trailing_stops()
+                daily_exit_check()
+                save_open_positions_csv()
+                update_trades_log()
+            else:
+                logger.info("Dry-run mode: skipping trailing stops, exits, and log refresh.")
+            if trade_entries and not DRY_RUN:
                 try:
                     csv_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
                     existing = (
@@ -1880,14 +1946,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                 metrics["symbols_skipped"],
             )
 
-            history_script = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "fetch_trades_history.py"
-            )
-            try:
-                subprocess.run(["python", history_script], check=True)
-                logger.info("Historical trades successfully fetched and CSV files updated.")
-            except subprocess.CalledProcessError as e:
-                logger.error("Failed to run historical trade script: %s", e)
+            if not DRY_RUN:
+                history_script = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "fetch_trades_history.py"
+                )
+                try:
+                    subprocess.run(["python", history_script], check=True)
+                    logger.info("Historical trades successfully fetched and CSV files updated.")
+                except subprocess.CalledProcessError as e:
+                    logger.error("Failed to run historical trade script: %s", e)
         except Exception as exc:
             logger.exception("Critical error occurred: %s", exc)
             send_alert(str(exc))
