@@ -11,7 +11,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 import json
 
 import numpy as np
@@ -50,6 +50,57 @@ try:
 except Exception as exc:  # pragma: no cover - optional dependency
     data_client = None
     logger.error("Alpaca client unavailable: %s", exc)
+
+
+def compute_recent_performance(
+    bars: Optional[pd.DataFrame],
+    *,
+    lookback: int = 90,
+) -> dict[str, float]:
+    """Compute simple expectancy and win-rate statistics for recent bars.
+
+    Parameters
+    ----------
+    bars:
+        DataFrame containing at least ``timestamp`` and ``close`` columns.
+    lookback:
+        Maximum number of most-recent return observations to include when
+        computing the summary statistics.
+
+    Returns
+    -------
+    dict[str, float]
+        Mapping with keys ``expectancy`` (mean daily return), ``win_rate``
+        (fraction of positive returns), ``samples`` (number of returns used)
+        and ``lookback`` (applied window).
+    """
+
+    if bars is None or bars.empty:
+        return {"expectancy": 0.0, "win_rate": 0.0, "samples": 0, "lookback": int(lookback)}
+
+    frame = bars.copy()
+    if "timestamp" in frame.columns:
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+        frame = frame.sort_values("timestamp")
+
+    closes = pd.to_numeric(frame.get("close"), errors="coerce")
+    returns = closes.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    if lookback and lookback > 0:
+        returns = returns.tail(int(lookback))
+
+    if returns.empty:
+        return {"expectancy": 0.0, "win_rate": 0.0, "samples": 0, "lookback": int(lookback)}
+
+    expectancy = float(returns.mean())
+    win_rate = float((returns > 0).mean())
+    samples = int(returns.shape[0])
+
+    return {
+        "expectancy": expectancy,
+        "win_rate": win_rate,
+        "samples": samples,
+        "lookback": int(lookback),
+    }
 
 
 def get_data(symbol: str, days: int = 800) -> pd.DataFrame:

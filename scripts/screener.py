@@ -18,6 +18,7 @@ from typing import (
     Mapping,
     MutableMapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
@@ -43,6 +44,7 @@ try:  # pragma: no cover - preferred module execution path
         score_universe,
         DEFAULT_COMPONENT_MAP,
     )
+    from .backtest import compute_recent_performance
 except Exception:  # pragma: no cover - fallback for direct script execution
     import os as _os
     import sys as _sys
@@ -66,6 +68,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
         score_universe,
         DEFAULT_COMPONENT_MAP,
     )
+    from scripts.backtest import compute_recent_performance  # type: ignore
 
 from utils.env import load_env, get_alpaca_creds
 from utils.io_utils import atomic_write_bytes
@@ -145,10 +148,18 @@ CORE_FEATURE_COLUMNS = [
     "LIQpen",
 ]
 
+COARSE_RANK_COLUMNS = tuple(dict.fromkeys(DEFAULT_COMPONENT_MAP.values()))
+
 TOP_CANDIDATE_COLUMNS = [
     "timestamp",
     "symbol",
     "Score",
+    "coarse_score",
+    "coarse_rank",
+    "backtest_expectancy",
+    "backtest_win_rate",
+    "backtest_adjustment",
+    "backtest_samples",
     "exchange",
     "close",
     "volume",
@@ -181,6 +192,11 @@ ASSET_HTTP_TIMEOUT = 15
 BARS_BATCH_SIZE = 200
 BAR_RETRY_STATUSES = {429, 500, 502, 503, 504}
 BAR_MAX_RETRIES = 3
+DEFAULT_SHORTLIST_SIZE = 800
+DEFAULT_BACKTEST_TOP_K = 100
+DEFAULT_BACKTEST_LOOKBACK = 90
+BACKTEST_EXPECTANCY_WEIGHT = 5.0
+BACKTEST_WIN_RATE_WEIGHT = 1.0
 
 
 def _write_universe_prefix_metrics(
@@ -1854,6 +1870,8 @@ def build_enriched_bars(
     cfg: Mapping[str, object],
     *,
     timings: Optional[dict[str, float]] = None,
+    feature_columns: Optional[Sequence[str]] = None,
+    include_intermediate: Optional[bool] = None,
 ) -> pd.DataFrame:
     stage_timer = T()
     df = bars_df.copy() if bars_df is not None else pd.DataFrame(columns=INPUT_COLUMNS)
@@ -1892,7 +1910,8 @@ def build_enriched_bars(
         df.groupby("symbol", as_index=False)["timestamp"].size().rename(columns={"size": "history"})
     )
 
-    features_df = compute_all_features(df, cfg)
+    add_intermediate = True if include_intermediate is None else bool(include_intermediate)
+    features_df = compute_all_features(df, cfg, add_intermediate=add_intermediate)
     feature_elapsed = stage_timer.lap("feature_secs")
     if timings is not None:
         timings["feature_secs"] = timings.get("feature_secs", 0.0) + feature_elapsed
@@ -1900,7 +1919,7 @@ def build_enriched_bars(
         columns = [
             "symbol",
             "timestamp",
-            *ALL_FEATURE_COLUMNS,
+            *(feature_columns or ALL_FEATURE_COLUMNS),
             "close",
             "volume",
             "exchange",
@@ -1910,6 +1929,17 @@ def build_enriched_bars(
 
     base_cols = ["symbol", "timestamp", "close", "volume", "exchange"]
     base_info = df[base_cols].drop_duplicates(subset=["symbol", "timestamp"], keep="last")
+
+    if feature_columns is not None:
+        ordered = [str(col) for col in feature_columns]
+        missing = [col for col in ordered if col not in features_df.columns]
+        for col in missing:
+            features_df[col] = pd.NA
+        feature_subset = ["symbol", "timestamp", *ordered]
+        features_df = features_df.reindex(columns=feature_subset)
+    else:
+        feature_subset = ["symbol", "timestamp", *ALL_FEATURE_COLUMNS]
+        features_df = features_df.reindex(columns=feature_subset, fill_value=pd.NA)
 
     enriched = features_df.merge(base_info, on=["symbol", "timestamp"], how="left")
     enriched = enriched.merge(history_counts, on="symbol", how="left")
@@ -1970,6 +2000,24 @@ def _format_timestamp(ts: datetime) -> str:
 def _write_csv_atomic(path: Path, df: pd.DataFrame) -> None:
     data = df.to_csv(index=False).encode("utf-8")
     atomic_write_bytes(path, data)
+
+
+def _write_shortlist_csv(path: Path, shortlist: Optional[pd.DataFrame]) -> Path:
+    columns = ["symbol", "coarse_score", "coarse_rank"]
+    if shortlist is None or shortlist.empty:
+        frame = pd.DataFrame(columns=columns)
+    else:
+        frame = shortlist.copy()
+        frame = frame.reindex(columns=columns, fill_value=pd.NA)
+        frame["symbol"] = frame["symbol"].astype("string").str.upper().fillna("")
+        if "coarse_score" in frame.columns:
+            frame["coarse_score"] = pd.to_numeric(frame["coarse_score"], errors="coerce")
+        if "coarse_rank" in frame.columns:
+            frame["coarse_rank"] = pd.to_numeric(frame["coarse_rank"], errors="coerce").astype("Int64")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _write_csv_atomic(target, frame)
+    return target
 
 
 def _write_json_atomic(path: Path, payload: dict) -> None:
@@ -2329,6 +2377,10 @@ def run_screener(
     relax_gates: str = "none",
     dollar_vol_min: Optional[float] = None,
     ranker_config: Optional[Mapping[str, object]] = None,
+    shortlist_size: Optional[int] = None,
+    shortlist_path: Optional[Union[str, Path]] = None,
+    backtest_top_k: Optional[int] = None,
+    backtest_lookback: Optional[int] = None,
 ) -> Tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -2345,6 +2397,42 @@ def run_screener(
     prepared = _prepare_input_frame(df)
     stats: dict[str, int] = {"symbols_in": 0, "candidates_out": 0}
     skip_reasons = {key: 0 for key in SKIP_KEYS}
+
+    try:
+        shortlist_limit = (
+            DEFAULT_SHORTLIST_SIZE
+            if shortlist_size is None
+            else max(int(shortlist_size), 0)
+        )
+    except (TypeError, ValueError):
+        shortlist_limit = DEFAULT_SHORTLIST_SIZE
+
+    try:
+        backtest_limit = (
+            DEFAULT_BACKTEST_TOP_K
+            if backtest_top_k is None
+            else max(int(backtest_top_k), 0)
+        )
+    except (TypeError, ValueError):
+        backtest_limit = DEFAULT_BACKTEST_TOP_K
+
+    try:
+        lookback_window = (
+            DEFAULT_BACKTEST_LOOKBACK
+            if backtest_lookback is None
+            else max(int(backtest_lookback), 0)
+        )
+    except (TypeError, ValueError):
+        lookback_window = DEFAULT_BACKTEST_LOOKBACK
+
+    shortlist_target = (
+        Path(shortlist_path)
+        if shortlist_path is not None
+        else Path("data") / "tmp" / "shortlist.csv"
+    )
+
+    stats["shortlist_requested"] = shortlist_limit
+    stats["backtest_target"] = backtest_limit
 
     prefiltered_map = {
         str(sym or "").strip().upper(): str(reason or "").strip().upper()
@@ -2422,25 +2510,139 @@ def run_screener(
             LOGGER.warning("Invalid dollar_vol_min override: %s", dollar_vol_min)
 
     timing_info: dict[str, float] = {}
-    LOGGER.info("[STAGE] features start")
-    enriched = build_enriched_bars(prepared, ranker_cfg, timings=timing_info)
-    LOGGER.info("[STAGE] features end (rows=%d)", int(enriched.shape[0]))
+
+    LOGGER.info("[STAGE] coarse features start")
+    coarse_enriched = build_enriched_bars(
+        prepared,
+        ranker_cfg,
+        timings=timing_info,
+        feature_columns=COARSE_RANK_COLUMNS,
+        include_intermediate=False,
+    )
+    LOGGER.info(
+        "[STAGE] coarse features end (rows=%d)", int(coarse_enriched.shape[0])
+    )
+
+    coarse_rank_timer = T()
+    LOGGER.info("[STAGE] coarse rank start")
+    coarse_scored = score_universe(coarse_enriched, ranker_cfg)
+    LOGGER.info(
+        "[STAGE] coarse rank end (rows=%d)", int(coarse_scored.shape[0])
+    )
+    timing_info["coarse_rank_secs"] = timing_info.get(
+        "coarse_rank_secs", 0.0
+    ) + coarse_rank_timer.lap("coarse_rank_secs")
+
+    if not coarse_scored.empty:
+        coarse_scored = coarse_scored.copy()
+        coarse_scored["coarse_rank"] = np.arange(
+            1, coarse_scored.shape[0] + 1, dtype=int
+        )
+    else:
+        coarse_scored["coarse_rank"] = pd.Series(dtype="int64")
+
+    stats["coarse_ranked"] = int(coarse_scored.shape[0])
+
+    shortlist_view = (
+        coarse_scored.head(shortlist_limit).loc[:, ["symbol", "Score", "coarse_rank"]]
+        if not coarse_scored.empty
+        else pd.DataFrame(columns=["symbol", "Score", "coarse_rank"])
+    )
+    shortlist_payload = shortlist_view.rename(columns={"Score": "coarse_score"})
+    shortlist_payload["symbol"] = (
+        shortlist_payload.get("symbol", pd.Series(dtype="object"))
+        .astype(str)
+        .str.upper()
+    )
+    shortlist_payload = shortlist_payload.drop_duplicates(subset=["symbol"])
+    stats["shortlist_candidates"] = int(shortlist_payload.shape[0])
+
+    try:
+        shortlist_written = _write_shortlist_csv(shortlist_target, shortlist_payload)
+        LOGGER.info(
+            "[STAGE] shortlist written: %s (rows=%d)",
+            shortlist_written,
+            stats["shortlist_candidates"],
+        )
+    except Exception as exc:  # pragma: no cover - disk issues unexpected
+        LOGGER.warning("Failed to write shortlist %s: %s", shortlist_target, exc)
+        shortlist_written = shortlist_target
+
+    stats["shortlist_path"] = str(shortlist_written)
+
+    shortlist_symbols = (
+        shortlist_payload["symbol"].astype(str).str.upper().tolist()
+        if not shortlist_payload.empty
+        else []
+    )
+
+    shortlist_prepared = (
+        prepared[prepared["symbol"].isin(shortlist_symbols)].copy()
+        if shortlist_symbols
+        else prepared.iloc[0:0].copy()
+    )
+
+    LOGGER.info(
+        "[STAGE] full features start (shortlist=%d)", len(shortlist_symbols)
+    )
+    enriched = build_enriched_bars(
+        shortlist_prepared,
+        ranker_cfg,
+        timings=timing_info,
+    )
+    LOGGER.info("[STAGE] full features end (rows=%d)", int(enriched.shape[0]))
+
     rank_timer = T()
-    LOGGER.info("[STAGE] rank start")
+    LOGGER.info("[STAGE] full rank start")
     scored_df = score_universe(enriched, ranker_cfg)
-    LOGGER.info("[STAGE] rank end (rows=%d)", int(scored_df.shape[0]))
-    timing_info["rank_secs"] = timing_info.get("rank_secs", 0.0) + rank_timer.lap("rank_secs")
+    LOGGER.info("[STAGE] full rank end (rows=%d)", int(scored_df.shape[0]))
+    timing_info["rank_secs"] = timing_info.get("rank_secs", 0.0) + rank_timer.lap(
+        "rank_secs"
+    )
+
     if not scored_df.empty:
+        scored_df = scored_df.copy()
         scored_df["rank"] = np.arange(1, scored_df.shape[0] + 1, dtype=int)
     else:
         scored_df["rank"] = pd.Series(dtype="int64")
+
     scored_df["gates_passed"] = False
+
+    if "symbol" in scored_df.columns and not shortlist_payload.empty:
+        scored_df = scored_df.merge(shortlist_payload, on="symbol", how="left")
+    else:
+        if "coarse_score" not in scored_df.columns:
+            scored_df["coarse_score"] = pd.Series(pd.NA, index=scored_df.index, dtype="Float64")
+        if "coarse_rank" not in scored_df.columns:
+            scored_df["coarse_rank"] = pd.Series(pd.NA, index=scored_df.index, dtype="Int64")
+
+    if "coarse_score" in scored_df.columns:
+        scored_df["coarse_score"] = pd.to_numeric(
+            scored_df["coarse_score"], errors="coerce"
+        )
+    if "coarse_rank" in scored_df.columns:
+        scored_df["coarse_rank"] = pd.to_numeric(
+            scored_df["coarse_rank"], errors="coerce"
+        ).astype("Int64")
 
     gates_timer = T()
     LOGGER.info("[STAGE] gates start")
     candidates_df, gate_fail_counts, gate_rejects = apply_gates(scored_df, ranker_cfg)
     LOGGER.info("[STAGE] gates end (candidates=%d)", int(candidates_df.shape[0]))
-    timing_info["gates_secs"] = timing_info.get("gates_secs", 0.0) + gates_timer.lap("gates_secs")
+    timing_info["gates_secs"] = timing_info.get("gates_secs", 0.0) + gates_timer.lap(
+        "gates_secs"
+    )
+
+    if not candidates_df.empty:
+        candidates_df["gates_passed"] = True
+        if "coarse_score" in candidates_df.columns:
+            candidates_df["coarse_score"] = pd.to_numeric(
+                candidates_df["coarse_score"], errors="coerce"
+            )
+        if "coarse_rank" in candidates_df.columns:
+            candidates_df["coarse_rank"] = pd.to_numeric(
+                candidates_df["coarse_rank"], errors="coerce"
+            ).astype("Int64")
 
     if not candidates_df.empty:
         def _gate_key(frame: pd.DataFrame) -> pd.Index:
@@ -2461,6 +2663,162 @@ def run_screener(
         scored_df["gates_passed"] = scored_df_keys.isin(passed_index)
 
     stats["candidates_out"] = int(candidates_df.shape[0])
+
+    backtest_timer = T()
+    backtest_rows: list[dict[str, object]] = []
+    if backtest_limit and not scored_df.empty and not shortlist_prepared.empty:
+        ranked_symbols = (
+            scored_df.sort_values("Score", ascending=False)["symbol"]
+            .astype(str)
+            .str.upper()
+            .tolist()
+        )
+        unique_symbols: list[str] = []
+        for sym in ranked_symbols:
+            if sym not in unique_symbols:
+                unique_symbols.append(sym)
+            if len(unique_symbols) >= backtest_limit:
+                break
+
+        if unique_symbols:
+            bars_sorted = shortlist_prepared.sort_values("timestamp")
+            for sym in unique_symbols:
+                sym_mask = bars_sorted["symbol"].astype(str).str.upper() == sym
+                sym_bars = bars_sorted.loc[sym_mask]
+                if sym_bars.empty:
+                    continue
+                metrics = compute_recent_performance(sym_bars, lookback=lookback_window)
+                backtest_rows.append(
+                    {
+                        "symbol": sym,
+                        "backtest_expectancy": float(metrics.get("expectancy", 0.0) or 0.0),
+                        "backtest_win_rate": float(metrics.get("win_rate", 0.0) or 0.0),
+                        "backtest_samples": int(metrics.get("samples", 0) or 0),
+                    }
+                )
+
+    backtest_elapsed = backtest_timer.lap("backtest_secs")
+    if backtest_elapsed:
+        timing_info["backtest_secs"] = timing_info.get("backtest_secs", 0.0) + backtest_elapsed
+
+    backtest_df = pd.DataFrame(
+        backtest_rows,
+        columns=[
+            "symbol",
+            "backtest_expectancy",
+            "backtest_win_rate",
+            "backtest_samples",
+        ],
+    )
+    stats["backtest_evaluated"] = int(backtest_df.shape[0])
+    stats["backtest_lookback"] = int(lookback_window)
+    if not backtest_df.empty:
+        stats["backtest_expectancy_mean"] = float(
+            pd.to_numeric(backtest_df["backtest_expectancy"], errors="coerce")
+            .dropna()
+            .mean()
+        )
+        stats["backtest_win_rate_mean"] = float(
+            pd.to_numeric(backtest_df["backtest_win_rate"], errors="coerce")
+            .dropna()
+            .mean()
+        )
+    else:
+        stats["backtest_expectancy_mean"] = 0.0
+        stats["backtest_win_rate_mean"] = 0.0
+
+    merge_cols = [
+        "symbol",
+        "backtest_expectancy",
+        "backtest_win_rate",
+        "backtest_samples",
+    ]
+    if not backtest_df.empty:
+        scored_df = scored_df.merge(backtest_df, on="symbol", how="left")
+        if not candidates_df.empty:
+            candidates_df = candidates_df.merge(backtest_df, on="symbol", how="left")
+    else:
+        for frame in (scored_df, candidates_df):
+            if frame is None or frame.empty:
+                continue
+            for col in merge_cols[1:]:
+                if col not in frame.columns:
+                    frame[col] = pd.NA
+
+    def _apply_backtest_adjustment(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame is None or frame.empty:
+            return frame
+        expectancy_raw = pd.to_numeric(
+            frame.get("backtest_expectancy", pd.Series(dtype="float64")),
+            errors="coerce",
+        )
+        win_rate_raw = pd.to_numeric(
+            frame.get("backtest_win_rate", pd.Series(dtype="float64")),
+            errors="coerce",
+        )
+        samples_raw = pd.to_numeric(
+            frame.get("backtest_samples", pd.Series(dtype="float64")),
+            errors="coerce",
+        )
+
+        samples_filled = samples_raw.fillna(0)
+        valid_mask = samples_filled > 0
+
+        expectancy_display = expectancy_raw.where(valid_mask, np.nan)
+        win_rate_display = win_rate_raw.where(valid_mask, np.nan)
+        samples_display = samples_filled.astype("Int64")
+
+        exp_comp = expectancy_display.fillna(0.0)
+        win_comp = win_rate_display.fillna(0.5)
+        adjustment = exp_comp * BACKTEST_EXPECTANCY_WEIGHT
+        adjustment += (win_comp - 0.5) * BACKTEST_WIN_RATE_WEIGHT
+
+        frame["backtest_expectancy"] = expectancy_display
+        frame["backtest_win_rate"] = win_rate_display
+        frame["backtest_samples"] = samples_display
+        frame["backtest_adjustment"] = adjustment
+        score_series = pd.to_numeric(frame.get("Score"), errors="coerce").fillna(0.0)
+        frame["Score"] = score_series + adjustment
+        return frame
+
+    scored_df = _apply_backtest_adjustment(scored_df)
+    candidates_df = _apply_backtest_adjustment(candidates_df)
+
+    def _augment_breakdown(frame: pd.DataFrame) -> None:
+        if frame is None or frame.empty or "score_breakdown" not in frame.columns:
+            return
+
+        def _update(row: pd.Series) -> str:
+            raw = row.get("score_breakdown", "")
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) and raw else {}
+            except Exception:
+                payload = {}
+            samples_value = row.get("backtest_samples")
+            expectancy_value = row.get("backtest_expectancy")
+            win_rate_value = row.get("backtest_win_rate")
+            if pd.isna(samples_value) or float(samples_value) <= 0:
+                return json.dumps({k: payload[k] for k in sorted(payload)})
+            if pd.notna(expectancy_value):
+                payload["BTexp"] = round(float(expectancy_value), 4)
+            if pd.notna(win_rate_value):
+                payload["BTwin"] = round(float(win_rate_value), 4)
+            return json.dumps({k: payload[k] for k in sorted(payload)})
+
+        frame["score_breakdown"] = frame.apply(_update, axis=1)
+
+    _augment_breakdown(scored_df)
+    _augment_breakdown(candidates_df)
+
+    if not scored_df.empty:
+        scored_df.sort_values("Score", ascending=False, inplace=True)
+        scored_df.reset_index(drop=True, inplace=True)
+        scored_df["rank"] = np.arange(1, scored_df.shape[0] + 1, dtype=int)
+
+    if not candidates_df.empty:
+        candidates_df.sort_values("Score", ascending=False, inplace=True)
+        candidates_df.reset_index(drop=True, inplace=True)
+        candidates_df["rank"] = np.arange(1, candidates_df.shape[0] + 1, dtype=int)
 
     skip_reasons["NAN_DATA"] += _coerce_int(gate_fail_counts.get("nan_data"))
     skip_reasons["INSUFFICIENT_HISTORY"] += _coerce_int(
@@ -2597,6 +2955,15 @@ def write_outputs(
         "ranked_rows": int(scored_df.shape[0]),
         "symbols_in": int(stats.get("symbols_in", 0)),
         "candidates_out": int(stats.get("candidates_out", 0)),
+        "shortlist_requested": int(stats.get("shortlist_requested", 0)),
+        "shortlist_size": int(stats.get("shortlist_candidates", 0)),
+        "coarse_ranked": int(stats.get("coarse_ranked", 0)),
+        "shortlist_path": str(stats.get("shortlist_path", "")),
+        "backtest_target": int(stats.get("backtest_target", 0)),
+        "backtest_evaluated": int(stats.get("backtest_evaluated", 0)),
+        "backtest_lookback": int(stats.get("backtest_lookback", 0)),
+        "backtest_expectancy_mean": float(stats.get("backtest_expectancy_mean", 0.0)),
+        "backtest_win_rate_mean": float(stats.get("backtest_win_rate_mean", 0.0)),
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
     }
     gate_counts: dict[str, Union[int, str]] = {}
@@ -2694,6 +3061,8 @@ def write_outputs(
         "feature_secs": timing_payload.get("feature_secs", 0),
         "rank_secs": timing_payload.get("rank_secs", 0),
         "gates_secs": timing_payload.get("gates_secs", 0),
+        "coarse_rank_secs": timing_payload.get("coarse_rank_secs", 0),
+        "backtest_secs": timing_payload.get("backtest_secs", 0),
     }
     try:
         if hist_path.exists():
