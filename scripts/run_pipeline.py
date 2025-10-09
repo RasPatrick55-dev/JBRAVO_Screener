@@ -268,40 +268,43 @@ def _run_step(
 
 def refresh_latest_candidates() -> None:
     logger = LOGGER
-    src, dst = "data/top_candidates.csv", "data/latest_candidates.csv"
-    if os.path.exists(src):
-        try:
-            copyfile(src, dst)
-        except Exception as exc:  # pragma: no cover - copy failures are unexpected
-            logger.error("Failed to refresh %s from %s: %s", dst, src, exc)
-            emit(
-                "LATEST_COPY_FAILED",
-                component="pipeline",
-                error=str(exc).replace(" ", "_"),
-            )
-        else:
-            logger.info("Refreshed %s from %s.", dst, src)
-            emit("LATEST_UPDATED", component="pipeline")
-    else:
-        try:
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            with open(dst, "a", encoding="utf-8"):
-                pass
-        except Exception as exc:  # pragma: no cover - directory issues are unexpected
-            logger.error("Failed to create placeholder for %s: %s", dst, exc)
-        logger.warning("Missing %s; created/kept %s to clear staleness.", src, dst)
-        emit("TOP_MISSING", component="pipeline")
+    src = Path("data/top_candidates.csv")
+    dst = Path("data/latest_candidates.csv")
 
-    metrics_path = "data/screener_metrics.json"
     try:
-        os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
-        if os.path.exists(metrics_path):
-            with open(metrics_path, "r", encoding="utf-8") as fh:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        copyfile(src, dst)
+    except FileNotFoundError as exc:
+        logger.warning("Missing %s; keeping placeholder %s.", src, dst)
+        emit("TOP_MISSING", component="pipeline")
+        try:
+            dst.touch()
+        except Exception as touch_exc:  # pragma: no cover - touch failures unexpected
+            logger.error("Failed to touch %s after missing %s: %s", dst, src, touch_exc)
+        else:
+            logger.info("Touched %s to avoid dashboard staleness.", dst)
+    except Exception as exc:  # pragma: no cover - copy failures are unexpected
+        logger.error("Failed to refresh %s from %s: %s", dst, src, exc)
+        emit(
+            "LATEST_COPY_FAILED",
+            component="pipeline",
+            error=str(exc).replace(" ", "_"),
+        )
+    else:
+        logger.info("Refreshed %s from %s.", dst, src)
+        emit("LATEST_UPDATED", component="pipeline")
+
+    metrics_path = Path("data/screener_metrics.json")
+    try:
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics: dict[str, Any]
+        if metrics_path.exists():
+            with metrics_path.open("r", encoding="utf-8") as fh:
                 metrics = json.load(fh) or {}
         else:
             metrics = {}
-        metrics["last_run_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        with open(metrics_path, "w", encoding="utf-8") as fh:
+        metrics["last_run_utc"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        with metrics_path.open("w", encoding="utf-8") as fh:
             json.dump(metrics, fh)
         logger.info("Updated screener metrics last_run_utc.")
     except Exception as exc:  # pragma: no cover - metrics update should succeed

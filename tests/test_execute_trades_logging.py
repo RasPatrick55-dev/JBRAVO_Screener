@@ -74,6 +74,7 @@ def test_metrics_backward_compat(execute_trades_module):
     original_metrics = module.metrics.copy()
     original_latencies = list(module.order_latencies_ms)
     original_backoff = module.retry_backoff_ms_total
+    original_skip_counts = module.skip_reason_counts.copy()
     try:
         for key in module.metrics:
             module.metrics[key] = 0
@@ -120,6 +121,66 @@ def test_metrics_backward_compat(execute_trades_module):
         module.metrics.update(original_metrics)
         module.order_latencies_ms[:] = original_latencies
         module.retry_backoff_ms_total = original_backoff
+        module.skip_reason_counts.clear()
+        module.skip_reason_counts.update(original_skip_counts)
+
+
+def test_persist_execute_metrics_includes_skip_reasons(
+    tmp_path, monkeypatch, execute_trades_module
+):
+    module = execute_trades_module
+
+    events_path = tmp_path / "execute_events.jsonl"
+    _install_emit_stub(module, monkeypatch, events_path)
+
+    original_metrics = module.metrics.copy()
+    original_skip_counts = module.skip_reason_counts.copy()
+    original_latencies = list(module.order_latencies_ms)
+    original_backoff = module.retry_backoff_ms_total
+    original_metrics_path = module.metrics_path
+
+    try:
+        for key in module.metrics:
+            module.metrics[key] = 0
+
+        module.metrics.update(
+            {
+                "symbols_processed": 4,
+                "orders_submitted": 2,
+                "symbols_skipped": 0,
+                "api_failures": 1,
+            }
+        )
+
+        module.skip_reason_counts.clear()
+
+        metrics_file = tmp_path / "execute_metrics.json"
+        monkeypatch.setattr(module, "metrics_path", metrics_file)
+
+        module.skip("AAPL", "RISK_LIMIT", "Risk limit tripped")
+        module.skip("MSFT", "MARKET_DATA", "Bad data")
+        module.skip("TSLA", "MARKET_DATA", "Bad data")
+
+        payload = module.persist_execute_metrics()
+        written = json.loads(metrics_file.read_text(encoding="utf-8"))
+
+        assert written == payload
+        assert written["submitted"]["orders"] == 2
+        assert written["submitted"]["symbols"] == 4
+        assert written["skipped"]["total"] == module.metrics["symbols_skipped"] == 3
+        assert written["skipped"]["by_reason"] == {"MARKET_DATA": 2, "RISK_LIMIT": 1}
+        assert written["errors"]["api_failures"] == 1
+        assert "legacy" in written
+        assert written["legacy"]["orders_skipped_risk_limits"] >= 1
+        assert "generated_at_utc" in written
+        datetime.fromisoformat(written["generated_at_utc"])
+    finally:
+        module.metrics.update(original_metrics)
+        module.skip_reason_counts.clear()
+        module.skip_reason_counts.update(original_skip_counts)
+        module.order_latencies_ms[:] = original_latencies
+        module.retry_backoff_ms_total = original_backoff
+        monkeypatch.setattr(module, "metrics_path", original_metrics_path)
 
 
 def test_event_json_schema(tmp_path, monkeypatch, execute_trades_module):
