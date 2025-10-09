@@ -2,6 +2,8 @@ import argparse
 import json
 import logging
 import os
+import pathlib
+import shutil
 import sys
 import subprocess
 import time
@@ -14,6 +16,60 @@ from utils.env import load_env
 from utils.io_utils import atomic_write_bytes
 
 load_env()
+
+
+def _auto_reload_web(domain: str | None = None) -> None:
+    """Attempt to reload the PythonAnywhere web app.
+
+    Priority:
+      1) pa_reload_webapp <domain> (if available + domain given)
+      2) pa_reload_webapp (domain from env var)
+      3) touch WSGI file (fallback)
+
+    Never raises; logs warnings on failure.
+    """
+
+    log = logging.getLogger(__name__)
+    domain = domain or os.environ.get("PYTHONANYWHERE_DOMAIN")
+
+    cmd = shutil.which("pa_reload_webapp")
+    if cmd:
+        try:
+            args = [cmd] + ([domain] if domain else [])
+            ret = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
+            )
+            if ret.returncode == 0:
+                log.info(
+                    "[AUTO-RELOAD] pa_reload_webapp succeeded%s",
+                    f" for {domain}" if domain else "",
+                )
+                return
+            log.warning(
+                "[AUTO-RELOAD] pa_reload_webapp returned %s: %s",
+                ret.returncode,
+                (ret.stderr or ret.stdout or "").strip(),
+            )
+        except Exception as exc:  # pragma: no cover - defensive safety
+            log.warning("[AUTO-RELOAD] pa_reload_webapp error: %s", exc)
+
+    try:
+        user = os.environ.get("PA_USERNAME") or os.environ.get("USER") or "RasPatrick"
+        guess = f"/var/www/{user.lower()}_pythonanywhere_com_wsgi.py"
+        path = os.environ.get("PA_WSGI_PATH", guess)
+        pathlib.Path(path).touch()
+        log.info("[AUTO-RELOAD] touched WSGI file: %s", path)
+        return
+    except Exception as exc:  # pragma: no cover - defensive safety
+        log.warning("[AUTO-RELOAD] touch WSGI fallback failed: %s", exc)
+
+    log.warning(
+        "[AUTO-RELOAD] No reload method succeeded; dashboard may appear stale until manual reload."
+    )
 
 
 def repo_root() -> Path:
@@ -171,6 +227,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default="screener,backtest,metrics",
         help="Comma-separated list of steps to run (default: screener,backtest,metrics)",
     )
+    parser.add_argument(
+        "--reload-web",
+        choices=["true", "false"],
+        default="true",
+        help="Reload the web app after pipeline completes (default: true)",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -326,6 +388,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         raise
     finally:
         emit("PIPELINE_END", component="pipeline")
+        do_reload = str(getattr(args, "reload_web", "true")).lower() == "true"
+        if do_reload:
+            _auto_reload_web(domain=os.environ.get("PYTHONANYWHERE_DOMAIN"))
 
     return exit_code
 

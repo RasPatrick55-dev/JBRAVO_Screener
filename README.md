@@ -44,6 +44,9 @@ automatically:
 python scripts/run_pipeline.py
 ```
 
+Set `PYTHONANYWHERE_DOMAIN` (e.g., `RasPatrick.pythonanywhere.com`) or `PA_WSGI_PATH` to enable the automatic web reload.
+Disable it per-run via `--reload-web false`.
+
 When creating a scheduled task for `execute_trades.py` on PythonAnywhere make
 sure the working directory is set to the project root so logs and CSV files are
 written in the correct location:
