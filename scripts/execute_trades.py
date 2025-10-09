@@ -2,6 +2,7 @@
 import os, sys, subprocess, json
 from pathlib import Path
 from datetime import datetime, timezone
+from collections import Counter
 
 
 def repo_root() -> Path:
@@ -180,6 +181,7 @@ metrics = {
     "api_retries": 0,
     "api_failures": 0,
 }
+skip_reason_counts: Counter[str] = Counter()
 
 VALID_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
 
@@ -288,14 +290,39 @@ def build_execute_metrics_snapshot() -> dict[str, int]:
     return snapshot
 
 
-def persist_execute_metrics() -> dict[str, int]:
+def _current_utc_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def persist_execute_metrics() -> dict[str, object]:
     """Persist the current execution metrics snapshot to disk."""
 
     snapshot = build_execute_metrics_snapshot()
-    with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump(snapshot, f, indent=4)
-    logger.info("[METRICS] Execution results: %s", snapshot)
-    return snapshot
+    payload: dict[str, object] = {
+        "generated_at_utc": _current_utc_iso(),
+        "submitted": {
+            "orders": snapshot.get("orders_submitted", 0),
+            "symbols": snapshot.get("symbols_processed", 0),
+        },
+        "skipped": {
+            "total": snapshot.get("symbols_skipped", 0),
+            "by_reason": dict(sorted(skip_reason_counts.items())),
+        },
+        "errors": {
+            "api_failures": snapshot.get("api_failures", 0),
+        },
+        "legacy": snapshot,
+    }
+
+    if metrics.get("run_aborted_reason"):
+        payload["run_aborted_reason"] = metrics["run_aborted_reason"]
+
+    metrics_file = Path(metrics_path)
+    metrics_file.parent.mkdir(parents=True, exist_ok=True)
+    with metrics_file.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    logger.info("[METRICS] Execution results: %s", payload)
+    return payload
 
 
 def log_order_submit_event(
@@ -386,6 +413,8 @@ def skip(symbol: str, code: str, reason: str, **kvs) -> None:
 
     inc("symbols_skipped")
     inc(f"orders_skipped_{code.lower()}")
+    normalized_code = code.strip().upper() or "UNKNOWN"
+    skip_reason_counts[normalized_code] += 1
     log_event(
         {
             "event": "CANDIDATE_SKIPPED",
@@ -1810,16 +1839,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if status == "CLOSED" and not force_flag:
         logger.warning("Market is closed; aborting trade execution run.")
         metrics["run_aborted_reason"] = "MARKET_CLOSED"
-        mp = Path("data/execute_metrics.json")
-        mp.parent.mkdir(parents=True, exist_ok=True)
-        metrics_payload: dict[str, object] = {}
-        if mp.exists():
-            try:
-                metrics_payload = json.loads(mp.read_text(encoding="utf-8"))
-            except Exception:
-                metrics_payload = {}
-        metrics_payload["run_aborted_reason"] = "MARKET_CLOSED"
-        mp.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+        persist_execute_metrics()
         emit("RUN_ABORT", component=COMPONENT_NAME, reason_code="MARKET_CLOSED")
         emit("RUN_END", component=COMPONENT_NAME, status="aborted")
         return 0
