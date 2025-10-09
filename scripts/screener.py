@@ -1977,6 +1977,181 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     atomic_write_bytes(path, data)
 
 
+def _load_coverage_table(path: Path) -> dict[str, dict[str, object]]:
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_csv(path)
+    except Exception as exc:
+        LOGGER.warning("Failed to read coverage table %s: %s", path, exc)
+        return {}
+    coverage: dict[str, dict[str, object]] = {}
+    for row in df.to_dict("records"):
+        symbol = str(row.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        coverage[symbol] = {
+            "last_ok_utc": row.get("last_ok_utc"),
+            "last_miss_utc": row.get("last_miss_utc"),
+            "ok_count": int(row.get("ok_count", 0) or 0),
+            "miss_count": int(row.get("miss_count", 0) or 0),
+        }
+    return coverage
+
+
+def _write_coverage_table(path: Path, coverage: Mapping[str, Mapping[str, object]]) -> None:
+    rows: list[dict[str, object]] = []
+    for symbol in sorted(coverage.keys()):
+        entry = coverage[symbol]
+        rows.append(
+            {
+                "symbol": symbol,
+                "last_ok_utc": entry.get("last_ok_utc"),
+                "last_miss_utc": entry.get("last_miss_utc"),
+                "ok_count": int(entry.get("ok_count", 0) or 0),
+                "miss_count": int(entry.get("miss_count", 0) or 0),
+            }
+        )
+    frame = pd.DataFrame(rows, columns=["symbol", "last_ok_utc", "last_miss_utc", "ok_count", "miss_count"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_csv_atomic(path, frame)
+
+
+def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
+    LOGGER.info("[DELTA] Starting delta update run")
+    run_ts = datetime.now(timezone.utc)
+    run_utc = _format_timestamp(run_ts)
+
+    feed = str(getattr(args, "feed", DEFAULT_FEED) or DEFAULT_FEED).strip().lower()
+    batch_size = max(1, int(getattr(args, "batch_size", 50)))
+
+    try:
+        start_iso, end_iso, last_day = _fallback_daily_window(1)
+    except Exception as exc:  # pragma: no cover - fallback already guards
+        LOGGER.warning("Delta update fallback window failed: %s", exc)
+        start_iso, end_iso, last_day = _fallback_daily_window(1)
+
+    LOGGER.info("[DELTA] Requesting %s (%s → %s)", last_day, start_iso, end_iso)
+
+    symbols, _, asset_metrics = _fetch_assets_via_http(exclude_otc=False)
+    unique_symbols = list(dict.fromkeys(symbols))
+    if not unique_symbols:
+        LOGGER.error("[DELTA] No tradable symbols available from Alpaca assets endpoint")
+        return 1
+
+    coverage_path = base_dir / "data" / "coverage" / f"{feed}_coverage.csv"
+    coverage = _load_coverage_table(coverage_path)
+
+    output_dir = base_dir / "data" / "bars" / feed / "1d" / last_day
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    metrics = {
+        "mode": "delta-update",
+        "run_utc": run_utc,
+        "feed": feed,
+        "trading_day": last_day,
+        "batches": 0,
+        "symbols_total": len(unique_symbols),
+        "symbols_with_rows": 0,
+        "symbols_without_rows": 0,
+        "http": {
+            "requests": 0,
+            "rows": 0,
+            "rate_limit_hits": 0,
+            "retries": 0,
+            "miss_symbols": 0,
+        },
+        "assets": {
+            "total": int(asset_metrics.get("assets_total", 0)),
+            "tradable_equity": int(asset_metrics.get("assets_tradable_equities", 0)),
+            "after_filters": int(asset_metrics.get("assets_after_filters", 0)),
+        },
+    }
+
+    miss_symbols: set[str] = set()
+
+    for batch_idx, chunk in enumerate(_chunked(unique_symbols, batch_size)):
+        batch_syms = [s.upper() for s in chunk if s]
+        if not batch_syms:
+            continue
+        metrics["batches"] += 1
+        bars_raw, http_stats = fetch_bars_http(
+            batch_syms,
+            start_iso,
+            end_iso,
+            feed=feed,
+            batch=len(batch_syms),
+        )
+
+        df = to_bars_df(bars_raw)
+        if "symbol" in df.columns:
+            df["symbol"] = df["symbol"].astype("string").str.upper()
+            df = df[df["symbol"].isin(batch_syms)]
+        df = df.reset_index(drop=True)
+
+        batch_path = output_dir / f"{batch_idx:04d}.parquet"
+        if df.empty:
+            empty = pd.DataFrame(columns=BARS_COLUMNS)
+            empty.to_parquet(batch_path, index=False)
+        else:
+            df.to_parquet(batch_path, index=False)
+
+        present = set(df["symbol"].unique()) if not df.empty else set()
+        missing = set(batch_syms) - present
+
+        LOGGER.info(
+            "[DELTA] batch=%04d symbols=%d rows=%d missing=%d",
+            batch_idx,
+            len(batch_syms),
+            int(df.shape[0]),
+            len(missing),
+        )
+
+        metrics["symbols_with_rows"] += len(present)
+        metrics["symbols_without_rows"] += len(missing)
+
+        metrics["http"]["requests"] += int(http_stats.get("requests", 0))
+        metrics["http"]["rows"] += int(http_stats.get("rows", df.shape[0]))
+        metrics["http"]["rate_limit_hits"] += int(http_stats.get("rate_limit_hits", 0))
+        metrics["http"]["retries"] += int(http_stats.get("retries", 0))
+        miss_symbols.update(http_stats.get("miss_list", []))
+        metrics["http"]["miss_symbols"] += int(http_stats.get("miss_symbols", len(missing)))
+
+        for symbol in batch_syms:
+            record = coverage.setdefault(
+                symbol,
+                {"last_ok_utc": None, "last_miss_utc": None, "ok_count": 0, "miss_count": 0},
+            )
+            if symbol in present:
+                record["last_ok_utc"] = run_utc
+                record["ok_count"] = int(record.get("ok_count", 0)) + 1
+            else:
+                record["last_miss_utc"] = run_utc
+                record["miss_count"] = int(record.get("miss_count", 0)) + 1
+
+    metrics["coverage"] = {
+        "ok": sum(1 for entry in coverage.values() if int(entry.get("ok_count", 0)) > 0),
+        "miss": sum(1 for entry in coverage.values() if int(entry.get("miss_count", 0)) > 0),
+    }
+    metrics["http"]["miss_list"] = sorted(miss_symbols)
+
+    _write_coverage_table(coverage_path, coverage)
+
+    metrics_dir = base_dir / "data" / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = metrics_dir / f"delta_update_{feed}.json"
+    _write_json_atomic(metrics_path, metrics)
+
+    LOGGER.info(
+        "[DELTA] Completed batches=%d http.requests=%d http.rows=%d",
+        metrics["batches"],
+        metrics["http"]["requests"],
+        metrics["http"]["rows"],
+    )
+
+    return 0
+
+
 def write_predictions(
     ranked_df: Optional[pd.DataFrame],
     run_meta: Optional[Mapping[str, object]],
@@ -2535,6 +2710,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the nightly screener")
     source_default = os.environ.get("SCREENER_SOURCE")
     parser.add_argument(
+        "--mode",
+        choices=["screener", "delta-update"],
+        default="screener",
+        help="Run the full screener (default) or nightly delta update pipeline",
+    )
+    parser.add_argument(
         "--universe",
         choices=["alpaca-active", "csv"],
         default="alpaca-active",
@@ -2680,6 +2861,10 @@ def main(
         LOGGER.error("Missing Alpaca credentials; set APCA_API_KEY_ID and APCA_API_SECRET_KEY.")
         return 2
     base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
+
+    if getattr(args, "mode", "screener") == "delta-update":
+        return _run_delta_update(args, base_dir)
+
     now = datetime.now(timezone.utc)
     pipeline_timer = T()
     fetch_elapsed = 0.0

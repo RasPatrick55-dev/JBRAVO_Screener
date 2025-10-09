@@ -338,8 +338,8 @@ def average_precision(y_true: np.ndarray, y_score: np.ndarray) -> Optional[float
 
 
 def compute_decile_lifts(
-    frame: pd.DataFrame,
-    score_column: str,
+    frame: pd.DataFrame | np.ndarray | List[float],
+    score_column: str | np.ndarray | List[float],
     deciles: int = 10,
 ) -> Dict[str, List[Optional[float]]]:
     summary: Dict[str, List[Optional[float]]] = {
@@ -348,6 +348,21 @@ def compute_decile_lifts(
         "avg_return": [],
         "count": [],
     }
+    if not isinstance(frame, pd.DataFrame):
+        labels = np.asarray(frame)
+        scores = np.asarray(score_column)
+        tmp = pd.DataFrame({"label": labels, "score": scores})
+        summary = compute_decile_lifts(tmp, "score", deciles=deciles)
+        return {
+            str(rank): {
+                "hit_rate": summary["hit_rate"][idx],
+                "avg_return": summary["avg_return"][idx],
+                "count": summary["count"][idx],
+            }
+            for idx, rank in enumerate(summary.get("rank_decile", []))
+        }
+    if not isinstance(score_column, str):
+        raise TypeError("score_column must be column name when passing a DataFrame")
     if frame is None or frame.empty or score_column not in frame.columns:
         for idx in range(deciles):
             summary["rank_decile"].append(idx + 1)

@@ -3,11 +3,9 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import requests
-
-from .rate import TokenBucket
 
 
 def _flatten_to_canonical(data: Dict) -> List[Dict]:
@@ -47,35 +45,75 @@ def _flatten_to_canonical(data: Dict) -> List[Dict]:
     return out
 
 
+def _rate_limit_guard(last_call: List[float], min_interval: float) -> None:
+    """Sleep when the last request was within ``min_interval`` seconds."""
+
+    now = time.monotonic()
+    if last_call:
+        elapsed = now - last_call[0]
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+    last_call[:] = [time.monotonic()]
+
+
+def _chunk_symbols(symbols: Iterable[str], batch: int) -> Iterable[List[str]]:
+    batch = max(1, int(batch))
+    cleaned: List[str] = []
+    for sym in symbols:
+        if not sym:
+            continue
+        cleaned.append(str(sym).strip().upper())
+    for start_idx in range(0, len(cleaned), batch):
+        yield cleaned[start_idx : start_idx + batch]
+
+
 def fetch_bars_http(
     symbols: List[str],
     start: str,
     end: str,
-    timeframe: str = "1Day",
     feed: str = "iex",
+    batch: int = 50,
+    *,
+    timeframe: str = "1Day",
     per_page: int = 10000,
-    sleep_s: float = 0.35,
     verify_hook=None,
 ) -> Tuple[List[dict], Dict[str, int]]:
+    """Fetch daily bars for ``symbols`` via Alpaca's HTTP API.
+
+    The client issues batched requests, following pagination tokens until
+    exhaustion. A light-weight rate limiter targets ~3-4 requests per second.
+    When a 429 response is observed the client backs off exponentially before
+    retrying. HTTP 404 responses mark every symbol in the batch as a miss.
+    """
+
     base = (os.getenv("APCA_DATA_API_BASE_URL") or "https://data.alpaca.markets").rstrip("/")
     url = f"{base}/v2/stocks/bars"
     headers = {
         "APCA-API-KEY-ID": os.getenv("APCA_API_KEY_ID"),
         "APCA-API-SECRET-KEY": os.getenv("APCA_API_SECRET_KEY"),
     }
-    out: List[dict] = []
-    http_404 = 0
-    http_empty = 0
-    rate_limited = 0
-    requests_made = 0
-    pages_total = 0
-    token_bucket = TokenBucket(200)
-    first = True
-    for i in range(0, len(symbols), 50):
-        chunk = symbols[i : i + 50]
-        chunk_pages = 0
+
+    rows: List[dict] = []
+    stats: Dict[str, int] = {
+        "requests": 0,
+        "rows": 0,
+        "rate_limit_hits": 0,
+        "retries": 0,
+        "pages": 0,
+        "http_404_batches": 0,
+        "http_empty_batches": 0,
+        "chunks": 0,
+    }
+    missed: set[str] = set()
+    first_hook = True
+    last_call: List[float] = []
+
+    for chunk in _chunk_symbols(symbols, batch):
+        if not chunk:
+            continue
+        stats["chunks"] += 1
+        page_token = None
         consecutive_429 = 0
-        page = None
         while True:
             params = {
                 "symbols": ",".join(chunk),
@@ -85,46 +123,58 @@ def fetch_bars_http(
                 "feed": feed,
                 "limit": per_page,
             }
-            if page:
-                params["page_token"] = page
-            if verify_hook and first:
-                verify_hook(url, params)
-                first = False
+            if page_token:
+                params["page_token"] = page_token
 
-            token_bucket.acquire()
+            if verify_hook and first_hook:
+                verify_hook(url, params)
+                first_hook = False
+
+            _rate_limit_guard(last_call, 0.28)
             resp = requests.get(url, headers=headers, params=params, timeout=30)
-            requests_made += 1
+            stats["requests"] += 1
+
             if resp.status_code == 429:
-                rate_limited += 1
-                consecutive_429 = min(consecutive_429 + 1, 3)
-                delay = 1.5 if consecutive_429 >= 2 else max(sleep_s, 0.35)
+                stats["rate_limit_hits"] += 1
+                stats["retries"] += 1
+                consecutive_429 += 1
+                delay = min(4.0, 0.5 * (2 ** (consecutive_429 - 1)))
                 time.sleep(delay)
                 continue
+
             consecutive_429 = 0
             if resp.status_code == 404:
-                http_404 += 1
+                stats["http_404_batches"] += 1
+                missed.update(chunk)
                 break
+
             resp.raise_for_status()
-            data = resp.json()
+
+            try:
+                data = resp.json()
+            except Exception:
+                data = {}
+
             flattened = _flatten_to_canonical(data if isinstance(data, dict) else {})
             if flattened:
-                out.extend(flattened)
-                chunk_pages += 1
+                rows.extend(flattened)
+                stats["rows"] += len(flattened)
+                stats["pages"] += 1
             else:
-                http_empty += 1
-            page = data.get("next_page_token") if isinstance(data, dict) else None
-            if not page:
+                stats["http_empty_batches"] += 1
+
+            page_token = data.get("next_page_token") if isinstance(data, dict) else None
+            if not page_token:
                 break
-            time.sleep(sleep_s)
-        pages_total += chunk_pages
-        time.sleep(sleep_s)
-    chunk_count = max(1, (len(symbols) + 49) // 50)
-    return out, {
-        "http_404_batches": http_404,
-        "http_empty_batches": http_empty,
-        "empty_pages": http_empty,
-        "rate_limited": rate_limited,
-        "pages": pages_total,
-        "requests": requests_made,
-        "chunks": chunk_count,
-    }
+            stats["retries"] += 1
+
+    if missed:
+        stats["miss_symbols"] = len(missed)
+        stats["miss_list"] = sorted(missed)
+    else:
+        stats["miss_symbols"] = 0
+        stats["miss_list"] = []
+
+    stats["rate_limited"] = stats["rate_limit_hits"]
+
+    return rows, stats
