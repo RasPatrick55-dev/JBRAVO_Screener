@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gzip
 import json
 import logging
 import os
@@ -2211,12 +2212,57 @@ def _latest_child_dir(root: Path) -> Optional[Path]:
     return sorted(children)[-1]
 
 
-def _read_parquet_safely(path: Path) -> pd.DataFrame:
+def _is_batch_file(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    name = path.name
+    return name.endswith(".parquet") or name.endswith(".parquet.csv.gz")
+
+
+def _iter_batch_files(directory: Path) -> Iterable[Path]:
+    if not directory.exists():
+        return []
+    shards = sorted(path for path in directory.iterdir() if _is_batch_file(path))
+    seen: set[str] = set()
+    for shard in shards:
+        name = shard.name
+        base = name[: -len(".csv.gz")] if name.endswith(".parquet.csv.gz") else name
+        if base in seen:
+            continue
+        seen.add(base)
+        yield shard
+
+
+def _write_parquet_or_csv(df: pd.DataFrame, path: Union[str, Path]) -> str:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
     try:
-        return pd.read_parquet(path)
+        df.to_parquet(target, index=False)
+        return str(target)
     except Exception as exc:
-        LOGGER.warning("Failed to read parquet %s: %s", path, exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS)
+        LOGGER.warning(
+            "[DELTA] parquet engine missing/unavailable (%s). Falling back to CSV gzip for %s",
+            exc,
+            target.name,
+        )
+        alt = target.with_suffix(target.suffix + ".csv.gz")
+        with gzip.open(alt, "wt", encoding="utf-8") as handle:
+            df.to_csv(handle, index=False)
+        return str(alt)
+
+
+def _read_batch_safely(path: Path) -> pd.DataFrame:
+    try:
+        if path.suffix == ".parquet":
+            return pd.read_parquet(path)
+        if path.suffix == ".gz" and path.name.endswith(".csv.gz"):
+            return pd.read_csv(path)
+        if path.suffix == ".csv":
+            return pd.read_csv(path)
+        LOGGER.warning("Unsupported shard format at %s", path)
+    except Exception as exc:
+        LOGGER.warning("Failed to read shard %s: %s", path, exc)
+    return pd.DataFrame(columns=INPUT_COLUMNS)
 
 
 def _load_local_bars(
@@ -2235,8 +2281,8 @@ def _load_local_bars(
     frames: list[pd.DataFrame] = []
     latest_delta = _latest_child_dir(delta_root)
     if latest_delta is not None:
-        for shard in sorted(latest_delta.glob("*.parquet")):
-            frames.append(_read_parquet_safely(shard))
+        for shard in _iter_batch_files(latest_delta):
+            frames.append(_read_batch_safely(shard))
 
     if reuse_cache and cache_root.exists():
         day_limit = max(int(days), 0) if days else 0
@@ -2245,8 +2291,8 @@ def _load_local_bars(
             if not day_dir.is_dir():
                 continue
             collected += 1
-            for shard in sorted(day_dir.glob("*.parquet")):
-                frames.append(_read_parquet_safely(shard))
+            for shard in _iter_batch_files(day_dir):
+                frames.append(_read_batch_safely(shard))
             if day_limit and collected >= day_limit:
                 break
 
@@ -2375,18 +2421,24 @@ def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
 
     existing_rows = 0
     if output_dir.exists():
-        for existing_file in sorted(output_dir.glob("*.parquet")):
+        for existing_file in _iter_batch_files(output_dir):
             try:
                 if existing_file.stat().st_size == 0:
                     continue
-                existing_rows += int(pd.read_parquet(existing_file).shape[0])
+                existing_df = _read_batch_safely(existing_file)
+                if existing_df.empty:
+                    continue
+                existing_rows += int(existing_df.shape[0])
             except Exception as exc:  # pragma: no cover - best effort only
                 LOGGER.debug("[DELTA] Could not inspect %s: %s", existing_file, exc)
                 continue
             if existing_rows > 0:
                 break
     if existing_rows > 0:
-        LOGGER.info("[DELTA] No new bars for %s; skipping fetch.", last_day)
+        LOGGER.info(
+            "[DELTA] No new bars for %s; shards already present. Proceeding.",
+            last_day,
+        )
         return 0
 
     metrics = {
@@ -2436,9 +2488,10 @@ def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
         batch_path = output_dir / f"{batch_idx:04d}.parquet"
         if df.empty:
             empty = pd.DataFrame(columns=BARS_COLUMNS)
-            empty.to_parquet(batch_path, index=False)
+            written = _write_parquet_or_csv(empty, batch_path)
+            LOGGER.info("[DELTA] wrote shard: %s (empty batch)", written)
         else:
-            df.to_parquet(batch_path, index=False)
+            _write_parquet_or_csv(df, batch_path)
 
         present = set(df["symbol"].unique()) if not df.empty else set()
         missing = set(batch_syms) - present
