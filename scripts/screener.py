@@ -2549,7 +2549,7 @@ def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
     return 0
 
 
-def _run_build_symbol_stats(args: argparse.Namespace, base_dir: Path) -> int:
+def run_build_symbol_stats(args: argparse.Namespace, base_dir: Path) -> int:
     LOGGER.info("[MODE] build-symbol-stats start")
     start_time = time.time()
     feed = getattr(args, "feed", DEFAULT_FEED)
@@ -2624,7 +2624,7 @@ def _prepare_coarse_rank_export(frame: pd.DataFrame) -> pd.DataFrame:
     return ordered
 
 
-def _run_coarse_features(args: argparse.Namespace, base_dir: Path) -> int:
+def run_coarse_features(args: argparse.Namespace, base_dir: Path) -> int:
     LOGGER.info("[MODE] coarse-features start")
     stats_path = base_dir / "data" / "registry" / "symbol_stats.csv"
     if not stats_path.exists():
@@ -2761,7 +2761,7 @@ def _run_coarse_features(args: argparse.Namespace, base_dir: Path) -> int:
     return 0
 
 
-def _run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
+def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
     LOGGER.info("[MODE] full-nightly start")
     coarse_path = base_dir / "data" / "tmp" / "coarse_rank.csv"
     if not coarse_path.exists():
@@ -3944,7 +3944,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--gate-preset",
-        choices=["conservative", "standard", "aggressive"],
+        choices=["strict", "standard", "mild"],
         default="standard",
         help="Gate strictness preset to apply before scoring (default: standard)",
     )
@@ -3990,9 +3990,9 @@ def main(
     mode = getattr(args, "mode", "screener")
 
     if mode == "build-symbol-stats":
-        return _run_build_symbol_stats(args, base_dir)
+        return run_build_symbol_stats(args, base_dir)
     if mode == "coarse-features":
-        return _run_coarse_features(args, base_dir)
+        return run_coarse_features(args, base_dir)
 
     api_key, api_secret, _, _ = get_alpaca_creds()
     if not api_key or not api_secret:
@@ -4002,7 +4002,7 @@ def main(
     if mode == "delta-update":
         return _run_delta_update(args, base_dir)
     if mode == "full-nightly":
-        return _run_full_nightly(args, base_dir)
+        return run_full_nightly(args, base_dir)
 
     now = datetime.now(timezone.utc)
     pipeline_timer = T()

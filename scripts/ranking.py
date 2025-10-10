@@ -58,6 +58,7 @@ DEFAULT_GATES: Mapping[str, float | bool] = {
     "rsi_tolerance": 0.5,
     "min_adx": None,
     "min_aroon": None,
+    "min_macd_hist": None,
     "min_volexp": 0.0,
     "max_gap": None,
     "max_liq_penalty": 0.00001,
@@ -76,6 +77,7 @@ FAILURE_KEYS: Tuple[str, ...] = (
     "failed_rsi",
     "failed_adx",
     "failed_aroon",
+    "failed_macd",
     "failed_volexp",
     "failed_gap",
     "failed_liquidity",
@@ -254,6 +256,7 @@ def apply_gates(
         rsi_tolerance = max(rsi_tolerance, 0.0)
     min_adx = _resolve_float(gates_cfg.get("min_adx"))
     min_aroon = _resolve_float(gates_cfg.get("min_aroon"))
+    min_macd_hist = _resolve_float(gates_cfg.get("min_macd_hist"))
     min_volexp = _resolve_float(gates_cfg.get("min_volexp"))
     max_gap = _resolve_float(gates_cfg.get("max_gap"))
     max_liq_pen = _resolve_float(gates_cfg.get("max_liq_penalty"))
@@ -348,16 +351,23 @@ def apply_gates(
                 continue
 
         if min_aroon is not None:
-            aroon_value = _resolve_float(row.get("AROON"))
-            if (aroon_value is None or aroon_value + FLOAT_TOL < min_aroon) and "AROON_UP" in row:
-                alt_value = _resolve_float(row.get("AROON_UP"))
-                if alt_value is not None:
-                    aroon_value = alt_value
+            aroon_value = _resolve_float(row.get("AROON_UP"))
+            if aroon_value is None:
+                aroon_value = _resolve_float(row.get("AROON"))
             if aroon_value is None:
                 record_failure("nan_data", "MISSING_AROON")
                 continue
             if aroon_value + FLOAT_TOL < min_aroon:
                 record_failure("failed_aroon", "LOW_AROON")
+                continue
+
+        if min_macd_hist is not None:
+            macd_hist_value = _resolve_float(row.get("MACD_HIST"))
+            if macd_hist_value is None:
+                record_failure("nan_data", "MISSING_MACD")
+                continue
+            if macd_hist_value + FLOAT_TOL < min_macd_hist:
+                record_failure("failed_macd", "LOW_MACD_HIST")
                 continue
 
         if min_volexp is not None:
