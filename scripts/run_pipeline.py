@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import pathlib
+import shlex
 import shutil
 import sys
 import subprocess
@@ -253,8 +254,22 @@ def _run_step(
 ) -> bool:
     print(f"Starting {name} step...")
     cmd = [sys.executable, "-m", module]
-    if extra_args:
+    env_args: list[str] = []
+    if module == "scripts.screener":
+        raw_env = os.environ.get("JBR_SCREENER_ARGS", "").strip()
+        if raw_env:
+            try:
+                env_args = shlex.split(raw_env)
+            except ValueError as exc:
+                LOGGER.warning("Failed to parse JBR_SCREENER_ARGS=%r: %s", raw_env, exc)
+                env_args = []
+    if env_args:
+        cmd.extend(env_args)
+    elif extra_args:
         cmd.extend(extra_args)
+    if module == "scripts.screener":
+        quoted = " ".join(shlex.quote(part) for part in cmd)
+        LOGGER.info("Running screener command: %s", quoted)
     result = subprocess.run(cmd, cwd=cwd)
     if result.returncode != 0:
         emit(error_event, component="pipeline", returncode=str(result.returncode))

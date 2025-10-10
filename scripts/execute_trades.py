@@ -178,13 +178,15 @@ metrics = {
     "orders_skipped_session_window": 0,
     "orders_skipped_duplicate_candidate": 0,
     "orders_skipped_other": 0,
+    "orders_skipped_price_filter": 0,
     "api_retries": 0,
     "api_failures": 0,
     "skips_time_window": 0,
+    "skips_price_filter": 0,
 }
 skip_reason_counts: Counter[str] = Counter()
 
-CANDIDATE_SOURCE_DEFAULT = os.path.join(BASE_DIR, "data", "latest_candidates.csv")
+CANDIDATE_SOURCE_DEFAULT = "data/latest_candidates.csv"
 CANDIDATE_SOURCE_PATH = CANDIDATE_SOURCE_DEFAULT
 DRY_RUN = False
 
@@ -197,6 +199,29 @@ def resolve_candidates_path(source: Optional[str] = None) -> Path:
     if not candidate_path.is_absolute():
         candidate_path = Path(BASE_DIR) / candidate_path
     return candidate_path
+
+
+def reset_metrics_for_dry_run() -> None:
+    """Zero mutable metrics that should remain 0 during a dry-run."""
+
+    zero_keys = [
+        "orders_submitted",
+        "api_failures",
+        "api_retries",
+        "orders_skipped_existing_positions",
+        "orders_skipped_existing_position",
+        "orders_skipped_pending_orders",
+        "orders_skipped_pending_order",
+        "orders_skipped_price_filter",
+        "skips_time_window",
+        "skips_price_filter",
+    ]
+    for key in zero_keys:
+        metrics[key] = 0
+    skip_reason_counts.clear()
+    order_latencies_ms.clear()
+    global retry_backoff_ms_total
+    retry_backoff_ms_total = 0
 
 VALID_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
 
@@ -302,6 +327,7 @@ def build_execute_metrics_snapshot() -> dict[str, int]:
     if metrics.get("run_aborted_reason"):
         snapshot["run_aborted_reason"] = metrics["run_aborted_reason"]
     snapshot["skips_time_window"] = metrics.get("skips_time_window", 0)
+    snapshot["skips_price_filter"] = metrics.get("skips_price_filter", 0)
 
     return snapshot
 
@@ -340,6 +366,10 @@ def persist_execute_metrics() -> dict[str, object]:
         "skips_time_window": int(
             metrics.get("skips_time_window", 0)
             or skip_reason_counts.get("SESSION_WINDOW", 0)
+        ),
+        "skips_price_filter": int(
+            metrics.get("skips_price_filter", 0)
+            or skip_reason_counts.get("PRICE_FILTER", 0)
         ),
         "api_failures": int(metrics.get("api_failures", 0)),
         "api_retries": int(metrics.get("api_retries", 0)),
@@ -446,6 +476,8 @@ def skip(symbol: str, code: str, reason: str, **kvs) -> None:
     skip_reason_counts[normalized_code] += 1
     if normalized_code == "SESSION_WINDOW":
         inc("skips_time_window")
+    if normalized_code == "PRICE_FILTER":
+        inc("skips_price_filter")
     log_event(
         {
             "event": "CANDIDATE_SKIPPED",
@@ -1521,6 +1553,9 @@ def submit_trades() -> list[dict]:
         errors,
     )
 
+    if DRY_RUN:
+        reset_metrics_for_dry_run()
+        logger.info("Dry-run mode: metrics snapshot zeroed for reporting.")
     execute_metrics = persist_execute_metrics()
 
     return trade_log_entries
@@ -1832,7 +1867,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Do not submit orders; log intent instead",
+        help="Do not submit orders; log intended orders and exit",
     )
     return parser.parse_args(argv)
 

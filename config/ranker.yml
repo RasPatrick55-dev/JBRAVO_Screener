@@ -33,8 +33,9 @@ gates:
   min_rsi: 52
   max_rsi: 68
   rsi_tolerance: 0.5
-  min_adx: 18
-  min_aroon: 40
+  min_adx: 20
+  min_aroon: 60
+  min_macd_hist: 0.0
   min_volexp: 0.8
   max_gap: 0.08
   max_liq_penalty: 0.00001
@@ -44,27 +45,30 @@ gates:
   history_column: history
 
 presets:
-  conservative:
+  strict:
     min_rsi: 55
     max_rsi: 65
     min_adx: 25
     min_aroon: 70
+    min_macd_hist: 0.1
     min_volexp: 1.0
     max_gap: 0.06
     max_liq_penalty: 0.000008
   standard:
     min_rsi: 52
     max_rsi: 68
-    min_adx: 18
+    min_adx: 20
     min_aroon: 60
+    min_macd_hist: 0.0
     min_volexp: 0.8
     max_gap: 0.08
     max_liq_penalty: 0.00001
-  aggressive:
-    min_rsi: 49
-    max_rsi: null
-    min_adx: 14
-    min_aroon: 45
+  mild:
+    min_rsi: 50
+    max_rsi: 70
+    min_adx: 15
+    min_aroon: 50
+    min_macd_hist: -0.05
     min_volexp: 0.6
     max_gap: 0.12
     max_liq_penalty: 0.00002
