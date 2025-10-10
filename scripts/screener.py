@@ -3668,6 +3668,8 @@ def write_outputs(
         "backtest_win_rate_mean": float(stats.get("backtest_win_rate_mean", 0.0)),
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
     }
+    metrics["gate_preset"] = run_meta["gate_preset"]
+    metrics["relax_gates"] = run_meta["relax_gates"]
     gate_counts: dict[str, Union[int, str]] = {}
     for key, value in (gate_counters or {}).items():
         str_key = str(key)
@@ -3946,7 +3948,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--gate-preset",
         choices=["strict", "standard", "mild"],
         default="standard",
-        help="Gate strictness preset to apply before scoring (default: standard)",
+        help="Gate thresholds preset (default: standard)",
     )
     parser.add_argument(
         "--relax-gates",

@@ -83,7 +83,7 @@ def test_screener_api_mode_creates_outputs(tmp_path, monkeypatch):
         ),
     )
 
-    exit_code = screener.main(["--gate-preset", "aggressive"], output_dir=tmp_path)
+    exit_code = screener.main(["--gate-preset", "mild"], output_dir=tmp_path)
     assert exit_code == 0
 
     data_dir = Path(tmp_path) / "data"
@@ -99,5 +99,5 @@ def test_screener_api_mode_creates_outputs(tmp_path, monkeypatch):
     assert metrics["skips"]["UNKNOWN_EXCHANGE"] == 1
     assert metrics["skips"]["NON_EQUITY"] == 1
     gate_counts = metrics["gate_fail_counts"]
-    assert gate_counts["gate_preset"] == "aggressive"
+    assert gate_counts["gate_preset"] == "mild"
     assert gate_counts["gate_total_evaluated"] >= 1

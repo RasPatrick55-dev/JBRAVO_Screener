@@ -136,10 +136,12 @@ def test_paginate(monkeypatch):
 
 
 def test_gate_presets_parsing():
-    parsed = screener.parse_args(["--gate-preset", "aggressive", "--relax-gates", "cross_or_rsi"])
-    assert parsed.gate_preset == "aggressive"
+    parsed = screener.parse_args(
+        ["--mode", "screener", "--gate-preset", "strict", "--relax-gates", "cross_or_rsi"]
+    )
+    assert parsed.gate_preset == "strict"
     assert parsed.relax_gates == "cross_or_rsi"
 
-    defaults = screener.parse_args([])
+    defaults = screener.parse_args(["--mode", "screener"])
     assert defaults.gate_preset == "standard"
     assert defaults.relax_gates == "none"
