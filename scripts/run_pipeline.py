@@ -74,13 +74,8 @@ def copy_latest_candidates() -> None:
             size = 0
         LOG.info("[INFO] refreshed latest_candidates.csv (size=%s)", size)
     else:
-        if not dst.exists():
-            dst.write_text(LATEST_HEADER)
-            LOG.warning(
-                "[INFO] top_candidates.csv missing; created header-only latest_candidates.csv"
-            )
-        else:
-            LOG.warning("[INFO] top_candidates.csv missing; retained existing latest_candidates.csv")
+        dst.write_text(LATEST_HEADER)
+        LOG.info("[INFO] top_candidates.csv missing; wrote header-only latest_candidates.csv")
 
 
 def write_metrics_summary() -> None:
