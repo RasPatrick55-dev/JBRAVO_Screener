@@ -69,6 +69,34 @@ DEFAULT_GATES: Mapping[str, float | bool] = {
 }
 
 
+PRESETS: Mapping[str, Dict[str, float | int]] = {
+    "strict": {
+        "rsi_min": 55,
+        "rsi_max": 65,
+        "adx_min": 25,
+        "aroon_up_min": 70,
+        "macd_hist_min": 0.10,
+        "cross_lookback": 2,
+    },
+    "standard": {
+        "rsi_min": 52,
+        "rsi_max": 68,
+        "adx_min": 20,
+        "aroon_up_min": 60,
+        "macd_hist_min": 0.00,
+        "cross_lookback": 3,
+    },
+    "mild": {
+        "rsi_min": 50,
+        "rsi_max": 70,
+        "adx_min": 15,
+        "aroon_up_min": 50,
+        "macd_hist_min": -0.05,
+        "cross_lookback": 5,
+    },
+}
+
+
 FAILURE_KEYS: Tuple[str, ...] = (
     "insufficient_history",
     "failed_score",
@@ -90,6 +118,48 @@ GateCountValue = Union[int, str]
 GateCounts = Dict[str, GateCountValue]
 
 FLOAT_TOL = 1e-6
+
+
+def _ensure_series(
+    df: pd.DataFrame, column: str, default: float | int | None = None
+) -> pd.Series:
+    base = pd.Series(default, index=df.index)
+    if column in df.columns:
+        base = df[column]
+    return pd.to_numeric(base, errors="coerce")
+
+
+def apply_final_gates(df: pd.DataFrame, preset: str = "standard") -> pd.DataFrame:
+    """Apply preset indicator thresholds for the final gate filter."""
+
+    if df is None or df.empty:
+        return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+    preset_key = str(preset or "standard").strip().lower()
+    preset_cfg = PRESETS.get(preset_key, PRESETS["standard"])
+
+    rsi14 = _ensure_series(df, "RSI14")
+    adx = _ensure_series(df, "ADX")
+    aroon_up = _ensure_series(df, "AROON_UP")
+    if "AROON_UP" not in df.columns:
+        aroon_up = _ensure_series(df, "AROON")
+    macd_hist = _ensure_series(df, "MACD_HIST")
+    sma9 = _ensure_series(df, "SMA9")
+    ema20 = _ensure_series(df, "EMA20")
+    sma50 = _ensure_series(df, "SMA50")
+    sma100 = _ensure_series(df, "SMA100")
+    recent_cross = _ensure_series(df, "recent_cross_bars", default=np.inf).fillna(np.inf)
+
+    rsi_mask = rsi14.between(preset_cfg["rsi_min"], preset_cfg["rsi_max"], inclusive="both")
+    adx_mask = adx >= float(preset_cfg["adx_min"])
+    aroon_mask = aroon_up >= float(preset_cfg["aroon_up_min"])
+    macd_mask = macd_hist >= float(preset_cfg["macd_hist_min"])
+    cross_mask = (sma9 > ema20) | (recent_cross <= float(preset_cfg["cross_lookback"]))
+    stack_mask = cross_mask & (ema20 > sma50) & (sma50 >= sma100)
+
+    pass_mask = rsi_mask & adx_mask & aroon_mask & macd_mask & stack_mask
+    pass_mask = pass_mask.fillna(False)
+    return df.loc[pass_mask].copy()
 
 
 def _standardize(series: pd.Series) -> pd.Series:
@@ -399,16 +469,95 @@ def apply_gates(
 
         gate_rows.append(idx)
 
+    preset_key = str((cfg or {}).get("_gate_preset", "custom")).strip().lower()
+    final_preset = preset_key if preset_key in PRESETS else None
+
     candidates_df = df.loc[gate_rows].copy()
+    if final_preset and not candidates_df.empty:
+        preset_cfg = PRESETS[final_preset]
+        filtered_df = apply_final_gates(candidates_df, final_preset)
+        if filtered_df.shape[0] != candidates_df.shape[0]:
+            removed_df = candidates_df.loc[~candidates_df.index.isin(filtered_df.index)]
+            for _, removed in removed_df.iterrows():
+                symbol = str(removed.get("symbol", "")).strip().upper() or "<UNKNOWN>"
+
+                def record_reason(reason_key: str, reason_label: str) -> None:
+                    fail_counts[reason_key] += 1
+                    if len(reject_samples) < REJECT_SAMPLE_LIMIT:
+                        reject_samples.append({"symbol": symbol, "reason": reason_label})
+
+                rsi_value = _resolve_float(removed.get("RSI14"))
+                if rsi_value is None:
+                    record_reason("nan_data", "MISSING_RSI14")
+                    continue
+                if rsi_value + FLOAT_TOL < float(preset_cfg["rsi_min"]):
+                    record_reason("failed_rsi", "LOW_RSI14")
+                    continue
+                if rsi_value - FLOAT_TOL > float(preset_cfg["rsi_max"]):
+                    record_reason("failed_rsi", "HIGH_RSI14")
+                    continue
+
+                adx_value = _resolve_float(removed.get("ADX"))
+                if adx_value is None:
+                    record_reason("nan_data", "MISSING_ADX")
+                    continue
+                if adx_value + FLOAT_TOL < float(preset_cfg["adx_min"]):
+                    record_reason("failed_adx", "LOW_ADX_RAW")
+                    continue
+
+                aroon_value = _resolve_float(removed.get("AROON_UP"))
+                if aroon_value is None:
+                    aroon_value = _resolve_float(removed.get("AROON"))
+                if aroon_value is None:
+                    record_reason("nan_data", "MISSING_AROON_UP")
+                    continue
+                if aroon_value + FLOAT_TOL < float(preset_cfg["aroon_up_min"]):
+                    record_reason("failed_aroon", "LOW_AROON_UP")
+                    continue
+
+                macd_value = _resolve_float(removed.get("MACD_HIST"))
+                if macd_value is None:
+                    record_reason("nan_data", "MISSING_MACD_HIST")
+                    continue
+                if macd_value + FLOAT_TOL < float(preset_cfg["macd_hist_min"]):
+                    record_reason("failed_macd", "LOW_MACD_HIST_RAW")
+                    continue
+
+                sma9_value = _resolve_float(removed.get("SMA9"))
+                ema20_value = _resolve_float(removed.get("EMA20"))
+                sma50_value = _resolve_float(removed.get("SMA50"))
+                sma100_value = _resolve_float(removed.get("SMA100"))
+                recent_cross = _resolve_float(removed.get("recent_cross_bars"))
+                if any(v is None for v in (sma9_value, ema20_value, sma50_value, sma100_value)):
+                    record_reason("nan_data", "MISSING_SMA_STACK")
+                    continue
+                cross_ok = False
+                if sma9_value is not None and ema20_value is not None and sma9_value > ema20_value:
+                    cross_ok = True
+                if (
+                    recent_cross is not None
+                    and recent_cross <= float(preset_cfg["cross_lookback"]) + FLOAT_TOL
+                ):
+                    cross_ok = True
+                if not cross_ok:
+                    record_reason("failed_sma_stack", "FAILED_SMA_OR_CROSS")
+                    continue
+                if ema20_value is None or sma50_value is None or ema20_value <= sma50_value:
+                    record_reason("failed_sma_stack", "FAILED_EMA20_GT_SMA50")
+                    continue
+                if sma50_value is None or sma100_value is None or sma50_value + FLOAT_TOL < sma100_value:
+                    record_reason("failed_sma_stack", "FAILED_SMA50_GTE_SMA100")
+                    continue
+            candidates_df = filtered_df
+
     candidates_df.sort_values("Score", ascending=False, inplace=True)
     candidates_df.reset_index(drop=True, inplace=True)
     gate_counts = dict(fail_counts)
-    preset_key = str((cfg or {}).get("_gate_preset", "custom"))
     relax_mode = str((cfg or {}).get("_gate_relax_mode", "none"))
     gate_counts["gate_preset"] = preset_key
     gate_counts["gate_relax_mode"] = relax_mode
     evaluated = total_symbols
-    passed = int(len(gate_rows))
+    passed = int(candidates_df.shape[0])
     gate_counts["gate_total_evaluated"] = evaluated
     gate_counts["gate_total_passed"] = passed
     gate_counts["gate_total_failed"] = max(evaluated - passed, 0)
@@ -418,6 +567,8 @@ def apply_gates(
 __all__ = [
     "score_universe",
     "apply_gates",
+    "apply_final_gates",
+    "PRESETS",
     "DEFAULT_COMPONENT_MAP",
     "DEFAULT_WEIGHTS",
     "DEFAULT_GATES",
