@@ -4,417 +4,179 @@ import logging
 import os
 import pathlib
 import shlex
-import shutil
-import sys
 import subprocess
+import sys
 import time
-from datetime import datetime, timezone
-from pathlib import Path
-from shutil import copyfile
-from typing import Any, Dict, Iterable, Optional
+from typing import Iterable, Optional
 
 from utils.env import load_env
-from utils.io_utils import atomic_write_bytes
-
-load_env()
 
 
-def _auto_reload_web(domain: str | None = None) -> None:
-    """Attempt to reload the PythonAnywhere web app.
+LOG = logging.getLogger("pipeline")
+LOG_PATH = pathlib.Path("logs") / "pipeline.log"
+LATEST_HEADER = "timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown\n"
 
-    Priority:
-      1) pa_reload_webapp <domain> (if available + domain given)
-      2) pa_reload_webapp (domain from env var)
-      3) touch WSGI file (fallback)
 
-    Never raises; logs warnings on failure.
-    """
-
-    log = logging.getLogger(__name__)
-    domain = domain or os.environ.get("PYTHONANYWHERE_DOMAIN")
-
-    cmd = shutil.which("pa_reload_webapp")
-    if cmd:
-        try:
-            args = [cmd] + ([domain] if domain else [])
-            ret = subprocess.run(
-                args,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=20,
-            )
-            if ret.returncode == 0:
-                log.info(
-                    "[AUTO-RELOAD] pa_reload_webapp succeeded%s",
-                    f" for {domain}" if domain else "",
-                )
-                return
-            log.warning(
-                "[AUTO-RELOAD] pa_reload_webapp returned %s: %s",
-                ret.returncode,
-                (ret.stderr or ret.stdout or "").strip(),
-            )
-        except Exception as exc:  # pragma: no cover - defensive safety
-            log.warning("[AUTO-RELOAD] pa_reload_webapp error: %s", exc)
-
-    try:
-        user = os.environ.get("PA_USERNAME") or os.environ.get("USER") or "RasPatrick"
-        guess = f"/var/www/{user.lower()}_pythonanywhere_com_wsgi.py"
-        path = os.environ.get("PA_WSGI_PATH", guess)
-        pathlib.Path(path).touch()
-        log.info("[AUTO-RELOAD] touched WSGI file: %s", path)
+def configure_logging() -> None:
+    """Configure console and file logging for the pipeline."""
+    if getattr(configure_logging, "_configured", False):  # pragma: no cover - defensive
         return
-    except Exception as exc:  # pragma: no cover - defensive safety
-        log.warning("[AUTO-RELOAD] touch WSGI fallback failed: %s", exc)
 
-    log.warning(
-        "[AUTO-RELOAD] No reload method succeeded; dashboard may appear stale until manual reload."
-    )
+    fmt = "%(asctime)s - pipeline - %(message)s"
+    logging.basicConfig(level=logging.INFO, format=fmt)
 
-
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
-
-
-ROOT = repo_root()
-LOG_PATH = ROOT / "logs" / "pipeline.log"
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, default))
-    except (TypeError, ValueError):
-        return default
-
-
-RATE_LIMIT_ALERT_THRESHOLD = _parse_int_env("RATE_LIMIT_ALERT_THRESHOLD", 10)
-HTTP_EMPTY_ALERT_THRESHOLD = _parse_int_env("HTTP_EMPTY_ALERT_THRESHOLD", 25)
-
-
-def _configure_logger() -> logging.Logger:
-    logger = logging.getLogger("pipeline")
-    if logger.handlers:
-        return logger
-
-    logger.setLevel(logging.INFO)
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    formatter = logging.Formatter("%Y-%m-%d %H:%M:%S %(message)s")
-
     file_handler = logging.FileHandler(LOG_PATH)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    file_handler.setFormatter(logging.Formatter(fmt))
+    LOG.addHandler(file_handler)
+    LOG.propagate = True
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
-
-    logger.propagate = False
-    return logger
+    configure_logging._configured = True  # type: ignore[attr-defined]
 
 
-LOGGER = _configure_logger()
+def run_cmd(cmd: list[str], name: str) -> int:
+    """Run ``cmd`` while logging start/end markers and outputs."""
+    LOG.info("[INFO] START %s: %s", name, " ".join(shlex.quote(part) for part in cmd))
+    start = time.time()
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    duration = time.time() - start
+    LOG.info("[INFO] END %s (rc=%s, %.1fs)", name, result.returncode, duration)
+    if result.stdout:
+        LOG.info("[INFO] %s stdout:\n%s", name, result.stdout.strip())
+    if result.stderr:
+        LOG.info("[INFO] %s stderr:\n%s", name, result.stderr.strip())
+    return result.returncode
 
 
-class T:
-    def __init__(self) -> None:
-        self.t = time.time()
-        self.m: dict[str, float] = {}
-
-    def lap(self, key: str) -> float:
-        now = time.time()
-        elapsed = round(now - self.t, 3)
-        self.m[key] = elapsed
-        self.t = time.time()
-        return elapsed
-
-
-def _coerce_int(value: Any) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
+def screener_cmd() -> list[str]:
+    base = [
+        sys.executable,
+        "-m",
+        "scripts.screener",
+        "--mode",
+        "screener",
+        "--feed",
+        "iex",
+    ]
+    extra = shlex.split(os.environ.get("JBR_SCREENER_ARGS", "")) if os.environ.get("JBR_SCREENER_ARGS") else []
+    return base + extra
 
 
-def _now_utc_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def _load_json_dict(path: Path) -> Dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except Exception as exc:  # pragma: no cover - unexpected I/O or JSON issues
-        LOGGER.error("Failed to load JSON from %s: %s", path, exc)
-        return {}
-    if isinstance(data, dict):
-        return data
-    LOGGER.error("JSON payload at %s is not an object; ignoring.", path)
-    return {}
-
-
-def _write_json_dict(path: Path, payload: Dict[str, Any]) -> None:
-    try:
-        encoded = json.dumps(payload, sort_keys=True, indent=2).encode("utf-8")
-        atomic_write_bytes(path, encoded)
-    except Exception as exc:  # pragma: no cover - unexpected I/O issues
-        LOGGER.error("Failed to persist JSON to %s: %s", path, exc)
-
-
-def check_screener_alerts(base_dir: Path) -> None:
-    metrics_path = base_dir / "data" / "screener_metrics.json"
-    metrics = _load_json_dict(metrics_path)
-    if not metrics:
-        LOGGER.warning("Screener metrics unavailable at %s; skipping alerts.", metrics_path)
-        return
-
-    alerts: list[str] = []
-
-    bars_rows_total = _coerce_int(metrics.get("bars_rows_total"))
-    symbols_with_bars = _coerce_int(metrics.get("symbols_with_bars"))
-    if bars_rows_total == 0 or symbols_with_bars == 0:
-        alerts.append(
-            "Screener returned no bars (symbols_with_bars=%d, bars_rows_total=%d)."
-            % (symbols_with_bars, bars_rows_total)
-        )
-
-    rate_limited = _coerce_int(metrics.get("rate_limited"))
-    if rate_limited > RATE_LIMIT_ALERT_THRESHOLD:
-        alerts.append(
-            "Rate limit hits elevated (%d > %d)."
-            % (rate_limited, RATE_LIMIT_ALERT_THRESHOLD)
-        )
-
-    http_empty_batches = _coerce_int(metrics.get("http_empty_batches"))
-    if http_empty_batches > HTTP_EMPTY_ALERT_THRESHOLD:
-        alerts.append(
-            "Empty HTTP batches elevated (%d > %d)."
-            % (http_empty_batches, HTTP_EMPTY_ALERT_THRESHOLD)
-        )
-
-    state_path = base_dir / "data" / "last_alert.json"
-    state = _load_json_dict(state_path)
-    rows_zero_streak = _coerce_int(state.get("rows_zero_streak"))
-    rows = _coerce_int(metrics.get("rows"))
-    if rows == 0:
-        rows_zero_streak += 1
-        last_run_utc = str(metrics.get("last_run_utc") or _now_utc_iso())
-        state["last_zero_rows_utc"] = last_run_utc
-        if rows_zero_streak >= 2:
-            alerts.append(
-                "Screener produced zero candidates for %d consecutive runs."
-                % rows_zero_streak
-            )
+def copy_latest_candidates() -> None:
+    src = pathlib.Path("data/top_candidates.csv")
+    dst = pathlib.Path("data/latest_candidates.csv")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.exists():
+        dst.write_bytes(src.read_bytes())
+        try:
+            size = dst.stat().st_size
+        except FileNotFoundError:  # pragma: no cover - race condition safeguard
+            size = 0
+        LOG.info("[INFO] refreshed latest_candidates.csv (size=%s)", size)
     else:
-        rows_zero_streak = 0
-        state.pop("last_zero_rows_utc", None)
+        if not dst.exists():
+            dst.write_text(LATEST_HEADER)
+            LOG.warning(
+                "[INFO] top_candidates.csv missing; created header-only latest_candidates.csv"
+            )
+        else:
+            LOG.warning("[INFO] top_candidates.csv missing; retained existing latest_candidates.csv")
 
-    state["rows_zero_streak"] = rows_zero_streak
-    state["last_rows_value"] = rows
-    state["last_seen_metrics_run_utc"] = str(metrics.get("last_run_utc") or "")
-    state["last_updated_utc"] = _now_utc_iso()
-    _write_json_dict(state_path, state)
 
-    for message in alerts:
-        LOGGER.warning("ALERT: %s", message)
+def write_metrics_summary() -> None:
+    """Write a minimal metrics_summary.csv for the dashboard overview."""
+    summary_path = pathlib.Path("data/metrics_summary.csv")
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+
+    meta = {
+        "last_run_utc": "",
+        "symbols_in": 0,
+        "symbols_with_bars": 0,
+        "bars_rows_total": 0,
+        "rows": 0,
+    }
+
+    metrics_path = pathlib.Path("data/screener_metrics.json")
+    if metrics_path.exists():
+        try:
+            metrics = json.loads(metrics_path.read_text())
+            if isinstance(metrics, dict):
+                for key in meta:
+                    meta[key] = metrics.get(key, meta[key])
+        except Exception as exc:  # pragma: no cover - defensive parsing
+            LOG.warning("[INFO] could not parse screener_metrics.json: %s", exc)
+
+    summary_path.write_text(
+        "last_run_utc,symbols_in,with_bars,bars_rows,candidates\n"
+        f"{meta['last_run_utc']},{meta['symbols_in']},{meta['symbols_with_bars']},{meta['bars_rows_total']},{meta['rows']}\n"
+    )
+    LOG.info("[INFO] wrote metrics_summary.csv")
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the JBRAVO pipeline")
     parser.add_argument(
         "--steps",
-        default="screener,backtest,metrics",
-        help="Comma-separated list of steps to run (default: screener,backtest,metrics)",
+        default=None,
+        help="Comma-separated list of steps to run (default env PIPE_STEPS or screener,backtest,metrics)",
     )
     parser.add_argument(
         "--reload-web",
-        choices=["true", "false"],
+        choices=("true", "false"),
         default="true",
-        help="Reload the web app after pipeline completes (default: true)",
+        help="Reload the web application when the pipeline finishes (default: true)",
     )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
-def emit(evt, **kvs):
-    cmd = [sys.executable, "-m", "bin.emit_event", evt]
-    for k, v in kvs.items():
-        cmd.append(f"{k}={v}")
-    subprocess.run(cmd, check=False)
-
-
-def _run_step(
-    name: str,
-    module: str,
-    success_event: str,
-    error_event: str,
-    cwd: Path,
-    extra_args: Optional[list[str]] = None,
-) -> bool:
-    print(f"Starting {name} step...")
-    cmd = [sys.executable, "-m", module]
-    env_args: list[str] = []
-    if module == "scripts.screener":
-        raw_env = os.environ.get("JBR_SCREENER_ARGS", "").strip()
-        if raw_env:
-            try:
-                env_args = shlex.split(raw_env)
-            except ValueError as exc:
-                LOGGER.warning("Failed to parse JBR_SCREENER_ARGS=%r: %s", raw_env, exc)
-                env_args = []
-    if env_args:
-        cmd.extend(env_args)
-    elif extra_args:
-        cmd.extend(extra_args)
-    if module == "scripts.screener":
-        quoted = " ".join(shlex.quote(part) for part in cmd)
-        LOGGER.info("Running screener command: %s", quoted)
-    result = subprocess.run(cmd, cwd=cwd)
-    if result.returncode != 0:
-        emit(error_event, component="pipeline", returncode=str(result.returncode))
-        print(f"{name} step failed with exit code {result.returncode}.")
-        return False
-
-    emit(success_event, component="pipeline")
-    print(f"{name} step completed.")
-    return True
-
-
-def refresh_latest_candidates() -> None:
-    logger = LOGGER
-    src = Path("data/top_candidates.csv")
-    dst = Path("data/latest_candidates.csv")
-
-    try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        copyfile(src, dst)
-    except FileNotFoundError as exc:
-        logger.warning("Missing %s; keeping placeholder %s.", src, dst)
-        emit("TOP_MISSING", component="pipeline")
-        try:
-            dst.touch()
-        except Exception as touch_exc:  # pragma: no cover - touch failures unexpected
-            logger.error("Failed to touch %s after missing %s: %s", dst, src, touch_exc)
-        else:
-            logger.info("Touched %s to avoid dashboard staleness.", dst)
-    except Exception as exc:  # pragma: no cover - copy failures are unexpected
-        logger.error("Failed to refresh %s from %s: %s", dst, src, exc)
-        emit(
-            "LATEST_COPY_FAILED",
-            component="pipeline",
-            error=str(exc).replace(" ", "_"),
-        )
-    else:
-        logger.info("Refreshed %s from %s.", dst, src)
-        emit("LATEST_UPDATED", component="pipeline")
-
-    metrics_path = Path("data/screener_metrics.json")
-    try:
-        metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        metrics: dict[str, Any]
-        if metrics_path.exists():
-            with metrics_path.open("r", encoding="utf-8") as fh:
-                metrics = json.load(fh) or {}
-        else:
-            metrics = {}
-        metrics.setdefault("universe_prefix_counts", {})
-        metrics.setdefault("http", {"429": 0, "404": 0, "empty_pages": 0})
-        metrics.setdefault("cache", {"batches_hit": 0, "batches_miss": 0})
-        metrics.setdefault("timings", {})
-        metrics["last_run_utc"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        with metrics_path.open("w", encoding="utf-8") as fh:
-            json.dump(metrics, fh)
-        logger.info("Updated screener metrics last_run_utc.")
-    except Exception as exc:  # pragma: no cover - metrics update should succeed
-        logger.exception("Could not update last_run_utc: %s", exc)
+def determine_steps(requested: Optional[str]) -> list[str]:
+    raw = requested or os.environ.get("PIPE_STEPS", "screener,backtest,metrics")
+    steps = [step.strip().lower() for step in raw.split(",") if step.strip()]
+    return steps or ["screener", "backtest", "metrics"]
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
+    load_env()
     args = parse_args(argv)
-    requested_steps = [
-        step.strip().lower()
-        for step in str(args.steps or "").split(",")
-        if step.strip()
-    ]
-    if not requested_steps:
-        requested_steps = ["screener", "backtest", "metrics"]
+    configure_logging()
 
-    root = repo_root()
-    os.chdir(root)
-    emit("PIPELINE_START", component="pipeline")
+    steps = determine_steps(args.steps)
+    LOG.info("[INFO] PIPELINE_START steps=%s", steps)
 
-    exit_code = 0
-    try:
-        last_step_success = True
+    rc = 0
+    start = time.time()
 
-        for step in requested_steps:
-            if step == "screener":
-                screener_ok = _run_step(
-                    "Screener",
-                    "scripts.screener",
-                    "SCREENER_SUCCESS",
-                    "SCREENER_ERROR",
-                    root,
-                    extra_args=[
-                        "--universe",
-                        "alpaca-active",
-                        "--days",
-                        "750",
-                        "--feed",
-                        "iex",
-                    ],
-                )
-                last_step_success = screener_ok
-                if screener_ok:
-                    refresh_latest_candidates()
-                    check_screener_alerts(root)
-                else:
-                    exit_code = 1
-            elif step == "backtest":
-                if last_step_success:
-                    backtest_ok = _run_step(
-                        "Backtest",
-                        "scripts.backtest",
-                        "BACKTEST_SUCCESS",
-                        "BACKTEST_ERROR",
-                        root,
-                    )
-                    last_step_success = backtest_ok
-                    if not backtest_ok:
-                        exit_code = 1
-                else:
-                    print("Skipping Backtest step because a previous step failed.")
-                    exit_code = 1
-                    last_step_success = False
-            elif step == "metrics":
-                if last_step_success:
-                    metrics_ok = _run_step(
-                        "Metrics",
-                        "scripts.metrics",
-                        "METRICS_SUCCESS",
-                        "METRICS_ERROR",
-                        root,
-                    )
-                    last_step_success = metrics_ok
-                    if not metrics_ok:
-                        exit_code = 1
-                else:
-                    print("Skipping Metrics step because a previous step failed.")
-                    exit_code = 1
-                    last_step_success = False
-            else:
-                print(f"Unknown step '{step}' requested; skipping.")
-    except Exception as e:
-        emit("PIPELINE_ERROR", component="pipeline", error=str(e).replace(" ", "_"))
-        raise
-    finally:
-        emit("PIPELINE_END", component="pipeline")
-        do_reload = str(getattr(args, "reload_web", "true")).lower() == "true"
-        if do_reload:
-            _auto_reload_web(domain=os.environ.get("PYTHONANYWHERE_DOMAIN"))
+    if "screener" in steps:
+        rc_scr = run_cmd(screener_cmd(), "SCREENER")
+        if rc_scr != 0:
+            LOG.error("[INFO] SCREENER failed rc=%s; continuing to write minimal artifacts", rc_scr)
+            rc = rc_scr if rc == 0 else rc
+        copy_latest_candidates()
+        write_metrics_summary()
 
-    return exit_code
+    if "backtest" in steps:
+        rc_bt = run_cmd([sys.executable, "-m", "scripts.backtest"], "BACKTEST")
+        if rc_bt != 0 and rc == 0:
+            rc = rc_bt
+
+    if "metrics" in steps:
+        rc_mx = run_cmd([sys.executable, "-m", "scripts.metrics"], "METRICS")
+        if rc_mx != 0 and rc == 0:
+            rc = rc_mx
+
+    duration = time.time() - start
+    LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
+
+    if args.reload_web.lower() == "true":
+        try:
+            domain = os.environ.get("PYTHONANYWHERE_DOMAIN")
+            if domain:
+                subprocess.run(["pa_reload_webapp", domain], check=False)
+                LOG.info("[INFO] AUTO-RELOAD webapp requested for %s", domain)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            LOG.warning("[INFO] AUTO-RELOAD failed: %s", exc)
+
+    return rc
 
 
 if __name__ == "__main__":
