@@ -1181,7 +1181,7 @@ def _fetch_daily_bars(
     if insufficient:
         metrics["insufficient_history"] = len(insufficient)
 
-    symbols_with_bars = len(symbols_with_history)
+    symbols_with_bars = int(combined["symbol"].nunique()) if not combined.empty else 0
     symbols_no_bars = max(len(unique_symbols) - symbols_with_bars, 0)
     bars_rows_total = int(len(combined))
     metrics.update(
