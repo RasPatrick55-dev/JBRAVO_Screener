@@ -19,11 +19,15 @@ import pytz
 from pathlib import Path
 from typing import Optional
 
+os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
+
 from dashboards.screener_health import build_layout as build_screener_health
 from dashboards.screener_health import register_callbacks as register_screener_health
 
 # Base directory of the project (parent of this file)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.environ.get(
+    "JBRAVO_HOME", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 
 # Absolute paths to CSV data files used throughout the dashboard
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
@@ -44,7 +48,7 @@ account_equity_path = os.path.join(BASE_DIR, "data", "account_equity.csv")
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
 pipeline_log_path = os.path.join(screener_log_dir, "pipeline.log")
-monitor_log_path = os.path.expanduser("~/jbravo_screener/logs/monitor.log")
+monitor_log_path = os.path.join(screener_log_dir, "monitor.log")
 # Additional logs
 screener_log_path = os.path.join(screener_log_dir, "screener.log")
 backtest_log_path = os.path.join(screener_log_dir, "backtest.log")
@@ -69,10 +73,9 @@ def is_log_stale(log_path):
         with open(log_path) as file:
             lines = file.readlines()
         for line in reversed(lines):
-            if any(
-                marker in line
-                for marker in ("[INFO]", "[ERROR]", "- INFO -", "- ERROR -")
-            ):
+            is_info = ("[INFO]" in line) or ("- INFO -" in line)
+            is_error = ("[ERROR]" in line) or ("- ERROR -" in line)
+            if is_info or is_error:
                 ts_str = line[:19]
                 ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
                 return (datetime.utcnow() - ts).total_seconds() > (STALE_THRESHOLD_MINUTES * 60)
