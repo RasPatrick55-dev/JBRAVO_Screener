@@ -7,7 +7,9 @@ from dash import html, dcc
 from dash.dash_table import DataTable
 from dash.dependencies import Input, Output
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+REPO_ROOT = pathlib.Path(
+    os.environ.get("JBRAVO_HOME", pathlib.Path(__file__).resolve().parents[1])
+)
 DATA_DIR  = REPO_ROOT / "data"
 LOG_DIR   = REPO_ROOT / "logs"
 
