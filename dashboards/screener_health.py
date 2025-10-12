@@ -5,6 +5,7 @@ import logging
 import os
 import pathlib
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 from dash import dcc, html
@@ -157,25 +158,53 @@ def _mk_why_tooltip(row: dict) -> dict:
     - Raw indicators (RSI14, ADX, AROON, MACD_HIST, ATR%, ADV20)
     Returns a dict mapping column-id -> {'value': md, 'type': 'markdown'}
     """
+
+    row = row or {}
+
     # Contributions (same parsing used by Why string)
-    contrib_str = _why_from_breakdown(row.get("score_breakdown",""))
+    contrib_str = _why_from_breakdown(row.get("score_breakdown", ""))
+
+    def _format_value(value, formatter):
+        if value is None:
+            return "n/a"
+        if isinstance(value, str):
+            if value.strip() == "":
+                return "n/a"
+        try:
+            if pd.isna(value):
+                return "n/a"
+        except Exception:  # pragma: no cover - pandas type quirks
+            pass
+        if formatter is None:
+            try:
+                return str(value)
+            except Exception:  # pragma: no cover - defensive
+                return "n/a"
+        try:
+            return formatter(value)
+        except Exception:
+            try:
+                return str(value)
+            except Exception:  # pragma: no cover - defensive
+                return "n/a"
+
+    def _indicator_line(label: str, value, formatter=None) -> str:
+        formatted = _format_value(value, formatter)
+        return f"- {label}: `{formatted}`"
+
     # Raw values with safe fallbacks
-    score = row.get("Score", None)
+    score = row.get("Score")
     rsi14 = row.get("RSI14", row.get("RSI"))  # try raw first, fallback to z if needed
-    adx   = row.get("ADX_raw", row.get("ADX"))  # allow a raw alias if available
-    aup   = row.get("AROON_UP", None)
-    adn   = row.get("AROON_DN", None)
-    mh    = row.get("MACD_HIST", row.get("MH"))
-    atrp  = row.get("ATR_pct", None)
-    adv20 = row.get("ADV20", None)
-    close = row.get("close", None)
+    adx = row.get("ADX_raw", row.get("ADX"))  # allow a raw alias if available
+    aup = row.get("AROON_UP")
+    adn = row.get("AROON_DN")
+    mh = row.get("MACD_HIST", row.get("MH"))
+    atrp = row.get("ATR_pct")
+    adv20 = row.get("ADV20")
+    close = row.get("close")
 
     md = []
-    if score is not None:
-        try:
-            md.append(f"**Score:** `{float(score):.3f}`")
-        except Exception:
-            md.append(f"**Score:** `{score}`")
+    md.append(f"**Score:** `{_format_value(score, lambda v: f"{float(v):.3f}")}`")
     if contrib_str and contrib_str != "n/a":
         md.append("**Contributions (z‑weighted):**")
         # convert bullets nicely (already "• name ▲ 0.00")
@@ -187,51 +216,27 @@ def _mk_why_tooltip(row: dict) -> dict:
         md.append("_Contributions unavailable_")
 
     md.append("**Raw indicators:**")
-    raw_lines = []
-    if close is not None:
-        try:
-            raw_lines.append(f"- Close: `{float(close):.2f}`")
-        except Exception:
-            raw_lines.append(f"- Close: `{close}`")
-    if rsi14 is not None:
-        try:
-            raw_lines.append(f"- RSI14: `{float(rsi14):.2f}`")
-        except Exception:
-            raw_lines.append(f"- RSI14: `{rsi14}`")
-    if adx is not None:
-        try:
-            raw_lines.append(f"- ADX: `{float(adx):.2f}`")
-        except Exception:
-            raw_lines.append(f"- ADX: `{adx}`")
-    if aup is not None and adn is not None:
-        try:
-            raw_lines.append(f"- Aroon Up/Dn: `{float(aup):.1f}` / `{float(adn):.1f}`")
-        except Exception:
-            raw_lines.append(f"- Aroon Up/Dn: `{aup}` / `{adn}`")
-    elif aup is not None:
-        try:
-            raw_lines.append(f"- Aroon Up: `{float(aup):.1f}`")
-        except Exception:
-            raw_lines.append(f"- Aroon Up: `{aup}`")
-    elif adn is not None:
-        try:
-            raw_lines.append(f"- Aroon Dn: `{float(adn):.1f}`")
-        except Exception:
-            raw_lines.append(f"- Aroon Dn: `{adn}`")
-    if mh is not None:
-        try:
-            raw_lines.append(f"- MACD Hist: `{float(mh):.4f}`")
-        except Exception:
-            raw_lines.append(f"- MACD Hist: `{mh}`")
-    if atrp is not None:
-        try:
-            raw_lines.append(f"- ATR%: `{float(atrp):.2%}`")
-        except Exception:
-            raw_lines.append(f"- ATR%: `{atrp}`")
-    if adv20 is not None:
-        raw_lines.append(f"- ADV20: `{_fmt_millions(adv20)}`")
-    if not raw_lines:
-        raw_lines.append("_No raw indicators available_")
+    raw_lines = [
+        _indicator_line("Close", close, lambda v: f"{float(v):.2f}"),
+        _indicator_line("RSI14", rsi14, lambda v: f"{float(v):.2f}"),
+        _indicator_line("ADX", adx, lambda v: f"{float(v):.2f}"),
+    ]
+
+    up_str = _format_value(aup, lambda v: f"{float(v):.1f}")
+    dn_str = _format_value(adn, lambda v: f"{float(v):.1f}")
+    if up_str == "n/a" and dn_str == "n/a":
+        raw_lines.append("- Aroon Up/Dn: `n/a`")
+    else:
+        raw_lines.append(f"- Aroon Up/Dn: `{up_str}` / `{dn_str}`")
+
+    raw_lines.extend(
+        [
+            _indicator_line("MACD Hist", mh, lambda v: f"{float(v):.4f}"),
+            _indicator_line("ATR%", atrp, lambda v: f"{float(v):.2%}"),
+            _indicator_line("ADV20", adv20, _fmt_millions),
+        ]
+    )
+
     md.extend(raw_lines)
 
     return {"Why": {"value": "\n".join(md), "type": "markdown"}}
@@ -388,10 +393,19 @@ def register_callbacks(app):
                         if not use.empty:
                             top = top.merge(use, on=join_keys, how="left")
             if "ATR14" in top.columns and "close" in top.columns:
-                top["ATR_pct"] = (top["ATR14"] / top["close"]).clip(lower=0)
+                atr_num = pd.to_numeric(top["ATR14"], errors="coerce")
+                close_num = pd.to_numeric(top["close"], errors="coerce")
+                atr_pct = atr_num / close_num
+                atr_pct = atr_pct.replace([np.inf, -np.inf], pd.NA)
+                top["ATR_pct"] = atr_pct.clip(lower=0)
             else:
-                top["ATR_pct"] = 0.0
-            top["Why"] = top.get("score_breakdown","").apply(_why_from_breakdown) if "score_breakdown" in top.columns else "n/a"
+                top["ATR_pct"] = pd.NA
+            if "score_breakdown" in top.columns:
+                top["Why"] = top.get("score_breakdown", "").apply(_why_from_breakdown)
+            else:
+                top["Why"] = "n/a"
+            if "Why" in top.columns:
+                top["Why"] = top["Why"].fillna("n/a")
 
         hist = _safe_csv(HIST_CSV)
         ev = _safe_json(RANKER_EVAL_LATEST)
@@ -424,6 +438,15 @@ def register_callbacks(app):
         Input("sh-eval-store","data"),
     )
     def _render(m, top_rows, hist_rows, ev):
+        if not isinstance(m, dict):
+            m = {}
+        if not isinstance(top_rows, list):
+            top_rows = []
+        if not isinstance(hist_rows, list):
+            hist_rows = []
+        if not isinstance(ev, dict):
+            ev = {}
+
         # ---------------- KPIs ----------------
         def _card(title, value, sub=None):
             return html.Div([
@@ -455,9 +478,14 @@ def register_callbacks(app):
             fig_gates = px.bar(title="Gate Pressure (no data)")
 
         # ---------------- Coverage donut ----------------
-        cov_df = pd.DataFrame({"label":["With Bars","No Bars"],
-                               "value":[sym_bars, max(sym_in - sym_bars, 0)]})
-        fig_cov = px.pie(cov_df, names="label", values="value", title="Universe Coverage", hole=0.45)
+        cov_values = [sym_bars, max(sym_in - sym_bars, 0)]
+        if sum(cov_values) > 0:
+            cov_df = pd.DataFrame({"label": ["With Bars", "No Bars"], "value": cov_values})
+            fig_cov = px.pie(
+                cov_df, names="label", values="value", title="Universe Coverage", hole=0.45
+            )
+        else:
+            fig_cov = px.pie(title="Universe Coverage (no data)")
 
         # ---------------- Timings ----------------
         t = m.get("timings", {}) or {}
