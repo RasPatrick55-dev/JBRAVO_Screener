@@ -166,7 +166,11 @@ def write_metrics_summary() -> None:
 
     summary_path.write_text(
         "last_run_utc,symbols_in,with_bars,bars_rows,candidates\n"
-        f"{meta['last_run_utc']},{meta['symbols_in']},{meta['symbols_with_bars']},{meta['bars_rows_total']},{meta['rows']}\n"
+        f"{meta['last_run_utc']}"
+        f",{int(meta['symbols_in'] or 0)}"
+        f",{int(meta['symbols_with_bars'] or 0)}"
+        f",{int(meta['bars_rows_total'] or 0)}"
+        f",{int(meta['rows'] or 0)}\n"
     )
     LOG.info("[INFO] wrote metrics_summary.csv")
 
@@ -203,14 +207,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     rc = 0
     start = time.time()
+    artifacts_written = False
 
     if "screener" in steps:
         rc_scr = run_cmd(screener_cmd(), "SCREENER")
         if rc_scr != 0:
             LOG.error("[INFO] SCREENER failed rc=%s; continuing to write minimal artifacts", rc_scr)
             rc = rc_scr if rc == 0 else rc
-        copy_latest_candidates()
-        write_metrics_summary()
+        try:
+            refresh_latest_candidates()
+            artifacts_written = True
+        except Exception as exc:  # pragma: no cover - defensive safeguard
+            LOG.error("[INFO] failed to refresh screener artifacts after SCREENER step: %s", exc)
 
     if "backtest" in steps:
         rc_bt = run_cmd([sys.executable, "-m", "scripts.backtest"], "BACKTEST")
@@ -221,6 +229,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         rc_mx = run_cmd([sys.executable, "-m", "scripts.metrics"], "METRICS")
         if rc_mx != 0 and rc == 0:
             rc = rc_mx
+
+    if not artifacts_written:
+        try:
+            refresh_latest_candidates()
+        except Exception as exc:  # pragma: no cover - defensive safeguard
+            LOG.error("[INFO] final artifact refresh failed: %s", exc)
 
     duration = time.time() - start
     LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)

@@ -72,9 +72,11 @@ def is_log_stale(log_path):
     try:
         with open(log_path) as file:
             lines = file.readlines()
+        info_tokens = ("[INFO]", "- INFO -")
+        error_tokens = ("[ERROR]", "- ERROR -")
         for line in reversed(lines):
-            is_info = ("[INFO]" in line) or ("- INFO -" in line)
-            is_error = ("[ERROR]" in line) or ("- ERROR -" in line)
+            is_info = any(token in line for token in info_tokens)
+            is_error = any(token in line for token in error_tokens)
             if is_info or is_error:
                 ts_str = line[:19]
                 ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")

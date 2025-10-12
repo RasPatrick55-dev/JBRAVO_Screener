@@ -40,13 +40,11 @@ def _resolve_repo_root() -> pathlib.Path:
     if env_home:
         try:
             candidate = pathlib.Path(env_home).expanduser()
-            if candidate.exists():
-                return candidate
-            LOGGER.warning(
-                "JBRAVO_HOME=%s not found; falling back to %s",
-                candidate,
-                default_root,
-            )
+            if not candidate.exists():
+                LOGGER.warning(
+                    "JBRAVO_HOME=%s not found; continuing with provided path", candidate
+                )
+            return candidate
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.warning(
                 "Failed to resolve JBRAVO_HOME=%s (%s); falling back to %s",
