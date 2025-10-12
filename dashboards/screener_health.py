@@ -1,58 +1,126 @@
 from __future__ import annotations
-import json, os, pathlib
-from datetime import datetime
+
+import json
+import logging
+import os
+import pathlib
+
 import pandas as pd
 import plotly.express as px
-from dash import html, dcc
+from dash import dcc, html
 from dash.dash_table import DataTable
 from dash.dependencies import Input, Output
 
-REPO_ROOT = pathlib.Path(
-    os.environ.get("JBRAVO_HOME", pathlib.Path(__file__).resolve().parents[1])
-)
-DATA_DIR  = REPO_ROOT / "data"
-LOG_DIR   = REPO_ROOT / "logs"
+LOGGER = logging.getLogger(__name__)
+
+_WARNED_PATHS: set[tuple[str, pathlib.Path]] = set()
+
+
+def _warn_once(kind: str, path: pathlib.Path, message: str, *args) -> None:
+    """Emit a warning once per (kind, path) to avoid log spam."""
+
+    key = (kind, path)
+    if key in _WARNED_PATHS:
+        return
+    _WARNED_PATHS.add(key)
+    LOGGER.warning(message, *args)
+
+
+def _clear_warnings(path: pathlib.Path, *kinds: str) -> None:
+    for kind in kinds:
+        _WARNED_PATHS.discard((kind, path))
+
+
+def _resolve_repo_root() -> pathlib.Path:
+    """Resolve the repository root while tolerating bad env overrides."""
+
+    default_root = pathlib.Path(__file__).resolve().parents[1]
+    env_home = os.environ.get("JBRAVO_HOME")
+    if env_home:
+        try:
+            candidate = pathlib.Path(env_home).expanduser()
+            if candidate.exists():
+                return candidate
+            LOGGER.warning(
+                "JBRAVO_HOME=%s not found; falling back to %s",
+                candidate,
+                default_root,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
+                "Failed to resolve JBRAVO_HOME=%s (%s); falling back to %s",
+                env_home,
+                exc,
+                default_root,
+            )
+    return default_root
+
+
+REPO_ROOT = _resolve_repo_root()
+DATA_DIR = REPO_ROOT / "data"
+LOG_DIR = REPO_ROOT / "logs"
 
 METRICS_JSON = DATA_DIR / "screener_metrics.json"
-TOP_CSV      = DATA_DIR / "top_candidates.csv"
-SCORED_CSV   = DATA_DIR / "scored_candidates.csv"
-HIST_CSV     = DATA_DIR / "screener_metrics_history.csv"
-PRED_LATEST  = DATA_DIR / "predictions" / "latest.csv"
+TOP_CSV = DATA_DIR / "top_candidates.csv"
+SCORED_CSV = DATA_DIR / "scored_candidates.csv"
+HIST_CSV = DATA_DIR / "screener_metrics_history.csv"
+PRED_LATEST = DATA_DIR / "predictions" / "latest.csv"
 RANKER_EVAL_LATEST = DATA_DIR / "ranker_eval" / "latest.json"
+
 
 def _safe_json(path: pathlib.Path) -> dict:
     try:
         if path.exists():
-            return json.loads(path.read_text())
-    except Exception:
-        pass
+            contents = json.loads(path.read_text())
+            if not isinstance(contents, dict):
+                _warn_once(
+                    "json_type",
+                    path,
+                    "JSON artifact %s did not contain an object; defaulting to empty dict",
+                    path,
+                )
+                return {}
+            _clear_warnings(path, "json_missing", "json_error", "json_type")
+            return contents
+        _warn_once("json_missing", path, "JSON artifact missing at %s", path)
+    except Exception as exc:  # pragma: no cover - defensive
+        _warn_once("json_error", path, "Failed to read JSON artifact %s: %s", path, exc)
     return {}
+
 
 def _safe_csv(path: pathlib.Path, nrows: int | None = None) -> pd.DataFrame:
     try:
         if path.exists():
-            return pd.read_csv(path, nrows=nrows)
-    except Exception:
-        pass
+            df = pd.read_csv(path, nrows=nrows)
+            _clear_warnings(path, "csv_missing", "csv_error")
+            return df
+        _warn_once("csv_missing", path, "CSV artifact missing at %s", path)
+    except Exception as exc:  # pragma: no cover - defensive
+        _warn_once("csv_error", path, "Failed to read CSV artifact %s: %s", path, exc)
     return pd.DataFrame()
+
 
 def _tail(path: pathlib.Path, lines: int = 200) -> str:
     try:
-        if not path.exists(): return "(no log)"
+        if not path.exists():
+            _warn_once("log_missing", path, "Log file missing at %s", path)
+            return "(no log)"
         with path.open("rb") as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
             block = 4096
-            data = b''
-            while size > 0 and data.count(b'\n') <= lines:
+            data = b""
+            while size > 0 and data.count(b"\n") <= lines:
                 step = min(block, size)
                 size -= step
                 f.seek(size)
                 data = f.read(step) + data
             text = data.decode("utf-8", errors="ignore")
+            _clear_warnings(path, "log_missing", "log_error")
             return "\n".join(text.splitlines()[-lines:])
-    except Exception as e:
-        return f"(log read error: {e})"
+    except Exception as exc:  # pragma: no cover - defensive
+        _warn_once("log_error", path, "Failed to read log %s: %s", path, exc)
+        return f"(log read error: {exc})"
 
 def _why_from_breakdown(json_str: str) -> str:
     try:
@@ -447,15 +515,29 @@ def register_callbacks(app):
         s_tail = _tail(LOG_DIR / "screener.log", 180)
         p_tail = _tail(LOG_DIR / "pipeline.log", 180)
 
-        prefix_counts = json.dumps(m.get("universe_prefix_counts", {}) or {}, indent=2, sort_keys=True)
-        http_view = m.get("http", {}) or {}
-        cache_view = m.get("cache", {}) or {}
-        timings_dict = m.get("timings", {}) or {}
+        prefix_raw = m.get("universe_prefix_counts") if isinstance(m, dict) else {}
+        prefix_counts = (
+            json.dumps(prefix_raw, indent=2, sort_keys=True)
+            if isinstance(prefix_raw, dict) and prefix_raw
+            else "(no data)"
+        )
+
+        http_view = m.get("http") if isinstance(m, dict) else {}
+        if not isinstance(http_view, dict):
+            http_view = {}
+        http_json = json.dumps(http_view, indent=2, sort_keys=True) if http_view else "(no data)"
+
+        cache_view = m.get("cache") if isinstance(m, dict) else {}
+        if not isinstance(cache_view, dict):
+            cache_view = {}
+        cache_json = json.dumps(cache_view, indent=2, sort_keys=True) if cache_view else "(no data)"
+
+        timings_dict = m.get("timings") if isinstance(m, dict) else {}
+        if not isinstance(timings_dict, dict):
+            timings_dict = {}
         base_timings = {"fetch_secs": 0, "feature_secs": 0, "rank_secs": 0, "gates_secs": 0}
         timings_view = {**base_timings, **timings_dict}
         timings_json = json.dumps({k: timings_view.get(k) for k in sorted(timings_view)}, indent=2)
-        http_json = json.dumps(http_view, indent=2, sort_keys=True)
-        cache_json = json.dumps(cache_view, indent=2, sort_keys=True)
 
         return (
             kpis,
