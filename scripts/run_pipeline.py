@@ -7,13 +7,16 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import Iterable, Optional
+from datetime import datetime, timezone
+from shutil import copyfile
+from typing import Any, Iterable, Mapping, MutableMapping, Optional
 
 from utils.env import load_env
 
 
 LOG = logging.getLogger("pipeline")
 LOG_PATH = pathlib.Path("logs") / "pipeline.log"
+EVENTS_PATH = pathlib.Path("logs") / "execute_events.jsonl"
 LATEST_HEADER = "timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown\n"
 
 
@@ -62,20 +65,80 @@ def screener_cmd() -> list[str]:
     return base + extra
 
 
-def copy_latest_candidates() -> None:
-    src = pathlib.Path("data/top_candidates.csv")
-    dst = pathlib.Path("data/latest_candidates.csv")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if src.exists():
-        dst.write_bytes(src.read_bytes())
+def emit(event: str, **payload: Any) -> None:
+    """Append a structured event to ``logs/execute_events.jsonl``."""
+
+    record: dict[str, Any] = {"event": str(event), **payload}
+    record.setdefault("ts", datetime.now(timezone.utc).isoformat())
+
+    EVENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with EVENTS_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def _merge_metrics_defaults(base: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    defaults: Mapping[str, Any] = {
+        "last_run_utc": "",
+        "rows": 0,
+        "symbols_in": 0,
+        "symbols_with_bars": 0,
+        "bars_rows_total": 0,
+        "http": {"429": 0, "404": 0, "empty_pages": 0},
+        "cache": {"batches_hit": 0, "batches_miss": 0},
+        "universe_prefix_counts": {},
+        "timings": {},
+    }
+
+    for key, value in defaults.items():
+        if isinstance(value, Mapping):
+            node = base.setdefault(key, {})
+            if isinstance(node, MutableMapping):
+                for nested_key, nested_value in value.items():
+                    node.setdefault(nested_key, nested_value)
+            else:  # pragma: no cover - defensive fallback
+                base[key] = dict(value)
+        else:
+            base.setdefault(key, value)
+    return base
+
+
+def refresh_latest_candidates() -> None:
+    """Refresh ``latest_candidates.csv`` and ensure metrics scaffolding exists."""
+
+    src = os.path.join("data", "top_candidates.csv")
+    dst = os.path.join("data", "latest_candidates.csv")
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+
+    if os.path.exists(src):
+        copyfile(src, dst)
         try:
-            size = dst.stat().st_size
-        except FileNotFoundError:  # pragma: no cover - race condition safeguard
+            size = os.path.getsize(dst)
+        except OSError:  # pragma: no cover - defensive guard
             size = 0
         LOG.info("[INFO] refreshed latest_candidates.csv (size=%s)", size)
     else:
-        dst.write_text(LATEST_HEADER)
+        pathlib.Path(dst).write_text(LATEST_HEADER, encoding="utf-8")
         LOG.info("[INFO] top_candidates.csv missing; wrote header-only latest_candidates.csv")
+
+    metrics_path = pathlib.Path("data/screener_metrics.json")
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    existing: MutableMapping[str, Any] = {}
+    if metrics_path.exists():
+        try:
+            parsed = json.loads(metrics_path.read_text(encoding="utf-8")) or {}
+            if isinstance(parsed, dict):
+                existing.update(parsed)
+        except Exception as exc:  # pragma: no cover - defensive parsing
+            LOG.warning("[INFO] could not parse screener_metrics.json: %s", exc)
+    merged = _merge_metrics_defaults(existing)
+    merged["last_run_utc"] = datetime.now(timezone.utc).isoformat()
+    metrics_path.write_text(json.dumps(merged, indent=2, sort_keys=True), encoding="utf-8")
+
+    write_metrics_summary()
+
+
+def copy_latest_candidates() -> None:  # pragma: no cover - backward compatibility alias
+    refresh_latest_candidates()
 
 
 def write_metrics_summary() -> None:
