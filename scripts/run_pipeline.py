@@ -66,6 +66,12 @@ def screener_cmd() -> list[str]:
     return base + extra
 
 
+def execute_cmd() -> list[str]:
+    base = [sys.executable, "-m", "scripts.execute_trades"]
+    extra = shlex.split(os.environ.get("JBR_EXEC_ARGS", "")) if os.environ.get("JBR_EXEC_ARGS") else []
+    return base + extra
+
+
 def emit(event: str, **payload: Any) -> None:
     """Append a structured event to ``logs/execute_events.jsonl``."""
 
@@ -263,7 +269,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 latest_refreshed = True
             except Exception as exc:  # pragma: no cover - defensive safeguard
                 LOG.error("[INFO] failed to refresh artifacts before EXECUTE step: %s", exc)
-        rc_exec = run_execute_step([sys.executable, "-m", "scripts.execute_trades"])
+        rc_exec = run_execute_step(execute_cmd())
         if rc_exec != 0 and rc == 0:
             rc = rc_exec
 

@@ -13,9 +13,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 
 import pandas as pd
+import requests
 
 from utils.env import get_alpaca_creds, load_env
 import utils.telemetry as telemetry
@@ -82,6 +83,56 @@ REQUIRED_COLUMNS = [
 
 OPTIONAL_COLUMNS = {"atrp", "exchange", "adv20", "entry_price"}
 IMPORT_SENTINEL_ENV = "JBRAVO_IMPORT_SENTINEL"
+DATA_URL_ENV_VARS = ("APCA_API_DATA_URL", "ALPACA_API_DATA_URL")
+DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
+
+
+def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
+    api_key, api_secret, _, feed = get_alpaca_creds()
+    if not api_key or not api_secret:
+        return None
+    base_url = None
+    for env_name in DATA_URL_ENV_VARS:
+        candidate = os.getenv(env_name)
+        if candidate:
+            base_url = candidate
+            break
+    base_url = base_url or DEFAULT_DATA_BASE_URL
+    url = f"{base_url.rstrip('/')}/v2/stocks/{symbol}/bars/latest"
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+    params: Dict[str, str] = {}
+    if feed:
+        params["feed"] = str(feed)
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+    except Exception as exc:
+        LOGGER.warning("[WARN] Failed to fetch latest close for %s: %s", symbol, exc)
+        return None
+    if response.status_code != 200:
+        LOGGER.warning(
+            "[WARN] Latest close request for %s returned status %s", symbol, response.status_code
+        )
+        return None
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        LOGGER.warning("[WARN] Could not decode latest close response for %s: %s", symbol, exc)
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    bar = payload.get("bar")
+    if isinstance(bar, Mapping):
+        close_value = bar.get("c") if "c" in bar else bar.get("close")
+        if close_value is None:
+            return None
+        try:
+            return float(close_value)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 class CandidateLoadError(RuntimeError):
@@ -109,6 +160,97 @@ def emit_import_sentinel() -> None:
 
 
 emit_import_sentinel()
+
+
+def _format_breakdown(value: Any, score: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        return value
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, sort_keys=True)
+        except TypeError:  # pragma: no cover - fallback for unserialisable payload
+            pass
+    if score is not None and not pd.isna(score):
+        try:
+            return json.dumps({"score": float(score)})
+        except (TypeError, ValueError):
+            return json.dumps({"score": score})
+    return json.dumps({})
+
+
+def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
+    frame = df.copy()
+    messages: List[str] = []
+
+    frame["symbol"] = frame.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+
+    missing_columns = [col for col in REQUIRED_COLUMNS if col not in frame.columns]
+    if missing_columns:
+        for column in missing_columns:
+            frame[column] = pd.NA
+        messages.append(
+            f"missing columns -> {', '.join(sorted(missing_columns))}; defaults applied"
+        )
+
+    for column in OPTIONAL_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+
+    if "score" not in frame.columns or frame["score"].isna().all():
+        if "Score" in frame.columns:
+            frame["score"] = frame.get("Score")
+            messages.append("derived score column from Score")
+        else:
+            frame["score"] = pd.NA
+    frame["score"] = pd.to_numeric(frame.get("score"), errors="coerce")
+
+    if "close" not in frame.columns:
+        frame["close"] = pd.NA
+    close_series = pd.to_numeric(frame.get("close"), errors="coerce")
+
+    if "entry_price" not in frame.columns:
+        frame["entry_price"] = pd.NA
+    entry_series = pd.to_numeric(frame.get("entry_price"), errors="coerce")
+
+    close_fallback_mask = close_series.isna() & entry_series.notna()
+    if close_fallback_mask.any():
+        close_series.loc[close_fallback_mask] = entry_series.loc[close_fallback_mask]
+        messages.append(
+            f"close fallback from entry_price applied to {int(close_fallback_mask.sum())} rows"
+        )
+    frame["close"] = close_series
+
+    entry_missing_mask = entry_series.isna() & close_series.notna()
+    if entry_missing_mask.any():
+        entry_series.loc[entry_missing_mask] = close_series.loc[entry_missing_mask]
+        messages.append(
+            f"entry_price defaulted from close on {int(entry_missing_mask.sum())} rows"
+        )
+    frame["entry_price"] = entry_series
+
+    if "universe_count" not in frame.columns:
+        frame["universe_count"] = pd.NA
+    universe_series = pd.to_numeric(frame.get("universe_count"), errors="coerce")
+    default_universe = int(frame.shape[0])
+    universe_missing = universe_series.isna()
+    if universe_missing.any():
+        universe_series.loc[universe_missing] = default_universe
+        messages.append("universe_count defaulted to candidate row count")
+    frame["universe_count"] = universe_series.fillna(default_universe).astype(int)
+
+    if "score_breakdown" not in frame.columns:
+        frame["score_breakdown"] = [json.dumps({})] * frame.shape[0]
+        messages.append("score_breakdown populated from score")
+    frame["score_breakdown"] = [
+        _format_breakdown(value, score)
+        for value, score in zip(frame.get("score_breakdown"), frame["score"])
+    ]
+
+    frame["exchange"] = (
+        frame.get("exchange", pd.Series(dtype="string")).astype("string").fillna("").str.upper()
+    )
+
+    return frame, messages
 
 
 @dataclass
@@ -278,12 +420,29 @@ class DailyBarCache:
             return None
         return round(float(latest_atr) / float(latest_close) * 100, 3)
 
+    def latest_close(self, symbol: str) -> Optional[float]:
+        frame = self.load(symbol)
+        if frame is None or frame.empty:
+            return None
+        lower_map = {col.lower(): col for col in frame.columns}
+        close_column = lower_map.get("close")
+        if not close_column or close_column not in frame.columns:
+            return None
+        try:
+            closes = pd.to_numeric(frame[close_column], errors="coerce").dropna()
+        except Exception:  # pragma: no cover - defensive conversion
+            return None
+        if closes.empty:
+            return None
+        return float(closes.iloc[-1])
+
 
 class OptionalFieldHydrator:
     def __init__(self, client: Any, cache: DailyBarCache) -> None:
         self.client = client
         self.cache = cache
         self.exchange_cache: Dict[str, Optional[str]] = {}
+        self.latest_close_cache: Dict[str, tuple[Optional[float], Optional[str]]] = {}
 
     def get_exchange(self, symbol: str) -> Optional[str]:
         key = symbol.upper()
@@ -299,12 +458,37 @@ class OptionalFieldHydrator:
         self.exchange_cache[key] = exchange
         return exchange
 
+    def latest_close(self, symbol: str) -> tuple[Optional[float], Optional[str]]:
+        key = symbol.upper()
+        if key in self.latest_close_cache:
+            return self.latest_close_cache[key]
+        price = self.cache.latest_close(symbol)
+        source: Optional[str] = "cache" if price is not None else None
+        if price is None:
+            price = _fetch_latest_close_from_alpaca(symbol)
+            if price is not None:
+                source = "alpaca"
+        self.latest_close_cache[key] = (price, source)
+        return self.latest_close_cache[key]
+
     def hydrate(self, row: Dict[str, Any]) -> Dict[str, Any]:
         enriched = dict(row)
         symbol = enriched.get("symbol", "").upper()
         if symbol:
             if "exchange" not in enriched or pd.isna(enriched.get("exchange")):
                 enriched["exchange"] = self.get_exchange(symbol)
+            close_value = enriched.get("close")
+            if close_value in (None, "") or pd.isna(close_value):
+                fallback = enriched.get("entry_price")
+                fallback_source: Optional[str] = None
+                if fallback in (None, "") or pd.isna(fallback):
+                    fallback, fallback_source = self.latest_close(symbol)
+                if fallback is not None and not pd.isna(fallback):
+                    enriched["close"] = fallback
+                    if fallback_source == "alpaca":
+                        LOGGER.warning(
+                            "[WARN] close missing for %s; populated via Alpaca latest bar", symbol
+                        )
             if "atrp" not in enriched or pd.isna(enriched.get("atrp")):
                 enriched["atrp"] = self.cache.atr_percent(symbol)
         if "entry_price" not in enriched or pd.isna(enriched.get("entry_price")):
@@ -351,14 +535,9 @@ class TradeExecutor:
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
-        missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
-        if missing:
-            raise CandidateLoadError(
-                f"Candidate file missing required columns: {', '.join(missing)}"
-            )
-        for column in OPTIONAL_COLUMNS:
-            if column not in df.columns:
-                df[column] = pd.NA
+        df, warnings = _apply_candidate_defaults(df)
+        if warnings:
+            LOGGER.warning("[WARN] %s", "; ".join(warnings))
         return df
 
     def hydrate_candidates(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
