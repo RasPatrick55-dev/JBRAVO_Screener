@@ -129,7 +129,13 @@ def test_execute_flow_attaches_trailing_stop(tmp_path):
         ]
     )
     frame.to_csv(csv_path, index=False)
-    config = ExecutorConfig(source=csv_path, cancel_after_min=1, allocation_pct=0.5)
+    config = ExecutorConfig(
+        source=csv_path,
+        cancel_after_min=1,
+        allocation_pct=0.5,
+        time_window="any",
+        extended_hours=True,
+    )
     metrics = ExecutionMetrics()
     client = StubTradingClient()
     executor = TradeExecutor(config, client, metrics, sleep_fn=lambda *_: None)
