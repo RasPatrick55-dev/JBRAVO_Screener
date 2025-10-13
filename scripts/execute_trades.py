@@ -10,10 +10,12 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time as dt_time
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
+
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -262,6 +264,8 @@ class ExecutorConfig:
     trailing_percent: float = 3.0
     cancel_after_min: int = 35
     extended_hours: bool = True
+    time_window: str = "premarket"
+    market_timezone: str = "America/New_York"
     dry_run: bool = False
     min_adv20: int = 2_000_000
     min_price: float = 1.0
@@ -286,8 +290,11 @@ class ExecutionMetrics:
         # Maintain backward compatibility with legacy attribute name
         self.skipped_by_reason = self.skipped_reasons
 
-    def record_skip(self, reason: str) -> None:
-        self.skipped_reasons[reason] = self.skipped_reasons.get(reason, 0) + 1
+    def record_skip(self, reason: str, count: int = 1) -> None:
+        count = int(count)
+        if count <= 0:
+            return
+        self.skipped_reasons[reason] = self.skipped_reasons.get(reason, 0) + count
 
     def record_latency(self, seconds: float) -> None:
         if seconds > 0:
@@ -420,6 +427,31 @@ class DailyBarCache:
             return None
         return round(float(latest_atr) / float(latest_close) * 100, 3)
 
+    def adv20(self, symbol: str) -> Optional[float]:
+        frame = self.load(symbol)
+        if frame is None or frame.empty:
+            return None
+        lower_map = {col.lower(): col for col in frame.columns}
+        close_column = lower_map.get("close")
+        volume_column = lower_map.get("volume") or lower_map.get("vol")
+        if not close_column or not volume_column:
+            return None
+        try:
+            closes = pd.to_numeric(frame[close_column], errors="coerce")
+            volumes = pd.to_numeric(frame[volume_column], errors="coerce")
+        except Exception:
+            return None
+        df = pd.DataFrame({"close": closes, "volume": volumes}).dropna()
+        if df.empty:
+            return None
+        window = df.tail(20)
+        if window.empty:
+            return None
+        adv = (window["close"] * window["volume"]).mean()
+        if pd.isna(adv):
+            return None
+        return float(adv)
+
     def latest_close(self, symbol: str) -> Optional[float]:
         frame = self.load(symbol)
         if frame is None or frame.empty:
@@ -443,6 +475,19 @@ class OptionalFieldHydrator:
         self.cache = cache
         self.exchange_cache: Dict[str, Optional[str]] = {}
         self.latest_close_cache: Dict[str, tuple[Optional[float], Optional[str]]] = {}
+        self._missing_logged: set[Tuple[str, str]] = set()
+
+    def _log_missing(self, field: str, symbol: str, detail: str = "") -> None:
+        key = (field.lower(), symbol.upper())
+        if key in self._missing_logged:
+            return
+        parts = [f"[WARN] MISSING_{field.upper()} (filled default)"]
+        if symbol:
+            parts.append(f"symbol={symbol.upper()}")
+        if detail:
+            parts.append(detail)
+        LOGGER.warning(" ".join(parts))
+        self._missing_logged.add(key)
 
     def get_exchange(self, symbol: str) -> Optional[str]:
         key = symbol.upper()
@@ -475,8 +520,11 @@ class OptionalFieldHydrator:
         enriched = dict(row)
         symbol = enriched.get("symbol", "").upper()
         if symbol:
-            if "exchange" not in enriched or pd.isna(enriched.get("exchange")):
-                enriched["exchange"] = self.get_exchange(symbol)
+            exchange_value = enriched.get("exchange")
+            if exchange_value in (None, "") or pd.isna(exchange_value):
+                exchange = self.get_exchange(symbol)
+                enriched["exchange"] = exchange
+                self._log_missing("exchange", symbol, detail=f"source={'asset' if exchange else 'default'}")
             close_value = enriched.get("close")
             if close_value in (None, "") or pd.isna(close_value):
                 fallback = enriched.get("entry_price")
@@ -489,10 +537,20 @@ class OptionalFieldHydrator:
                         LOGGER.warning(
                             "[WARN] close missing for %s; populated via Alpaca latest bar", symbol
                         )
-            if "atrp" not in enriched or pd.isna(enriched.get("atrp")):
-                enriched["atrp"] = self.cache.atr_percent(symbol)
-        if "entry_price" not in enriched or pd.isna(enriched.get("entry_price")):
+            atr_value = enriched.get("atrp")
+            if atr_value in (None, "") or pd.isna(atr_value):
+                atr = self.cache.atr_percent(symbol)
+                enriched["atrp"] = atr
+                self._log_missing("atrp", symbol, detail=f"source={'bars' if atr is not None else 'default'}")
+            adv_value = enriched.get("adv20")
+            if adv_value in (None, "") or pd.isna(adv_value):
+                adv = self.cache.adv20(symbol)
+                enriched["adv20"] = adv
+                self._log_missing("adv20", symbol, detail=f"source={'bars' if adv is not None else 'default'}")
+        entry_value = enriched.get("entry_price")
+        if entry_value in (None, "") or pd.isna(entry_value):
             enriched["entry_price"] = enriched.get("close")
+            self._log_missing("entry_price", symbol, detail="source=close")
         if "adv20" not in enriched or pd.isna(enriched.get("adv20")):
             enriched["adv20"] = None
         return enriched
@@ -514,6 +572,7 @@ class TradeExecutor:
         self.bar_cache = DailyBarCache(config.bar_directories)
         self.hydrator = OptionalFieldHydrator(client, self.bar_cache)
         self.log_json = config.log_json
+        self._tz_fallback_logged = False
 
     def log_event(self, event: str, **payload: Any) -> None:
         human = " ".join(f"{key}={value}" for key, value in payload.items())
@@ -526,6 +585,102 @@ class TradeExecutor:
                 LOGGER.info(json.dumps({"event": event, **payload}))
             except TypeError:  # pragma: no cover - serialization guard
                 LOGGER.info(json.dumps({"event": event, "message": str(payload)}))
+
+    def record_skip_reason(
+        self,
+        reason: str,
+        *,
+        symbol: str = "",
+        detail: str = "",
+        count: int = 1,
+    ) -> None:
+        self.metrics.record_skip(reason, count=count)
+        payload: Dict[str, Any] = {"reason": reason}
+        if symbol:
+            payload["symbol"] = symbol
+        if detail:
+            payload["detail"] = detail
+        if count > 1:
+            payload["count"] = count
+        self.log_event("SKIP", **payload)
+
+    def _resolve_market_timezone(self) -> ZoneInfo:
+        tz_name = self.config.market_timezone or "America/New_York"
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            if not self._tz_fallback_logged:
+                LOGGER.warning(
+                    "[WARN] invalid market timezone '%s'; falling back to America/New_York",
+                    tz_name,
+                )
+                self._tz_fallback_logged = True
+            try:
+                return ZoneInfo("America/New_York")
+            except Exception:  # pragma: no cover - ZoneInfo fallback safety
+                return ZoneInfo("UTC")
+
+    def _get_trading_clock(self) -> Optional[Any]:
+        if self.client is None or not hasattr(self.client, "get_clock"):
+            return None
+        try:
+            return self.client.get_clock()
+        except Exception as exc:
+            LOGGER.warning("[WARN] failed to fetch trading clock: %s", exc)
+            return None
+
+    def evaluate_time_window(self) -> Tuple[bool, str]:
+        tz = self._resolve_market_timezone()
+        now_local = datetime.now(timezone.utc).astimezone(tz)
+        current_time = dt_time(
+            now_local.hour, now_local.minute, now_local.second, now_local.microsecond
+        )
+
+        premarket_start = dt_time(4, 0)
+        regular_start = dt_time(9, 30)
+        regular_end = dt_time(16, 0)
+        postmarket_end = dt_time(20, 0)
+
+        within_premarket = premarket_start <= current_time < regular_start
+        within_regular = regular_start <= current_time < regular_end
+        within_post = regular_end <= current_time < postmarket_end
+
+        window = (self.config.time_window or "premarket").lower()
+        clock = self._get_trading_clock()
+        clock_is_open = bool(getattr(clock, "is_open", False))
+
+        message: str
+        allowed = False
+
+        if window == "premarket":
+            if not self.config.extended_hours:
+                allowed = False
+                message = "outside premarket (skipping submit; extended hours disabled)"
+            else:
+                allowed = within_premarket
+                message = "premarket open window (allowed)" if allowed else "outside premarket (skipping submit)"
+        elif window == "regular":
+            allowed = within_regular
+            message = "regular session (allowed)" if allowed else "outside regular session (skipping submit)"
+        else:  # any
+            extended_ok = self.config.extended_hours and (within_premarket or within_post)
+            if clock is not None:
+                allowed = clock_is_open or extended_ok
+            else:
+                allowed = within_regular or extended_ok
+            message = "any window (allowed)" if allowed else "market closed (skipping submit)"
+
+        if not allowed and clock is not None and window in {"premarket", "regular"}:
+            # When Alpaca reports the venue open, treat it as authoritative for overrides.
+            if window == "premarket" and self.config.extended_hours and clock_is_open and not within_regular:
+                allowed = True
+                message = "premarket open window (allowed)"
+            elif window == "regular" and clock_is_open and within_regular:
+                allowed = True
+                message = "regular session (allowed)"
+
+        LOGGER.info("[INFO] TIME_WINDOW: %s", message)
+        return allowed, message
 
     def load_candidates(self) -> pd.DataFrame:
         path = self.config.source
@@ -547,24 +702,37 @@ class TradeExecutor:
     def guard_candidates(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         filtered: List[Dict[str, Any]] = []
         for record in records:
+            raw_symbol = record.get("symbol")
+            symbol = ""
+            if raw_symbol not in (None, "") and not pd.isna(raw_symbol):
+                symbol = str(raw_symbol).upper()
             price = record.get("entry_price")
             if price in (None, "") or pd.isna(price):
                 price = record.get("close")
             if price in (None, "") or pd.isna(price):
-                self.metrics.record_skip("MISSING_PRICE")
+                self.record_skip_reason("MISSING_PRICE", symbol=symbol)
                 continue
             price_f = float(price)
             if price_f < self.config.min_price:
-                self.metrics.record_skip("PRICE_LT_MIN")
+                self.record_skip_reason(
+                    "PRICE_BOUNDS",
+                    symbol=symbol,
+                    detail=f"lt_min({price_f:.2f})",
+                )
                 continue
             if price_f > self.config.max_price:
-                self.metrics.record_skip("PRICE_GT_MAX")
+                self.record_skip_reason(
+                    "PRICE_BOUNDS",
+                    symbol=symbol,
+                    detail=f"gt_max({price_f:.2f})",
+                )
                 continue
             adv = record.get("adv20")
             if adv not in (None, "") and not pd.isna(adv):
                 adv_value = pd.to_numeric(pd.Series([adv]), errors="coerce").iloc[0]
                 if not pd.isna(adv_value) and float(adv_value) < self.config.min_adv20:
-                    self.metrics.record_skip("ADV20_LT_MIN")
+                    detail = f"{float(adv_value):.0f}" if not pd.isna(adv_value) else ""
+                    self.record_skip_reason("ADV20_LT_MIN", symbol=symbol, detail=detail)
                     continue
             filtered.append(record)
         return filtered
@@ -586,6 +754,12 @@ class TradeExecutor:
             self.persist_metrics()
             return 0
 
+        allowed, status = self.evaluate_time_window()
+        if not allowed:
+            self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
+            self.persist_metrics()
+            return 0
+
         if self.config.dry_run:
             LOGGER.info("Dry-run mode active; no orders will be submitted.")
 
@@ -598,24 +772,25 @@ class TradeExecutor:
             if not symbol:
                 continue
             if symbol in existing_positions:
-                self.metrics.record_skip("EXISTING_POSITION")
+                self.record_skip_reason("EXISTING_POSITION", symbol=symbol)
                 continue
             if symbol in open_order_symbols:
-                self.metrics.record_skip("OPEN_ORDER")
+                self.record_skip_reason("OPEN_ORDER", symbol=symbol)
                 continue
             if len(existing_positions) >= self.config.max_positions:
-                self.metrics.record_skip("MAX_POSITIONS")
+                self.record_skip_reason("MAX_POSITIONS", symbol=symbol)
                 break
 
             limit_price = compute_limit_price(record, self.config.entry_buffer_bps)
             qty = compute_quantity(account_buying_power, self.config.allocation_pct, limit_price)
             if qty < 1:
-                self.metrics.record_skip("BUYING_POWER")
+                self.record_skip_reason("ZERO_QTY", symbol=symbol)
                 continue
 
             notional = qty * limit_price
             if notional > account_buying_power:
-                self.metrics.record_skip("BUYING_POWER")
+                detail = f"required={notional:.2f} available={account_buying_power:.2f}"
+                self.record_skip_reason("CASH", symbol=symbol, detail=detail)
                 continue
 
             if self.config.dry_run:
@@ -689,7 +864,14 @@ class TradeExecutor:
         outcome["submitted"] = True
         order_id = str(getattr(submitted_order, "id", ""))
         self.metrics.orders_submitted += 1
-        self.log_event("BUY_SUBMIT", symbol=symbol, qty=qty, limit=f"{limit_price:.2f}", order_id=order_id or "")
+        self.log_event(
+            "BUY_SUBMIT",
+            symbol=symbol,
+            qty=qty,
+            limit=f"{limit_price:.2f}",
+            extended_hours=self.config.extended_hours,
+            order_id=order_id or "",
+        )
 
         fill_deadline = datetime.now(timezone.utc) + timedelta(minutes=self.config.cancel_after_min)
         submit_ts = time.time()
@@ -714,7 +896,7 @@ class TradeExecutor:
                 self.log_event(
                     "BUY_FILL",
                     symbol=symbol,
-                    qty=f"{filled_qty:.0f}",
+                    filled_qty=f"{filled_qty:.0f}",
                     avg_price=f"{float(filled_avg_price or 0):.2f}",
                     order_id=order_id,
                 )
@@ -730,7 +912,7 @@ class TradeExecutor:
                 self.log_event(
                     "BUY_FILL",
                     symbol=symbol,
-                    qty=f"{filled_qty:.0f}",
+                    filled_qty=f"{filled_qty:.0f}",
                     avg_price=f"{float(filled_avg_price or 0):.2f}",
                     order_id=order_id,
                 )
@@ -758,7 +940,7 @@ class TradeExecutor:
             self.log_event(
                 "BUY_FILL",
                 symbol=symbol,
-                qty=f"{filled_qty:.0f}",
+                filled_qty=f"{filled_qty:.0f}",
                 avg_price=f"{float(filled_avg_price or 0):.2f}",
                 partial="true",
                 order_id=order_id,
@@ -949,6 +1131,17 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default=ExecutorConfig.log_json,
         help="Emit structured JSON logs in addition to human readable ones",
     )
+    parser.add_argument(
+        "--time-window",
+        choices=("premarket", "regular", "any"),
+        default=ExecutorConfig.time_window,
+        help="Trading time window gate controlling when orders may be submitted",
+    )
+    parser.add_argument(
+        "--market-timezone",
+        default=ExecutorConfig.market_timezone,
+        help="IANA timezone name used for market window evaluation",
+    )
     return parser.parse_args(argv)
 
 
@@ -966,6 +1159,8 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         min_price=args.min_price,
         max_price=args.max_price,
         log_json=args.log_json,
+        time_window=args.time_window,
+        market_timezone=args.market_timezone,
     )
 
 
