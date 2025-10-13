@@ -3866,19 +3866,17 @@ def write_outputs(
             "batches_total": _coerce_int(fetch_payload.get("batches_total", 0)),
         }
     )
-    symbol_count = 0
     if isinstance(scored_df, pd.DataFrame) and "symbol" in scored_df.columns:
         try:
-            symbol_count = int(scored_df["symbol"].dropna().astype(str).nunique())
+            symbol_count = int(scored_df["symbol"].astype("string").dropna().nunique())
         except Exception:
-            try:
-                symbol_count = int(scored_df["symbol"].nunique())
-            except Exception:
-                symbol_count = 0
+            symbol_count = int(scored_df["symbol"].nunique())
+    else:
+        symbol_count = 0
     rows_total = int(scored_df.shape[0]) if isinstance(scored_df, pd.DataFrame) else 0
-    metrics["symbols_with_bars"] = symbol_count
-    metrics["bars_rows_total"] = rows_total
-    metrics["symbols_no_bars"] = max(int(metrics.get("symbols_in", 0)) - symbol_count, 0)
+    metrics["symbols_with_bars"] = int(symbol_count)
+    metrics["bars_rows_total"] = int(rows_total)
+    metrics["symbols_no_bars"] = max(int(metrics.get("symbols_in", 0)) - int(symbol_count), 0)
     prefix_counts_payload = fetch_payload.get("universe_prefix_counts")
     if isinstance(prefix_counts_payload, dict):
         metrics["universe_prefix_counts"] = {
