@@ -84,6 +84,17 @@ REQUIRED_COLUMNS = [
 ]
 
 OPTIONAL_COLUMNS = {"atrp", "exchange", "adv20", "entry_price"}
+SKIP_REASON_KEYS = {
+    "TIME_WINDOW",
+    "ZERO_QTY",
+    "CASH",
+    "PRICE_BOUNDS",
+    "MAX_POSITIONS",
+    "EXISTING_POSITION",
+    "OPEN_ORDER",
+    "ADV20_LT_MIN",
+    "MISSING_PRICE",
+}
 IMPORT_SENTINEL_ENV = "JBRAVO_IMPORT_SENTINEL"
 DATA_URL_ENV_VARS = ("APCA_API_DATA_URL", "ALPACA_API_DATA_URL")
 DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
@@ -187,21 +198,19 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
     frame["symbol"] = frame.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
 
     missing_columns = [col for col in REQUIRED_COLUMNS if col not in frame.columns]
-    if missing_columns:
-        for column in missing_columns:
-            frame[column] = pd.NA
-        messages.append(
-            f"missing columns -> {', '.join(sorted(missing_columns))}; defaults applied"
-        )
+    for column in missing_columns:
+        frame[column] = pd.NA
+        messages.append(f"[WARN] MISSING_{column.upper()} column (defaulted)")
 
     for column in OPTIONAL_COLUMNS:
         if column not in frame.columns:
             frame[column] = pd.NA
+            messages.append(f"[WARN] MISSING_{column.upper()} column (defaulted)")
 
     if "score" not in frame.columns or frame["score"].isna().all():
         if "Score" in frame.columns:
             frame["score"] = frame.get("Score")
-            messages.append("derived score column from Score")
+            messages.append("[WARN] derived score column from Score header (defaulted)")
         else:
             frame["score"] = pd.NA
     frame["score"] = pd.to_numeric(frame.get("score"), errors="coerce")
@@ -218,7 +227,7 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
     if close_fallback_mask.any():
         close_series.loc[close_fallback_mask] = entry_series.loc[close_fallback_mask]
         messages.append(
-            f"close fallback from entry_price applied to {int(close_fallback_mask.sum())} rows"
+            f"[WARN] close fallback from entry_price applied to {int(close_fallback_mask.sum())} rows"
         )
     frame["close"] = close_series
 
@@ -226,7 +235,7 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
     if entry_missing_mask.any():
         entry_series.loc[entry_missing_mask] = close_series.loc[entry_missing_mask]
         messages.append(
-            f"entry_price defaulted from close on {int(entry_missing_mask.sum())} rows"
+            f"[WARN] entry_price defaulted from close on {int(entry_missing_mask.sum())} rows"
         )
     frame["entry_price"] = entry_series
 
@@ -237,12 +246,12 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
     universe_missing = universe_series.isna()
     if universe_missing.any():
         universe_series.loc[universe_missing] = default_universe
-        messages.append("universe_count defaulted to candidate row count")
+        messages.append("[WARN] universe_count defaulted to candidate row count")
     frame["universe_count"] = universe_series.fillna(default_universe).astype(int)
 
     if "score_breakdown" not in frame.columns:
-        frame["score_breakdown"] = [json.dumps({})] * frame.shape[0]
-        messages.append("score_breakdown populated from score")
+        frame["score_breakdown"] = [None] * frame.shape[0]
+        messages.append("[WARN] score_breakdown populated from score (defaulted)")
     frame["score_breakdown"] = [
         _format_breakdown(value, score)
         for value, score in zip(frame.get("score_breakdown"), frame["score"])
@@ -294,7 +303,8 @@ class ExecutionMetrics:
         count = int(count)
         if count <= 0:
             return
-        self.skipped_reasons[reason] = self.skipped_reasons.get(reason, 0) + count
+        key = reason.upper()
+        self.skipped_reasons[key] = self.skipped_reasons.get(key, 0) + count
 
     def record_latency(self, seconds: float) -> None:
         if seconds > 0:
@@ -316,6 +326,8 @@ class ExecutionMetrics:
         return round(value, 3)
 
     def as_dict(self) -> Dict[str, Any]:
+        skip_keys = sorted(SKIP_REASON_KEYS.union(self.skipped_reasons.keys()))
+        skip_payload = {key: int(self.skipped_reasons.get(key, 0)) for key in skip_keys}
         return {
             "last_run_utc": datetime.now(timezone.utc).isoformat(),
             "symbols_in": self.symbols_in,
@@ -329,7 +341,8 @@ class ExecutionMetrics:
                 "p50": self.percentile(0.5),
                 "p95": self.percentile(0.95),
             },
-            "skipped": self.skipped_reasons,
+            "skips": skip_payload,
+            "skipped": dict(skip_payload),
         }
 
 
@@ -481,7 +494,7 @@ class OptionalFieldHydrator:
         key = (field.lower(), symbol.upper())
         if key in self._missing_logged:
             return
-        parts = [f"[WARN] MISSING_{field.upper()} (filled default)"]
+        parts = [f"[WARN] MISSING_{field.upper()} (defaulted)"]
         if symbol:
             parts.append(f"symbol={symbol.upper()}")
         if detail:
@@ -524,29 +537,42 @@ class OptionalFieldHydrator:
             if exchange_value in (None, "") or pd.isna(exchange_value):
                 exchange = self.get_exchange(symbol)
                 enriched["exchange"] = exchange
-                self._log_missing("exchange", symbol, detail=f"source={'asset' if exchange else 'default'}")
+                self._log_missing(
+                    "exchange",
+                    symbol,
+                    detail=f"source={'asset' if exchange else 'default'}",
+                )
             close_value = enriched.get("close")
             if close_value in (None, "") or pd.isna(close_value):
                 fallback = enriched.get("entry_price")
                 fallback_source: Optional[str] = None
+                source_label = "entry_price"
                 if fallback in (None, "") or pd.isna(fallback):
                     fallback, fallback_source = self.latest_close(symbol)
+                    source_label = fallback_source or "default"
                 if fallback is not None and not pd.isna(fallback):
                     enriched["close"] = fallback
-                    if fallback_source == "alpaca":
-                        LOGGER.warning(
-                            "[WARN] close missing for %s; populated via Alpaca latest bar", symbol
-                        )
+                    self._log_missing("close", symbol, detail=f"source={source_label}")
+                else:
+                    self._log_missing("close", symbol, detail="source=unavailable")
             atr_value = enriched.get("atrp")
             if atr_value in (None, "") or pd.isna(atr_value):
                 atr = self.cache.atr_percent(symbol)
                 enriched["atrp"] = atr
-                self._log_missing("atrp", symbol, detail=f"source={'bars' if atr is not None else 'default'}")
+                self._log_missing(
+                    "atrp",
+                    symbol,
+                    detail=f"source={'bars' if atr is not None else 'default'}",
+                )
             adv_value = enriched.get("adv20")
             if adv_value in (None, "") or pd.isna(adv_value):
                 adv = self.cache.adv20(symbol)
                 enriched["adv20"] = adv
-                self._log_missing("adv20", symbol, detail=f"source={'bars' if adv is not None else 'default'}")
+                self._log_missing(
+                    "adv20",
+                    symbol,
+                    detail=f"source={'bars' if adv is not None else 'default'}",
+                )
         entry_value = enriched.get("entry_price")
         if entry_value in (None, "") or pd.isna(entry_value):
             enriched["entry_price"] = enriched.get("close")
@@ -594,8 +620,18 @@ class TradeExecutor:
         detail: str = "",
         count: int = 1,
     ) -> None:
-        self.metrics.record_skip(reason, count=count)
-        payload: Dict[str, Any] = {"reason": reason}
+        reason_key = reason.upper()
+        parts = [f"[INFO] {reason_key}"]
+        if symbol:
+            parts.append(f"symbol={symbol}")
+        if detail:
+            parts.append(str(detail))
+        if count > 1:
+            parts.append(f"count={count}")
+        LOGGER.info(" ".join(parts))
+
+        self.metrics.record_skip(reason_key, count=count)
+        payload: Dict[str, Any] = {"reason": reason_key}
         if symbol:
             payload["symbol"] = symbol
         if detail:
@@ -691,8 +727,8 @@ class TradeExecutor:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
         df, warnings = _apply_candidate_defaults(df)
-        if warnings:
-            LOGGER.warning("[WARN] %s", "; ".join(warnings))
+        for message in warnings:
+            LOGGER.warning(message)
         return df
 
     def hydrate_candidates(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -1168,6 +1204,13 @@ def run_executor(config: ExecutorConfig, *, client: Optional[Any] = None) -> int
     configure_logging(config.log_json)
     metrics = ExecutionMetrics()
     loader = TradeExecutor(config, client, metrics)
+    if config.dry_run:
+        banner = "=" * 72
+        LOGGER.info(banner)
+        LOGGER.info("[INFO] DRY_RUN=True — no orders will be submitted")
+        LOGGER.info(banner)
+    else:
+        LOGGER.info("[INFO] DRY_RUN=False")
     try:
         frame = loader.load_candidates()
     except CandidateLoadError as exc:

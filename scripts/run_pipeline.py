@@ -222,7 +222,8 @@ def latest_candidates_has_rows(path: pathlib.Path) -> bool:
 def run_execute_step(cmd: list[str]) -> int:
     latest_path = pathlib.Path("data") / "latest_candidates.csv"
     if not latest_candidates_has_rows(latest_path):
-        LOG.info("[INFO] EXECUTE SKIPPED: NO CANDIDATES")
+        LOG.info("[INFO] START EXECUTE (skipped: NO CANDIDATES)")
+        LOG.info("[INFO] END EXECUTE rc=0 duration=0.0s (skipped)")
         return 0
 
     LOG.info("[INFO] START EXECUTE %s", " ".join(shlex.quote(part) for part in cmd))
