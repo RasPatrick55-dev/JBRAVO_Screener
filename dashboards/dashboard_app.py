@@ -44,6 +44,7 @@ executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
 historical_candidates_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
 execute_metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 account_equity_path = os.path.join(BASE_DIR, "data", "account_equity.csv")
+health_connectivity_path = os.path.join(BASE_DIR, "data", "health", "connectivity.json")
 
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
@@ -858,10 +859,29 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 color="warning",
             )
 
+        execute_metrics: dict = {}
+        execute_alert = None
+        if os.path.exists(execute_metrics_path):
+            try:
+                with open(execute_metrics_path, "r", encoding="utf-8") as handle:
+                    loaded_execute = json.load(handle) or {}
+                if isinstance(loaded_execute, dict):
+                    execute_metrics = loaded_execute
+                else:
+                    execute_alert = dbc.Alert(
+                        "Execution metrics are in an unexpected format.",
+                        color="warning",
+                    )
+            except Exception as exc:
+                execute_alert = dbc.Alert(
+                    f"Failed to read execution metrics: {exc}",
+                    color="danger",
+                )
+
         df, alert = load_csv(top_candidates_path)
         scored_df, scored_alert = load_csv(scored_candidates_path)
 
-        alerts = [a for a in (metrics_alert, alert, scored_alert) if a]
+        alerts = [a for a in (metrics_alert, alert, scored_alert, execute_alert) if a]
 
         def _safe_int(value) -> int:
             try:
@@ -892,13 +912,16 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 return f"{int(numeric):,}"
             return f"{numeric:,.2f}"
 
-        last_run_display = metrics_data.get("last_run_utc")
-        if isinstance(last_run_display, str):
-            try:
-                parsed = datetime.fromisoformat(last_run_display.replace("Z", "+00:00"))
-                last_run_display = parsed.strftime("%Y-%m-%d %H:%M UTC")
-            except Exception:
-                pass
+        def _format_iso_display(value):
+            if isinstance(value, str):
+                try:
+                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    return parsed.strftime("%Y-%m-%d %H:%M UTC")
+                except Exception:
+                    return value
+            return value
+
+        last_run_display = _format_iso_display(metrics_data.get("last_run_utc"))
 
         health_items = [
             ("Last Run (UTC)", last_run_display),
@@ -923,6 +946,36 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         health_cards = dbc.Row(health_columns, className="g-3 mb-4")
 
         timings = metrics_data.get("timings", {}) or {}
+
+        execution_card = None
+        if execute_metrics:
+            exec_last_run = _format_iso_display(execute_metrics.get("last_run_utc"))
+            submitted = _safe_int(execute_metrics.get("orders_submitted"))
+            trailing = _safe_int(execute_metrics.get("trailing_attached"))
+            skips_payload = execute_metrics.get("skips")
+            skip_text = "None"
+            if isinstance(skips_payload, dict):
+                parts = []
+                for key, value in sorted(skips_payload.items()):
+                    count = _safe_int(value)
+                    if count <= 0:
+                        continue
+                    parts.append(f"{key}:{count}")
+                skip_text = ", ".join(parts) if parts else "None"
+            elif skips_payload not in (None, ""):
+                skip_text = str(skips_payload)
+            execution_card = dbc.Card(
+                dbc.CardBody(
+                    [
+                        html.Div("Execution", className="card-metric-label"),
+                        html.Div((exec_last_run or "—"), className="card-metric-value mb-2"),
+                        html.Div(f"Submitted: {submitted}", className="small text-muted"),
+                        html.Div(f"Trailing: {trailing}", className="small text-muted"),
+                        html.Div(f"Skips: {skip_text}", className="small text-muted"),
+                    ]
+                ),
+                className="bg-dark text-light h-100",
+            )
         timing_labels = [
             ("fetch_secs", "Fetch"),
             ("normalize_secs", "Normalize"),
@@ -1259,10 +1312,40 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="g-3 mb-4",
         )
 
+        connectivity_chip = None
+        if os.path.exists(health_connectivity_path):
+            try:
+                with open(health_connectivity_path, "r", encoding="utf-8") as handle:
+                    connectivity_payload = json.load(handle) or {}
+                trading = connectivity_payload.get("trading", {}) if isinstance(connectivity_payload, dict) else {}
+                data_status = connectivity_payload.get("data", {}) if isinstance(connectivity_payload, dict) else {}
+                trading_ok = bool(trading.get("ok"))
+                data_ok = bool(data_status.get("ok"))
+                status_color = "success" if trading_ok and data_ok else ("warning" if trading_ok or data_ok else "danger")
+                connectivity_chip = dbc.Badge(
+                    [
+                        html.Span("Alpaca Connectivity", className="me-2"),
+                        html.Span(f"Trading {'✅' if trading_ok else '❌'}", className="me-2"),
+                        html.Span(f"Data {'✅' if data_ok else '❌'}"),
+                    ],
+                    color=status_color,
+                    className="me-2",
+                )
+            except Exception:
+                connectivity_chip = None
+
         components = []
+        if connectivity_chip:
+            components.append(html.Div(connectivity_chip, className="mb-3"))
         components.extend(alerts)
         if metrics_data:
-            components.extend([health_cards, info_row, charts_row])
+            metrics_sections = [health_cards]
+            if execution_card is not None:
+                metrics_sections.append(
+                    dbc.Row([dbc.Col(execution_card, md=4, sm=6)], className="g-3 mb-4")
+                )
+            metrics_sections.extend([info_row, charts_row])
+            components.extend(metrics_sections)
         components.append(html.H4("Top Candidates", className="text-light"))
         components.append(top_table_component)
         if metrics_data:

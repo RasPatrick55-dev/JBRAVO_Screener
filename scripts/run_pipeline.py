@@ -19,6 +19,7 @@ from utils.env import load_env
 LOG = logging.getLogger("pipeline")
 LOG_PATH = pathlib.Path("logs") / "pipeline.log"
 EVENTS_PATH = pathlib.Path("logs") / "execute_events.jsonl"
+EXECUTE_METRICS_PATH = pathlib.Path("data") / "execute_metrics.json"
 LATEST_HEADER = "timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown\n"
 
 
@@ -299,6 +300,23 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             except Exception as exc:  # pragma: no cover - defensive safeguard
                 LOG.error("[INFO] failed to refresh artifacts before EXECUTE step: %s", exc)
         rc_exec = run_execute_step(execute_cmd())
+        summary: dict[str, Any] = {}
+        if EXECUTE_METRICS_PATH.exists():
+            try:
+                payload = json.loads(EXECUTE_METRICS_PATH.read_text(encoding="utf-8")) or {}
+            except Exception as exc:  # pragma: no cover - defensive metrics parsing
+                LOG.warning("[INFO] failed to read execute metrics: %s", exc)
+            else:
+                if isinstance(payload, Mapping):
+                    summary = {
+                        "last_run_utc": payload.get("last_run_utc"),
+                        "orders_submitted": payload.get("orders_submitted"),
+                        "trailing_attached": payload.get("trailing_attached"),
+                        "skips": payload.get("skips"),
+                    }
+                else:
+                    summary = {"raw": payload}
+        LOG.info("EXECUTE SUMMARY %s", json.dumps(summary))
         if rc_exec != 0 and rc == 0:
             rc = rc_exec
 
