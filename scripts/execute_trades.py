@@ -1512,9 +1512,58 @@ def apply_guards(df: pd.DataFrame, config: ExecutorConfig, metrics: ExecutionMet
 def main(argv: Optional[Iterable[str]] = None) -> int:
     load_env()
     args = parse_args(argv)
+    trailing_pct = args.trailing_percent if args.trailing_percent is not None else 0.0
+    LOGGER.info(
+        "EXECUTE START dry_run=%s time_window=%s ext_hours=%s alloc=%.2f max_pos=%d trail=%.1f%%",
+        bool(args.dry_run),
+        args.time_window,
+        bool(args.extended_hours),
+        float(args.allocation_pct or 0.0),
+        int(args.max_positions or 0),
+        float(trailing_pct),
+    )
     config = build_config(args)
     try:
-        return run_executor(config)
+        rc = run_executor(config)
+        if rc == 0:
+            summary: Dict[str, Any] = {
+                "orders_submitted": 0,
+                "trailing_attached": 0,
+                "skips": {},
+            }
+            if METRICS_PATH.exists():
+                try:
+                    payload = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+                except Exception as exc:  # pragma: no cover - defensive metrics parsing
+                    LOGGER.warning("Failed to load execute metrics for summary: %s", exc)
+                else:
+                    if isinstance(payload, Mapping):
+                        def _to_int(value: Any) -> int:
+                            try:
+                                return int(value)
+                            except (TypeError, ValueError):
+                                return 0
+
+                        summary["orders_submitted"] = _to_int(payload.get("orders_submitted"))
+                        summary["trailing_attached"] = _to_int(payload.get("trailing_attached"))
+                        skips_value = payload.get("skips")
+                        if isinstance(skips_value, Mapping):
+                            converted: Dict[str, Any] = {}
+                            for key, value in skips_value.items():
+                                try:
+                                    converted[str(key)] = _to_int(value)
+                                except Exception:  # pragma: no cover - defensive fallback
+                                    converted[str(key)] = value
+                            summary["skips"] = converted
+                        elif skips_value:
+                            summary["skips"] = skips_value
+            LOGGER.info(
+                "EXECUTE END submitted=%d trailing=%d skipped=%s",
+                int(summary.get("orders_submitted", 0) or 0),
+                int(summary.get("trailing_attached", 0) or 0),
+                summary.get("skips", {}),
+            )
+        return rc
     except Exception as exc:  # pragma: no cover - top-level guard
         LOGGER.exception("Executor failed: %s", exc)
         return 1
