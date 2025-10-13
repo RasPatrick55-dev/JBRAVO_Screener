@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import pathlib
+from datetime import datetime
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -58,6 +60,7 @@ def _resolve_repo_root() -> pathlib.Path:
 REPO_ROOT = _resolve_repo_root()
 DATA_DIR = REPO_ROOT / "data"
 LOG_DIR = REPO_ROOT / "logs"
+HEALTH_JSON = DATA_DIR / "health" / "connectivity.json"
 
 METRICS_JSON = DATA_DIR / "screener_metrics.json"
 TOP_CSV = DATA_DIR / "top_candidates.csv"
@@ -65,6 +68,101 @@ SCORED_CSV = DATA_DIR / "scored_candidates.csv"
 HIST_CSV = DATA_DIR / "screener_metrics_history.csv"
 PRED_LATEST = DATA_DIR / "predictions" / "latest.csv"
 RANKER_EVAL_LATEST = DATA_DIR / "ranker_eval" / "latest.json"
+
+
+def _format_probe_timestamp(raw: Any) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        return "n/a"
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+    except Exception:  # pragma: no cover - tolerate malformed timestamps
+        return raw
+
+
+def _status_row(label: str, payload: Mapping[str, Any]) -> html.Div:
+    info = payload if isinstance(payload, Mapping) else {}
+    ok = bool(info.get("ok"))
+    icon = "✅" if ok else "❌"
+    status = info.get("status")
+    status_text = "n/a" if status in (None, "") else str(status)
+    message = str(info.get("message") or "").strip()
+    return html.Div(
+        [
+            html.Div(
+                f"{icon} {label} ({status_text})",
+                style={"fontWeight": 600, "marginBottom": "4px"},
+            ),
+            html.Div(
+                message or "(no details)",
+                style={
+                    "fontSize": "12px",
+                    "color": "#bfc3d9" if ok else "#ffd7d5",
+                    "whiteSpace": "pre-wrap",
+                    "wordBreak": "break-word",
+                },
+            ),
+        ],
+        className="sh-health-row",
+        style={"padding": "4px 0"},
+    )
+
+
+def _health_elements(health: Mapping[str, Any] | None) -> tuple[html.Div, html.Div | None]:
+    trading = health.get("trading") if isinstance(health, Mapping) else {}
+    data = health.get("data") if isinstance(health, Mapping) else {}
+    trading = trading if isinstance(trading, Mapping) else {}
+    data = data if isinstance(data, Mapping) else {}
+
+    ts = _format_probe_timestamp(health.get("ts_utc") if isinstance(health, Mapping) else None)
+
+    health_card = html.Div(
+        [
+            html.Div("Alpaca Connectivity", className="sh-kpi-title"),
+            html.Div(
+                [
+                    _status_row("Trading", trading),
+                    _status_row("Data", data),
+                ],
+                style={"display": "grid", "gap": "6px"},
+            ),
+            html.Div(f"Last probe: {ts}", className="sh-kpi-sub"),
+        ],
+        className="sh-kpi sh-health-card",
+        style={"gridColumn": "1 / span 2", "background": "#1e2235"},
+    )
+
+    banner = None
+    issues: list[str] = []
+    if not trading.get("ok", False):
+        trading_msg = str(trading.get("message") or "no response").strip()
+        issues.append(f"Trading ({trading.get('status', 'n/a')}): {trading_msg}")
+    if not data.get("ok", False):
+        data_msg = str(data.get("message") or "no response").strip()
+        issues.append(f"Data ({data.get('status', 'n/a')}): {data_msg}")
+
+    if issues:
+        banner = html.Div(
+            [
+                html.Div("Alpaca Connectivity Issue", style={"fontWeight": 600, "marginBottom": "4px"}),
+                *[html.Div(issue, style={"fontSize": "13px", "marginBottom": "2px"}) for issue in issues],
+            ],
+            style={
+                "position": "sticky",
+                "top": 0,
+                "zIndex": 1100,
+                "padding": "10px 14px",
+                "borderRadius": "6px",
+                "background": "#8c1d13",
+                "color": "#fff",
+                "boxShadow": "0 2px 8px rgba(0,0,0,0.35)",
+                "marginBottom": "12px",
+            },
+            className="sh-health-alert",
+        )
+
+    return health_card, banner
 
 
 def _safe_json(path: pathlib.Path) -> dict:
@@ -247,6 +345,8 @@ def build_layout():
             dcc.Store(id="sh-top-store"),
             dcc.Store(id="sh-hist-store"),
             dcc.Store(id="sh-eval-store"),
+            dcc.Store(id="sh-health-store"),
+            html.Div(id="sh-health-banner"),
             html.Div(id="sh-kpis", className="sh-row"),
             html.Div(
                 [
@@ -355,6 +455,7 @@ def register_callbacks(app):
         Output("sh-top-store","data"),
         Output("sh-hist-store","data"),
         Output("sh-eval-store","data"),
+        Output("sh-health-store","data"),
         Input("sh-interval","n_intervals")
     )
     def _load_artifacts(_n):
@@ -407,11 +508,15 @@ def register_callbacks(app):
 
         hist = _safe_csv(HIST_CSV)
         ev = _safe_json(RANKER_EVAL_LATEST)
+        health = _safe_json(HEALTH_JSON)
 
-        return (m,
-                (top.to_dict("records") if not top.empty else []),
-                (hist.to_dict("records") if not hist.empty else []),
-                ev)
+        return (
+            m,
+            (top.to_dict("records") if not top.empty else []),
+            (hist.to_dict("records") if not hist.empty else []),
+            ev,
+            health,
+        )
 
     @app.callback(
         Output("sh-kpis","children"),
@@ -434,8 +539,9 @@ def register_callbacks(app):
         Input("sh-top-store","data"),
         Input("sh-hist-store","data"),
         Input("sh-eval-store","data"),
+        Input("sh-health-store","data"),
     )
-    def _render(m, top_rows, hist_rows, ev):
+    def _render(m, top_rows, hist_rows, ev, health):
         if not isinstance(m, dict):
             m = {}
         if not isinstance(top_rows, list):
@@ -444,6 +550,8 @@ def register_callbacks(app):
             hist_rows = []
         if not isinstance(ev, dict):
             ev = {}
+        if not isinstance(health, dict):
+            health = {}
 
         # ---------------- KPIs ----------------
         def _card(title, value, sub=None):
@@ -452,19 +560,22 @@ def register_callbacks(app):
                 html.Div(value, className="sh-kpi-value"),
                 html.Div(sub or "", className="sh-kpi-sub")
             ], className="sh-kpi")
+
+        health_card, health_banner = _health_elements(health)
         last_run = (m.get("last_run_utc") or "n/a")
         sym_in   = int(m.get("symbols_in", 0) or 0)
         sym_bars = int(m.get("symbols_with_bars", 0) or 0)
         bars_tot = int(m.get("bars_rows_total", 0) or 0)
         rows     = int(m.get("rows", 0) or 0)
         kpis = html.Div([
+            health_card,
             _card("Last Run (UTC)", last_run),
             _card("Symbols In", f"{sym_in:,}"),
             _card("With Bars", f"{sym_bars:,}", f"{(sym_bars/max(sym_in,1))*100:.1f}%"),
             _card("Bar Rows", f"{bars_tot:,}"),
             _card("Candidates", f"{rows:,}"),
         ], className="sh-kpi-wrap",
-           style={"display":"grid","gridTemplateColumns":"repeat(5,1fr)","gap":"10px","marginBottom":"12px"})
+           style={"display":"grid","gridTemplateColumns":"repeat(6, minmax(140px,1fr))","gap":"10px","marginBottom":"12px"})
 
         # ---------------- Gate pressure ----------------
         fail = m.get("gate_fail_counts", {}) or {}
@@ -566,6 +677,7 @@ def register_callbacks(app):
         timings_json = json.dumps({k: timings_view.get(k) for k in sorted(timings_view)}, indent=2)
 
         return (
+            health_banner,
             kpis,
             prefix_counts,
             http_json,
