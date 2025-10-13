@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from shutil import copyfile
 from typing import Any, Iterable, Mapping, MutableMapping, Optional
 
+from scripts.health_check import run_health_check
 from utils.env import load_env
 
 
@@ -50,6 +51,21 @@ def run_cmd(cmd: list[str], name: str) -> int:
     if result.stderr:
         LOG.info("[INFO] %s stderr:\n%s", name, result.stderr.strip())
     return result.returncode
+
+
+def _record_health(stage: str) -> dict[str, Any]:
+    report = run_health_check(write=True)
+    trading = report.get("trading", {}) if isinstance(report, dict) else {}
+    data = report.get("data", {}) if isinstance(report, dict) else {}
+    LOG.info(
+        "[INFO] HEALTH trading_ok=%s data_ok=%s stage=%s trading_status=%s data_status=%s",
+        trading.get("ok"),
+        data.get("ok"),
+        stage,
+        trading.get("status"),
+        data.get("status"),
+    )
+    return report
 
 
 def screener_cmd() -> list[str]:
@@ -246,6 +262,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     configure_logging()
 
     steps = determine_steps(args.steps)
+    health_report = _record_health("start")
+    trading_status = {}
+    if isinstance(health_report, dict):
+        trading_status = health_report.get("trading", {}) or {}
+    if trading_status.get("status") == 401:
+        LOG.error(
+            "[ERROR] Alpaca auth failed (401). Check: (1) paper vs live base URL, "
+            "(2) fresh key/secret, (3) whitespace/CRLF in .env."
+        )
+        raise SystemExit(2)
     LOG.info("[INFO] PIPELINE_START steps=%s", steps)
 
     rc = 0
@@ -294,6 +320,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     duration = time.time() - start
     LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
+    _record_health("end")
 
     if args.reload_web.lower() == "true":
         try:

@@ -71,6 +71,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     )
     from scripts.backtest import compute_recent_performance  # type: ignore
 
+from scripts.health_check import probe_trading_only
 from utils.env import load_env, get_alpaca_creds
 from utils.io_utils import atomic_write_bytes
 
@@ -4177,6 +4178,14 @@ def main(
     if not api_key or not api_secret:
         LOGGER.error("Missing Alpaca credentials; set APCA_API_KEY_ID and APCA_API_SECRET_KEY.")
         return 2
+
+    trading_probe = probe_trading_only()
+    if trading_probe.get("status") == 401:
+        LOGGER.error(
+            "[ERROR] Alpaca auth failed (401). Check: (1) paper vs live base URL, "
+            "(2) fresh key/secret, (3) whitespace/CRLF in .env."
+        )
+        raise SystemExit(2)
 
     if mode == "delta-update":
         return _run_delta_update(args, base_dir)
