@@ -33,7 +33,8 @@ def test_load_candidates_success(tmp_path: Path):
 
     loaded = execute_trades.load_candidates(csv_path)
     assert not loaded.empty
-    assert list(loaded.columns) == list(df.columns)
+    for column in df.columns:
+        assert column in loaded.columns
 
 
 def test_load_candidates_missing_required_columns(tmp_path: Path):

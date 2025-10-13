@@ -65,6 +65,20 @@ ERROR_RETENTION_DAYS = 1
 MAX_OPEN_TRADES = 10
 
 
+def tail_log(log_path: str, limit: int = 10) -> list[str]:
+    """Return up to ``limit`` most recent non-empty lines from ``log_path``."""
+
+    if not os.path.exists(log_path):
+        return []
+    try:
+        with open(log_path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return []
+    trimmed = [line.rstrip() for line in lines if line.strip()]
+    return trimmed[-limit:]
+
+
 def is_log_stale(log_path):
     """Return True if the most recent INFO/ERROR entry in ``log_path`` is older than 24 hours."""
     if not os.path.exists(log_path):
@@ -1284,24 +1298,32 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 ],
             )
 
-        metrics_data = {
-            "symbols_processed": 0,
+        metrics_defaults = {
+            "last_run_utc": "",
+            "symbols_in": 0,
             "orders_submitted": 0,
-            "symbols_skipped": 0,
+            "orders_filled": 0,
+            "orders_canceled": 0,
+            "trailing_attached": 0,
             "api_retries": 0,
             "api_failures": 0,
-            "orders_skipped_existing_positions": 0,
-            "orders_skipped_pending_orders": 0,
-            "orders_skipped_risk_limits": 0,
-            "orders_skipped_market_data": 0,
-            "orders_skipped_session": 0,
-            "orders_skipped_duplicate": 0,
-            "orders_skipped_other": 0,
+            "latency_secs": {"p50": 0.0, "p95": 0.0},
         }
+        metrics_data = metrics_defaults.copy()
         if os.path.exists(execute_metrics_path):
             try:
-                with open(execute_metrics_path) as f:
-                    metrics_data.update(json.load(f))
+                with open(execute_metrics_path, encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    for key, default_value in metrics_defaults.items():
+                        if key == "latency_secs":
+                            latency = loaded.get("latency_secs", {}) or {}
+                            metrics_data["latency_secs"] = {
+                                "p50": latency.get("p50", 0.0),
+                                "p95": latency.get("p95", 0.0),
+                            }
+                        else:
+                            metrics_data[key] = loaded.get(key, default_value)
             except Exception as exc:  # pragma: no cover - log file errors
                 logger.error("Failed to load execution metrics: %s", exc)
 
@@ -1325,53 +1347,99 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             else None
         )
 
-        trades_skipped = metrics_data.get("symbols_skipped", 0)
-        skipped_warning = (
-            html.Div(
-                f"{trades_skipped} trades skipped due to max open positions limit ({MAX_OPEN_TRADES}).",
-                style={"color": "red"},
-            )
-            if trades_skipped > 0 and position_count >= MAX_OPEN_TRADES
-            else None
+        skipped_warning = None
+
+        orders_fig = go.Figure(
+            data=[
+                go.Bar(
+                    x=["Submitted", "Filled", "Canceled"],
+                    y=[
+                        metrics_data.get("orders_submitted", 0),
+                        metrics_data.get("orders_filled", 0),
+                        metrics_data.get("orders_canceled", 0),
+                    ],
+                    marker_color=["#1f77b4", "#2ca02c", "#d62728"],
+                )
+            ]
+        )
+        orders_fig.update_layout(
+            template="plotly_dark",
+            margin=dict(l=20, r=20, t=40, b=40),
+            title="Order Lifecycle (Last Run)",
+            yaxis_title="Count",
         )
 
-        metric_items = [
-            ("Symbols Processed", "symbols_processed"),
-            ("Trades Submitted", "orders_submitted"),
-            ("Trades Skipped", "symbols_skipped"),
-            ("Retries Attempted", "api_retries"),
-            ("API Failures", "api_failures"),
-            (
-                "Orders Skipped (Existing Positions)",
-                "orders_skipped_existing_positions",
-            ),
-            ("Orders Skipped (Pending Orders)", "orders_skipped_pending_orders"),
-            ("Orders Skipped (Risk Limits)", "orders_skipped_risk_limits"),
-            ("Orders Skipped (Market Data)", "orders_skipped_market_data"),
-            ("Orders Skipped (Session)", "orders_skipped_session"),
-            ("Orders Skipped (Duplicate)", "orders_skipped_duplicate"),
-            ("Orders Skipped (Other)", "orders_skipped_other"),
-        ]
+        kpi_cards = dbc.Row(
+            [
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            [
+                                html.H6("Trailing Stops Attached", className="card-title"),
+                                html.H3(f"{metrics_data.get('trailing_attached', 0)}", className="card-text"),
+                            ]
+                        ),
+                        className="mb-3",
+                    ),
+                    md=4,
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            [
+                                html.H6("API Retries", className="card-title"),
+                                html.H3(f"{metrics_data.get('api_retries', 0)}", className="card-text"),
+                            ]
+                        ),
+                        className="mb-3",
+                    ),
+                    md=4,
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            [
+                                html.H6("Latency p95 (s)", className="card-title"),
+                                html.H3(
+                                    f"{metrics_data.get('latency_secs', {}).get('p95', 0.0):.2f}",
+                                    className="card-text",
+                                ),
+                            ]
+                        ),
+                        className="mb-3",
+                    ),
+                    md=4,
+                ),
+            ]
+        )
 
-        metrics_view = html.Div([
-            html.H5("Execute Trades Metrics"),
-            html.Ul(
-                [
-                    html.Li(f"{label}: {metrics_data.get(key, 0) or 0}")
-                    for label, key in metric_items
-                ]
-            ),
-            html.Pre(
-                id="execute-trades-log",
-                style={
-                    "maxHeight": "400px",
-                    "overflowY": "auto",
-                    "backgroundColor": "#272B30",
-                    "color": "#E0E0E0",
-                    "padding": "10px",
-                },
-            ),
-        ])
+        recent_events = tail_log(execute_trades_log_path, limit=10)
+        events_block = html.Div(
+            [
+                html.H5("Recent Executor Events"),
+                html.Pre(
+                    "\n".join(recent_events) if recent_events else "No executor activity logged.",
+                    style={
+                        "maxHeight": "300px",
+                        "overflowY": "auto",
+                        "backgroundColor": "#272B30",
+                        "color": "#E0E0E0",
+                        "padding": "10px",
+                        "borderRadius": "4px",
+                    },
+                    id="execute-trades-log",
+                ),
+            ]
+        )
+
+        metrics_view = html.Div(
+            [
+                html.H5("Execute Trades Metrics"),
+                kpi_cards,
+                dcc.Graph(figure=orders_fig, style={"height": "320px"}),
+                events_block,
+            ]
+        )
 
         download = html.Div(
             [

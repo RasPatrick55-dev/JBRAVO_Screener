@@ -86,6 +86,9 @@ python scripts/execute_trades.py --dry-run
 
 # Execute using a different candidate list
 python scripts/execute_trades.py --source data/predictions/2024-05-01.csv
+
+# Tighten liquidity/price guardrails (values shown are the defaults)
+python scripts/execute_trades.py --min-adv20 2000000 --min-price 1 --max-price 1000
 ```
 
 Dry runs log `WOULD SUBMIT` entries while still producing
