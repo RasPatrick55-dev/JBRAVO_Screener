@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, time as dt_time
 from decimal import Decimal, ROUND_HALF_UP
@@ -92,8 +93,6 @@ SKIP_REASON_KEYS = {
     "MAX_POSITIONS",
     "EXISTING_POSITION",
     "OPEN_ORDER",
-    "ADV20_LT_MIN",
-    "MISSING_PRICE",
 }
 IMPORT_SENTINEL_ENV = "JBRAVO_IMPORT_SENTINEL"
 DATA_URL_ENV_VARS = ("APCA_API_DATA_URL", "ALPACA_API_DATA_URL")
@@ -146,6 +145,68 @@ def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _fetch_latest_daily_bars(symbols: Sequence[str]) -> Dict[str, Dict[str, Optional[float]]]:
+    unique = sorted({str(symbol).upper() for symbol in symbols if str(symbol).strip()})
+    if not unique:
+        return {}
+
+    api_key, api_secret, _, feed = get_alpaca_creds()
+    if not api_key or not api_secret:
+        return {}
+
+    base_url = None
+    for env_name in DATA_URL_ENV_VARS:
+        candidate = os.getenv(env_name)
+        if candidate:
+            base_url = candidate
+            break
+    base_url = base_url or DEFAULT_DATA_BASE_URL
+    url = f"{base_url.rstrip('/')}/v2/stocks/bars/latest"
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+    params: Dict[str, str] = {"symbols": ",".join(unique), "timeframe": "1Day"}
+    if feed:
+        params["feed"] = str(feed)
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+    except Exception as exc:
+        LOGGER.warning("[WARN] Failed batch daily bars fetch for %s symbols: %s", len(unique), exc)
+        return {}
+    if response.status_code != 200:
+        LOGGER.warning(
+            "[WARN] Batch daily bars request returned status %s", response.status_code
+        )
+        return {}
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        LOGGER.warning("[WARN] Could not decode batch daily bars response: %s", exc)
+        return {}
+    bars = payload.get("bars") if isinstance(payload, Mapping) else None
+    results: Dict[str, Dict[str, Optional[float]]] = {}
+    if isinstance(bars, Mapping):
+        for symbol in unique:
+            entry = bars.get(symbol) or bars.get(symbol.lower()) or bars.get(symbol.upper())
+            if not isinstance(entry, Mapping):
+                continue
+            close_value = entry.get("c") if "c" in entry else entry.get("close")
+            volume_value = entry.get("v") if "v" in entry else entry.get("volume")
+            close: Optional[float]
+            volume: Optional[float]
+            try:
+                close = float(close_value) if close_value is not None else None
+            except (TypeError, ValueError):
+                close = None
+            try:
+                volume = float(volume_value) if volume_value is not None else None
+            except (TypeError, ValueError):
+                volume = None
+            results[symbol] = {"close": close, "volume": volume, "source": "alpaca"}
+    return results
 
 
 class CandidateLoadError(RuntimeError):
@@ -205,7 +266,6 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
     for column in OPTIONAL_COLUMNS:
         if column not in frame.columns:
             frame[column] = pd.NA
-            messages.append(f"[WARN] MISSING_{column.upper()} column (defaulted)")
 
     if "score" not in frame.columns or frame["score"].isna().all():
         if "Score" in frame.columns:
@@ -230,13 +290,6 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
             f"[WARN] close fallback from entry_price applied to {int(close_fallback_mask.sum())} rows"
         )
     frame["close"] = close_series
-
-    entry_missing_mask = entry_series.isna() & close_series.notna()
-    if entry_missing_mask.any():
-        entry_series.loc[entry_missing_mask] = close_series.loc[entry_missing_mask]
-        messages.append(
-            f"[WARN] entry_price defaulted from close on {int(entry_missing_mask.sum())} rows"
-        )
     frame["entry_price"] = entry_series
 
     if "universe_count" not in frame.columns:
@@ -326,8 +379,10 @@ class ExecutionMetrics:
         return round(value, 3)
 
     def as_dict(self) -> Dict[str, Any]:
-        skip_keys = sorted(SKIP_REASON_KEYS.union(self.skipped_reasons.keys()))
-        skip_payload = {key: int(self.skipped_reasons.get(key, 0)) for key in skip_keys}
+        skip_payload = {key: int(self.skipped_reasons.get(key, 0)) for key in sorted(SKIP_REASON_KEYS)}
+        for key, value in sorted(self.skipped_reasons.items()):
+            if key not in skip_payload:
+                skip_payload[key] = int(value)
         return {
             "last_run_utc": datetime.now(timezone.utc).isoformat(),
             "symbols_in": self.symbols_in,
@@ -342,7 +397,6 @@ class ExecutionMetrics:
                 "p95": self.percentile(0.95),
             },
             "skips": skip_payload,
-            "skipped": dict(skip_payload),
         }
 
 
@@ -481,26 +535,62 @@ class DailyBarCache:
             return None
         return float(closes.iloc[-1])
 
+    def latest_bar(self, symbol: str) -> Optional[Dict[str, Optional[float]]]:
+        frame = self.load(symbol)
+        if frame is None or frame.empty:
+            return None
+        lower_map = {col.lower(): col for col in frame.columns}
+        close_column = lower_map.get("close")
+        volume_column = lower_map.get("volume") or lower_map.get("vol")
+        close_value: Optional[float] = None
+        volume_value: Optional[float] = None
+        if close_column and close_column in frame.columns:
+            try:
+                closes = pd.to_numeric(frame[close_column], errors="coerce").dropna()
+                if not closes.empty:
+                    close_value = float(closes.iloc[-1])
+            except Exception:  # pragma: no cover - defensive conversion
+                close_value = None
+        if volume_column and volume_column in frame.columns:
+            try:
+                volumes = pd.to_numeric(frame[volume_column], errors="coerce").dropna()
+                if not volumes.empty:
+                    volume_value = float(volumes.iloc[-1])
+            except Exception:  # pragma: no cover - defensive conversion
+                volume_value = None
+        if close_value is None and volume_value is None:
+            return None
+        return {"close": close_value, "volume": volume_value, "source": "cache"}
+
 
 class OptionalFieldHydrator:
     def __init__(self, client: Any, cache: DailyBarCache) -> None:
         self.client = client
         self.cache = cache
         self.exchange_cache: Dict[str, Optional[str]] = {}
-        self.latest_close_cache: Dict[str, tuple[Optional[float], Optional[str]]] = {}
+        self.latest_bar_cache: Dict[str, Dict[str, Optional[float]]] = {}
         self._missing_logged: set[Tuple[str, str]] = set()
+        self.missing_counts: Counter[str] = Counter()
+        self._summary_logged = False
 
-    def _log_missing(self, field: str, symbol: str, detail: str = "") -> None:
+    def _log_missing(
+        self, field: str, symbol: str, detail: str = "", *, qualifier: str = "defaulted"
+    ) -> None:
         key = (field.lower(), symbol.upper())
         if key in self._missing_logged:
             return
-        parts = [f"[WARN] MISSING_{field.upper()} (defaulted)"]
+        qualifier_text = qualifier.strip()
+        if qualifier_text:
+            parts = [f"[WARN] MISSING_{field.upper()} ({qualifier_text})"]
+        else:
+            parts = [f"[WARN] MISSING_{field.upper()}"]
         if symbol:
             parts.append(f"symbol={symbol.upper()}")
         if detail:
             parts.append(detail)
         LOGGER.warning(" ".join(parts))
         self._missing_logged.add(key)
+        self.missing_counts[field.upper()] += 1
 
     def get_exchange(self, symbol: str) -> Optional[str]:
         key = symbol.upper()
@@ -516,18 +606,96 @@ class OptionalFieldHydrator:
         self.exchange_cache[key] = exchange
         return exchange
 
-    def latest_close(self, symbol: str) -> tuple[Optional[float], Optional[str]]:
+    @staticmethod
+    def _value_missing(value: Any) -> bool:
+        if value in (None, ""):
+            return True
+        if isinstance(value, float) and math.isnan(value):
+            return True
+        try:
+            return bool(pd.isna(value))
+        except Exception:
+            return False
+
+    def prime_latest_bars(self, records: Iterable[Mapping[str, Any]]) -> None:
+        symbols_to_fetch: List[str] = []
+        for row in records:
+            raw_symbol = row.get("symbol")
+            symbol = str(raw_symbol).upper() if raw_symbol not in (None, "") else ""
+            if not symbol:
+                continue
+            needs_close = self._value_missing(row.get("close"))
+            needs_volume = self._value_missing(row.get("volume"))
+            cache_entry = self.latest_bar_cache.get(symbol)
+            if cache_entry:
+                if not needs_close or cache_entry.get("close") is not None:
+                    needs_close = False
+                if not needs_volume or cache_entry.get("volume") is not None:
+                    needs_volume = False
+            if not needs_close and not needs_volume:
+                continue
+            local = self.cache.latest_bar(symbol)
+            if local:
+                cached = self.latest_bar_cache.get(symbol, {})
+                if local.get("close") is not None:
+                    cached["close"] = local.get("close")
+                if local.get("volume") is not None:
+                    cached["volume"] = local.get("volume")
+                cached["source"] = "cache"
+                self.latest_bar_cache[symbol] = cached
+                if (
+                    (not needs_close or cached.get("close") is not None)
+                    and (not needs_volume or cached.get("volume") is not None)
+                ):
+                    continue
+            symbols_to_fetch.append(symbol)
+
+        unique_symbols = sorted(set(symbols_to_fetch))
+        remote_payload = _fetch_latest_daily_bars(unique_symbols) if unique_symbols else {}
+        for symbol, payload in remote_payload.items():
+            cached = self.latest_bar_cache.get(symbol, {})
+            if "close" in payload and payload.get("close") is not None:
+                cached["close"] = payload.get("close")
+            if "volume" in payload and payload.get("volume") is not None:
+                cached["volume"] = payload.get("volume")
+            if payload:
+                cached["source"] = payload.get("source") or "alpaca"
+            self.latest_bar_cache[symbol] = cached
+
+    def latest_bar(self, symbol: str) -> tuple[Optional[float], Optional[float], Optional[str]]:
         key = symbol.upper()
-        if key in self.latest_close_cache:
-            return self.latest_close_cache[key]
-        price = self.cache.latest_close(symbol)
-        source: Optional[str] = "cache" if price is not None else None
-        if price is None:
-            price = _fetch_latest_close_from_alpaca(symbol)
-            if price is not None:
-                source = "alpaca"
-        self.latest_close_cache[key] = (price, source)
-        return self.latest_close_cache[key]
+        if key in self.latest_bar_cache:
+            cached = self.latest_bar_cache[key]
+            return (
+                cached.get("close"),
+                cached.get("volume"),
+                cached.get("source"),
+            )
+        local = self.cache.latest_bar(symbol)
+        if local:
+            self.latest_bar_cache[key] = dict(local)
+            cached = self.latest_bar_cache[key]
+            return (
+                cached.get("close"),
+                cached.get("volume"),
+                cached.get("source"),
+            )
+        price = _fetch_latest_close_from_alpaca(symbol)
+        if price is not None:
+            cached = {"close": price, "volume": None, "source": "alpaca"}
+            self.latest_bar_cache[key] = cached
+            return price, None, "alpaca"
+        return None, None, None
+
+    def log_missing_summary(self) -> None:
+        if not self.missing_counts or self._summary_logged:
+            return
+        summary = " ".join(
+            f"{field.lower()}={count}" for field, count in sorted(self.missing_counts.items())
+        )
+        if summary:
+            LOGGER.info("[INFO] DEFAULTED_OPTIONALS %s", summary)
+        self._summary_logged = True
 
     def hydrate(self, row: Dict[str, Any]) -> Dict[str, Any]:
         enriched = dict(row)
@@ -543,20 +711,49 @@ class OptionalFieldHydrator:
                     detail=f"source={'asset' if exchange else 'default'}",
                 )
             close_value = enriched.get("close")
-            if close_value in (None, "") or pd.isna(close_value):
+            if self._value_missing(close_value):
                 fallback = enriched.get("entry_price")
                 fallback_source: Optional[str] = None
                 source_label = "entry_price"
-                if fallback in (None, "") or pd.isna(fallback):
-                    fallback, fallback_source = self.latest_close(symbol)
+                if self._value_missing(fallback):
+                    latest_close, _, fallback_source = self.latest_bar(symbol)
+                    fallback = latest_close
                     source_label = fallback_source or "default"
                 if fallback is not None and not pd.isna(fallback):
                     enriched["close"] = fallback
-                    self._log_missing("close", symbol, detail=f"source={source_label}")
+                    self._log_missing(
+                        "close",
+                        symbol,
+                        detail=f"source={source_label}",
+                        qualifier="defaulted",
+                    )
                 else:
-                    self._log_missing("close", symbol, detail="source=unavailable")
+                    self._log_missing(
+                        "close",
+                        symbol,
+                        detail="source=unavailable",
+                        qualifier="missing",
+                    )
+            volume_value = enriched.get("volume")
+            if self._value_missing(volume_value):
+                _, latest_volume, source_label = self.latest_bar(symbol)
+                if latest_volume is not None and not pd.isna(latest_volume):
+                    enriched["volume"] = latest_volume
+                    self._log_missing(
+                        "volume",
+                        symbol,
+                        detail=f"source={source_label or 'default'}",
+                        qualifier="defaulted",
+                    )
+                else:
+                    self._log_missing(
+                        "volume",
+                        symbol,
+                        detail="source=unavailable",
+                        qualifier="missing",
+                    )
             atr_value = enriched.get("atrp")
-            if atr_value in (None, "") or pd.isna(atr_value):
+            if self._value_missing(atr_value):
                 atr = self.cache.atr_percent(symbol)
                 enriched["atrp"] = atr
                 self._log_missing(
@@ -565,7 +762,7 @@ class OptionalFieldHydrator:
                     detail=f"source={'bars' if atr is not None else 'default'}",
                 )
             adv_value = enriched.get("adv20")
-            if adv_value in (None, "") or pd.isna(adv_value):
+            if self._value_missing(adv_value):
                 adv = self.cache.adv20(symbol)
                 enriched["adv20"] = adv
                 self._log_missing(
@@ -574,9 +771,22 @@ class OptionalFieldHydrator:
                     detail=f"source={'bars' if adv is not None else 'default'}",
                 )
         entry_value = enriched.get("entry_price")
-        if entry_value in (None, "") or pd.isna(entry_value):
-            enriched["entry_price"] = enriched.get("close")
-            self._log_missing("entry_price", symbol, detail="source=close")
+        if self._value_missing(entry_value):
+            close_value = enriched.get("close")
+            if not self._value_missing(close_value):
+                enriched["entry_price"] = close_value
+                self._log_missing(
+                    "entry_price",
+                    symbol,
+                    qualifier="defaulted from close",
+                )
+            else:
+                self._log_missing(
+                    "entry_price",
+                    symbol,
+                    detail="source=unavailable",
+                    qualifier="missing",
+                )
         if "adv20" not in enriched or pd.isna(enriched.get("adv20")):
             enriched["adv20"] = None
         return enriched
@@ -619,6 +829,7 @@ class TradeExecutor:
         symbol: str = "",
         detail: str = "",
         count: int = 1,
+        aliases: Optional[Sequence[str]] = None,
     ) -> None:
         reason_key = reason.upper()
         parts = [f"[INFO] {reason_key}"]
@@ -631,6 +842,10 @@ class TradeExecutor:
         LOGGER.info(" ".join(parts))
 
         self.metrics.record_skip(reason_key, count=count)
+        if aliases:
+            for alias in aliases:
+                if alias:
+                    self.metrics.record_skip(alias.upper(), count=count)
         payload: Dict[str, Any] = {"reason": reason_key}
         if symbol:
             payload["symbol"] = symbol
@@ -670,6 +885,13 @@ class TradeExecutor:
         now_local = datetime.now(timezone.utc).astimezone(tz)
         current_time = dt_time(
             now_local.hour, now_local.minute, now_local.second, now_local.microsecond
+        )
+
+        tz_label = getattr(tz, "key", None) or getattr(tz, "zone", None) or str(tz)
+        LOGGER.info(
+            "[INFO] MARKET_TIME: %s (%s)",
+            now_local.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            tz_label,
         )
 
         premarket_start = dt_time(4, 0)
@@ -726,6 +948,16 @@ class TradeExecutor:
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
+        missing_required = []
+        for column in REQUIRED_COLUMNS:
+            if column in df.columns:
+                continue
+            if column == "score" and "Score" in df.columns:
+                continue
+            missing_required.append(column)
+        if missing_required:
+            joined = ", ".join(sorted(missing_required))
+            raise CandidateLoadError(f"Missing required columns: {joined}")
         df, warnings = _apply_candidate_defaults(df)
         for message in warnings:
             LOGGER.warning(message)
@@ -733,7 +965,10 @@ class TradeExecutor:
 
     def hydrate_candidates(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         records = df.to_dict(orient="records")
-        return [self.hydrator.hydrate(record) for record in records]
+        self.hydrator.prime_latest_bars(records)
+        enriched = [self.hydrator.hydrate(record) for record in records]
+        self.hydrator.log_missing_summary()
+        return enriched
 
     def guard_candidates(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         filtered: List[Dict[str, Any]] = []
@@ -746,7 +981,12 @@ class TradeExecutor:
             if price in (None, "") or pd.isna(price):
                 price = record.get("close")
             if price in (None, "") or pd.isna(price):
-                self.record_skip_reason("MISSING_PRICE", symbol=symbol)
+                self.record_skip_reason(
+                    "PRICE_BOUNDS",
+                    symbol=symbol,
+                    detail="missing_price",
+                    aliases=("MISSING_PRICE",),
+                )
                 continue
             price_f = float(price)
             if price_f < self.config.min_price:
@@ -754,6 +994,7 @@ class TradeExecutor:
                     "PRICE_BOUNDS",
                     symbol=symbol,
                     detail=f"lt_min({price_f:.2f})",
+                    aliases=("PRICE_LT_MIN",),
                 )
                 continue
             if price_f > self.config.max_price:
@@ -761,14 +1002,20 @@ class TradeExecutor:
                     "PRICE_BOUNDS",
                     symbol=symbol,
                     detail=f"gt_max({price_f:.2f})",
+                    aliases=("PRICE_GT_MAX",),
                 )
                 continue
             adv = record.get("adv20")
             if adv not in (None, "") and not pd.isna(adv):
                 adv_value = pd.to_numeric(pd.Series([adv]), errors="coerce").iloc[0]
                 if not pd.isna(adv_value) and float(adv_value) < self.config.min_adv20:
-                    detail = f"{float(adv_value):.0f}" if not pd.isna(adv_value) else ""
-                    self.record_skip_reason("ADV20_LT_MIN", symbol=symbol, detail=detail)
+                    detail = f"adv20_lt_min({float(adv_value):.0f})"
+                    self.record_skip_reason(
+                        "PRICE_BOUNDS",
+                        symbol=symbol,
+                        detail=detail,
+                        aliases=("ADV20_LT_MIN",),
+                    )
                     continue
             filtered.append(record)
         return filtered
@@ -900,12 +1147,13 @@ class TradeExecutor:
         outcome["submitted"] = True
         order_id = str(getattr(submitted_order, "id", ""))
         self.metrics.orders_submitted += 1
+        extended_hours_flag = "true" if self.config.extended_hours else "false"
         self.log_event(
             "BUY_SUBMIT",
             symbol=symbol,
-            qty=qty,
+            qty=str(qty),
             limit=f"{limit_price:.2f}",
-            extended_hours=self.config.extended_hours,
+            extended_hours=extended_hours_flag,
             order_id=order_id or "",
         )
 
@@ -1011,11 +1259,16 @@ class TradeExecutor:
             trail_percent=self.config.trailing_percent,
             time_in_force=TimeInForce.GTC,
         )
+        trail_value = self.config.trailing_percent
+        if float(trail_value).is_integer():
+            trail_display = str(int(trail_value))
+        else:
+            trail_display = f"{trail_value:g}"
         self.log_event(
             "TRAIL_SUBMIT",
             symbol=symbol,
             qty=str(qty_int),
-            trail_percent=self.config.trailing_percent,
+            trail_percent=trail_display,
         )
         trailing_order = self.submit_with_retries(request)
         if trailing_order is None:
@@ -1174,7 +1427,9 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Trading time window gate controlling when orders may be submitted",
     )
     parser.add_argument(
+        "--market-tz",
         "--market-timezone",
+        dest="market_timezone",
         default=ExecutorConfig.market_timezone,
         help="IANA timezone name used for market window evaluation",
     )
@@ -1182,6 +1437,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 
 
 def build_config(args: argparse.Namespace) -> ExecutorConfig:
+    market_timezone = args.market_timezone or ExecutorConfig.market_timezone
     return ExecutorConfig(
         source=args.source,
         allocation_pct=args.allocation_pct,
@@ -1196,7 +1452,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         max_price=args.max_price,
         log_json=args.log_json,
         time_window=args.time_window,
-        market_timezone=args.market_timezone,
+        market_timezone=market_timezone,
     )
 
 
