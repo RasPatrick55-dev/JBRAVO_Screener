@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import csv
 import os
 import pathlib
 import shlex
@@ -192,9 +193,42 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 
 
 def determine_steps(requested: Optional[str]) -> list[str]:
-    raw = requested or os.environ.get("PIPE_STEPS", "screener,backtest,metrics")
+    raw = requested or os.environ.get("PIPE_STEPS", "screener,execute,backtest,metrics")
     steps = [step.strip().lower() for step in raw.split(",") if step.strip()]
     return steps or ["screener", "backtest", "metrics"]
+
+
+def latest_candidates_has_rows(path: pathlib.Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)
+            for row in reader:
+                if any(field.strip() for field in row):
+                    return True
+    except Exception as exc:  # pragma: no cover - defensive parsing
+        LOG.warning("[INFO] failed to inspect %s: %s", path, exc)
+    return False
+
+
+def run_execute_step(cmd: list[str]) -> int:
+    latest_path = pathlib.Path("data") / "latest_candidates.csv"
+    if not latest_candidates_has_rows(latest_path):
+        LOG.info("[INFO] EXECUTE SKIPPED: NO CANDIDATES")
+        return 0
+
+    LOG.info("[INFO] START EXECUTE %s", " ".join(shlex.quote(part) for part in cmd))
+    start = time.time()
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    duration = time.time() - start
+    LOG.info("[INFO] END EXECUTE rc=%s duration=%.1fs", result.returncode, duration)
+    if result.stdout:
+        LOG.info("[INFO] EXECUTE stdout:\n%s", result.stdout.strip())
+    if result.stderr:
+        LOG.info("[INFO] EXECUTE stderr:\n%s", result.stderr.strip())
+    return result.returncode
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
@@ -208,6 +242,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     rc = 0
     start = time.time()
     artifacts_written = False
+    latest_refreshed = False
 
     if "screener" in steps:
         rc_scr = run_cmd(screener_cmd(), "SCREENER")
@@ -217,8 +252,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         try:
             refresh_latest_candidates()
             artifacts_written = True
+            latest_refreshed = True
         except Exception as exc:  # pragma: no cover - defensive safeguard
             LOG.error("[INFO] failed to refresh screener artifacts after SCREENER step: %s", exc)
+
+    if "execute" in steps:
+        if not latest_refreshed:
+            try:
+                refresh_latest_candidates()
+                latest_refreshed = True
+            except Exception as exc:  # pragma: no cover - defensive safeguard
+                LOG.error("[INFO] failed to refresh artifacts before EXECUTE step: %s", exc)
+        rc_exec = run_execute_step([sys.executable, "-m", "scripts.execute_trades"])
+        if rc_exec != 0 and rc == 0:
+            rc = rc_exec
 
     if "backtest" in steps:
         rc_bt = run_cmd([sys.executable, "-m", "scripts.backtest"], "BACKTEST")
