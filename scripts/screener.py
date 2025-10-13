@@ -155,6 +155,7 @@ TOP_CANDIDATE_COLUMNS = [
     "timestamp",
     "symbol",
     "Score",
+    "score",
     "coarse_score",
     "coarse_rank",
     "backtest_expectancy",
@@ -163,7 +164,10 @@ TOP_CANDIDATE_COLUMNS = [
     "backtest_samples",
     "exchange",
     "close",
+    "entry_price",
     "volume",
+    "adv20",
+    "atrp",
     "score_breakdown",
     "RSI",
     "ADX",
@@ -2033,6 +2037,164 @@ def _prepare_top_frame(candidates_df: pd.DataFrame, top_n: int) -> pd.DataFrame:
     return subset
 
 
+def _normalise_timestamp(series: pd.Series) -> pd.Series:
+    parsed = pd.to_datetime(series, errors="coerce", utc=True)
+    formatted = parsed.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    fallback = series.astype("string") if isinstance(series, pd.Series) else pd.Series(dtype="string")
+    return formatted.where(~parsed.isna(), fallback).fillna("")
+
+
+def _ensure_score_breakdown(raw: object, score_value: Optional[float]) -> str:
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    if isinstance(raw, (dict, list)):
+        try:
+            return json.dumps(raw, sort_keys=True)
+        except TypeError:
+            pass
+    if score_value is not None and not pd.isna(score_value):
+        return json.dumps({"score": float(score_value)})
+    return json.dumps({})
+
+
+def _normalise_top_candidates(
+    top_df: pd.DataFrame,
+    scored_df: Optional[pd.DataFrame],
+    *,
+    universe_count: Optional[int] = None,
+) -> pd.DataFrame:
+    if top_df is None:
+        return pd.DataFrame(columns=TOP_CANDIDATE_COLUMNS)
+    frame = top_df.copy()
+    if frame.empty:
+        for column in TOP_CANDIDATE_COLUMNS:
+            if column not in frame.columns:
+                frame[column] = pd.Series(dtype="object")
+        return frame[TOP_CANDIDATE_COLUMNS]
+
+    frame["symbol"] = frame.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    if "timestamp" not in frame.columns:
+        frame["timestamp"] = pd.NA
+    frame["timestamp"] = _normalise_timestamp(frame["timestamp"])
+    frame["_ts"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
+
+    scored_meta: Optional[pd.DataFrame] = None
+    if isinstance(scored_df, pd.DataFrame) and not scored_df.empty:
+        scored_meta = scored_df.copy()
+        scored_meta["symbol"] = (
+            scored_meta.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+        )
+        scored_meta["_ts"] = pd.to_datetime(
+            scored_meta.get("timestamp"), errors="coerce", utc=True
+        )
+
+    meta_columns = [col for col in ("exchange", "close", "volume", "score_breakdown") if col in frame.columns]
+    lookup_columns = {"exchange", "close", "volume", "score_breakdown"}
+
+    if scored_meta is not None:
+        available_meta = [col for col in lookup_columns if col in scored_meta.columns]
+        if available_meta:
+            exact_meta = (
+                scored_meta.dropna(subset=["symbol"])
+                .drop_duplicates(subset=["symbol", "_ts"], keep="last")
+                .loc[:, ["symbol", "_ts", *available_meta]]
+                .rename(columns={col: f"__exact_{col}" for col in available_meta})
+            )
+            frame = frame.merge(exact_meta, on=["symbol", "_ts"], how="left")
+
+            symbol_meta = (
+                scored_meta.dropna(subset=["symbol"])
+                .sort_values(["symbol", "_ts"], na_position="last")
+                .drop_duplicates(subset=["symbol"], keep="last")
+                .loc[:, ["symbol", *available_meta]]
+                .rename(columns={col: f"__symbol_{col}" for col in available_meta})
+            )
+            frame = frame.merge(symbol_meta, on="symbol", how="left")
+            meta_columns.extend(available_meta)
+
+    meta_columns = sorted({*meta_columns, *lookup_columns})
+
+    if "score" not in frame.columns or frame["score"].isna().all():
+        frame["score"] = frame.get("Score", pd.Series(dtype="float64"))
+    frame["score"] = pd.to_numeric(frame["score"], errors="coerce")
+    if "Score" not in frame.columns:
+        frame["Score"] = frame["score"]
+
+    if "entry_price" not in frame.columns:
+        frame["entry_price"] = pd.NA
+
+    optional_defaults = {
+        "adv20": frame.get("adv20", pd.Series(pd.NA, index=frame.index)),
+        "atrp": frame.get("atrp", pd.Series(pd.NA, index=frame.index)),
+    }
+    for column, series in optional_defaults.items():
+        if column not in frame.columns:
+            frame[column] = series
+
+    for column in meta_columns:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+        exact_col = f"__exact_{column}"
+        symbol_col = f"__symbol_{column}"
+        if exact_col in frame.columns:
+            mask = frame[column].isna()
+            frame.loc[mask, column] = frame.loc[mask, exact_col]
+            frame.drop(columns=[exact_col], inplace=True)
+        if symbol_col in frame.columns:
+            mask = frame[column].isna()
+            frame.loc[mask, column] = frame.loc[mask, symbol_col]
+            frame.drop(columns=[symbol_col], inplace=True)
+
+    frame["exchange"] = (
+        frame.get("exchange", pd.Series(dtype="string")).astype("string").fillna("").str.upper()
+    )
+    for column in ("close", "entry_price", "volume"):
+        frame[column] = pd.to_numeric(frame.get(column), errors="coerce")
+
+    missing_close = frame["close"].isna()
+    if missing_close.any():
+        frame.loc[missing_close, "close"] = frame.loc[missing_close, "entry_price"]
+
+    if "ADV20" in frame.columns:
+        frame["adv20"] = pd.to_numeric(frame.get("ADV20"), errors="coerce")
+    if "ATR_pct" in frame.columns and frame["ATR_pct"].notna().any():
+        frame["atrp"] = pd.to_numeric(frame.get("ATR_pct"), errors="coerce")
+
+    frame["entry_price"] = pd.to_numeric(frame.get("entry_price"), errors="coerce")
+    entry_missing = frame["entry_price"].isna()
+    if entry_missing.any():
+        frame.loc[entry_missing, "entry_price"] = frame.loc[entry_missing, "close"]
+
+    frame["score_breakdown"] = [
+        _ensure_score_breakdown(raw, score)
+        for raw, score in zip(frame.get("score_breakdown"), frame["score"])
+    ]
+
+    count = universe_count if universe_count is not None else None
+    if count is None:
+        count = int(scored_df.shape[0]) if isinstance(scored_df, pd.DataFrame) else None
+    if count is None:
+        count = int(frame.shape[0])
+    frame["universe_count"] = int(count)
+
+    required = [
+        "timestamp",
+        "symbol",
+        "score",
+        "exchange",
+        "close",
+        "volume",
+        "universe_count",
+        "score_breakdown",
+    ]
+    ordered = required + [col for col in TOP_CANDIDATE_COLUMNS if col not in required]
+    ordered += [col for col in frame.columns if col not in ordered]
+    frame = frame.reindex(columns=ordered, fill_value=pd.NA)
+
+    frame.drop(columns=["_ts"], inplace=True, errors="ignore")
+    return frame
+
+
 def _summarise_features(
     scored_df: pd.DataFrame, cfg: Optional[Mapping[str, object]] = None
 ) -> dict[str, dict[str, Optional[float]]]:
@@ -3534,8 +3696,12 @@ def run_screener(
         combined_rejects.append(entry)
 
     top_df = _prepare_top_frame(candidates_df, top_n)
-    if not top_df.empty:
-        top_df["universe_count"] = stats.get("symbols_in", 0)
+    scored_count = int(scored_df.shape[0]) if isinstance(scored_df, pd.DataFrame) else 0
+    top_df = _normalise_top_candidates(
+        top_df,
+        scored_df,
+        universe_count=scored_count if scored_count else stats.get("symbols_in"),
+    )
 
     if stats["candidates_out"] == 0:
         if combined_rejects:
