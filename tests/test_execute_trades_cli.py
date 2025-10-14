@@ -45,7 +45,9 @@ def test_load_candidates_missing_required_columns(tmp_path: Path):
         execute_trades.load_candidates(csv_path)
 
 
-def test_apply_guards_filters_by_price_and_adv(tmp_path: Path):
+def test_apply_guards_filters_by_price_and_adv(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(execute_trades, "_fetch_latest_daily_bars", lambda symbols: {})
+    monkeypatch.setattr(execute_trades, "_fetch_latest_close_from_alpaca", lambda symbol: None)
     df = pd.DataFrame(
         {
             "symbol": ["LOW", "HIGH", "LIQ"],
@@ -86,6 +88,12 @@ def test_run_executor_returns_zero_when_all_filtered(tmp_path: Path, monkeypatch
         min_adv20=200_000,
         log_json=True,
     )
+
+    monkeypatch.setenv("APCA_API_KEY_ID", "PKTEST")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setattr(execute_trades, "_fetch_latest_daily_bars", lambda symbols: {})
+    monkeypatch.setattr(execute_trades, "_fetch_latest_close_from_alpaca", lambda symbol: None)
 
     exit_code = execute_trades.run_executor(config)
     assert exit_code == 0

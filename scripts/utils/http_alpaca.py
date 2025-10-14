@@ -7,6 +7,8 @@ from typing import Dict, Iterable, List, Tuple
 
 import requests
 
+from utils.env import AlpacaUnauthorizedError
+
 
 def _flatten_to_canonical(data: Dict) -> List[Dict]:
     """
@@ -133,6 +135,10 @@ def fetch_bars_http(
             _rate_limit_guard(last_call, 0.28)
             resp = requests.get(url, headers=headers, params=params, timeout=30)
             stats["requests"] += 1
+
+            if resp.status_code in (401, 403):
+                endpoint = getattr(resp.request, "path_url", "/v2/stocks/bars")
+                raise AlpacaUnauthorizedError(endpoint=endpoint, feed=feed)
 
             if resp.status_code == 429:
                 stats["rate_limit_hits"] += 1

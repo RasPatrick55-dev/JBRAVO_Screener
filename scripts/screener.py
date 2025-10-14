@@ -72,7 +72,14 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.backtest import compute_recent_performance  # type: ignore
 
 from scripts.health_check import probe_trading_only
-from utils.env import load_env, get_alpaca_creds
+from utils.env import (
+    AlpacaCredentialsError,
+    AlpacaUnauthorizedError,
+    assert_alpaca_creds,
+    get_alpaca_creds,
+    load_env,
+    write_auth_error_artifacts,
+)
 from utils.io_utils import atomic_write_bytes
 
 load_env()
@@ -198,6 +205,43 @@ ASSET_HTTP_TIMEOUT = 15
 BARS_BATCH_SIZE = 200
 BAR_RETRY_STATUSES = {429, 500, 502, 503, 504}
 BAR_MAX_RETRIES = 3
+
+SCREENER_METRICS_PATH = Path("data") / "screener_metrics.json"
+METRICS_SUMMARY_PATH = Path("data") / "metrics_summary.csv"
+AUTH_CONTEXT: dict[str, object] = {
+    "base_dir": Path(__file__).resolve().parents[1],
+    "creds": {},
+}
+
+
+def _auth_paths(base_dir: Optional[Path] = None) -> tuple[Path, Path]:
+    root = base_dir or AUTH_CONTEXT.get("base_dir")
+    if not isinstance(root, Path):
+        root = Path(root) if isinstance(root, str) else Path(__file__).resolve().parents[1]
+    return root / "data" / "screener_metrics.json", root / "data" / "metrics_summary.csv"
+
+
+def _persist_auth_error(
+    reason: str,
+    missing: Iterable[str] | None = None,
+    *,
+    sanitized: Mapping[str, object] | None = None,
+    base_dir: Optional[Path] = None,
+) -> None:
+    metrics_path, summary_path = _auth_paths(base_dir)
+    snapshot: Mapping[str, object]
+    if sanitized is not None:
+        snapshot = sanitized
+    else:
+        stored = AUTH_CONTEXT.get("creds")
+        snapshot = stored if isinstance(stored, Mapping) else {}
+    write_auth_error_artifacts(
+        reason=reason,
+        sanitized=snapshot,
+        missing=missing or [],
+        metrics_path=metrics_path,
+        summary_path=summary_path,
+    )
 DEFAULT_SHORTLIST_SIZE = 800
 DEFAULT_BACKTEST_TOP_K = 100
 DEFAULT_BACKTEST_LOOKBACK = 90
@@ -703,6 +747,8 @@ def _fetch_daily_bars(
                     "http_retries": int(http_stats.get("retries", 0)),
                 }
                 return symbol, bars_df, stats_block
+            except AlpacaUnauthorizedError:
+                raise
             except Exception as exc:  # pragma: no cover - network errors hit in integration
                 LOGGER.warning("Failed HTTP bars fetch for %s: %s", symbol, exc)
                 df = pd.DataFrame(columns=BARS_COLUMNS)
@@ -801,6 +847,8 @@ def _fetch_daily_bars(
                 symbol = futures[future]
                 try:
                     sym, df, http_stats = future.result()
+                except AlpacaUnauthorizedError:
+                    raise
                 except Exception as exc:  # pragma: no cover - unexpected failure path
                     LOGGER.error("Single-symbol worker failed for %s: %s", symbol, exc)
                     sym = symbol
@@ -1781,12 +1829,16 @@ def _fetch_assets_via_http(exclude_otc: bool) -> Tuple[List[str], Dict[str, dict
             params={"status": "active", "asset_class": "us_equity"},
             headers={
                 "APCA-API-KEY-ID": api_key,
-            "APCA-API-SECRET-KEY": api_secret,
-        },
-        timeout=ASSET_HTTP_TIMEOUT,
-    )
+                "APCA-API-SECRET-KEY": api_secret,
+            },
+            timeout=ASSET_HTTP_TIMEOUT,
+        )
+        if response.status_code in (401, 403):
+            raise AlpacaUnauthorizedError(endpoint="/v2/assets")
         response.raise_for_status()
         payload = response.json()
+    except AlpacaUnauthorizedError:
+        raise
     except Exception as exc:
         LOGGER.warning("Raw Alpaca asset fetch failed: %s", exc)
         return [], {}, {"assets_total": 0, "assets_tradable_equities": 0, "assets_after_filters": 0}
@@ -4167,143 +4219,174 @@ def main(
     args = parse_args(arg_list)
     base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
 
-    mode = getattr(args, "mode", "screener")
-
-    if mode == "build-symbol-stats":
-        return run_build_symbol_stats(args, base_dir)
-    if mode == "coarse-features":
-        return run_coarse_features(args, base_dir)
-
-    api_key, api_secret, _, _ = get_alpaca_creds()
-    if not api_key or not api_secret:
-        LOGGER.error("Missing Alpaca credentials; set APCA_API_KEY_ID and APCA_API_SECRET_KEY.")
+    try:
+        creds_snapshot = assert_alpaca_creds()
+    except AlpacaCredentialsError as exc:
+        missing = list(dict.fromkeys(list(exc.missing) + list(exc.whitespace)))
+        LOGGER.error(
+            "[ERROR] ALPACA_CREDENTIALS_INVALID reason=%s missing=%s whitespace=%s sanitized=%s",
+            exc.reason,
+            ",".join(exc.missing) or "",
+            ",".join(exc.whitespace) or "",
+            json.dumps(exc.sanitized, sort_keys=True),
+        )
+        AUTH_CONTEXT["creds"] = exc.sanitized
+        AUTH_CONTEXT["base_dir"] = base_dir
+        _persist_auth_error(exc.reason, missing, sanitized=exc.sanitized, base_dir=base_dir)
         return 2
 
-    trading_probe = probe_trading_only()
-    if trading_probe.get("status") == 401:
-        LOGGER.error(
-            "[ERROR] Alpaca auth failed (401). Check: (1) paper vs live base URL, "
-            "(2) fresh key/secret, (3) whitespace/CRLF in .env."
-        )
-        raise SystemExit(2)
-
-    if mode == "delta-update":
-        return _run_delta_update(args, base_dir)
-    if mode == "full-nightly":
-        return run_full_nightly(args, base_dir)
-
-    now = datetime.now(timezone.utc)
-    pipeline_timer = T()
-    fetch_elapsed = 0.0
-
-    symbols_override: Optional[List[str]] = None
-    if args.symbols:
-        symbols_override = [s.strip() for s in str(args.symbols).split(",") if s.strip()]
-
-    LOGGER.info("[STAGE] fetch start")
-    frame: pd.DataFrame
-    asset_meta: Dict[str, dict] = {}
-    fetch_metrics: dict[str, Any] = {}
-    asset_metrics: dict[str, Any] = {}
-    prescreened: Dict[str, str] = {}
-    if input_df is not None:
-        frame = input_df
-        fetch_elapsed = pipeline_timer.lap("fetch_secs")
-        LOGGER.info(
-            "[STAGE] fetch end (rows=%d, elapsed=%.2fs)",
-            int(frame.shape[0]) if hasattr(frame, "shape") else 0,
-            fetch_elapsed,
-        )
-    else:
-        universe_mode = args.universe
-        frame = pd.DataFrame(columns=INPUT_COLUMNS)
-        if universe_mode == "csv":
-            csv_path = (
-                Path(args.source_csv)
-                if getattr(args, "source_csv", None)
-                else base_dir / "data" / "screener_source.csv"
-            )
-            frame = _load_source_dataframe(csv_path)
-            if frame.empty:
-                LOGGER.warning(
-                    "CSV universe empty or missing; falling back to Alpaca active universe."
-                )
-                universe_mode = "alpaca-active"
-        if universe_mode == "alpaca-active":
-            (
-                frame,
-                asset_meta,
-                fetch_metrics,
-                prescreened,
-                asset_metrics,
-            ) = _load_alpaca_universe(
-                base_dir=base_dir,
-                days=max(1, args.days),
-                feed=args.feed,
-                limit=args.limit,
-                fetch_mode=args.fetch_mode,
-                batch_size=args.batch_size,
-                max_workers=args.max_workers,
-                min_history=args.min_history,
-                bars_source=args.bars_source,
-                exclude_otc=args.exclude_otc,
-                iex_only=args.iex_only,
-                liquidity_top=args.liquidity_top,
-                symbols_override=symbols_override,
-                verify_request=args.verify_request,
-                min_days_fallback=args.min_days_fallback,
-                min_days_final=args.min_days_final,
-                reuse_cache=bool(args.reuse_cache),
-                metrics=fetch_metrics,
-            )
-            fetch_elapsed = pipeline_timer.lap("fetch_secs")
-        LOGGER.info(
-            "[STAGE] fetch end (rows=%d, elapsed=%.2fs)",
-            int(frame.shape[0]) if hasattr(frame, "shape") else 0,
-            fetch_elapsed,
-        )
-    (
-        top_df,
-        scored_df,
-        stats,
-        skip_reasons,
-        reject_samples,
-        gate_counters,
-        ranker_cfg,
-        timing_info,
-    ) = run_screener(
-        frame,
-        top_n=args.top_n,
-        min_history=args.min_history,
-        now=now,
-        asset_meta=asset_meta,
-        prefiltered_skips=prescreened,
-        gate_preset=args.gate_preset,
-        relax_gates=args.relax_gates,
-        dollar_vol_min=args.dollar_vol_min,
-    )
-    timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(fetch_elapsed, 3)
-    write_outputs(
-        base_dir,
-        top_df,
-        scored_df,
-        stats,
-        skip_reasons,
-        reject_samples,
-        status="ok",
-        now=now,
-        gate_counters=gate_counters,
-        fetch_metrics=fetch_metrics,
-        asset_metrics=asset_metrics,
-        ranker_cfg=ranker_cfg,
-        timings=timing_info,
-    )
+    AUTH_CONTEXT["creds"] = creds_snapshot
+    AUTH_CONTEXT["base_dir"] = base_dir
     LOGGER.info(
-        "Screener complete: %d symbols examined, %d candidates.",
-        stats["symbols_in"],
-        stats["candidates_out"],
+        "[INFO] ALPACA_CREDENTIALS_OK sanitized=%s",
+        json.dumps(creds_snapshot, sort_keys=True),
     )
-    return 0
+
+    def _run() -> int:
+        mode = getattr(args, "mode", "screener")
+
+        if mode == "build-symbol-stats":
+            return run_build_symbol_stats(args, base_dir)
+        if mode == "coarse-features":
+            return run_coarse_features(args, base_dir)
+
+        trading_probe = probe_trading_only()
+        status_code = (
+            trading_probe.get("status")
+            if isinstance(trading_probe, Mapping)
+            else trading_probe.get("status") if isinstance(trading_probe, dict) else None
+        )
+        if status_code in (401, 403):
+            raise AlpacaUnauthorizedError(endpoint="/v2/account")
+
+        if mode == "delta-update":
+            return _run_delta_update(args, base_dir)
+        if mode == "full-nightly":
+            return run_full_nightly(args, base_dir)
+
+        now = datetime.now(timezone.utc)
+        pipeline_timer = T()
+        fetch_elapsed = 0.0
+
+        symbols_override: Optional[List[str]] = None
+        if args.symbols:
+            symbols_override = [s.strip() for s in str(args.symbols).split(",") if s.strip()]
+
+        LOGGER.info("[STAGE] fetch start")
+        frame: pd.DataFrame
+        asset_meta: Dict[str, dict] = {}
+        fetch_metrics: dict[str, Any] = {}
+        asset_metrics: dict[str, Any] = {}
+        prescreened: Dict[str, str] = {}
+        if input_df is not None:
+            frame = input_df
+            fetch_elapsed = pipeline_timer.lap("fetch_secs")
+            LOGGER.info(
+                "[STAGE] fetch end (rows=%d, elapsed=%.2fs)",
+                int(frame.shape[0]) if hasattr(frame, "shape") else 0,
+                fetch_elapsed,
+            )
+        else:
+            universe_mode = args.universe
+            frame = pd.DataFrame(columns=INPUT_COLUMNS)
+            if universe_mode == "csv":
+                csv_path = (
+                    Path(args.source_csv)
+                    if getattr(args, "source_csv", None)
+                    else base_dir / "data" / "screener_source.csv"
+                )
+                frame = _load_source_dataframe(csv_path)
+                if frame.empty:
+                    LOGGER.warning(
+                        "CSV universe empty or missing; falling back to Alpaca active universe."
+                    )
+                    universe_mode = "alpaca-active"
+            if universe_mode == "alpaca-active":
+                (
+                    frame,
+                    asset_meta,
+                    fetch_metrics,
+                    prescreened,
+                    asset_metrics,
+                ) = _load_alpaca_universe(
+                    base_dir=base_dir,
+                    days=max(1, args.days),
+                    feed=args.feed,
+                    limit=args.limit,
+                    fetch_mode=args.fetch_mode,
+                    batch_size=args.batch_size,
+                    max_workers=args.max_workers,
+                    min_history=args.min_history,
+                    bars_source=args.bars_source,
+                    exclude_otc=args.exclude_otc,
+                    iex_only=args.iex_only,
+                    liquidity_top=args.liquidity_top,
+                    symbols_override=symbols_override,
+                    verify_request=args.verify_request,
+                    min_days_fallback=args.min_days_fallback,
+                    min_days_final=args.min_days_final,
+                    reuse_cache=bool(args.reuse_cache),
+                    metrics=fetch_metrics,
+                )
+                fetch_elapsed = pipeline_timer.lap("fetch_secs")
+            LOGGER.info(
+                "[STAGE] fetch end (rows=%d, elapsed=%.2fs)",
+                int(frame.shape[0]) if hasattr(frame, "shape") else 0,
+                fetch_elapsed,
+            )
+        (
+            top_df,
+            scored_df,
+            stats,
+            skip_reasons,
+            reject_samples,
+            gate_counters,
+            ranker_cfg,
+            timing_info,
+        ) = run_screener(
+            frame,
+            top_n=args.top_n,
+            min_history=args.min_history,
+            now=now,
+            asset_meta=asset_meta,
+            prefiltered_skips=prescreened,
+            gate_preset=args.gate_preset,
+            relax_gates=args.relax_gates,
+            dollar_vol_min=args.dollar_vol_min,
+        )
+        timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(fetch_elapsed, 3)
+        write_outputs(
+            base_dir,
+            top_df,
+            scored_df,
+            stats,
+            skip_reasons,
+            reject_samples,
+            status="ok",
+            now=now,
+            gate_counters=gate_counters,
+            fetch_metrics=fetch_metrics,
+            asset_metrics=asset_metrics,
+            ranker_cfg=ranker_cfg,
+            timings=timing_info,
+        )
+        LOGGER.info(
+            "Screener complete: %d symbols examined, %d candidates.",
+            stats["symbols_in"],
+            stats["candidates_out"],
+        )
+        return 0
+
+    try:
+        return _run()
+    except AlpacaUnauthorizedError as exc:
+        LOGGER.error(
+            '[ERROR] ALPACA_UNAUTHORIZED endpoint=%s feed=%s hint="check keys/base urls"',
+            exc.endpoint or "",
+            exc.feed or "",
+        )
+        _persist_auth_error("unauthorized", base_dir=base_dir)
+        return 2
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

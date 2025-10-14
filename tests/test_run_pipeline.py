@@ -10,7 +10,7 @@ os.environ.setdefault("APCA_API_KEY_ID", "test")
 os.environ.setdefault("APCA_API_SECRET_KEY", "test")
 os.environ.setdefault("ALPACA_KEY_ID", os.environ["APCA_API_KEY_ID"])
 os.environ.setdefault("ALPACA_SECRET_KEY", os.environ["APCA_API_SECRET_KEY"])
-os.environ.setdefault("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+os.environ.setdefault("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
 
 from scripts import run_pipeline
 
@@ -78,3 +78,5 @@ def test_pipeline_refresh_latest(tmp_path, monkeypatch):
     assert metrics.get("cache") == {"batches_hit": 0, "batches_miss": 0}
     assert metrics.get("universe_prefix_counts") == {}
     assert "timings" in metrics
+    assert metrics.get("status") == "ok"
+    assert metrics.get("auth_missing") == []
