@@ -106,6 +106,23 @@ DATA_URL_ENV_VARS = ("APCA_API_DATA_URL", "ALPACA_API_DATA_URL")
 DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
 
 
+def _load_execute_metrics() -> Optional[Dict[str, Any]]:
+    if not METRICS_PATH.exists():
+        return None
+    try:
+        payload = json.loads(METRICS_PATH.read_text(encoding="utf-8")) or {}
+    except Exception as exc:  # pragma: no cover - defensive metrics parsing
+        LOGGER.warning("Failed to load execute metrics: %s", exc)
+        return None
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    LOGGER.warning(
+        "Execute metrics file contained unexpected payload type: %s",
+        type(payload).__name__,
+    )
+    return None
+
+
 def _record_auth_error(
     reason: str,
     sanitized: Mapping[str, object],
@@ -1559,56 +1576,31 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
 
     args = parse_args(argv)
-    trailing_pct = args.trailing_percent if args.trailing_percent is not None else 0.0
     LOGGER.info(
         "EXECUTE START dry_run=%s time_window=%s ext_hours=%s alloc=%.2f max_pos=%d trail=%.1f%%",
-        bool(args.dry_run),
+        args.dry_run,
         args.time_window,
-        bool(args.extended_hours),
-        float(args.allocation_pct or 0.0),
-        int(args.max_positions or 0),
-        float(trailing_pct),
+        args.extended_hours,
+        args.allocation_pct,
+        args.max_positions,
+        args.trailing_percent,
     )
     config = build_config(args)
     try:
         rc = run_executor(config)
-        if rc == 0:
-            summary: Dict[str, Any] = {
-                "orders_submitted": 0,
-                "trailing_attached": 0,
-                "skips": {},
-            }
-            if METRICS_PATH.exists():
+        metrics_payload = _load_execute_metrics()
+        if metrics_payload is not None:
+            def _as_int(value: Any) -> int:
                 try:
-                    payload = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
-                except Exception as exc:  # pragma: no cover - defensive metrics parsing
-                    LOGGER.warning("Failed to load execute metrics for summary: %s", exc)
-                else:
-                    if isinstance(payload, Mapping):
-                        def _to_int(value: Any) -> int:
-                            try:
-                                return int(value)
-                            except (TypeError, ValueError):
-                                return 0
+                    return int(value)
+                except (TypeError, ValueError):
+                    return 0
 
-                        summary["orders_submitted"] = _to_int(payload.get("orders_submitted"))
-                        summary["trailing_attached"] = _to_int(payload.get("trailing_attached"))
-                        skips_value = payload.get("skips")
-                        if isinstance(skips_value, Mapping):
-                            converted: Dict[str, Any] = {}
-                            for key, value in skips_value.items():
-                                try:
-                                    converted[str(key)] = _to_int(value)
-                                except Exception:  # pragma: no cover - defensive fallback
-                                    converted[str(key)] = value
-                            summary["skips"] = converted
-                        elif skips_value:
-                            summary["skips"] = skips_value
             LOGGER.info(
-                "EXECUTE END submitted=%d trailing=%d skipped=%s",
-                int(summary.get("orders_submitted", 0) or 0),
-                int(summary.get("trailing_attached", 0) or 0),
-                summary.get("skips", {}),
+                "EXECUTE END submitted=%d trailing=%d skips=%s",
+                _as_int(metrics_payload.get("orders_submitted")),
+                _as_int(metrics_payload.get("trailing_attached")),
+                metrics_payload.get("skips", {}),
             )
         return rc
     except AlpacaUnauthorizedError as exc:

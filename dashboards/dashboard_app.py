@@ -947,7 +947,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         timings = metrics_data.get("timings", {}) or {}
 
-        execution_card = None
+        execution_card_body = [html.Div("Execution", className="card-metric-label")]
         if execute_metrics:
             exec_last_run = _format_iso_display(execute_metrics.get("last_run_utc"))
             submitted = _safe_int(execute_metrics.get("orders_submitted"))
@@ -964,18 +964,25 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 skip_text = ", ".join(parts) if parts else "None"
             elif skips_payload not in (None, ""):
                 skip_text = str(skips_payload)
-            execution_card = dbc.Card(
-                dbc.CardBody(
-                    [
-                        html.Div("Execution", className="card-metric-label"),
-                        html.Div((exec_last_run or "—"), className="card-metric-value mb-2"),
-                        html.Div(f"Submitted: {submitted}", className="small text-muted"),
-                        html.Div(f"Trailing: {trailing}", className="small text-muted"),
-                        html.Div(f"Skips: {skip_text}", className="small text-muted"),
-                    ]
-                ),
-                className="bg-dark text-light h-100",
+            execution_card_body.extend(
+                [
+                    html.Div(f"Last Run: {exec_last_run or '—'}", className="small text-muted"),
+                    html.Div(f"Submitted: {submitted}", className="small text-muted"),
+                    html.Div(f"Trailing: {trailing}", className="small text-muted"),
+                    html.Div(f"Skips: {skip_text}", className="small text-muted"),
+                ]
             )
+        else:
+            execution_card_body.append(
+                html.Div(
+                    "No execution metrics yet (will appear after execute step).",
+                    className="small text-muted",
+                )
+            )
+        execution_card = dbc.Card(
+            dbc.CardBody(execution_card_body),
+            className="bg-dark text-light h-100",
+        )
         timing_labels = [
             ("fetch_secs", "Fetch"),
             ("normalize_secs", "Normalize"),
@@ -1338,13 +1345,17 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         if connectivity_chip:
             components.append(html.Div(connectivity_chip, className="mb-3"))
         components.extend(alerts)
+
+        metrics_sections = []
         if metrics_data:
-            metrics_sections = [health_cards]
-            if execution_card is not None:
-                metrics_sections.append(
-                    dbc.Row([dbc.Col(execution_card, md=4, sm=6)], className="g-3 mb-4")
-                )
+            metrics_sections.append(health_cards)
+        if execution_card is not None:
+            metrics_sections.append(
+                dbc.Row([dbc.Col(execution_card, md=4, sm=6)], className="g-3 mb-4")
+            )
+        if metrics_data:
             metrics_sections.extend([info_row, charts_row])
+        if metrics_sections:
             components.extend(metrics_sections)
         components.append(html.H4("Top Candidates", className="text-light"))
         components.append(top_table_component)
