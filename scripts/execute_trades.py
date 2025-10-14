@@ -21,7 +21,14 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
-from utils.env import get_alpaca_creds, load_env
+from utils.env import (
+    AlpacaCredentialsError,
+    AlpacaUnauthorizedError,
+    assert_alpaca_creds,
+    get_alpaca_creds,
+    load_env,
+    write_auth_error_artifacts,
+)
 import utils.telemetry as telemetry
 
 try:  # pragma: no cover - import guard for optional dependency
@@ -99,6 +106,20 @@ DATA_URL_ENV_VARS = ("APCA_API_DATA_URL", "ALPACA_API_DATA_URL")
 DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
 
 
+def _record_auth_error(
+    reason: str,
+    sanitized: Mapping[str, object],
+    missing: Iterable[str] | None = None,
+) -> None:
+    write_auth_error_artifacts(
+        reason=reason,
+        sanitized=sanitized,
+        missing=missing or [],
+        metrics_path=METRICS_PATH,
+        summary_path=Path("data") / "metrics_summary.csv",
+    )
+
+
 def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
     api_key, api_secret, _, feed = get_alpaca_creds()
     if not api_key or not api_secret:
@@ -123,6 +144,11 @@ def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
     except Exception as exc:
         LOGGER.warning("[WARN] Failed to fetch latest close for %s: %s", symbol, exc)
         return None
+    if response.status_code in (401, 403):
+        raise AlpacaUnauthorizedError(
+            endpoint=f"/v2/stocks/{symbol}/bars/latest",
+            feed=str(feed or ""),
+        )
     if response.status_code != 200:
         LOGGER.warning(
             "[WARN] Latest close request for %s returned status %s", symbol, response.status_code
@@ -176,6 +202,8 @@ def _fetch_latest_daily_bars(symbols: Sequence[str]) -> Dict[str, Dict[str, Opti
     except Exception as exc:
         LOGGER.warning("[WARN] Failed batch daily bars fetch for %s symbols: %s", len(unique), exc)
         return {}
+    if response.status_code in (401, 403):
+        raise AlpacaUnauthorizedError(endpoint="/v2/stocks/bars/latest", feed=str(feed or ""))
     if response.status_code != 200:
         LOGGER.warning(
             "[WARN] Batch daily bars request returned status %s", response.status_code
@@ -1511,6 +1539,25 @@ def apply_guards(df: pd.DataFrame, config: ExecutorConfig, metrics: ExecutionMet
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     load_env()
+    try:
+        creds_snapshot = assert_alpaca_creds()
+    except AlpacaCredentialsError as exc:
+        missing = list(dict.fromkeys(list(exc.missing) + list(exc.whitespace)))
+        LOGGER.error(
+            "[ERROR] ALPACA_CREDENTIALS_INVALID reason=%s missing=%s whitespace=%s sanitized=%s",
+            exc.reason,
+            ",".join(exc.missing) or "",
+            ",".join(exc.whitespace) or "",
+            json.dumps(exc.sanitized, sort_keys=True),
+        )
+        _record_auth_error(exc.reason, exc.sanitized, missing)
+        return 2
+
+    LOGGER.info(
+        "[INFO] ALPACA_CREDENTIALS_OK sanitized=%s",
+        json.dumps(creds_snapshot, sort_keys=True),
+    )
+
     args = parse_args(argv)
     trailing_pct = args.trailing_percent if args.trailing_percent is not None else 0.0
     LOGGER.info(
@@ -1564,6 +1611,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 summary.get("skips", {}),
             )
         return rc
+    except AlpacaUnauthorizedError as exc:
+        LOGGER.error(
+            '[ERROR] ALPACA_UNAUTHORIZED endpoint=%s feed=%s hint="check keys/base urls"',
+            exc.endpoint or "",
+            exc.feed or "",
+        )
+        _record_auth_error("unauthorized", creds_snapshot)
+        return 2
     except Exception as exc:  # pragma: no cover - top-level guard
         LOGGER.exception("Executor failed: %s", exc)
         return 1

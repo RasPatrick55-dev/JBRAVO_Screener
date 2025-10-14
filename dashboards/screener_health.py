@@ -68,6 +68,7 @@ SCORED_CSV = DATA_DIR / "scored_candidates.csv"
 HIST_CSV = DATA_DIR / "screener_metrics_history.csv"
 PRED_LATEST = DATA_DIR / "predictions" / "latest.csv"
 RANKER_EVAL_LATEST = DATA_DIR / "ranker_eval" / "latest.json"
+METRICS_SUMMARY_CSV = DATA_DIR / "metrics_summary.csv"
 
 
 def _format_probe_timestamp(raw: Any) -> str:
@@ -346,6 +347,7 @@ def build_layout():
             dcc.Store(id="sh-hist-store"),
             dcc.Store(id="sh-eval-store"),
             dcc.Store(id="sh-health-store"),
+            dcc.Store(id="sh-summary-store"),
             html.Div(id="sh-health-banner"),
             html.Div(id="sh-kpis", className="sh-row"),
             html.Div(
@@ -456,6 +458,7 @@ def register_callbacks(app):
         Output("sh-hist-store","data"),
         Output("sh-eval-store","data"),
         Output("sh-health-store","data"),
+        Output("sh-summary-store","data"),
         Input("sh-interval","n_intervals")
     )
     def _load_artifacts(_n):
@@ -509,6 +512,8 @@ def register_callbacks(app):
         hist = _safe_csv(HIST_CSV)
         ev = _safe_json(RANKER_EVAL_LATEST)
         health = _safe_json(HEALTH_JSON)
+        summary_df = _safe_csv(METRICS_SUMMARY_CSV, nrows=1)
+        summary = summary_df.iloc[0].to_dict() if not summary_df.empty else {}
 
         return (
             m,
@@ -516,9 +521,11 @@ def register_callbacks(app):
             (hist.to_dict("records") if not hist.empty else []),
             ev,
             health,
+            summary,
         )
 
     @app.callback(
+        Output("sh-health-banner","children"),
         Output("sh-kpis","children"),
         Output("sh-prefix-counts","children"),
         Output("sh-http","children"),
@@ -540,8 +547,9 @@ def register_callbacks(app):
         Input("sh-hist-store","data"),
         Input("sh-eval-store","data"),
         Input("sh-health-store","data"),
+        Input("sh-summary-store","data"),
     )
-    def _render(m, top_rows, hist_rows, ev, health):
+    def _render(m, top_rows, hist_rows, ev, health, summary):
         if not isinstance(m, dict):
             m = {}
         if not isinstance(top_rows, list):
@@ -552,6 +560,8 @@ def register_callbacks(app):
             ev = {}
         if not isinstance(health, dict):
             health = {}
+        if not isinstance(summary, Mapping):
+            summary = {}
 
         # ---------------- KPIs ----------------
         def _card(title, value, sub=None):
@@ -562,6 +572,26 @@ def register_callbacks(app):
             ], className="sh-kpi")
 
         health_card, health_banner = _health_elements(health)
+        summary_status = str(summary.get("status") or "").strip().lower()
+        auth_reason = summary.get("auth_reason") if isinstance(summary, Mapping) else ""
+        missing_raw = summary.get("auth_missing") if isinstance(summary, Mapping) else ""
+        if isinstance(missing_raw, str):
+            missing_list = [part.strip() for part in missing_raw.replace(";", ",").split(",") if part.strip()]
+        elif isinstance(missing_raw, (list, tuple, set)):
+            missing_list = [str(item).strip() for item in missing_raw if str(item).strip()]
+        else:
+            missing_list = []
+        hint_raw = summary.get("auth_hint") if isinstance(summary, Mapping) else {}
+        if isinstance(hint_raw, str):
+            try:
+                hint_data = json.loads(hint_raw)
+            except Exception:
+                hint_data = {"raw": hint_raw}
+        elif isinstance(hint_raw, Mapping):
+            hint_data = hint_raw
+        else:
+            hint_data = {}
+        creds_alert = None
         last_run = (m.get("last_run_utc") or "n/a")
         sym_in   = int(m.get("symbols_in", 0) or 0)
         sym_bars = int(m.get("symbols_with_bars", 0) or 0)
@@ -652,6 +682,84 @@ def register_callbacks(app):
         s_tail = _tail(LOG_DIR / "screener.log", 180)
         p_tail = _tail(LOG_DIR / "pipeline.log", 180)
 
+        unauthorized_log = "ALPACA_UNAUTHORIZED" in (p_tail or "")
+        if summary_status == "auth_error" or unauthorized_log:
+            detail_blocks: list[Any] = []
+            if missing_list:
+                detail_blocks.append(
+                    html.Div(
+                        "Missing variables: " + ", ".join(missing_list),
+                        style={"fontSize": "13px", "marginBottom": "4px"},
+                    )
+                )
+            if auth_reason:
+                detail_blocks.append(
+                    html.Div(
+                        f"Reason: {auth_reason}",
+                        style={"fontSize": "13px", "marginBottom": "4px"},
+                    )
+                )
+            hint_entries: list[Any] = []
+            if isinstance(hint_data, Mapping):
+                key_prefix = hint_data.get("key_prefix")
+                if key_prefix:
+                    hint_entries.append(
+                        html.Div(
+                            f"Key prefix: {key_prefix}",
+                            style={"fontSize": "13px", "marginBottom": "2px"},
+                        )
+                    )
+                secret_len = hint_data.get("secret_len")
+                if secret_len is not None:
+                    hint_entries.append(
+                        html.Div(
+                            f"Secret length: {secret_len}",
+                            style={"fontSize": "13px", "marginBottom": "2px"},
+                        )
+                    )
+                base_urls = hint_data.get("base_urls")
+                if isinstance(base_urls, Mapping):
+                    for label, url in base_urls.items():
+                        hint_entries.append(
+                            html.Div(
+                                f"{str(label).title()} URL: {url or 'n/a'}",
+                                style={"fontSize": "13px", "marginBottom": "2px"},
+                            )
+                        )
+                if not hint_entries and hint_data:
+                    hint_entries.append(
+                        html.Div(
+                            f"Hint: {json.dumps(hint_data, sort_keys=True)}",
+                            style={"fontSize": "13px", "marginBottom": "2px"},
+                        )
+                    )
+            alert_children: list[Any] = [
+                html.Div("Credentials invalid", style={"fontWeight": 600, "marginBottom": "4px"}),
+                *detail_blocks,
+                *hint_entries,
+                html.A(
+                    "Troubleshooting guide",
+                    href="https://docs.alpaca.markets/docs/troubleshooting-authentication",
+                    target="_blank",
+                    style={"color": "#ffd7d5", "textDecoration": "underline"},
+                ),
+            ]
+            creds_alert = html.Div(
+                alert_children,
+                style={
+                    "position": "sticky",
+                    "top": 0,
+                    "zIndex": 1100,
+                    "padding": "10px 14px",
+                    "borderRadius": "6px",
+                    "background": "#8c1d13",
+                    "color": "#fff",
+                    "boxShadow": "0 2px 8px rgba(0,0,0,0.35)",
+                    "marginBottom": "12px",
+                },
+                className="sh-health-alert",
+            )
+
         prefix_raw = m.get("universe_prefix_counts") if isinstance(m, dict) else {}
         prefix_counts = (
             json.dumps(prefix_raw, indent=2, sort_keys=True)
@@ -676,8 +784,14 @@ def register_callbacks(app):
         timings_view = {**base_timings, **timings_dict}
         timings_json = json.dumps({k: timings_view.get(k) for k in sorted(timings_view)}, indent=2)
 
+        banner_children: list[Any] = []
+        if creds_alert:
+            banner_children.append(creds_alert)
+        if health_banner:
+            banner_children.append(health_banner)
+
         return (
-            health_banner,
+            banner_children if banner_children else None,
             kpis,
             prefix_counts,
             http_json,

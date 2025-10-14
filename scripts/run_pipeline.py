@@ -13,7 +13,13 @@ from shutil import copyfile
 from typing import Any, Iterable, Mapping, MutableMapping, Optional
 
 from scripts.health_check import run_health_check
-from utils.env import load_env
+from utils.env import (
+    AlpacaCredentialsError,
+    assert_alpaca_creds,
+    load_env,
+    write_auth_error_artifacts,
+    write_metrics_summary_row,
+)
 
 
 LOG = logging.getLogger("pipeline")
@@ -111,6 +117,10 @@ def _merge_metrics_defaults(base: MutableMapping[str, Any]) -> MutableMapping[st
         "cache": {"batches_hit": 0, "batches_miss": 0},
         "universe_prefix_counts": {},
         "timings": {},
+        "status": "ok",
+        "auth_reason": "",
+        "auth_missing": [],
+        "auth_hint": "",
     }
 
     for key, value in defaults.items():
@@ -123,6 +133,13 @@ def _merge_metrics_defaults(base: MutableMapping[str, Any]) -> MutableMapping[st
                 base[key] = dict(value)
         else:
             base.setdefault(key, value)
+
+    if base.get("status") != "auth_error":
+        base["status"] = "ok"
+    base.setdefault("auth_reason", "")
+    if not isinstance(base.get("auth_missing"), list):
+        base["auth_missing"] = []
+    base.setdefault("auth_hint", "")
     return base
 
 
@@ -165,17 +182,18 @@ def copy_latest_candidates() -> None:  # pragma: no cover - backward compatibili
     refresh_latest_candidates()
 
 
-def write_metrics_summary() -> None:
+def write_metrics_summary(*, overrides: Mapping[str, object] | None = None) -> None:
     """Write a minimal metrics_summary.csv for the dashboard overview."""
-    summary_path = pathlib.Path("data/metrics_summary.csv")
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-
-    meta = {
+    meta: dict[str, object] = {
         "last_run_utc": "",
         "symbols_in": 0,
         "symbols_with_bars": 0,
         "bars_rows_total": 0,
         "rows": 0,
+        "status": "ok",
+        "auth_reason": "",
+        "auth_missing": "",
+        "auth_hint": "",
     }
 
     metrics_path = pathlib.Path("data/screener_metrics.json")
@@ -185,16 +203,41 @@ def write_metrics_summary() -> None:
             if isinstance(metrics, dict):
                 for key in meta:
                     meta[key] = metrics.get(key, meta[key])
+                status_value = metrics.get("status")
+                if status_value:
+                    meta["status"] = status_value
+                reason_value = metrics.get("auth_reason")
+                if reason_value:
+                    meta["auth_reason"] = reason_value
+                missing_value = metrics.get("auth_missing")
+                if isinstance(missing_value, (list, tuple)):
+                    meta["auth_missing"] = ",".join(
+                        str(item) for item in missing_value if str(item).strip()
+                    )
+                elif isinstance(missing_value, str):
+                    meta["auth_missing"] = missing_value
+                hint_value = metrics.get("auth_hint")
+                if hint_value:
+                    meta["auth_hint"] = hint_value
         except Exception as exc:  # pragma: no cover - defensive parsing
             LOG.warning("[INFO] could not parse screener_metrics.json: %s", exc)
 
-    summary_path.write_text(
-        "last_run_utc,symbols_in,with_bars,bars_rows,candidates\n"
-        f"{meta['last_run_utc']}"
-        f",{int(meta['symbols_in'] or 0)}"
-        f",{int(meta['symbols_with_bars'] or 0)}"
-        f",{int(meta['bars_rows_total'] or 0)}"
-        f",{int(meta['rows'] or 0)}\n"
+    if isinstance(overrides, Mapping):
+        for key, value in overrides.items():
+            meta[key] = value
+
+    write_metrics_summary_row(
+        {
+            "last_run_utc": meta.get("last_run_utc", ""),
+            "symbols_in": meta.get("symbols_in", 0),
+            "with_bars": meta.get("symbols_with_bars", 0),
+            "bars_rows": meta.get("bars_rows_total", 0),
+            "candidates": meta.get("rows", 0),
+            "status": meta.get("status", "ok"),
+            "auth_reason": meta.get("auth_reason", ""),
+            "auth_missing": meta.get("auth_missing", ""),
+            "auth_hint": meta.get("auth_hint", ""),
+        }
     )
     LOG.info("[INFO] wrote metrics_summary.csv")
 
@@ -259,8 +302,33 @@ def run_execute_step(cmd: list[str]) -> int:
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     load_env()
-    args = parse_args(argv)
     configure_logging()
+    try:
+        creds_snapshot = assert_alpaca_creds()
+    except AlpacaCredentialsError as exc:
+        missing = list(dict.fromkeys(list(exc.missing) + list(exc.whitespace)))
+        LOG.error(
+            "[ERROR] ALPACA_CREDENTIALS_INVALID reason=%s missing=%s whitespace=%s sanitized=%s",
+            exc.reason,
+            ",".join(exc.missing) or "",
+            ",".join(exc.whitespace) or "",
+            json.dumps(exc.sanitized, sort_keys=True),
+        )
+        write_auth_error_artifacts(
+            reason=exc.reason,
+            sanitized=exc.sanitized,
+            missing=missing,
+            metrics_path=pathlib.Path("data") / "screener_metrics.json",
+            summary_path=pathlib.Path("data") / "metrics_summary.csv",
+        )
+        return 2
+
+    LOG.info(
+        "[INFO] ALPACA_CREDENTIALS_OK sanitized=%s",
+        json.dumps(creds_snapshot, sort_keys=True),
+    )
+
+    args = parse_args(argv)
 
     steps = determine_steps(args.steps)
     health_report = _record_health("start")
