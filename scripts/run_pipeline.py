@@ -26,6 +26,8 @@ LOG = logging.getLogger("pipeline")
 LOG_PATH = pathlib.Path("logs") / "pipeline.log"
 EVENTS_PATH = pathlib.Path("logs") / "execute_events.jsonl"
 EXECUTE_METRICS_PATH = pathlib.Path("data") / "execute_metrics.json"
+SCREENER_ARGS_ENV = "JBR_SCREENER_ARGS"
+SCREENER_EXTRA_ARGS: list[str] = []
 LATEST_HEADER = "timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown\n"
 
 
@@ -75,6 +77,16 @@ def _record_health(stage: str) -> dict[str, Any]:
     return report
 
 
+def _parse_env_args(raw: str) -> list[str]:
+    if not raw:
+        return []
+    try:
+        return shlex.split(raw)
+    except ValueError as exc:
+        LOG.error("Failed to parse %s: %s", SCREENER_ARGS_ENV, exc)
+        return []
+
+
 def screener_cmd() -> list[str]:
     base = [
         sys.executable,
@@ -85,14 +97,12 @@ def screener_cmd() -> list[str]:
         "--feed",
         "iex",
     ]
-    extra = shlex.split(os.environ.get("JBR_SCREENER_ARGS", "")) if os.environ.get("JBR_SCREENER_ARGS") else []
-    return base + extra
+    return base + SCREENER_EXTRA_ARGS
 
 
 def execute_cmd() -> list[str]:
     base = [sys.executable, "-m", "scripts.execute_trades"]
-    extra = shlex.split(os.environ.get("JBR_EXEC_ARGS", "")) if os.environ.get("JBR_EXEC_ARGS") else []
-    return base + extra
+    return base
 
 
 def emit(event: str, **payload: Any) -> None:
@@ -330,6 +340,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     args = parse_args(argv)
 
+    env_raw = os.environ.get(SCREENER_ARGS_ENV, "")
+    parsed_env = _parse_env_args(env_raw)
+    global SCREENER_EXTRA_ARGS
+    SCREENER_EXTRA_ARGS = parsed_env
+    LOG.info(
+        "[INFO] PIPELINE_ENV %s raw=%s parsed=%s",
+        SCREENER_ARGS_ENV,
+        env_raw,
+        parsed_env,
+    )
+
     steps = determine_steps(args.steps)
     health_report = _record_health("start")
     trading_status = {}
@@ -368,23 +389,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             except Exception as exc:  # pragma: no cover - defensive safeguard
                 LOG.error("[INFO] failed to refresh artifacts before EXECUTE step: %s", exc)
         rc_exec = run_execute_step(execute_cmd())
-        summary: dict[str, Any] = {}
         if EXECUTE_METRICS_PATH.exists():
             try:
-                payload = json.loads(EXECUTE_METRICS_PATH.read_text(encoding="utf-8")) or {}
+                execute_metrics = json.loads(
+                    EXECUTE_METRICS_PATH.read_text(encoding="utf-8")
+                )
             except Exception as exc:  # pragma: no cover - defensive metrics parsing
                 LOG.warning("[INFO] failed to read execute metrics: %s", exc)
             else:
-                if isinstance(payload, Mapping):
-                    summary = {
-                        "last_run_utc": payload.get("last_run_utc"),
-                        "orders_submitted": payload.get("orders_submitted"),
-                        "trailing_attached": payload.get("trailing_attached"),
-                        "skips": payload.get("skips"),
-                    }
-                else:
-                    summary = {"raw": payload}
-        LOG.info("EXECUTE SUMMARY %s", json.dumps(summary))
+                LOG.info(
+                    "EXECUTE SUMMARY %s",
+                    json.dumps(execute_metrics, sort_keys=True),
+                )
         if rc_exec != 0 and rc == 0:
             rc = rc_exec
 
