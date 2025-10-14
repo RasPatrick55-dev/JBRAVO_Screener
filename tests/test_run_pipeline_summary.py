@@ -1,69 +1,81 @@
 import json
 import logging
+import sys
+from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import run_pipeline
 
 
+@pytest.fixture(autouse=True)
+def _set_creds(monkeypatch):
+    monkeypatch.setenv("APCA_API_KEY_ID", "test")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "test")
+    monkeypatch.setenv("ALPACA_KEY_ID", "test")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
+    monkeypatch.setenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+
+
 @pytest.mark.alpaca_optional
-def test_pipeline_summary_emitted(tmp_path, monkeypatch, caplog):
+def test_pipeline_summary_zero_candidates(tmp_path, monkeypatch, caplog):
     data_dir = tmp_path / "data"
     logs_dir = tmp_path / "logs"
     data_dir.mkdir()
     logs_dir.mkdir()
-    top_csv = data_dir / "top_candidates.csv"
-    top_csv.write_text(
-        "timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown\n"
-        "2024-05-01T12:00:00Z,AAPL,3.2,NASDAQ,175.0,1000000,50,{}\n",
-        encoding="utf-8",
-    )
-    metrics_path = data_dir / "screener_metrics.json"
-    metrics_path.write_text(
-        json.dumps({"symbols_in": 5, "symbols_with_bars": 4, "rows": 0}),
-        encoding="utf-8",
-    )
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("PYTHONANYWHERE_DOMAIN", "")
 
     monkeypatch.setattr(run_pipeline, "load_env", lambda: None)
-    monkeypatch.setattr(run_pipeline, "assert_alpaca_creds", lambda: {"mode": "paper"})
+    monkeypatch.setattr(run_pipeline, "configure_logging", lambda: None)
+    monkeypatch.setattr(run_pipeline, "assert_alpaca_creds", lambda: {"id": "ok"})
     monkeypatch.setattr(run_pipeline, "_record_health", lambda stage: {})
-
-    called_steps: list[str] = []
-
-    def fake_run_cmd(cmd, name):
-        called_steps.append(name)
-        return 0
-
-    monkeypatch.setattr(run_pipeline, "run_cmd", fake_run_cmd)
-
-    emitted: list[tuple[str, int]] = []
-
-    def fake_emit_metric(name, value):
-        emitted.append((name, value))
-
-    monkeypatch.setattr(run_pipeline, "emit_metric", fake_emit_metric)
-
-    caplog.set_level(logging.INFO, logger="pipeline")
-
-    rc = run_pipeline.main(["--steps", "screener"])
-    assert rc == 0
-    assert called_steps == ["SCREENER"]
-    assert emitted == [("CANDIDATE_ROWS", 1)]
-
-    summary_line = ""
-    for record in caplog.records:
-        message = record.getMessage()
-        if "PIPELINE_SUMMARY" in message:
-            summary_line = message
-    assert summary_line, "PIPELINE_SUMMARY log not found"
-    assert "symbols_in=5" in summary_line
-    assert "with_bars=4" in summary_line
-    assert "rows=1" in summary_line
-    assert "durations={\"screener\":" in summary_line
-    assert "step_rcs={\"screener\":0}" in summary_line
+    monkeypatch.setattr(run_pipeline, "run_cmd", lambda cmd, name: 0)
+    monkeypatch.setattr(run_pipeline, "emit_metric", lambda *a, **k: None)
+    monkeypatch.setattr(run_pipeline, "write_metrics_summary", lambda **kwargs: None)
 
     latest_path = data_dir / "latest_candidates.csv"
-    assert latest_path.exists()
+
+    metrics_payload = {
+        "symbols_in": 15,
+        "symbols_with_bars": 12,
+        "rows": 0,
+        "timings": {
+            "fetch_secs": 1.1,
+            "feature_secs": 2.2,
+            "rank_secs": 3.3,
+            "gates_secs": 4.4,
+        },
+    }
+
+    def fake_refresh() -> dict[str, object]:
+        latest_path.write_text(run_pipeline.LATEST_HEADER, encoding="utf-8")
+        return json.loads(json.dumps(metrics_payload))
+
+    monkeypatch.setattr(run_pipeline, "refresh_latest_candidates", fake_refresh)
+
+    def fake_execute(cmd, *, candidate_rows=None):
+        raise AssertionError("execute step should be skipped when rows=0")
+
+    monkeypatch.setattr(run_pipeline, "run_execute_step", fake_execute)
+
+    caplog.set_level(logging.INFO, logger="pipeline")
+    rc = run_pipeline.main(["--steps", "screener,execute", "--reload-web", "false"])
+
+    assert rc == 0
+
+    messages = [record.getMessage() for record in caplog.records]
+    summary_lines = [msg for msg in messages if "PIPELINE_SUMMARY" in msg]
+    assert summary_lines, "PIPELINE_SUMMARY log missing"
+    summary_line = summary_lines[-1]
+    assert "rows=0" in summary_line
+    assert "fetch_secs=1.10" in summary_line
+    assert "feature_secs=2.20" in summary_line
+    assert "rank_secs=3.30" in summary_line
+    assert "gate_secs=4.40" in summary_line
+    assert "step_rcs=" in summary_line
+
+    skip_lines = [msg for msg in messages if "EXECUTE_SKIP_NO_CANDIDATES" in msg]
+    assert skip_lines == ["[INFO] EXECUTE_SKIP_NO_CANDIDATES rows=0"]

@@ -421,7 +421,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     artifacts_written = False
     latest_refreshed = False
     pipeline_metrics: dict[str, Any] = {}
-    candidate_rows = 0
+    latest_path = pathlib.Path("data") / "latest_candidates.csv"
+    candidate_rows = _count_candidate_rows(latest_path)
     step_durations: dict[str, float] = {}
     step_rcs: dict[str, int] = {}
 
@@ -435,7 +436,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             rc = rc_scr if rc == 0 else rc
         try:
             pipeline_metrics = refresh_latest_candidates()
-            candidate_rows = int(pipeline_metrics.get("rows", 0))
+            candidate_rows = _count_candidate_rows(latest_path)
             emit_metric("CANDIDATE_ROWS", candidate_rows)
             artifacts_written = True
             latest_refreshed = True
@@ -446,29 +447,34 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if not latest_refreshed:
             try:
                 pipeline_metrics = refresh_latest_candidates()
-                candidate_rows = int(pipeline_metrics.get("rows", 0))
+                candidate_rows = _count_candidate_rows(latest_path)
                 emit_metric("CANDIDATE_ROWS", candidate_rows)
                 latest_refreshed = True
             except Exception as exc:  # pragma: no cover - defensive safeguard
                 LOG.error("[INFO] failed to refresh artifacts before EXECUTE step: %s", exc)
-        step_start = time.time()
-        rc_exec = run_execute_step(execute_cmd(), candidate_rows=candidate_rows)
-        step_durations["execute"] = round(time.time() - step_start, 2)
-        step_rcs["execute"] = rc_exec
-        if EXECUTE_METRICS_PATH.exists():
-            try:
-                execute_metrics = json.loads(
-                    EXECUTE_METRICS_PATH.read_text(encoding="utf-8")
-                )
-            except Exception as exc:  # pragma: no cover - defensive metrics parsing
-                LOG.warning("[INFO] failed to read execute metrics: %s", exc)
-            else:
-                LOG.info(
-                    "EXECUTE SUMMARY %s",
-                    json.dumps(execute_metrics, sort_keys=True),
-                )
-        if rc_exec != 0 and rc == 0:
-            rc = rc_exec
+        if candidate_rows == 0:
+            LOG.info("[INFO] EXECUTE_SKIP_NO_CANDIDATES rows=0")
+            step_rcs["execute"] = 0
+            step_durations["execute"] = 0.0
+        else:
+            step_start = time.time()
+            rc_exec = run_execute_step(execute_cmd(), candidate_rows=candidate_rows)
+            step_durations["execute"] = round(time.time() - step_start, 2)
+            step_rcs["execute"] = rc_exec
+            if EXECUTE_METRICS_PATH.exists():
+                try:
+                    execute_metrics = json.loads(
+                        EXECUTE_METRICS_PATH.read_text(encoding="utf-8")
+                    )
+                except Exception as exc:  # pragma: no cover - defensive metrics parsing
+                    LOG.warning("[INFO] failed to read execute metrics: %s", exc)
+                else:
+                    LOG.info(
+                        "EXECUTE SUMMARY %s",
+                        json.dumps(execute_metrics, sort_keys=True),
+                    )
+            if rc_exec != 0 and rc == 0:
+                rc = rc_exec
 
     if "backtest" in steps:
         step_start = time.time()
@@ -489,27 +495,46 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if not artifacts_written:
         try:
             pipeline_metrics = refresh_latest_candidates()
-            candidate_rows = int(pipeline_metrics.get("rows", 0))
+            candidate_rows = _count_candidate_rows(latest_path)
             emit_metric("CANDIDATE_ROWS", candidate_rows)
         except Exception as exc:  # pragma: no cover - defensive safeguard
             LOG.error("[INFO] final artifact refresh failed: %s", exc)
 
     duration = time.time() - start
     LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
-    summary_payload = {
-        "symbols_in": int(pipeline_metrics.get("symbols_in", 0)),
-        "with_bars": int(pipeline_metrics.get("symbols_with_bars", 0)),
-        "rows": int(pipeline_metrics.get("rows", candidate_rows)),
-        "durations": step_durations,
-        "step_rcs": step_rcs,
-    }
+    rows_value = candidate_rows
+    if rows_value == 0:
+        try:
+            rows_value = int(pipeline_metrics.get("rows", 0))
+        except Exception:
+            rows_value = 0
+    timings_view = {}
+    if isinstance(pipeline_metrics.get("timings"), Mapping):
+        timings_view = dict(pipeline_metrics.get("timings", {}))
+
+    def _safe_float(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    fetch_secs = _safe_float(timings_view.get("fetch_secs"))
+    feature_secs = _safe_float(timings_view.get("feature_secs"))
+    rank_secs = _safe_float(timings_view.get("rank_secs"))
+    gate_secs = _safe_float(timings_view.get("gates_secs"))
+
+    symbols_in = int(pipeline_metrics.get("symbols_in", 0) or 0)
+    with_bars = int(pipeline_metrics.get("symbols_with_bars", 0) or 0)
     LOG.info(
-        "[INFO] PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s durations=%s step_rcs=%s",
-        summary_payload["symbols_in"],
-        summary_payload["with_bars"],
-        summary_payload["rows"],
-        json.dumps(summary_payload["durations"], sort_keys=True, separators=(",", ":")),
-        json.dumps(summary_payload["step_rcs"], sort_keys=True, separators=(",", ":")),
+        "[INFO] PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s fetch_secs=%.2f feature_secs=%.2f rank_secs=%.2f gate_secs=%.2f step_rcs=%s",
+        symbols_in,
+        with_bars,
+        rows_value,
+        fetch_secs,
+        feature_secs,
+        rank_secs,
+        gate_secs,
+        json.dumps(step_rcs, sort_keys=True, separators=(",", ":")),
     )
     _record_health("end")
 
