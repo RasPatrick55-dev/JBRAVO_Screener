@@ -356,13 +356,13 @@ def _mk_why_tooltip(row: dict) -> dict:
 
     md.append("**Raw indicators:**")
     raw_lines = [
-        _indicator_line("Close", close, lambda v: f"{float(v):.2f}"),
-        _indicator_line("RSI14", rsi14, lambda v: f"{float(v):.2f}"),
-        _indicator_line("ADX", adx, lambda v: f"{float(v):.2f}"),
+        _indicator_line("Close", close, lambda v: "{:.2f}".format(float(v))),
+        _indicator_line("RSI14", rsi14, lambda v: "{:.2f}".format(float(v))),
+        _indicator_line("ADX", adx, lambda v: "{:.2f}".format(float(v))),
     ]
 
-    up_str = _format_value(aup, lambda v: f"{float(v):.1f}")
-    dn_str = _format_value(adn, lambda v: f"{float(v):.1f}")
+    up_str = _format_value(aup, lambda v: "{:.1f}".format(float(v)))
+    dn_str = _format_value(adn, lambda v: "{:.1f}".format(float(v)))
     if up_str == "n/a" and dn_str == "n/a":
         raw_lines.append("- Aroon Up/Dn: `n/a`")
     else:
@@ -370,8 +370,8 @@ def _mk_why_tooltip(row: dict) -> dict:
 
     raw_lines.extend(
         [
-            _indicator_line("MACD Hist", mh, lambda v: f"{float(v):.4f}"),
-            _indicator_line("ATR%", atrp, lambda v: f"{float(v):.2%}"),
+            _indicator_line("MACD Hist", mh, lambda v: "{:.4f}".format(float(v))),
+            _indicator_line("ATR%", atrp, lambda v: "{:.2%}".format(float(v))),
             _indicator_line("ADV20", adv20, _fmt_millions),
         ]
     )

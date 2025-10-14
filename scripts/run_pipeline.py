@@ -1,19 +1,24 @@
 import argparse
+import csv
 import json
 import logging
-import csv
 import os
 import pathlib
 import shlex
 import subprocess
 import sys
 import time
-from pathlib import Path
 from datetime import datetime, timezone
-from shutil import copyfile
+from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Optional
 
-from scripts.fallback_candidates import ensure_min_candidates
+import pandas as pd
+
+from scripts.fallback_candidates import (
+    ensure_min_candidates,
+    prepare_latest_candidates,
+    REQUIRED as CANDIDATE_REQUIRED,
+)
 from scripts.health_check import run_health_check
 from utils.env import (
     AlpacaCredentialsError,
@@ -32,7 +37,6 @@ EXECUTE_METRICS_PATH = pathlib.Path("data") / "execute_metrics.json"
 PIPELINE_METRICS_PATH = pathlib.Path("data") / "pipeline_metrics.json"
 SCREENER_ARGS_ENV = "JBR_SCREENER_ARGS"
 SCREENER_EXTRA_ARGS: list[str] = []
-LATEST_HEADER = "timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown\n"
 
 
 def configure_logging() -> None:
@@ -196,15 +200,32 @@ def refresh_latest_candidates() -> dict[str, Any]:
     dst = os.path.join("data", "latest_candidates.csv")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
 
+    row_count = 0
     if os.path.exists(src):
-        copyfile(src, dst)
+        try:
+            df = pd.read_csv(src)
+        except Exception as exc:
+            LOG.error("[INFO] failed to read %s: %s", src, exc)
+            df = pd.DataFrame(columns=CANDIDATE_REQUIRED)
+        prepared = prepare_latest_candidates(df, "screener", canonicalize=True)
+        prepared.to_csv(dst, index=False)
+        row_count = len(prepared)
         try:
             size = os.path.getsize(dst)
         except OSError:  # pragma: no cover - defensive guard
             size = 0
-        LOG.info("[INFO] refreshed latest_candidates.csv (size=%s)", size)
+        LOG.info(
+            "[INFO] refreshed latest_candidates.csv rows=%s size=%s",
+            row_count,
+            size,
+        )
     else:
-        pathlib.Path(dst).write_text(LATEST_HEADER, encoding="utf-8")
+        empty = prepare_latest_candidates(
+            pd.DataFrame(columns=CANDIDATE_REQUIRED),
+            "screener",
+            canonicalize=True,
+        )
+        empty.to_csv(dst, index=False)
         LOG.info("[INFO] top_candidates.csv missing; wrote header-only latest_candidates.csv")
 
     metrics_path = pathlib.Path("data/screener_metrics.json")
@@ -218,7 +239,8 @@ def refresh_latest_candidates() -> dict[str, Any]:
         except Exception as exc:  # pragma: no cover - defensive parsing
             LOG.warning("[INFO] could not parse screener_metrics.json: %s", exc)
     merged = _merge_metrics_defaults(existing)
-    row_count = _count_candidate_rows(pathlib.Path(dst))
+    if row_count == 0:
+        row_count = _count_candidate_rows(pathlib.Path(dst))
     merged["last_run_utc"] = datetime.now(timezone.utc).isoformat()
     merged["rows"] = row_count
     status_value = str(merged.get("status") or "").upper()
@@ -432,7 +454,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     def maybe_run_fallback() -> tuple[int, str]:
         nonlocal candidate_rows, fallback_rows, fallback_reason
         if fallback_rows is None:
-            fallback_rows, fallback_reason = ensure_min_candidates(BASE_DIR, min_rows=1)
+            fallback_rows, fallback_reason = ensure_min_candidates(
+                BASE_DIR, min_rows=1, canonicalize=True
+            )
             LOG.info(
                 "[INFO] FALLBACK_CHECK rows_out=%s reason=%s",
                 fallback_rows,

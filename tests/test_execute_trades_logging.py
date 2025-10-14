@@ -181,6 +181,8 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     rc = executor.execute(df)
     assert rc == 0
     log_text = "\n".join(caplog.messages)
+    tokens = ("[INFO] EXEC_START", "[INFO] EXECUTE_SUMMARY", "[INFO] TIME_WINDOW")
+    assert any(token in log_text for token in tokens)
     assert "[INFO] TIME_WINDOW outside premarket (NY)" in log_text
     assert (
         "[INFO] EXECUTE_SUMMARY orders_submitted=0 trailing_attached=0 "
