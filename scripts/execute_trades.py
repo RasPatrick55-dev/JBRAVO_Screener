@@ -1104,18 +1104,15 @@ class TradeExecutor:
         if not candidates:
             LOGGER.info("No candidates passed guardrails; nothing to do.")
             self.persist_metrics()
+            self.log_summary()
             return 0
 
         allowed, status = self.evaluate_time_window()
         if not allowed:
             self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
-            skip_count = int(self.metrics.skipped_reasons.get("TIME_WINDOW", 0))
-            LOGGER.info(
-                "[INFO] EXECUTE_SUMMARY orders_submitted=%d skipped.TIME_WINDOW=%d",
-                self.metrics.orders_submitted,
-                skip_count,
-            )
+            LOGGER.info("[INFO] TIME_WINDOW %s", status)
             self.persist_metrics()
+            self.log_summary()
             return 0
 
         if self.config.dry_run:
@@ -1163,6 +1160,7 @@ class TradeExecutor:
                 open_order_symbols.add(symbol)
 
         self.persist_metrics()
+        self.log_summary()
         return 0
 
     def fetch_existing_positions(self) -> set[str]:
@@ -1339,6 +1337,7 @@ class TradeExecutor:
             trail_display = str(int(trail_value))
         else:
             trail_display = f"{trail_value:g}"
+        LOGGER.info("[INFO] TRAIL_SUBMIT symbol=%s trail_pct=%s", symbol, trail_display)
         LOGGER.info(
             "[INFO] TRAIL_SUBMIT symbol=%s trail_pct=%s route=trailing_stop",
             symbol,
@@ -1391,6 +1390,18 @@ class TradeExecutor:
         if last_error is not None:
             self.log_event("API_FAILURE", error=str(last_error))
         return None
+
+    def log_summary(self) -> None:
+        skips = self.metrics.skipped_reasons
+        LOGGER.info(
+            "[INFO] EXECUTE_SUMMARY orders_submitted=%d trailing_attached=%d "
+            "skips.TIME_WINDOW=%d skips.OPEN_ORDER=%d skips.EXISTING_POSITION=%d",
+            self.metrics.orders_submitted,
+            self.metrics.trailing_attached,
+            int(skips.get("TIME_WINDOW", 0)),
+            int(skips.get("OPEN_ORDER", 0)),
+            int(skips.get("EXISTING_POSITION", 0)),
+        )
 
     def persist_metrics(self) -> None:
         payload = self.metrics.as_dict()
@@ -1555,9 +1566,9 @@ def run_executor(config: ExecutorConfig, *, client: Optional[Any] = None) -> int
 
     candidates = int(frame.shape[0])
     LOGGER.info(
-        "[INFO] EXEC_START dry_run=%s time_window=%s candidates=%d",
-        config.dry_run,
-        config.time_window,
+        "[INFO] EXEC_START dry_run=%s time_window=%s candidates=%s",
+        bool(config.dry_run),
+        config.time_window or "any",
         candidates,
     )
 
