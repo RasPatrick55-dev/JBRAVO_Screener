@@ -26,6 +26,7 @@ LOG = logging.getLogger("pipeline")
 LOG_PATH = pathlib.Path("logs") / "pipeline.log"
 EVENTS_PATH = pathlib.Path("logs") / "execute_events.jsonl"
 EXECUTE_METRICS_PATH = pathlib.Path("data") / "execute_metrics.json"
+PIPELINE_METRICS_PATH = pathlib.Path("data") / "pipeline_metrics.json"
 SCREENER_ARGS_ENV = "JBR_SCREENER_ARGS"
 SCREENER_EXTRA_ARGS: list[str] = []
 LATEST_HEADER = "timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown\n"
@@ -116,6 +117,25 @@ def emit(event: str, **payload: Any) -> None:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def emit_metric(name: str, value: Any) -> None:
+    """Persist a lightweight pipeline metric and log it."""
+
+    LOG.info("[INFO] METRIC %s value=%s", name, value)
+    emit("METRIC", name=name, value=value)
+    try:
+        existing: dict[str, Any] = {}
+        if PIPELINE_METRICS_PATH.exists():
+            existing_payload = json.loads(PIPELINE_METRICS_PATH.read_text(encoding="utf-8"))
+            if isinstance(existing_payload, dict):
+                existing.update(existing_payload)
+        existing[str(name)] = value
+        existing["last_update_utc"] = datetime.now(timezone.utc).isoformat()
+        PIPELINE_METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PIPELINE_METRICS_PATH.write_text(json.dumps(existing, sort_keys=True), encoding="utf-8")
+    except Exception as exc:  # pragma: no cover - best-effort metric cache
+        LOG.debug("[INFO] emit_metric failed to persist %s: %s", name, exc)
+
+
 def _merge_metrics_defaults(base: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
     defaults: Mapping[str, Any] = {
         "last_run_utc": "",
@@ -153,7 +173,20 @@ def _merge_metrics_defaults(base: MutableMapping[str, Any]) -> MutableMapping[st
     return base
 
 
-def refresh_latest_candidates() -> None:
+def _count_candidate_rows(path: pathlib.Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)
+            return sum(1 for row in reader if any(field.strip() for field in row))
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOG.warning("[INFO] failed to count rows in %s: %s", path, exc)
+        return 0
+
+
+def refresh_latest_candidates() -> dict[str, Any]:
     """Refresh ``latest_candidates.csv`` and ensure metrics scaffolding exists."""
 
     src = os.path.join("data", "top_candidates.csv")
@@ -182,10 +215,25 @@ def refresh_latest_candidates() -> None:
         except Exception as exc:  # pragma: no cover - defensive parsing
             LOG.warning("[INFO] could not parse screener_metrics.json: %s", exc)
     merged = _merge_metrics_defaults(existing)
+    row_count = _count_candidate_rows(pathlib.Path(dst))
     merged["last_run_utc"] = datetime.now(timezone.utc).isoformat()
+    merged["rows"] = row_count
+    status_value = str(merged.get("status") or "").upper()
+    if row_count == 0:
+        if status_value in ("", "OK", "ZERO_CANDIDATES"):
+            merged["status"] = "ZERO_CANDIDATES"
+        merged["candidate_reason"] = "ZERO_CANDIDATES"
+    else:
+        if status_value == "ZERO_CANDIDATES":
+            merged["status"] = "ok"
+        merged["candidate_reason"] = "HAVE_CANDIDATES"
     metrics_path.write_text(json.dumps(merged, indent=2, sort_keys=True), encoding="utf-8")
 
-    write_metrics_summary()
+    write_metrics_summary(
+        overrides={"rows": row_count, "status": merged.get("status", "ok")}
+    )
+
+    return dict(merged)
 
 
 def copy_latest_candidates() -> None:  # pragma: no cover - backward compatibility alias
@@ -289,14 +337,18 @@ def latest_candidates_has_rows(path: pathlib.Path) -> bool:
     return False
 
 
-def run_execute_step(cmd: list[str]) -> int:
+def run_execute_step(cmd: list[str], *, candidate_rows: int | None = None) -> int:
     latest_path = pathlib.Path("data") / "latest_candidates.csv"
     cmd_str = " ".join(shlex.quote(part) for part in cmd)
     start = time.time()
     LOG.info("[INFO] START EXECUTE %s", cmd_str)
-    if not latest_candidates_has_rows(latest_path):
+    if candidate_rows is None:
+        has_rows = latest_candidates_has_rows(latest_path)
+    else:
+        has_rows = candidate_rows > 0
+    if not has_rows:
         duration = time.time() - start
-        LOG.info("[INFO] EXECUTE SKIPPED: NO CANDIDATES")
+        LOG.info("[INFO] EXECUTE_SKIP_NO_CANDIDATES rows=0")
         LOG.info("[INFO] END EXECUTE rc=0 duration=%.1fs", duration)
         return 0
 
@@ -368,14 +420,23 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     start = time.time()
     artifacts_written = False
     latest_refreshed = False
+    pipeline_metrics: dict[str, Any] = {}
+    candidate_rows = 0
+    step_durations: dict[str, float] = {}
+    step_rcs: dict[str, int] = {}
 
     if "screener" in steps:
+        step_start = time.time()
         rc_scr = run_cmd(screener_cmd(), "SCREENER")
+        step_durations["screener"] = round(time.time() - step_start, 2)
+        step_rcs["screener"] = rc_scr
         if rc_scr != 0:
             LOG.error("[INFO] SCREENER failed rc=%s; continuing to write minimal artifacts", rc_scr)
             rc = rc_scr if rc == 0 else rc
         try:
-            refresh_latest_candidates()
+            pipeline_metrics = refresh_latest_candidates()
+            candidate_rows = int(pipeline_metrics.get("rows", 0))
+            emit_metric("CANDIDATE_ROWS", candidate_rows)
             artifacts_written = True
             latest_refreshed = True
         except Exception as exc:  # pragma: no cover - defensive safeguard
@@ -384,11 +445,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if "execute" in steps:
         if not latest_refreshed:
             try:
-                refresh_latest_candidates()
+                pipeline_metrics = refresh_latest_candidates()
+                candidate_rows = int(pipeline_metrics.get("rows", 0))
+                emit_metric("CANDIDATE_ROWS", candidate_rows)
                 latest_refreshed = True
             except Exception as exc:  # pragma: no cover - defensive safeguard
                 LOG.error("[INFO] failed to refresh artifacts before EXECUTE step: %s", exc)
-        rc_exec = run_execute_step(execute_cmd())
+        step_start = time.time()
+        rc_exec = run_execute_step(execute_cmd(), candidate_rows=candidate_rows)
+        step_durations["execute"] = round(time.time() - step_start, 2)
+        step_rcs["execute"] = rc_exec
         if EXECUTE_METRICS_PATH.exists():
             try:
                 execute_metrics = json.loads(
@@ -405,23 +471,46 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             rc = rc_exec
 
     if "backtest" in steps:
+        step_start = time.time()
         rc_bt = run_cmd([sys.executable, "-m", "scripts.backtest"], "BACKTEST")
+        step_durations["backtest"] = round(time.time() - step_start, 2)
+        step_rcs["backtest"] = rc_bt
         if rc_bt != 0 and rc == 0:
             rc = rc_bt
 
     if "metrics" in steps:
+        step_start = time.time()
         rc_mx = run_cmd([sys.executable, "-m", "scripts.metrics"], "METRICS")
+        step_durations["metrics"] = round(time.time() - step_start, 2)
+        step_rcs["metrics"] = rc_mx
         if rc_mx != 0 and rc == 0:
             rc = rc_mx
 
     if not artifacts_written:
         try:
-            refresh_latest_candidates()
+            pipeline_metrics = refresh_latest_candidates()
+            candidate_rows = int(pipeline_metrics.get("rows", 0))
+            emit_metric("CANDIDATE_ROWS", candidate_rows)
         except Exception as exc:  # pragma: no cover - defensive safeguard
             LOG.error("[INFO] final artifact refresh failed: %s", exc)
 
     duration = time.time() - start
     LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
+    summary_payload = {
+        "symbols_in": int(pipeline_metrics.get("symbols_in", 0)),
+        "with_bars": int(pipeline_metrics.get("symbols_with_bars", 0)),
+        "rows": int(pipeline_metrics.get("rows", candidate_rows)),
+        "durations": step_durations,
+        "step_rcs": step_rcs,
+    }
+    LOG.info(
+        "[INFO] PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s durations=%s step_rcs=%s",
+        summary_payload["symbols_in"],
+        summary_payload["with_bars"],
+        summary_payload["rows"],
+        json.dumps(summary_payload["durations"], sort_keys=True, separators=(",", ":")),
+        json.dumps(summary_payload["step_rcs"], sort_keys=True, separators=(",", ":")),
+    )
     _record_health("end")
 
     if args.reload_web.lower() == "true":

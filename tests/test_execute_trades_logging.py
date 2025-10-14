@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pandas as pd
 import pytest
@@ -104,15 +105,19 @@ def test_compute_quantity_caps_by_buying_power():
     assert compute_quantity(1000, 0.5, 10) == 50
 
 
-def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch):
+def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch, caplog):
     csv_path = tmp_path / "candidates.csv"
     csv_path.write_text("symbol,close,score,universe_count,score_breakdown\n", encoding="utf-8")
     config = ExecutorConfig(source=csv_path, dry_run=True)
+    caplog.set_level(logging.INFO, logger="execute_trades")
+    caplog.clear()
     rc = run_executor(config, client=StubTradingClient())
     assert rc == 0
     metrics_payload = json.loads(execute_mod.METRICS_PATH.read_text(encoding="utf-8"))
     assert metrics_payload["symbols_in"] == 0
     assert metrics_payload["orders_submitted"] == 0
+    logs = "\n".join(caplog.messages)
+    assert "[INFO] EXEC_START dry_run=True time_window=premarket candidates=0" in logs
 
 
 def test_execute_flow_attaches_trailing_stop(tmp_path):
@@ -146,3 +151,35 @@ def test_execute_flow_attaches_trailing_stop(tmp_path):
     assert metrics.trailing_attached == 1
     assert metrics.orders_filled == 1
     assert client.trailing_orders, "Trailing stop should have been submitted"
+
+
+def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
+    csv_path = tmp_path / "candidates.csv"
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "TSLA",
+                "close": 200.0,
+                "score": 3.2,
+                "universe_count": 50,
+                "score_breakdown": "{}",
+            }
+        ]
+    )
+    frame.to_csv(csv_path, index=False)
+    config = ExecutorConfig(source=csv_path, dry_run=True)
+    metrics = ExecutionMetrics()
+    executor = TradeExecutor(config, None, metrics, sleep_fn=lambda *_: None)
+    df = executor.load_candidates()
+    caplog.set_level(logging.INFO, logger="execute_trades")
+    caplog.clear()
+
+    def fake_window(self):
+        return False, "outside premarket (NY)"
+
+    monkeypatch.setattr(execute_mod.TradeExecutor, "evaluate_time_window", fake_window)
+    rc = executor.execute(df)
+    assert rc == 0
+    log_text = "\n".join(caplog.messages)
+    assert "[INFO] TIME_WINDOW outside premarket (NY)" in log_text
+    assert "[INFO] EXECUTE_SUMMARY orders_submitted=0 skipped.TIME_WINDOW=1" in log_text

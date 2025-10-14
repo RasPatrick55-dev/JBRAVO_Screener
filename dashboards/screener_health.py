@@ -69,6 +69,7 @@ HIST_CSV = DATA_DIR / "screener_metrics_history.csv"
 PRED_LATEST = DATA_DIR / "predictions" / "latest.csv"
 RANKER_EVAL_LATEST = DATA_DIR / "ranker_eval" / "latest.json"
 METRICS_SUMMARY_CSV = DATA_DIR / "metrics_summary.csv"
+EXECUTE_METRICS_JSON = DATA_DIR / "execute_metrics.json"
 
 
 def _format_probe_timestamp(raw: Any) -> str:
@@ -196,6 +197,43 @@ def _safe_csv(path: pathlib.Path, nrows: int | None = None) -> pd.DataFrame:
     except Exception as exc:  # pragma: no cover - defensive
         _warn_once("csv_error", path, "Failed to read CSV artifact %s: %s", path, exc)
     return pd.DataFrame()
+
+
+def _extract_last_line(text: str, token: str) -> str:
+    if not isinstance(text, str):
+        return ""
+    for line in reversed(text.splitlines()):
+        if token in line:
+            return line.strip()
+    return ""
+
+
+def _parse_pipeline_summary(text: str) -> dict[str, Any]:
+    if not isinstance(text, str):
+        return {}
+    for line in reversed(text.splitlines()):
+        if "PIPELINE_SUMMARY" not in line:
+            continue
+        tail = line.split("PIPELINE_SUMMARY", 1)[1].strip()
+        summary: dict[str, Any] = {}
+        for part in tail.split():
+            if "=" not in part:
+                continue
+            key, value = part.split("=", 1)
+            parsed: Any = value
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                try:
+                    parsed = int(value)
+                except ValueError:
+                    try:
+                        parsed = float(value)
+                    except ValueError:
+                        parsed = value
+            summary[key] = parsed
+        return summary
+    return {}
 
 
 def _tail(path: pathlib.Path, lines: int = 200) -> str:
@@ -445,7 +483,13 @@ def build_layout():
                                  style={"maxHeight":"220px","overflow":"auto",
                                         "background":"#0b0b0b","color":"#cfcfcf","padding":"8px"})
                     ]),
-                ], style={"display":"grid","gridTemplateColumns":"2fr 1fr 1fr","gap":"12px"})
+                    html.Div([
+                        html.H4("Pipeline Summary"),
+                        html.Pre(id="sh-pipeline-panel",
+                                 style={"maxHeight":"220px","overflow":"auto",
+                                        "background":"#0b0b0b","color":"#cfcfcf","padding":"8px"})
+                    ]),
+                ], style={"display":"grid","gridTemplateColumns":"2fr 1fr 1fr 1fr","gap":"12px"})
             ]),
         ],
         style={"padding":"12px"}
@@ -542,6 +586,7 @@ def register_callbacks(app):
         Output("sh-preds-head","children"),
         Output("sh-screener-log","children"),
         Output("sh-pipeline-log","children"),
+        Output("sh-pipeline-panel","children"),
         Input("sh-metrics-store","data"),
         Input("sh-top-store","data"),
         Input("sh-hist-store","data"),
@@ -562,6 +607,18 @@ def register_callbacks(app):
             health = {}
         if not isinstance(summary, Mapping):
             summary = {}
+
+        exec_metrics = _safe_json(EXECUTE_METRICS_JSON)
+        if not isinstance(exec_metrics, Mapping):
+            exec_metrics = {}
+        skips_view = exec_metrics.get("skips") if isinstance(exec_metrics, Mapping) else {}
+        if isinstance(skips_view, Mapping):
+            try:
+                time_window_skips = int(skips_view.get("TIME_WINDOW", 0) or 0)
+            except (TypeError, ValueError):
+                time_window_skips = 0
+        else:
+            time_window_skips = 0
 
         # ---------------- KPIs ----------------
         def _card(title, value, sub=None):
@@ -597,13 +654,19 @@ def register_callbacks(app):
         sym_bars = int(m.get("symbols_with_bars", 0) or 0)
         bars_tot = int(m.get("bars_rows_total", 0) or 0)
         rows     = int(m.get("rows", 0) or 0)
+        candidate_reason = str(
+            (m.get("candidate_reason") or m.get("status") or "")
+        ).strip().upper()
+        candidate_sub = ""
+        if rows == 0 and candidate_reason:
+            candidate_sub = f"reason: {candidate_reason}"
         kpis = html.Div([
             health_card,
             _card("Last Run (UTC)", last_run),
             _card("Symbols In", f"{sym_in:,}"),
             _card("With Bars", f"{sym_bars:,}", f"{(sym_bars/max(sym_in,1))*100:.1f}%"),
             _card("Bar Rows", f"{bars_tot:,}"),
-            _card("Candidates", f"{rows:,}"),
+            _card("Candidates", f"{rows:,}", candidate_sub or None),
         ], className="sh-kpi-wrap",
            style={"display":"grid","gridTemplateColumns":"repeat(6, minmax(140px,1fr))","gap":"10px","marginBottom":"12px"})
 
@@ -681,6 +744,33 @@ def register_callbacks(app):
         preds_head = preds.to_csv(index=False) if not preds.empty else "(no predictions yet)"
         s_tail = _tail(LOG_DIR / "screener.log", 180)
         p_tail = _tail(LOG_DIR / "pipeline.log", 180)
+        pipeline_summary = _parse_pipeline_summary(p_tail)
+        skip_line = _extract_last_line(p_tail, "EXECUTE_SKIP_NO_CANDIDATES")
+        panel_lines: list[str] = []
+        if isinstance(pipeline_summary, Mapping) and pipeline_summary:
+            try:
+                sym_block = (
+                    f"symbols_in={int(pipeline_summary.get('symbols_in', 0) or 0)} "
+                    f"with_bars={int(pipeline_summary.get('with_bars', 0) or 0)} "
+                    f"rows={int(pipeline_summary.get('rows', 0) or 0)}"
+                )
+            except Exception:
+                sym_block = f"summary={json.dumps(pipeline_summary, sort_keys=True)}"
+            panel_lines.append(sym_block)
+            durations_view = pipeline_summary.get("durations")
+            if isinstance(durations_view, Mapping) and durations_view:
+                panel_lines.append("durations=" + json.dumps(durations_view, sort_keys=True))
+            elif isinstance(durations_view, str) and durations_view:
+                panel_lines.append("durations=" + durations_view)
+            step_rcs_view = pipeline_summary.get("step_rcs")
+            if isinstance(step_rcs_view, Mapping) and step_rcs_view:
+                panel_lines.append("step_rcs=" + json.dumps(step_rcs_view, sort_keys=True))
+            elif isinstance(step_rcs_view, str) and step_rcs_view:
+                panel_lines.append("step_rcs=" + step_rcs_view)
+        if skip_line:
+            panel_lines.append(skip_line)
+        panel_lines.append(f"TIME_WINDOW skips={time_window_skips}")
+        pipeline_panel = "\n".join(panel_lines) if panel_lines else "(no data)"
 
         unauthorized_log = "ALPACA_UNAUTHORIZED" in (p_tail or "")
         if summary_status == "auth_error" or unauthorized_log:
@@ -808,4 +898,5 @@ def register_callbacks(app):
             preds_head,
             s_tail,
             p_tail,
+            pipeline_panel,
         )
