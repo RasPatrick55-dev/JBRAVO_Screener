@@ -8,10 +8,12 @@ import shlex
 import subprocess
 import sys
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 from shutil import copyfile
 from typing import Any, Iterable, Mapping, MutableMapping, Optional
 
+from scripts.fallback_candidates import ensure_min_candidates
 from scripts.health_check import run_health_check
 from utils.env import (
     AlpacaCredentialsError,
@@ -23,6 +25,7 @@ from utils.env import (
 
 
 LOG = logging.getLogger("pipeline")
+BASE_DIR = Path(__file__).resolve().parents[1]
 LOG_PATH = pathlib.Path("logs") / "pipeline.log"
 EVENTS_PATH = pathlib.Path("logs") / "execute_events.jsonl"
 EXECUTE_METRICS_PATH = pathlib.Path("data") / "execute_metrics.json"
@@ -423,6 +426,21 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     pipeline_metrics: dict[str, Any] = {}
     latest_path = pathlib.Path("data") / "latest_candidates.csv"
     candidate_rows = _count_candidate_rows(latest_path)
+    fallback_rows: int | None = None
+    fallback_reason = "na"
+
+    def maybe_run_fallback() -> tuple[int, str]:
+        nonlocal candidate_rows, fallback_rows, fallback_reason
+        if fallback_rows is None:
+            fallback_rows, fallback_reason = ensure_min_candidates(BASE_DIR, min_rows=1)
+            LOG.info(
+                "[INFO] FALLBACK_CHECK rows_out=%s reason=%s",
+                fallback_rows,
+                fallback_reason,
+            )
+            candidate_rows = _count_candidate_rows(latest_path)
+        return fallback_rows, fallback_reason
+
     step_durations: dict[str, float] = {}
     step_rcs: dict[str, int] = {}
 
@@ -440,6 +458,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             emit_metric("CANDIDATE_ROWS", candidate_rows)
             artifacts_written = True
             latest_refreshed = True
+            maybe_run_fallback()
         except Exception as exc:  # pragma: no cover - defensive safeguard
             LOG.error("[INFO] failed to refresh screener artifacts after SCREENER step: %s", exc)
 
@@ -450,9 +469,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 candidate_rows = _count_candidate_rows(latest_path)
                 emit_metric("CANDIDATE_ROWS", candidate_rows)
                 latest_refreshed = True
+                maybe_run_fallback()
             except Exception as exc:  # pragma: no cover - defensive safeguard
                 LOG.error("[INFO] failed to refresh artifacts before EXECUTE step: %s", exc)
-        if candidate_rows == 0:
+        rows_out, _ = maybe_run_fallback()
+        if rows_out == 0:
+            LOG.info("[INFO] EXECUTE_SKIP_NO_CANDIDATES rows=0")
+            steps = [s for s in steps if s != "execute"]
+            step_rcs["execute"] = 0
+            step_durations["execute"] = 0.0
+        elif candidate_rows == 0:
             LOG.info("[INFO] EXECUTE_SKIP_NO_CANDIDATES rows=0")
             step_rcs["execute"] = 0
             step_durations["execute"] = 0.0
@@ -497,44 +523,45 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             pipeline_metrics = refresh_latest_candidates()
             candidate_rows = _count_candidate_rows(latest_path)
             emit_metric("CANDIDATE_ROWS", candidate_rows)
+            maybe_run_fallback()
         except Exception as exc:  # pragma: no cover - defensive safeguard
             LOG.error("[INFO] final artifact refresh failed: %s", exc)
 
+    maybe_run_fallback()
     duration = time.time() - start
     LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
-    rows_value = candidate_rows
-    if rows_value == 0:
+    sm_path = BASE_DIR / "data" / "screener_metrics.json"
+    sym_in = with_bars = rows = "na"
+    fetch_secs = feat_secs = rank_secs = gates_secs = "na"
+    metrics_source: dict[str, Any] = {}
+    if isinstance(pipeline_metrics, Mapping) and pipeline_metrics:
+        metrics_source = dict(pipeline_metrics)
+    if not metrics_source and sm_path.exists():
         try:
-            rows_value = int(pipeline_metrics.get("rows", 0))
+            loaded = json.loads(sm_path.read_text())
         except Exception:
-            rows_value = 0
-    timings_view = {}
-    if isinstance(pipeline_metrics.get("timings"), Mapping):
-        timings_view = dict(pipeline_metrics.get("timings", {}))
-
-    def _safe_float(value: Any) -> float:
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return 0.0
-
-    fetch_secs = _safe_float(timings_view.get("fetch_secs"))
-    feature_secs = _safe_float(timings_view.get("feature_secs"))
-    rank_secs = _safe_float(timings_view.get("rank_secs"))
-    gate_secs = _safe_float(timings_view.get("gates_secs"))
-
-    symbols_in = int(pipeline_metrics.get("symbols_in", 0) or 0)
-    with_bars = int(pipeline_metrics.get("symbols_with_bars", 0) or 0)
+            loaded = None
+        if isinstance(loaded, Mapping):
+            metrics_source = dict(loaded)
+    if metrics_source:
+        sym_in = metrics_source.get("symbols_in", "na")
+        with_bars = metrics_source.get("symbols_with_bars", "na")
+        rows = metrics_source.get("rows", "na")
+        timings = metrics_source.get("timings", {})
+        if isinstance(timings, Mapping):
+            fetch_secs = timings.get("fetch_secs", "na")
+            feat_secs = timings.get("feature_secs", "na")
+            rank_secs = timings.get("rank_secs", "na")
+            gates_secs = timings.get("gates_secs", "na")
     LOG.info(
-        "[INFO] PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s fetch_secs=%.2f feature_secs=%.2f rank_secs=%.2f gate_secs=%.2f step_rcs=%s",
-        symbols_in,
+        "[INFO] PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s fetch_secs=%s feature_secs=%s rank_secs=%s gate_secs=%s",
+        sym_in,
         with_bars,
-        rows_value,
+        rows,
         fetch_secs,
-        feature_secs,
+        feat_secs,
         rank_secs,
-        gate_secs,
-        json.dumps(step_rcs, sort_keys=True, separators=(",", ":")),
+        gates_secs,
     )
     _record_health("end")
 

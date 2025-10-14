@@ -182,4 +182,8 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     assert rc == 0
     log_text = "\n".join(caplog.messages)
     assert "[INFO] TIME_WINDOW outside premarket (NY)" in log_text
-    assert "[INFO] EXECUTE_SUMMARY orders_submitted=0 skipped.TIME_WINDOW=1" in log_text
+    assert (
+        "[INFO] EXECUTE_SUMMARY orders_submitted=0 trailing_attached=0 "
+        "skips.TIME_WINDOW=1 skips.OPEN_ORDER=0 skips.EXISTING_POSITION=0"
+        in log_text
+    )
