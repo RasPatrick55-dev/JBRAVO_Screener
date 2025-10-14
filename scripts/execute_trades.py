@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
-from scripts.fallback_candidates import CANON
+from scripts.fallback_candidates import CANON, normalize_candidate_df
 from utils.env import (
     AlpacaCredentialsError,
     AlpacaUnauthorizedError,
@@ -163,10 +163,12 @@ def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
         LOGGER.warning("[WARN] Failed to fetch latest close for %s: %s", symbol, exc)
         return None
     if response.status_code in (401, 403):
-        raise AlpacaUnauthorizedError(
-            endpoint=f"/v2/stocks/{symbol}/bars/latest",
-            feed=str(feed or ""),
+        LOGGER.warning(
+            "[WARN] Latest close request unauthorized for %s status=%s",
+            symbol,
+            response.status_code,
         )
+        return None
     if response.status_code != 200:
         LOGGER.warning(
             "[WARN] Latest close request for %s returned status %s", symbol, response.status_code
@@ -221,7 +223,10 @@ def _fetch_latest_daily_bars(symbols: Sequence[str]) -> Dict[str, Dict[str, Opti
         LOGGER.warning("[WARN] Failed batch daily bars fetch for %s symbols: %s", len(unique), exc)
         return {}
     if response.status_code in (401, 403):
-        raise AlpacaUnauthorizedError(endpoint="/v2/stocks/bars/latest", feed=str(feed or ""))
+        LOGGER.warning(
+            "[WARN] Batch daily bars request unauthorized status=%s", response.status_code
+        )
+        return {}
     if response.status_code != 200:
         LOGGER.warning(
             "[WARN] Batch daily bars request returned status %s", response.status_code
@@ -312,6 +317,17 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
     for column in OPTIONAL_COLUMNS:
         if column not in frame.columns:
             frame[column] = pd.NA
+
+    if "entry_price" in frame.columns:
+        entry_series = pd.to_numeric(frame["entry_price"], errors="coerce")
+        close_series = pd.to_numeric(frame.get("close"), errors="coerce") if "close" in frame.columns else pd.Series(dtype="float64")
+        missing_entry = entry_series.isna()
+        if "close" in frame.columns and not close_series.empty:
+            filled = close_series.reindex_like(entry_series)
+            entry_series = entry_series.fillna(filled)
+        frame["entry_price"] = entry_series
+        if missing_entry.any():
+            messages.append("[WARN] DEFAULTED_ENTRY_PRICE_FROM_CLOSE")
 
     if "score" not in frame.columns or frame["score"].isna().all():
         if "Score" in frame.columns:
@@ -1018,26 +1034,17 @@ class TradeExecutor:
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
-        rename_map: Dict[str, str] = {}
+        canonical_available = set()
         for column in df.columns:
             key = str(column).strip()
-            target = CANON.get(key)
-            if target is None:
-                target = CANON.get(key.lower())
-            if target is not None:
-                rename_map[column] = target
-        if rename_map:
-            df = df.rename(columns=rename_map)
-        df.columns = [str(col).strip() for col in df.columns]
-        missing_required = []
-        for column in REQUIRED_COLUMNS:
-            if column in df.columns:
-                continue
-            missing_required.append(column)
+            canonical = CANON.get(key, CANON.get(key.lower(), key))
+            canonical_available.add(str(canonical))
+        normalized = normalize_candidate_df(df, now_ts=None)
+        missing_required = [column for column in REQUIRED_COLUMNS if column not in canonical_available]
         if missing_required:
             joined = ", ".join(sorted(missing_required))
             raise CandidateLoadError(f"Missing required columns: {joined}")
-        df, warnings = _apply_candidate_defaults(df)
+        df, warnings = _apply_candidate_defaults(normalized)
         for message in warnings:
             LOGGER.warning(message)
         return df

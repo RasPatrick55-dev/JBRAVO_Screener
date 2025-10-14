@@ -2,49 +2,52 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.fallback_candidates import ensure_min_candidates
+from scripts.fallback_candidates import ensure_min_candidates, REQUIRED
 
 
 def test_fallback_from_scored(tmp_path: Path):
     data = tmp_path / "data"
     data.mkdir(parents=True)
+    pd.DataFrame(columns=["symbol", "score"]).to_csv(data / "top_candidates.csv", index=False)
     pd.DataFrame(
         [
             {
-                "timestamp": "t",
                 "symbol": "AAA",
                 "score": 2.0,
                 "exchange": "NASDAQ",
                 "close": 10,
                 "volume": 1_000_000,
-                "universe_count": 1,
-                "score_breakdown": "x",
-                "adv20": 2_500_000,
+                "universe count": 1,
+                "score breakdown": "x",
             },
             {
-                "timestamp": "t",
                 "symbol": "BBB",
-                "score": 1.0,
+                "score": 4.0,
                 "exchange": "NYSE",
                 "close": 12,
                 "volume": 1_000_000,
-                "universe_count": 1,
-                "score_breakdown": "y",
-                "adv20": 2_100_000,
+                "universe count": 1,
+                "score breakdown": "y",
+            },
+            {
+                "symbol": "CCC",
+                "score": 3.5,
+                "exchange": "AMEX",
+                "close": 11,
+                "volume": 900_000,
+                "universe count": 1,
+                "score breakdown": "z",
             },
         ]
     ).to_csv(data / "scored_candidates.csv", index=False)
-    rows, reason = ensure_min_candidates(tmp_path, 1)
+    rows, reason = ensure_min_candidates(
+        tmp_path,
+        1,
+        canonicalize=True,
+        prefer="top_then_scored",
+    )
     assert rows >= 1
-    assert reason in ("scored_candidates", "already_populated")
+    assert reason.startswith("scored")
     out = pd.read_csv(data / "latest_candidates.csv")
-    assert {
-        "timestamp",
-        "symbol",
-        "score",
-        "exchange",
-        "close",
-        "volume",
-        "universe_count",
-        "score_breakdown",
-    }.issubset(out.columns)
+    assert set(REQUIRED).issubset(out.columns.tolist())
+    assert out.iloc[0]["symbol"] == "BBB"

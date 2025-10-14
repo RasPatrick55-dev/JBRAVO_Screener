@@ -4,13 +4,17 @@ import json
 import logging
 import os
 import pathlib
-import shlex
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterable, Mapping, MutableMapping, Optional
+
+from shutil import copyfile
+
+import shlex
 
 import pandas as pd
 
@@ -35,8 +39,13 @@ LOG_PATH = pathlib.Path("logs") / "pipeline.log"
 EVENTS_PATH = pathlib.Path("logs") / "execute_events.jsonl"
 EXECUTE_METRICS_PATH = pathlib.Path("data") / "execute_metrics.json"
 PIPELINE_METRICS_PATH = pathlib.Path("data") / "pipeline_metrics.json"
-SCREENER_ARGS_ENV = "JBR_SCREENER_ARGS"
-SCREENER_EXTRA_ARGS: list[str] = []
+
+LATEST_COLUMNS = prepare_latest_candidates(
+    pd.DataFrame(columns=CANDIDATE_REQUIRED),
+    "screener",
+    canonicalize=True,
+).columns.tolist()
+LATEST_HEADER = ",".join(LATEST_COLUMNS) + "\n"
 
 
 def configure_logging() -> None:
@@ -58,7 +67,7 @@ def configure_logging() -> None:
 
 def run_cmd(cmd: list[str], name: str) -> int:
     """Run ``cmd`` while logging start/end markers and outputs."""
-    LOG.info("[INFO] START %s: %s", name, " ".join(shlex.quote(part) for part in cmd))
+    LOG.info("[INFO] START %s cmd=%s", name, " ".join(cmd))
     start = time.time()
     result = subprocess.run(cmd, capture_output=True, text=True)
     duration = time.time() - start
@@ -68,6 +77,16 @@ def run_cmd(cmd: list[str], name: str) -> int:
     if result.stderr:
         LOG.info("[INFO] %s stderr:\n%s", name, result.stderr.strip())
     return result.returncode
+
+
+def _split_args(raw: str, label: str) -> list[str]:
+    if not raw:
+        return []
+    try:
+        return shlex.split(raw)
+    except ValueError as exc:
+        LOG.error("Failed to parse %s: %s", label, exc)
+        return []
 
 
 def _record_health(stage: str) -> dict[str, Any]:
@@ -83,34 +102,6 @@ def _record_health(stage: str) -> dict[str, Any]:
         data.get("status"),
     )
     return report
-
-
-def _parse_env_args(raw: str) -> list[str]:
-    if not raw:
-        return []
-    try:
-        return shlex.split(raw)
-    except ValueError as exc:
-        LOG.error("Failed to parse %s: %s", SCREENER_ARGS_ENV, exc)
-        return []
-
-
-def screener_cmd() -> list[str]:
-    base = [
-        sys.executable,
-        "-m",
-        "scripts.screener",
-        "--mode",
-        "screener",
-        "--feed",
-        "iex",
-    ]
-    return base + SCREENER_EXTRA_ARGS
-
-
-def execute_cmd() -> list[str]:
-    base = [sys.executable, "-m", "scripts.execute_trades"]
-    return base
 
 
 def emit(event: str, **payload: Any) -> None:
@@ -201,9 +192,15 @@ def refresh_latest_candidates() -> dict[str, Any]:
     os.makedirs(os.path.dirname(dst), exist_ok=True)
 
     row_count = 0
+    raw_row_count = 0
     if os.path.exists(src):
         try:
+            copyfile(src, dst)
+        except Exception as exc:  # pragma: no cover - defensive copy fallback
+            LOG.warning("[INFO] failed to copy %s to %s: %s", src, dst, exc)
+        try:
             df = pd.read_csv(src)
+            raw_row_count = len(df.index)
         except Exception as exc:
             LOG.error("[INFO] failed to read %s: %s", src, exc)
             df = pd.DataFrame(columns=CANDIDATE_REQUIRED)
@@ -245,9 +242,13 @@ def refresh_latest_candidates() -> dict[str, Any]:
     merged["rows"] = row_count
     status_value = str(merged.get("status") or "").upper()
     if row_count == 0:
-        if status_value in ("", "OK", "ZERO_CANDIDATES"):
-            merged["status"] = "ZERO_CANDIDATES"
-        merged["candidate_reason"] = "ZERO_CANDIDATES"
+        if raw_row_count > 0:
+            merged["status"] = "ok"
+            merged["candidate_reason"] = "HAVE_CANDIDATES"
+        else:
+            if status_value in ("", "OK", "ZERO_CANDIDATES"):
+                merged["status"] = "ZERO_CANDIDATES"
+            merged["candidate_reason"] = "ZERO_CANDIDATES"
     else:
         if status_value == "ZERO_CANDIDATES":
             merged["status"] = "ok"
@@ -338,6 +339,26 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default="true",
         help="Reload the web application when the pipeline finishes (default: true)",
     )
+    parser.add_argument(
+        "--screener-args",
+        default=os.getenv("JBR_SCREENER_ARGS", ""),
+        help="Extra arguments passed to scripts.screener (default env JBR_SCREENER_ARGS)",
+    )
+    parser.add_argument(
+        "--backtest-args",
+        default=os.getenv("JBR_BACKTEST_ARGS", ""),
+        help="Extra arguments passed to scripts.backtest (default env JBR_BACKTEST_ARGS)",
+    )
+    parser.add_argument(
+        "--metrics-args",
+        default=os.getenv("JBR_METRICS_ARGS", ""),
+        help="Extra arguments passed to scripts.metrics (default env JBR_METRICS_ARGS)",
+    )
+    parser.add_argument(
+        "--execute-args",
+        default=os.getenv("JBR_EXEC_ARGS", ""),
+        help="Extra arguments passed to scripts.execute_trades (default env JBR_EXEC_ARGS)",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -416,16 +437,25 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
 
     args = parse_args(argv)
-
-    env_raw = os.environ.get(SCREENER_ARGS_ENV, "")
-    parsed_env = _parse_env_args(env_raw)
-    global SCREENER_EXTRA_ARGS
-    SCREENER_EXTRA_ARGS = parsed_env
+    extras = {
+        "screener": _split_args(args.screener_args, "screener_args"),
+        "backtest": _split_args(args.backtest_args, "backtest_args"),
+        "metrics": _split_args(args.metrics_args, "metrics_args"),
+        "execute": _split_args(args.execute_args, "execute_args"),
+    }
     LOG.info(
-        "[INFO] PIPELINE_ENV %s raw=%s parsed=%s",
-        SCREENER_ARGS_ENV,
-        env_raw,
-        parsed_env,
+        "[INFO] PIPELINE_ARGS screener_raw=%s backtest_raw=%s metrics_raw=%s execute_raw=%s",
+        args.screener_args,
+        args.backtest_args,
+        args.metrics_args,
+        args.execute_args,
+    )
+    LOG.info(
+        "[INFO] PIPELINE_ARGS_PARSED screener=%s backtest=%s metrics=%s execute=%s",
+        extras["screener"],
+        extras["backtest"],
+        extras["metrics"],
+        extras["execute"],
     )
 
     steps = determine_steps(args.steps)
@@ -448,14 +478,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     pipeline_metrics: dict[str, Any] = {}
     latest_path = pathlib.Path("data") / "latest_candidates.csv"
     candidate_rows = _count_candidate_rows(latest_path)
-    fallback_rows: int | None = None
-    fallback_reason = "na"
+    fallback_rows: Optional[int] = None
+    fallback_reason = "not_run"
 
-    def maybe_run_fallback() -> tuple[int, str]:
-        nonlocal candidate_rows, fallback_rows, fallback_reason
+    def run_fallback_if_needed() -> tuple[int, str]:
+        nonlocal fallback_rows, fallback_reason, candidate_rows
         if fallback_rows is None:
             fallback_rows, fallback_reason = ensure_min_candidates(
-                BASE_DIR, min_rows=1, canonicalize=True
+                base_dir=BASE_DIR,
+                min_rows=1,
+                canonicalize=True,
+                prefer="top_then_scored",
+                max_rows=3,
             )
             LOG.info(
                 "[INFO] FALLBACK_CHECK rows_out=%s reason=%s",
@@ -463,28 +497,37 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 fallback_reason,
             )
             candidate_rows = _count_candidate_rows(latest_path)
-        return fallback_rows, fallback_reason
-
-    step_durations: dict[str, float] = {}
-    step_rcs: dict[str, int] = {}
+        return fallback_rows or 0, fallback_reason
 
     if "screener" in steps:
         step_start = time.time()
-        rc_scr = run_cmd(screener_cmd(), "SCREENER")
-        step_durations["screener"] = round(time.time() - step_start, 2)
-        step_rcs["screener"] = rc_scr
-        if rc_scr != 0:
-            LOG.error("[INFO] SCREENER failed rc=%s; continuing to write minimal artifacts", rc_scr)
-            rc = rc_scr if rc == 0 else rc
+        cmd = [
+            sys.executable,
+            "-m",
+            "scripts.screener",
+            "--mode",
+            "screener",
+            "--feed",
+            "iex",
+        ]
+        if extras["screener"]:
+            cmd.extend(extras["screener"])
+        rc_scr = run_cmd(cmd, "SCREENER")
+        if rc_scr != 0 and rc == 0:
+            rc = rc_scr
+            LOG.error(
+                "[INFO] SCREENER failed rc=%s; continuing to write minimal artifacts",
+                rc_scr,
+            )
         try:
             pipeline_metrics = refresh_latest_candidates()
             candidate_rows = _count_candidate_rows(latest_path)
             emit_metric("CANDIDATE_ROWS", candidate_rows)
             artifacts_written = True
             latest_refreshed = True
-            maybe_run_fallback()
         except Exception as exc:  # pragma: no cover - defensive safeguard
             LOG.error("[INFO] failed to refresh screener artifacts after SCREENER step: %s", exc)
+        run_fallback_if_needed()
 
     if "execute" in steps:
         if not latest_refreshed:
@@ -493,24 +536,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 candidate_rows = _count_candidate_rows(latest_path)
                 emit_metric("CANDIDATE_ROWS", candidate_rows)
                 latest_refreshed = True
-                maybe_run_fallback()
             except Exception as exc:  # pragma: no cover - defensive safeguard
                 LOG.error("[INFO] failed to refresh artifacts before EXECUTE step: %s", exc)
-        rows_out, _ = maybe_run_fallback()
-        if rows_out == 0:
+        rows_out, _ = run_fallback_if_needed()
+        if rows_out == 0 or candidate_rows == 0:
             LOG.info("[INFO] EXECUTE_SKIP_NO_CANDIDATES rows=0")
-            steps = [s for s in steps if s != "execute"]
-            step_rcs["execute"] = 0
-            step_durations["execute"] = 0.0
-        elif candidate_rows == 0:
-            LOG.info("[INFO] EXECUTE_SKIP_NO_CANDIDATES rows=0")
-            step_rcs["execute"] = 0
-            step_durations["execute"] = 0.0
         else:
-            step_start = time.time()
-            rc_exec = run_execute_step(execute_cmd(), candidate_rows=candidate_rows)
-            step_durations["execute"] = round(time.time() - step_start, 2)
-            step_rcs["execute"] = rc_exec
+            cmd = [sys.executable, "-m", "scripts.execute_trades"]
+            if extras["execute"]:
+                cmd.extend(extras["execute"])
+            rc_exec = run_execute_step(cmd, candidate_rows=candidate_rows)
+            if rc_exec != 0 and rc == 0:
+                rc = rc_exec
             if EXECUTE_METRICS_PATH.exists():
                 try:
                     execute_metrics = json.loads(
@@ -519,26 +556,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 except Exception as exc:  # pragma: no cover - defensive metrics parsing
                     LOG.warning("[INFO] failed to read execute metrics: %s", exc)
                 else:
-                    LOG.info(
-                        "EXECUTE SUMMARY %s",
-                        json.dumps(execute_metrics, sort_keys=True),
-                    )
-            if rc_exec != 0 and rc == 0:
-                rc = rc_exec
+                    LOG.info("EXECUTE SUMMARY %s", json.dumps(execute_metrics, sort_keys=True))
 
     if "backtest" in steps:
-        step_start = time.time()
-        rc_bt = run_cmd([sys.executable, "-m", "scripts.backtest"], "BACKTEST")
-        step_durations["backtest"] = round(time.time() - step_start, 2)
-        step_rcs["backtest"] = rc_bt
+        cmd = [sys.executable, "-m", "scripts.backtest"]
+        if extras["backtest"]:
+            cmd.extend(extras["backtest"])
+        rc_bt = run_cmd(cmd, "BACKTEST")
         if rc_bt != 0 and rc == 0:
             rc = rc_bt
 
     if "metrics" in steps:
-        step_start = time.time()
-        rc_mx = run_cmd([sys.executable, "-m", "scripts.metrics"], "METRICS")
-        step_durations["metrics"] = round(time.time() - step_start, 2)
-        step_rcs["metrics"] = rc_mx
+        run_fallback_if_needed()
+        cmd = [sys.executable, "-m", "scripts.metrics"]
+        if extras["metrics"]:
+            cmd.extend(extras["metrics"])
+        rc_mx = run_cmd(cmd, "METRICS")
         if rc_mx != 0 and rc == 0:
             rc = rc_mx
 
@@ -547,16 +580,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             pipeline_metrics = refresh_latest_candidates()
             candidate_rows = _count_candidate_rows(latest_path)
             emit_metric("CANDIDATE_ROWS", candidate_rows)
-            maybe_run_fallback()
         except Exception as exc:  # pragma: no cover - defensive safeguard
             LOG.error("[INFO] final artifact refresh failed: %s", exc)
+        run_fallback_if_needed()
 
-    maybe_run_fallback()
+    run_fallback_if_needed()
     duration = time.time() - start
     LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
     sm_path = BASE_DIR / "data" / "screener_metrics.json"
-    sym_in = with_bars = rows = "na"
-    fetch_secs = feat_secs = rank_secs = gates_secs = "na"
     metrics_source: dict[str, Any] = {}
     if isinstance(pipeline_metrics, Mapping) and pipeline_metrics:
         metrics_source = dict(pipeline_metrics)
@@ -567,25 +598,27 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             loaded = None
         if isinstance(loaded, Mapping):
             metrics_source = dict(loaded)
-    if metrics_source:
-        sym_in = metrics_source.get("symbols_in", "na")
-        with_bars = metrics_source.get("symbols_with_bars", "na")
-        rows = metrics_source.get("rows", "na")
-        timings = metrics_source.get("timings", {})
-        if isinstance(timings, Mapping):
-            fetch_secs = timings.get("fetch_secs", "na")
-            feat_secs = timings.get("feature_secs", "na")
-            rank_secs = timings.get("rank_secs", "na")
-            gates_secs = timings.get("gates_secs", "na")
+    timings = metrics_source.get("timings", {}) if isinstance(metrics_source, Mapping) else {}
+    if not isinstance(timings, Mapping):
+        timings = {}
+    m = SimpleNamespace(
+        symbols_in=metrics_source.get("symbols_in", "na"),
+        symbols_with_bars=metrics_source.get("symbols_with_bars", "na"),
+        rows=metrics_source.get("rows", "na"),
+        t_fetch=timings.get("fetch_secs", "na"),
+        t_features=timings.get("feature_secs", "na"),
+        t_rank=timings.get("rank_secs", "na"),
+        t_gates=timings.get("gates_secs", "na"),
+    )
     LOG.info(
         "[INFO] PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s fetch_secs=%s feature_secs=%s rank_secs=%s gate_secs=%s",
-        sym_in,
-        with_bars,
-        rows,
-        fetch_secs,
-        feat_secs,
-        rank_secs,
-        gates_secs,
+        m.symbols_in,
+        m.symbols_with_bars,
+        m.rows,
+        m.t_fetch,
+        m.t_features,
+        m.t_rank,
+        m.t_gates,
     )
     _record_health("end")
 

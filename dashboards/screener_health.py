@@ -330,7 +330,14 @@ def _mk_why_tooltip(row: dict) -> dict:
     # Raw values with safe fallbacks
     score = row.get("Score")
     rsi14 = row.get("RSI14", row.get("RSI"))  # try raw first, fallback to z if needed
-    adx = row.get("ADX_raw", row.get("ADX"))  # allow a raw alias if available
+    adx_raw = row.get("ADX_raw")
+    use_fallback = adx_raw is None
+    if not use_fallback:
+        try:
+            use_fallback = pd.isna(adx_raw)
+        except Exception:  # pragma: no cover - tolerate scalar types without isna
+            use_fallback = False
+    adx = row.get("ADX") if use_fallback else adx_raw
     aup = row.get("AROON_UP")
     adn = row.get("AROON_DN")
     mh = row.get("MACD_HIST", row.get("MH"))
@@ -677,13 +684,21 @@ def register_callbacks(app):
                     "fontSize": "13px",
                 },
             )
+        sym_in_text = f"{sym_in:,}"
+        sym_bars_text = f"{sym_bars:,}"
+        bars_tot_text = f"{bars_tot:,}"
+        rows_text = f"{rows:,}"
+        bars_pct_value = 0.0
+        if sym_in > 0:
+            bars_pct_value = (sym_bars / max(sym_in, 1)) * 100
+        bars_pct_text = f"{bars_pct_value:.1f}%"
         kpis = html.Div([
             health_card,
             _card("Last Run (UTC)", last_run),
-            _card("Symbols In", f"{sym_in:,}"),
-            _card("With Bars", f"{sym_bars:,}", f"{(sym_bars/max(sym_in,1))*100:.1f}%"),
-            _card("Bar Rows", f"{bars_tot:,}"),
-            _card("Candidates", f"{rows:,}", candidate_sub or None),
+            _card("Symbols In", sym_in_text),
+            _card("With Bars", sym_bars_text, bars_pct_text),
+            _card("Bar Rows", bars_tot_text),
+            _card("Candidates", rows_text, candidate_sub or None),
         ], className="sh-kpi-wrap",
            style={"display":"grid","gridTemplateColumns":"repeat(6, minmax(140px,1fr))","gap":"10px","marginBottom":"12px"})
 

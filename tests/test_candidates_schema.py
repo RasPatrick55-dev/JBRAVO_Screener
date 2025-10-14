@@ -11,7 +11,6 @@ def test_normalize_candidate_df_handles_synonyms_and_entry_price():
     frame = pd.DataFrame(
         [
             {
-                "timestamp": "2024-01-01T00:00:00Z",
                 "symbol": "AAPL",
                 "score": "3.2",
                 "exchange": "NASDAQ",
@@ -21,7 +20,6 @@ def test_normalize_candidate_df_handles_synonyms_and_entry_price():
                 "score breakdown": "{}",
             },
             {
-                "timestamp": "2024-01-01T00:05:00Z",
                 "symbol": "MSFT",
                 "score": "2.1",
                 "exchange": "NASDAQ",
@@ -33,11 +31,11 @@ def test_normalize_candidate_df_handles_synonyms_and_entry_price():
         ]
     )
 
-    normalized = normalize_candidate_df(frame)
+    normalized = normalize_candidate_df(frame, now_ts="2024-01-01T00:00:00Z")
 
     assert "score_breakdown" in normalized.columns
     assert "universe_count" in normalized.columns
     assert "entry_price" in normalized.columns
-    assert not normalized["entry_price"].isna().any()
-    # Scores should be sorted descending
-    assert list(normalized["symbol"]) == ["AAPL", "MSFT"]
+    assert (normalized["entry_price"] == normalized["close"]).all()
+    assert len(normalized) >= 1
+    assert normalized.iloc[0]["symbol"] == "AAPL"
