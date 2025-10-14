@@ -611,14 +611,15 @@ def register_callbacks(app):
         exec_metrics = _safe_json(EXECUTE_METRICS_JSON)
         if not isinstance(exec_metrics, Mapping):
             exec_metrics = {}
+        skip_payload: dict[str, int] = {}
         skips_view = exec_metrics.get("skips") if isinstance(exec_metrics, Mapping) else {}
         if isinstance(skips_view, Mapping):
-            try:
-                time_window_skips = int(skips_view.get("TIME_WINDOW", 0) or 0)
-            except (TypeError, ValueError):
-                time_window_skips = 0
-        else:
-            time_window_skips = 0
+            for key, value in skips_view.items():
+                try:
+                    skip_payload[str(key)] = int(value)
+                except (TypeError, ValueError):
+                    continue
+        time_window_skips = int(skip_payload.get("TIME_WINDOW", 0))
 
         # ---------------- KPIs ----------------
         def _card(title, value, sub=None):
@@ -660,6 +661,18 @@ def register_callbacks(app):
         candidate_sub = ""
         if rows == 0 and candidate_reason:
             candidate_sub = f"reason: {candidate_reason}"
+        zero_banner = None
+        if rows == 0:
+            zero_banner = html.Div(
+                "Zero candidates in latest screener output.",
+                style={
+                    "background": "#1e2734",
+                    "color": "#d8dee9",
+                    "padding": "8px 12px",
+                    "borderRadius": "6px",
+                    "fontSize": "13px",
+                },
+            )
         kpis = html.Div([
             health_card,
             _card("Last Run (UTC)", last_run),
@@ -669,6 +682,19 @@ def register_callbacks(app):
             _card("Candidates", f"{rows:,}", candidate_sub or None),
         ], className="sh-kpi-wrap",
            style={"display":"grid","gridTemplateColumns":"repeat(6, minmax(140px,1fr))","gap":"10px","marginBottom":"12px"})
+
+        banner_parts = []
+        if health_banner is not None:
+            banner_parts.append(health_banner)
+        if zero_banner is not None:
+            banner_parts.append(zero_banner)
+        if banner_parts:
+            health_banner = html.Div(
+                banner_parts,
+                style={"display": "grid", "gap": "10px", "marginBottom": "12px"},
+            )
+        else:
+            health_banner = html.Div()
 
         # ---------------- Gate pressure ----------------
         fail = m.get("gate_fail_counts", {}) or {}
@@ -747,6 +773,12 @@ def register_callbacks(app):
         pipeline_summary = _parse_pipeline_summary(p_tail)
         skip_line = _extract_last_line(p_tail, "EXECUTE_SKIP_NO_CANDIDATES")
         panel_lines: list[str] = []
+        def _try_float(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
         if isinstance(pipeline_summary, Mapping) and pipeline_summary:
             try:
                 sym_block = (
@@ -757,11 +789,17 @@ def register_callbacks(app):
             except Exception:
                 sym_block = f"summary={json.dumps(pipeline_summary, sort_keys=True)}"
             panel_lines.append(sym_block)
-            durations_view = pipeline_summary.get("durations")
-            if isinstance(durations_view, Mapping) and durations_view:
-                panel_lines.append("durations=" + json.dumps(durations_view, sort_keys=True))
-            elif isinstance(durations_view, str) and durations_view:
-                panel_lines.append("durations=" + durations_view)
+            fetch_secs = _try_float(pipeline_summary.get("fetch_secs"))
+            feature_secs = _try_float(pipeline_summary.get("feature_secs"))
+            rank_secs = _try_float(pipeline_summary.get("rank_secs"))
+            gate_secs = _try_float(pipeline_summary.get("gate_secs"))
+            panel_lines.append(
+                "timings "
+                f"fetch_secs={fetch_secs:.2f} "
+                f"feature_secs={feature_secs:.2f} "
+                f"rank_secs={rank_secs:.2f} "
+                f"gate_secs={gate_secs:.2f}"
+            )
             step_rcs_view = pipeline_summary.get("step_rcs")
             if isinstance(step_rcs_view, Mapping) and step_rcs_view:
                 panel_lines.append("step_rcs=" + json.dumps(step_rcs_view, sort_keys=True))
@@ -770,6 +808,10 @@ def register_callbacks(app):
         if skip_line:
             panel_lines.append(skip_line)
         panel_lines.append(f"TIME_WINDOW skips={time_window_skips}")
+        if skip_payload:
+            panel_lines.append(
+                "execute_skips=" + json.dumps(skip_payload, sort_keys=True)
+            )
         pipeline_panel = "\n".join(panel_lines) if panel_lines else "(no data)"
 
         unauthorized_log = "ALPACA_UNAUTHORIZED" in (p_tail or "")

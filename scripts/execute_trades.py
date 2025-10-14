@@ -1339,6 +1339,11 @@ class TradeExecutor:
             trail_display = str(int(trail_value))
         else:
             trail_display = f"{trail_value:g}"
+        LOGGER.info(
+            "[INFO] TRAIL_SUBMIT symbol=%s trail_pct=%s route=trailing_stop",
+            symbol,
+            trail_display,
+        )
         self.log_event(
             "TRAIL_SUBMIT",
             symbol=symbol,
