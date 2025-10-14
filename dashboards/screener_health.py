@@ -339,7 +339,11 @@ def _mk_why_tooltip(row: dict) -> dict:
     close = row.get("close")
 
     md = []
-    md.append(f"**Score:** `{_format_value(score, lambda v: f"{float(v):.3f}")}`")
+    md.append(
+        "**Score:** `"
+        + _format_value(score, lambda v: "{:.3f}".format(float(v)))
+        + "`"
+    )
     if contrib_str and contrib_str != "n/a":
         md.append("**Contributions (z‑weighted):**")
         # convert bullets nicely (already "• name ▲ 0.00")
