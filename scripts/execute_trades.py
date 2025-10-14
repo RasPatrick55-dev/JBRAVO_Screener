@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
+from scripts.fallback_candidates import CANON
 from utils.env import (
     AlpacaCredentialsError,
     AlpacaUnauthorizedError,
@@ -1017,11 +1018,20 @@ class TradeExecutor:
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
+        rename_map: Dict[str, str] = {}
+        for column in df.columns:
+            key = str(column).strip()
+            target = CANON.get(key)
+            if target is None:
+                target = CANON.get(key.lower())
+            if target is not None:
+                rename_map[column] = target
+        if rename_map:
+            df = df.rename(columns=rename_map)
+        df.columns = [str(col).strip() for col in df.columns]
         missing_required = []
         for column in REQUIRED_COLUMNS:
             if column in df.columns:
-                continue
-            if column == "score" and "Score" in df.columns:
                 continue
             missing_required.append(column)
         if missing_required:
