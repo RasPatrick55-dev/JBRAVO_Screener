@@ -867,6 +867,17 @@ class TradeExecutor:
             except TypeError:  # pragma: no cover - serialization guard
                 LOGGER.info(json.dumps({"event": event, "message": str(payload)}))
 
+    def _market_label(self) -> str:
+        tz_name = str(self.config.market_timezone or "America/New_York")
+        mapping = {
+            "America/New_York": "NY",
+            "America/Chicago": "Chicago",
+        }
+        if tz_name in mapping:
+            return mapping[tz_name]
+        suffix = tz_name.split("/")[-1].strip()
+        return suffix or tz_name
+
     def record_skip_reason(
         self,
         reason: str,
@@ -954,35 +965,48 @@ class TradeExecutor:
 
         message: str
         allowed = False
+        market_label = self._market_label()
 
         if window == "premarket":
             if not self.config.extended_hours:
                 allowed = False
-                message = "outside premarket (skipping submit; extended hours disabled)"
+                message = f"outside premarket ({market_label})"
             else:
                 allowed = within_premarket
-                message = "premarket open window (allowed)" if allowed else "outside premarket (skipping submit)"
+                message = (
+                    f"premarket window open ({market_label})"
+                    if allowed
+                    else f"outside premarket ({market_label})"
+                )
         elif window == "regular":
             allowed = within_regular
-            message = "regular session (allowed)" if allowed else "outside regular session (skipping submit)"
+            message = (
+                f"regular session ({market_label})"
+                if allowed
+                else f"outside regular session ({market_label})"
+            )
         else:  # any
             extended_ok = self.config.extended_hours and (within_premarket or within_post)
             if clock is not None:
                 allowed = clock_is_open or extended_ok
             else:
                 allowed = within_regular or extended_ok
-            message = "any window (allowed)" if allowed else "market closed (skipping submit)"
+            message = (
+                f"any window ({market_label})"
+                if allowed
+                else f"market closed ({market_label})"
+            )
 
         if not allowed and clock is not None and window in {"premarket", "regular"}:
             # When Alpaca reports the venue open, treat it as authoritative for overrides.
             if window == "premarket" and self.config.extended_hours and clock_is_open and not within_regular:
                 allowed = True
-                message = "premarket open window (allowed)"
+                message = f"premarket window open ({market_label})"
             elif window == "regular" and clock_is_open and within_regular:
                 allowed = True
-                message = "regular session (allowed)"
+                message = f"regular session ({market_label})"
 
-        LOGGER.info("[INFO] TIME_WINDOW: %s", message)
+        LOGGER.info("[INFO] TIME_WINDOW %s", message)
         return allowed, message
 
     def load_candidates(self) -> pd.DataFrame:
@@ -1085,6 +1109,12 @@ class TradeExecutor:
         allowed, status = self.evaluate_time_window()
         if not allowed:
             self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
+            skip_count = int(self.metrics.skipped_reasons.get("TIME_WINDOW", 0))
+            LOGGER.info(
+                "[INFO] EXECUTE_SUMMARY orders_submitted=%d skipped.TIME_WINDOW=%d",
+                self.metrics.orders_submitted,
+                skip_count,
+            )
             self.persist_metrics()
             return 0
 
@@ -1312,8 +1342,8 @@ class TradeExecutor:
         self.log_event(
             "TRAIL_SUBMIT",
             symbol=symbol,
-            qty=str(qty_int),
-            trail_percent=trail_display,
+            trail_pct=trail_display,
+            route="trailing_stop",
         )
         trailing_order = self.submit_with_retries(request)
         if trailing_order is None:
@@ -1510,8 +1540,6 @@ def run_executor(config: ExecutorConfig, *, client: Optional[Any] = None) -> int
         LOGGER.info(banner)
         LOGGER.info("[INFO] DRY_RUN=True — no orders will be submitted")
         LOGGER.info(banner)
-    else:
-        LOGGER.info("[INFO] DRY_RUN=False")
     try:
         frame = loader.load_candidates()
     except CandidateLoadError as exc:
@@ -1519,6 +1547,14 @@ def run_executor(config: ExecutorConfig, *, client: Optional[Any] = None) -> int
         metrics.api_failures += 1
         loader.persist_metrics()
         return 1
+
+    candidates = int(frame.shape[0])
+    LOGGER.info(
+        "[INFO] EXEC_START dry_run=%s time_window=%s candidates=%d",
+        config.dry_run,
+        config.time_window,
+        candidates,
+    )
 
     if frame.empty:
         loader.persist_metrics()
@@ -1577,9 +1613,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     args = parse_args(argv)
     LOGGER.info(
-        "EXECUTE START dry_run=%s time_window=%s ext_hours=%s alloc=%.2f max_pos=%d trail=%.1f%%",
-        args.dry_run,
-        args.time_window,
+        "[INFO] EXEC_CONFIG ext_hours=%s alloc=%.2f max_pos=%d trail_pct=%.1f",
         args.extended_hours,
         args.allocation_pct,
         args.max_positions,
