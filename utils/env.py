@@ -9,13 +9,29 @@ from pathlib import Path
 from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
-from dotenv import dotenv_values, find_dotenv, load_dotenv
+try:  # pragma: no cover - optional dependency
+    from dotenv import dotenv_values, load_dotenv
+except Exception:  # pragma: no cover - allow operation without python-dotenv
+    dotenv_values = None  # type: ignore
+    load_dotenv = None  # type: ignore
 
 
 _REQUIRED_KEYS: tuple[tuple[str, ...], ...] = (
     ("APCA_API_KEY_ID", "ALPACA_API_KEY_ID"),
     ("APCA_API_SECRET_KEY", "ALPACA_API_SECRET_KEY"),
+    ("APCA_API_BASE_URL", "ALPACA_API_BASE_URL"),
+    ("APCA_DATA_API_BASE_URL", "APCA_API_DATA_URL", "ALPACA_API_DATA_URL"),
 )
+
+_REQUIRED_PRIMARY: tuple[str, ...] = (
+    "APCA_API_KEY_ID",
+    "APCA_API_SECRET_KEY",
+    "APCA_API_BASE_URL",
+    "APCA_DATA_API_BASE_URL",
+    "ALPACA_DATA_FEED",
+)
+
+_ENV_SHIMMED: bool = False
 
 METRICS_SUMMARY_COLUMNS: tuple[str, ...] = (
     "last_run_utc",
@@ -69,77 +85,100 @@ def _normalize_apca_base_url(value: str) -> str:
     return trimmed.rstrip("/")
 
 
-def load_env() -> Dict[str, Dict[str, int]]:
-    """Load environment files and normalize common Alpaca variables.
+def _manual_parse_env(path: Path, *, override: bool) -> bool:
+    loaded = False
+    try:
+        contents = path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+    for raw_line in contents.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if (value.startswith("\"") and value.endswith("\"")) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+        if not override and key in os.environ:
+            continue
+        os.environ[key] = value
+        loaded = True
+    return loaded
 
-    Returns a mapping describing which variables were populated during the
-    loading process. Each entry tracks whether the variable is present and the
-    length of the normalized value.
+
+def _load_env_file(path: Path, *, override: bool = False) -> bool:
+    if not path.exists():
+        return False
+    if load_dotenv is not None:
+        try:
+            result = load_dotenv(path, override=override)
+        except Exception:
+            result = False
+        if result:
+            return True
+    return _manual_parse_env(path, override=override)
+
+
+def _normalize_env_aliases() -> None:
+    for primary_key, *aliases in _REQUIRED_KEYS:
+        value, source_key, _ = _resolve_env_value(primary_key, *aliases)
+        if value:
+            if primary_key == "APCA_API_BASE_URL":
+                value = _normalize_apca_base_url(value)
+            if primary_key == "APCA_DATA_API_BASE_URL":
+                value = value.rstrip("/")
+            os.environ[primary_key] = value
+            if source_key and source_key != primary_key:
+                os.environ[source_key] = value
+
+
+def load_env(
+    required_keys: Sequence[str] | None = None,
+    *,
+    override: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Load environment files from well-known locations.
+
+    Returns a tuple of ``(loaded_files, missing_required)`` so callers can emit
+    diagnostics before proceeding. When ``python-dotenv`` is unavailable a
+    minimal parser is used instead.
     """
 
-    summary: Dict[str, Dict[str, int]] = {}
+    global _ENV_SHIMMED
 
-    loaded_paths: list[str] = []
-    primary = find_dotenv(usecwd=True)
-    if primary:
-        load_dotenv(primary)
-        loaded_paths.append(primary)
+    repo_root = Path(__file__).resolve().parents[1]
+    user_env = Path(os.path.expanduser("~/.config/jbravo/.env"))
+    repo_env = repo_root / ".env"
 
-    alt = os.path.expanduser("~/.config/jbravo/.env")
-    if os.path.exists(alt):
-        load_dotenv(alt, override=False)
-        loaded_paths.append(alt)
+    loaded_files: list[str] = []
+    for path in (user_env, repo_env):
+        if _load_env_file(path, override=override):
+            loaded_files.append(str(path))
 
-    tracked: set[str] = set()
-    for path in loaded_paths:
-        try:
-            values: Mapping[str, str | None] = dotenv_values(path)
-        except Exception:
-            continue
-        tracked.update(key for key, value in values.items() if value is not None)
+    _normalize_env_aliases()
 
-    tracked.update({"APCA_API_BASE_URL", "ALPACA_API_BASE_URL"})
-    for keys in _REQUIRED_KEYS:
-        tracked.update(keys)
+    if not os.environ.get("APCA_API_BASE_URL"):
+        base = os.environ.get("ALPACA_API_BASE_URL")
+        if base:
+            os.environ["APCA_API_BASE_URL"] = _normalize_apca_base_url(base)
 
-    for key in tracked:
-        raw = os.environ.get(key)
-        if raw is None:
-            summary[key] = {"present": False, "len": 0}
-            continue
-        normalized = raw.strip()
-        if key == "APCA_API_BASE_URL":
-            normalized = _normalize_apca_base_url(normalized)
-        if normalized != raw:
-            os.environ[key] = normalized
-        summary[key] = {"present": bool(normalized), "len": len(normalized)}
+    if not os.environ.get("APCA_DATA_API_BASE_URL"):
+        data_alias = os.environ.get("APCA_API_DATA_URL") or os.environ.get(
+            "ALPACA_API_DATA_URL"
+        )
+        if data_alias:
+            os.environ["APCA_DATA_API_BASE_URL"] = data_alias.rstrip("/")
 
-    for primary_key, *aliases in _REQUIRED_KEYS:
-        canon_value = os.environ.get(primary_key, "").strip()
-        if canon_value:
-            summary.setdefault(primary_key, {"present": True, "len": len(canon_value)})
-            continue
-        fallback_value = ""
-        fallback_key = None
-        for alias in aliases:
-            alias_val = os.environ.get(alias, "").strip()
-            if alias_val:
-                fallback_value = alias_val
-                fallback_key = alias
-                break
-        if fallback_value:
-            os.environ[primary_key] = fallback_value
-            summary[primary_key] = {"present": True, "len": len(fallback_value)}
-            if fallback_key:
-                summary.setdefault(
-                    fallback_key, {"present": True, "len": len(fallback_value)}
-                )
-        else:
-            summary.setdefault(primary_key, {"present": False, "len": 0})
-            for alias in aliases:
-                summary.setdefault(alias, {"present": False, "len": 0})
+    required = list(required_keys) if required_keys is not None else list(_REQUIRED_PRIMARY)
+    missing_required = [key for key in required if not os.environ.get(key)]
 
-    return summary
+    _ENV_SHIMMED = True
+    return loaded_files, missing_required
 
 
 def _resolve_env_value(primary: str, *aliases: str) -> tuple[str, str | None, bool]:

@@ -29,7 +29,7 @@ def test_pipeline_summary_zero_candidates(tmp_path, monkeypatch, caplog):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(run_pipeline, "BASE_DIR", tmp_path)
 
-    monkeypatch.setattr(run_pipeline, "load_env", lambda: None)
+    monkeypatch.setattr(run_pipeline, "load_env", lambda *a, **k: ([], []))
     monkeypatch.setattr(run_pipeline, "configure_logging", lambda: None)
     monkeypatch.setattr(run_pipeline, "assert_alpaca_creds", lambda: {"id": "ok"})
     monkeypatch.setattr(run_pipeline, "_record_health", lambda stage: {})

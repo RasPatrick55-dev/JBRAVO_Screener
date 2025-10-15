@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, time as dt_time
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from zoneinfo import ZoneInfo
@@ -106,6 +107,13 @@ SKIP_REASON_KEYS = {
 IMPORT_SENTINEL_ENV = "JBRAVO_IMPORT_SENTINEL"
 DATA_URL_ENV_VARS = ("APCA_API_DATA_URL", "ALPACA_API_DATA_URL")
 DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
+REQUIRED_ENV_KEYS = (
+    "APCA_API_KEY_ID",
+    "APCA_API_SECRET_KEY",
+    "APCA_API_BASE_URL",
+    "APCA_DATA_API_BASE_URL",
+    "ALPACA_DATA_FEED",
+)
 
 
 def _load_execute_metrics() -> Optional[Dict[str, Any]]:
@@ -383,7 +391,7 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
 @dataclass
 class ExecutorConfig:
     source: Path = Path("data/latest_candidates.csv")
-    allocation_pct: float = 0.03
+    allocation_pct: float = 0.05
     max_positions: int = 4
     entry_buffer_bps: int = 75
     limit_buffer_pct: float = 1.0
@@ -398,7 +406,7 @@ class ExecutorConfig:
     max_price: float = 1_000.0
     log_json: bool = False
     bar_directories: Sequence[Path] = DEFAULT_BAR_DIRECTORIES
-    min_order_usd: float = 150.0
+    min_order_usd: float = 200.0
     allow_bump_to_one: bool = True
 
 
@@ -638,6 +646,8 @@ class OptionalFieldHydrator:
         self._missing_logged: set[Tuple[str, str]] = set()
         self.missing_counts: Counter[str] = Counter()
         self._summary_logged = False
+        self._entry_summary_logged = False
+        self._entry_defaults = 0
 
     def _log_missing(
         self, field: str, symbol: str, detail: str = "", *, qualifier: str = "defaulted"
@@ -657,6 +667,8 @@ class OptionalFieldHydrator:
         LOGGER.warning(" ".join(parts))
         self._missing_logged.add(key)
         self.missing_counts[field.upper()] += 1
+        if field.lower() == "entry_price" and "defaulted from close" in qualifier_text.lower():
+            self._entry_defaults += 1
 
     def get_exchange(self, symbol: str) -> Optional[str]:
         key = symbol.upper()
@@ -761,6 +773,11 @@ class OptionalFieldHydrator:
         )
         if summary:
             LOGGER.info("[INFO] DEFAULTED_OPTIONALS %s", summary)
+        if self._entry_defaults and not self._entry_summary_logged:
+            LOGGER.warning(
+                "[WARN] entry_price defaulted from close on %d rows", self._entry_defaults
+            )
+            self._entry_summary_logged = True
         self._summary_logged = True
 
     def hydrate(self, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -875,6 +892,7 @@ class TradeExecutor:
         self.hydrator = OptionalFieldHydrator(client, self.bar_cache)
         self.log_json = config.log_json
         self._tz_fallback_logged = False
+        self._clock_auth_warned = False
 
     def log_event(self, event: str, **payload: Any) -> None:
         human = " ".join(f"{key}={value}" for key, value in payload.items())
@@ -948,14 +966,58 @@ class TradeExecutor:
             except Exception:  # pragma: no cover - ZoneInfo fallback safety
                 return ZoneInfo("UTC")
 
-    def _get_trading_clock(self) -> Optional[Any]:
-        if self.client is None or not hasattr(self.client, "get_clock"):
+    def _probe_trading_clock(self) -> Optional[Any]:
+        api_key, api_secret, base_url, _ = get_alpaca_creds()
+        base = (base_url or "").strip()
+        if not api_key or not api_secret or not base:
             return None
+        url = f"{base.rstrip('/')}/v2/clock"
+        headers = {
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": api_secret,
+        }
         try:
-            return self.client.get_clock()
+            response = requests.get(url, headers=headers, timeout=5)
         except Exception as exc:
             LOGGER.warning("[WARN] failed to fetch trading clock: %s", exc)
             return None
+        if response.status_code == 200:
+            try:
+                payload = response.json()
+            except ValueError:
+                return None
+            if isinstance(payload, Mapping):
+                return SimpleNamespace(**payload)
+            return None
+        if response.status_code == 401 and not self._clock_auth_warned:
+            LOGGER.warning(
+                "[WARN] clock_fetch_failed=%s -> using tz_fallback=America/New_York",
+                response.status_code,
+            )
+            self._clock_auth_warned = True
+            return None
+        LOGGER.warning(
+            "[WARN] failed to fetch trading clock: status=%s",
+            response.status_code,
+        )
+        return None
+
+    def _get_trading_clock(self) -> Optional[Any]:
+        if self.client is None or not hasattr(self.client, "get_clock"):
+            return self._probe_trading_clock()
+        try:
+            return self.client.get_clock()
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            if status == 401 and not self._clock_auth_warned:
+                LOGGER.warning(
+                    "[WARN] clock_fetch_failed=%s -> using tz_fallback=America/New_York",
+                    status,
+                )
+                self._clock_auth_warned = True
+            else:
+                LOGGER.warning("[WARN] failed to fetch trading clock: %s", exc)
+            return self._probe_trading_clock()
 
     def evaluate_time_window(self, *, log: bool = True) -> Tuple[bool, str]:
         tz = self._resolve_market_timezone()
@@ -1391,9 +1453,8 @@ class TradeExecutor:
             trail_display = str(int(trail_value))
         else:
             trail_display = f"{trail_value:g}"
-        LOGGER.info("[INFO] TRAIL_SUBMIT symbol=%s trail_pct=%s", symbol, trail_display)
         LOGGER.info(
-            "[INFO] TRAIL_SUBMIT symbol=%s trail_pct=%s route=trailing_stop",
+            "TRAIL_SUBMIT symbol=%s trail_pct=%s route=trailing_stop",
             symbol,
             trail_display,
         )
@@ -1405,9 +1466,17 @@ class TradeExecutor:
         )
         trailing_order = self.submit_with_retries(request)
         if trailing_order is None:
+            LOGGER.warning("[WARN] TRAIL_FAILED symbol=%s reason=submit_failed", symbol)
+            self.log_event("TRAIL_FAILED", symbol=symbol, reason="submit_failed")
             return
         self.metrics.trailing_attached += 1
         order_id = str(getattr(trailing_order, "id", ""))
+        LOGGER.info(
+            "TRAIL_CONFIRMED symbol=%s qty=%s order_id=%s",
+            symbol,
+            qty_int,
+            order_id,
+        )
         self.log_event(
             "TRAIL_CONFIRMED",
             symbol=symbol,
@@ -1485,15 +1554,53 @@ def configure_logging(log_json: bool) -> None:
     LOGGER.setLevel(logging.INFO)
 
 
-def _create_trading_client() -> Any:
+def _create_trading_client() -> tuple[Any, str, bool]:
     if TradingClient is None:
         raise RuntimeError("alpaca-py TradingClient is unavailable")
     api_key, api_secret, base_url, _ = get_alpaca_creds()
     if not api_key or not api_secret:
         raise RuntimeError("Missing Alpaca credentials for trading client")
-    env = (base_url or "paper").lower()
-    paper = "live" not in env
-    return TradingClient(api_key, api_secret, paper=paper)
+    forced = os.getenv("JBR_EXEC_PAPER")
+    paper_mode: bool
+    if forced is not None:
+        paper_mode = forced.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        env = (base_url or "paper").lower()
+        paper_mode = "live" not in env
+    resolved_base = (base_url or "https://paper-api.alpaca.markets").rstrip("/")
+    if not resolved_base:
+        resolved_base = "https://paper-api.alpaca.markets"
+    client = TradingClient(api_key, api_secret, paper=paper_mode)
+    return client, resolved_base, paper_mode
+
+
+def _ensure_trading_auth(base_url: str, creds_snapshot: Mapping[str, Any]) -> None:
+    api_key, api_secret, _, _ = get_alpaca_creds()
+    if not api_key or not api_secret:
+        raise SystemExit(2)
+    url = f"{base_url.rstrip('/')}/v2/account"
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+    except Exception as exc:
+        LOGGER.error(
+            "[ERROR] TRADING_AUTH_FAILED base=%s status=ERR tip=\"Reload ~/.config/jbravo/.env\" detail=%s",
+            base_url,
+            exc,
+        )
+        _record_auth_error("unauthorized", creds_snapshot)
+        raise SystemExit(2)
+    if response.status_code != 200:
+        LOGGER.error(
+            "[ERROR] TRADING_AUTH_FAILED base=%s status=%s tip=\"Reload ~/.config/jbravo/.env\"",
+            base_url,
+            response.status_code,
+        )
+        _record_auth_error("unauthorized", creds_snapshot)
+        raise SystemExit(2)
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -1622,7 +1729,12 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
     )
 
 
-def run_executor(config: ExecutorConfig, *, client: Optional[Any] = None) -> int:
+def run_executor(
+    config: ExecutorConfig,
+    *,
+    client: Optional[Any] = None,
+    creds_snapshot: Mapping[str, Any] | None = None,
+) -> int:
     configure_logging(config.log_json)
     metrics = ExecutionMetrics()
     loader = TradeExecutor(config, client, metrics)
@@ -1661,10 +1773,20 @@ def run_executor(config: ExecutorConfig, *, client: Optional[Any] = None) -> int
 
     if client is not None:
         trading_client = client
+        base_url = ""
+        paper_mode = None
     elif config.dry_run or not filtered:
         trading_client = None
+        base_url = ""
+        paper_mode = None
     else:
-        trading_client = _create_trading_client()
+        trading_client, base_url, paper_mode = _create_trading_client()
+        LOGGER.info(
+            "[INFO] TRADING_CLIENT base=%s paper_mode=%s",
+            base_url or "",
+            bool(paper_mode),
+        )
+        _ensure_trading_auth(base_url or "", creds_snapshot or {})
 
     executor = TradeExecutor(config, trading_client, metrics)
     return executor.execute(frame, prefiltered=filtered)
@@ -1686,8 +1808,27 @@ def apply_guards(df: pd.DataFrame, config: ExecutorConfig, metrics: ExecutionMet
     return pd.DataFrame(filtered)
 
 
+def _bootstrap_env() -> tuple[list[str], list[str]]:
+    loaded_files, missing = load_env(REQUIRED_ENV_KEYS)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.INFO)
+    try:
+        paths = ",".join(loaded_files) if loaded_files else "none"
+        LOGGER.info("[INFO] ENV_LOADED files=%s", paths)
+        if missing:
+            LOGGER.error("[ERROR] ENV_MISSING keys=%s", ",".join(missing))
+    finally:
+        LOGGER.removeHandler(handler)
+        handler.close()
+    return loaded_files, missing
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
-    load_env()
+    _, missing_keys = _bootstrap_env()
+    if missing_keys:
+        return 2
     try:
         creds_snapshot = assert_alpaca_creds()
     except AlpacaCredentialsError as exc:
@@ -1717,7 +1858,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
     config = build_config(args)
     try:
-        rc = run_executor(config)
+        rc = run_executor(config, creds_snapshot=creds_snapshot)
         metrics_payload = _load_execute_metrics()
         if metrics_payload is not None:
             def _as_int(value: Any) -> int:

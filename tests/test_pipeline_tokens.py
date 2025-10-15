@@ -69,7 +69,7 @@ def test_pipeline_logs_summary_and_end(tmp_path: Path, monkeypatch, caplog):
     monkeypatch.setattr(run_pipeline, "run_step", fake_run_step)
     monkeypatch.setattr(run_pipeline, "_reload_dashboard", lambda enabled: None)
     monkeypatch.setattr(run_pipeline, "configure_logging", lambda: None)
-    monkeypatch.setattr(run_pipeline, "load_env", lambda: None)
+    monkeypatch.setattr(run_pipeline, "load_env", lambda *a, **k: ([], []))
 
     with pytest.raises(SystemExit) as exit_info:
         run_pipeline.main(["--steps", "screener,metrics", "--reload-web", "false"])

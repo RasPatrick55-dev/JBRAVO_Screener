@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import os
+from typing import Sequence, Tuple
+
+from utils.env import load_env as _core_load_env
 
 
 def trading_base_url() -> str:
@@ -28,4 +31,10 @@ def market_data_base_url() -> str:
     return base.rstrip("/")
 
 
-__all__ = ["trading_base_url", "market_data_base_url"]
+def load_env(required_keys: Sequence[str] | None = None) -> Tuple[list[str], list[str]]:
+    """Thin shim that proxies to :func:`utils.env.load_env`."""
+
+    return _core_load_env(required_keys)
+
+
+__all__ = ["trading_base_url", "market_data_base_url", "load_env"]
