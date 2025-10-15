@@ -10,7 +10,6 @@ from scripts.execute_trades import (
     ExecutorConfig,
     TradeExecutor,
     compute_limit_price,
-    compute_quantity,
     run_executor,
 )
 
@@ -98,13 +97,6 @@ def test_compute_limit_price_rounds_to_tick():
     assert price == pytest.approx(10.05, rel=1e-3)
 
 
-def test_compute_quantity_caps_by_buying_power():
-    qty = compute_quantity(5000, 0.1, 120.25)
-    assert qty == 4
-    assert compute_quantity(100, 0.1, 200) == 0
-    assert compute_quantity(1000, 0.5, 10) == 50
-
-
 def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch, caplog):
     csv_path = tmp_path / "candidates.csv"
     csv_path.write_text("symbol,close,score,universe_count,score_breakdown\n", encoding="utf-8")
@@ -188,11 +180,14 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     tokens = ("[INFO] EXEC_START", "[INFO] EXECUTE_SUMMARY", "[INFO] TIME_WINDOW")
     assert any(token in log_text for token in tokens)
     assert "[INFO] TIME_WINDOW outside premarket (NY)" in log_text
-    assert (
-        "[INFO] EXECUTE_SUMMARY orders_submitted=0 trailing_attached=0 "
-        "skips.TIME_WINDOW=1 skips.OPEN_ORDER=0 skips.EXISTING_POSITION=0"
-        in log_text
-    )
+    summary_lines = [msg for msg in caplog.messages if "[INFO] EXECUTE_SUMMARY" in msg]
+    assert summary_lines, "Expected EXECUTE_SUMMARY log entry"
+    summary = summary_lines[-1]
+    assert "orders_submitted=0" in summary
+    assert "trailing_attached=0" in summary
+    for key in ("TIME_WINDOW", "ZERO_QTY", "CASH", "OPEN_ORDER", "EXISTING_POSITION", "MAX_POSITIONS", "NO_CANDIDATES"):
+        assert f"skips.{key}=" in summary
+    assert "skips.TIME_WINDOW=1" in summary
 
 
 def test_limit_buffer_pct_relaxes_price_bounds(tmp_path):

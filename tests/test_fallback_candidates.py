@@ -5,7 +5,7 @@ import pandas as pd
 from scripts import fallback_candidates as fallback_mod
 
 
-def test_build_latest_candidates_uses_scored_and_canonical_columns(tmp_path: Path):
+def test_build_latest_candidates_filters_scored_and_keeps_canonical_columns(tmp_path: Path):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True)
     scored_path = data_dir / "scored_candidates.csv"
@@ -29,7 +29,7 @@ def test_build_latest_candidates_uses_scored_and_canonical_columns(tmp_path: Pat
                 "volume": 400_000,
                 "universe count": 10,
                 "score breakdown": "{}",
-                "adv20": 2_000_000,
+                "adv20": 2_500_000,
             },
         ]
     ).to_csv(scored_path, index=False)
@@ -44,6 +44,7 @@ def test_build_latest_candidates_uses_scored_and_canonical_columns(tmp_path: Pat
     assert latest.iloc[0]["symbol"] == "BBB"
     assert latest.iloc[0]["source"] == "fallback:scored"
     assert frame.iloc[0]["symbol"] == "BBB"
+    assert float(frame.iloc[0]["adv20"]) >= 2_000_000
 
 
 def test_build_latest_candidates_invokes_atomic_write(tmp_path: Path, monkeypatch):
@@ -66,5 +67,6 @@ def test_build_latest_candidates_invokes_atomic_write(tmp_path: Path, monkeypatc
     latest_path = data_dir / "latest_candidates.csv"
     assert latest_path.exists()
     persisted = pd.read_csv(latest_path)
-    assert persisted.iloc[0]["source"].startswith("fallback")
+    assert persisted.columns.tolist() == list(fallback_mod.CANONICAL_COLUMNS)
+    assert persisted.iloc[0]["symbol"] == "AAPL"
     assert frame.equals(persisted.head(len(frame)))

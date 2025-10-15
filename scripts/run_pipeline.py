@@ -227,19 +227,22 @@ def _reload_dashboard(enabled: bool) -> None:
         LOG.info("[INFO] DASH_RELOAD method=pa rc=0 domain=%s", domain or "(default)")
         return
     except FileNotFoundError:
-        LOG.info("[INFO] DASH_RELOAD method=pa rc=ERR detail=missing_tool")
+        LOG.info("[INFO] DASH_RELOAD method=pa rc=missing_tool domain=%s", domain or "(default)")
     except subprocess.CalledProcessError as exc:
         LOG.info(
-            "[INFO] DASH_RELOAD method=pa rc=ERR detail=rc%s", exc.returncode
+            "[INFO] DASH_RELOAD method=pa rc=%s domain=%s",
+            exc.returncode,
+            domain or "(default)",
         )
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOG.info("[INFO] DASH_RELOAD method=pa rc=ERR detail=%s", exc)
+        LOG.info(
+            "[INFO] DASH_RELOAD method=pa rc=ERR domain=%s detail=%s",
+            domain or "(default)",
+            exc,
+        )
 
     target = domain.replace(".", "_") if domain else ""
-    if target:
-        path = Path(f"/var/www/{target}_wsgi.py")
-    else:
-        path = DEFAULT_WSGI_PATH
+    path = Path(f"/var/www/{target}_wsgi.py") if target else DEFAULT_WSGI_PATH
     try:
         path.touch()
         LOG.info("[INFO] DASH_RELOAD method=touch rc=0 path=%s", path)
@@ -282,7 +285,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             symbols_with_bars = int(metrics.get("symbols_with_bars", 0) or 0)
             top_frame = _load_top_candidates()
             if top_frame.empty:
-                frame, source = build_latest_candidates(PROJECT_ROOT)
+                frame, source = build_latest_candidates(PROJECT_ROOT, max_rows=1)
                 write_csv_atomic(str(TOP_CANDIDATES), frame)
                 rows = int(len(frame.index))
                 LOG.info(

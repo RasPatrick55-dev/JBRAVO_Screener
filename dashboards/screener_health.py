@@ -478,13 +478,15 @@ def build_layout():
                         "fontWeight": "600",
                     },
                     {
-                        "if": {"column_id": "origin", "filter_query": "{origin} = 'fallback'"},
+                        "if": {"column_id": "origin", "filter_query": "{origin} contains 'fallback'"},
                         "backgroundColor": "#2b223a",
                         "color": "#f4d9ff",
                         "fontSize": "11px",
                         "fontWeight": "600",
                         "border": "1px solid rgba(244, 217, 255, 0.45)",
                         "textAlign": "center",
+                        "borderRadius": "999px",
+                        "padding": "0 10px",
                     },
                     {
                         "if": {"column_id": "origin"},
@@ -602,7 +604,16 @@ def register_callbacks(app):
                 top["Why"] = "n/a"
             if "Why" in top.columns:
                 top["Why"] = top["Why"].fillna("n/a")
-            top["origin"] = "fallback" if fallback_active else "—"
+            badge_markup = "<span class='sh-badge sh-badge-fallback'>fallback</span>"
+            top["origin"] = "—"
+            if "source" in top.columns:
+                source_series = top["source"].astype("string").fillna("")
+                mask = source_series.str.contains("fallback", case=False, na=False)
+                top.loc[mask, "origin"] = badge_markup
+            elif fallback_active:
+                top["origin"] = badge_markup
+            else:
+                top["origin"] = "—"
 
         hist = _safe_csv(HIST_CSV)
         ev = _safe_json(RANKER_EVAL_LATEST)
@@ -789,12 +800,10 @@ def register_callbacks(app):
 
         # ---------------- Top table ----------------
         top_data = top_rows or []
-        if fallback_active:
-            for entry in top_data:
-                entry.setdefault("origin", "fallback")
-        else:
-            for entry in top_data:
-                entry.setdefault("origin", "—")
+        for entry in top_data:
+            origin_val = entry.get("origin")
+            if origin_val in (None, ""):
+                entry["origin"] = "—"
         # Build tooltip_data aligned with top_data rows
         tooltips = []
         for r in (top_data or []):
@@ -848,15 +857,17 @@ def register_callbacks(app):
         pipeline_summary = _parse_pipeline_summary(p_tail)
         skip_line = _extract_last_line(p_tail, "EXECUTE_SKIP_NO_CANDIDATES")
         panel_lines: list[str] = []
-        pipeline_tokens = [
-            _extract_last_line(p_tail, "PIPELINE_START"),
-            _extract_last_line(p_tail, "PIPELINE_SUMMARY"),
-            _extract_last_line(p_tail, "FALLBACK_CHECK"),
-            _extract_last_line(p_tail, "PIPELINE_END"),
+        token_labels = [
+            "PIPELINE_START",
+            "PIPELINE_SUMMARY",
+            "FALLBACK_CHECK",
+            "PIPELINE_END",
         ]
-        for token_line in pipeline_tokens:
-            if token_line:
-                panel_lines.append(token_line)
+        pipeline_tokens = [
+            _extract_last_line(p_tail, label) for label in token_labels
+        ]
+        for label, token_line in zip(token_labels, pipeline_tokens):
+            panel_lines.append(token_line or f"{label} (missing)")
         def _try_float(value: Any) -> float:
             try:
                 return float(value)
