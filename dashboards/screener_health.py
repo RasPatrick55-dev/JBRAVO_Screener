@@ -746,7 +746,11 @@ def register_callbacks(app):
         # Build tooltip_data aligned with top_data rows
         tooltips = []
         for r in (top_data or []):
-            tooltips.append(_mk_why_tooltip(r or {}))
+            try:
+                tooltips.append(_mk_why_tooltip(r or {}))
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning("Failed to build tooltip markdown: %s", exc)
+                tooltips.append({})
 
         # ---------------- Trend (Rows & With-Bars %) ----------------
         if hist_rows:
@@ -831,7 +835,11 @@ def register_callbacks(app):
             panel_lines.append(
                 "execute_skips=" + json.dumps(skip_payload, sort_keys=True)
             )
-        pipeline_panel = "\n".join(panel_lines) if panel_lines else "(no data)"
+        try:
+            pipeline_panel = "\n".join(panel_lines) if panel_lines else "(no data)"
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("Failed to compose pipeline panel markdown: %s", exc)
+            pipeline_panel = "(error rendering pipeline summary)"
 
         unauthorized_log = "ALPACA_UNAUTHORIZED" in (p_tail or "")
         if summary_status == "auth_error" or unauthorized_log:

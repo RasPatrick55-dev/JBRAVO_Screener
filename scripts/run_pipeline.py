@@ -19,9 +19,9 @@ import shlex
 import pandas as pd
 
 from scripts.fallback_candidates import (
-    ensure_min_candidates,
-    prepare_latest_candidates,
-    REQUIRED as CANDIDATE_REQUIRED,
+    CANONICAL_COLUMNS,
+    generate_candidates,
+    normalize_candidate_df,
 )
 from scripts.health_check import run_health_check
 from utils.env import (
@@ -40,11 +40,7 @@ EVENTS_PATH = pathlib.Path("logs") / "execute_events.jsonl"
 EXECUTE_METRICS_PATH = pathlib.Path("data") / "execute_metrics.json"
 PIPELINE_METRICS_PATH = pathlib.Path("data") / "pipeline_metrics.json"
 
-LATEST_COLUMNS = prepare_latest_candidates(
-    pd.DataFrame(columns=CANDIDATE_REQUIRED),
-    "screener",
-    canonicalize=True,
-).columns.tolist()
+LATEST_COLUMNS = list(CANONICAL_COLUMNS)
 LATEST_HEADER = ",".join(LATEST_COLUMNS) + "\n"
 
 
@@ -184,6 +180,70 @@ def _count_candidate_rows(path: pathlib.Path) -> int:
         return 0
 
 
+def _read_screener_rows(metrics_path: pathlib.Path) -> int:
+    if not metrics_path.exists():
+        return 0
+    try:
+        payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive parse guard
+        LOG.warning("[INFO] could not parse screener_metrics.json: %s", exc)
+        return 0
+    rows = payload.get("rows") if isinstance(payload, Mapping) else None
+    try:
+        return int(rows or 0)
+    except Exception:
+        return 0
+
+
+def _maybe_fallback(project_root: Path) -> int:
+    LOG.info("[INFO] FALLBACK_CHECK start")
+    cmd = [sys.executable, "-m", "scripts.fallback_candidates"]
+    inline_rows: Optional[int] = None
+    try:
+        subprocess.check_call(cmd, cwd=str(project_root))
+    except subprocess.CalledProcessError as exc:
+        LOG.warning("[INFO] fallback_candidates exited rc=%s during fallback", exc.returncode)
+        inline_rows = _fallback_inline(project_root)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOG.warning("[INFO] fallback_candidates launch failed: %s", exc)
+        inline_rows = _fallback_inline(project_root)
+
+    data_dir = project_root / "data"
+    top = data_dir / "top_candidates.csv"
+    latest = data_dir / "latest_candidates.csv"
+    if inline_rows is not None:
+        rows = inline_rows
+    else:
+        if top.exists():
+            try:
+                copyfile(top, latest)
+            except Exception as exc:  # pragma: no cover - defensive copy
+                LOG.warning("[INFO] FALLBACK_CHECK copy_failed: %s", exc)
+        rows = _count_candidate_rows(latest)
+        if rows == 0 and inline_rows is None:
+            inline_rows = _fallback_inline(project_root)
+            rows = inline_rows
+
+    LOG.info("[INFO] FALLBACK_CHECK rows_out=%s source=fallback", rows or 0)
+    return rows or 0
+
+
+def _fallback_inline(project_root: Path) -> int:
+    try:
+        prepared, _source = generate_candidates(project_root, max_rows=3)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOG.warning("[INFO] FALLBACK_CHECK inline generation failed: %s", exc)
+        prepared = pd.DataFrame(columns=LATEST_COLUMNS)
+    data_dir = project_root / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    top = data_dir / "top_candidates.csv"
+    latest = data_dir / "latest_candidates.csv"
+    prepared = prepared.reindex(columns=LATEST_COLUMNS, fill_value=pd.NA)
+    prepared.to_csv(top, index=False)
+    prepared.to_csv(latest, index=False)
+    return len(prepared)
+
+
 def refresh_latest_candidates() -> dict[str, Any]:
     """Refresh ``latest_candidates.csv`` and ensure metrics scaffolding exists."""
 
@@ -193,6 +253,7 @@ def refresh_latest_candidates() -> dict[str, Any]:
 
     row_count = 0
     raw_row_count = 0
+    now_iso = datetime.now(timezone.utc).isoformat()
     if os.path.exists(src):
         try:
             copyfile(src, dst)
@@ -203,10 +264,14 @@ def refresh_latest_candidates() -> dict[str, Any]:
             raw_row_count = len(df.index)
         except Exception as exc:
             LOG.error("[INFO] failed to read %s: %s", src, exc)
-            df = pd.DataFrame(columns=CANDIDATE_REQUIRED)
-        prepared = prepare_latest_candidates(df, "screener", canonicalize=True)
-        prepared.to_csv(dst, index=False)
-        row_count = len(prepared)
+            df = pd.DataFrame(columns=LATEST_COLUMNS)
+        if raw_row_count > 0:
+            prepared = normalize_candidate_df(df, now_ts=now_iso)
+            prepared["source"] = "screener"
+            prepared.to_csv(dst, index=False)
+            row_count = len(prepared)
+        else:
+            pd.DataFrame(columns=LATEST_COLUMNS).to_csv(dst, index=False)
         try:
             size = os.path.getsize(dst)
         except OSError:  # pragma: no cover - defensive guard
@@ -217,12 +282,7 @@ def refresh_latest_candidates() -> dict[str, Any]:
             size,
         )
     else:
-        empty = prepare_latest_candidates(
-            pd.DataFrame(columns=CANDIDATE_REQUIRED),
-            "screener",
-            canonicalize=True,
-        )
-        empty.to_csv(dst, index=False)
+        pd.DataFrame(columns=LATEST_COLUMNS).to_csv(dst, index=False)
         LOG.info("[INFO] top_candidates.csv missing; wrote header-only latest_candidates.csv")
 
     metrics_path = pathlib.Path("data/screener_metrics.json")
@@ -478,26 +538,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     pipeline_metrics: dict[str, Any] = {}
     latest_path = pathlib.Path("data") / "latest_candidates.csv"
     candidate_rows = _count_candidate_rows(latest_path)
-    fallback_rows: Optional[int] = None
-    fallback_reason = "not_run"
 
-    def run_fallback_if_needed() -> tuple[int, str]:
-        nonlocal fallback_rows, fallback_reason, candidate_rows
-        if fallback_rows is None:
-            fallback_rows, fallback_reason = ensure_min_candidates(
-                base_dir=BASE_DIR,
-                min_rows=1,
-                canonicalize=True,
-                prefer="top_then_scored",
-                max_rows=3,
-            )
-            LOG.info(
-                "[INFO] FALLBACK_CHECK rows_out=%s reason=%s",
-                fallback_rows,
-                fallback_reason,
-            )
-            candidate_rows = _count_candidate_rows(latest_path)
-        return fallback_rows or 0, fallback_reason
+    def ensure_candidates(force: bool = False) -> int:
+        nonlocal candidate_rows
+        current = _count_candidate_rows(latest_path)
+        if force or current <= 0:
+            current = _maybe_fallback(BASE_DIR)
+        candidate_rows = current
+        return candidate_rows
 
     if "screener" in steps:
         step_start = time.time()
@@ -527,7 +575,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             latest_refreshed = True
         except Exception as exc:  # pragma: no cover - defensive safeguard
             LOG.error("[INFO] failed to refresh screener artifacts after SCREENER step: %s", exc)
-        run_fallback_if_needed()
+
+        screener_rows = _read_screener_rows(pathlib.Path("data") / "screener_metrics.json")
+        LOG.info("[INFO] SCREENER rows=%s", screener_rows)
+        if screener_rows == 0:
+            ensure_candidates(force=True)
+        else:
+            ensure_candidates()
 
     if "execute" in steps:
         if not latest_refreshed:
@@ -538,8 +592,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 latest_refreshed = True
             except Exception as exc:  # pragma: no cover - defensive safeguard
                 LOG.error("[INFO] failed to refresh artifacts before EXECUTE step: %s", exc)
-        rows_out, _ = run_fallback_if_needed()
-        if rows_out == 0 or candidate_rows == 0:
+        rows_out = ensure_candidates()
+        if rows_out == 0:
             LOG.info("[INFO] EXECUTE_SKIP_NO_CANDIDATES rows=0")
         else:
             cmd = [sys.executable, "-m", "scripts.execute_trades"]
@@ -559,6 +613,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     LOG.info("EXECUTE SUMMARY %s", json.dumps(execute_metrics, sort_keys=True))
 
     if "backtest" in steps:
+        ensure_candidates()
         cmd = [sys.executable, "-m", "scripts.backtest"]
         if extras["backtest"]:
             cmd.extend(extras["backtest"])
@@ -567,7 +622,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             rc = rc_bt
 
     if "metrics" in steps:
-        run_fallback_if_needed()
+        ensure_candidates()
         cmd = [sys.executable, "-m", "scripts.metrics"]
         if extras["metrics"]:
             cmd.extend(extras["metrics"])
@@ -582,9 +637,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             emit_metric("CANDIDATE_ROWS", candidate_rows)
         except Exception as exc:  # pragma: no cover - defensive safeguard
             LOG.error("[INFO] final artifact refresh failed: %s", exc)
-        run_fallback_if_needed()
+        ensure_candidates()
 
-    run_fallback_if_needed()
+    ensure_candidates()
     duration = time.time() - start
     LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
     sm_path = BASE_DIR / "data" / "screener_metrics.json"
@@ -623,13 +678,27 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     _record_health("end")
 
     if args.reload_web.lower() == "true":
+        domain = os.environ.get("PYTHONANYWHERE_DOMAIN", "")
+        cmd = ["pa_reload_webapp"]
+        if domain:
+            cmd.append(domain)
         try:
-            domain = os.environ.get("PYTHONANYWHERE_DOMAIN")
-            if domain:
-                subprocess.run(["pa_reload_webapp", domain], check=False)
-                LOG.info("[INFO] AUTO-RELOAD webapp requested for %s", domain)
+            subprocess.check_call(cmd)
+            LOG.info("[INFO] AUTO-RELOAD ok domain=%s", domain or "(default)")
         except Exception as exc:  # pragma: no cover - defensive fallback
-            LOG.warning("[INFO] AUTO-RELOAD failed: %s", exc)
+            LOG.info("[INFO] AUTO-RELOAD failed: %s", exc)
+            wsgi_path = Path("/var/www/raspatrick_pythonanywhere_com_wsgi.py")
+            try:
+                wsgi_path.touch()
+                LOG.info(
+                    "[INFO] AUTO-RELOAD fallback touch ok: %s",
+                    wsgi_path,
+                )
+            except Exception as exc2:  # pragma: no cover - defensive fallback
+                LOG.info(
+                    "[INFO] AUTO-RELOAD fallback touch failed: %s",
+                    exc2,
+                )
 
     return rc
 

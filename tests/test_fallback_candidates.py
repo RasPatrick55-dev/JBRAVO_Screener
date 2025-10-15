@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.fallback_candidates import ensure_min_candidates, REQUIRED
+from scripts.fallback_candidates import CANONICAL_COLUMNS, ensure_min_candidates
 
 
 def test_fallback_from_scored(tmp_path: Path):
@@ -49,5 +49,5 @@ def test_fallback_from_scored(tmp_path: Path):
     assert rows >= 1
     assert reason.startswith("scored")
     out = pd.read_csv(data / "latest_candidates.csv")
-    assert set(REQUIRED).issubset(out.columns.tolist())
+    assert out.columns.tolist() == list(CANONICAL_COLUMNS)
     assert out.iloc[0]["symbol"] == "BBB"

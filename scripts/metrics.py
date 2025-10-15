@@ -8,10 +8,10 @@ sys.path.insert(0, BASE_DIR)
 
 import logging
 from datetime import datetime
-import numpy as np
-
-import pandas as pd
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 from utils import write_csv_atomic
 from utils.env import load_env
 
@@ -42,18 +42,46 @@ REQUIRED_COLUMNS = [
 required_columns = ["symbol", "net_pnl", "entry_time", "exit_time"]
 
 
-def load_trades_log(file_path: str) -> pd.DataFrame:
-    """Load ``trades_log.csv`` and validate required columns."""
-    if not Path(file_path).exists():
-        logger.error("Trades log file not found: %s", file_path)
-        raise FileNotFoundError(f"Trades log file not found: {file_path}")
+_TRADES_CANONICAL_COLUMNS = [
+    "timestamp",
+    "symbol",
+    "action",
+    "qty",
+    "price",
+    "order_id",
+    "status",
+    "net_pnl",
+    "entry_time",
+    "exit_time",
+]
 
-    df = pd.read_csv(file_path)
+
+def load_trades_log(file_path: Path) -> pd.DataFrame:
+    """Load ``trades_log.csv`` while tolerating missing or empty files."""
+
+    canonical = list(_TRADES_CANONICAL_COLUMNS)
+    if not isinstance(file_path, Path):
+        file_path = Path(str(file_path))
+
+    if not file_path.exists() or file_path.stat().st_size == 0:
+        logger.warning("Trades log missing/empty; using empty DataFrame at %s", file_path)
+        return pd.DataFrame(columns=canonical)
+
+    try:
+        df = pd.read_csv(file_path)
+    except Exception as exc:  # pragma: no cover - defensive I/O guard
+        logger.error("Failed to read trades log %s: %s", file_path, exc)
+        return pd.DataFrame(columns=canonical)
+
+    for column in canonical:
+        if column not in df.columns:
+            df[column] = pd.Series(dtype="object")
+
     missing_cols = [col for col in required_columns if col not in df.columns]
     if missing_cols:
-        logger.error("Trades log missing required columns: %s", missing_cols)
-        raise KeyError(f"Missing required columns: {missing_cols}")
-    return df
+        logger.warning("Trades log missing required metrics columns: %s", missing_cols)
+
+    return df[canonical]
 
 
 def validate_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:
@@ -187,24 +215,27 @@ def main():
 
     # Detect missing symbol-level metrics and compute from trades_log.csv
     if "net_pnl" not in results_df.columns:
-        try:
-            trades_df = pd.read_csv(os.path.join(BASE_DIR, "data", "trades_log.csv"))
-        except Exception as e:
-            logger.error(f"Error encountered in load_trades_log CSV: {e}")
-            raise
-        grouped = trades_df.groupby("symbol")["net_pnl"]
+        trades_path = Path(BASE_DIR) / "data" / "trades_log.csv"
+        trades_df = load_trades_log(trades_path)
+        if trades_df.empty:
+            results_df = pd.DataFrame(
+                columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
+            )
+        else:
+            trades_df = validate_numeric(trades_df, "net_pnl")
+            grouped = trades_df.groupby("symbol")["net_pnl"]
 
-        symbol_metrics = grouped.agg(
-            trades="count",
-            wins=lambda s: (s > 0).sum(),
-            losses=lambda s: (s <= 0).sum(),
-            net_pnl="sum",
-        ).reset_index()
-        symbol_metrics["win_rate"] = (
-            symbol_metrics["wins"] / symbol_metrics["trades"] * 100
-        )
+            symbol_metrics = grouped.agg(
+                trades="count",
+                wins=lambda s: (s > 0).sum(),
+                losses=lambda s: (s <= 0).sum(),
+                net_pnl="sum",
+            ).reset_index()
+            symbol_metrics["win_rate"] = (
+                symbol_metrics["wins"] / symbol_metrics["trades"] * 100
+            )
 
-        results_df = symbol_metrics
+            results_df = symbol_metrics
 
     ranked_df = rank_candidates(results_df)
     logger.info(
