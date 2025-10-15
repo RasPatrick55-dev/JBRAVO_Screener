@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePath
@@ -72,19 +73,25 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.backtest import compute_recent_performance  # type: ignore
 
 from scripts.health_check import probe_trading_only
+from scripts.utils.env import load_env
 from utils.env import (
     AlpacaCredentialsError,
     AlpacaUnauthorizedError,
     assert_alpaca_creds,
     get_alpaca_creds,
-    load_env,
     write_auth_error_artifacts,
 )
 from utils.io_utils import atomic_write_bytes
 
-load_env()
-_, _, _, _DEFAULT_FEED = get_alpaca_creds()
-DEFAULT_FEED = (_DEFAULT_FEED or "iex").lower()
+DEFAULT_FEED = (os.getenv("ALPACA_DATA_FEED") or "iex").strip().lower() or "iex"
+
+REQUIRED_ENV_KEYS = (
+    "APCA_API_KEY_ID",
+    "APCA_API_SECRET_KEY",
+    "APCA_API_BASE_URL",
+    "APCA_DATA_API_BASE_URL",
+    "ALPACA_DATA_FEED",
+)
 
 try:  # pragma: no cover - optional Alpaca dependency import guard
     from alpaca.trading.client import TradingClient
@@ -114,6 +121,32 @@ except ImportError:  # pragma: no cover - older pydantic exposes it elsewhere
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _bootstrap_env() -> list[str]:
+    loaded_files, missing = load_env(REQUIRED_ENV_KEYS)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.INFO)
+    missing_keys: list[str] = []
+    try:
+        files_repr = json.dumps(loaded_files) if loaded_files else "[]"
+        LOGGER.info("[INFO] ENV_LOADED files=%s", files_repr)
+        if missing:
+            missing_keys = list(missing)
+            LOGGER.error("[ERROR] ENV_MISSING_KEYS=%s", json.dumps(missing_keys))
+    finally:
+        LOGGER.removeHandler(handler)
+        handler.close()
+    if missing_keys:
+        raise SystemExit(2)
+    _, _, _, feed_value = get_alpaca_creds()
+    resolved_feed = (
+        (feed_value or os.getenv("ALPACA_DATA_FEED") or "iex").strip().lower() or "iex"
+    )
+    globals()["DEFAULT_FEED"] = resolved_feed
+    return loaded_files
 
 
 class T:
@@ -4208,6 +4241,7 @@ def main(
     input_df: Optional[pd.DataFrame] = None,
     output_dir: Optional[Path] = None,
 ) -> int:
+    _bootstrap_env()
     _ensure_logger()
     arg_list: Optional[List[str]]
     if argv is None:

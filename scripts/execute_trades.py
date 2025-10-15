@@ -23,12 +23,12 @@ import pandas as pd
 import requests
 
 from scripts.fallback_candidates import CANON, normalize_candidate_df
+from scripts.utils.env import load_env
 from utils.env import (
     AlpacaCredentialsError,
     AlpacaUnauthorizedError,
     assert_alpaca_creds,
     get_alpaca_creds,
-    load_env,
     write_auth_error_artifacts,
 )
 import utils.telemetry as telemetry
@@ -892,7 +892,7 @@ class TradeExecutor:
         self.hydrator = OptionalFieldHydrator(client, self.bar_cache)
         self.log_json = config.log_json
         self._tz_fallback_logged = False
-        self._clock_auth_warned = False
+        self._clock_warning_logged = False
 
     def log_event(self, event: str, **payload: Any) -> None:
         human = " ".join(f"{key}={value}" for key, value in payload.items())
@@ -966,6 +966,15 @@ class TradeExecutor:
             except Exception:  # pragma: no cover - ZoneInfo fallback safety
                 return ZoneInfo("UTC")
 
+    def _log_clock_warning(self, status: str) -> None:
+        if self._clock_warning_logged:
+            return
+        LOGGER.warning(
+            "[WARN] clock_fetch_failed status=%s -> using tz_fallback=America/New_York",
+            status,
+        )
+        self._clock_warning_logged = True
+
     def _probe_trading_clock(self) -> Optional[Any]:
         api_key, api_secret, base_url, _ = get_alpaca_creds()
         base = (base_url or "").strip()
@@ -979,7 +988,8 @@ class TradeExecutor:
         try:
             response = requests.get(url, headers=headers, timeout=5)
         except Exception as exc:
-            LOGGER.warning("[WARN] failed to fetch trading clock: %s", exc)
+            self._log_clock_warning("ERR")
+            LOGGER.debug("Trading clock probe failed: %s", exc, exc_info=False)
             return None
         if response.status_code == 200:
             try:
@@ -989,13 +999,7 @@ class TradeExecutor:
             if isinstance(payload, Mapping):
                 return SimpleNamespace(**payload)
             return None
-        if response.status_code == 401 and not self._clock_auth_warned:
-            LOGGER.warning(
-                "[WARN] clock_fetch_failed=%s -> using tz_fallback=America/New_York",
-                response.status_code,
-            )
-            self._clock_auth_warned = True
-            return None
+        self._log_clock_warning(str(response.status_code))
         LOGGER.warning(
             "[WARN] failed to fetch trading clock: status=%s",
             response.status_code,
@@ -1009,13 +1013,9 @@ class TradeExecutor:
             return self.client.get_clock()
         except Exception as exc:
             status = getattr(exc, "status_code", None)
-            if status == 401 and not self._clock_auth_warned:
-                LOGGER.warning(
-                    "[WARN] clock_fetch_failed=%s -> using tz_fallback=America/New_York",
-                    status,
-                )
-                self._clock_auth_warned = True
-            else:
+            status_label = str(status) if status else "ERR"
+            self._log_clock_warning(status_label)
+            if status not in (401, 403):
                 LOGGER.warning("[WARN] failed to fetch trading clock: %s", exc)
             return self._probe_trading_clock()
 
@@ -1554,16 +1554,18 @@ def configure_logging(log_json: bool) -> None:
     LOGGER.setLevel(logging.INFO)
 
 
-def _create_trading_client() -> tuple[Any, str, bool]:
+def _create_trading_client() -> tuple[Any, str, bool, bool | None]:
     if TradingClient is None:
         raise RuntimeError("alpaca-py TradingClient is unavailable")
     api_key, api_secret, base_url, _ = get_alpaca_creds()
     if not api_key or not api_secret:
         raise RuntimeError("Missing Alpaca credentials for trading client")
-    forced = os.getenv("JBR_EXEC_PAPER")
+    forced_raw = os.getenv("JBR_EXEC_PAPER")
+    forced_mode: bool | None = None
     paper_mode: bool
-    if forced is not None:
-        paper_mode = forced.strip().lower() in {"1", "true", "yes", "on"}
+    if forced_raw is not None:
+        forced_mode = forced_raw.strip().lower() in {"1", "true", "yes", "on"}
+        paper_mode = forced_mode
     else:
         env = (base_url or "paper").lower()
         paper_mode = "live" not in env
@@ -1571,7 +1573,7 @@ def _create_trading_client() -> tuple[Any, str, bool]:
     if not resolved_base:
         resolved_base = "https://paper-api.alpaca.markets"
     client = TradingClient(api_key, api_secret, paper=paper_mode)
-    return client, resolved_base, paper_mode
+    return client, resolved_base, paper_mode, forced_mode
 
 
 def _ensure_trading_auth(base_url: str, creds_snapshot: Mapping[str, Any]) -> None:
@@ -1587,15 +1589,16 @@ def _ensure_trading_auth(base_url: str, creds_snapshot: Mapping[str, Any]) -> No
         response = requests.get(url, headers=headers, timeout=10)
     except Exception as exc:
         LOGGER.error(
-            "[ERROR] TRADING_AUTH_FAILED base=%s status=ERR tip=\"Reload ~/.config/jbravo/.env\" detail=%s",
+            '[ERROR] TRADING_AUTH_FAILED base=%s status=%s tip="Reload ~/.config/jbravo/.env"',
             base_url,
-            exc,
+            "ERR",
         )
+        LOGGER.debug("Trading auth probe error: %s", exc, exc_info=False)
         _record_auth_error("unauthorized", creds_snapshot)
         raise SystemExit(2)
     if response.status_code != 200:
         LOGGER.error(
-            "[ERROR] TRADING_AUTH_FAILED base=%s status=%s tip=\"Reload ~/.config/jbravo/.env\"",
+            '[ERROR] TRADING_AUTH_FAILED base=%s status=%s tip="Reload ~/.config/jbravo/.env"',
             base_url,
             response.status_code,
         )
@@ -1780,11 +1783,13 @@ def run_executor(
         base_url = ""
         paper_mode = None
     else:
-        trading_client, base_url, paper_mode = _create_trading_client()
+        trading_client, base_url, paper_mode, forced_mode = _create_trading_client()
+        forced_label = forced_mode if forced_mode is not None else "auto"
         LOGGER.info(
-            "[INFO] TRADING_CLIENT base=%s paper_mode=%s",
+            "[INFO] TRADING_MODE base=%s paper_mode=%s forced=%s",
             base_url or "",
             bool(paper_mode),
+            forced_label,
         )
         _ensure_trading_auth(base_url or "", creds_snapshot or {})
 
@@ -1808,27 +1813,29 @@ def apply_guards(df: pd.DataFrame, config: ExecutorConfig, metrics: ExecutionMet
     return pd.DataFrame(filtered)
 
 
-def _bootstrap_env() -> tuple[list[str], list[str]]:
+def _bootstrap_env() -> list[str]:
     loaded_files, missing = load_env(REQUIRED_ENV_KEYS)
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(message)s"))
     LOGGER.addHandler(handler)
     LOGGER.setLevel(logging.INFO)
+    missing_keys: list[str] = []
     try:
-        paths = ",".join(loaded_files) if loaded_files else "none"
-        LOGGER.info("[INFO] ENV_LOADED files=%s", paths)
+        files_repr = f"[{', '.join(loaded_files)}]" if loaded_files else "[]"
+        LOGGER.info("[INFO] ENV_LOADED files=%s", files_repr)
         if missing:
-            LOGGER.error("[ERROR] ENV_MISSING keys=%s", ",".join(missing))
+            missing_keys = list(missing)
+            LOGGER.error("[ERROR] ENV_MISSING_KEYS=%s", f"[{', '.join(missing_keys)}]")
     finally:
         LOGGER.removeHandler(handler)
         handler.close()
-    return loaded_files, missing
+    if missing_keys:
+        raise SystemExit(2)
+    return loaded_files
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
-    _, missing_keys = _bootstrap_env()
-    if missing_keys:
-        return 2
+    _bootstrap_env()
     try:
         creds_snapshot = assert_alpaca_creds()
     except AlpacaCredentialsError as exc:

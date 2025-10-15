@@ -523,7 +523,7 @@ def _load_symbols(source_csv: Path) -> List[str]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    args = _parse_args(argv)
+    args = _parse_args(argv or [])
     source_csv = Path(args.source).expanduser()
     symbols = _load_symbols(source_csv)
 

@@ -1,5 +1,7 @@
 import logging
 
+import logging
+
 import pytest
 
 from scripts import execute_trades
@@ -31,3 +33,5 @@ def test_trading_auth_failure_exits(monkeypatch, caplog):
 
     assert exc.value.code == 2
     assert "TRADING_AUTH_FAILED" in caplog.text
+    assert "status=401" in caplog.text
+    assert "Reload ~/.config/jbravo/.env" in caplog.text

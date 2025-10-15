@@ -116,7 +116,7 @@ def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch, caplog):
     assert int(skips.get("NO_CANDIDATES", 0)) >= 1
 
 
-def test_execute_flow_attaches_trailing_stop(tmp_path):
+def test_execute_flow_attaches_trailing_stop(tmp_path, caplog):
     csv_path = tmp_path / "candidates.csv"
     frame = pd.DataFrame(
         [
@@ -141,12 +141,17 @@ def test_execute_flow_attaches_trailing_stop(tmp_path):
     client = StubTradingClient()
     executor = TradeExecutor(config, client, metrics, sleep_fn=lambda *_: None)
     df = executor.load_candidates()
+    caplog.set_level(logging.INFO, logger="execute_trades")
+    caplog.clear()
     rc = executor.execute(df)
     assert rc == 0
     assert metrics.orders_submitted == 1
     assert metrics.trailing_attached == 1
     assert metrics.orders_filled == 1
     assert client.trailing_orders, "Trailing stop should have been submitted"
+    logs = "\n".join(caplog.messages)
+    assert "TRAIL_SUBMIT" in logs
+    assert "TRAIL_CONFIRMED" in logs
 
 
 def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):

@@ -15,7 +15,8 @@ from typing import Any, Optional, Sequence
 import pandas as pd
 
 from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
-from utils.env import assert_alpaca_creds, load_env
+from scripts.utils.env import load_env
+from utils.env import assert_alpaca_creds
 from utils import write_csv_atomic
 from utils.telemetry import emit_event
 
@@ -148,6 +149,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--screener-args",
         default=os.getenv("JBR_SCREENER_ARGS", ""),
         help="Extra CLI arguments forwarded to scripts.screener",
+    )
+    parser.add_argument(
+        "--exec-args",
+        default=os.getenv("JBR_EXEC_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.execute_trades",
     )
     parser.add_argument(
         "--backtest-args",
@@ -365,11 +371,11 @@ def _reload_dashboard(enabled: bool) -> None:
 def main(argv: Optional[Iterable[str]] = None) -> int:
     loaded_files, missing_keys = load_env(REQUIRED_ENV_KEYS)
     configure_logging()
-    paths = ",".join(loaded_files) if loaded_files else "none"
-    LOG.info("[INFO] ENV_LOADED files=%s", paths)
+    files_repr = f"[{', '.join(loaded_files)}]" if loaded_files else "[]"
+    LOG.info("[INFO] ENV_LOADED files=%s", files_repr)
     if missing_keys:
-        LOG.error("[ERROR] ENV_MISSING keys=%s", ",".join(missing_keys))
-        return 2
+        LOG.error("[ERROR] ENV_MISSING_KEYS=%s", f"[{', '.join(missing_keys)}]")
+        raise SystemExit(2)
     args = parse_args(argv)
     steps = determine_steps(args.steps)
     LOG.info("PIPELINE_START steps=%s", ",".join(steps))
@@ -378,6 +384,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     extras = {
         "screener": _split_args(args.screener_args),
+        "exec": _split_args(args.exec_args),
         "backtest": _split_args(args.backtest_args),
         "metrics": _split_args(args.metrics_args),
     }
@@ -475,6 +482,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             stage_times["metrics"] = secs
             if rc_mt and not rc:
                 rc = rc_mt
+        if "exec" in steps:
+            min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
+            rows = ensure_candidates(min_rows)
+            cmd = [sys.executable, "-m", "scripts.execute_trades"]
+            if extras["exec"]:
+                cmd.extend(extras["exec"])
+            rc_exec, secs = run_step("exec", cmd, timeout=60 * 10)
+            stage_times["exec"] = secs
+            if rc_exec and not rc:
+                rc = rc_exec
     except Exception as exc:  # pragma: no cover - defensive guard
         LOG.exception("PIPELINE_FATAL: %s", exc)
         rc = 1
