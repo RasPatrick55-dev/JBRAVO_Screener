@@ -107,9 +107,16 @@ def validate_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:
 
 
 # Load backtest results
-def load_results(csv_file='backtest_results.csv'):
-    csv_path = os.path.join(BASE_DIR, 'data', csv_file)
-    return pd.read_csv(csv_path)
+def load_results(csv_file: str = "backtest_results.csv") -> pd.DataFrame:
+    csv_path = Path(BASE_DIR) / "data" / csv_file
+    if not csv_path.exists():
+        logger.warning("Backtest results missing at %s; continuing with empty frame", csv_path)
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(csv_path)
+    except Exception as exc:  # pragma: no cover - defensive I/O guard
+        logger.error("Failed to read backtest results %s: %s", csv_path, exc)
+        return pd.DataFrame()
 
 # Calculate additional performance metrics
 def calculate_metrics(trades_df: pd.DataFrame) -> dict:
@@ -211,17 +218,13 @@ def save_metrics_summary(metrics_summary, symbols, output_file="metrics_summary.
         [[metrics_summary.get(col, 0) for col in REQUIRED_COLUMNS]],
         columns=REQUIRED_COLUMNS,
     )
-    csv_path = os.path.join(BASE_DIR, "data", output_file)
-    metrics_summary_df.to_csv(csv_path, index=False)
+    csv_path = Path(BASE_DIR) / "data" / output_file
+    write_csv_atomic(str(csv_path), metrics_summary_df)
     logger.info(f"Successfully updated metrics_summary.csv: {csv_path}")
 
 # Full execution of metrics calculation, ranking, and summary
 def main():
-    try:
-        results_df = load_results()
-    except Exception as e:
-        logger.error(f"Error encountered in load_results: {e}")
-        raise
+    results_df = load_results()
 
     # Detect missing symbol-level metrics and compute from trades_log.csv
     if "net_pnl" not in results_df.columns:
@@ -326,7 +329,7 @@ def main():
         )
 
     try:
-        metrics_summary.to_csv(metrics_summary_file, index=False)
+        write_csv_atomic(str(metrics_summary_file), metrics_summary)
         logger.info(
             f"Metrics summary CSV successfully updated: {metrics_summary_file}"
         )

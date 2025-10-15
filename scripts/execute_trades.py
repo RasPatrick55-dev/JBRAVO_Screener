@@ -398,6 +398,8 @@ class ExecutorConfig:
     max_price: float = 1_000.0
     log_json: bool = False
     bar_directories: Sequence[Path] = DEFAULT_BAR_DIRECTORIES
+    min_order_usd: float = 150.0
+    allow_bump_to_one: bool = True
 
 
 @dataclass
@@ -1146,6 +1148,7 @@ class TradeExecutor:
         existing_positions = self.fetch_existing_positions()
         open_order_symbols = self.fetch_open_order_symbols()
         account_buying_power = self.fetch_buying_power()
+        slots = max(1, min(self.config.max_positions, len(candidates)))
 
         for record in candidates:
             symbol = record.get("symbol", "").upper()
@@ -1161,12 +1164,38 @@ class TradeExecutor:
                 self.record_skip_reason("MAX_POSITIONS", symbol=symbol)
                 break
 
-            limit_price = compute_limit_price(record, self.config.entry_buffer_bps)
-            qty = compute_quantity(account_buying_power, self.config.allocation_pct, limit_price)
+            price_value = record.get("entry_price")
+            if price_value in (None, "") or (isinstance(price_value, float) and math.isnan(price_value)):
+                price_value = record.get("close")
+            price_series = pd.to_numeric(pd.Series([price_value]), errors="coerce").fillna(0.0)
+            price_f = float(price_series.iloc[0])
+            if price_f <= 0:
+                self.record_skip_reason("ZERO_QTY", symbol=symbol, detail="invalid_price")
+                continue
+
+            raw_target = float(self.config.allocation_pct) * max(account_buying_power, 0.0)
+            raw_target /= max(1, slots)
+            target_usd = max(float(self.config.min_order_usd), raw_target)
+            qty = int(math.floor(target_usd / price_f)) if price_f > 0 else 0
+            if qty < 1 and self.config.allow_bump_to_one:
+                if price_f <= account_buying_power and account_buying_power > 0:
+                    qty = 1
+                    LOGGER.info("[INFO] BUMP_TO_ONE symbol=%s price=%.2f", symbol, price_f)
+            LOGGER.debug(
+                "CALC symbol=%s price=%.2f bp=%.2f alloc_pct=%.2f slots=%d target_usd=%.2f qty=%d",
+                symbol,
+                price_f,
+                account_buying_power,
+                float(self.config.allocation_pct),
+                slots,
+                target_usd,
+                qty,
+            )
             if qty < 1:
                 self.record_skip_reason("ZERO_QTY", symbol=symbol)
                 continue
 
+            limit_price = compute_limit_price(record, self.config.entry_buffer_bps)
             notional = qty * limit_price
             if notional > account_buying_power:
                 detail = f"required={notional:.2f} available={account_buying_power:.2f}"
@@ -1417,16 +1446,16 @@ class TradeExecutor:
         return None
 
     def log_summary(self) -> None:
-        skips = self.metrics.skipped_reasons
-        LOGGER.info(
-            "[INFO] EXECUTE_SUMMARY orders_submitted=%d trailing_attached=%d "
-            "skips.TIME_WINDOW=%d skips.OPEN_ORDER=%d skips.EXISTING_POSITION=%d",
-            self.metrics.orders_submitted,
-            self.metrics.trailing_attached,
-            int(skips.get("TIME_WINDOW", 0)),
-            int(skips.get("OPEN_ORDER", 0)),
-            int(skips.get("EXISTING_POSITION", 0)),
-        )
+        skips = {key.upper(): int(value) for key, value in self.metrics.skipped_reasons.items()}
+        all_keys = sorted({key.upper() for key in SKIP_REASON_KEYS} | set(skips.keys()))
+        parts = [
+            "[INFO] EXECUTE_SUMMARY",
+            f"orders_submitted={self.metrics.orders_submitted}",
+            f"trailing_attached={self.metrics.trailing_attached}",
+        ]
+        for key in all_keys:
+            parts.append(f"skips.{key}={int(skips.get(key, 0))}")
+        LOGGER.info(" ".join(parts))
 
     def persist_metrics(self) -> None:
         payload = self.metrics.as_dict()
@@ -1477,6 +1506,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Fraction of buying power allocated per position (0-1)",
     )
     parser.add_argument(
+        "--min-order-usd",
+        type=float,
+        default=ExecutorConfig.min_order_usd,
+        help="Minimum USD notional target per slot before rounding",
+    )
+    parser.add_argument(
         "--max-positions",
         type=int,
         default=ExecutorConfig.max_positions,
@@ -1517,6 +1552,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         type=lambda s: s.lower() in {"1", "true", "yes", "y"},
         default=ExecutorConfig.dry_run,
         help="If true, only log intended actions without submitting orders",
+    )
+    parser.add_argument(
+        "--allow-bump-to-one",
+        type=lambda s: s.lower() in {"1", "true", "yes", "y"},
+        default=ExecutorConfig.allow_bump_to_one,
+        help="Allow bumping position size to one share when sizing rounds to zero",
     )
     parser.add_argument(
         "--min-adv20",
@@ -1570,6 +1611,8 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         cancel_after_min=args.cancel_after_min,
         extended_hours=args.extended_hours,
         dry_run=args.dry_run,
+        min_order_usd=args.min_order_usd,
+        allow_bump_to_one=args.allow_bump_to_one,
         min_adv20=args.min_adv20,
         min_price=args.min_price,
         max_price=args.max_price,
