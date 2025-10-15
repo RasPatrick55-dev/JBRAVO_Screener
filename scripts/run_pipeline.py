@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -14,8 +13,9 @@ from typing import Any, Optional, Sequence
 
 import pandas as pd
 
-from scripts.fallback_candidates import CANONICAL_COLUMNS
+from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
 from utils.env import load_env
+from utils import write_csv_atomic
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -147,49 +147,59 @@ def _count_rows(path: Path) -> int:
     return int(len(df.index))
 
 
-def _minimal_fallback_frame() -> pd.DataFrame:
-    now_value = datetime.now(timezone.utc).isoformat()
-    row = {
-        "timestamp": now_value,
-        "symbol": "AAPL",
-        "score": 0.0,
-        "exchange": "UNKNOWN",
-        "close": 0.0,
-        "volume": 0,
-        "universe_count": 0,
-        "score_breakdown": "fallback",
-        "entry_price": 0.0,
-        "adv20": 0.0,
-        "atrp": 0.0,
-        "source": "fallback",
-    }
-    return pd.DataFrame([row], columns=list(CANONICAL_COLUMNS))
-
-
-def maybe_fallback() -> int:
-    LOG.info("FALLBACK_CHECK start")
-    rc, _ = run_step("fallback", [sys.executable, "-m", "scripts.fallback_candidates"], timeout=180)
-    rows = _count_rows(LATEST_CANDIDATES)
+def _ensure_latest_headers() -> None:
+    if LATEST_CANDIDATES.exists() and LATEST_CANDIDATES.stat().st_size > 0:
+        return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if rows <= 0:
-        fallback_df = _minimal_fallback_frame()
-        fallback_df.to_csv(LATEST_CANDIDATES, index=False)
-        fallback_df.to_csv(TOP_CANDIDATES, index=False)
-        rows = len(fallback_df.index)
-    else:
-        try:
-            shutil.copyfile(LATEST_CANDIDATES, TOP_CANDIDATES)
-        except Exception as exc:  # pragma: no cover - defensive guard
-            LOG.warning("FALLBACK mirror to top_candidates failed: %s", exc)
-    LOG.info("FALLBACK_CHECK rows_out=%d rc=%s", rows, rc)
-    return rows
+    empty = pd.DataFrame(columns=list(CANONICAL_COLUMNS))
+    write_csv_atomic(str(LATEST_CANDIDATES), empty)
 
 
-def ensure_candidate_rows(min_rows: int = 1) -> int:
+def _load_top_candidates() -> pd.DataFrame:
+    if not TOP_CANDIDATES.exists() or TOP_CANDIDATES.stat().st_size == 0:
+        return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
+    try:
+        return pd.read_csv(TOP_CANDIDATES)
+    except Exception as exc:  # pragma: no cover - defensive read guard
+        LOG.warning("PIPELINE_TOP_READ_FAILED path=%s error=%s", TOP_CANDIDATES, exc)
+        return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
+
+
+def _write_latest_from_frame(frame: pd.DataFrame, *, source: str = "screener") -> int:
+    normalized = normalize_candidate_df(frame)
+    normalized["source"] = normalized.get("source", "").astype("string").fillna("")
+    normalized.loc[normalized["source"].str.strip() == "", "source"] = source
+    normalized = normalized[list(CANONICAL_COLUMNS)]
+    write_csv_atomic(str(LATEST_CANDIDATES), normalized)
+    return int(len(normalized.index))
+
+
+def _ensure_trades_log() -> None:
+    trades_path = DATA_DIR / "trades_log.csv"
+    if trades_path.exists() and trades_path.stat().st_size > 0:
+        return
+    header = pd.DataFrame(columns=[
+        "timestamp",
+        "symbol",
+        "action",
+        "qty",
+        "price",
+        "order_id",
+        "status",
+        "net_pnl",
+        "entry_time",
+        "exit_time",
+    ])
+    write_csv_atomic(str(trades_path), header)
+
+
+def ensure_candidates(min_rows: int = 1) -> int:
     current = _count_rows(LATEST_CANDIDATES)
     if current >= min_rows:
         return current
-    return maybe_fallback()
+    frame, _ = build_latest_candidates(PROJECT_ROOT, max_rows=max(1, min_rows))
+    write_csv_atomic(str(TOP_CANDIDATES), frame)
+    return int(len(frame.index))
 
 
 def _extract_timing(metrics: Mapping[str, Any], key: str) -> float:
@@ -205,30 +215,36 @@ def _extract_timing(metrics: Mapping[str, Any], key: str) -> float:
         return 0.0
 
 
-def _auto_reload(enabled: bool) -> None:
+def _reload_dashboard(enabled: bool) -> None:
     if not enabled:
         return
-    domain = os.environ.get("PYTHONANYWHERE_DOMAIN", "")
+    domain = os.environ.get("PYTHONANYWHERE_DOMAIN", "").strip()
     cmd = ["pa_reload_webapp"]
     if domain:
         cmd.append(domain)
     try:
-        subprocess.check_call(cmd)
-        LOG.info("AUTO-RELOAD ok domain=%s", domain or "(default)")
+        subprocess.run(cmd, check=True, capture_output=True)
+        LOG.info("[INFO] DASH_RELOAD method=pa rc=0 domain=%s", domain or "(default)")
         return
     except FileNotFoundError:
-        LOG.info("AUTO-RELOAD tool missing; falling back to touch")
+        LOG.info("[INFO] DASH_RELOAD method=pa rc=ERR detail=missing_tool")
     except subprocess.CalledProcessError as exc:
-        LOG.info("AUTO-RELOAD failed rc=%s; falling back", exc.returncode)
+        LOG.info(
+            "[INFO] DASH_RELOAD method=pa rc=ERR detail=rc%s", exc.returncode
+        )
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOG.info("AUTO-RELOAD failed: %s; falling back", exc)
-    wsgi_hint = os.environ.get("PA_WSGI_PATH") or str(DEFAULT_WSGI_PATH)
-    path = Path(wsgi_hint)
+        LOG.info("[INFO] DASH_RELOAD method=pa rc=ERR detail=%s", exc)
+
+    target = domain.replace(".", "_") if domain else ""
+    if target:
+        path = Path(f"/var/www/{target}_wsgi.py")
+    else:
+        path = DEFAULT_WSGI_PATH
     try:
         path.touch()
-        LOG.info("AUTO-RELOAD fallback touch ok: %s", path)
+        LOG.info("[INFO] DASH_RELOAD method=touch rc=0 path=%s", path)
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOG.warning("AUTO-RELOAD fallback touch failed: %s", exc)
+        LOG.info("[INFO] DASH_RELOAD method=touch rc=ERR path=%s detail=%s", path, exc)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
@@ -237,6 +253,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     steps = determine_steps(args.steps)
     LOG.info("PIPELINE_START steps=%s", ",".join(steps))
+
+    _ensure_latest_headers()
 
     extras = {
         "screener": _split_args(args.screener_args),
@@ -262,17 +280,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             metrics = _read_json(SCREENER_METRICS_PATH)
             symbols_in = int(metrics.get("symbols_in", 0) or 0)
             symbols_with_bars = int(metrics.get("symbols_with_bars", 0) or 0)
-            rows = int(metrics.get("rows", 0) or 0)
-            if rows == 0:
-                rows = maybe_fallback()
+            top_frame = _load_top_candidates()
+            if top_frame.empty:
+                frame, source = build_latest_candidates(PROJECT_ROOT)
+                write_csv_atomic(str(TOP_CANDIDATES), frame)
+                rows = int(len(frame.index))
+                LOG.info(
+                    "[INFO] FALLBACK_CHECK reason=no_candidates rows_out=%d source=%s",
+                    rows,
+                    source,
+                )
+            else:
+                rows = _write_latest_from_frame(top_frame, source="screener")
         else:
             metrics = _read_json(SCREENER_METRICS_PATH)
             symbols_in = int(metrics.get("symbols_in", 0) or 0)
             symbols_with_bars = int(metrics.get("symbols_with_bars", 0) or 0)
-            rows = ensure_candidate_rows(0)
+            rows = ensure_candidates(0)
 
         if "backtest" in steps:
-            rows = ensure_candidate_rows(rows or 1)
+            rows = ensure_candidates(rows or 1)
             cmd = [sys.executable, "-m", "scripts.backtest"]
             if extras["backtest"]:
                 cmd.extend(extras["backtest"])
@@ -280,7 +307,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             stage_times["backtest"] = secs
 
         if "metrics" in steps:
-            rows = ensure_candidate_rows(rows or 1)
+            rows = ensure_candidates(rows or 1)
+            _ensure_trades_log()
             cmd = [sys.executable, "-m", "scripts.metrics"]
             if extras["metrics"]:
                 cmd.extend(extras["metrics"])
@@ -308,7 +336,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
         duration = time.time() - started
         LOG.info("PIPELINE_END rc=%s duration=%.1fs", rc, duration)
-        _auto_reload(args.reload_web.lower() == "true")
+        _reload_dashboard(args.reload_web.lower() == "true")
         sys.exit(rc)
 
 

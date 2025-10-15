@@ -101,6 +101,7 @@ SKIP_REASON_KEYS = {
     "MAX_POSITIONS",
     "EXISTING_POSITION",
     "OPEN_ORDER",
+    "NO_CANDIDATES",
 }
 IMPORT_SENTINEL_ENV = "JBRAVO_IMPORT_SENTINEL"
 DATA_URL_ENV_VARS = ("APCA_API_DATA_URL", "ALPACA_API_DATA_URL")
@@ -385,6 +386,7 @@ class ExecutorConfig:
     allocation_pct: float = 0.03
     max_positions: int = 4
     entry_buffer_bps: int = 75
+    limit_buffer_pct: float = 1.0
     trailing_percent: float = 3.0
     cancel_after_min: int = 35
     extended_hours: bool = True
@@ -953,7 +955,7 @@ class TradeExecutor:
             LOGGER.warning("[WARN] failed to fetch trading clock: %s", exc)
             return None
 
-    def evaluate_time_window(self) -> Tuple[bool, str]:
+    def evaluate_time_window(self, *, log: bool = True) -> Tuple[bool, str]:
         tz = self._resolve_market_timezone()
         now_local = datetime.now(timezone.utc).astimezone(tz)
         current_time = dt_time(
@@ -961,11 +963,12 @@ class TradeExecutor:
         )
 
         tz_label = getattr(tz, "key", None) or getattr(tz, "zone", None) or str(tz)
-        LOGGER.info(
-            "[INFO] MARKET_TIME: %s (%s)",
-            now_local.strftime("%Y-%m-%d %H:%M:%S %Z"),
-            tz_label,
-        )
+        if log:
+            LOGGER.info(
+                "[INFO] MARKET_TIME: %s (%s)",
+                now_local.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                tz_label,
+            )
 
         premarket_start = dt_time(4, 0)
         regular_start = dt_time(9, 30)
@@ -1015,7 +1018,8 @@ class TradeExecutor:
                 allowed = True
                 message = f"regular session ({market_label})"
 
-        LOGGER.info("[INFO] TIME_WINDOW %s", message)
+        if log:
+            LOGGER.info("[INFO] TIME_WINDOW %s", message)
         return allowed, message
 
     def load_candidates(self) -> pd.DataFrame:
@@ -1050,6 +1054,14 @@ class TradeExecutor:
 
     def guard_candidates(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         filtered: List[Dict[str, Any]] = []
+        buffer_pct = 0.0
+        if self.config.extended_hours:
+            try:
+                buffer_pct = max(0.0, float(self.config.limit_buffer_pct)) / 100.0
+            except (TypeError, ValueError):
+                buffer_pct = 0.0
+        min_threshold = max(0.0, float(self.config.min_price) * (1 - buffer_pct))
+        max_threshold = float(self.config.max_price) * (1 + buffer_pct)
         for record in records:
             raw_symbol = record.get("symbol")
             symbol = ""
@@ -1067,19 +1079,19 @@ class TradeExecutor:
                 )
                 continue
             price_f = float(price)
-            if price_f < self.config.min_price:
+            if price_f < min_threshold:
                 self.record_skip_reason(
                     "PRICE_BOUNDS",
                     symbol=symbol,
-                    detail=f"lt_min({price_f:.2f})",
+                    detail=f"lt_min({price_f:.2f}) thr={min_threshold:.2f}",
                     aliases=("PRICE_LT_MIN",),
                 )
                 continue
-            if price_f > self.config.max_price:
+            if price_f > max_threshold:
                 self.record_skip_reason(
                     "PRICE_BOUNDS",
                     symbol=symbol,
-                    detail=f"gt_max({price_f:.2f})",
+                    detail=f"gt_max({price_f:.2f}) thr={max_threshold:.2f}",
                     aliases=("PRICE_GT_MAX",),
                 )
                 continue
@@ -1115,6 +1127,7 @@ class TradeExecutor:
             records = self.hydrate_candidates(df)
             candidates = self.guard_candidates(records)
         if not candidates:
+            self.metrics.record_skip("NO_CANDIDATES", count=max(1, len(df)))
             LOGGER.info("No candidates passed guardrails; nothing to do.")
             self.persist_metrics()
             self.log_summary()
@@ -1123,7 +1136,6 @@ class TradeExecutor:
         allowed, status = self.evaluate_time_window()
         if not allowed:
             self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
-            LOGGER.info("[INFO] TIME_WINDOW %s", status)
             self.persist_metrics()
             self.log_summary()
             return 0
@@ -1477,6 +1489,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Entry buffer in basis points added to the reference price",
     )
     parser.add_argument(
+        "--limit-buffer-pct",
+        type=float,
+        default=ExecutorConfig.limit_buffer_pct,
+        help="Percent tolerance applied to price guards (default 1.0)",
+    )
+    parser.add_argument(
         "--trailing-percent",
         type=float,
         default=ExecutorConfig.trailing_percent,
@@ -1548,6 +1566,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         max_positions=args.max_positions,
         entry_buffer_bps=args.entry_buffer_bps,
         trailing_percent=args.trailing_percent,
+        limit_buffer_pct=args.limit_buffer_pct,
         cancel_after_min=args.cancel_after_min,
         extended_hours=args.extended_hours,
         dry_run=args.dry_run,
@@ -1578,14 +1597,19 @@ def run_executor(config: ExecutorConfig, *, client: Optional[Any] = None) -> int
         return 1
 
     candidates = int(frame.shape[0])
+    ny_now = datetime.now(ZoneInfo("America/New_York")).isoformat()
+    in_window, _ = loader.evaluate_time_window(log=False)
     LOGGER.info(
-        "[INFO] EXEC_START dry_run=%s time_window=%s candidates=%s",
+        "[INFO] EXEC_START dry_run=%s time_window=%s ny_now=%s in_window=%s candidates=%s",
         bool(config.dry_run),
         config.time_window or "any",
+        ny_now,
+        bool(in_window),
         candidates,
     )
 
     if frame.empty:
+        loader.metrics.record_skip("NO_CANDIDATES", count=1)
         loader.persist_metrics()
         return 0
 

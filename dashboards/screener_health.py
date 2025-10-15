@@ -70,6 +70,7 @@ PRED_LATEST = DATA_DIR / "predictions" / "latest.csv"
 RANKER_EVAL_LATEST = DATA_DIR / "ranker_eval" / "latest.json"
 METRICS_SUMMARY_CSV = DATA_DIR / "metrics_summary.csv"
 EXECUTE_METRICS_JSON = DATA_DIR / "execute_metrics.json"
+LATEST_CSV = DATA_DIR / "latest_candidates.csv"
 
 
 def _format_probe_timestamp(raw: Any) -> str:
@@ -385,7 +386,15 @@ def _mk_why_tooltip(row: dict) -> dict:
 
     md.extend(raw_lines)
 
-    return {"Why": {"value": "\n".join(md), "type": "markdown"}}
+    tooltips = {"Why": {"value": "\n".join(md), "type": "markdown"}}
+    origin = str(row.get("origin") or "").strip().lower()
+    if origin == "fallback":
+        tooltips["origin"] = {
+            "value": "Fallback candidate generated for resilience",
+            "type": "markdown",
+        }
+
+    return tooltips
 
 def build_layout():
     return html.Div(
@@ -455,11 +464,34 @@ def build_layout():
                 tooltip_duration=None,
                 columns=[
                     {"name":"symbol","id":"symbol"},
+                    {"name":"Origin","id":"origin","presentation":"markdown"},
                     {"name":"Score","id":"Score","type":"numeric","format":{"specifier":".3f"}},
                     {"name":"close","id":"close","type":"numeric","format":{"specifier":".2f"}},
                     {"name":"ADV20","id":"ADV20","type":"numeric","format":{"specifier":".0f"}},
                     {"name":"ATR%","id":"ATR_pct","type":"numeric","format":{"specifier":".2%"}},
                     {"name":"Why (top contributors)","id":"Why"},
+                ],
+                style_data_conditional=[
+                    {
+                        "if": {"column_id": "Score"},
+                        "color": "#4DB6AC",
+                        "fontWeight": "600",
+                    },
+                    {
+                        "if": {"column_id": "origin", "filter_query": "{origin} = 'fallback'"},
+                        "backgroundColor": "#2b223a",
+                        "color": "#f4d9ff",
+                        "fontSize": "11px",
+                        "fontWeight": "600",
+                        "border": "1px solid rgba(244, 217, 255, 0.45)",
+                        "textAlign": "center",
+                    },
+                    {
+                        "if": {"column_id": "origin"},
+                        "color": "#8f9bb3",
+                        "fontSize": "11px",
+                        "textAlign": "center",
+                    },
                 ],
             ),
             html.Hr(),
@@ -517,7 +549,14 @@ def register_callbacks(app):
         Input("sh-interval","n_intervals")
     )
     def _load_artifacts(_n):
-        m = _safe_json(METRICS_JSON)
+        m = dict(_safe_json(METRICS_JSON) or {})
+        latest = _safe_csv(LATEST_CSV, nrows=1)
+        fallback_active = False
+        if not latest.empty:
+            source_raw = str(latest.iloc[0].get("source") or "").strip().lower()
+            fallback_active = source_raw.startswith("fallback")
+        m["_fallback_active"] = fallback_active
+
         top = _safe_csv(TOP_CSV)
         # augment top with ATR% and Why using scored CSV if ATR14/ADV20 missing
         if not top.empty:
@@ -563,6 +602,7 @@ def register_callbacks(app):
                 top["Why"] = "n/a"
             if "Why" in top.columns:
                 top["Why"] = top["Why"].fillna("n/a")
+            top["origin"] = "fallback" if fallback_active else "—"
 
         hist = _safe_csv(HIST_CSV)
         ev = _safe_json(RANKER_EVAL_LATEST)
@@ -608,6 +648,8 @@ def register_callbacks(app):
     def _render(m, top_rows, hist_rows, ev, health, summary):
         if not isinstance(m, dict):
             m = {}
+        else:
+            m = dict(m)
         if not isinstance(top_rows, list):
             top_rows = []
         if not isinstance(hist_rows, list):
@@ -619,6 +661,7 @@ def register_callbacks(app):
         if not isinstance(summary, Mapping):
             summary = {}
 
+        fallback_active = bool(m.get("_fallback_active"))
         exec_metrics = _safe_json(EXECUTE_METRICS_JSON)
         if not isinstance(exec_metrics, Mapping):
             exec_metrics = {}
@@ -672,6 +715,9 @@ def register_callbacks(app):
         candidate_sub = ""
         if rows == 0 and candidate_reason:
             candidate_sub = f"reason: {candidate_reason}"
+        if fallback_active:
+            note = "fallback"
+            candidate_sub = f"{candidate_sub} | {note}" if candidate_sub else note
         zero_banner = None
         if rows == 0:
             zero_banner = html.Div(
@@ -743,6 +789,12 @@ def register_callbacks(app):
 
         # ---------------- Top table ----------------
         top_data = top_rows or []
+        if fallback_active:
+            for entry in top_data:
+                entry.setdefault("origin", "fallback")
+        else:
+            for entry in top_data:
+                entry.setdefault("origin", "—")
         # Build tooltip_data aligned with top_data rows
         tooltips = []
         for r in (top_data or []):
@@ -796,6 +848,15 @@ def register_callbacks(app):
         pipeline_summary = _parse_pipeline_summary(p_tail)
         skip_line = _extract_last_line(p_tail, "EXECUTE_SKIP_NO_CANDIDATES")
         panel_lines: list[str] = []
+        pipeline_tokens = [
+            _extract_last_line(p_tail, "PIPELINE_START"),
+            _extract_last_line(p_tail, "PIPELINE_SUMMARY"),
+            _extract_last_line(p_tail, "FALLBACK_CHECK"),
+            _extract_last_line(p_tail, "PIPELINE_END"),
+        ]
+        for token_line in pipeline_tokens:
+            if token_line:
+                panel_lines.append(token_line)
         def _try_float(value: Any) -> float:
             try:
                 return float(value)
