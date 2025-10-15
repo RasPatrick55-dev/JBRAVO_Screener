@@ -6,8 +6,8 @@ All automated tasks run in US Eastern time and respect DST changes. The
 executor enforces the pre-market window of **07:00–09:30 America/New_York**.
 When the Alpaca clock API is unavailable the executor falls back to the
 `America/New_York` timezone automatically and logs
-`clock_fetch_failed=<status> -> using tz_fallback=America/New_York` once per
-run. For cron-style deployments use the UTC equivalents:
+`clock_fetch_failed status=<status> -> using tz_fallback=America/New_York` once
+per run. For cron-style deployments use the UTC equivalents:
 
 | Task | Eastern (local) | UTC |
 | ---- | ---------------- | --- |
@@ -17,6 +17,14 @@ run. For cron-style deployments use the UTC equivalents:
 
 Adjust the UTC offset when daylight saving changes; the executor always
 normalises to America/New_York internally.
+
+### Pre-Market Autopilot
+
+Trade execution opens positions only within the 07:00–09:30 America/New_York
+window when `time_window=premarket`. In UTC that window spans **12:00–14:30**
+during Eastern Standard Time (EST, UTC−5) and **11:00–13:30** during Eastern
+Daylight Time (EDT, UTC−4). Schedulers should apply the appropriate offset when
+running on cron-like systems.
 
 ## Pipeline & Dashboard Guarantees
 

@@ -1,6 +1,9 @@
 import pandas as pd
 import pytest
 
+import pandas as pd
+import pytest
+
 from scripts import execute_trades
 
 

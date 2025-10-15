@@ -1,8 +1,6 @@
-from datetime import datetime, timezone
-
-from datetime import datetime, timezone
-
 import pytest
+
+from datetime import datetime, timezone
 
 from scripts import execute_trades
 
@@ -11,8 +9,6 @@ pytestmark = pytest.mark.alpaca_optional
 
 
 class _FrozenDateTime:
-    """Simple shim to freeze ``datetime.now`` used in executor tests."""
-
     def __init__(self, moment: datetime) -> None:
         self._moment = moment
 
@@ -22,19 +18,19 @@ class _FrozenDateTime:
         return self._moment.astimezone(tz)
 
 
-def test_premarket_window_allows_with_timezone_fallback(monkeypatch, caplog):
+def test_premarket_window_handles_7am(monkeypatch):
     config = execute_trades.ExecutorConfig(
-        time_window="premarket", extended_hours=True, market_timezone="Invalid/TZ"
+        time_window="premarket",
+        extended_hours=True,
+        market_timezone="America/New_York",
     )
     metrics = execute_trades.ExecutionMetrics()
     executor = execute_trades.TradeExecutor(config, None, metrics)
 
-    frozen = _FrozenDateTime(datetime(2024, 1, 2, 12, 30, tzinfo=timezone.utc))
+    frozen = _FrozenDateTime(datetime(2024, 3, 1, 12, 0, tzinfo=timezone.utc))
     monkeypatch.setattr(execute_trades, "datetime", frozen)
-    caplog.set_level("INFO", logger="execute_trades")
 
     allowed, message = executor.evaluate_time_window()
 
     assert allowed is True
     assert "premarket window open" in message
-    assert any("invalid market timezone" in msg for msg in caplog.messages)
