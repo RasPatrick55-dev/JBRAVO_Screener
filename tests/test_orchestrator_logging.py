@@ -82,6 +82,8 @@ def test_fallback_and_summary_logged_once(tmp_path: Path, monkeypatch, caplog):
     messages = [record.getMessage() for record in caplog.records]
     fallback_lines = [msg for msg in messages if "FALLBACK_CHECK" in msg]
     summary_lines = [msg for msg in messages if "PIPELINE_SUMMARY" in msg]
-    assert len(fallback_lines) == 1
+    assert len(fallback_lines) == 2
+    assert any("FALLBACK_CHECK start" in msg for msg in fallback_lines)
+    assert any("FALLBACK_CHECK rows_out" in msg for msg in fallback_lines)
     assert len(summary_lines) == 1
     assert "rows=" in summary_lines[0]

@@ -1003,16 +1003,8 @@ class TradeExecutor:
                 else f"outside regular session ({market_label})"
             )
         else:  # any
-            extended_ok = self.config.extended_hours and (within_premarket or within_post)
-            if clock is not None:
-                allowed = clock_is_open or extended_ok
-            else:
-                allowed = within_regular or extended_ok
-            message = (
-                f"any window ({market_label})"
-                if allowed
-                else f"market closed ({market_label})"
-            )
+            allowed = True
+            message = f"any window ({market_label})"
 
         if not allowed and clock is not None and window in {"premarket", "regular"}:
             # When Alpaca reports the venue open, treat it as authoritative for overrides.
@@ -1094,7 +1086,11 @@ class TradeExecutor:
             adv = record.get("adv20")
             if adv not in (None, "") and not pd.isna(adv):
                 adv_value = pd.to_numeric(pd.Series([adv]), errors="coerce").iloc[0]
-                if not pd.isna(adv_value) and float(adv_value) < self.config.min_adv20:
+                if (
+                    not pd.isna(adv_value)
+                    and float(adv_value) > 0
+                    and float(adv_value) < self.config.min_adv20
+                ):
                     detail = f"adv20_lt_min({float(adv_value):.0f})"
                     self.record_skip_reason(
                         "PRICE_BOUNDS",

@@ -490,19 +490,33 @@ def run_backtest(symbols: List[str]) -> dict:
     return {"tested": tested, "skipped": skipped}
 
 
-if __name__ == "__main__":
+def main() -> int:
     try:
         csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
-        symbols_df = pd.read_csv(csv_path)
-        symbol_list = symbols_df["symbol"].tolist()
-        logger.info("Loaded %d symbols from %s", len(symbol_list), csv_path)
-        run_backtest(symbol_list)
-        logger.info("Backtest script finished")
+        if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
+            logger.info("Backtest: no candidates today — skipping.")
+        else:
+            symbols_df = pd.read_csv(csv_path)
+            if symbols_df.empty or "symbol" not in symbols_df.columns:
+                logger.info("Backtest: no candidates today — skipping.")
+            else:
+                symbol_series = symbols_df["symbol"].astype("string").str.strip()
+                symbol_list = [s for s in symbol_series.tolist() if s]
+                if not symbol_list:
+                    logger.info("Backtest: no candidates today — skipping.")
+                else:
+                    logger.info("Loaded %d symbols from %s", len(symbol_list), csv_path)
+                    run_backtest(symbol_list)
+                    logger.info("Backtest script finished")
     except Exception as exc:
         logger.error("Backtest failed: %s", exc)
     finally:
         end_time = datetime.utcnow()
         elapsed_time = end_time - start_time
         logger.info("Script finished in %s", elapsed_time)
-        sys.exit(0)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 

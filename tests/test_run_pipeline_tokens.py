@@ -56,10 +56,19 @@ def test_pipeline_emits_tokens(tmp_path, monkeypatch, caplog):
 
     monkeypatch.setattr(run_pipeline, "refresh_latest_candidates", fake_refresh)
 
-    def fake_fallback(*args, **kwargs):
-        return 1, "test_source"
+    def fake_fallback(project_root):
+        run_pipeline.LOG.info("[INFO] FALLBACK_CHECK start (test stub)")
+        latest = project_root / "data" / "latest_candidates.csv"
+        latest.parent.mkdir(parents=True, exist_ok=True)
+        latest.write_text(
+            run_pipeline.LATEST_HEADER
+            + "2024-01-01T00:00:00Z,TEST,1.0,NASDAQ,10.0,1000,1,{},10.0,0,0,fallback\n",
+            encoding="utf-8",
+        )
+        run_pipeline.LOG.info("[INFO] FALLBACK_CHECK rows_out=1 source=fallback (test stub)")
+        return 1
 
-    monkeypatch.setattr(run_pipeline, "ensure_min_candidates", fake_fallback)
+    monkeypatch.setattr(run_pipeline, "_maybe_fallback", fake_fallback)
 
     caplog.set_level(logging.INFO, logger="pipeline")
 
