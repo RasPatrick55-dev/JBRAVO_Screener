@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Tuple
 
 import pandas as pd
+
+from utils import write_csv_atomic
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +40,12 @@ CANONICAL_COLUMNS: Sequence[str] = (
     "atrp",
     "source",
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_ROOT / "data"
+LATEST_CANDIDATES = DATA_DIR / "latest_candidates.csv"
+SCORED_CANDIDATES = DATA_DIR / "scored_candidates.csv"
+PREDICTIONS_DIR = DATA_DIR / "predictions"
 
 _NUMERIC_COLUMNS = ("score", "close", "volume", "universe_count", "entry_price", "adv20", "atrp")
 _RENAME_MAP = {
@@ -203,29 +212,62 @@ def _write_candidates(base_dir: Path, prepared: pd.DataFrame) -> None:
     data_dir = base_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     top_path = data_dir / "top_candidates.csv"
+    write_csv_atomic(str(top_path), prepared)
     latest_path = data_dir / "latest_candidates.csv"
-    prepared.to_csv(top_path, index=False)
-    prepared.to_csv(latest_path, index=False)
+    if not latest_path.exists():
+        write_csv_atomic(str(latest_path), prepared)
 
 
 def generate_candidates(base_dir: Path, *, max_rows: int = 3) -> Tuple[pd.DataFrame, str]:
-    data_dir = base_dir / "data"
+    frame, source = build_latest_candidates(base_dir, max_rows=max_rows)
+    return frame.head(max_rows), source
+
+
+def _tag_source(frame: pd.DataFrame, source: str) -> pd.DataFrame:
+    tagged = frame.copy()
+    tagged["source"] = source
+    return tagged
+
+
+def build_latest_candidates(base_dir: Path | None = None, *, max_rows: int = 1) -> tuple[pd.DataFrame, str]:
+    """Construct the latest candidates CSV using canonical fallback ordering."""
+
+    base = base_dir or PROJECT_ROOT
+    data_dir = base / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
     now_value = _now_iso()
 
     scored = _safe_read_csv(data_dir / "scored_candidates.csv")
     if not scored.empty:
         prepared = _canonical_frame(scored, now_value).head(max_rows)
         if not prepared.empty:
+            prepared = _tag_source(prepared, "fallback:scored")
+            _write_latest(data_dir, prepared)
             return prepared, "scored"
 
     predictions = _latest_prediction_frame(data_dir / "predictions")
     if not predictions.empty:
         prepared = _canonical_frame(predictions, now_value).head(max_rows)
         if not prepared.empty:
+            prepared = _tag_source(prepared, "fallback:predictions")
+            _write_latest(data_dir, prepared)
             return prepared, "predictions"
 
     fallback = _canonical_frame(pd.DataFrame([_DEFAULT_ROW.copy()]), now_value).head(max_rows)
-    return fallback, "synthetic"
+    fallback = _tag_source(fallback, "fallback:static")
+    _write_latest(data_dir, fallback)
+    return fallback, "static"
+
+
+def _write_latest(data_dir: Path, frame: pd.DataFrame) -> None:
+    latest_path = data_dir / "latest_candidates.csv"
+    write_csv_atomic(str(latest_path), frame)
+    LOGGER.info(
+        "[INFO] FALLBACK_OUT rows=%d path=%s",
+        len(frame.index),
+        os.path.relpath(latest_path, start=PROJECT_ROOT),
+    )
 
 
 def ensure_min_candidates(

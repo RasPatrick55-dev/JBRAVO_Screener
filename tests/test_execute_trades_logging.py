@@ -117,7 +117,11 @@ def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch, caplog):
     assert metrics_payload["symbols_in"] == 0
     assert metrics_payload["orders_submitted"] == 0
     logs = "\n".join(caplog.messages)
-    assert "[INFO] EXEC_START dry_run=True time_window=premarket candidates=0" in logs
+    assert "[INFO] EXEC_START dry_run=True time_window=premarket" in logs
+    assert "ny_now=" in logs
+    assert "in_window=False" in logs or "in_window=True" in logs
+    skips = metrics_payload.get("skips", {})
+    assert int(skips.get("NO_CANDIDATES", 0)) >= 1
 
 
 def test_execute_flow_attaches_trailing_stop(tmp_path):
@@ -189,3 +193,35 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
         "skips.TIME_WINDOW=1 skips.OPEN_ORDER=0 skips.EXISTING_POSITION=0"
         in log_text
     )
+
+
+def test_limit_buffer_pct_relaxes_price_bounds(tmp_path):
+    record = {
+        "symbol": "ABC",
+        "entry_price": 9.6,
+        "close": 9.6,
+        "score": 2.0,
+        "universe_count": 10,
+        "score_breakdown": "{}",
+        "adv20": 5_000_000,
+    }
+
+    buffered_config = ExecutorConfig(
+        limit_buffer_pct=5.0,
+        min_price=10.0,
+        max_price=50.0,
+        extended_hours=True,
+    )
+    buffered_executor = TradeExecutor(buffered_config, None, ExecutionMetrics(), sleep_fn=lambda *_: None)
+    allowed = buffered_executor.guard_candidates([record])
+    assert allowed, "buffer should allow slightly-below-min price"
+
+    strict_config = ExecutorConfig(
+        limit_buffer_pct=0.0,
+        min_price=10.0,
+        max_price=50.0,
+        extended_hours=True,
+    )
+    strict_executor = TradeExecutor(strict_config, None, ExecutionMetrics(), sleep_fn=lambda *_: None)
+    denied = strict_executor.guard_candidates([record])
+    assert not denied, "without buffer the same candidate should be skipped"

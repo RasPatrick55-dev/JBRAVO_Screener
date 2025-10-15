@@ -66,8 +66,10 @@ def load_trades_log(file_path: Path) -> pd.DataFrame:
     canonical = list(_TRADES_CANONICAL_COLUMNS)
 
     if not file_path.exists() or file_path.stat().st_size == 0:
-        logger.warning("Trades log missing/empty; using empty DataFrame at %s", file_path)
-        return pd.DataFrame(columns=canonical)
+        logger.warning("Trades log missing/empty; creating placeholder at %s", file_path)
+        empty = pd.DataFrame(columns=canonical)
+        write_csv_atomic(str(file_path), empty)
+        return empty
 
     try:
         df = pd.read_csv(file_path)
