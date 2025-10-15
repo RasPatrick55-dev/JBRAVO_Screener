@@ -251,7 +251,8 @@ def main() -> int:
 
     prepared, source = generate_candidates(base_dir)
     _write_candidates(base_dir, prepared)
-    LOGGER.info("FALLBACK generated rows=%s source=%s", len(prepared), source)
+    LOGGER.info("FALLBACK produced rows=%d", len(prepared))
+    LOGGER.info("FALLBACK source=%s", source)
     LOGGER.debug("FALLBACK payload=%s", json.dumps(prepared.to_dict(orient="records"), default=str))
     return 0
 

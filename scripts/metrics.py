@@ -42,7 +42,7 @@ REQUIRED_COLUMNS = [
 required_columns = ["symbol", "net_pnl", "entry_time", "exit_time"]
 
 
-_TRADES_CANONICAL_COLUMNS = [
+CANON_TRADES_COLS = [
     "timestamp",
     "symbol",
     "action",
@@ -50,18 +50,20 @@ _TRADES_CANONICAL_COLUMNS = [
     "price",
     "order_id",
     "status",
-    "net_pnl",
-    "entry_time",
-    "exit_time",
 ]
+
+_TRADES_OPTIONAL_COLUMNS = ["net_pnl", "entry_time", "exit_time"]
+
+_TRADES_CANONICAL_COLUMNS = CANON_TRADES_COLS + _TRADES_OPTIONAL_COLUMNS
 
 
 def load_trades_log(file_path: Path) -> pd.DataFrame:
     """Load ``trades_log.csv`` while tolerating missing or empty files."""
 
-    canonical = list(_TRADES_CANONICAL_COLUMNS)
     if not isinstance(file_path, Path):
         file_path = Path(str(file_path))
+
+    canonical = list(_TRADES_CANONICAL_COLUMNS)
 
     if not file_path.exists() or file_path.stat().st_size == 0:
         logger.warning("Trades log missing/empty; using empty DataFrame at %s", file_path)
@@ -73,7 +75,11 @@ def load_trades_log(file_path: Path) -> pd.DataFrame:
         logger.error("Failed to read trades log %s: %s", file_path, exc)
         return pd.DataFrame(columns=canonical)
 
-    for column in canonical:
+    for column in CANON_TRADES_COLS:
+        if column not in df.columns:
+            df[column] = pd.Series(dtype="object")
+
+    for column in _TRADES_OPTIONAL_COLUMNS:
         if column not in df.columns:
             df[column] = pd.Series(dtype="object")
 
@@ -81,7 +87,9 @@ def load_trades_log(file_path: Path) -> pd.DataFrame:
     if missing_cols:
         logger.warning("Trades log missing required metrics columns: %s", missing_cols)
 
-    return df[canonical]
+    ordered = [col for col in canonical if col in df.columns]
+    remainder = [col for col in df.columns if col not in ordered]
+    return df[ordered + remainder]
 
 
 def validate_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:

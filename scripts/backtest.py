@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 
@@ -11,6 +12,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Dict, List, Optional
 import json
 
@@ -490,24 +492,52 @@ def run_backtest(symbols: List[str]) -> dict:
     return {"tested": tested, "skipped": skipped}
 
 
-def main() -> int:
+def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the JBRAVO backtest")
+    parser.add_argument(
+        "--source",
+        default=os.path.join(BASE_DIR, "data", "top_candidates.csv"),
+        help="CSV file containing candidate symbols (default: data/top_candidates.csv)",
+    )
+    return parser.parse_args(argv if argv is not None else None)
+
+
+def _load_symbols(source_csv: Path) -> List[str]:
+    if not isinstance(source_csv, Path):
+        source_csv = Path(str(source_csv))
+
+    if not source_csv.exists() or source_csv.stat().st_size == 0:
+        return []
+
     try:
-        csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
-        if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
-            logger.info("Backtest: no candidates today — skipping.")
-        else:
-            symbols_df = pd.read_csv(csv_path)
-            if symbols_df.empty or "symbol" not in symbols_df.columns:
-                logger.info("Backtest: no candidates today — skipping.")
-            else:
-                symbol_series = symbols_df["symbol"].astype("string").str.strip()
-                symbol_list = [s for s in symbol_series.tolist() if s]
-                if not symbol_list:
-                    logger.info("Backtest: no candidates today — skipping.")
-                else:
-                    logger.info("Loaded %d symbols from %s", len(symbol_list), csv_path)
-                    run_backtest(symbol_list)
-                    logger.info("Backtest script finished")
+        frame = pd.read_csv(source_csv)
+    except Exception as exc:  # pragma: no cover - defensive I/O guard
+        logger.error("Backtest: failed to read %s: %s", source_csv, exc)
+        return []
+
+    if frame.empty or "symbol" not in frame.columns:
+        return []
+
+    series = frame["symbol"].astype("string").str.strip()
+    return [symbol for symbol in series.tolist() if symbol]
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = _parse_args(argv)
+    source_csv = Path(args.source).expanduser()
+    symbols = _load_symbols(source_csv)
+
+    if len(symbols) == 0:
+        logger.info("Backtest: no candidates today — skipping.")
+        end_time = datetime.utcnow()
+        elapsed_time = end_time - start_time
+        logger.info("Script finished in %s", elapsed_time)
+        return 0
+
+    try:
+        logger.info("Loaded %d symbols from %s", len(symbols), source_csv)
+        run_backtest(symbols)
+        logger.info("Backtest script finished")
     except Exception as exc:
         logger.error("Backtest failed: %s", exc)
     finally:
