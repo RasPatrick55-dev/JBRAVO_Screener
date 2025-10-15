@@ -85,3 +85,6 @@ class RunSentinel:
             }
         )
         return False
+
+
+emit_event = log_event

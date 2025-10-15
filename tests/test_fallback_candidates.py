@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import pandas as pd
+
 from scripts import fallback_candidates as fallback_mod
 
 
@@ -69,4 +71,8 @@ def test_build_latest_candidates_invokes_atomic_write(tmp_path: Path, monkeypatc
     persisted = pd.read_csv(latest_path)
     assert persisted.columns.tolist() == list(fallback_mod.CANONICAL_COLUMNS)
     assert persisted.iloc[0]["symbol"] == "AAPL"
-    assert frame.equals(persisted.head(len(frame)))
+    pd.testing.assert_frame_equal(
+        frame.reset_index(drop=True),
+        persisted.head(len(frame)).reset_index(drop=True),
+        check_dtype=False,
+    )

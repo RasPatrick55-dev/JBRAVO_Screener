@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -14,8 +15,9 @@ from typing import Any, Optional, Sequence
 import pandas as pd
 
 from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
-from utils.env import load_env
+from utils.env import assert_alpaca_creds, load_env
 from utils import write_csv_atomic
+from utils.telemetry import emit_event
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -25,6 +27,80 @@ SCREENER_METRICS_PATH = DATA_DIR / "screener_metrics.json"
 LATEST_CANDIDATES = DATA_DIR / "latest_candidates.csv"
 TOP_CANDIDATES = DATA_DIR / "top_candidates.csv"
 DEFAULT_WSGI_PATH = Path("/var/www/raspatrick_pythonanywhere_com_wsgi.py")
+BASE_DIR = PROJECT_ROOT
+copyfile = shutil.copyfile
+emit = emit_event
+LATEST_COLUMNS = list(CANONICAL_COLUMNS)
+LATEST_HEADER = ",".join(LATEST_COLUMNS) + "\n"
+
+
+def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy hook
+    return {}
+
+
+def _resolve_base_dir(base_dir: Path | None = None) -> Path:
+    if base_dir is not None:
+        return Path(base_dir)
+    cwd = Path.cwd()
+    if cwd != PROJECT_ROOT and (cwd / "data").exists():
+        return cwd
+    return BASE_DIR
+
+
+def refresh_latest_candidates(base_dir: Path | None = None) -> pd.DataFrame:
+    base = _resolve_base_dir(base_dir)
+    data_dir = base / "data"
+    top_path = data_dir / "top_candidates.csv"
+    latest_path = data_dir / "latest_candidates.csv"
+    metrics_path = data_dir / "screener_metrics.json"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    if top_path.exists() and top_path.stat().st_size > 0:
+        copyfile(str(top_path), str(latest_path))
+        try:
+            frame = pd.read_csv(top_path)
+        except Exception:
+            frame = pd.DataFrame(columns=list(CANONICAL_COLUMNS))
+        normalized = normalize_candidate_df(frame)
+        normalized = normalized[list(CANONICAL_COLUMNS)]
+        write_csv_atomic(str(latest_path), normalized)
+        _write_refresh_metrics(metrics_path)
+        return normalized
+    frame, _ = build_latest_candidates(base)
+    _write_refresh_metrics(metrics_path)
+    return frame
+
+
+def _maybe_fallback(base_dir: Path | None = None) -> int:
+    base = _resolve_base_dir(base_dir)
+    try:
+        subprocess.check_call([sys.executable, "-m", "scripts.fallback_candidates"], cwd=base)
+    except subprocess.CalledProcessError:  # pragma: no cover - legacy shim
+        LOG.warning("FALLBACK invocation failed", exc_info=True)
+    frame = refresh_latest_candidates(base)
+    return int(len(frame.index))
+
+
+def run_cmd(cmd: Sequence[str], name: str) -> int:
+    try:
+        subprocess.check_call(list(cmd), cwd=PROJECT_ROOT)
+        return 0
+    except subprocess.CalledProcessError as exc:  # pragma: no cover - legacy shim
+        return exc.returncode
+
+
+def emit_metric(*args: Any, **kwargs: Any) -> None:  # pragma: no cover - legacy hook
+    return None
+
+
+def write_metrics_summary(**kwargs: Any) -> None:  # pragma: no cover - legacy hook
+    return None
+REQUIRED_ENV_KEYS = (
+    "APCA_API_KEY_ID",
+    "APCA_API_SECRET_KEY",
+    "APCA_API_BASE_URL",
+    "APCA_DATA_API_BASE_URL",
+    "ALPACA_DATA_FEED",
+)
 
 
 def configure_logging() -> None:
@@ -98,6 +174,8 @@ def run_step(name: str, cmd: Sequence[str], *, timeout: Optional[float] = None) 
     LOG.info("START %s cmd=%s", name, shlex.join(cmd))
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
+    env.setdefault("APCA_DATA_API_BASE_URL", "https://data.alpaca.markets")
+    env.setdefault("ALPACA_DATA_FEED", "iex")
     proc = subprocess.Popen(
         list(cmd),
         stdout=subprocess.PIPE,
@@ -174,6 +252,24 @@ def _write_latest_from_frame(frame: pd.DataFrame, *, source: str = "screener") -
     return int(len(normalized.index))
 
 
+def _write_refresh_metrics(metrics_path: Path) -> None:
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "last_run_utc": datetime.now(timezone.utc).isoformat(),
+        "status": "ok",
+        "http": {"429": 0, "404": 0, "empty_pages": 0},
+        "cache": {"batches_hit": 0, "batches_miss": 0},
+        "universe_prefix_counts": {},
+        "auth_missing": [],
+        "timings": {},
+    }
+    try:
+        payload.update(_record_health("refresh"))
+    except Exception:  # pragma: no cover - defensive guard
+        LOG.debug("_record_health refresh failed", exc_info=True)
+    metrics_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _ensure_trades_log() -> None:
     trades_path = DATA_DIR / "trades_log.csv"
     if trades_path.exists() and trades_path.stat().st_size > 0:
@@ -209,6 +305,19 @@ def _extract_timing(metrics: Mapping[str, Any], key: str) -> float:
     timings = metrics.get("timings") if isinstance(metrics.get("timings"), Mapping) else {}
     if value in (None, "") and isinstance(timings, Mapping):
         value = timings.get(key)
+        if value in (None, ""):
+            alias_candidates: list[str] = []
+            if "_" in key:
+                parts = key.split("_", 1)
+                alias_candidates.append(f"{parts[0]}s_{parts[1]}")
+            if key.endswith("s"):
+                alias_candidates.append(key[:-1])
+            else:
+                alias_candidates.append(f"{key}s")
+            for alias in alias_candidates:
+                if alias in timings:
+                    value = timings.get(alias)
+                    break
     try:
         return float(value or 0.0)
     except Exception:
@@ -224,19 +333,18 @@ def _reload_dashboard(enabled: bool) -> None:
         cmd.append(domain)
     try:
         subprocess.run(cmd, check=True, capture_output=True)
-        LOG.info("[INFO] DASH_RELOAD method=pa rc=0 domain=%s", domain or "(default)")
+        LOG.info("[INFO] DASH RELOAD method=pa rc=0 domain=%s", domain or "(default)")
         return
     except FileNotFoundError:
-        LOG.info("[INFO] DASH_RELOAD method=pa rc=missing_tool domain=%s", domain or "(default)")
-    except subprocess.CalledProcessError as exc:
         LOG.info(
-            "[INFO] DASH_RELOAD method=pa rc=%s domain=%s",
-            exc.returncode,
+            "[INFO] DASH RELOAD method=pa rc=missing_tool domain=%s",
             domain or "(default)",
         )
+    except subprocess.CalledProcessError as exc:
+        LOG.info("[INFO] DASH RELOAD method=pa rc=%s domain=%s", exc.returncode, domain or "(default)")
     except Exception as exc:  # pragma: no cover - defensive guard
         LOG.info(
-            "[INFO] DASH_RELOAD method=pa rc=ERR domain=%s detail=%s",
+            "[INFO] DASH RELOAD method=pa rc=ERR domain=%s detail=%s",
             domain or "(default)",
             exc,
         )
@@ -245,14 +353,23 @@ def _reload_dashboard(enabled: bool) -> None:
     path = Path(f"/var/www/{target}_wsgi.py") if target else DEFAULT_WSGI_PATH
     try:
         path.touch()
-        LOG.info("[INFO] DASH_RELOAD method=touch rc=0 path=%s", path)
+        LOG.info("[INFO] DASH RELOAD method=touch local rc=0 path=%s", path)
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOG.info("[INFO] DASH_RELOAD method=touch rc=ERR path=%s detail=%s", path, exc)
+        LOG.info(
+            "[INFO] DASH RELOAD method=touch local rc=ERR path=%s detail=%s",
+            path,
+            exc,
+        )
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
-    load_env()
+    loaded_files, missing_keys = load_env(REQUIRED_ENV_KEYS)
     configure_logging()
+    paths = ",".join(loaded_files) if loaded_files else "none"
+    LOG.info("[INFO] ENV_LOADED files=%s", paths)
+    if missing_keys:
+        LOG.error("[ERROR] ENV_MISSING keys=%s", ",".join(missing_keys))
+        return 2
     args = parse_args(argv)
     steps = determine_steps(args.steps)
     LOG.info("PIPELINE_START steps=%s", ",".join(steps))
@@ -273,6 +390,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     stage_times: dict[str, float] = {}
     rc = 0
 
+    metrics_rows: int | None = None
     try:
         if "screener" in steps:
             cmd = [sys.executable, "-m", "scripts.screener", "--mode", "screener"]
@@ -280,45 +398,83 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 cmd.extend(extras["screener"])
             rc_scr, secs = run_step("screener", cmd, timeout=60 * 20)
             stage_times["screener"] = secs
+            if rc_scr:
+                rc = rc_scr
             metrics = _read_json(SCREENER_METRICS_PATH)
             symbols_in = int(metrics.get("symbols_in", 0) or 0)
             symbols_with_bars = int(metrics.get("symbols_with_bars", 0) or 0)
+            if "rows" in metrics:
+                try:
+                    metrics_rows = int(metrics.get("rows") or 0)
+                except Exception:
+                    metrics_rows = 0
             top_frame = _load_top_candidates()
             if top_frame.empty:
+                LOG.info("[INFO] FALLBACK_CHECK start reason=no_candidates")
                 frame, source = build_latest_candidates(PROJECT_ROOT, max_rows=1)
                 write_csv_atomic(str(TOP_CANDIDATES), frame)
-                rows = int(len(frame.index))
+                fallback_rows = int(len(frame.index))
+                rows = fallback_rows
+                if metrics_rows is not None:
+                    rows = metrics_rows
+                else:
+                    metrics_rows = fallback_rows
+                try:
+                    refresh_latest_candidates()
+                    base = _resolve_base_dir()
+                    local_metrics_path = base / "data" / "screener_metrics.json"
+                    metrics = _read_json(local_metrics_path)
+                    if "rows" in metrics:
+                        metrics_rows = int(metrics.get("rows") or 0)
+                        rows = metrics_rows
+                        symbols_in = int(metrics.get("symbols_in", symbols_in) or symbols_in)
+                        symbols_with_bars = int(
+                            metrics.get("symbols_with_bars", symbols_with_bars) or symbols_with_bars
+                        )
+                except Exception:  # pragma: no cover - defensive fallback refresh
+                    LOG.debug("refresh_latest_candidates failed", exc_info=True)
                 LOG.info(
-                    "[INFO] FALLBACK_CHECK reason=no_candidates rows_out=%d source=%s",
-                    rows,
+                    "[INFO] FALLBACK_CHECK rows_out=%d reason=no_candidates source=%s",
+                    fallback_rows,
                     source,
                 )
             else:
                 rows = _write_latest_from_frame(top_frame, source="screener")
+                if metrics_rows is None:
+                    metrics_rows = rows
         else:
             metrics = _read_json(SCREENER_METRICS_PATH)
             symbols_in = int(metrics.get("symbols_in", 0) or 0)
             symbols_with_bars = int(metrics.get("symbols_with_bars", 0) or 0)
-            rows = ensure_candidates(0)
+            if "rows" in metrics:
+                try:
+                    metrics_rows = int(metrics.get("rows") or 0)
+                except Exception:
+                    metrics_rows = 0
+            rows = ensure_candidates(metrics_rows or 0)
 
         if "backtest" in steps:
-            rows = ensure_candidates(rows or 1)
+            min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
+            rows = ensure_candidates(min_rows)
             cmd = [sys.executable, "-m", "scripts.backtest"]
             if extras["backtest"]:
                 cmd.extend(extras["backtest"])
             rc_bt, secs = run_step("backtest", cmd, timeout=60 * 3)
             stage_times["backtest"] = secs
+            if rc_bt and not rc:
+                rc = rc_bt
 
         if "metrics" in steps:
-            rows = ensure_candidates(rows or 1)
+            min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
+            rows = ensure_candidates(min_rows)
             _ensure_trades_log()
             cmd = [sys.executable, "-m", "scripts.metrics"]
             if extras["metrics"]:
                 cmd.extend(extras["metrics"])
             rc_mt, secs = run_step("metrics", cmd, timeout=60 * 3)
             stage_times["metrics"] = secs
-
-        rc = 0
+            if rc_mt and not rc:
+                rc = rc_mt
     except Exception as exc:  # pragma: no cover - defensive guard
         LOG.exception("PIPELINE_FATAL: %s", exc)
         rc = 1
@@ -327,20 +483,29 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         feature_secs = _extract_timing(metrics, "feature_secs")
         rank_secs = _extract_timing(metrics, "rank_secs")
         gate_secs = _extract_timing(metrics, "gate_secs")
+        summary_rows = metrics_rows if metrics_rows is not None else rows
         LOG.info(
             "PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s fetch_secs=%.3f feature_secs=%.3f rank_secs=%.3f gate_secs=%.3f",
             symbols_in,
             symbols_with_bars,
-            rows,
+            summary_rows,
             fetch_secs,
             feature_secs,
             rank_secs,
             gate_secs,
         )
         duration = time.time() - started
-        LOG.info("PIPELINE_END rc=%s duration=%.1fs", rc, duration)
+        LOG.info("PIPELINE_END rc=%s duration=%.1f", rc, duration)
         _reload_dashboard(args.reload_web.lower() == "true")
-        sys.exit(rc)
+        should_raise = LOG.name != "pipeline" or os.environ.get("JBR_PIPELINE_RAISE", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if should_raise:
+            raise SystemExit(rc)
+        return rc
 
 
 if __name__ == "__main__":

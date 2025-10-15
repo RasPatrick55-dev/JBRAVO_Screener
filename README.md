@@ -12,6 +12,29 @@ To launch the dashboard locally run:
 python dashboards/dashboard_app.py
 ```
 
+## Pre-Market Autopilot
+
+The orchestrator now bootstraps environment variables automatically from
+`~/.config/jbravo/.env` and the repository `.env` file. Each entry point
+(`scripts/screener.py`, `scripts/run_pipeline.py`, `scripts/execute_trades.py`)
+logs which files were loaded and fails fast with exit code `2` when the
+required Alpaca credentials are missing. Trade execution validates
+authorization against `/v2/account` before sizing orders, emits
+`TRADING_AUTH_FAILED` on HTTP 401 responses, and records the failure for the
+dashboard.
+
+Default sizing was tuned for pre-market operation: each slot targets the larger
+of `5%` of buying power or `$200` notional, and price guardrails automatically
+fall back to the previous close when `entry_price` is absent. Trailing stops are
+attached immediately after fills with explicit `TRAIL_SUBMIT` and
+`TRAIL_CONFIRMED` events.
+
+The metrics pipeline is resilient to a missing `data/trades_log.csv`; when the
+file is absent an empty `data/metrics_summary.csv` is written and the run still
+reports `PIPELINE_END rc=0`. Dashboard reloads continue to work even when the
+`pa_reload_webapp` CLI is unavailable—the runner touches the WSGI file as a
+fallback.
+
 ## Cron Job Setup
 
 To keep CSV files in sync with your Alpaca account, schedule

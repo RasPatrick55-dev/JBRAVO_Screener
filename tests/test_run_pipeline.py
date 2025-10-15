@@ -71,7 +71,19 @@ def test_pipeline_refresh_latest(tmp_path, monkeypatch):
 
     run_pipeline.refresh_latest_candidates()
 
-    assert copied.get("call") == ("data/top_candidates.csv", "data/latest_candidates.csv")
+    call = copied.get("call")
+    assert call is not None
+    src, dst = call
+    expected_src = tmp_path / "data" / "top_candidates.csv"
+    expected_dst = tmp_path / "data" / "latest_candidates.csv"
+    src_path = Path(src)
+    dst_path = Path(dst)
+    if not src_path.is_absolute():
+        src_path = tmp_path / src_path
+    if not dst_path.is_absolute():
+        dst_path = tmp_path / dst_path
+    assert src_path == expected_src
+    assert dst_path == expected_dst
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     assert "last_run_utc" in metrics and metrics["last_run_utc"]
     assert metrics.get("http") == {"429": 0, "404": 0, "empty_pages": 0}

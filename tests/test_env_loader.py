@@ -28,42 +28,45 @@ def _clean_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
-def _write_env(tmp_path: Path, contents: str) -> None:
-    env_path = tmp_path / ".env"
+def _write_env(tmp_path: Path, contents: str) -> Path:
+    config_dir = tmp_path / ".config" / "jbravo"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    env_path = config_dir / ".env"
     env_path.write_text(contents, encoding="utf-8")
+    return env_path
 
 
 def test_load_env_strips_crlf_and_spaces(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
-    _write_env(
+    env_path = _write_env(
         tmp_path,
         "APCA_API_KEY_ID= key123   \r\n"
         "APCA_API_SECRET_KEY= secret456\r\n",
     )
 
-    summary = load_env()
+    loaded, missing = load_env(("APCA_API_KEY_ID", "APCA_API_SECRET_KEY"))
 
     assert os.environ["APCA_API_KEY_ID"] == "key123"
     assert os.environ["APCA_API_SECRET_KEY"] == "secret456"
-    assert summary["APCA_API_KEY_ID"] == {"present": True, "len": 6}
-    assert summary["APCA_API_SECRET_KEY"] == {"present": True, "len": 9}
+    assert env_path.as_posix() in loaded
+    assert missing == []
 
 
 def test_load_env_handles_quoted_values(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
-    _write_env(
+    env_path = _write_env(
         tmp_path,
         'APCA_API_KEY_ID="quoted-key"\nAPCA_API_SECRET_KEY="quoted-secret"\n',
     )
 
-    summary = load_env()
+    loaded, missing = load_env(("APCA_API_KEY_ID", "APCA_API_SECRET_KEY"))
 
     assert os.environ["APCA_API_KEY_ID"] == "quoted-key"
     assert os.environ["APCA_API_SECRET_KEY"] == "quoted-secret"
-    assert summary["APCA_API_KEY_ID"]["len"] == len("quoted-key")
-    assert summary["APCA_API_SECRET_KEY"]["len"] == len("quoted-secret")
+    assert env_path.as_posix() in loaded
+    assert missing == []
 
 
 def test_load_env_trims_v2_suffix(tmp_path, monkeypatch):
@@ -73,13 +76,13 @@ def test_load_env_trims_v2_suffix(tmp_path, monkeypatch):
         tmp_path,
         "APCA_API_KEY_ID=abc\n"
         "APCA_API_SECRET_KEY=def\n"
-        "APCA_API_BASE_URL=https://paper-api.alpaca.markets/v2/\n",
+        "APCA_API_BASE_URL=https://paper-api.alpaca.markets/v2/\n"
+        "APCA_DATA_API_BASE_URL=https://data.alpaca.markets\n"
+        "ALPACA_DATA_FEED=iex\n",
     )
 
-    summary = load_env()
+    loaded, missing = load_env()
 
     assert os.environ["APCA_API_BASE_URL"] == "https://paper-api.alpaca.markets"
-    assert summary["APCA_API_BASE_URL"] == {
-        "present": True,
-        "len": len("https://paper-api.alpaca.markets"),
-    }
+    assert "https://paper-api.alpaca.markets" in os.environ["APCA_API_BASE_URL"]
+    assert not missing
