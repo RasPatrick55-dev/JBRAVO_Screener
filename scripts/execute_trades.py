@@ -166,27 +166,28 @@ def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
     params: Dict[str, str] = {}
     if feed:
         params["feed"] = str(feed)
+    _log_call("alpaca.latest_bar", symbol=symbol)
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
     except Exception as exc:
-        LOGGER.warning("[WARN] Failed to fetch latest close for %s: %s", symbol, exc)
+        _warn_context("alpaca.latest_bar", f"{symbol}: {exc}")
         return None
     if response.status_code in (401, 403):
-        LOGGER.warning(
-            "[WARN] Latest close request unauthorized for %s status=%s",
-            symbol,
-            response.status_code,
+        _warn_context(
+            "alpaca.latest_bar",
+            f"{symbol} unauthorized status={response.status_code}",
         )
         return None
     if response.status_code != 200:
-        LOGGER.warning(
-            "[WARN] Latest close request for %s returned status %s", symbol, response.status_code
+        _warn_context(
+            "alpaca.latest_bar",
+            f"{symbol} status={response.status_code}",
         )
         return None
     try:
         payload = response.json()
     except ValueError as exc:
-        LOGGER.warning("[WARN] Could not decode latest close response for %s: %s", symbol, exc)
+        _warn_context("alpaca.latest_bar", f"{symbol} decode_failed: {exc}")
         return None
     if not isinstance(payload, Mapping):
         return None
@@ -226,25 +227,28 @@ def _fetch_latest_daily_bars(symbols: Sequence[str]) -> Dict[str, Dict[str, Opti
     params: Dict[str, str] = {"symbols": ",".join(unique), "timeframe": "1Day"}
     if feed:
         params["feed"] = str(feed)
+    _log_call("alpaca.bars_latest", symbols=len(unique))
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
     except Exception as exc:
-        LOGGER.warning("[WARN] Failed batch daily bars fetch for %s symbols: %s", len(unique), exc)
+        _warn_context("alpaca.bars_latest", f"request_failed: {exc}")
         return {}
     if response.status_code in (401, 403):
-        LOGGER.warning(
-            "[WARN] Batch daily bars request unauthorized status=%s", response.status_code
+        _warn_context(
+            "alpaca.bars_latest",
+            f"unauthorized status={response.status_code}",
         )
         return {}
     if response.status_code != 200:
-        LOGGER.warning(
-            "[WARN] Batch daily bars request returned status %s", response.status_code
+        _warn_context(
+            "alpaca.bars_latest",
+            f"status={response.status_code}",
         )
         return {}
     try:
         payload = response.json()
     except ValueError as exc:
-        LOGGER.warning("[WARN] Could not decode batch daily bars response: %s", exc)
+        _warn_context("alpaca.bars_latest", f"decode_failed: {exc}")
         return {}
     bars = payload.get("bars") if isinstance(payload, Mapping) else None
     results: Dict[str, Dict[str, Optional[float]]] = {}
@@ -997,10 +1001,12 @@ class TradeExecutor:
             "APCA-API-KEY-ID": api_key,
             "APCA-API-SECRET-KEY": api_secret,
         }
+        _log_call("alpaca.clock_probe")
         try:
             response = requests.get(url, headers=headers, timeout=5)
         except Exception as exc:
             self._log_clock_warning("ERR")
+            _warn_context("alpaca.clock_probe", str(exc))
             LOGGER.debug("Trading clock probe failed: %s", exc, exc_info=False)
             return None
         if response.status_code == 200:
@@ -1012,9 +1018,9 @@ class TradeExecutor:
                 return SimpleNamespace(**payload)
             return None
         self._log_clock_warning(str(response.status_code))
-        LOGGER.warning(
-            "[WARN] failed to fetch trading clock: status=%s",
-            response.status_code,
+        _warn_context(
+            "alpaca.clock_probe",
+            f"status={response.status_code}",
         )
         return None
 
@@ -1026,22 +1032,30 @@ class TradeExecutor:
         if self.client is None or not hasattr(self.client, "get_clock"):
             return self._probe_trading_clock()
         try:
+            _log_call("alpaca.get_clock")
             return self.client.get_clock()
         except Exception as exc:
             status = getattr(exc, "status_code", None)
             status_label = str(status) if status else "ERR"
             self._log_clock_warning(status_label)
             if status not in (401, 403):
-                LOGGER.warning("[WARN] failed to fetch trading clock: %s", exc)
+                _warn_context("alpaca.get_clock", str(exc))
             return self._probe_trading_clock()
 
     def evaluate_time_window(self, *, log: bool = True) -> Tuple[bool, str, str]:
         tz = self._resolve_market_timezone()
         now_utc = datetime.now(timezone.utc)
         now_local = now_utc.astimezone(tz)
-        ny_now = now_utc.astimezone(ZoneInfo("America/New_York")).isoformat()
+        ny_now_dt = now_utc.astimezone(ZoneInfo("America/New_York"))
+        ny_now = ny_now_dt.isoformat()
         current_time = dt_time(
             now_local.hour, now_local.minute, now_local.second, now_local.microsecond
+        )
+        ny_time = dt_time(
+            ny_now_dt.hour,
+            ny_now_dt.minute,
+            ny_now_dt.second,
+            ny_now_dt.microsecond,
         )
 
         premarket_start = dt_time(4, 0)
@@ -1052,12 +1066,25 @@ class TradeExecutor:
         within_premarket = premarket_start <= current_time < regular_start
         within_regular = regular_start <= current_time < regular_end
         within_post = regular_end <= current_time < postmarket_end
+        ny_within_premarket = premarket_start <= ny_time < regular_start
+        ny_within_regular = regular_start <= ny_time < regular_end
 
         mode = (self.config.time_window or "auto").lower()
         resolved_window = mode
+        auto_branch = None
         if mode == "auto":
-            auto_window = "premarket" if dt_time(7, 0) <= current_time < regular_start else "regular"
-            resolved_window = auto_window
+            if dt_time(7, 0) <= ny_time < regular_start:
+                resolved_window = "premarket"
+                auto_branch = "premarket"
+            elif ny_within_regular:
+                resolved_window = "regular"
+                auto_branch = "regular"
+            else:
+                resolved_window = "regular"
+                auto_branch = "regular"
+            LOGGER.info(
+                "[INFO] TIME_WINDOW_AUTO branch=%s ny_time=%s", auto_branch, ny_now
+            )
         elif mode not in {"premarket", "regular", "any"}:
             resolved_window = "any"
 
@@ -1073,14 +1100,14 @@ class TradeExecutor:
                 allowed = False
                 message = f"outside premarket ({market_label})"
             else:
-                allowed = within_premarket
+                allowed = ny_within_premarket if mode == "auto" else within_premarket
                 message = (
                     f"premarket window open ({market_label})"
                     if allowed
                     else f"outside premarket ({market_label})"
                 )
         elif resolved_window == "regular":
-            allowed = within_regular
+            allowed = ny_within_regular if mode == "auto" else within_regular
             message = (
                 f"regular session ({market_label})"
                 if allowed
@@ -1298,6 +1325,11 @@ class TradeExecutor:
                     notional = bumped_notional
                 qty = int(math.floor(notional / limit_px)) if limit_px > 0 else 0
             if qty < 1:
+                if not self.config.allow_fractional and notional >= min_order > 0:
+                    _warn_context(
+                        "sizing",
+                        f"ZERO_QTY post min-notional symbol={symbol} limit={limit_px:.2f}",
+                    )
                 LOGGER.info(
                     "[INFO] ZERO_QTY_AFTER_BUMP symbol=%s limit=%.2f min_usd=%.2f",
                     symbol,
@@ -1346,13 +1378,14 @@ class TradeExecutor:
         if self.client is None:
             return symbols
         try:
+            _log_call("alpaca.get_positions")
             positions = self.client.get_all_positions()
             for pos in positions:
                 symbol = getattr(pos, "symbol", "")
                 if symbol:
                     symbols.add(symbol.upper())
         except Exception as exc:
-            LOGGER.warning("Failed to fetch positions: %s", exc)
+            _warn_context("alpaca.get_positions", str(exc))
         return symbols
 
     @staticmethod
@@ -1376,19 +1409,20 @@ class TradeExecutor:
             return symbols
         try:
             request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+            _log_call("alpaca.get_orders", status=request.status)
             orders = self.client.get_orders(request)
             for order in orders or []:
                 symbol = getattr(order, "symbol", "")
                 if symbol:
                     symbols.add(symbol.upper())
         except Exception as exc:
-            LOGGER.warning("Failed to fetch open orders: %s", exc)
+            _warn_context("alpaca.get_orders", str(exc))
         return symbols
 
     def fetch_buying_power(self) -> float:
-        if isinstance(self.account_snapshot, Mapping):
-            snapshot_map = dict(self.account_snapshot)
-            for field in ("buying_power", "non_marginable_buying_power", "cash"):
+        def _extract(snapshot: Mapping[str, Any], source: str) -> Optional[float]:
+            snapshot_map = dict(snapshot)
+            for field in ("cash", "buying_power", "non_marginable_buying_power"):
                 raw_value = snapshot_map.get(field)
                 parsed = self._coerce_buying_power(raw_value)
                 if parsed is None:
@@ -1396,33 +1430,36 @@ class TradeExecutor:
                 self._last_buying_power_raw = raw_value
                 if field != "buying_power" and "buying_power" not in snapshot_map:
                     snapshot_map["buying_power"] = raw_value
+                if field != "cash":
+                    LOGGER.info(
+                        "[INFO] BUYING_POWER_FALLBACK source=%s field=%s", source, field
+                    )
                 self.account_snapshot = snapshot_map
                 return parsed
+            return None
+
+        if isinstance(self.account_snapshot, Mapping):
+            parsed_snapshot = _extract(self.account_snapshot, "snapshot")
+            if parsed_snapshot is not None:
+                return parsed_snapshot
         if self.client is None:
+            _warn_context("alpaca.buying_power", "client_unavailable")
             return 0.0
         try:
+            _log_call("alpaca.get_account")
             account = self.client.get_account()
         except Exception as exc:
-            LOGGER.warning("Failed to fetch buying power: %s", exc)
+            _warn_context("alpaca.get_account", str(exc))
             return 0.0
-        for field in ("buying_power", "non_marginable_buying_power", "cash"):
+        snapshot: Dict[str, Any] = {}
+        for field in ("cash", "buying_power", "non_marginable_buying_power"):
             buying_power = getattr(account, field, None)
-            parsed = self._coerce_buying_power(buying_power)
-            if parsed is None:
-                continue
-            self._last_buying_power_raw = buying_power
-            snapshot = {field: buying_power}
-            if isinstance(self.account_snapshot, Mapping):
-                updated = dict(self.account_snapshot)
-                updated.update(snapshot)
-                if field != "buying_power" and "buying_power" not in updated:
-                    updated["buying_power"] = buying_power
-                self.account_snapshot = updated
-            else:
-                if field != "buying_power":
-                    snapshot["buying_power"] = buying_power
-                self.account_snapshot = snapshot
+            snapshot[field] = buying_power
+        parsed = _extract(snapshot, "account")
+        if parsed is not None:
             return parsed
+        _warn_context("alpaca.buying_power", "Unable to fetch buying power")
+        self.account_snapshot = snapshot
         return 0.0
 
     def execute_order(self, symbol: str, qty: int, limit_price: float) -> Dict[str, Any]:
@@ -1461,9 +1498,10 @@ class TradeExecutor:
 
         while datetime.now(timezone.utc) < fill_deadline:
             try:
+                _log_call("alpaca.get_order", order_id=order_id)
                 order = self.client.get_order_by_id(order_id)
             except Exception as exc:
-                LOGGER.warning("Failed to refresh order %s: %s", order_id, exc)
+                _warn_context("alpaca.get_order", f"{order_id}: {exc}")
                 break
             status = str(getattr(order, "status", "")).lower()
             filled_qty = float(getattr(order, "filled_qty", filled_qty) or 0)
@@ -1533,13 +1571,15 @@ class TradeExecutor:
             return
         try:
             if hasattr(self.client, "cancel_order_by_id"):
+                _log_call("alpaca.cancel_order", order_id=order_id)
                 self.client.cancel_order_by_id(order_id)
             elif hasattr(self.client, "cancel_order"):
+                _log_call("alpaca.cancel_order", order_id=order_id)
                 self.client.cancel_order(order_id)
             else:  # pragma: no cover - defensive fallback
                 LOGGER.warning("Client has no cancel method; unable to cancel %s", order_id)
         except Exception as exc:
-            LOGGER.warning("Failed to cancel %s for %s: %s", order_id, symbol, exc)
+            _warn_context("alpaca.cancel_order", f"{order_id}: {exc}")
 
     def attach_trailing_stop(self, symbol: str, qty: float, avg_price: Optional[Any]) -> None:
         if qty <= 0 or self.client is None:
@@ -1599,6 +1639,7 @@ class TradeExecutor:
         last_error: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
             try:
+                _log_call("alpaca.submit_order", attempt=attempt)
                 if isinstance(request, LimitOrderRequest):
                     result = self.client.submit_order(request)
                 else:
@@ -1615,7 +1656,7 @@ class TradeExecutor:
                     delay *= backoff
                     continue
                 self.metrics.api_failures += 1
-                LOGGER.error("Order submission failed after retries: %s", exc)
+                _warn_context("alpaca.submit_order", f"failed: {exc}")
         if last_error is not None:
             self.log_event("API_FAILURE", error=str(last_error))
         return None
@@ -1635,8 +1676,24 @@ class TradeExecutor:
     def persist_metrics(self) -> None:
         payload = self.metrics.as_dict()
         METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        METRICS_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        LOGGER.info("Metrics updated: %s", json.dumps(payload))
+        existing: Dict[str, Any] = {}
+        if METRICS_PATH.exists():
+            try:
+                existing_payload = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+            except Exception as exc:  # pragma: no cover - defensive merge
+                _warn_context("metrics.persist", f"decode_failed: {exc}")
+                existing_payload = {}
+            if isinstance(existing_payload, Mapping):
+                existing = dict(existing_payload)
+        merged = dict(existing)
+        merged.update(payload)
+        existing_skips = existing.get("skips") if isinstance(existing.get("skips"), Mapping) else {}
+        payload_skips = payload.get("skips") if isinstance(payload.get("skips"), Mapping) else {}
+        skips_merged = dict(existing_skips)
+        skips_merged.update(payload_skips)
+        merged["skips"] = skips_merged
+        METRICS_PATH.write_text(json.dumps(merged, indent=2, sort_keys=True), encoding="utf-8")
+        LOGGER.info("Metrics updated: %s", json.dumps(merged, sort_keys=True))
 
 
 def configure_logging(log_json: bool) -> None:
@@ -1700,10 +1757,13 @@ def _ensure_trading_auth(
 
     def fetch(path: str) -> Mapping[str, Any]:
         url = f"{resolved_base}{path}"
+        context = f"alpaca.auth{path}"
+        _log_call(context)
         try:
             response = requests.get(url, headers=headers, timeout=10)
         except Exception as exc:
             body_text = str(exc)
+            _warn_context(context, body_text)
             LOGGER.error(
                 "[ERROR] ALPACA_AUTH_FAILED status=ERR body=%s endpoint=%s",
                 body_text,
@@ -1713,6 +1773,7 @@ def _ensure_trading_auth(
             raise AlpacaAuthFailure(body_text) from exc
         if response.status_code != 200:
             body_text = (response.text or "")[:500].replace("\n", " ")
+            _warn_context(context, f"status={response.status_code}")
             LOGGER.error(
                 "[ERROR] ALPACA_AUTH_FAILED status=%s body=%s endpoint=%s",
                 response.status_code,
@@ -1893,14 +1954,19 @@ def run_executor(
     ny_now = datetime.now(ZoneInfo("America/New_York")).isoformat()
     in_window, _, resolved_window = loader.evaluate_time_window(log=False)
     LOGGER.info(
-        "[INFO] EXEC_START dry_run=%s time_window=%s resolved=%s ny_now=%s in_window=%s candidates=%s",
+        "EXEC_START dry_run=%s time_window=%s ny_now=%s in_window=%s candidates=%s",
         bool(config.dry_run),
         config.time_window or "any",
-        resolved_window,
         ny_now,
         bool(in_window),
         candidates,
     )
+    if resolved_window != (config.time_window or "any"):
+        LOGGER.info(
+            "[INFO] EXEC_WINDOW_RESOLVED mode=%s resolved=%s",
+            config.time_window or "any",
+            resolved_window,
+        )
 
     if frame.empty:
         loader.metrics.record_skip("NO_CANDIDATES", count=1)
@@ -2046,3 +2112,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     sys.exit(main())
+def _log_call(context: str, **kwargs: Any) -> None:
+    suffix = ""
+    if kwargs:
+        try:
+            suffix = " " + " ".join(f"{key}={value}" for key, value in kwargs.items())
+        except Exception:  # pragma: no cover - formatting best effort
+            suffix = ""
+    LOGGER.info("[CALL] %s%s", context, suffix)
+
+
+def _warn_context(context: str, message: str) -> None:
+    LOGGER.warning("[WARN] %s: %s", context, message)
+
+

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from scripts import metrics
 
@@ -33,6 +34,11 @@ def test_metrics_handles_missing_trades(tmp_path, monkeypatch):
 
     summary = pd.read_csv(summary_path)
     assert set(metrics.REQUIRED_COLUMNS) == set(summary.columns)
-    if summary.empty:
-        return
-    assert summary.iloc[0]["total_trades"] == 0
+    assert not summary.empty
+    row = summary.iloc[0]
+    assert row["total_trades"] == 0
+    assert row["net_pnl"] == pytest.approx(0.0)
+    assert row["win_rate"] == pytest.approx(0.0)
+    assert row["expectancy"] == pytest.approx(0.0)
+    assert row["profit_factor"] == pytest.approx(0.0)
+    assert row["max_drawdown"] == pytest.approx(0.0)

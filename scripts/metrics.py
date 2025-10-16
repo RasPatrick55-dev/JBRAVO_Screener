@@ -76,12 +76,7 @@ def load_trades_log(file_path: Path) -> pd.DataFrame:
         if not _TRADES_LOG_WARNED:
             logger.warning("[WARN] METRICS_TRADES_LOG_MISSING path=%s", file_path)
             _TRADES_LOG_WARNED = True
-        empty = pd.DataFrame(columns=canonical)
-        empty_summary = pd.DataFrame(columns=REQUIRED_COLUMNS)
-        summary_path = _summary_path()
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        write_csv_atomic(str(summary_path), empty_summary)
-        return empty
+        return pd.DataFrame(columns=canonical)
 
     try:
         df = pd.read_csv(file_path)
@@ -282,65 +277,27 @@ def main():
     metrics_summary_file = _summary_path()
 
     trades_df = load_trades_log(trade_log_path)
-
-    if trades_df.empty:
-        if _TRADES_LOG_WARNED:
-            metrics_summary = pd.DataFrame(columns=REQUIRED_COLUMNS)
-        else:
-            logger.warning("Trades log is empty. Writing default metrics.")
-            metrics_summary = pd.DataFrame([
-                {
-                    "total_trades": 0,
-                    "net_pnl": 0.0,
-                    "win_rate": 0.0,
-                    "expectancy": 0.0,
-                    "profit_factor": 0.0,
-                    "max_drawdown": 0.0,
-                }
-            ])
-    else:
+    if not trades_df.empty:
         trades_df = validate_numeric(trades_df, "net_pnl")
 
-        total_trades = len(trades_df)
-        net_pnl = trades_df["net_pnl"].sum()
+    summary_metrics = calculate_metrics(trades_df.copy())
+    if trades_df.empty:
+        logger.warning("Trades log missing or empty; writing default metrics row.")
+    metrics_summary = pd.DataFrame(
+        [[summary_metrics.get(col, 0) for col in REQUIRED_COLUMNS]],
+        columns=REQUIRED_COLUMNS,
+    )
 
-        wins = trades_df[trades_df["net_pnl"] > 0]
-        losses = trades_df[trades_df["net_pnl"] < 0]
-
-        win_rate = (len(wins) / total_trades * 100) if total_trades else 0.0
-        expectancy = (net_pnl / total_trades) if total_trades else 0.0
-
-        try:
-            profit_factor = (
-                wins["net_pnl"].sum() / abs(losses["net_pnl"].sum())
-                if not losses.empty
-                else np.inf
-            )
-        except ZeroDivisionError:
-            profit_factor = np.inf
-
-        max_drawdown = trades_df["net_pnl"].cumsum().min()
-
-        metrics_summary = pd.DataFrame([
-            {
-                "total_trades": total_trades,
-                "net_pnl": net_pnl,
-                "win_rate": win_rate,
-                "expectancy": expectancy,
-                "profit_factor": profit_factor,
-                "max_drawdown": max_drawdown,
-            }
-        ])
-
+    if not trades_df.empty:
         logger.info(
             "Calculated Metrics: Trades=%s, Net PnL=%.2f, Win Rate=%.2f%%, "
             "Expectancy=%.2f, Profit Factor=%s, Max Drawdown=%.2f",
-            total_trades,
-            net_pnl,
-            win_rate,
-            expectancy,
-            profit_factor,
-            max_drawdown,
+            summary_metrics.get("total_trades", 0),
+            summary_metrics.get("net_pnl", 0.0),
+            summary_metrics.get("win_rate", 0.0),
+            summary_metrics.get("expectancy", 0.0),
+            summary_metrics.get("profit_factor", 0.0),
+            summary_metrics.get("max_drawdown", 0.0),
         )
 
     try:

@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import pathlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 import numpy as np
@@ -715,8 +715,34 @@ def register_callbacks(app):
         else:
             hint_data = {}
         creds_alert = None
-        last_run = (m.get("last_run_utc") or "n/a")
-        sym_in   = int(m.get("symbols_in", 0) or 0)
+        last_run_raw = str(m.get("last_run_utc") or "").strip()
+        if not last_run_raw:
+            try:
+                if METRICS_JSON.exists():
+                    ts = datetime.fromtimestamp(
+                        METRICS_JSON.stat().st_mtime, tz=timezone.utc
+                    )
+                    last_run_raw = ts.strftime("%Y-%m-%d %H:%M:%S UTC")
+            except Exception:
+                last_run_raw = ""
+        if not last_run_raw:
+            exec_last = exec_metrics.get("last_run_utc") if isinstance(exec_metrics, Mapping) else ""
+            if isinstance(exec_last, str) and exec_last.strip():
+                try:
+                    last_run_raw = datetime.fromisoformat(
+                        exec_last.replace("Z", "+00:00")
+                    ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                except Exception:
+                    last_run_raw = exec_last
+        last_run = last_run_raw or "n/a"
+        sym_in = int(m.get("symbols_in", 0) or 0)
+        if sym_in == 0 and isinstance(exec_metrics, Mapping):
+            try:
+                sym_in_exec = int(exec_metrics.get("symbols_in", 0) or 0)
+            except (TypeError, ValueError):
+                sym_in_exec = 0
+            if sym_in_exec:
+                sym_in = sym_in_exec
         sym_bars = int(m.get("symbols_with_bars", 0) or 0)
         bars_tot = int(m.get("bars_rows_total", 0) or 0)
         rows     = int(m.get("rows", 0) or 0)
