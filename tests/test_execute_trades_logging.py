@@ -109,7 +109,7 @@ def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch, caplog):
     assert metrics_payload["symbols_in"] == 0
     assert metrics_payload["orders_submitted"] == 0
     logs = "\n".join(caplog.messages)
-    assert "[INFO] EXEC_START dry_run=True time_window=premarket" in logs
+    assert "EXEC_START dry_run=True time_window=auto" in logs
     assert "ny_now=" in logs
     assert "in_window=False" in logs or "in_window=True" in logs
     skips = metrics_payload.get("skips", {})
@@ -182,7 +182,7 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     rc = executor.execute(df)
     assert rc == 0
     log_text = "\n".join(caplog.messages)
-    tokens = ("[INFO] EXEC_START", "[INFO] EXECUTE_SUMMARY", "[INFO] TIME_WINDOW")
+    tokens = ("EXEC_START", "[INFO] EXECUTE_SUMMARY", "[INFO] TIME_WINDOW")
     assert any(token in log_text for token in tokens)
     assert "[INFO] TIME_WINDOW outside premarket (NY)" in log_text
     summary_lines = [msg for msg in caplog.messages if "[INFO] EXECUTE_SUMMARY" in msg]
@@ -193,6 +193,45 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     for key in ("TIME_WINDOW", "ZERO_QTY", "CASH", "OPEN_ORDER", "EXISTING_POSITION", "MAX_POSITIONS", "NO_CANDIDATES"):
         assert f"skips.{key}=" in summary
     assert "skips.TIME_WINDOW=1" in summary
+
+
+def test_dry_run_creates_metrics_with_zero_orders(tmp_path, caplog):
+    csv_path = tmp_path / "candidates.csv"
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "close": 50.0,
+                "score": 1.0,
+                "universe_count": 10,
+                "score_breakdown": "{}",
+            },
+            {
+                "symbol": "BBB",
+                "close": 60.0,
+                "score": 1.1,
+                "universe_count": 10,
+                "score_breakdown": "{}",
+            },
+        ]
+    )
+    frame.to_csv(csv_path, index=False)
+
+    config = ExecutorConfig(source=csv_path, dry_run=True, time_window="any")
+    caplog.set_level(logging.INFO, logger="execute_trades")
+    caplog.clear()
+
+    rc = run_executor(config, client=StubTradingClient())
+    assert rc == 0
+
+    log_text = "\n".join(caplog.messages)
+    assert "EXEC_START dry_run=True" in log_text
+    assert "[INFO] EXECUTE_SUMMARY" in log_text
+
+    metrics_payload = json.loads(execute_mod.METRICS_PATH.read_text(encoding="utf-8"))
+    assert metrics_payload.get("symbols_in") == 2
+    assert metrics_payload.get("orders_submitted") == 0
+    assert metrics_payload.get("trailing_attached") == 0
 
 
 def test_limit_buffer_pct_relaxes_price_bounds(tmp_path):
