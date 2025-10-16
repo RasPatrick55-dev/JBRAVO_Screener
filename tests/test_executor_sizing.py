@@ -78,4 +78,5 @@ def test_min_order_floor_sets_quantity(monkeypatch, caplog, tmp_path: Path):
     assert rc == 0
     messages = [record.getMessage() for record in caplog.records]
     assert any("CALC symbol=FLOOR" in msg and "qty=5" in msg for msg in messages)
+    assert any("notional=500.00" in msg for msg in messages)
     assert metrics.skipped_reasons.get("ZERO_QTY", 0) == 0

@@ -8,7 +8,7 @@ from scripts.execute_trades import ExecutionMetrics, ExecutorConfig, TradeExecut
 
 
 @pytest.mark.alpaca_optional
-def test_zero_qty_prevented_by_min_order(monkeypatch, caplog, tmp_path: Path) -> None:
+def test_min_order_prevents_zero_qty(monkeypatch, caplog, tmp_path: Path) -> None:
     config = ExecutorConfig(
         source=tmp_path / "candidates.csv",
         allocation_pct=0.02,
@@ -21,8 +21,8 @@ def test_zero_qty_prevented_by_min_order(monkeypatch, caplog, tmp_path: Path) ->
         [
             {
                 "symbol": "LIMIT",
-                "close": 310.0,
-                "entry_price": 310.0,
+                "close": 50.0,
+                "entry_price": 50.0,
                 "score": 5.0,
                 "universe_count": 50,
                 "score_breakdown": "{}",
@@ -31,7 +31,7 @@ def test_zero_qty_prevented_by_min_order(monkeypatch, caplog, tmp_path: Path) ->
     )
     metrics = ExecutionMetrics()
     executor = TradeExecutor(config, None, metrics)
-    monkeypatch.setattr(executor, "fetch_buying_power", lambda: 1000.0)
+    monkeypatch.setattr(executor, "fetch_buying_power", lambda: 5000.0)
     monkeypatch.setattr(executor, "evaluate_time_window", lambda log=True: (True, "ok", "any"))
 
     caplog.set_level(logging.INFO, logger="execute_trades")
@@ -40,5 +40,6 @@ def test_zero_qty_prevented_by_min_order(monkeypatch, caplog, tmp_path: Path) ->
     rc = executor.execute(df, prefiltered=df.to_dict("records"))
     assert rc == 0
     messages = [record.getMessage() for record in caplog.records]
-    assert any("ZERO_QTY_AFTER_BUMP" in msg for msg in messages)
-    assert metrics.skipped_reasons.get("ZERO_QTY", 0) == 1
+    assert any("DRY_RUN_ORDER" in msg and "qty=3" in msg for msg in messages)
+    assert "ZERO_QTY_AFTER_BUMP" not in "\n".join(messages)
+    assert metrics.skipped_reasons.get("ZERO_QTY", 0) == 0

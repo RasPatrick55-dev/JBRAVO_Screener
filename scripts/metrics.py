@@ -74,7 +74,7 @@ def load_trades_log(file_path: Path) -> pd.DataFrame:
 
     if not file_path.exists() or file_path.stat().st_size == 0:
         if not _TRADES_LOG_WARNED:
-            logger.warning("[WARN] no trades_log.csv -> writing empty metrics_summary")
+            logger.warning("[WARN] METRICS_TRADES_LOG_MISSING path=%s", file_path)
             _TRADES_LOG_WARNED = True
         empty = pd.DataFrame(columns=canonical)
         empty_summary = pd.DataFrame(columns=REQUIRED_COLUMNS)

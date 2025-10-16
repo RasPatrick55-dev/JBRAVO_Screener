@@ -1037,7 +1037,9 @@ class TradeExecutor:
 
     def evaluate_time_window(self, *, log: bool = True) -> Tuple[bool, str, str]:
         tz = self._resolve_market_timezone()
-        now_local = datetime.now(timezone.utc).astimezone(tz)
+        now_utc = datetime.now(timezone.utc)
+        now_local = now_utc.astimezone(tz)
+        ny_now = now_utc.astimezone(ZoneInfo("America/New_York")).isoformat()
         current_time = dt_time(
             now_local.hour, now_local.minute, now_local.second, now_local.microsecond
         )
@@ -1105,7 +1107,7 @@ class TradeExecutor:
         if log:
             LOGGER.info(
                 "[INFO] MARKET_TIME ny_now=%s mode=%s resolved=%s in_window=%s",
-                now_local.isoformat(),
+                ny_now,
                 mode,
                 resolved_window,
                 bool(allowed),
@@ -1232,7 +1234,9 @@ class TradeExecutor:
             return 0
 
         if self.config.dry_run:
-            LOGGER.info("[INFO] DRY_RUN=True — no orders will be submitted")
+            LOGGER.info(
+                "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
+            )
 
         existing_positions = self.fetch_existing_positions()
         open_order_symbols = self.fetch_open_order_symbols()
@@ -1282,35 +1286,37 @@ class TradeExecutor:
                 self.record_skip_reason("ZERO_QTY", symbol=symbol, detail="invalid_price")
                 continue
 
-            base_notional = allocation_pct * max(account_buying_power, 0.0)
-            target_usd = max(float(self.config.min_order_usd), base_notional)
+            base_notional = max(0.0, allocation_pct * max(account_buying_power, 0.0))
+            min_order = max(0.0, float(self.config.min_order_usd))
+            notional = max(base_notional, min_order)
             limit_px = price_f * (1 + limit_buffer_ratio)
             limit_px = max(limit_px, 0.01)
-            qty = int(math.floor(target_usd / limit_px)) if limit_px > 0 else 0
-            if qty < 1 and self.config.allow_bump_to_one:
-                bumped_notional = max(target_usd, float(self.config.min_order_usd))
-                qty = int(math.floor(bumped_notional / limit_px)) if limit_px > 0 else 0
-                if qty < 1:
-                    LOGGER.info(
-                        "[INFO] ZERO_QTY_AFTER_BUMP symbol=%s limit=%.2f min_usd=%.2f",
-                        symbol,
-                        limit_px,
-                        float(self.config.min_order_usd),
-                    )
+            qty = int(math.floor(notional / limit_px)) if limit_px > 0 else 0
+            if qty < 1:
+                bumped_notional = max(notional, min_order)
+                if bumped_notional > notional:
+                    notional = bumped_notional
+                qty = int(math.floor(notional / limit_px)) if limit_px > 0 else 0
+            if qty < 1:
+                LOGGER.info(
+                    "[INFO] ZERO_QTY_AFTER_BUMP symbol=%s limit=%.2f min_usd=%.2f",
+                    symbol,
+                    limit_px,
+                    min_order,
+                )
+                self.record_skip_reason("ZERO_QTY", symbol=symbol)
+                continue
             LOGGER.debug(
-                "CALC symbol=%s price=%.2f bp=%.2f alloc_pct=%.4f slots=%d target_usd=%.2f limit_px=%.2f qty=%d",
+                "CALC symbol=%s price=%.2f bp=%.2f alloc_pct=%.4f slots=%d notional=%.2f limit_px=%.2f qty=%d",
                 symbol,
                 price_f,
                 account_buying_power,
                 allocation_pct,
                 slots,
-                target_usd,
+                notional,
                 limit_px,
                 qty,
             )
-            if qty < 1:
-                self.record_skip_reason("ZERO_QTY", symbol=symbol)
-                continue
 
             limit_price = compute_limit_price(record, self.config.entry_buffer_bps)
             limit_price = max(limit_price, limit_px)
@@ -1381,10 +1387,16 @@ class TradeExecutor:
 
     def fetch_buying_power(self) -> float:
         if isinstance(self.account_snapshot, Mapping):
-            raw_value = self.account_snapshot.get("buying_power")
-            self._last_buying_power_raw = raw_value
-            parsed = self._coerce_buying_power(raw_value)
-            if parsed is not None:
+            snapshot_map = dict(self.account_snapshot)
+            for field in ("buying_power", "non_marginable_buying_power", "cash"):
+                raw_value = snapshot_map.get(field)
+                parsed = self._coerce_buying_power(raw_value)
+                if parsed is None:
+                    continue
+                self._last_buying_power_raw = raw_value
+                if field != "buying_power" and "buying_power" not in snapshot_map:
+                    snapshot_map["buying_power"] = raw_value
+                self.account_snapshot = snapshot_map
                 return parsed
         if self.client is None:
             return 0.0
@@ -1393,16 +1405,23 @@ class TradeExecutor:
         except Exception as exc:
             LOGGER.warning("Failed to fetch buying power: %s", exc)
             return 0.0
-        buying_power = getattr(account, "buying_power", None)
-        self._last_buying_power_raw = buying_power
-        parsed = self._coerce_buying_power(buying_power)
-        if parsed is not None:
+        for field in ("buying_power", "non_marginable_buying_power", "cash"):
+            buying_power = getattr(account, field, None)
+            parsed = self._coerce_buying_power(buying_power)
+            if parsed is None:
+                continue
+            self._last_buying_power_raw = buying_power
+            snapshot = {field: buying_power}
             if isinstance(self.account_snapshot, Mapping):
-                snapshot = dict(self.account_snapshot)
-                snapshot["buying_power"] = buying_power
-                self.account_snapshot = snapshot
+                updated = dict(self.account_snapshot)
+                updated.update(snapshot)
+                if field != "buying_power" and "buying_power" not in updated:
+                    updated["buying_power"] = buying_power
+                self.account_snapshot = updated
             else:
-                self.account_snapshot = {"buying_power": buying_power}
+                if field != "buying_power":
+                    snapshot["buying_power"] = buying_power
+                self.account_snapshot = snapshot
             return parsed
         return 0.0
 
@@ -1553,7 +1572,7 @@ class TradeExecutor:
         )
         trailing_order = self.submit_with_retries(request)
         if trailing_order is None:
-            LOGGER.warning("[WARN] TRAIL_FAILED symbol=%s reason=submit_failed", symbol)
+            LOGGER.error("[ERROR] TRAIL_FAILED symbol=%s reason=submit_failed", symbol)
             self.log_event("TRAIL_FAILED", symbol=symbol, reason="submit_failed")
             return
         self.metrics.trailing_attached += 1
@@ -1686,19 +1705,19 @@ def _ensure_trading_auth(
         except Exception as exc:
             body_text = str(exc)
             LOGGER.error(
-                "[ERROR] ALPACA_AUTH_FAILED endpoint=%s status=ERR body=%s",
-                path,
+                "[ERROR] ALPACA_AUTH_FAILED status=ERR body=%s endpoint=%s",
                 body_text,
+                path,
             )
             _record_auth_error("unauthorized", creds_snapshot)
             raise AlpacaAuthFailure(body_text) from exc
         if response.status_code != 200:
             body_text = (response.text or "")[:500].replace("\n", " ")
             LOGGER.error(
-                "[ERROR] ALPACA_AUTH_FAILED endpoint=%s status=%s body=%s",
-                path,
+                "[ERROR] ALPACA_AUTH_FAILED status=%s body=%s endpoint=%s",
                 response.status_code,
                 body_text,
+                path,
             )
             _record_auth_error("unauthorized", creds_snapshot)
             raise AlpacaAuthFailure(body_text)
@@ -1858,7 +1877,9 @@ def run_executor(
     if config.dry_run:
         banner = "=" * 72
         LOGGER.info(banner)
-        LOGGER.info("[INFO] DRY_RUN=True — no orders will be submitted")
+        LOGGER.info(
+            "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
+        )
         LOGGER.info(banner)
     try:
         frame = loader.load_candidates()

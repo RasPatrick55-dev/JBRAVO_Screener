@@ -39,3 +39,41 @@ def test_premarket_window_allows_with_timezone_fallback(monkeypatch, caplog):
     assert "premarket window open" in message
     assert resolved == "premarket"
     assert any("invalid market timezone" in msg for msg in caplog.messages)
+
+
+def test_auto_time_window_detects_premarket(monkeypatch, caplog):
+    config = execute_trades.ExecutorConfig(time_window="auto", extended_hours=True)
+    metrics = execute_trades.ExecutionMetrics()
+    executor = execute_trades.TradeExecutor(config, None, metrics)
+
+    frozen = _FrozenDateTime(datetime(2024, 3, 1, 12, 30, tzinfo=timezone.utc))
+    monkeypatch.setattr(execute_trades, "datetime", frozen)
+
+    caplog.set_level("INFO", logger="execute_trades")
+    caplog.clear()
+
+    allowed, message, resolved = executor.evaluate_time_window()
+
+    assert allowed is True
+    assert resolved == "premarket"
+    assert "premarket" in message
+    assert any("MARKET_TIME" in msg and "mode=auto" in msg and "resolved=premarket" in msg for msg in caplog.messages)
+
+
+def test_auto_time_window_detects_regular(monkeypatch, caplog):
+    config = execute_trades.ExecutorConfig(time_window="auto", extended_hours=True)
+    metrics = execute_trades.ExecutionMetrics()
+    executor = execute_trades.TradeExecutor(config, None, metrics)
+
+    frozen = _FrozenDateTime(datetime(2024, 3, 1, 15, 0, tzinfo=timezone.utc))
+    monkeypatch.setattr(execute_trades, "datetime", frozen)
+
+    caplog.set_level("INFO", logger="execute_trades")
+    caplog.clear()
+
+    allowed, message, resolved = executor.evaluate_time_window()
+
+    assert allowed is True
+    assert resolved == "regular"
+    assert "regular session" in message
+    assert any("MARKET_TIME" in msg and "mode=auto" in msg and "resolved=regular" in msg for msg in caplog.messages)

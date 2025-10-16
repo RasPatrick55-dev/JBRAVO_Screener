@@ -79,7 +79,11 @@ def test_pipeline_logs_summary_and_end(tmp_path: Path, monkeypatch, caplog):
     messages = [record.getMessage() for record in caplog.records]
     assert any("FALLBACK_CHECK" in msg for msg in messages)
     assert any("PIPELINE_SUMMARY" in msg for msg in messages)
+    assert any("HEALTH trading_ok=" in msg for msg in messages)
     assert any("PIPELINE_END" in msg for msg in messages)
+    assert any(
+        "source=fallback" in msg or "source=fallback:scored" in msg for msg in messages
+    )
 
     latest = pd.read_csv(data_dir / "latest_candidates.csv")
     assert not latest.empty
