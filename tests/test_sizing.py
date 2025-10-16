@@ -23,7 +23,7 @@ def test_sizing_produces_positive_quantities(monkeypatch):
     monkeypatch.setattr(executor, "fetch_existing_positions", lambda: set())
     monkeypatch.setattr(executor, "fetch_open_order_symbols", lambda: set())
     monkeypatch.setattr(executor, "fetch_buying_power", lambda: 10000.0)
-    monkeypatch.setattr(executor, "evaluate_time_window", lambda log=True: (True, "ok"))
+    monkeypatch.setattr(executor, "evaluate_time_window", lambda log=True: (True, "ok", "any"))
 
     captured: list[dict] = []
 

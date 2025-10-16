@@ -273,6 +273,10 @@ class CandidateLoadError(RuntimeError):
     """Raised when candidate data cannot be loaded or validated."""
 
 
+class AlpacaAuthFailure(RuntimeError):
+    """Raised when Alpaca auth probes fail."""
+
+
 def emit_import_sentinel() -> None:
     """Emit an import sentinel event when requested via environment flag."""
 
@@ -398,7 +402,7 @@ class ExecutorConfig:
     trailing_percent: float = 3.0
     cancel_after_min: int = 35
     extended_hours: bool = True
-    time_window: str = "premarket"
+    time_window: str = "auto"
     market_timezone: str = "America/New_York"
     dry_run: bool = False
     min_adv20: int = 2_000_000
@@ -408,6 +412,7 @@ class ExecutorConfig:
     bar_directories: Sequence[Path] = DEFAULT_BAR_DIRECTORIES
     min_order_usd: float = 200.0
     allow_bump_to_one: bool = True
+    allow_fractional: bool = False
 
 
 @dataclass
@@ -883,6 +888,9 @@ class TradeExecutor:
         metrics: ExecutionMetrics,
         *,
         sleep_fn: Optional[Any] = None,
+        base_url: str = "",
+        account_snapshot: Optional[Mapping[str, Any]] = None,
+        clock_snapshot: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.config = config
         self.client = client
@@ -893,6 +901,10 @@ class TradeExecutor:
         self.log_json = config.log_json
         self._tz_fallback_logged = False
         self._clock_warning_logged = False
+        self._base_url = base_url
+        self.account_snapshot: Optional[Mapping[str, Any]] = account_snapshot
+        self.clock_snapshot: Optional[Mapping[str, Any]] = clock_snapshot
+        self._last_buying_power_raw: Any = None
 
     def log_event(self, event: str, **payload: Any) -> None:
         human = " ".join(f"{key}={value}" for key, value in payload.items())
@@ -1007,6 +1019,10 @@ class TradeExecutor:
         return None
 
     def _get_trading_clock(self) -> Optional[Any]:
+        if self.clock_snapshot is not None:
+            if isinstance(self.clock_snapshot, Mapping):
+                return SimpleNamespace(**self.clock_snapshot)
+            return None
         if self.client is None or not hasattr(self.client, "get_clock"):
             return self._probe_trading_clock()
         try:
@@ -1019,20 +1035,12 @@ class TradeExecutor:
                 LOGGER.warning("[WARN] failed to fetch trading clock: %s", exc)
             return self._probe_trading_clock()
 
-    def evaluate_time_window(self, *, log: bool = True) -> Tuple[bool, str]:
+    def evaluate_time_window(self, *, log: bool = True) -> Tuple[bool, str, str]:
         tz = self._resolve_market_timezone()
         now_local = datetime.now(timezone.utc).astimezone(tz)
         current_time = dt_time(
             now_local.hour, now_local.minute, now_local.second, now_local.microsecond
         )
-
-        tz_label = getattr(tz, "key", None) or getattr(tz, "zone", None) or str(tz)
-        if log:
-            LOGGER.info(
-                "[INFO] MARKET_TIME: %s (%s)",
-                now_local.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                tz_label,
-            )
 
         premarket_start = dt_time(4, 0)
         regular_start = dt_time(9, 30)
@@ -1043,7 +1051,14 @@ class TradeExecutor:
         within_regular = regular_start <= current_time < regular_end
         within_post = regular_end <= current_time < postmarket_end
 
-        window = (self.config.time_window or "premarket").lower()
+        mode = (self.config.time_window or "auto").lower()
+        resolved_window = mode
+        if mode == "auto":
+            auto_window = "premarket" if dt_time(7, 0) <= current_time < regular_start else "regular"
+            resolved_window = auto_window
+        elif mode not in {"premarket", "regular", "any"}:
+            resolved_window = "any"
+
         clock = self._get_trading_clock()
         clock_is_open = bool(getattr(clock, "is_open", False))
 
@@ -1051,7 +1066,7 @@ class TradeExecutor:
         allowed = False
         market_label = self._market_label()
 
-        if window == "premarket":
+        if resolved_window == "premarket":
             if not self.config.extended_hours:
                 allowed = False
                 message = f"outside premarket ({market_label})"
@@ -1062,7 +1077,7 @@ class TradeExecutor:
                     if allowed
                     else f"outside premarket ({market_label})"
                 )
-        elif window == "regular":
+        elif resolved_window == "regular":
             allowed = within_regular
             message = (
                 f"regular session ({market_label})"
@@ -1073,18 +1088,30 @@ class TradeExecutor:
             allowed = True
             message = f"any window ({market_label})"
 
-        if not allowed and clock is not None and window in {"premarket", "regular"}:
+        if not allowed and clock is not None and resolved_window in {"premarket", "regular"}:
             # When Alpaca reports the venue open, treat it as authoritative for overrides.
-            if window == "premarket" and self.config.extended_hours and clock_is_open and not within_regular:
+            if (
+                resolved_window == "premarket"
+                and self.config.extended_hours
+                and clock_is_open
+                and not within_regular
+            ):
                 allowed = True
                 message = f"premarket window open ({market_label})"
-            elif window == "regular" and clock_is_open and within_regular:
+            elif resolved_window == "regular" and clock_is_open and within_regular:
                 allowed = True
                 message = f"regular session ({market_label})"
 
         if log:
+            LOGGER.info(
+                "[INFO] MARKET_TIME ny_now=%s mode=%s resolved=%s in_window=%s",
+                now_local.isoformat(),
+                mode,
+                resolved_window,
+                bool(allowed),
+            )
             LOGGER.info("[INFO] TIME_WINDOW %s", message)
-        return allowed, message
+        return allowed, message, resolved_window
 
     def load_candidates(self) -> pd.DataFrame:
         path = self.config.source
@@ -1197,7 +1224,7 @@ class TradeExecutor:
             self.log_summary()
             return 0
 
-        allowed, status = self.evaluate_time_window()
+        allowed, status, _ = self.evaluate_time_window()
         if not allowed:
             self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
             self.persist_metrics()
@@ -1205,12 +1232,32 @@ class TradeExecutor:
             return 0
 
         if self.config.dry_run:
-            LOGGER.info("Dry-run mode active; no orders will be submitted.")
+            LOGGER.info("[INFO] DRY_RUN=True — no orders will be submitted")
 
         existing_positions = self.fetch_existing_positions()
         open_order_symbols = self.fetch_open_order_symbols()
         account_buying_power = self.fetch_buying_power()
+        bp_raw = self._last_buying_power_raw
+        if bp_raw is None:
+            bp_raw = account_buying_power
+        bp_display: str
+        try:
+            bp_display = f"{float(bp_raw):.2f}"
+        except Exception:
+            bp_display = str(bp_raw)
+        if account_buying_power <= 0 or bp_raw in (None, "", 0, "0"):
+            LOGGER.error("[ERROR] NO_BUYING_POWER buying_power=%s", bp_display)
+            self.metrics.api_failures += 1
+            self.persist_metrics()
+            self.log_summary()
+            return 2
+
         slots = max(1, min(self.config.max_positions, len(candidates)))
+        try:
+            allocation_pct = float(self.config.allocation_pct)
+        except (TypeError, ValueError):
+            allocation_pct = 0.0
+        limit_buffer_ratio = max(0.0, float(self.config.limit_buffer_pct)) / 100.0
 
         for record in candidates:
             symbol = record.get("symbol", "").upper()
@@ -1235,22 +1282,30 @@ class TradeExecutor:
                 self.record_skip_reason("ZERO_QTY", symbol=symbol, detail="invalid_price")
                 continue
 
-            raw_target = float(self.config.allocation_pct) * max(account_buying_power, 0.0)
-            raw_target /= max(1, slots)
-            target_usd = max(float(self.config.min_order_usd), raw_target)
-            qty = int(math.floor(target_usd / price_f)) if price_f > 0 else 0
+            base_notional = allocation_pct * max(account_buying_power, 0.0)
+            target_usd = max(float(self.config.min_order_usd), base_notional)
+            limit_px = price_f * (1 + limit_buffer_ratio)
+            limit_px = max(limit_px, 0.01)
+            qty = int(math.floor(target_usd / limit_px)) if limit_px > 0 else 0
             if qty < 1 and self.config.allow_bump_to_one:
-                if price_f <= account_buying_power and account_buying_power > 0:
-                    qty = 1
-                    LOGGER.info("[INFO] BUMP_TO_ONE symbol=%s price=%.2f", symbol, price_f)
+                bumped_notional = max(target_usd, float(self.config.min_order_usd))
+                qty = int(math.floor(bumped_notional / limit_px)) if limit_px > 0 else 0
+                if qty < 1:
+                    LOGGER.info(
+                        "[INFO] ZERO_QTY_AFTER_BUMP symbol=%s limit=%.2f min_usd=%.2f",
+                        symbol,
+                        limit_px,
+                        float(self.config.min_order_usd),
+                    )
             LOGGER.debug(
-                "CALC symbol=%s price=%.2f bp=%.2f alloc_pct=%.2f slots=%d target_usd=%.2f qty=%d",
+                "CALC symbol=%s price=%.2f bp=%.2f alloc_pct=%.4f slots=%d target_usd=%.2f limit_px=%.2f qty=%d",
                 symbol,
                 price_f,
                 account_buying_power,
-                float(self.config.allocation_pct),
+                allocation_pct,
                 slots,
                 target_usd,
+                limit_px,
                 qty,
             )
             if qty < 1:
@@ -1258,6 +1313,7 @@ class TradeExecutor:
                 continue
 
             limit_price = compute_limit_price(record, self.config.entry_buffer_bps)
+            limit_price = max(limit_price, limit_px)
             notional = qty * limit_price
             if notional > account_buying_power:
                 detail = f"required={notional:.2f} available={account_buying_power:.2f}"
@@ -1293,6 +1349,21 @@ class TradeExecutor:
             LOGGER.warning("Failed to fetch positions: %s", exc)
         return symbols
 
+    @staticmethod
+    def _coerce_buying_power(value: Any) -> Optional[float]:
+        if value in (None, "", False):
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            try:
+                numeric = float(str(value))
+            except Exception:
+                return None
+        if math.isnan(numeric):
+            return None
+        return numeric
+
     def fetch_open_order_symbols(self) -> set[str]:
         symbols: set[str] = set()
         if self.client is None:
@@ -1309,15 +1380,31 @@ class TradeExecutor:
         return symbols
 
     def fetch_buying_power(self) -> float:
+        if isinstance(self.account_snapshot, Mapping):
+            raw_value = self.account_snapshot.get("buying_power")
+            self._last_buying_power_raw = raw_value
+            parsed = self._coerce_buying_power(raw_value)
+            if parsed is not None:
+                return parsed
         if self.client is None:
             return 0.0
         try:
             account = self.client.get_account()
-            buying_power = getattr(account, "buying_power", 0.0)
-            return float(buying_power)
         except Exception as exc:
             LOGGER.warning("Failed to fetch buying power: %s", exc)
             return 0.0
+        buying_power = getattr(account, "buying_power", None)
+        self._last_buying_power_raw = buying_power
+        parsed = self._coerce_buying_power(buying_power)
+        if parsed is not None:
+            if isinstance(self.account_snapshot, Mapping):
+                snapshot = dict(self.account_snapshot)
+                snapshot["buying_power"] = buying_power
+                self.account_snapshot = snapshot
+            else:
+                self.account_snapshot = {"buying_power": buying_power}
+            return parsed
+        return 0.0
 
     def execute_order(self, symbol: str, qty: int, limit_price: float) -> Dict[str, Any]:
         outcome: Dict[str, Any] = {"submitted": False, "filled_qty": 0.0}
@@ -1576,34 +1663,54 @@ def _create_trading_client() -> tuple[Any, str, bool, bool | None]:
     return client, resolved_base, paper_mode, forced_mode
 
 
-def _ensure_trading_auth(base_url: str, creds_snapshot: Mapping[str, Any]) -> None:
+def _ensure_trading_auth(
+    base_url: str, creds_snapshot: Mapping[str, Any]
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     api_key, api_secret, _, _ = get_alpaca_creds()
     if not api_key or not api_secret:
-        raise SystemExit(2)
-    url = f"{base_url.rstrip('/')}/v2/account"
+        body = "missing credentials"
+        LOGGER.error("[ERROR] ALPACA_AUTH_FAILED status=MISSING body=%s", body)
+        _record_auth_error("unauthorized", creds_snapshot)
+        raise AlpacaAuthFailure("missing credentials")
+
+    resolved_base = (base_url or "https://paper-api.alpaca.markets").rstrip("/")
     headers = {
         "APCA-API-KEY-ID": api_key,
         "APCA-API-SECRET-KEY": api_secret,
     }
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-    except Exception as exc:
-        LOGGER.error(
-            '[ERROR] TRADING_AUTH_FAILED base=%s status=%s tip="Reload ~/.config/jbravo/.env"',
-            base_url,
-            "ERR",
-        )
-        LOGGER.debug("Trading auth probe error: %s", exc, exc_info=False)
-        _record_auth_error("unauthorized", creds_snapshot)
-        raise SystemExit(2)
-    if response.status_code != 200:
-        LOGGER.error(
-            '[ERROR] TRADING_AUTH_FAILED base=%s status=%s tip="Reload ~/.config/jbravo/.env"',
-            base_url,
-            response.status_code,
-        )
-        _record_auth_error("unauthorized", creds_snapshot)
-        raise SystemExit(2)
+
+    def fetch(path: str) -> Mapping[str, Any]:
+        url = f"{resolved_base}{path}"
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+        except Exception as exc:
+            body_text = str(exc)
+            LOGGER.error(
+                "[ERROR] ALPACA_AUTH_FAILED endpoint=%s status=ERR body=%s",
+                path,
+                body_text,
+            )
+            _record_auth_error("unauthorized", creds_snapshot)
+            raise AlpacaAuthFailure(body_text) from exc
+        if response.status_code != 200:
+            body_text = (response.text or "")[:500].replace("\n", " ")
+            LOGGER.error(
+                "[ERROR] ALPACA_AUTH_FAILED endpoint=%s status=%s body=%s",
+                path,
+                response.status_code,
+                body_text,
+            )
+            _record_auth_error("unauthorized", creds_snapshot)
+            raise AlpacaAuthFailure(body_text)
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        return payload if isinstance(payload, Mapping) else {}
+
+    account_payload = fetch("/v2/account")
+    clock_payload = fetch("/v2/clock")
+    return account_payload, clock_payload
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -1670,6 +1777,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Allow bumping position size to one share when sizing rounds to zero",
     )
     parser.add_argument(
+        "--allow-fractional",
+        type=lambda s: s.lower() in {"1", "true", "yes", "y"},
+        default=ExecutorConfig.allow_fractional,
+        help="Allow fractional share orders when full shares are not affordable",
+    )
+    parser.add_argument(
         "--min-adv20",
         type=int,
         default=ExecutorConfig.min_adv20,
@@ -1695,7 +1808,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--time-window",
-        choices=("premarket", "regular", "any"),
+        choices=("premarket", "regular", "any", "auto"),
         default=ExecutorConfig.time_window,
         help="Trading time window gate controlling when orders may be submitted",
     )
@@ -1723,6 +1836,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         dry_run=args.dry_run,
         min_order_usd=args.min_order_usd,
         allow_bump_to_one=args.allow_bump_to_one,
+        allow_fractional=args.allow_fractional,
         min_adv20=args.min_adv20,
         min_price=args.min_price,
         max_price=args.max_price,
@@ -1756,11 +1870,12 @@ def run_executor(
 
     candidates = int(frame.shape[0])
     ny_now = datetime.now(ZoneInfo("America/New_York")).isoformat()
-    in_window, _ = loader.evaluate_time_window(log=False)
+    in_window, _, resolved_window = loader.evaluate_time_window(log=False)
     LOGGER.info(
-        "[INFO] EXEC_START dry_run=%s time_window=%s ny_now=%s in_window=%s candidates=%s",
+        "[INFO] EXEC_START dry_run=%s time_window=%s resolved=%s ny_now=%s in_window=%s candidates=%s",
         bool(config.dry_run),
         config.time_window or "any",
+        resolved_window,
         ny_now,
         bool(in_window),
         candidates,
@@ -1774,6 +1889,8 @@ def run_executor(
     records = loader.hydrate_candidates(frame)
     filtered = loader.guard_candidates(records)
 
+    account_payload: Optional[Mapping[str, Any]] = None
+    clock_payload: Optional[Mapping[str, Any]] = None
     if client is not None:
         trading_client = client
         base_url = ""
@@ -1791,9 +1908,21 @@ def run_executor(
             bool(paper_mode),
             forced_label,
         )
-        _ensure_trading_auth(base_url or "", creds_snapshot or {})
+        try:
+            account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
+        except AlpacaAuthFailure:
+            metrics.api_failures += 1
+            loader.persist_metrics()
+            return 2
 
-    executor = TradeExecutor(config, trading_client, metrics)
+    executor = TradeExecutor(
+        config,
+        trading_client,
+        metrics,
+        base_url=base_url or "",
+        account_snapshot=account_payload,
+        clock_snapshot=clock_payload,
+    )
     return executor.execute(frame, prefiltered=filtered)
 
 

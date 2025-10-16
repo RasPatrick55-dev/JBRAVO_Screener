@@ -176,7 +176,7 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     caplog.clear()
 
     def fake_window(self):
-        return False, "outside premarket (NY)"
+        return False, "outside premarket (NY)", "premarket"
 
     monkeypatch.setattr(execute_mod.TradeExecutor, "evaluate_time_window", fake_window)
     rc = executor.execute(df)

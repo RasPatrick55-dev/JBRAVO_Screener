@@ -33,8 +33,9 @@ def test_premarket_window_allows_with_timezone_fallback(monkeypatch, caplog):
     monkeypatch.setattr(execute_trades, "datetime", frozen)
     caplog.set_level("INFO", logger="execute_trades")
 
-    allowed, message = executor.evaluate_time_window()
+    allowed, message, resolved = executor.evaluate_time_window()
 
     assert allowed is True
     assert "premarket window open" in message
+    assert resolved == "premarket"
     assert any("invalid market timezone" in msg for msg in caplog.messages)

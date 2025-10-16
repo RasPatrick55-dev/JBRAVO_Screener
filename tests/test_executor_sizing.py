@@ -8,7 +8,7 @@ from scripts.execute_trades import ExecutionMetrics, ExecutorConfig, TradeExecut
 
 
 @pytest.mark.alpaca_optional
-def test_sizing_bumps_to_one_share(monkeypatch, caplog, tmp_path: Path):
+def test_sizing_logs_zero_qty_after_bump(monkeypatch, caplog, tmp_path: Path):
     config = ExecutorConfig(
         source=tmp_path / "candidates.csv",
         allocation_pct=0.01,
@@ -32,7 +32,7 @@ def test_sizing_bumps_to_one_share(monkeypatch, caplog, tmp_path: Path):
     metrics = ExecutionMetrics()
     executor = TradeExecutor(config, None, metrics)
     monkeypatch.setattr(executor, "fetch_buying_power", lambda: 1000.0)
-    monkeypatch.setattr(executor, "evaluate_time_window", lambda log=True: (True, "ok"))
+    monkeypatch.setattr(executor, "evaluate_time_window", lambda log=True: (True, "ok", "any"))
 
     caplog.set_level(logging.DEBUG, logger="execute_trades")
     caplog.clear()
@@ -40,9 +40,8 @@ def test_sizing_bumps_to_one_share(monkeypatch, caplog, tmp_path: Path):
     rc = executor.execute(df, prefiltered=df.to_dict("records"))
     assert rc == 0
     messages = [record.getMessage() for record in caplog.records]
-    assert any("[INFO] BUMP_TO_ONE symbol=BUMP" in msg for msg in messages)
-    assert any("CALC symbol=BUMP" in msg and "qty=1" in msg for msg in messages)
-    assert metrics.skipped_reasons.get("ZERO_QTY", 0) == 0
+    assert any("ZERO_QTY_AFTER_BUMP" in msg for msg in messages)
+    assert metrics.skipped_reasons.get("ZERO_QTY", 0) == 1
 
 
 @pytest.mark.alpaca_optional
@@ -70,7 +69,7 @@ def test_min_order_floor_sets_quantity(monkeypatch, caplog, tmp_path: Path):
     metrics = ExecutionMetrics()
     executor = TradeExecutor(config, None, metrics)
     monkeypatch.setattr(executor, "fetch_buying_power", lambda: 2000.0)
-    monkeypatch.setattr(executor, "evaluate_time_window", lambda log=True: (True, "ok"))
+    monkeypatch.setattr(executor, "evaluate_time_window", lambda log=True: (True, "ok", "any"))
 
     caplog.set_level(logging.DEBUG, logger="execute_trades")
     caplog.clear()
