@@ -31,7 +31,6 @@ def test_fallback_and_summary_logged_once(tmp_path: Path, monkeypatch, caplog):
     monkeypatch.setattr(run_pipeline, "BASE_DIR", tmp_path)
     monkeypatch.setattr(run_pipeline, "load_env", lambda *a, **k: ([], []))
     monkeypatch.setattr(run_pipeline, "configure_logging", lambda: None)
-    monkeypatch.setattr(run_pipeline, "assert_alpaca_creds", lambda: {"id": "ok"})
     monkeypatch.setattr(run_pipeline, "_record_health", lambda stage: {})
     monkeypatch.setattr(run_pipeline, "run_cmd", lambda cmd, name: 0)
     monkeypatch.setattr(run_pipeline, "emit_metric", lambda *a, **k: None)

@@ -16,7 +16,6 @@ import pandas as pd
 
 from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
 from scripts.utils.env import load_env
-from utils.env import assert_alpaca_creds
 from utils import write_csv_atomic
 from utils.telemetry import emit_event
 
@@ -276,25 +275,6 @@ def _write_refresh_metrics(metrics_path: Path) -> None:
     metrics_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _ensure_trades_log() -> None:
-    trades_path = DATA_DIR / "trades_log.csv"
-    if trades_path.exists() and trades_path.stat().st_size > 0:
-        return
-    header = pd.DataFrame(columns=[
-        "timestamp",
-        "symbol",
-        "action",
-        "qty",
-        "price",
-        "order_id",
-        "status",
-        "net_pnl",
-        "entry_time",
-        "exit_time",
-    ])
-    write_csv_atomic(str(trades_path), header)
-
-
 def ensure_candidates(min_rows: int = 1) -> int:
     current = _count_rows(LATEST_CANDIDATES)
     if current >= min_rows:
@@ -361,8 +341,8 @@ def _reload_dashboard(enabled: bool) -> None:
         path.touch()
         LOG.info("[INFO] DASH RELOAD method=touch local rc=0 path=%s", path)
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOG.info(
-            "[INFO] DASH RELOAD method=touch local rc=ERR path=%s detail=%s",
+        LOG.warning(
+            "[WARN] DASH RELOAD failed method=touch path=%s detail=%s",
             path,
             exc,
         )
@@ -416,9 +396,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 except Exception:
                     metrics_rows = 0
             top_frame = _load_top_candidates()
+            latest_source = "screener"
+            latest_rows = 0
             if top_frame.empty:
                 LOG.info("[INFO] FALLBACK_CHECK start reason=no_candidates")
-                frame, source = build_latest_candidates(PROJECT_ROOT, max_rows=1)
+                frame, _ = build_latest_candidates(PROJECT_ROOT, max_rows=1)
                 write_csv_atomic(str(TOP_CANDIDATES), frame)
                 fallback_rows = int(len(frame.index))
                 rows = fallback_rows
@@ -427,10 +409,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 else:
                     metrics_rows = fallback_rows
                 try:
-                    refresh_latest_candidates()
+                    refreshed = refresh_latest_candidates()
+                    if isinstance(refreshed, pd.DataFrame):
+                        latest_rows = int(len(refreshed.index))
+                    elif isinstance(refreshed, Mapping):
+                        metrics = dict(refreshed)
                     base = _resolve_base_dir()
                     local_metrics_path = base / "data" / "screener_metrics.json"
-                    metrics = _read_json(local_metrics_path)
+                    metrics = _read_json(local_metrics_path) or metrics
                     if "rows" in metrics:
                         metrics_rows = int(metrics.get("rows") or 0)
                         rows = metrics_rows
@@ -440,15 +426,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         )
                 except Exception:  # pragma: no cover - defensive fallback refresh
                     LOG.debug("refresh_latest_candidates failed", exc_info=True)
-                LOG.info(
-                    "[INFO] FALLBACK_CHECK rows_out=%d reason=no_candidates source=%s",
-                    fallback_rows,
-                    source,
-                )
+                latest_source = "fallback"
+                if not latest_rows:
+                    latest_rows = fallback_rows
             else:
                 rows = _write_latest_from_frame(top_frame, source="screener")
                 if metrics_rows is None:
                     metrics_rows = rows
+                latest_rows = rows
+                latest_source = "screener"
+            LOG.info(
+                "[INFO] FALLBACK_CHECK rows_out=%d source=%s",
+                latest_rows,
+                latest_source,
+            )
         else:
             metrics = _read_json(SCREENER_METRICS_PATH)
             symbols_in = int(metrics.get("symbols_in", 0) or 0)
@@ -459,6 +450,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 except Exception:
                     metrics_rows = 0
             rows = ensure_candidates(metrics_rows or 0)
+            LOG.info("[INFO] FALLBACK_CHECK rows_out=%d source=fallback", rows)
 
         if "backtest" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
@@ -474,20 +466,29 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if "metrics" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
-            _ensure_trades_log()
-            cmd = [sys.executable, "-m", "scripts.metrics"]
-            if extras["metrics"]:
-                cmd.extend(extras["metrics"])
-            rc_mt, secs = run_step("metrics", cmd, timeout=60 * 3)
-            stage_times["metrics"] = secs
-            if rc_mt and not rc:
-                rc = rc_mt
+            trades_path = DATA_DIR / "trades_log.csv"
+            if not trades_path.exists():
+                LOG.warning(
+                    "[WARN] METRICS_TRADES_LOG_MISSING path=%s",
+                    trades_path,
+                )
+            else:
+                cmd = [sys.executable, "-m", "scripts.metrics"]
+                if extras["metrics"]:
+                    cmd.extend(extras["metrics"])
+                rc_mt, secs = run_step("metrics", cmd, timeout=60 * 3)
+                stage_times["metrics"] = secs
+                if rc_mt and not rc:
+                    rc = rc_mt
         if "exec" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
             cmd = [sys.executable, "-m", "scripts.execute_trades"]
-            if extras["exec"]:
-                cmd.extend(extras["exec"])
+            exec_args = extras["exec"]
+            if not any(arg.startswith("--time-window") for arg in exec_args):
+                cmd.extend(["--time-window", "auto"])
+            if exec_args:
+                cmd.extend(exec_args)
             rc_exec, secs = run_step("exec", cmd, timeout=60 * 10)
             stage_times["exec"] = secs
             if rc_exec and not rc:

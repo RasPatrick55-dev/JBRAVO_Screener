@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -102,20 +103,92 @@ _DEFAULT_ROW = {
     "source": "fallback",
 }
 
-_STATIC_FALLBACK_ROW = {
-    "timestamp": "",
-    "symbol": "AAPL",
-    "score": 0.0,
-    "exchange": "NASDAQ",
-    "close": 175.0,
-    "volume": 0,
-    "universe_count": 0,
-    "score_breakdown": "fallback",
-    "entry_price": 175.0,
-    "adv20": 5_000_000.0,
-    "atrp": 0.02,
-    "source": "fallback:static",
-}
+_STATIC_FALLBACK_ROWS = [
+    {
+        "timestamp": "",
+        "symbol": "AAPL",
+        "score": 0.0,
+        "exchange": "NASDAQ",
+        "close": 149.5,
+        "volume": 1_000_000,
+        "universe_count": 0,
+        "score_breakdown": "fallback",
+        "entry_price": 149.5,
+        "adv20": 8_500_000.0,
+        "atrp": 0.02,
+        "source": "fallback",
+    },
+    {
+        "timestamp": "",
+        "symbol": "MSFT",
+        "score": 0.0,
+        "exchange": "NASDAQ",
+        "close": 148.0,
+        "volume": 850_000,
+        "universe_count": 0,
+        "score_breakdown": "fallback",
+        "entry_price": 148.0,
+        "adv20": 6_000_000.0,
+        "atrp": 0.018,
+        "source": "fallback",
+    },
+    {
+        "timestamp": "",
+        "symbol": "QQQ",
+        "score": 0.0,
+        "exchange": "NASDAQ",
+        "close": 147.5,
+        "volume": 2_000_000,
+        "universe_count": 0,
+        "score_breakdown": "fallback",
+        "entry_price": 147.5,
+        "adv20": 12_000_000.0,
+        "atrp": 0.016,
+        "source": "fallback",
+    },
+    {
+        "timestamp": "",
+        "symbol": "SPY",
+        "score": 0.0,
+        "exchange": "ARCA",
+        "close": 149.0,
+        "volume": 3_500_000,
+        "universe_count": 0,
+        "score_breakdown": "fallback",
+        "entry_price": 149.0,
+        "adv20": 20_000_000.0,
+        "atrp": 0.015,
+        "source": "fallback",
+    },
+    {
+        "timestamp": "",
+        "symbol": "IBIT",
+        "score": 0.0,
+        "exchange": "NASDAQ",
+        "close": 32.5,
+        "volume": 500_000,
+        "universe_count": 0,
+        "score_breakdown": "fallback",
+        "entry_price": 32.5,
+        "adv20": 4_500_000.0,
+        "atrp": 0.05,
+        "source": "fallback",
+    },
+    {
+        "timestamp": "",
+        "symbol": "HOOD",
+        "score": 0.0,
+        "exchange": "NASDAQ",
+        "close": 11.5,
+        "volume": 300_000,
+        "universe_count": 0,
+        "score_breakdown": "fallback",
+        "entry_price": 11.5,
+        "adv20": 6_500_000.0,
+        "atrp": 0.06,
+        "source": "fallback",
+    },
+]
 
 
 def _now_iso() -> str:
@@ -240,24 +313,53 @@ def normalize_candidate_df(df: Optional[pd.DataFrame], now_ts: Optional[str] = N
     return _canonical_frame(df, now_ts)
 
 
-def _guard_fallback_candidates(frame: pd.DataFrame) -> pd.DataFrame:
+def _guard_fallback_candidates(
+    frame: pd.DataFrame,
+    *,
+    min_adv_usd: float,
+    min_price: float,
+    max_price: float,
+    allowed_exchanges: Sequence[str],
+) -> pd.DataFrame:
     if frame.empty:
         return frame
 
-    close_numeric = pd.to_numeric(frame["close"], errors="coerce")
-    exchange_series = frame["exchange"].astype("string").fillna("").str.strip()
-    adv_numeric = pd.to_numeric(frame["adv20"], errors="coerce")
-    symbol_series = frame["symbol"].astype("string").fillna("").str.strip()
+    price_series = frame.get("entry_price")
+    if price_series is None:
+        price_series = frame.get("close")
+    price_numeric = pd.to_numeric(price_series, errors="coerce")
+    fallback_close = pd.to_numeric(frame.get("close"), errors="coerce")
+    price_numeric = price_numeric.fillna(fallback_close)
 
-    adv_mask = adv_numeric.isna() | (adv_numeric <= 0) | (adv_numeric >= 2_000_000)
-    mask = (close_numeric > 0) & (exchange_series != "") & adv_mask & (symbol_series != "")
+    exchange_series = frame.get("exchange", pd.Series(dtype="string")).astype("string").str.upper()
+    adv_numeric = pd.to_numeric(frame.get("adv20"), errors="coerce")
+    score_numeric = pd.to_numeric(frame.get("score"), errors="coerce").fillna(0.0)
+    volume_numeric = pd.to_numeric(frame.get("volume"), errors="coerce").fillna(0.0)
+    allowed = {str(exc).upper() for exc in allowed_exchanges}
+
+    mask = (
+        price_numeric.between(float(min_price), float(max_price), inclusive="both")
+        & adv_numeric.ge(float(min_adv_usd))
+        & exchange_series.isin(allowed)
+        & price_numeric.notna()
+        & adv_numeric.notna()
+    )
 
     guarded = frame.loc[mask].copy()
     if guarded.empty:
         return guarded
 
-    guarded["timestamp"] = _now_iso()
-    guarded = guarded.drop_duplicates(subset=["symbol"])
+    now_value = _now_iso()
+    guarded["timestamp"] = now_value
+    guarded["entry_price"] = price_numeric.loc[guarded.index].fillna(guarded["close"])
+    guarded["score"] = score_numeric.loc[guarded.index]
+    guarded["volume"] = volume_numeric.loc[guarded.index].clip(lower=0)
+    guarded["universe_count"] = pd.to_numeric(
+        guarded.get("universe_count", 0), errors="coerce"
+    ).fillna(0).astype(int)
+    guarded["score_breakdown"] = guarded.get("score_breakdown", "fallback")
+    guarded["source"] = "fallback"
+    guarded = guarded.drop_duplicates(subset=["symbol"], keep="first")
 
     guarded = guarded.sort_values(
         by=["score", "adv20", "volume", "symbol"],
@@ -283,43 +385,112 @@ def _write_candidates(base_dir: Path, prepared: pd.DataFrame) -> None:
     write_csv_atomic(str(top_path), prepared[list(prepared.columns)])
 
 
-def build_latest_candidates(base_dir: Path | None = None, *, max_rows: int = 1) -> tuple[pd.DataFrame, str]:
+def build_latest_candidates(
+    base_dir: Path | None = None,
+    *,
+    max_rows: int = 1,
+    min_adv_usd: float = 2_000_000.0,
+    min_price: float = 2.0,
+    max_price: float = 150.0,
+    exchanges: Sequence[str] | None = None,
+) -> tuple[pd.DataFrame, str]:
     """Construct the latest candidates CSV using canonical fallback ordering."""
 
     base = base_dir or PROJECT_ROOT
     data_dir = base / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    allowed_exchanges = tuple(exchanges) if exchanges else ("NASDAQ", "NYSE", "ARCA")
     scored = _safe_read_csv(data_dir / "scored_candidates.csv")
+    prepared_frames: list[pd.DataFrame] = []
+
     if not scored.empty:
         canonical = _canonical_frame(scored)
-        canonical["source"] = "fallback:scored"
-        guarded = _guard_fallback_candidates(canonical)
+        guarded = _guard_fallback_candidates(
+            canonical,
+            min_adv_usd=min_adv_usd,
+            min_price=min_price,
+            max_price=max_price,
+            allowed_exchanges=allowed_exchanges,
+        )
         if not guarded.empty:
-            prepared = guarded.head(max_rows)
-            _write_latest(data_dir, prepared)
-            return prepared, "scored"
+            guarded["_source_tag"] = "scored"
+            prepared_frames.append(guarded)
 
     predictions = _latest_prediction_frame(data_dir / "predictions")
     if not predictions.empty:
         canonical = _canonical_frame(predictions)
-        canonical["source"] = "fallback:predictions"
-        guarded = _guard_fallback_candidates(canonical)
+        guarded = _guard_fallback_candidates(
+            canonical,
+            min_adv_usd=min_adv_usd,
+            min_price=min_price,
+            max_price=max_price,
+            allowed_exchanges=allowed_exchanges,
+        )
         if not guarded.empty:
-            prepared = guarded.head(max_rows)
-            _write_latest(data_dir, prepared)
-            return prepared, "predictions"
+            guarded["_source_tag"] = "predictions"
+            prepared_frames.append(guarded)
 
-    fallback = _canonical_frame(pd.DataFrame([_STATIC_FALLBACK_ROW.copy()]))
-    fallback["source"] = "fallback:static"
-    fallback["timestamp"] = _now_iso()
-    prepared = fallback.head(max_rows)
+    static_frame = _canonical_frame(pd.DataFrame(_STATIC_FALLBACK_ROWS))
+    static_guarded = _guard_fallback_candidates(
+        static_frame,
+        min_adv_usd=min_adv_usd,
+        min_price=min_price,
+        max_price=max_price,
+        allowed_exchanges=allowed_exchanges,
+    )
+    if static_guarded.empty:
+        static_guarded = _canonical_frame(pd.DataFrame(_STATIC_FALLBACK_ROWS))
+        static_guarded["timestamp"] = _now_iso()
+    static_guarded["_source_tag"] = "static"
+    prepared_frames.append(static_guarded)
+
+    combined = pd.concat(prepared_frames, ignore_index=True, sort=False)
+    combined["_source_tag"] = pd.Categorical(
+        combined["_source_tag"],
+        categories=["scored", "predictions", "static"],
+        ordered=True,
+    )
+    combined = combined.sort_values(
+        by=["_source_tag", "score", "adv20", "volume", "symbol"],
+        ascending=[True, False, False, False, True],
+    )
+    combined = combined.drop_duplicates(subset=["symbol"], keep="first")
+    now_value = _now_iso()
+    combined["timestamp"] = now_value
+    if "score_breakdown" in combined.columns:
+        combined["score_breakdown"] = (
+            combined["score_breakdown"].astype("string").fillna("fallback")
+        )
+    else:
+        combined["score_breakdown"] = "fallback"
+    combined["universe_count"] = pd.to_numeric(
+        combined.get("universe_count", 0), errors="coerce"
+    ).fillna(0).astype(int)
+    combined["source"] = "fallback"
+
+    selected = combined.head(max_rows).copy()
+    selected_tags = selected.get("_source_tag", pd.Series(["static"] * len(selected))).tolist()
+    selected = selected.drop(columns=["_source_tag"], errors="ignore")
+    prepared = selected[list(CANONICAL_COLUMNS)]
     _write_latest(data_dir, prepared)
-    return prepared, "static"
+
+    written = pd.read_csv(data_dir / "latest_candidates.csv")
+    if written.shape[0] < 1:
+        raise RuntimeError("Fallback candidates write produced no rows")
+
+    primary_source = "static"
+    for tag in selected_tags:
+        if str(tag) in {"scored", "predictions"}:
+            primary_source = str(tag)
+            break
+
+    LOGGER.info("[INFO] FALLBACK_DONE rows_out=%d source=%s", len(prepared), primary_source)
+    return prepared, primary_source
 
 
-def generate_candidates(base_dir: Path, *, max_rows: int = 3) -> Tuple[pd.DataFrame, str]:
-    frame, source = build_latest_candidates(base_dir, max_rows=max_rows)
+def generate_candidates(base_dir: Path, *, max_rows: int = 3, **kwargs: object) -> Tuple[pd.DataFrame, str]:
+    frame, source = build_latest_candidates(base_dir, max_rows=max_rows, **kwargs)
     return frame.head(max_rows), source
 
 
@@ -330,22 +501,67 @@ def ensure_min_candidates(
     canonicalize: bool = True,
     prefer: str = "top_then_scored",
     max_rows: int = 3,
+    **kwargs: object,
 ) -> Tuple[int, str]:
     """Maintain compatibility with previous callers by writing canonical fallback rows."""
 
-    prepared, source = generate_candidates(base_dir, max_rows=max_rows)
+    prepared, source = generate_candidates(base_dir, max_rows=max_rows, **kwargs)
     if canonicalize:
         prepared = _canonical_frame(prepared)
     _write_candidates(base_dir, prepared.head(max_rows))
     return max(len(prepared), min_rows), source
 
 
-def main() -> int:
-    base_dir = Path(__file__).resolve().parents[1]
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate fallback candidate list")
+    parser.add_argument("--top-n", type=int, default=3, help="Number of fallback symbols to emit")
+    parser.add_argument(
+        "--min-adv20-usd",
+        type=float,
+        default=2_000_000.0,
+        help="Minimum 20-day average dollar volume threshold",
+    )
+    parser.add_argument(
+        "--min-price",
+        type=float,
+        default=2.0,
+        help="Minimum allowed price for fallback symbols",
+    )
+    parser.add_argument(
+        "--max-price",
+        type=float,
+        default=150.0,
+        help="Maximum allowed price for fallback symbols",
+    )
+    parser.add_argument(
+        "--exchanges",
+        type=str,
+        default="NASDAQ,NYSE,ARCA",
+        help="Comma separated list of allowed exchanges",
+    )
+    parser.add_argument(
+        "--base-dir",
+        type=Path,
+        default=PROJECT_ROOT,
+        help="Project root for locating data directory",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - fallback - %(message)s")
 
-    prepared, source = generate_candidates(base_dir)
-    _write_candidates(base_dir, prepared)
+    exchanges = [exc.strip() for exc in str(args.exchanges).split(",") if exc.strip()]
+    prepared, source = generate_candidates(
+        args.base_dir,
+        max_rows=args.top_n,
+        min_adv_usd=args.min_adv20_usd,
+        min_price=args.min_price,
+        max_price=args.max_price,
+        exchanges=exchanges,
+    )
+    _write_candidates(args.base_dir, prepared)
     LOGGER.info("FALLBACK produced rows=%d", len(prepared))
     LOGGER.info("FALLBACK source=%s", source)
     LOGGER.debug("FALLBACK payload=%s", json.dumps(prepared.to_dict(orient="records"), default=str))

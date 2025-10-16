@@ -30,7 +30,8 @@ def test_premarket_window_handles_7am(monkeypatch):
     frozen = _FrozenDateTime(datetime(2024, 3, 1, 12, 0, tzinfo=timezone.utc))
     monkeypatch.setattr(execute_trades, "datetime", frozen)
 
-    allowed, message = executor.evaluate_time_window()
+    allowed, message, resolved = executor.evaluate_time_window()
 
     assert allowed is True
     assert "premarket window open" in message
+    assert resolved == "premarket"
