@@ -313,33 +313,10 @@ def _extract_timing(metrics: Mapping[str, Any], key: str) -> float:
 def _reload_dashboard(enabled: bool) -> None:
     if not enabled:
         return
-    domain = os.environ.get("PYTHONANYWHERE_DOMAIN", "").strip()
-    cmd = ["pa_reload_webapp"]
-    if domain:
-        cmd.append(domain)
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
-        LOG.info("[INFO] DASH RELOAD method=pa rc=0 domain=%s", domain or "(default)")
-        return
-    except FileNotFoundError:
-        LOG.info(
-            "[INFO] DASH RELOAD method=pa rc=missing_tool domain=%s",
-            domain or "(default)",
-        )
-    except subprocess.CalledProcessError as exc:
-        LOG.info("[INFO] DASH RELOAD method=pa rc=%s domain=%s", exc.returncode, domain or "(default)")
-    except Exception as exc:  # pragma: no cover - defensive guard
-        LOG.info(
-            "[INFO] DASH RELOAD method=pa rc=ERR domain=%s detail=%s",
-            domain or "(default)",
-            exc,
-        )
-
-    target = domain.replace(".", "_") if domain else ""
-    path = Path(f"/var/www/{target}_wsgi.py") if target else DEFAULT_WSGI_PATH
+    path = DEFAULT_WSGI_PATH
     try:
         path.touch()
-        LOG.info("[INFO] DASH RELOAD method=touch local rc=0 path=%s", path)
+        LOG.info("[INFO] DASH RELOAD method=touch path=%s", path)
     except Exception as exc:  # pragma: no cover - defensive guard
         LOG.warning(
             "[WARN] DASH RELOAD failed method=touch path=%s detail=%s",
@@ -400,7 +377,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             latest_rows = 0
             if top_frame.empty:
                 LOG.info("[INFO] FALLBACK_CHECK start reason=no_candidates")
-                frame, _ = build_latest_candidates(PROJECT_ROOT, max_rows=1)
+                frame, fallback_source = build_latest_candidates(PROJECT_ROOT, max_rows=1)
                 write_csv_atomic(str(TOP_CANDIDATES), frame)
                 fallback_rows = int(len(frame.index))
                 rows = fallback_rows
@@ -427,6 +404,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 except Exception:  # pragma: no cover - defensive fallback refresh
                     LOG.debug("refresh_latest_candidates failed", exc_info=True)
                 latest_source = "fallback"
+                if str(fallback_source) in {"scored", "predictions"}:
+                    latest_source = f"fallback:{fallback_source}"
                 if not latest_rows:
                     latest_rows = fallback_rows
             else:
@@ -512,6 +491,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             rank_secs,
             gate_secs,
         )
+        data_ok = int((summary_rows or 0) > 0)
+        trading_ok = int(rc == 0)
+        LOG.info("HEALTH trading_ok=%s data_ok=%s stage=end", trading_ok, data_ok)
         duration = time.time() - started
         LOG.info("PIPELINE_END rc=%s duration=%.1f", rc, duration)
         _reload_dashboard(args.reload_web.lower() == "true")

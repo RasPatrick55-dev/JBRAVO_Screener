@@ -72,3 +72,5 @@ def test_pipeline_summary_zero_candidates(tmp_path, monkeypatch, caplog):
     assert "feature_secs=2.2" in summary_line
     assert "rank_secs=3.3" in summary_line
     assert "gate_secs=4.4" in summary_line
+    assert any("HEALTH trading_ok=" in msg for msg in messages)
+    assert any("PIPELINE_END" in msg for msg in messages)

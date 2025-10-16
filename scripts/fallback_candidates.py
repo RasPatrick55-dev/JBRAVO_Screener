@@ -472,20 +472,36 @@ def build_latest_candidates(
     selected = combined.head(max_rows).copy()
     selected_tags = selected.get("_source_tag", pd.Series(["static"] * len(selected))).tolist()
     selected = selected.drop(columns=["_source_tag"], errors="ignore")
+
+    source_labels: list[str] = []
+    normalized_tags: list[str] = []
+    for tag in selected_tags:
+        tag_str = str(tag) if str(tag) not in ("None", "") else "static"
+        normalized_tags.append(tag_str)
+        if tag_str == "scored":
+            source_labels.append("fallback:scored")
+        else:
+            source_labels.append("fallback")
+    if not source_labels:
+        source_labels = ["fallback"] * len(selected.index)
+
+    selected["source"] = source_labels
     prepared = selected[list(CANONICAL_COLUMNS)]
     _write_latest(data_dir, prepared)
 
-    written = pd.read_csv(data_dir / "latest_candidates.csv")
+    latest_path = data_dir / "latest_candidates.csv"
+    written = pd.read_csv(latest_path)
     if written.shape[0] < 1:
         raise RuntimeError("Fallback candidates write produced no rows")
 
     primary_source = "static"
-    for tag in selected_tags:
-        if str(tag) in {"scored", "predictions"}:
-            primary_source = str(tag)
+    for tag_str in normalized_tags:
+        if tag_str in {"scored", "predictions"}:
+            primary_source = tag_str
             break
 
-    LOGGER.info("[INFO] FALLBACK_DONE rows_out=%d source=%s", len(prepared), primary_source)
+    source_token = source_labels[0] if source_labels else "fallback"
+    LOGGER.info("[INFO] FALLBACK_DONE rows_out=%d source=%s", len(prepared), source_token)
     return prepared, primary_source
 
 
