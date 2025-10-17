@@ -106,35 +106,54 @@ trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 logger = logging.getLogger(__name__)
 
 
+def _environment_state() -> tuple[bool, str]:
+    base_url = (os.getenv("APCA_API_BASE_URL") or "").lower()
+    paper = "paper-api" in base_url
+    if not paper:
+        exec_flag = (os.getenv("JBR_EXEC_PAPER") or "").strip().lower()
+        paper = exec_flag in {"1", "true", "yes", "on"}
+    feed = (os.getenv("ALPACA_DATA_FEED") or "").strip().upper() or "?"
+    return paper, feed
+
+
 def _detect_paper_mode() -> bool:
     """Return True when Alpaca is configured for paper trading."""
 
-    base_url = (os.getenv("APCA_API_BASE_URL") or "").lower()
-    if "paper" in base_url:
-        return True
-    exec_flag = (os.getenv("JBR_EXEC_PAPER") or "").strip().lower()
-    return exec_flag in {"1", "true", "yes", "on"}
+    paper, _ = _environment_state()
+    return paper
 
 
 PAPER_TRADING_MODE = _detect_paper_mode()
 
 
 def _paper_badge_component() -> dbc.Badge:
-    """Return a subtle badge indicating paper-mode execution."""
+    """Return a subtle badge indicating execution environment."""
 
+    paper, feed = _environment_state()
+    label = f"{'Paper' if paper else 'Live'} ({feed})"
+    if paper:
+        badge_kwargs = dict(color="info", text_color="dark")
+        style = {
+            "backgroundColor": "#cfe2ff",
+            "color": "#084298",
+        }
+    else:
+        badge_kwargs = dict(color="success", text_color="dark")
+        style = {
+            "backgroundColor": "#d1e7dd",
+            "color": "#0f5132",
+        }
     return dbc.Badge(
-        "Paper Trading Mode",
-        color="info",
-        text_color="dark",
+        label,
         className="me-2",
         style={
             "fontSize": "0.75rem",
             "letterSpacing": "0.04em",
             "padding": "0.25rem 0.5rem",
-            "backgroundColor": "#cfe2ff",
-            "color": "#084298",
             "fontWeight": 600,
+            **style,
         },
+        **badge_kwargs,
     )
 
 
@@ -1423,9 +1442,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             except Exception:
                 connectivity_chip = None
 
-        components = []
-        if PAPER_TRADING_MODE:
-            components.append(html.Div(_paper_badge_component(), className="mb-2"))
+        components = [html.Div(_paper_badge_component(), className="mb-2")]
         if connectivity_chip:
             components.append(html.Div(connectivity_chip, className="mb-3"))
         if latest_notice:
@@ -1479,7 +1496,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             )
         else:
             hint = dbc.Alert(
-                "No trades yet (paper account).",
+                "No trades yet (paper).",
                 color="info",
                 className="mb-2",
             )
@@ -1643,9 +1660,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             executed_trades_path if executed_exists else trades_log_path
         )
         last_updated = format_time(get_file_mtime(last_updated_path))
-        header_children: list[Any] = []
-        if PAPER_TRADING_MODE:
-            header_children.append(_paper_badge_component())
+        header_children: list[Any] = [_paper_badge_component()]
         header_children.append(
             html.Span(
                 f"Last Updated: {last_updated}",
