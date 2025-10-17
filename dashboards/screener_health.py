@@ -15,29 +15,47 @@ from dash import dcc, html
 from dash.dash_table import DataTable
 from dash.dependencies import Input, Output
 
+from dashboards.utils import (
+    coerce_kpi_types,
+    parse_pipeline_summary,
+    safe_read_json,
+    safe_read_metrics_csv,
+)
+
 LOGGER = logging.getLogger(__name__)
 
 _WARNED_PATHS: set[tuple[str, pathlib.Path]] = set()
 
 
-def _detect_paper_mode() -> bool:
+def _environment_state() -> tuple[bool, str]:
     base_url = (os.getenv("APCA_API_BASE_URL") or "").lower()
-    if "paper" in base_url:
-        return True
-    flag = (os.getenv("JBR_EXEC_PAPER") or "").strip().lower()
-    return flag in {"1", "true", "yes", "on"}
+    paper = "paper-api" in base_url
+    if not paper:
+        flag = (os.getenv("JBR_EXEC_PAPER") or "").strip().lower()
+        paper = flag in {"1", "true", "yes", "on"}
+    feed = (os.getenv("ALPACA_DATA_FEED") or "").strip().upper() or "?"
+    return paper, feed
+
+
+def _detect_paper_mode() -> bool:
+    paper, _ = _environment_state()
+    return paper
 
 
 PAPER_TRADING_MODE = _detect_paper_mode()
 
 
 def _paper_badge_component() -> html.Span:
+    paper, feed = _environment_state()
+    label = f"{'Paper' if paper else 'Live'} ({feed})"
+    bg_color = "#cfe2ff" if paper else "#d1e7dd"
+    text_color = "#084298" if paper else "#0f5132"
     return html.Span(
-        "Paper Trading Mode",
+        label,
         style={
             "display": "inline-block",
-            "background": "#cfe2ff",
-            "color": "#084298",
+            "background": bg_color,
+            "color": text_color,
             "padding": "2px 10px",
             "borderRadius": "999px",
             "fontSize": "0.7rem",
@@ -100,6 +118,56 @@ METRICS_SUMMARY_CSV = DATA_DIR / "metrics_summary.csv"
 EXECUTE_METRICS_JSON = DATA_DIR / "execute_metrics.json"
 LATEST_CSV = DATA_DIR / "latest_candidates.csv"
 PREMARKET_JSON = DATA_DIR / "last_premarket_run.json"
+
+
+_KPI_LAST_SOURCE: str | None = None
+
+
+def _normalize_metrics(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "last_run_utc": None,
+        "symbols_in": None,
+        "symbols_with_bars": None,
+        "bars_rows_total": None,
+        "rows": None,
+    }
+    if isinstance(payload, Mapping):
+        base.update(payload)
+    coerced = coerce_kpi_types(base)
+    base.update(coerced)
+    return base
+
+
+def _log_kpi_source(source: str) -> None:
+    global _KPI_LAST_SOURCE
+    if source != _KPI_LAST_SOURCE:
+        LOGGER.info("KPI source %s", source)
+        _KPI_LAST_SOURCE = source
+
+
+def load_kpis() -> dict[str, Any]:
+    json_metrics = _normalize_metrics(safe_read_json(METRICS_JSON))
+    if json_metrics.get("symbols_in") is not None:
+        json_metrics["source"] = "screener_metrics.json"
+        _log_kpi_source(json_metrics["source"])
+        return json_metrics
+
+    csv_metrics = _normalize_metrics(safe_read_metrics_csv(METRICS_SUMMARY_CSV))
+    if csv_metrics.get("symbols_in") is not None:
+        csv_metrics["source"] = "metrics_summary.csv"
+        _log_kpi_source(csv_metrics["source"])
+        return csv_metrics
+
+    pipeline_metrics = _normalize_metrics(parse_pipeline_summary(LOG_DIR / "pipeline.log"))
+    if pipeline_metrics.get("symbols_in") is not None:
+        pipeline_metrics["source"] = "pipeline.log (inferred)"
+        _log_kpi_source(pipeline_metrics["source"])
+        return pipeline_metrics
+
+    empty = _normalize_metrics({})
+    empty["source"] = "none"
+    _log_kpi_source(empty["source"])
+    return empty
 
 
 def _format_probe_timestamp(raw: Any) -> str:
@@ -710,7 +778,7 @@ def register_callbacks(app):
         Input("sh-interval","n_intervals")
     )
     def _load_artifacts(_n):
-        m = dict(_safe_json(METRICS_JSON) or {})
+        m = dict(load_kpis())
         latest = _safe_csv(LATEST_CSV, nrows=1)
         fallback_active = False
         if not latest.empty:
@@ -718,6 +786,7 @@ def register_callbacks(app):
             fallback_active = source_raw.startswith("fallback")
         m["_fallback_active"] = fallback_active
         m["_latest_zero_rows"] = LATEST_CSV.exists() and latest.empty
+        m["_kpi_inferred_from_log"] = m.get("source") == "pipeline.log (inferred)"
 
         top = _safe_csv(TOP_CSV)
         # augment top with ATR% and Why using scored CSV if ATR14/ADV20 missing
@@ -840,7 +909,8 @@ def register_callbacks(app):
             premarket = {}
 
         fallback_active = bool(m.get("_fallback_active"))
-        paper_badge = _paper_badge_component() if PAPER_TRADING_MODE else ""
+        env_paper, env_feed = _environment_state()
+        paper_badge = _paper_badge_component()
         latest_zero = bool(m.get("_latest_zero_rows"))
         top_empty_message: Any = ""
         if latest_zero:
@@ -966,15 +1036,43 @@ def register_callbacks(app):
             _card("Bar Rows", bars_tot_text),
             _card("Candidates", rows_text, candidate_sub or None),
         ]
-        kpis = html.Div(
+        kpi_grid = html.Div(
             kpi_cards,
-            className="sh-kpi-wrap",
             style={
                 "display": "grid",
                 "gridTemplateColumns": "repeat(7, minmax(140px,1fr))",
                 "gap": "10px",
-                "marginBottom": "12px",
             },
+            className="sh-kpi-grid",
+        )
+        source_label = str(m.get("source") or "none")
+        env_label = "Paper" if env_paper else "Live"
+        caption_children: list[Any] = [
+            html.Span(
+                f"Source: {source_label} • {env_label}: {env_feed}",
+                style={"marginRight": "4px"},
+            )
+        ]
+        if m.get("_kpi_inferred_from_log"):
+            caption_children.append(
+                html.Span(
+                    "(inferred from pipeline log)",
+                    style={"fontStyle": "italic", "color": "#cbd5f5"},
+                )
+            )
+        kpi_caption = html.Div(
+            caption_children,
+            style={
+                "fontSize": "12px",
+                "color": "#9aa0b8",
+                "marginTop": "6px",
+            },
+            className="sh-kpi-caption",
+        )
+        kpis = html.Div(
+            [kpi_grid, kpi_caption],
+            className="sh-kpi-wrap",
+            style={"marginBottom": "12px", "display": "grid", "gap": "4px"},
         )
 
         banner_parts = []
