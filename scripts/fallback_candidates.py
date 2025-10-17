@@ -6,7 +6,7 @@ import argparse
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Tuple
 
@@ -109,41 +109,13 @@ _STATIC_FALLBACK_ROWS = [
         "symbol": "AAPL",
         "score": 0.0,
         "exchange": "NASDAQ",
-        "close": 149.5,
-        "volume": 1_000_000,
+        "close": 190.0,
+        "volume": 10_000_000,
         "universe_count": 0,
         "score_breakdown": "fallback",
-        "entry_price": 149.5,
-        "adv20": 8_500_000.0,
+        "entry_price": 190.0,
+        "adv20": 60_000_000.0,
         "atrp": 0.02,
-        "source": "fallback",
-    },
-    {
-        "timestamp": "",
-        "symbol": "MSFT",
-        "score": 0.0,
-        "exchange": "NASDAQ",
-        "close": 148.0,
-        "volume": 850_000,
-        "universe_count": 0,
-        "score_breakdown": "fallback",
-        "entry_price": 148.0,
-        "adv20": 6_000_000.0,
-        "atrp": 0.018,
-        "source": "fallback",
-    },
-    {
-        "timestamp": "",
-        "symbol": "QQQ",
-        "score": 0.0,
-        "exchange": "NASDAQ",
-        "close": 147.5,
-        "volume": 2_000_000,
-        "universe_count": 0,
-        "score_breakdown": "fallback",
-        "entry_price": 147.5,
-        "adv20": 12_000_000.0,
-        "atrp": 0.016,
         "source": "fallback",
     },
     {
@@ -151,44 +123,32 @@ _STATIC_FALLBACK_ROWS = [
         "symbol": "SPY",
         "score": 0.0,
         "exchange": "ARCA",
-        "close": 149.0,
-        "volume": 3_500_000,
+        "close": 430.0,
+        "volume": 75_000_000,
         "universe_count": 0,
         "score_breakdown": "fallback",
-        "entry_price": 149.0,
-        "adv20": 20_000_000.0,
+        "entry_price": 430.0,
+        "adv20": 90_000_000.0,
         "atrp": 0.015,
         "source": "fallback",
     },
     {
         "timestamp": "",
-        "symbol": "IBIT",
+        "symbol": "QQQ",
         "score": 0.0,
         "exchange": "NASDAQ",
-        "close": 32.5,
-        "volume": 500_000,
+        "close": 360.0,
+        "volume": 50_000_000,
         "universe_count": 0,
         "score_breakdown": "fallback",
-        "entry_price": 32.5,
-        "adv20": 4_500_000.0,
-        "atrp": 0.05,
-        "source": "fallback",
-    },
-    {
-        "timestamp": "",
-        "symbol": "HOOD",
-        "score": 0.0,
-        "exchange": "NASDAQ",
-        "close": 11.5,
-        "volume": 300_000,
-        "universe_count": 0,
-        "score_breakdown": "fallback",
-        "entry_price": 11.5,
-        "adv20": 6_500_000.0,
-        "atrp": 0.06,
+        "entry_price": 360.0,
+        "adv20": 45_000_000.0,
+        "atrp": 0.018,
         "source": "fallback",
     },
 ]
+
+SCORED_STALE_MINUTES = 30
 
 
 def _now_iso() -> str:
@@ -202,6 +162,17 @@ def _safe_read_csv(path: Path) -> pd.DataFrame:
     except Exception as exc:  # pragma: no cover - defensive I/O guard
         LOGGER.warning("FALLBACK_LOAD_FAILED path=%s error=%s", path, exc)
     return pd.DataFrame()
+
+
+def _is_stale(path: Path, *, max_age_minutes: int = SCORED_STALE_MINUTES) -> bool:
+    if not path.exists():
+        return True
+    try:
+        modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return True
+    age = datetime.now(timezone.utc) - modified
+    return age > timedelta(minutes=max_age_minutes)
 
 
 def _latest_prediction_frame(predictions_dir: Path) -> pd.DataFrame:
@@ -401,10 +372,19 @@ def build_latest_candidates(
     data_dir.mkdir(parents=True, exist_ok=True)
 
     allowed_exchanges = tuple(exchanges) if exchanges else ("NASDAQ", "NYSE", "ARCA")
-    scored = _safe_read_csv(data_dir / "scored_candidates.csv")
+    scored_path = data_dir / "scored_candidates.csv"
+    scored = _safe_read_csv(scored_path)
+    scored_stale = _is_stale(scored_path)
+    scored_age_minutes: float | None = None
+    if scored_path.exists():
+        try:
+            modified = datetime.fromtimestamp(scored_path.stat().st_mtime, tz=timezone.utc)
+            scored_age_minutes = (datetime.now(timezone.utc) - modified).total_seconds() / 60.0
+        except OSError:
+            scored_age_minutes = None
     prepared_frames: list[pd.DataFrame] = []
 
-    if not scored.empty:
+    if not scored.empty and not scored_stale:
         canonical = _canonical_frame(scored)
         guarded = _guard_fallback_candidates(
             canonical,
@@ -416,6 +396,12 @@ def build_latest_candidates(
         if not guarded.empty:
             guarded["_source_tag"] = "scored"
             prepared_frames.append(guarded)
+    elif scored_stale:
+        LOGGER.info(
+            "[INFO] FALLBACK_SCORED_STALE minutes=%.1f path=%s",
+            scored_age_minutes if scored_age_minutes is not None else -1.0,
+            scored_path,
+        )
 
     predictions = _latest_prediction_frame(data_dir / "predictions")
     if not predictions.empty:
@@ -469,21 +455,42 @@ def build_latest_candidates(
     ).fillna(0).astype(int)
     combined["source"] = "fallback"
 
-    selected = combined.head(max_rows).copy()
+    tag_series = combined.get("_source_tag")
+    fallback_only = True
+    if tag_series is not None and not tag_series.empty:
+        unique_tags = {
+            str(tag).strip().lower()
+            for tag in pd.Series(tag_series).dropna().unique().tolist()
+        }
+        fallback_only = not any(tag in {"scored", "predictions"} for tag in unique_tags)
+
+    if fallback_only:
+        static_rows = combined.loc[combined.get("_source_tag") == "static"].copy()
+        if static_rows.empty:
+            static_rows = combined.copy()
+        selected = static_rows.head(max(3, max_rows)).copy()
+    else:
+        selected = combined.head(max_rows).copy()
+
+    if selected.empty:
+        selected = combined.head(max(3, max_rows)).copy()
+
     selected_tags = selected.get("_source_tag", pd.Series(["static"] * len(selected))).tolist()
     selected = selected.drop(columns=["_source_tag"], errors="ignore")
 
     source_labels: list[str] = []
     normalized_tags: list[str] = []
     for tag in selected_tags:
-        tag_str = str(tag) if str(tag) not in ("None", "") else "static"
+        tag_str = str(tag).strip().lower() if str(tag).strip() else "static"
         normalized_tags.append(tag_str)
         if tag_str == "scored":
             source_labels.append("fallback:scored")
+        elif tag_str == "predictions":
+            source_labels.append("fallback:predictions")
         else:
-            source_labels.append("fallback")
+            source_labels.append("fallback:static")
     if not source_labels:
-        source_labels = ["fallback"] * len(selected.index)
+        source_labels = ["fallback:static"] * len(selected.index)
 
     selected["source"] = source_labels
     prepared = selected[list(CANONICAL_COLUMNS)]
@@ -500,8 +507,8 @@ def build_latest_candidates(
             primary_source = tag_str
             break
 
-    source_token = source_labels[0] if source_labels else "fallback"
-    LOGGER.info("[INFO] FALLBACK_DONE rows_out=%d source=%s", len(prepared), source_token)
+    source_token = source_labels[0] if source_labels else "fallback:static"
+    LOGGER.info("[INFO] FALLBACK_CHECK rows_out=%d source=%s", len(prepared), source_token)
     return prepared, primary_source
 
 

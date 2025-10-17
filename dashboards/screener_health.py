@@ -71,6 +71,7 @@ RANKER_EVAL_LATEST = DATA_DIR / "ranker_eval" / "latest.json"
 METRICS_SUMMARY_CSV = DATA_DIR / "metrics_summary.csv"
 EXECUTE_METRICS_JSON = DATA_DIR / "execute_metrics.json"
 LATEST_CSV = DATA_DIR / "latest_candidates.csv"
+PREMARKET_JSON = DATA_DIR / "last_premarket_run.json"
 
 
 def _format_probe_timestamp(raw: Any) -> str:
@@ -166,6 +167,70 @@ def _health_elements(health: Mapping[str, Any] | None) -> tuple[html.Div, html.D
         )
 
     return health_card, banner
+
+
+def _premarket_pill(payload: Mapping[str, Any] | None) -> html.Div:
+    info = payload if isinstance(payload, Mapping) else {}
+    in_window = bool(info.get("in_window"))
+    auth_ok = bool(info.get("auth_ok"))
+    candidates_raw = info.get("candidates_in", 0)
+    try:
+        candidates = int(candidates_raw)
+    except (TypeError, ValueError):
+        candidates = 0
+    started = _format_probe_timestamp(info.get("started_utc"))
+    ny_now = _format_probe_timestamp(info.get("ny_now"))
+
+    chip_style = {
+        "background": "#2a3145",
+        "padding": "2px 8px",
+        "borderRadius": "999px",
+    }
+    chips = [
+        html.Span(
+            f"Window {'✅' if in_window else '❌'}",
+            style=chip_style,
+        ),
+        html.Span(
+            f"Auth {'✅' if auth_ok else '❌'}",
+            style=chip_style,
+        ),
+        html.Span(
+            f"Candidates {candidates:,}",
+            style=chip_style,
+        ),
+    ]
+
+    sub_parts: list[str] = []
+    if started and started != "n/a":
+        sub_parts.append(f"Started {started}")
+    if ny_now and ny_now != "n/a":
+        sub_parts.append(f"NY {ny_now}")
+    sub_text = " • ".join(sub_parts) if sub_parts else "Awaiting latest run"
+
+    return html.Div(
+        [
+            html.Div("Pre-market readiness", className="sh-kpi-title"),
+            html.Div(
+                chips,
+                style={
+                    "display": "flex",
+                    "gap": "8px",
+                    "flexWrap": "wrap",
+                    "fontSize": "13px",
+                },
+            ),
+            html.Div(sub_text, className="sh-kpi-sub"),
+        ],
+        className="sh-kpi sh-premarket-pill",
+        style={
+            "background": "#1e2734",
+            "borderRadius": "8px",
+            "padding": "10px 12px",
+            "display": "grid",
+            "gap": "6px",
+        },
+    )
 
 
 def _safe_json(path: pathlib.Path) -> dict:
@@ -406,6 +471,7 @@ def build_layout():
             dcc.Store(id="sh-eval-store"),
             dcc.Store(id="sh-health-store"),
             dcc.Store(id="sh-summary-store"),
+            dcc.Store(id="sh-premarket-store"),
             html.Div(id="sh-health-banner"),
             html.Div(id="sh-kpis", className="sh-row"),
             html.Div(
@@ -548,6 +614,7 @@ def register_callbacks(app):
         Output("sh-eval-store","data"),
         Output("sh-health-store","data"),
         Output("sh-summary-store","data"),
+        Output("sh-premarket-store","data"),
         Input("sh-interval","n_intervals")
     )
     def _load_artifacts(_n):
@@ -620,6 +687,7 @@ def register_callbacks(app):
         health = _safe_json(HEALTH_JSON)
         summary_df = _safe_csv(METRICS_SUMMARY_CSV, nrows=1)
         summary = summary_df.iloc[0].to_dict() if not summary_df.empty else {}
+        premarket = _safe_json(PREMARKET_JSON)
 
         return (
             m,
@@ -628,6 +696,7 @@ def register_callbacks(app):
             ev,
             health,
             summary,
+            premarket,
         )
 
     @app.callback(
@@ -655,8 +724,9 @@ def register_callbacks(app):
         Input("sh-eval-store","data"),
         Input("sh-health-store","data"),
         Input("sh-summary-store","data"),
+        Input("sh-premarket-store","data"),
     )
-    def _render(m, top_rows, hist_rows, ev, health, summary):
+    def _render(m, top_rows, hist_rows, ev, health, summary, premarket):
         if not isinstance(m, dict):
             m = {}
         else:
@@ -671,6 +741,8 @@ def register_callbacks(app):
             health = {}
         if not isinstance(summary, Mapping):
             summary = {}
+        if not isinstance(premarket, Mapping):
+            premarket = {}
 
         fallback_active = bool(m.get("_fallback_active"))
         exec_metrics = _safe_json(EXECUTE_METRICS_JSON)
@@ -695,6 +767,7 @@ def register_callbacks(app):
             ], className="sh-kpi")
 
         health_card, health_banner = _health_elements(health)
+        premarket_card = _premarket_pill(premarket)
         summary_status = str(summary.get("status") or "").strip().lower()
         auth_reason = summary.get("auth_reason") if isinstance(summary, Mapping) else ""
         missing_raw = summary.get("auth_missing") if isinstance(summary, Mapping) else ""
@@ -775,15 +848,25 @@ def register_callbacks(app):
         if sym_in > 0:
             bars_pct_value = (sym_bars / max(sym_in, 1)) * 100
         bars_pct_text = f"{bars_pct_value:.1f}%"
-        kpis = html.Div([
+        kpi_cards = [
             health_card,
+            premarket_card,
             _card("Last Run (UTC)", last_run),
             _card("Symbols In", sym_in_text),
             _card("With Bars", sym_bars_text, bars_pct_text),
             _card("Bar Rows", bars_tot_text),
             _card("Candidates", rows_text, candidate_sub or None),
-        ], className="sh-kpi-wrap",
-           style={"display":"grid","gridTemplateColumns":"repeat(6, minmax(140px,1fr))","gap":"10px","marginBottom":"12px"})
+        ]
+        kpis = html.Div(
+            kpi_cards,
+            className="sh-kpi-wrap",
+            style={
+                "display": "grid",
+                "gridTemplateColumns": "repeat(7, minmax(140px,1fr))",
+                "gap": "10px",
+                "marginBottom": "12px",
+            },
+        )
 
         banner_parts = []
         if health_banner is not None:

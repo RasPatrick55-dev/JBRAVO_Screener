@@ -115,6 +115,82 @@ REQUIRED_ENV_KEYS = (
     "ALPACA_DATA_FEED",
 )
 
+_ENV_FILES_LOADED: list[str] = []
+
+
+def _mask_key_hint(raw: Optional[str]) -> str:
+    if not raw:
+        return "missing"
+    try:
+        value = str(raw).strip()
+    except Exception:
+        return "invalid"
+    if not value:
+        return "missing"
+    if len(value) <= 4:
+        return value[0] + "***"
+    prefix = value[:4]
+    suffix = value[-2:]
+    return f"{prefix}…{suffix}"
+
+
+def _log_account_probe(creds_snapshot: Mapping[str, Any] | None = None) -> None:
+    env_files = [
+        Path(path).name
+        for path in _ENV_FILES_LOADED
+        if isinstance(path, str) and path.strip()
+    ]
+    has_env_file = any(name.lower().endswith(".env") for name in env_files)
+
+    key, secret, base_url, _ = get_alpaca_creds()
+    key_hint = _mask_key_hint(key)
+    if (not key or key_hint == "missing") and isinstance(creds_snapshot, Mapping):
+        prefix = str(creds_snapshot.get("key_prefix") or "").strip()
+        if prefix:
+            key_hint = prefix
+
+    auth_ok = False
+    bp_display = "n/a"
+    trading_base = base_url or ""
+    if not trading_base and isinstance(creds_snapshot, Mapping):
+        base_urls = creds_snapshot.get("base_urls")
+        if isinstance(base_urls, Mapping):
+            trading_base = str(base_urls.get("trading") or "")
+    trading_base = (trading_base or "https://paper-api.alpaca.markets").rstrip("/")
+
+    if key and secret:
+        url = f"{trading_base}/v2/account"
+        headers = {
+            "APCA-API-KEY-ID": key,
+            "APCA-API-SECRET-KEY": secret,
+        }
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = {}
+                if isinstance(payload, Mapping):
+                    buying_power = payload.get("buying_power")
+                    if buying_power not in (None, ""):
+                        bp_display = str(buying_power)
+                auth_ok = True
+            else:
+                bp_display = f"status={response.status_code}"
+        except Exception as exc:  # pragma: no cover - best-effort logging
+            bp_display = f"error={exc}"
+    else:
+        bp_display = "missing-creds"
+
+    LOGGER.info(
+        "[INFO] AUTH_CHECK auth_ok=%s buying_power=%s env_loaded=%s key_hint=%s",
+        bool(auth_ok),
+        bp_display,
+        "yes" if has_env_file else "no",
+        key_hint,
+    )
+
 
 def _load_execute_metrics() -> Optional[Dict[str, Any]]:
     if not METRICS_PATH.exists():
@@ -1330,6 +1406,13 @@ class TradeExecutor:
                         "sizing",
                         f"ZERO_QTY post min-notional symbol={symbol} limit={limit_px:.2f}",
                     )
+                    if limit_px > 0 and min_order < limit_px:
+                        LOGGER.info(
+                            "[INFO] SIZING_HINT symbol=%s required_min_order_usd=%.2f current_min=%.2f",
+                            symbol,
+                            limit_px,
+                            min_order,
+                        )
                 LOGGER.info(
                     "[INFO] ZERO_QTY_AFTER_BUMP symbol=%s limit=%.2f min_usd=%.2f",
                     symbol,
@@ -1961,6 +2044,7 @@ def run_executor(
         bool(in_window),
         candidates,
     )
+    _log_account_probe(creds_snapshot)
     if resolved_window != (config.time_window or "any"):
         LOGGER.info(
             "[INFO] EXEC_WINDOW_RESOLVED mode=%s resolved=%s",
@@ -2030,7 +2114,9 @@ def apply_guards(df: pd.DataFrame, config: ExecutorConfig, metrics: ExecutionMet
 
 
 def _bootstrap_env() -> list[str]:
+    global _ENV_FILES_LOADED
     loaded_files, missing = load_env(REQUIRED_ENV_KEYS)
+    _ENV_FILES_LOADED = list(loaded_files)
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(message)s"))
     LOGGER.addHandler(handler)
