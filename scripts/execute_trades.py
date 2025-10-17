@@ -94,16 +94,17 @@ REQUIRED_COLUMNS = [
 ]
 
 OPTIONAL_COLUMNS = {"atrp", "exchange", "adv20", "entry_price"}
-SKIP_REASON_KEYS = {
+SKIP_REASON_ORDER: tuple[str, ...] = (
+    "CASH",
+    "EXISTING_POSITION",
+    "MAX_POSITIONS",
+    "NO_CANDIDATES",
+    "OPEN_ORDER",
+    "PRICE_BOUNDS",
     "TIME_WINDOW",
     "ZERO_QTY",
-    "CASH",
-    "PRICE_BOUNDS",
-    "MAX_POSITIONS",
-    "EXISTING_POSITION",
-    "OPEN_ORDER",
-    "NO_CANDIDATES",
-}
+)
+SKIP_REASON_KEYS = set(SKIP_REASON_ORDER)
 IMPORT_SENTINEL_ENV = "JBRAVO_IMPORT_SENTINEL"
 DATA_URL_ENV_VARS = ("APCA_API_DATA_URL", "ALPACA_API_DATA_URL")
 DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
@@ -190,6 +191,27 @@ def _log_account_probe(creds_snapshot: Mapping[str, Any] | None = None) -> None:
         "yes" if has_env_file else "no",
         key_hint,
     )
+
+
+def _paper_only_guard(trading_client: Any | None, base_url: str | None = "") -> None:
+    if trading_client is None:
+        return
+
+    raw_base = os.getenv("APCA_API_BASE_URL") or base_url or ""
+    base = str(raw_base).strip().lower()
+    if "paper-api.alpaca.markets" not in base:
+        LOGGER.error("PAPER_ONLY guard: APCA_API_BASE_URL is not paper: %s", base)
+        raise SystemExit(2)
+
+    auth_ok = False
+    buying_power = 0.0
+    try:
+        account = trading_client.get_account()
+        auth_ok = True
+        buying_power = float(getattr(account, "buying_power", 0.0) or 0.0)
+    except Exception as exc:  # pragma: no cover - defensive auth probe
+        LOGGER.warning("[WARN] AUTH probe failed: %s", str(exc)[:200])
+    LOGGER.info("AUTH_OK=%s buying_power=%.2f base_url=%s", auth_ok, buying_power, base)
 
 
 def _load_execute_metrics() -> Optional[Dict[str, Any]]:
@@ -538,7 +560,9 @@ class ExecutionMetrics:
         return round(value, 3)
 
     def as_dict(self) -> Dict[str, Any]:
-        skip_payload = {key: int(self.skipped_reasons.get(key, 0)) for key in sorted(SKIP_REASON_KEYS)}
+        skip_payload = {
+            key: int(self.skipped_reasons.get(key, 0)) for key in SKIP_REASON_ORDER
+        }
         for key, value in sorted(self.skipped_reasons.items()):
             if key not in skip_payload:
                 skip_payload[key] = int(value)
@@ -1746,13 +1770,15 @@ class TradeExecutor:
 
     def log_summary(self) -> None:
         skips = {key.upper(): int(value) for key, value in self.metrics.skipped_reasons.items()}
-        all_keys = sorted({key.upper() for key in SKIP_REASON_KEYS} | set(skips.keys()))
         parts = [
             "[INFO] EXECUTE_SUMMARY",
             f"orders_submitted={self.metrics.orders_submitted}",
             f"trailing_attached={self.metrics.trailing_attached}",
         ]
-        for key in all_keys:
+        for key in SKIP_REASON_ORDER:
+            parts.append(f"skips.{key}={int(skips.get(key, 0))}")
+        extra_keys = sorted(key for key in skips.keys() if key not in SKIP_REASON_KEYS)
+        for key in extra_keys:
             parts.append(f"skips.{key}={int(skips.get(key, 0))}")
         LOGGER.info(" ".join(parts))
 
@@ -2064,7 +2090,7 @@ def run_executor(
     clock_payload: Optional[Mapping[str, Any]] = None
     if client is not None:
         trading_client = client
-        base_url = ""
+        base_url = os.getenv("APCA_API_BASE_URL", "")
         paper_mode = None
     elif config.dry_run or not filtered:
         trading_client = None
@@ -2079,6 +2105,8 @@ def run_executor(
             bool(paper_mode),
             forced_label,
         )
+    _paper_only_guard(trading_client, base_url)
+    if trading_client is not None and client is None:
         try:
             account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
         except AlpacaAuthFailure:

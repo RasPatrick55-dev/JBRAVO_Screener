@@ -176,7 +176,7 @@ def determine_steps(raw: Optional[str]) -> list[str]:
 
 def run_step(name: str, cmd: Sequence[str], *, timeout: Optional[float] = None) -> tuple[int, float]:
     started = time.time()
-    LOG.info("START %s cmd=%s", name, shlex.join(cmd))
+    LOG.info("[INFO] START %s cmd=%s", name, shlex.join(cmd))
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
     env.setdefault("APCA_DATA_API_BASE_URL", "https://data.alpaca.markets")
@@ -316,7 +316,7 @@ def _reload_dashboard(enabled: bool) -> None:
     path = DEFAULT_WSGI_PATH
     try:
         path.touch()
-        LOG.info("[INFO] DASH RELOAD method=touch path=%s", path)
+        LOG.info("[INFO] DASH RELOAD method=touch local rc=0 path=%s", path)
     except Exception as exc:  # pragma: no cover - defensive guard
         LOG.warning(
             "[WARN] DASH RELOAD failed method=touch path=%s detail=%s",
@@ -335,7 +335,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         raise SystemExit(2)
     args = parse_args(argv)
     steps = determine_steps(args.steps)
-    LOG.info("PIPELINE_START steps=%s", ",".join(steps))
+    LOG.info("[INFO] PIPELINE_START steps=%s", ",".join(steps))
 
     _ensure_latest_headers()
 
@@ -429,7 +429,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 except Exception:
                     metrics_rows = 0
             rows = ensure_candidates(metrics_rows or 0)
-            LOG.info("[INFO] FALLBACK_CHECK rows_out=%d source=fallback", rows)
+            latest_source = "fallback"
+            try:
+                latest_frame = pd.read_csv(LATEST_CANDIDATES)
+                if not latest_frame.empty and "source" in latest_frame.columns:
+                    value = str(latest_frame.iloc[0]["source"] or "").strip()
+                    if value:
+                        latest_source = value
+            except Exception:  # pragma: no cover - defensive read
+                latest_source = "fallback"
+            LOG.info("[INFO] FALLBACK_CHECK rows_out=%d source=%s", rows, latest_source)
 
         if "backtest" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
@@ -445,20 +454,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if "metrics" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
-            trades_path = DATA_DIR / "trades_log.csv"
-            if not trades_path.exists():
-                LOG.warning(
-                    "[WARN] METRICS_TRADES_LOG_MISSING path=%s",
-                    trades_path,
-                )
-            else:
-                cmd = [sys.executable, "-m", "scripts.metrics"]
-                if extras["metrics"]:
-                    cmd.extend(extras["metrics"])
-                rc_mt, secs = run_step("metrics", cmd, timeout=60 * 3)
-                stage_times["metrics"] = secs
-                if rc_mt and not rc:
-                    rc = rc_mt
+            cmd = [sys.executable, "-m", "scripts.metrics"]
+            if extras["metrics"]:
+                cmd.extend(extras["metrics"])
+            rc_mt, secs = run_step("metrics", cmd, timeout=60 * 3)
+            stage_times["metrics"] = secs
+            if rc_mt:
+                LOG.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_mt)
         if "exec" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
@@ -482,20 +484,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         gate_secs = _extract_timing(metrics, "gate_secs")
         summary_rows = metrics_rows if metrics_rows is not None else rows
         LOG.info(
-            "PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s fetch_secs=%.3f feature_secs=%.3f rank_secs=%.3f gate_secs=%.3f",
+            "[INFO] PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s fetch_secs=%.3f feature_secs=%.3f",
             symbols_in,
             symbols_with_bars,
             summary_rows,
             fetch_secs,
             feature_secs,
-            rank_secs,
-            gate_secs,
         )
-        data_ok = int((summary_rows or 0) > 0)
-        trading_ok = int(rc == 0)
-        LOG.info("HEALTH trading_ok=%s data_ok=%s stage=end", trading_ok, data_ok)
+        data_ok = bool((summary_rows or 0) > 0)
+        trading_ok = rc == 0
+        trading_status = 200 if trading_ok else 503
+        data_status = 200 if data_ok else 204
+        LOG.info(
+            "[INFO] HEALTH trading_ok=%s data_ok=%s stage=end trading_status=%s data_status=%s",
+            trading_ok,
+            data_ok,
+            trading_status,
+            data_status,
+        )
         duration = time.time() - started
-        LOG.info("PIPELINE_END rc=%s duration=%.1f", rc, duration)
+        LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
         _reload_dashboard(args.reload_web.lower() == "true")
         should_raise = LOG.name != "pipeline" or os.environ.get("JBR_PIPELINE_RAISE", "").lower() in {
             "1",

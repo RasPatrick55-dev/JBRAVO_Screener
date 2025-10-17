@@ -88,6 +88,11 @@ def isolate_metrics_path(monkeypatch, tmp_path):
     return metrics_path
 
 
+@pytest.fixture(autouse=True)
+def paper_api_env(monkeypatch):
+    monkeypatch.setenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+
+
 pytestmark = pytest.mark.alpaca_optional
 
 
@@ -190,7 +195,16 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     summary = summary_lines[-1]
     assert "orders_submitted=0" in summary
     assert "trailing_attached=0" in summary
-    for key in ("TIME_WINDOW", "ZERO_QTY", "CASH", "OPEN_ORDER", "EXISTING_POSITION", "MAX_POSITIONS", "NO_CANDIDATES"):
+    for key in (
+        "TIME_WINDOW",
+        "ZERO_QTY",
+        "CASH",
+        "OPEN_ORDER",
+        "EXISTING_POSITION",
+        "MAX_POSITIONS",
+        "NO_CANDIDATES",
+        "PRICE_BOUNDS",
+    ):
         assert f"skips.{key}=" in summary
     assert "skips.TIME_WINDOW=1" in summary
 
@@ -232,6 +246,31 @@ def test_dry_run_creates_metrics_with_zero_orders(tmp_path, caplog):
     assert metrics_payload.get("symbols_in") == 2
     assert metrics_payload.get("orders_submitted") == 0
     assert metrics_payload.get("trailing_attached") == 0
+
+
+def test_auth_log_includes_buying_power(tmp_path, caplog):
+    csv_path = tmp_path / "candidates.csv"
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "AAPL",
+                "close": 150.0,
+                "score": 1.5,
+                "universe_count": 10,
+                "score_breakdown": "{}",
+            }
+        ]
+    )
+    frame.to_csv(csv_path, index=False)
+    config = ExecutorConfig(source=csv_path, dry_run=True, time_window="any")
+    caplog.set_level(logging.INFO, logger="execute_trades")
+    caplog.clear()
+    rc = run_executor(config, client=StubTradingClient())
+    assert rc == 0
+    log_text = "\n".join(caplog.messages)
+    assert "AUTH_OK=True" in log_text
+    assert "buying_power=50000.00" in log_text
+    assert "base_url=https://paper-api.alpaca.markets" in log_text
 
 
 def test_limit_buffer_pct_relaxes_price_bounds(tmp_path):

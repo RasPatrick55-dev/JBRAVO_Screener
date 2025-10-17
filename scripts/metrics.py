@@ -72,7 +72,10 @@ def load_trades_log(file_path: Path) -> pd.DataFrame:
 
     canonical = list(_TRADES_CANONICAL_COLUMNS)
 
-    if not file_path.exists() or file_path.stat().st_size == 0:
+    if not file_path.exists():
+        raise FileNotFoundError(str(file_path))
+
+    if file_path.stat().st_size == 0:
         if not _TRADES_LOG_WARNED:
             logger.warning("[WARN] METRICS_TRADES_LOG_MISSING path=%s", file_path)
             _TRADES_LOG_WARNED = True
@@ -99,6 +102,17 @@ def load_trades_log(file_path: Path) -> pd.DataFrame:
     ordered = [col for col in canonical if col in df.columns]
     remainder = [col for col in df.columns if col not in ordered]
     return df[ordered + remainder]
+
+
+def write_zero_metrics_summary(path: Path | str) -> None:
+    target = Path(path)
+    if not target.is_absolute():
+        target = Path(BASE_DIR) / target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {col: 0.0 for col in REQUIRED_COLUMNS}
+    payload["total_trades"] = 0
+    frame = pd.DataFrame([payload], columns=REQUIRED_COLUMNS)
+    write_csv_atomic(str(target), frame)
 
 
 def validate_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:
@@ -233,14 +247,18 @@ def save_metrics_summary(metrics_summary, symbols, output_file="metrics_summary.
 def main():
     results_df = load_results()
 
+    trades_path = Path(BASE_DIR) / "data" / "trades_log.csv"
+    metrics_summary_file = _summary_path()
+
+    try:
+        trades_df = load_trades_log(trades_path)
+    except FileNotFoundError:
+        logger.warning("No trades_log.csv; writing zeroed metrics_summary.csv")
+        write_zero_metrics_summary(metrics_summary_file)
+        return 0
+
     # Detect missing symbol-level metrics and compute from trades_log.csv
     if "net_pnl" not in results_df.columns:
-        trades_path = Path(BASE_DIR) / "data" / "trades_log.csv"
-        try:
-            trades_df = load_trades_log(trades_path)
-        except FileNotFoundError:
-            logger.warning("Trades log missing at %s; continuing with defaults", trades_path)
-            trades_df = pd.DataFrame(columns=_TRADES_CANONICAL_COLUMNS)
         if trades_df.empty:
             results_df = pd.DataFrame(
                 columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
@@ -277,14 +295,6 @@ def main():
         ranked_df[['symbol', 'score', 'win_rate', 'net_pnl']].head(15).to_string(index=False)
     )
 
-    trade_log_path = Path(BASE_DIR) / "data" / "trades_log.csv"
-    metrics_summary_file = _summary_path()
-
-    try:
-        trades_df = load_trades_log(trade_log_path)
-    except FileNotFoundError:
-        logger.warning("Trades log missing at %s; emitting zero metrics", trade_log_path)
-        trades_df = pd.DataFrame(columns=_TRADES_CANONICAL_COLUMNS)
     if not trades_df.empty:
         trades_df = validate_numeric(trades_df, "net_pnl")
 
@@ -315,12 +325,16 @@ def main():
         )
     except Exception as e:
         logger.error(f"Failed to write metrics_summary.csv: {e}")
+        return 1
+
+    return 0
 
 if __name__ == "__main__":
     logger.info("Starting metrics calculation")
-    main()
+    exit_code = main()
     logger.info("Metrics calculation complete")
     end_time = datetime.utcnow()
     elapsed_time = end_time - start_time
     logger.info("Script finished in %s", elapsed_time)
+    sys.exit(exit_code)
 
