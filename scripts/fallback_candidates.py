@@ -179,7 +179,7 @@ def _write_static_three(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path,"w",newline="") as f:
         w=csv.writer(f); w.writerow(CANONICAL); w.writerows(rows)
-    print("FALLBACK_CHECK rows_out=3 source=fallback:static")
+    print("[INFO] FALLBACK_CHECK rows_out=3 source=fallback:static")
 
 
 def _now_iso() -> str:
@@ -499,7 +499,15 @@ def build_latest_candidates(
         static_rows = combined.loc[combined.get("_source_tag") == "static"].copy()
         if static_rows.empty:
             static_rows = combined.copy()
+        symbol_order = {
+            str(row.get("symbol")): idx for idx, row in enumerate(_STATIC_FALLBACK_ROWS)
+        }
+        static_rows["_fallback_order"] = static_rows.get("symbol").astype("string").map(
+            symbol_order
+        ).fillna(len(symbol_order)).astype(int)
+        static_rows = static_rows.sort_values("_fallback_order", kind="stable")
         selected = static_rows.head(max(3, max_rows)).copy()
+        selected = selected.drop(columns=["_fallback_order"], errors="ignore")
     else:
         selected = combined.head(max_rows).copy()
 

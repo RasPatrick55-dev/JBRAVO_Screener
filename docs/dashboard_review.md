@@ -40,3 +40,22 @@ Missing files are tolerated: the checker sets `present=false` flags so monitorin
 - `dashboard_findings.txt` highlights the essentials for on-call review (last run times, candidate source, trades log availability, executor activity).
 
 Integrate the checker into daily or hourly jobs after the pipeline completes so health dashboards are refreshed alongside the artifacts they represent.
+
+## Paper trading indicators
+
+![Paper Trading Mode badge](images/paper-mode-badge.svg)
+
+The dashboard highlights paper-only environments with a lightweight badge. The Screener and Execution tabs both surface the badge when `APCA_API_BASE_URL` points at the paper endpoint or `JBR_EXEC_PAPER=true` is exported. This keeps operators aware that orders are simulated and allows the checker to assert consistency with paper artifacts.
+
+## Operator checklist
+
+Run the checker and then confirm the live dashboard matches the generated findings:
+
+1. **Last run timestamps** – Screener and Execution panels should show the same UTC timestamps reported in `dashboard_findings.txt`.
+2. **Candidate state** – If `latest_candidates.csv` exists with zero rows, the Screener tab displays the “No candidates today; fallback may populate shortly” hint that links directly to the pipeline panel.
+3. **Pipeline tokens** – The pipeline log summary renders the latest `[INFO] PIPELINE_*` markers (START, SUMMARY, FALLBACK_CHECK, END, DASH RELOAD) in the same order as the checker output.
+4. **Execution metrics** – When `execute_metrics.json` is missing (paper-only mornings), the Execution tab keeps KPIs at zero and shows “No execution yet today (paper)” while the badge reinforces the environment.
+5. **Trades and logs** – If neither `executed_trades.csv` nor `trades_log.csv` is available the tab presents the “No trades yet (paper account)” hint instead of erroring, matching the checker’s `present=false` flags.
+6. **Deciles and predictions** – Missing evaluation artifacts should resolve to “Not computed yet” placeholders without stack traces; once present they match the checker’s decile lift summaries.
+
+Reviewing these items alongside the `reports/dashboard_consistency.json` payload ensures the UI and artifacts stay in lock-step even on zero-candidate or fallback-only days.

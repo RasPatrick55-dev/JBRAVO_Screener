@@ -10,6 +10,7 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from dash import dcc, html
 from dash.dash_table import DataTable
 from dash.dependencies import Input, Output
@@ -17,6 +18,33 @@ from dash.dependencies import Input, Output
 LOGGER = logging.getLogger(__name__)
 
 _WARNED_PATHS: set[tuple[str, pathlib.Path]] = set()
+
+
+def _detect_paper_mode() -> bool:
+    base_url = (os.getenv("APCA_API_BASE_URL") or "").lower()
+    if "paper" in base_url:
+        return True
+    flag = (os.getenv("JBR_EXEC_PAPER") or "").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
+PAPER_TRADING_MODE = _detect_paper_mode()
+
+
+def _paper_badge_component() -> html.Span:
+    return html.Span(
+        "Paper Trading Mode",
+        style={
+            "display": "inline-block",
+            "background": "#cfe2ff",
+            "color": "#084298",
+            "padding": "2px 10px",
+            "borderRadius": "999px",
+            "fontSize": "0.7rem",
+            "fontWeight": 600,
+            "letterSpacing": "0.04em",
+        },
+    )
 
 
 def _warn_once(kind: str, path: pathlib.Path, message: str, *args) -> None:
@@ -324,6 +352,27 @@ def _tail(path: pathlib.Path, lines: int = 200) -> str:
         _warn_once("log_error", path, "Failed to read log %s: %s", path, exc)
         return f"(log read error: {exc})"
 
+
+def _placeholder_figure(title: str, message: str = "Not computed yet") -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(
+        template="plotly_dark",
+        title=title,
+        xaxis={"visible": False},
+        yaxis={"visible": False},
+        margin=dict(l=20, r=20, t=60, b=20),
+    )
+    fig.add_annotation(
+        text=message,
+        x=0.5,
+        y=0.5,
+        showarrow=False,
+        xref="paper",
+        yref="paper",
+        font=dict(color="#adb5bd", size=14),
+    )
+    return fig
+
 def _why_from_breakdown(json_str: str) -> str:
     try:
         d = json.loads(json_str) if isinstance(json_str, str) else {}
@@ -352,30 +401,45 @@ def _fmt_millions(x):
         return "n/a"
 
 def _mk_why_tooltip(row: dict) -> dict:
-    """
-    Build a markdown tooltip for the 'Why' cell showing:
-    - Score (final composite)
-    - Top contributors (z-weighted)
-    - Raw indicators (RSI14, ADX, AROON, MACD_HIST, ATR%, ADV20)
-    Returns a dict mapping column-id -> {'value': md, 'type': 'markdown'}
-    """
+    """Return tooltip content for the Why column with resilient fallbacks."""
 
     row = row or {}
+    breakdown_source = row.get("score_breakdown", {})
+    if isinstance(breakdown_source, Mapping):
+        breakdown_str = json.dumps(breakdown_source)
+        raw_breakdown = breakdown_source
+    else:
+        breakdown_str = breakdown_source if isinstance(breakdown_source, str) else ""
+        try:
+            raw_breakdown = json.loads(breakdown_str) if breakdown_str else {}
+        except Exception:
+            raw_breakdown = {}
 
-    # Contributions (same parsing used by Why string)
-    contrib_str = _why_from_breakdown(row.get("score_breakdown", ""))
+    normalized_breakdown: dict[str, float] = {}
+    for key, value in (raw_breakdown or {}).items():
+        base_key = str(key).replace("_z", "")
+        try:
+            normalized_breakdown[base_key] = float(value)
+        except (TypeError, ValueError):
+            continue
 
-    def _format_value(value, formatter):
+    contrib_str = _why_from_breakdown(breakdown_str)
+
+    def _is_missing(value) -> bool:
         if value is None:
-            return "n/a"
-        if isinstance(value, str):
-            if value.strip() == "":
-                return "n/a"
+            return True
+        if isinstance(value, str) and value.strip() == "":
+            return True
         try:
             if pd.isna(value):
-                return "n/a"
+                return True
         except Exception:  # pragma: no cover - pandas type quirks
             pass
+        return False
+
+    def _format_value(value, formatter):
+        if _is_missing(value):
+            return "n/a"
         if formatter is None:
             try:
                 return str(value)
@@ -389,20 +453,19 @@ def _mk_why_tooltip(row: dict) -> dict:
             except Exception:  # pragma: no cover - defensive
                 return "n/a"
 
-    def _indicator_line(label: str, value, formatter=None) -> str:
-        formatted = _format_value(value, formatter)
-        return f"- {label}: `{formatted}`"
+    missing_keys: set[str] = set()
 
-    # Raw values with safe fallbacks
+    def _tracked_value(value, key: str | None, formatter=None) -> str:
+        if _is_missing(value):
+            if key:
+                missing_keys.add(key)
+            return "n/a"
+        return _format_value(value, formatter)
+
     score = row.get("Score")
-    rsi14 = row.get("RSI14", row.get("RSI"))  # try raw first, fallback to z if needed
+    rsi14 = row.get("RSI14", row.get("RSI"))
     adx_raw = row.get("ADX_raw")
-    use_fallback = adx_raw is None
-    if not use_fallback:
-        try:
-            use_fallback = pd.isna(adx_raw)
-        except Exception:  # pragma: no cover - tolerate scalar types without isna
-            use_fallback = False
+    use_fallback = _is_missing(adx_raw)
     adx = row.get("ADX") if use_fallback else adx_raw
     aup = row.get("AROON_UP")
     adn = row.get("AROON_DN")
@@ -411,7 +474,7 @@ def _mk_why_tooltip(row: dict) -> dict:
     adv20 = row.get("ADV20")
     close = row.get("close")
 
-    md = []
+    md: list[str] = []
     md.append(
         "**Score:** `"
         + _format_value(score, lambda v: "{:.3f}".format(float(v)))
@@ -419,7 +482,6 @@ def _mk_why_tooltip(row: dict) -> dict:
     )
     if contrib_str and contrib_str != "n/a":
         md.append("**Contributions (z‑weighted):**")
-        # convert bullets nicely (already "• name ▲ 0.00")
         for part in contrib_str.split("•"):
             part = part.strip()
             if part:
@@ -427,15 +489,14 @@ def _mk_why_tooltip(row: dict) -> dict:
     else:
         md.append("_Contributions unavailable_")
 
-    md.append("**Raw indicators:**")
     raw_lines = [
-        _indicator_line("Close", close, lambda v: "{:.2f}".format(float(v))),
-        _indicator_line("RSI14", rsi14, lambda v: "{:.2f}".format(float(v))),
-        _indicator_line("ADX", adx, lambda v: "{:.2f}".format(float(v))),
+        f"- Close: `{_tracked_value(close, None, lambda v: '{:.2f}'.format(float(v)))}`",
+        f"- RSI14: `{_tracked_value(rsi14, 'RSI', lambda v: '{:.2f}'.format(float(v)))}`",
+        f"- ADX: `{_tracked_value(adx, 'ADX', lambda v: '{:.2f}'.format(float(v)))}`",
     ]
 
-    up_str = _format_value(aup, lambda v: "{:.1f}".format(float(v)))
-    dn_str = _format_value(adn, lambda v: "{:.1f}".format(float(v)))
+    up_str = _tracked_value(aup, None, lambda v: "{:.1f}".format(float(v)))
+    dn_str = _tracked_value(adn, None, lambda v: "{:.1f}".format(float(v)))
     if up_str == "n/a" and dn_str == "n/a":
         raw_lines.append("- Aroon Up/Dn: `n/a`")
     else:
@@ -443,13 +504,42 @@ def _mk_why_tooltip(row: dict) -> dict:
 
     raw_lines.extend(
         [
-            _indicator_line("MACD Hist", mh, lambda v: "{:.4f}".format(float(v))),
-            _indicator_line("ATR%", atrp, lambda v: "{:.2%}".format(float(v))),
-            _indicator_line("ADV20", adv20, _fmt_millions),
+            f"- MACD Hist: `{_tracked_value(mh, 'MH', lambda v: '{:.4f}'.format(float(v)))}`",
+            f"- ATR%: `{_tracked_value(atrp, None, lambda v: '{:.2%}'.format(float(v)))}`",
+            f"- ADV20: `{_tracked_value(adv20, None, _fmt_millions)}`",
         ]
     )
 
-    md.extend(raw_lines)
+    has_raw_data = any(
+        not _is_missing(val)
+        for val in (close, rsi14, adx, aup, adn, mh, atrp, adv20)
+    )
+    if has_raw_data:
+        md.append("**Raw indicators:**")
+        md.extend(raw_lines)
+    else:
+        md.append("_Raw indicators unavailable_")
+
+    fallback_labels = {
+        "RSI": "RSI",
+        "ADX": "ADX",
+        "TS": "Trend",
+        "MS": "MA Stack",
+        "BP": "Near 20D High",
+        "PT": "Pullback Tight",
+    }
+    fallback_pairs: list[str] = []
+    if missing_keys or not has_raw_data:
+        for key in ["RSI", "ADX", "TS", "MS", "BP", "PT"]:
+            if key not in normalized_breakdown:
+                continue
+            value = normalized_breakdown[key]
+            fallback_pairs.append(f"{fallback_labels[key]}={value:.2f}")
+    if fallback_pairs:
+        md.append("**Score breakdown metrics:**")
+        md.append("`" + ", ".join(fallback_pairs[:6]) + "`")
+    elif not has_raw_data:
+        md.append("_Score breakdown metrics unavailable_")
 
     tooltips = {"Why": {"value": "\n".join(md), "type": "markdown"}}
     origin = str(row.get("origin") or "").strip().lower()
@@ -472,6 +562,7 @@ def build_layout():
             dcc.Store(id="sh-health-store"),
             dcc.Store(id="sh-summary-store"),
             dcc.Store(id="sh-premarket-store"),
+            html.Div(id="sh-paper-badge", className="mb-2"),
             html.Div(id="sh-health-banner"),
             html.Div(id="sh-kpis", className="sh-row"),
             html.Div(
@@ -518,6 +609,7 @@ def build_layout():
             ),
             html.Hr(),
             html.H3("Top Candidates"),
+            html.Div(id="sh-top-empty", className="mb-2", style={"color": "#bfc3d9", "fontSize": "13px"}),
             DataTable(
                 id="sh-top-table",
                 page_size=15,
@@ -625,6 +717,7 @@ def register_callbacks(app):
             source_raw = str(latest.iloc[0].get("source") or "").strip().lower()
             fallback_active = source_raw.startswith("fallback")
         m["_fallback_active"] = fallback_active
+        m["_latest_zero_rows"] = LATEST_CSV.exists() and latest.empty
 
         top = _safe_csv(TOP_CSV)
         # augment top with ATR% and Why using scored CSV if ATR14/ADV20 missing
@@ -701,6 +794,7 @@ def register_callbacks(app):
 
     @app.callback(
         Output("sh-health-banner","children"),
+        Output("sh-paper-badge","children"),
         Output("sh-kpis","children"),
         Output("sh-prefix-counts","children"),
         Output("sh-http","children"),
@@ -710,6 +804,7 @@ def register_callbacks(app):
         Output("sh-coverage","figure"),
         Output("sh-timings","figure"),
         Output("sh-top-table","data"),
+        Output("sh-top-empty","children"),
         Output("sh-top-table","tooltip_data"),
         Output("sh-trend-rows","figure"),
         Output("sh-deciles-hit","figure"),
@@ -745,6 +840,20 @@ def register_callbacks(app):
             premarket = {}
 
         fallback_active = bool(m.get("_fallback_active"))
+        paper_badge = _paper_badge_component() if PAPER_TRADING_MODE else ""
+        latest_zero = bool(m.get("_latest_zero_rows"))
+        top_empty_message: Any = ""
+        if latest_zero:
+            top_empty_message = html.Span(
+                [
+                    "No candidates today; fallback may populate shortly. ",
+                    html.A(
+                        "View pipeline panel",
+                        href="#sh-pipeline-panel",
+                        style={"color": "#63b3ed"},
+                    ),
+                ]
+            )
         exec_metrics = _safe_json(EXECUTE_METRICS_JSON)
         if not isinstance(exec_metrics, Mapping):
             exec_metrics = {}
@@ -942,8 +1051,8 @@ def register_callbacks(app):
             fig_trend = px.line(title="14‑Day Trend: (insufficient history)")
 
         # ---------------- Deciles (Hit‑rate & Avg Return) ----------------
-        hit_fig = px.bar(title="Decile Hit‑Rate (n/a)")
-        ret_fig = px.bar(title="Decile Avg Return (n/a)")
+        hit_fig = _placeholder_figure("Decile Hit‑Rate")
+        ret_fig = _placeholder_figure("Decile Avg Return")
         if ev and isinstance(ev, dict):
             dec = ev.get("deciles") or {}
             # expected: {"rank_decile":[1..10], "hit_rate":[...], "avg_return":[...], "count":[...]}
@@ -955,12 +1064,14 @@ def register_callbacks(app):
                                      title=f"Decile Hit‑Rate (k={int(ev.get('population',0))})")
                     ret_fig = px.bar(df_dec, x="rank_decile", y="avg_return",
                                      title="Decile Avg Return")
+                    for fig in (hit_fig, ret_fig):
+                        fig.update_layout(template="plotly_dark", margin=dict(l=20, r=20, t=60, b=20))
             except Exception:
                 pass
 
         # ---------------- Predictions head & logs ----------------
         preds = _safe_csv(PRED_LATEST, nrows=8)
-        preds_head = preds.to_csv(index=False) if not preds.empty else "(no predictions yet)"
+        preds_head = preds.to_csv(index=False) if not preds.empty else "(Not computed yet)"
         s_tail = _tail(LOG_DIR / "screener.log", 180)
         p_tail = _tail(LOG_DIR / "pipeline.log", 180)
         pipeline_summary = _parse_pipeline_summary(p_tail)
@@ -971,6 +1082,7 @@ def register_callbacks(app):
             "PIPELINE_SUMMARY",
             "FALLBACK_CHECK",
             "PIPELINE_END",
+            "DASH RELOAD",
         ]
         pipeline_tokens = [
             _extract_last_line(p_tail, label) for label in token_labels
@@ -1132,6 +1244,7 @@ def register_callbacks(app):
 
         return (
             banner_children if banner_children else None,
+            paper_badge,
             kpis,
             prefix_counts,
             http_json,
@@ -1141,6 +1254,7 @@ def register_callbacks(app):
             fig_cov,
             fig_tm,
             top_data,
+            top_empty_message,
             tooltips,
             fig_trend,
             hit_fig,

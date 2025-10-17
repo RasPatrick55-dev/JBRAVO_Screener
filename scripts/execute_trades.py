@@ -200,9 +200,10 @@ def _log_account_probe(creds_snapshot: Mapping[str, Any] | None = None) -> None:
         bp_display = "missing-creds"
 
     LOGGER.info(
-        "[INFO] AUTH_CHECK auth_ok=%s buying_power=%s env_loaded=%s key_hint=%s",
+        "[INFO] AUTH_CHECK auth_ok=%s buying_power=%s base_url=%s env_loaded=%s key_hint=%s",
         bool(auth_ok),
         bp_display,
+        base_url,
         "yes" if has_env_file else "no",
         key_hint,
     )
@@ -1929,7 +1930,8 @@ def _ensure_trading_auth(
             _record_auth_error("unauthorized", creds_snapshot)
             raise AlpacaAuthFailure(body_text) from exc
         if response.status_code != 200:
-            body_text = (response.text or "")[:500].replace("\n", " ")
+            raw_text = getattr(response, "text", "")
+            body_text = (raw_text or "")[:500].replace("\n", " ")
             _warn_context(context, f"status={response.status_code}")
             LOGGER.error(
                 "[ERROR] ALPACA_AUTH_FAILED status=%s body=%s endpoint=%s",
@@ -1938,16 +1940,26 @@ def _ensure_trading_auth(
                 path,
             )
             _record_auth_error("unauthorized", creds_snapshot)
-            raise AlpacaAuthFailure(body_text)
+            raise AlpacaAuthFailure(f"status={response.status_code} body={body_text}")
         try:
             payload = response.json()
         except ValueError:
             payload = {}
         return payload if isinstance(payload, Mapping) else {}
 
-    account_payload = fetch("/v2/account")
-    clock_payload = fetch("/v2/clock")
-    return account_payload, clock_payload
+    try:
+        account_payload = fetch("/v2/account")
+        clock_payload = fetch("/v2/clock")
+        return account_payload, clock_payload
+    except AlpacaAuthFailure as exc:
+        status_hint = str(exc) or "unknown"
+        LOGGER.error(
+            "[ERROR] TRADING_AUTH_FAILED base_url=%s status=%s", resolved_base, status_hint
+        )
+        LOGGER.error(
+            "Reload ~/.config/jbravo/.env or export APCA_API_KEY_ID/APCA_API_SECRET_KEY"
+        )
+        raise SystemExit(2) from exc
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -2108,10 +2120,12 @@ def run_executor(
         return 1
 
     candidates_df = frame
-    win, in_window, now_ny = _resolve_time_window(config.time_window or "auto")
+    configured_window = config.time_window or "auto"
+    win, in_window, now_ny = _resolve_time_window(configured_window)
     logger.info(
-        "[INFO] EXEC_START dry_run=%s time_window=%s ny_now=%s in_window=%s candidates=%d",
+        "[INFO] EXEC_START dry_run=%s time_window=%s resolved=%s ny_now=%s in_window=%s candidates=%d",
         bool(config.dry_run),
+        configured_window,
         win,
         now_ny.isoformat(),
         in_window,

@@ -388,6 +388,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             latest_source = "screener"
             latest_rows = 0
             if top_frame.empty:
+                LOG.info("[INFO] FALLBACK_CHECK start origin=screener")
                 frame, fallback_source = build_latest_candidates(PROJECT_ROOT, max_rows=1)
                 write_csv_atomic(str(TOP_CANDIDATES), frame)
                 fallback_rows = int(len(frame.index))
@@ -431,6 +432,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 latest_source,
             )
         else:
+            LOG.info("[INFO] FALLBACK_CHECK start origin=latest")
             metrics = _read_json(SCREENER_METRICS_PATH)
             symbols_in = int(metrics.get("symbols_in", 0) or 0)
             symbols_with_bars = int(metrics.get("symbols_with_bars", 0) or 0)
