@@ -25,7 +25,7 @@ NY = ZoneInfo("America/New_York")
 import pandas as pd
 import requests
 
-from scripts.fallback_candidates import CANON, normalize_candidate_df
+from scripts.fallback_candidates import CANON, CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.utils.env import load_env
 from utils.env import (
     AlpacaCredentialsError,
@@ -1342,6 +1342,7 @@ class TradeExecutor:
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
+        df = _canonicalize_candidate_header(df)
         canonical_available = set()
         for column in df.columns:
             key = str(column).strip()
@@ -2388,4 +2389,46 @@ if __name__ == "__main__":  # pragma: no cover - CLI entry point
 def _warn_context(context: str, message: str) -> None:
     LOGGER.warning("[WARN] %s: %s", context, message)
 
+
+def _canonicalize_candidate_header(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    working = df.copy()
+    log_required = False
+    canonical_present = set()
+    for column in working.columns:
+        key = str(column).strip()
+        canonical = CANON.get(key, CANON.get(key.lower(), key.lower()))
+        canonical_present.add(canonical)
+    if "score_breakdown" not in canonical_present:
+        working["score_breakdown"] = "{}"
+        log_required = True
+    columns_after = list(working.columns)
+    canonical_to_actual: dict[str, str] = {}
+    for column in columns_after:
+        key = str(column).strip()
+        canonical = CANON.get(key, CANON.get(key.lower(), key.lower()))
+        if canonical not in canonical_to_actual:
+            canonical_to_actual[canonical] = column
+    score_column = canonical_to_actual.get("score_breakdown")
+    if score_column is not None:
+        sb_series = working[score_column].astype("string").fillna("")
+        normalized_sb = sb_series.replace({"": "{}", "fallback": "{}"})
+        if not normalized_sb.equals(sb_series):
+            working[score_column] = normalized_sb
+    ordered_actual: list[str] = []
+    for canonical in CANONICAL_COLUMNS:
+        actual = canonical_to_actual.get(canonical)
+        if actual is None:
+            continue
+        ordered_actual.append(actual)
+    ordered_set = set(ordered_actual)
+    extras = [col for col in working.columns if col not in ordered_set]
+    new_order = ordered_actual + extras
+    if new_order != list(working.columns):
+        working = working.reindex(columns=new_order)
+        log_required = True
+    if log_required:
+        LOGGER.info("[INFO] CANDIDATES_CANONICALIZED columns=%s", [str(col) for col in working.columns])
+    return working
 

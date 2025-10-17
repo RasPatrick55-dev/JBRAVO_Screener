@@ -149,23 +149,27 @@ def load_kpis() -> dict[str, Any]:
     json_metrics = _normalize_metrics(safe_read_json(METRICS_JSON))
     if json_metrics.get("symbols_in") is not None:
         json_metrics["source"] = "screener_metrics.json"
+        json_metrics["_kpi_inferred_from_log"] = False
         _log_kpi_source(json_metrics["source"])
         return json_metrics
 
     csv_metrics = _normalize_metrics(safe_read_metrics_csv(METRICS_SUMMARY_CSV))
     if csv_metrics.get("symbols_in") is not None:
         csv_metrics["source"] = "metrics_summary.csv"
+        csv_metrics["_kpi_inferred_from_log"] = False
         _log_kpi_source(csv_metrics["source"])
         return csv_metrics
 
     pipeline_metrics = _normalize_metrics(parse_pipeline_summary(LOG_DIR / "pipeline.log"))
     if pipeline_metrics.get("symbols_in") is not None:
         pipeline_metrics["source"] = "pipeline.log (inferred)"
+        pipeline_metrics["_kpi_inferred_from_log"] = True
         _log_kpi_source(pipeline_metrics["source"])
         return pipeline_metrics
 
     empty = _normalize_metrics({})
     empty["source"] = "none"
+    empty["_kpi_inferred_from_log"] = False
     _log_kpi_source(empty["source"])
     return empty
 

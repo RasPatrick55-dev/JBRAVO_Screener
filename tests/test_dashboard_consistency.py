@@ -59,8 +59,34 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
     _write_csv(
         data_dir / "latest_candidates.csv",
         [
-            {"symbol": "AAPL", "score": 0.91, "close": 195.1},
-            {"symbol": "BETA", "score": 0.85, "close": 22.3},
+            {
+                "timestamp": "2024-01-01T09:00:00Z",
+                "symbol": "AAPL",
+                "score": 0.91,
+                "exchange": "NASDAQ",
+                "close": 195.1,
+                "volume": 1_000_000,
+                "universe_count": 12,
+                "score_breakdown": "{}",
+                "entry_price": 195.1,
+                "adv20": 5_000_000,
+                "atrp": 0.75,
+                "source": "pipeline",
+            },
+            {
+                "timestamp": "2024-01-01T09:00:00Z",
+                "symbol": "BETA",
+                "score": 0.85,
+                "exchange": "NYSE",
+                "close": 22.3,
+                "volume": 250_000,
+                "universe_count": 12,
+                "score_breakdown": "{}",
+                "entry_price": 22.3,
+                "adv20": 1_500_000,
+                "atrp": 1.25,
+                "source": "pipeline",
+            },
         ],
     )
 
@@ -137,6 +163,8 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
     report = checker.generate_report(base_dir=base)
 
     assert report["checks"]["candidates_ok"] is True
+    assert report["checks"]["candidates"]["latest"]["canonical"] is True
+    assert report["checks"]["candidates"]["latest"]["missing_score_breakdown"] is False
     pipeline_tokens = report["checks"]["pipeline_tokens"]
     assert pipeline_tokens["PIPELINE_START"]["data"]["steps"] == ["screener", "metrics"]
     assert pipeline_tokens["PIPELINE_SUMMARY"]["data"]["rows"] == 2
@@ -148,3 +176,5 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
     assert (reports_dir / "dashboard_consistency.json").exists()
     assert (reports_dir / "dashboard_kpis.csv").exists()
     assert (reports_dir / "dashboard_findings.txt").exists()
+    findings_text = (reports_dir / "dashboard_findings.txt").read_text(encoding="utf-8")
+    assert "candidates_header=canonical:true" in findings_text

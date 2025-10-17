@@ -12,6 +12,8 @@ from typing import Any, Iterable, Mapping
 
 import pandas as pd
 
+from scripts.fallback_candidates import CANON, CANONICAL_COLUMNS
+
 BASE_DIR = Path(__file__).resolve().parents[1]
 
 LOGGER = logging.getLogger("dashboard_consistency")
@@ -266,7 +268,27 @@ def _analyze_candidates(df: pd.DataFrame | None, info: dict[str, Any]) -> dict[s
             c for c in CANDIDATE_CANONICAL_LOWER if c not in {str(col).lower() for col in info.get("columns", [])}
         ),
         "first_rows": [],
+        "canonical": None,
+        "missing_score_breakdown": True,
+        "canonical_sequence": [],
     }
+    raw_columns = list(info.get("columns", []) or [])
+    canonical_sequence: list[str] = []
+    missing_score_breakdown = True
+    for column in raw_columns:
+        key = str(column).strip()
+        canonical = CANON.get(key, CANON.get(key.lower(), key.lower()))
+        canonical_sequence.append(canonical)
+        if canonical == "score_breakdown":
+            missing_score_breakdown = False
+    analysis["canonical_sequence"] = canonical_sequence
+    analysis["missing_score_breakdown"] = missing_score_breakdown
+    if raw_columns:
+        canonical_list = list(CANONICAL_COLUMNS)
+        sequence_slice = canonical_sequence[: len(canonical_list)]
+        matches_order = sequence_slice == canonical_list
+        has_all = all(name in canonical_sequence for name in canonical_list)
+        analysis["canonical"] = matches_order and has_all and not missing_score_breakdown
     if df is None or df.empty:
         return analysis
     analysis["row_count"] = int(len(df.index))
@@ -456,6 +478,22 @@ def _write_findings(path: Path, report: Mapping[str, Any]) -> None:
     lines.append(
         f"Candidates: {latest.get('row_count', 0)} rows from {source}; fallback used: {source.startswith('fallback') if isinstance(source, str) else False}"
     )
+    canonical_flag = latest.get("canonical")
+    missing_breakdown = bool(latest.get("missing_score_breakdown"))
+    if canonical_flag is None:
+        lines.append("candidates_header=canonical:unknown")
+    else:
+        line = f"candidates_header=canonical:{str(bool(canonical_flag)).lower()}"
+        if not canonical_flag:
+            details: list[str] = []
+            if missing_breakdown:
+                details.append("missing_score_breakdown")
+            columns_snapshot = latest.get("columns") or latest.get("canonical_sequence")
+            if columns_snapshot:
+                details.append(f"columns={columns_snapshot}")
+            if details:
+                line = f"{line} (" + ", ".join(str(part) for part in details) + ")"
+        lines.append(line)
     lines.append(
         f"Trades log present: {trades.get('present', False)}; Orders submitted (today): {executor.get('orders_submitted', 0)}"
     )

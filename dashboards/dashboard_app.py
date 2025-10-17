@@ -960,6 +960,18 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 )
 
         df, alert = load_csv(top_candidates_path)
+        fallback_count = 0
+        if df is not None and not df.empty:
+            source_column = None
+            for column in df.columns:
+                if str(column).strip().lower() == "source":
+                    source_column = column
+                    break
+            if source_column:
+                source_series = df[source_column].astype("string")
+                fallback_count = int(
+                    source_series.str.contains("fallback", case=False, na=False).sum()
+                )
         scored_df, scored_alert = load_csv(scored_candidates_path)
 
         latest_notice = None
@@ -1460,7 +1472,30 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             metrics_sections.extend([info_row, charts_row])
         if metrics_sections:
             components.extend(metrics_sections)
-        components.append(html.H4("Top Candidates", className="text-light"))
+        fallback_badge = None
+        if fallback_count:
+            fallback_badge = dbc.Badge(
+                f"Fallback ({fallback_count})",
+                color="warning",
+                text_color="dark",
+                className="ms-2",
+                style={
+                    "fontSize": "0.65rem",
+                    "letterSpacing": "0.04em",
+                    "fontWeight": 600,
+                    "padding": "0.2rem 0.45rem",
+                },
+            )
+        title_children: list[Any] = ["Top Candidates"]
+        if fallback_badge is not None:
+            title_children.append(fallback_badge)
+        components.append(
+            html.H4(
+                title_children,
+                className="text-light",
+                style={"display": "flex", "alignItems": "center", "gap": "8px"},
+            )
+        )
         components.append(top_table_component)
         if metrics_data:
             components.extend([html.Hr(), html.H4("Diagnostics", className="text-light"), feature_section])
