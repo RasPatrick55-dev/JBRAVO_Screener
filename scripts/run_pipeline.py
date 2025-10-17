@@ -1,7 +1,9 @@
 import argparse
+import csv
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -24,6 +26,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 LOG = logging.getLogger("pipeline")
 logger = LOG
+
+SUMMARY_RX = re.compile(
+    r"PIPELINE_SUMMARY\s+symbols_in=(\d+)\s+with_bars=(\d+)\s+rows=(\d+)(?:[^\n\r]*?(?:\sbar_rows|\sbars_rows_total)=(\d+))?"
+)
 
 
 def _refresh_logger() -> None:
@@ -241,6 +247,118 @@ def _count_rows(path: Path) -> int:
     return int(len(df.index))
 
 
+def _read_metrics_summary(path: Path) -> dict[str, int]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            first = next(reader, None)
+    except Exception:
+        return {}
+    if not isinstance(first, dict):
+        return {}
+    result: dict[str, int] = {}
+    for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows"):
+        raw = first.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            result[key] = int(raw)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _derive_kpis(base_dir: Path) -> dict[str, Any]:
+    """Return KPI dict using JSON, pipeline log, metrics summary, and candidate CSV fallback."""
+
+    data_dir = base_dir / "data"
+    k: dict[str, Any] = {
+        "last_run_utc": None,
+        "symbols_in": None,
+        "symbols_with_bars": None,
+        "bars_rows_total": None,
+        "rows": None,
+    }
+
+    sm_path = data_dir / "screener_metrics.json"
+    if sm_path.exists():
+        try:
+            current = json.loads(sm_path.read_text(encoding="utf-8"))
+            if isinstance(current, Mapping):
+                for field in k:
+                    if current.get(field) is not None:
+                        k[field] = current[field]
+        except Exception:
+            pass
+
+    if any(k[field] is None for field in ("symbols_in", "symbols_with_bars", "rows", "bars_rows_total")):
+        pl_path = base_dir / "logs" / "pipeline.log"
+        if pl_path.exists():
+            try:
+                text = pl_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                text = ""
+            if text:
+                for match in reversed(list(SUMMARY_RX.finditer(text))):
+                    symbols_in, with_bars, rows, bars_rows = match.groups()
+                    if k["symbols_in"] is None:
+                        k["symbols_in"] = int(symbols_in)
+                    if k["symbols_with_bars"] is None:
+                        k["symbols_with_bars"] = int(with_bars)
+                    if k["rows"] is None:
+                        k["rows"] = int(rows)
+                    if k["bars_rows_total"] is None and bars_rows:
+                        k["bars_rows_total"] = int(bars_rows)
+                    break
+
+    if any(k[field] is None for field in ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows")):
+        summary = _read_metrics_summary(data_dir / "metrics_summary.csv")
+        for field, value in summary.items():
+            if k.get(field) is None:
+                k[field] = value
+
+    if k["rows"] is None:
+        top_path = data_dir / "top_candidates.csv"
+        if top_path.exists():
+            try:
+                with top_path.open("r", encoding="utf-8") as handle:
+                    total = sum(1 for _ in handle)
+                k["rows"] = max(0, total - 1)
+            except Exception:
+                pass
+
+    if not k.get("last_run_utc"):
+        candidates = []
+        for candidate_path in (
+            sm_path,
+            data_dir / "top_candidates.csv",
+            data_dir / "latest_candidates.csv",
+        ):
+            if candidate_path.exists():
+                try:
+                    candidates.append(candidate_path.stat().st_mtime)
+                except OSError:
+                    continue
+        if candidates:
+            latest_ts = max(candidates)
+            k["last_run_utc"] = datetime.fromtimestamp(latest_ts, tz=timezone.utc).isoformat()
+
+    return k
+
+
+def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
+    """Ensure data/screener_metrics.json has KPI values for dashboard consumption."""
+
+    data_dir = base_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    payload = _derive_kpis(base_dir)
+    metrics_path = data_dir / "screener_metrics.json"
+    metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
 def _ensure_latest_headers() -> None:
     if LATEST_CANDIDATES.exists() and LATEST_CANDIDATES.stat().st_size > 0:
         return
@@ -350,6 +468,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     LOG.info("[INFO] PIPELINE_START steps=%s", ",".join(steps))
 
     _ensure_latest_headers()
+    base_dir = _resolve_base_dir()
 
     extras = {
         "screener": _split_args(args.screener_args),
@@ -496,6 +615,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             stage_times["exec"] = secs
             if rc_exec and not rc:
                 rc = rc_exec
+        try:
+            kpis = write_complete_screener_metrics(base_dir)
+            LOG.info(
+                "SCREENER_METRICS_SYNC symbols_in=%s with_bars=%s rows=%s bars_rows_total=%s",
+                kpis.get("symbols_in"),
+                kpis.get("symbols_with_bars"),
+                kpis.get("rows"),
+                kpis.get("bars_rows_total"),
+            )
+        except Exception as sync_exc:
+            LOG.warning("SCREENER_METRICS_SYNC failed: %s", sync_exc)
     except Exception as exc:  # pragma: no cover - defensive guard
         LOG.exception("PIPELINE_FATAL: %s", exc)
         rc = 1

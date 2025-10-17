@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -178,3 +180,45 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
     assert (reports_dir / "dashboard_findings.txt").exists()
     findings_text = (reports_dir / "dashboard_findings.txt").read_text(encoding="utf-8")
     assert "candidates_header=canonical:true" in findings_text
+
+
+@pytest.mark.alpaca_optional
+def test_dashboard_kpis_recover_from_pipeline_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base_dir = tmp_path
+    data_dir = base_dir / "data"
+    logs_dir = base_dir / "logs"
+    data_dir.mkdir()
+    logs_dir.mkdir()
+
+    (data_dir / "screener_metrics.json").write_text(
+        json.dumps(
+            {
+                "last_run_utc": "2024-06-01T12:00:00Z",
+                "symbols_in": None,
+                "symbols_with_bars": None,
+                "rows": None,
+                "bars_rows_total": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    (logs_dir / "pipeline.log").write_text(
+        "2024-06-01T12:00:05Z [INFO] PIPELINE_SUMMARY symbols_in=42 with_bars=36 rows=9 bar_rows=540\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("JBRAVO_HOME", str(base_dir))
+    sys.modules.pop("dashboards.screener_health", None)
+    screener_health = importlib.import_module("dashboards.screener_health")
+    try:
+        kpis = screener_health.load_kpis()
+
+        assert kpis["symbols_in"] == 42
+        assert kpis["symbols_with_bars"] == 36
+        assert kpis["rows"] == 9
+        assert kpis["bars_rows_total"] == 540
+        assert kpis["source"] == "pipeline summary (recovered)"
+        assert kpis["_kpi_inferred_from_log"] is True
+    finally:
+        sys.modules.pop("dashboards.screener_health", None)

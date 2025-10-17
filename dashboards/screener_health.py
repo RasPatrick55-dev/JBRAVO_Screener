@@ -145,33 +145,68 @@ def _log_kpi_source(source: str) -> None:
         _KPI_LAST_SOURCE = source
 
 
+def _count_rows(path: pathlib.Path) -> int | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            header = next(handle, None)
+            if header is None:
+                return 0
+            return sum(1 for _ in handle)
+    except FileNotFoundError:
+        return None
+    except Exception:  # pragma: no cover - defensive counting guard
+        LOGGER.debug("Failed to count rows from %s", path, exc_info=True)
+        return None
+
+
 def load_kpis() -> dict[str, Any]:
-    json_metrics = _normalize_metrics(safe_read_json(METRICS_JSON))
-    if json_metrics.get("symbols_in") is not None:
-        json_metrics["source"] = "screener_metrics.json"
-        json_metrics["_kpi_inferred_from_log"] = False
-        _log_kpi_source(json_metrics["source"])
-        return json_metrics
+    metrics = _normalize_metrics(safe_read_json(METRICS_JSON))
+    kpis = dict(metrics)
+    numeric_fields = ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows")
+    primary_source = "screener_metrics.json"
+    inferred_from_log = False
 
-    csv_metrics = _normalize_metrics(safe_read_metrics_csv(METRICS_SUMMARY_CSV))
-    if csv_metrics.get("symbols_in") is not None:
-        csv_metrics["source"] = "metrics_summary.csv"
-        csv_metrics["_kpi_inferred_from_log"] = False
-        _log_kpi_source(csv_metrics["source"])
-        return csv_metrics
+    missing = [field for field in numeric_fields if not isinstance(kpis.get(field), int)]
+    if missing:
+        pipeline_metrics = _normalize_metrics(parse_pipeline_summary(LOG_DIR / "pipeline.log"))
+        pipeline_used = False
+        for field in numeric_fields:
+            value = pipeline_metrics.get(field)
+            if kpis.get(field) is None and isinstance(value, int):
+                kpis[field] = value
+                pipeline_used = True
+        if pipeline_used:
+            primary_source = "pipeline summary (recovered)"
+            inferred_from_log = True
+        missing = [field for field in numeric_fields if not isinstance(kpis.get(field), int)]
 
-    pipeline_metrics = _normalize_metrics(parse_pipeline_summary(LOG_DIR / "pipeline.log"))
-    if pipeline_metrics.get("symbols_in") is not None:
-        pipeline_metrics["source"] = "pipeline.log (inferred)"
-        pipeline_metrics["_kpi_inferred_from_log"] = True
-        _log_kpi_source(pipeline_metrics["source"])
-        return pipeline_metrics
+    if missing:
+        csv_metrics = _normalize_metrics(safe_read_metrics_csv(METRICS_SUMMARY_CSV))
+        csv_used = False
+        for field in numeric_fields:
+            value = csv_metrics.get(field)
+            if kpis.get(field) is None and isinstance(value, int):
+                kpis[field] = value
+                csv_used = True
+        if csv_used and not inferred_from_log:
+            primary_source = "metrics_summary.csv"
+        missing = [field for field in numeric_fields if not isinstance(kpis.get(field), int)]
 
-    empty = _normalize_metrics({})
-    empty["source"] = "none"
-    empty["_kpi_inferred_from_log"] = False
-    _log_kpi_source(empty["source"])
-    return empty
+    if "rows" in missing:
+        counted = _count_rows(TOP_CSV)
+        if counted is not None:
+            kpis["rows"] = counted
+            if primary_source == "screener_metrics.json":
+                primary_source = "top_candidates.csv (derived)"
+        missing = [field for field in numeric_fields if not isinstance(kpis.get(field), int)]
+
+    if all(not isinstance(kpis.get(field), int) for field in numeric_fields):
+        primary_source = "none"
+
+    kpis["source"] = primary_source
+    kpis["_kpi_inferred_from_log"] = inferred_from_log
+    _log_kpi_source(primary_source)
+    return kpis
 
 
 def _format_probe_timestamp(raw: Any) -> str:
@@ -1051,16 +1086,17 @@ def register_callbacks(app):
         )
         source_label = str(m.get("source") or "none")
         env_label = "Paper" if env_paper else "Live"
+        env_display = f"{env_label} ({env_feed})"
         caption_children: list[Any] = [
             html.Span(
-                f"Source: {source_label} • {env_label}: {env_feed}",
+                f"Source: {source_label} • {env_display}",
                 style={"marginRight": "4px"},
             )
         ]
         if m.get("_kpi_inferred_from_log"):
             caption_children.append(
                 html.Span(
-                    "(inferred from pipeline log)",
+                    "(recovered from pipeline log)",
                     style={"fontStyle": "italic", "color": "#cbd5f5"},
                 )
             )
