@@ -17,7 +17,7 @@ import numpy as np
 import os
 import pytz
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 
@@ -37,6 +37,7 @@ top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
 scored_candidates_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
 screener_metrics_path = os.path.join(BASE_DIR, "data", "screener_metrics.json")
 predictions_dir_path = os.path.join(BASE_DIR, "data", "predictions")
+latest_candidates_path = os.path.join(BASE_DIR, "data", "latest_candidates.csv")
 
 # Additional datasets introduced for monitoring
 metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
@@ -87,12 +88,8 @@ def is_log_stale(log_path):
     try:
         with open(log_path) as file:
             lines = file.readlines()
-        info_tokens = ("[INFO]", "- INFO -")
-        error_tokens = ("[ERROR]", "- ERROR -")
         for line in reversed(lines):
-            is_info = any(token in line for token in info_tokens)
-            is_error = any(token in line for token in error_tokens)
-            if is_info or is_error:
+            if "[INFO]" in line or "[ERROR]" in line:
                 ts_str = line[:19]
                 ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
                 return (datetime.utcnow() - ts).total_seconds() > (STALE_THRESHOLD_MINUTES * 60)
@@ -107,6 +104,38 @@ if not API_KEY or not API_SECRET:
     raise ValueError("Missing Alpaca credentials")
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 logger = logging.getLogger(__name__)
+
+
+def _detect_paper_mode() -> bool:
+    """Return True when Alpaca is configured for paper trading."""
+
+    base_url = (os.getenv("APCA_API_BASE_URL") or "").lower()
+    if "paper" in base_url:
+        return True
+    exec_flag = (os.getenv("JBR_EXEC_PAPER") or "").strip().lower()
+    return exec_flag in {"1", "true", "yes", "on"}
+
+
+PAPER_TRADING_MODE = _detect_paper_mode()
+
+
+def _paper_badge_component() -> dbc.Badge:
+    """Return a subtle badge indicating paper-mode execution."""
+
+    return dbc.Badge(
+        "Paper Trading Mode",
+        color="info",
+        text_color="dark",
+        className="me-2",
+        style={
+            "fontSize": "0.75rem",
+            "letterSpacing": "0.04em",
+            "padding": "0.25rem 0.5rem",
+            "backgroundColor": "#cfe2ff",
+            "color": "#084298",
+            "fontWeight": 600,
+        },
+    )
 
 
 def fetch_positions_api():
@@ -161,6 +190,27 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
             color="danger",
         )
     return df, None
+
+
+def _resolve_trades_dataframe() -> tuple[pd.DataFrame | None, str, str, list[Any]]:
+    """Return the most suitable trades dataframe and metadata."""
+
+    alerts: list[Any] = []
+    if os.path.exists(executed_trades_path):
+        df, alert = load_csv(executed_trades_path)
+        if alert is None and df is not None and not df.empty:
+            return df, executed_trades_path, "Executed trades", alerts
+        if alert:
+            alerts.append(alert)
+
+    if os.path.exists(trades_log_path):
+        df, alert = load_csv(trades_log_path)
+        if alert is None and df is not None and not df.empty:
+            return df, trades_log_path, "Paper trades", alerts
+        if alert:
+            alerts.append(alert)
+
+    return None, "", "", alerts
 
 
 def load_prediction_history(limit: int = 7) -> list[tuple[str, pd.DataFrame]]:
@@ -893,6 +943,26 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         df, alert = load_csv(top_candidates_path)
         scored_df, scored_alert = load_csv(scored_candidates_path)
 
+        latest_notice = None
+        if os.path.exists(latest_candidates_path):
+            try:
+                latest_preview = pd.read_csv(latest_candidates_path, nrows=1)
+            except Exception:
+                latest_preview = pd.DataFrame()
+            if latest_preview.empty:
+                latest_notice = dbc.Alert(
+                    [
+                        "No candidates today; fallback may populate shortly. ",
+                        html.A(
+                            "View pipeline panel",
+                            href="#sh-pipeline-panel",
+                            className="alert-link",
+                        ),
+                    ],
+                    color="info",
+                    className="mb-3",
+                )
+
         alerts = [a for a in (metrics_alert, alert, scored_alert, execute_alert) if a]
 
         def _safe_int(value) -> int:
@@ -1354,8 +1424,12 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 connectivity_chip = None
 
         components = []
+        if PAPER_TRADING_MODE:
+            components.append(html.Div(_paper_badge_component(), className="mb-2"))
         if connectivity_chip:
             components.append(html.Div(connectivity_chip, className="mb-3"))
+        if latest_notice:
+            components.append(latest_notice)
         components.extend(alerts)
 
         metrics_sections = []
@@ -1377,10 +1451,10 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-execute":
-        trades_df, alert = load_csv(executed_trades_path)
-        if alert:
-            table = alert
-        else:
+        trades_df, trade_source_path, trade_source_label, trade_alerts = _resolve_trades_dataframe()
+        executed_exists = os.path.exists(executed_trades_path)
+
+        if trades_df is not None:
             trades_df.sort_values("entry_time", ascending=False, inplace=True)
             table = dash_table.DataTable(
                 id="executed-trades-table",
@@ -1403,6 +1477,13 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     },
                 ],
             )
+        else:
+            hint = dbc.Alert(
+                "No trades yet (paper account).",
+                color="info",
+                className="mb-2",
+            )
+            table = html.Div([hint, *trade_alerts]) if trade_alerts else hint
 
         metrics_defaults = {
             "last_run_utc": "",
@@ -1416,7 +1497,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             "latency_secs": {"p50": 0.0, "p95": 0.0},
         }
         metrics_data = metrics_defaults.copy()
-        if os.path.exists(execute_metrics_path):
+        metrics_file_exists = os.path.exists(execute_metrics_path)
+        if metrics_file_exists:
             try:
                 with open(execute_metrics_path, encoding="utf-8") as f:
                     loaded = json.load(f)
@@ -1547,21 +1629,56 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             ]
         )
 
-        download = html.Div(
-            [
-                html.Button("Download CSV", id="btn-download-trades"),
-                dcc.Download(id="download-executed-trades"),
-            ],
+        download = None
+        if trade_source_path:
+            download = html.Div(
+                [
+                    html.Button("Download CSV", id="btn-download-trades"),
+                    dcc.Download(id="download-executed-trades"),
+                ],
+                className="mb-2",
+            )
+
+        last_updated_path = trade_source_path if trade_source_path else (
+            executed_trades_path if executed_exists else trades_log_path
+        )
+        last_updated = format_time(get_file_mtime(last_updated_path))
+        header_children: list[Any] = []
+        if PAPER_TRADING_MODE:
+            header_children.append(_paper_badge_component())
+        header_children.append(
+            html.Span(
+                f"Last Updated: {last_updated}",
+                className="text-muted",
+            )
+        )
+        if trade_source_label:
+            header_children.append(
+                html.Span(
+                    f"Source: {trade_source_label}",
+                    className="text-muted small",
+                )
+            )
+        header = html.Div(
+            header_children,
+            style={"display": "flex", "gap": "0.75rem", "flexWrap": "wrap", "alignItems": "center"},
             className="mb-2",
         )
 
-        last_updated = format_time(get_file_mtime(executed_trades_path))
-        timestamp = html.Div(
-            f"Last Updated: {last_updated}",
-            className="text-muted mb-2",
-        )
-
-        components = [timestamp, download, table, html.Hr()]
+        components: list[Any] = [header]
+        if download is not None:
+            components.append(download)
+        components.append(table)
+        components.append(html.Hr())
+        paper_notice = None
+        if not metrics_file_exists:
+            paper_notice = dbc.Alert(
+                "No execution yet today (paper).",
+                color="info",
+                className="mb-3",
+            )
+        if paper_notice:
+            components.append(paper_notice)
         if trade_limit_alert:
             components.append(trade_limit_alert)
         if skipped_warning:
@@ -1894,10 +2011,13 @@ def update_metrics_logs(n):
     Input("interval-trades", "n_intervals"),
 )
 def refresh_trades_table(n):
-    df, alert = load_csv(executed_trades_path)
-    if alert or df is None or df.empty:
+    df, _, _, _ = _resolve_trades_dataframe()
+    if df is None or df.empty:
         return []
-    df.sort_values("entry_time", ascending=False, inplace=True)
+    try:
+        df = df.sort_values("entry_time", ascending=False)
+    except Exception:
+        df = df.copy()
     return df.to_dict("records")
 
 
@@ -1922,8 +2042,13 @@ def update_execution_logs(n):
     prevent_initial_call=True,
 )
 def download_trades(n_clicks):
-    if n_clicks:
-        return dcc.send_file(executed_trades_path)
+    if not n_clicks:
+        return dash.no_update
+    _, path, _, _ = _resolve_trades_dataframe()
+    candidate = path or (executed_trades_path if os.path.exists(executed_trades_path) else trades_log_path)
+    if candidate and os.path.exists(candidate):
+        return dcc.send_file(candidate)
+    return dash.no_update
 
 
 
