@@ -80,6 +80,12 @@ except Exception:  # pragma: no cover - lightweight fallback for tests
 
 logger = logging.getLogger("execute_trades")
 LOGGER = logger
+
+
+def log_info(tag: str, **kv: Any) -> None:
+    payload = " ".join(f"{key}={kv[key]}" for key in sorted(kv)) if kv else ""
+    message = f"{tag} {payload}".strip()
+    LOGGER.info(message)
  
  
 def _log_call(label, fn, *args, **kwargs):
@@ -243,6 +249,36 @@ def _ny_now() -> datetime:
     return datetime.now(NY)
 
 
+def _clock_is_in_window(client: Any, window: str) -> tuple[bool, str]:
+    if client is None or not hasattr(client, "get_clock"):
+        return False, "00:00"
+    try:
+        clk = client.get_clock()
+        ny = ZoneInfo("America/New_York")
+        now_ny = (
+            clk.timestamp.astimezone(ny)
+            if getattr(clk, "timestamp", None) is not None
+            else None
+        )
+        if now_ny is None:
+            now_ny = datetime.now(ny)
+        hhmm = now_ny.strftime("%H:%M")
+        target = (window or "auto").lower()
+        if target == "premarket":
+            in_window = "07:00" <= hhmm < "09:30"
+        elif target == "regular":
+            in_window = "09:30" <= hhmm < "16:00"
+        elif target == "any":
+            in_window = True
+        else:  # auto and unknown default to premarket guard
+            in_window = "07:00" <= hhmm < "09:30"
+        log_info("MARKET_TIME", ny_now=str(now_ny), window=target, in_window=in_window)
+        return in_window, hhmm
+    except Exception as exc:  # pragma: no cover - defensive logging
+        log_info("CLOCK_FETCH_FAILED", error=str(exc)[:200])
+        return False, "00:00"
+
+
 def _resolve_time_window(requested: str):
     req = (requested or "auto").strip().lower()
     now = _ny_now()
@@ -259,6 +295,8 @@ def _resolve_time_window(requested: str):
         return "premarket", in_pre, now
     if req == "regular":
         return "regular", in_reg, now
+    if req == "any":
+        return "any", True, now
 
     if in_pre:
         return "premarket", True, now
@@ -300,7 +338,7 @@ def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
     params: Dict[str, str] = {}
     if feed:
         params["feed"] = str(feed)
-    _log_event("alpaca.latest_bar", symbol=symbol)
+    log_info("alpaca.latest_bar", symbol=symbol)
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
     except Exception as exc:
@@ -361,7 +399,7 @@ def _fetch_latest_daily_bars(symbols: Sequence[str]) -> Dict[str, Dict[str, Opti
     params: Dict[str, str] = {"symbols": ",".join(unique), "timeframe": "1Day"}
     if feed:
         params["feed"] = str(feed)
-    _log_event("alpaca.bars_latest", symbols=len(unique))
+    log_info("alpaca.bars_latest", symbols=len(unique))
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
     except Exception as exc:
@@ -641,13 +679,21 @@ def compute_limit_price(row: Dict[str, Any], buffer_bps: int = 75) -> float:
     return round_to_tick(limit, 0.01)
 
 
-def _compute_qty(alloc_usd: float, limit_price: float, min_order_usd: float) -> int:
-    if alloc_usd < min_order_usd:
-        return 0
-    if limit_price <= 0:
-        return 0
-    qty = int(alloc_usd // limit_price)
-    return max(qty, 0)
+def _compute_qty(
+    buying_power: float,
+    limit_price: float,
+    allocation_pct: float,
+    min_order_usd: float,
+) -> int:
+    limit_floor = max(0.01, float(limit_price or 0))
+    alloc_qty = math.floor(max(0.0, buying_power) * max(0.0, allocation_pct) / limit_floor)
+    min_qty = (
+        math.floor(max(0.0, min_order_usd) / limit_floor)
+        if min_order_usd
+        else 0
+    )
+    qty = max(alloc_qty, min_qty)
+    return max(0, qty)
 
 
 def compute_quantity(buying_power: float, allocation_pct: float, limit_price: float) -> int:
@@ -1062,12 +1108,8 @@ class TradeExecutor:
         self.clock_snapshot: Optional[Mapping[str, Any]] = clock_snapshot
         self._last_buying_power_raw: Any = None
 
-    def log_event(self, event: str, **payload: Any) -> None:
-        human = " ".join(f"{key}={value}" for key, value in payload.items())
-        if human:
-            LOGGER.info("%s %s", event, human)
-        else:
-            LOGGER.info("%s", event)
+    def log_info(self, event: str, **payload: Any) -> None:
+        log_info(event, **payload)
         if self.log_json:
             try:
                 LOGGER.info(json.dumps({"event": event, **payload}))
@@ -1116,7 +1158,7 @@ class TradeExecutor:
             payload["detail"] = detail
         if count > 1:
             payload["count"] = count
-        self.log_event("SKIP", **payload)
+        self.log_info("SKIP", **payload)
 
     def _resolve_market_timezone(self) -> ZoneInfo:
         tz_name = self.config.market_timezone or "America/New_York"
@@ -1153,7 +1195,7 @@ class TradeExecutor:
             "APCA-API-KEY-ID": api_key,
             "APCA-API-SECRET-KEY": api_secret,
         }
-        _log_event("alpaca.clock_probe")
+        log_info("alpaca.clock_probe")
         try:
             response = requests.get(url, headers=headers, timeout=5)
         except Exception as exc:
@@ -1184,7 +1226,7 @@ class TradeExecutor:
         if self.client is None or not hasattr(self.client, "get_clock"):
             return self._probe_trading_clock()
         try:
-            _log_event("alpaca.get_clock")
+            log_info("alpaca.get_clock")
             return self.client.get_clock()
         except Exception as exc:
             status = getattr(exc, "status_code", None)
@@ -1234,9 +1276,7 @@ class TradeExecutor:
             else:
                 resolved_window = "regular"
                 auto_branch = "regular"
-            LOGGER.info(
-                "[INFO] TIME_WINDOW_AUTO branch=%s ny_time=%s", auto_branch, ny_now
-            )
+            log_info("TIME_WINDOW_AUTO", branch=auto_branch, ny_time=ny_now)
         elif mode not in {"premarket", "regular", "any"}:
             resolved_window = "any"
 
@@ -1284,14 +1324,14 @@ class TradeExecutor:
                 message = f"regular session ({market_label})"
 
         if log:
-            LOGGER.info(
-                "[INFO] MARKET_TIME ny_now=%s mode=%s resolved=%s in_window=%s",
-                ny_now,
-                mode,
-                resolved_window,
-                bool(allowed),
+            log_info(
+                "MARKET_TIME",
+                ny_now=ny_now,
+                mode=mode,
+                resolved=resolved_window,
+                in_window=bool(allowed),
             )
-            LOGGER.info("[INFO] TIME_WINDOW %s", message)
+            log_info("TIME_WINDOW", message=message)
         return allowed, message, resolved_window
 
     def load_candidates(self) -> pd.DataFrame:
@@ -1470,7 +1510,7 @@ class TradeExecutor:
             target_notional = max(base_notional, min_order)
             limit_px = price_f * (1 + limit_buffer_ratio)
             limit_px = max(limit_px, 0.01)
-            qty = _compute_qty(target_notional, limit_px, min_order)
+            qty = _compute_qty(account_buying_power, limit_px, allocation_pct, min_order)
             if qty < 1 and self.config.allow_bump_to_one and not self.config.allow_fractional:
                 qty = 1 if limit_px > 0 and target_notional >= limit_px else qty
             if qty < 1:
@@ -1515,7 +1555,7 @@ class TradeExecutor:
                 continue
 
             if self.config.dry_run:
-                self.log_event("DRY_RUN_ORDER", symbol=symbol, qty=qty, limit_price=f"{limit_price:.2f}")
+                self.log_info("DRY_RUN_ORDER", symbol=symbol, qty=qty, limit_price=f"{limit_price:.2f}")
                 continue
 
             outcome = self.execute_order(symbol, qty, limit_price)
@@ -1534,7 +1574,7 @@ class TradeExecutor:
         if self.client is None:
             return symbols
         try:
-            _log_event("alpaca.get_positions")
+            log_info("alpaca.get_positions")
             positions = self.client.get_all_positions()
             for pos in positions:
                 symbol = getattr(pos, "symbol", "")
@@ -1565,7 +1605,7 @@ class TradeExecutor:
             return symbols
         try:
             request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
-            _log_event("alpaca.get_orders", status=request.status)
+            log_info("alpaca.get_orders", status=request.status)
             orders = self.client.get_orders(request)
             for order in orders or []:
                 symbol = getattr(order, "symbol", "")
@@ -1602,7 +1642,7 @@ class TradeExecutor:
             _warn_context("alpaca.buying_power", "client_unavailable")
             return 0.0
         try:
-            _log_event("alpaca.get_account")
+            log_info("alpaca.get_account")
             account = self.client.get_account()
         except Exception as exc:
             _warn_context("alpaca.get_account", str(exc))
@@ -1636,7 +1676,7 @@ class TradeExecutor:
         order_id = str(getattr(submitted_order, "id", ""))
         self.metrics.orders_submitted += 1
         extended_hours_flag = "true" if self.config.extended_hours else "false"
-        self.log_event(
+        self.log_info(
             "BUY_SUBMIT",
             symbol=symbol,
             qty=str(qty),
@@ -1654,7 +1694,7 @@ class TradeExecutor:
 
         while datetime.now(timezone.utc) < fill_deadline:
             try:
-                _log_event("alpaca.get_order", order_id=order_id)
+                log_info("alpaca.get_order", order_id=order_id)
                 order = self.client.get_order_by_id(order_id)
             except Exception as exc:
                 _warn_context("alpaca.get_order", f"{order_id}: {exc}")
@@ -1666,7 +1706,7 @@ class TradeExecutor:
                 latency = time.time() - submit_ts
                 self.metrics.orders_filled += 1
                 self.metrics.record_latency(latency)
-                self.log_event(
+                self.log_info(
                     "BUY_FILL",
                     symbol=symbol,
                     filled_qty=f"{filled_qty:.0f}",
@@ -1682,7 +1722,7 @@ class TradeExecutor:
                 latency = time.time() - submit_ts
                 self.metrics.orders_filled += 1
                 self.metrics.record_latency(latency)
-                self.log_event(
+                self.log_info(
                     "BUY_FILL",
                     symbol=symbol,
                     filled_qty=f"{filled_qty:.0f}",
@@ -1699,7 +1739,7 @@ class TradeExecutor:
         if remaining > 0:
             self.cancel_order(order_id, symbol)
             self.metrics.orders_canceled += 1
-            self.log_event(
+            self.log_info(
                 "BUY_CANCELLED",
                 symbol=symbol,
                 remaining_qty=f"{remaining:.0f}",
@@ -1710,7 +1750,7 @@ class TradeExecutor:
             latency = time.time() - submit_ts
             self.metrics.orders_filled += 1
             self.metrics.record_latency(latency)
-            self.log_event(
+            self.log_info(
                 "BUY_FILL",
                 symbol=symbol,
                 filled_qty=f"{filled_qty:.0f}",
@@ -1727,10 +1767,10 @@ class TradeExecutor:
             return
         try:
             if hasattr(self.client, "cancel_order_by_id"):
-                _log_event("alpaca.cancel_order", order_id=order_id)
+                log_info("alpaca.cancel_order", order_id=order_id)
                 self.client.cancel_order_by_id(order_id)
             elif hasattr(self.client, "cancel_order"):
-                _log_event("alpaca.cancel_order", order_id=order_id)
+                log_info("alpaca.cancel_order", order_id=order_id)
                 self.client.cancel_order(order_id)
             else:  # pragma: no cover - defensive fallback
                 LOGGER.warning("Client has no cancel method; unable to cancel %s", order_id)
@@ -1760,7 +1800,7 @@ class TradeExecutor:
             symbol,
             trail_display,
         )
-        self.log_event(
+        self.log_info(
             "TRAIL_SUBMIT",
             symbol=symbol,
             trail_pct=trail_display,
@@ -1769,7 +1809,7 @@ class TradeExecutor:
         trailing_order = self.submit_with_retries(request)
         if trailing_order is None:
             LOGGER.error("[ERROR] TRAIL_FAILED symbol=%s reason=submit_failed", symbol)
-            self.log_event("TRAIL_FAILED", symbol=symbol, reason="submit_failed")
+            self.log_info("TRAIL_FAILED", symbol=symbol, reason="submit_failed")
             return
         self.metrics.trailing_attached += 1
         order_id = str(getattr(trailing_order, "id", ""))
@@ -1779,7 +1819,7 @@ class TradeExecutor:
             qty_int,
             order_id,
         )
-        self.log_event(
+        self.log_info(
             "TRAIL_CONFIRMED",
             symbol=symbol,
             qty=str(qty_int),
@@ -1795,41 +1835,40 @@ class TradeExecutor:
         last_error: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
             try:
-                _log_event("alpaca.submit_order", attempt=attempt)
+                log_info("alpaca.submit_order", attempt=attempt)
                 if isinstance(request, LimitOrderRequest):
                     result = self.client.submit_order(request)
                 else:
                     result = self.client.submit_order(request)
                 if attempt > 1:
-                    self.log_event("API_RETRY_SUCCESS", attempt=attempt)
+                    self.log_info("API_RETRY_SUCCESS", attempt=attempt)
                 return result
             except Exception as exc:
                 last_error = exc
                 if attempt < attempts:
                     self.metrics.api_retries += 1
-                    self.log_event("API_RETRY", attempt=attempt, error=str(exc))
+                    self.log_info("API_RETRY", attempt=attempt, error=str(exc))
                     self.sleep(delay)
                     delay *= backoff
                     continue
                 self.metrics.api_failures += 1
                 _warn_context("alpaca.submit_order", f"failed: {exc}")
         if last_error is not None:
-            self.log_event("API_FAILURE", error=str(last_error))
+            self.log_info("API_FAILURE", error=str(last_error))
         return None
 
     def log_summary(self) -> None:
         skips = {key.upper(): int(value) for key, value in self.metrics.skipped_reasons.items()}
-        parts = [
-            "[INFO] EXECUTE_SUMMARY",
-            f"orders_submitted={self.metrics.orders_submitted}",
-            f"trailing_attached={self.metrics.trailing_attached}",
-        ]
+        payload: Dict[str, Any] = {
+            "orders_submitted": self.metrics.orders_submitted,
+            "trailing_attached": self.metrics.trailing_attached,
+        }
         for key in SKIP_REASON_ORDER:
-            parts.append(f"skips.{key}={int(skips.get(key, 0))}")
+            payload[f"skips.{key}"] = int(skips.get(key, 0))
         extra_keys = sorted(key for key in skips.keys() if key not in SKIP_REASON_KEYS)
         for key in extra_keys:
-            parts.append(f"skips.{key}={int(skips.get(key, 0))}")
-        LOGGER.info(" ".join(parts))
+            payload[f"skips.{key}"] = int(skips.get(key, 0))
+        log_info("EXECUTE_SUMMARY", **payload)
 
     def persist_metrics(self) -> None:
         payload = self.metrics.as_dict()
@@ -1850,8 +1889,15 @@ class TradeExecutor:
         skips_merged = dict(existing_skips)
         skips_merged.update(payload_skips)
         merged["skips"] = skips_merged
-        METRICS_PATH.write_text(json.dumps(merged, indent=2, sort_keys=True), encoding="utf-8")
-        LOGGER.info("Metrics updated: %s", json.dumps(merged, sort_keys=True))
+        try:
+            METRICS_PATH.write_text(
+                json.dumps(merged, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            _warn_context("metrics.persist", f"write_failed: {exc}")
+            return
+        log_info("METRICS_UPDATED", path=str(METRICS_PATH))
 
 
 def configure_logging(log_json: bool) -> None:
@@ -1916,7 +1962,7 @@ def _ensure_trading_auth(
     def fetch(path: str) -> Mapping[str, Any]:
         url = f"{resolved_base}{path}"
         context = f"alpaca.auth{path}"
-        _log_event(context)
+        log_info(context)
         try:
             response = requests.get(url, headers=headers, timeout=10)
         except Exception as exc:
@@ -2122,17 +2168,44 @@ def run_executor(
     candidates_df = frame
     configured_window = config.time_window or "auto"
     win, in_window, now_ny = _resolve_time_window(configured_window)
-    logger.info(
-        "[INFO] EXEC_START dry_run=%s time_window=%s resolved=%s ny_now=%s in_window=%s candidates=%d",
-        bool(config.dry_run),
-        configured_window,
-        win,
-        now_ny.isoformat(),
-        in_window,
-        len(candidates_df),
-    )
-
     trading_probe = client if client is not None else None
+    clock_hhmm = now_ny.strftime("%H:%M")
+    clock_window = win if win in {"premarket", "regular", "any"} else configured_window
+    if trading_probe is not None and hasattr(trading_probe, "get_clock"):
+        clock_allowed, hhmm = _clock_is_in_window(trading_probe, clock_window)
+        if hhmm != "00:00":
+            clock_hhmm = hhmm
+        if clock_window == "any":
+            in_window = clock_allowed
+        elif clock_window in {"premarket", "regular"}:
+            in_window = bool(in_window) and clock_allowed
+        else:
+            in_window = bool(in_window) and clock_allowed
+        if hhmm == "00:00":
+            log_info(
+                "MARKET_TIME",
+                ny_now=now_ny.isoformat(),
+                window=clock_window,
+                in_window=bool(in_window),
+            )
+    else:
+        log_info(
+            "MARKET_TIME",
+            ny_now=now_ny.isoformat(),
+            window=clock_window,
+            in_window=bool(in_window),
+        )
+
+    log_info(
+        "EXEC_START",
+        dry_run=bool(config.dry_run),
+        time_window=configured_window,
+        resolved=win,
+        ny_now=now_ny.isoformat(),
+        hhmm=clock_hhmm,
+        in_window=bool(in_window),
+        candidates=len(candidates_df),
+    )
     acc = None
     acc_err = None
     if trading_probe is not None and hasattr(trading_probe, "get_account"):
@@ -2143,23 +2216,23 @@ def run_executor(
             buying_power = float(acc.buying_power or 0)
         except Exception:
             buying_power = 0.0
-    logger.info(
-        "AUTH_OK=%s buying_power=%.2f",
-        acc is not None and acc_err is None,
-        buying_power,
+    log_info(
+        "AUTH_STATUS",
+        ok=acc is not None and acc_err is None,
+        buying_power=f"{buying_power:.2f}",
     )
 
     if not in_window:
-        logger.info("[INFO] TIME_WINDOW outside %s (NY) count=%d", win, len(candidates_df))
+        log_info(
+            "TIME_WINDOW",
+            window=win,
+            status="outside",
+            count=len(candidates_df),
+        )
         metrics.skips["TIME_WINDOW"] += len(candidates_df)
         metrics.flush()
         loader.persist_metrics()
-        logger.info(
-            "[INFO] EXECUTE_SUMMARY orders_submitted=%d trailing_attached=%d %s",
-            metrics.orders_submitted,
-            metrics.trailing_attached,
-            " ".join(f"skips.{k}={v}" for k, v in metrics.skips.items()),
-        )
+        loader.log_summary()
         return 0
 
     _log_account_probe(creds_snapshot)
@@ -2312,16 +2385,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     sys.exit(main())
-def _log_event(context: str, **kwargs: Any) -> None:
-    suffix = ""
-    if kwargs:
-        try:
-            suffix = " " + " ".join(f"{key}={value}" for key, value in kwargs.items())
-        except Exception:  # pragma: no cover - formatting best effort
-            suffix = ""
-    LOGGER.info("[CALL] %s%s", context, suffix)
-
-
 def _warn_context(context: str, message: str) -> None:
     LOGGER.warning("[WARN] %s: %s", context, message)
 

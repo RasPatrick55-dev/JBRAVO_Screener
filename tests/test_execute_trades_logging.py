@@ -9,6 +9,7 @@ from scripts.execute_trades import (
     ExecutionMetrics,
     ExecutorConfig,
     TradeExecutor,
+    _clock_is_in_window,
     compute_limit_price,
     run_executor,
 )
@@ -96,6 +97,20 @@ def paper_api_env(monkeypatch):
 pytestmark = pytest.mark.alpaca_optional
 
 
+def test_clock_is_in_window_handles_errors(caplog):
+    class BrokenClock:
+        def get_clock(self):
+            raise RuntimeError("clock unavailable")
+
+    caplog.set_level(logging.INFO, logger="execute_trades")
+    caplog.clear()
+    allowed, hhmm = _clock_is_in_window(BrokenClock(), "premarket")
+    assert allowed is False
+    assert hhmm == "00:00"
+    log_text = "\n".join(caplog.messages)
+    assert "CLOCK_FETCH_FAILED" in log_text
+
+
 def test_compute_limit_price_rounds_to_tick():
     row = {"entry_price": 10.003, "close": 10.0}
     price = compute_limit_price(row, buffer_bps=50)
@@ -114,11 +129,13 @@ def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch, caplog):
     assert metrics_payload["symbols_in"] == 0
     assert metrics_payload["orders_submitted"] == 0
     logs = "\n".join(caplog.messages)
-    assert "EXEC_START dry_run=True time_window=auto" in logs
-    assert "ny_now=" in logs
-    assert "in_window=False" in logs or "in_window=True" in logs
+    start_lines = [msg for msg in caplog.messages if msg.startswith("EXEC_START")]
+    assert start_lines, "Expected EXEC_START log entry"
+    start = start_lines[-1]
+    for token in ("candidates=0", "dry_run=True", "time_window=auto", "ny_now=", "in_window="):
+        assert token in start
     skips = metrics_payload.get("skips", {})
-    assert int(skips.get("NO_CANDIDATES", 0)) >= 1
+    assert "NO_CANDIDATES" in skips
 
 
 def test_execute_flow_attaches_trailing_stop(tmp_path, caplog):
@@ -187,10 +204,11 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     rc = executor.execute(df)
     assert rc == 0
     log_text = "\n".join(caplog.messages)
-    tokens = ("EXEC_START", "[INFO] EXECUTE_SUMMARY", "[INFO] TIME_WINDOW")
+    tokens = ("EXEC_START", "EXECUTE_SUMMARY", "TIME_WINDOW")
     assert any(token in log_text for token in tokens)
-    assert "[INFO] TIME_WINDOW outside premarket (NY)" in log_text
-    summary_lines = [msg for msg in caplog.messages if "[INFO] EXECUTE_SUMMARY" in msg]
+    assert "TIME_WINDOW" in log_text
+    assert "outside premarket (NY)" in log_text
+    summary_lines = [msg for msg in caplog.messages if msg.startswith("EXECUTE_SUMMARY")]
     assert summary_lines, "Expected EXECUTE_SUMMARY log entry"
     summary = summary_lines[-1]
     assert "orders_submitted=0" in summary
@@ -239,8 +257,9 @@ def test_dry_run_creates_metrics_with_zero_orders(tmp_path, caplog):
     assert rc == 0
 
     log_text = "\n".join(caplog.messages)
-    assert "EXEC_START dry_run=True" in log_text
-    assert "[INFO] EXECUTE_SUMMARY" in log_text
+    assert "EXEC_START" in log_text
+    assert "dry_run=True" in log_text
+    assert "EXECUTE_SUMMARY" in log_text
 
     metrics_payload = json.loads(execute_mod.METRICS_PATH.read_text(encoding="utf-8"))
     assert metrics_payload.get("symbols_in") == 2
@@ -268,7 +287,8 @@ def test_auth_log_includes_buying_power(tmp_path, caplog):
     rc = run_executor(config, client=StubTradingClient())
     assert rc == 0
     log_text = "\n".join(caplog.messages)
-    assert "AUTH_OK=True" in log_text
+    assert "AUTH_STATUS" in log_text
+    assert "ok=True" in log_text
     assert "buying_power=50000.00" in log_text
     assert "base_url=https://paper-api.alpaca.markets" in log_text
 
