@@ -71,6 +71,12 @@ def test_build_latest_candidates_invokes_atomic_write(tmp_path: Path, monkeypatc
     persisted = pd.read_csv(latest_path)
     assert persisted.columns.tolist() == list(fallback_mod.CANONICAL_COLUMNS)
     assert persisted.iloc[0]["symbol"] == "AAPL"
+    assert persisted.shape[0] >= 3
+    assert all(
+        persisted["source"].astype(str).str.lower().str.contains("fallback:static")
+    )
+    assert frame.shape[0] >= 3
+    assert str(frame.iloc[0]["source"]).lower() == "fallback:static"
     pd.testing.assert_frame_equal(
         frame.reset_index(drop=True),
         persisted.head(len(frame)).reset_index(drop=True),

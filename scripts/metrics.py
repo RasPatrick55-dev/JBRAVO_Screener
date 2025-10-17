@@ -236,7 +236,11 @@ def main():
     # Detect missing symbol-level metrics and compute from trades_log.csv
     if "net_pnl" not in results_df.columns:
         trades_path = Path(BASE_DIR) / "data" / "trades_log.csv"
-        trades_df = load_trades_log(trades_path)
+        try:
+            trades_df = load_trades_log(trades_path)
+        except FileNotFoundError:
+            logger.warning("Trades log missing at %s; continuing with defaults", trades_path)
+            trades_df = pd.DataFrame(columns=_TRADES_CANONICAL_COLUMNS)
         if trades_df.empty:
             results_df = pd.DataFrame(
                 columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
@@ -276,7 +280,11 @@ def main():
     trade_log_path = Path(BASE_DIR) / "data" / "trades_log.csv"
     metrics_summary_file = _summary_path()
 
-    trades_df = load_trades_log(trade_log_path)
+    try:
+        trades_df = load_trades_log(trade_log_path)
+    except FileNotFoundError:
+        logger.warning("Trades log missing at %s; emitting zero metrics", trade_log_path)
+        trades_df = pd.DataFrame(columns=_TRADES_CANONICAL_COLUMNS)
     if not trades_df.empty:
         trades_df = validate_numeric(trades_df, "net_pnl")
 
