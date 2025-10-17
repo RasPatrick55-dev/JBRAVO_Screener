@@ -73,7 +73,10 @@ def load_trades_log(file_path: Path) -> pd.DataFrame:
     canonical = list(_TRADES_CANONICAL_COLUMNS)
 
     if not file_path.exists():
-        raise FileNotFoundError(str(file_path))
+        if not _TRADES_LOG_WARNED:
+            logger.info("[INFO] METRICS trades_log_absent path=%s", file_path)
+            _TRADES_LOG_WARNED = True
+        return pd.DataFrame(columns=canonical)
 
     if file_path.stat().st_size == 0:
         if not _TRADES_LOG_WARNED:
