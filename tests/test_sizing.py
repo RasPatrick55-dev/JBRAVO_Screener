@@ -31,7 +31,7 @@ def test_sizing_produces_positive_quantities(monkeypatch):
         if event == "DRY_RUN_ORDER":
             captured.append(payload)
 
-    monkeypatch.setattr(executor, "log_event", capture_event)
+    monkeypatch.setattr(executor, "log_info", capture_event)
 
     records = [
         {
