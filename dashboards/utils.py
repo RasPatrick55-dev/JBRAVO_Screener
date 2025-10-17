@@ -51,14 +51,20 @@ def parse_pipeline_summary(path: Path) -> Dict[str, Any]:
     for line in reversed(text.splitlines()):
         if "PIPELINE_SUMMARY" not in line:
             continue
-        match = re.search(r"symbols_in=(\d+).+with_bars=(\d+).+rows=(\d+)", line)
+        match = re.search(
+            r"symbols_in=(\d+)\s+with_bars=(\d+)\s+rows=(\d+)(?:[^\n\r]*?(?:\sbar_rows|\sbars_rows_total)=(\d+))?",
+            line,
+        )
         if match:
-            return {
+            payload = {
                 "last_run_utc": None,
                 "symbols_in": int(match.group(1)),
                 "symbols_with_bars": int(match.group(2)),
                 "rows": int(match.group(3)),
             }
+            if match.group(4):
+                payload["bars_rows_total"] = int(match.group(4))
+            return payload
         break
     return {}
 

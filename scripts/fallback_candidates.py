@@ -641,6 +641,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     LOGGER.info("FALLBACK produced rows=%d", len(prepared))
     LOGGER.info("FALLBACK source=%s", source)
     LOGGER.debug("FALLBACK payload=%s", json.dumps(prepared.to_dict(orient="records"), default=str))
+
+    sm_path = DATA_DIR / "screener_metrics.json"
+    existing: dict[str, object]
+    if sm_path.exists():
+        try:
+            existing = json.loads(sm_path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = {}
+    else:
+        existing = {}
+    payload = {
+        "last_run_utc": datetime.now(timezone.utc).isoformat(),
+        "symbols_in": existing.get("symbols_in"),
+        "symbols_with_bars": existing.get("symbols_with_bars"),
+        "bars_rows_total": existing.get("bars_rows_total"),
+        "rows": existing.get("rows"),
+    }
+    try:
+        sm_path.parent.mkdir(parents=True, exist_ok=True)
+        sm_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:  # pragma: no cover - defensive guard
+        LOGGER.debug("Failed to update screener_metrics.json from fallback", exc_info=True)
+
     return 0
 
 

@@ -26,6 +26,7 @@ def test_load_kpis_infers_from_pipeline(tmp_path, monkeypatch):
         assert kpis["symbols_in"] == 321
         assert kpis["symbols_with_bars"] == 300
         assert kpis["rows"] == 111
-        assert kpis["source"] == "pipeline.log (inferred)"
+        assert kpis["source"] == "pipeline summary (recovered)"
+        assert kpis["_kpi_inferred_from_log"] is True
     finally:
         sys.modules.pop("dashboards.screener_health", None)
