@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import os
@@ -41,6 +42,21 @@ CANONICAL_COLUMNS: Sequence[str] = (
     "atrp",
     "source",
 )
+
+CANONICAL = [
+    "timestamp",
+    "symbol",
+    "score",
+    "exchange",
+    "close",
+    "volume",
+    "universe_count",
+    "score_breakdown",
+    "entry_price",
+    "adv20",
+    "atrp",
+    "source",
+]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -149,6 +165,21 @@ _STATIC_FALLBACK_ROWS = [
 ]
 
 SCORED_STALE_MINUTES = 30
+
+
+def _write_static_three(path):
+    # three liquid tickers as a safety net
+    now = datetime.utcnow().isoformat()
+    rows = [
+      [now,"AAPL",0.0,"NASDAQ",190.00,0,0,"{}",190.00,0.0,0.0,"fallback:static"],
+      [now,"SPY", 0.0,"NYSEARCA",520.00,0,0,"{}",520.00,0.0,0.0,"fallback:static"],
+      [now,"QQQ", 0.0,"NASDAQ",460.00,0,0,"{}",460.00,0.0,0.0,"fallback:static"],
+    ]
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path,"w",newline="") as f:
+        w=csv.writer(f); w.writerow(CANONICAL); w.writerows(rows)
+    print("FALLBACK_CHECK rows_out=3 source=fallback:static")
 
 
 def _now_iso() -> str:
@@ -353,7 +384,7 @@ def _write_candidates(base_dir: Path, prepared: pd.DataFrame) -> None:
     data_dir = base_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     top_path = data_dir / "top_candidates.csv"
-    write_csv_atomic(str(top_path), prepared[list(prepared.columns)])
+    write_csv_atomic(str(top_path), prepared[list(CANONICAL_COLUMNS)])
 
 
 def build_latest_candidates(
@@ -575,16 +606,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - fallback - %(message)s")
 
+    base_dir = Path(args.base_dir)
+    scored_path = Path(SCORED_CANDIDATES)
+    latest_path = Path(LATEST_CANDIDATES)
+    top_path = latest_path.parent / "top_candidates.csv"
+    if not scored_path.exists() or scored_path.stat().st_size == 0:
+        _write_static_three(latest_path)
+        _write_static_three(top_path)
+
     exchanges = [exc.strip() for exc in str(args.exchanges).split(",") if exc.strip()]
     prepared, source = generate_candidates(
-        args.base_dir,
+        base_dir,
         max_rows=args.top_n,
         min_adv_usd=args.min_adv20_usd,
         min_price=args.min_price,
         max_price=args.max_price,
         exchanges=exchanges,
     )
-    _write_candidates(args.base_dir, prepared)
+    if prepared.empty:
+        _write_static_three(latest_path)
+        _write_static_three(top_path)
+        try:
+            prepared = pd.read_csv(latest_path)
+        except Exception:
+            prepared = pd.DataFrame(columns=CANONICAL)
+        source = "fallback:static"
+    _write_candidates(base_dir, prepared)
     LOGGER.info("FALLBACK produced rows=%d", len(prepared))
     LOGGER.info("FALLBACK source=%s", source)
     LOGGER.debug("FALLBACK payload=%s", json.dumps(prepared.to_dict(orient="records"), default=str))
