@@ -43,20 +43,7 @@ CANONICAL_COLUMNS: Sequence[str] = (
     "source",
 )
 
-CANONICAL = [
-    "timestamp",
-    "symbol",
-    "score",
-    "exchange",
-    "close",
-    "volume",
-    "universe_count",
-    "score_breakdown",
-    "entry_price",
-    "adv20",
-    "atrp",
-    "source",
-]
+CANONICAL = list(CANONICAL_COLUMNS)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -112,7 +99,7 @@ _DEFAULT_ROW = {
     "close": 0.0,
     "volume": 0,
     "universe_count": 0,
-    "score_breakdown": "fallback",
+    "score_breakdown": "{}",
     "entry_price": 0.0,
     "adv20": 0.0,
     "atrp": 0.0,
@@ -128,7 +115,7 @@ _STATIC_FALLBACK_ROWS = [
         "close": 190.0,
         "volume": 10_000_000,
         "universe_count": 0,
-        "score_breakdown": "fallback",
+        "score_breakdown": "{}",
         "entry_price": 190.0,
         "adv20": 60_000_000.0,
         "atrp": 0.02,
@@ -142,7 +129,7 @@ _STATIC_FALLBACK_ROWS = [
         "close": 430.0,
         "volume": 75_000_000,
         "universe_count": 0,
-        "score_breakdown": "fallback",
+        "score_breakdown": "{}",
         "entry_price": 430.0,
         "adv20": 90_000_000.0,
         "atrp": 0.015,
@@ -156,7 +143,7 @@ _STATIC_FALLBACK_ROWS = [
         "close": 360.0,
         "volume": 50_000_000,
         "universe_count": 0,
-        "score_breakdown": "fallback",
+        "score_breakdown": "{}",
         "entry_price": 360.0,
         "adv20": 45_000_000.0,
         "atrp": 0.018,
@@ -284,7 +271,10 @@ def _canonical_frame(df: Optional[pd.DataFrame], now_ts: Optional[str] = None) -
 
     score_breakdown = source_frame.get("score_breakdown", pd.Series(index=out.index, dtype="string"))
     out["score_breakdown"] = (
-        score_breakdown.astype("string").fillna("").str.strip().replace({"": "fallback"})
+        score_breakdown.astype("string")
+        .fillna("")
+        .str.strip()
+        .replace({"": "{}", "fallback": "{}"})
     )
 
     out["entry_price"] = out["entry_price"].where(out["entry_price"] > 0, out["close"])
@@ -359,7 +349,15 @@ def _guard_fallback_candidates(
     guarded["universe_count"] = pd.to_numeric(
         guarded.get("universe_count", 0), errors="coerce"
     ).fillna(0).astype(int)
-    guarded["score_breakdown"] = guarded.get("score_breakdown", "fallback")
+    if "score_breakdown" in guarded.columns:
+        sb_series = (
+            guarded["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
+        )
+        guarded["score_breakdown"] = sb_series
+    else:
+        guarded["score_breakdown"] = pd.Series(
+            ["{}"] * len(guarded.index), index=guarded.index, dtype="string"
+        )
     guarded["source"] = "fallback"
     guarded = guarded.drop_duplicates(subset=["symbol"], keep="first")
 
