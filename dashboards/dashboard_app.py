@@ -138,10 +138,22 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
     required_columns = required_columns or []
     prefix = f"{alert_prefix}: " if alert_prefix else ""
     if not os.path.exists(csv_path):
-        return None, dbc.Alert(f"{prefix}File {csv_path} does not exist.", color="danger")
-    df = pd.read_csv(csv_path)
+        return None, dbc.Alert(
+            f"{prefix}No data yet. Expected file {csv_path} was not found.",
+            color="info",
+        )
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as exc:
+        logger.warning("Failed to read %s: %s", csv_path, exc)
+        return None, dbc.Alert(
+            f"{prefix}Unable to read {csv_path}. See logs for details.",
+            color="danger",
+        )
     if df.empty:
-        return None, dbc.Alert(f"{prefix}No data available in {csv_path}.", color="warning")
+        return None, dbc.Alert(
+            f"{prefix}No data yet in {csv_path}.", color="info"
+        )
     missing_cols = [col for col in required_columns if col not in df.columns]
     if missing_cols:
         return None, dbc.Alert(

@@ -327,22 +327,13 @@ def _reload_dashboard(enabled: bool) -> None:
     path = DEFAULT_WSGI_PATH
     try:
         path.touch()
-        LOG.info("[INFO] DASH RELOAD method=touch local rc=0 path=%s", path)
+        LOG.info("[INFO] DASH RELOAD method=touch rc=0 path=%s", path)
     except Exception as exc:  # pragma: no cover - defensive guard
         LOG.warning(
             "[WARN] DASH RELOAD failed method=touch path=%s detail=%s",
             path,
             exc,
         )
-
-
-def _touch_wsgi(path: Path = DEFAULT_WSGI_PATH) -> None:
-    if shutil.which("pa_reload_webapp"):
-        return
-    try:
-        path.touch()
-    except Exception:  # pragma: no cover - best effort touch
-        logger.debug("WSGI touch failed", exc_info=True)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
@@ -397,7 +388,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             latest_source = "screener"
             latest_rows = 0
             if top_frame.empty:
-                LOG.info("[INFO] FALLBACK_CHECK start reason=no_candidates")
                 frame, fallback_source = build_latest_candidates(PROJECT_ROOT, max_rows=1)
                 write_csv_atomic(str(TOP_CANDIDATES), frame)
                 fallback_rows = int(len(frame.index))
@@ -534,7 +524,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             trading_status=trading_status,
             data_status=data_status,
         )
-        logger.info(
+        LOG.info(
             "[INFO] PIPELINE_SUMMARY symbols_in=%d with_bars=%d rows=%d fetch_secs=%.3f feature_secs=%.3f rank_secs=%.3f gate_secs=%.3f",
             summary.symbols_in,
             summary.with_bars,
@@ -554,7 +544,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         duration = time.time() - started
         logger.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
         _reload_dashboard(args.reload_web.lower() == "true")
-        _touch_wsgi()
         should_raise = LOG.name != "pipeline" or os.environ.get("JBR_PIPELINE_RAISE", "").lower() in {
             "1",
             "true",
