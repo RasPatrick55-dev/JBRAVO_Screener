@@ -11,6 +11,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Sequence
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -22,6 +23,12 @@ from utils.telemetry import emit_event
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 LOG = logging.getLogger("pipeline")
+logger = LOG
+
+
+def _refresh_logger() -> None:
+    global logger
+    logger = LOG
 LOG_PATH = PROJECT_ROOT / "logs" / "pipeline.log"
 SCREENER_METRICS_PATH = DATA_DIR / "screener_metrics.json"
 LATEST_CANDIDATES = DATA_DIR / "latest_candidates.csv"
@@ -206,6 +213,10 @@ def run_step(name: str, cmd: Sequence[str], *, timeout: Optional[float] = None) 
     return proc.returncode, elapsed
 
 
+def _run_step_metrics(cmd: Sequence[str], *, timeout: Optional[float] = None) -> tuple[int, float]:
+    return run_step("metrics", cmd, timeout=timeout)
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -325,7 +336,17 @@ def _reload_dashboard(enabled: bool) -> None:
         )
 
 
+def _touch_wsgi(path: Path = DEFAULT_WSGI_PATH) -> None:
+    if shutil.which("pa_reload_webapp"):
+        return
+    try:
+        path.touch()
+    except Exception:  # pragma: no cover - best effort touch
+        logger.debug("WSGI touch failed", exc_info=True)
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
+    _refresh_logger()
     loaded_files, missing_keys = load_env(REQUIRED_ENV_KEYS)
     configure_logging()
     files_repr = f"[{', '.join(loaded_files)}]" if loaded_files else "[]"
@@ -457,10 +478,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             cmd = [sys.executable, "-m", "scripts.metrics"]
             if extras["metrics"]:
                 cmd.extend(extras["metrics"])
-            rc_mt, secs = run_step("metrics", cmd, timeout=60 * 3)
+            rc_metrics = 0
+            secs = 0.0
+            try:
+                rc_metrics, secs = _run_step_metrics(cmd, timeout=60 * 3)
+            except FileNotFoundError:
+                logger.warning("No trades_log.csv; metrics will write zero summary and continue.")
+                rc_metrics, secs = 0, 0.0
+            except Exception as e:
+                logger.warning("METRICS non-fatal error: %s", e)
+                rc_metrics, secs = 0, 0.0
             stage_times["metrics"] = secs
-            if rc_mt:
-                LOG.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_mt)
+            if rc_metrics:
+                logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
         if "exec" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
@@ -483,28 +513,48 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         rank_secs = _extract_timing(metrics, "rank_secs")
         gate_secs = _extract_timing(metrics, "gate_secs")
         summary_rows = metrics_rows if metrics_rows is not None else rows
-        LOG.info(
-            "[INFO] PIPELINE_SUMMARY symbols_in=%s with_bars=%s rows=%s fetch_secs=%.3f feature_secs=%.3f",
-            symbols_in,
-            symbols_with_bars,
-            summary_rows,
-            fetch_secs,
-            feature_secs,
+        summary = SimpleNamespace(
+            symbols_in=symbols_in,
+            with_bars=symbols_with_bars,
+            rows=summary_rows,
         )
-        data_ok = bool((summary_rows or 0) > 0)
+        t = SimpleNamespace(
+            fetch=fetch_secs,
+            features=feature_secs,
+            rank=rank_secs,
+            gates=gate_secs,
+        )
+        data_ok = bool((summary.rows or 0) > 0)
         trading_ok = rc == 0
         trading_status = 200 if trading_ok else 503
         data_status = 200 if data_ok else 204
-        LOG.info(
+        health = SimpleNamespace(
+            trading_ok=trading_ok,
+            data_ok=data_ok,
+            trading_status=trading_status,
+            data_status=data_status,
+        )
+        logger.info(
+            "[INFO] PIPELINE_SUMMARY symbols_in=%d with_bars=%d rows=%d fetch_secs=%.3f feature_secs=%.3f rank_secs=%.3f gate_secs=%.3f",
+            summary.symbols_in,
+            summary.with_bars,
+            summary.rows,
+            t.fetch,
+            t.features,
+            t.rank,
+            t.gates,
+        )
+        logger.info(
             "[INFO] HEALTH trading_ok=%s data_ok=%s stage=end trading_status=%s data_status=%s",
-            trading_ok,
-            data_ok,
-            trading_status,
-            data_status,
+            health.trading_ok,
+            health.data_ok,
+            health.trading_status,
+            health.data_status,
         )
         duration = time.time() - started
-        LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
+        logger.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
         _reload_dashboard(args.reload_web.lower() == "true")
+        _touch_wsgi()
         should_raise = LOG.name != "pipeline" or os.environ.get("JBR_PIPELINE_RAISE", "").lower() in {
             "1",
             "true",
