@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 import os
 import pytz
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -63,6 +64,9 @@ pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json
 STALE_THRESHOLD_MINUTES = 1440  # 24 hours
 ERROR_RETENTION_DAYS = 1
 
+# Accept both "[INFO]" and " - INFO - " markers emitted by the pipeline logger
+LEVEL_TOKEN = re.compile(r"\[(INFO|ERROR)\]| - (INFO|ERROR) - ")
+
 # Displayed configuration values
 MAX_OPEN_TRADES = 10
 
@@ -86,13 +90,14 @@ def is_log_stale(log_path):
     if not os.path.exists(log_path):
         return True
     try:
-        with open(log_path) as file:
+        with open(log_path, encoding="utf-8") as file:
             lines = file.readlines()
         for line in reversed(lines):
-            if "[INFO]" in line or "[ERROR]" in line:
-                ts_str = line[:19]
-                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                return (datetime.utcnow() - ts).total_seconds() > (STALE_THRESHOLD_MINUTES * 60)
+            if not LEVEL_TOKEN.search(line):
+                continue
+            ts_str = line[:19]
+            ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+            return (datetime.utcnow() - ts).total_seconds() > (STALE_THRESHOLD_MINUTES * 60)
     except Exception:
         return True
     return True

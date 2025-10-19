@@ -582,6 +582,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Minimum 20-day average dollar volume threshold",
     )
     parser.add_argument(
+        "--min-order-usd",
+        type=float,
+        default=None,
+        help=(
+            "Optional compatibility flag; ignored because order sizing is handled "
+            "by scripts.execute_trades."
+        ),
+    )
+    parser.add_argument(
         "--min-price",
         type=float,
         default=2.0,
@@ -613,6 +622,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - fallback - %(message)s")
 
     base_dir = Path(args.base_dir)
+    if args.min_order_usd is not None:
+        LOGGER.info(
+            "fallback_candidates: ignoring --min-order-usd=%s (compat)",
+            args.min_order_usd,
+        )
     scored_path = Path(SCORED_CANDIDATES)
     latest_path = Path(LATEST_CANDIDATES)
     top_path = latest_path.parent / "top_candidates.csv"
