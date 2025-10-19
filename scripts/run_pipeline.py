@@ -30,7 +30,7 @@ _SUMMARY_RE = re.compile(
     r"PIPELINE_SUMMARY.*?symbols_in=(?P<symbols_in>\d+).*?"
     r"with_bars=(?P<symbols_with_bars>\d+).*?"
     r"rows=(?P<rows>\d+)"
-    r"(?:.*?bar[s]?_rows(?:_total)?=(?P<bars_rows_total>\d+))?"
+    r"(?:.*?(?:bars?_rows(?:_total)?)=(?P<bars_rows_total>\d+))?"
 )
 
 
