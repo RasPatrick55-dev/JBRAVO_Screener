@@ -654,6 +654,25 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
         duration = time.time() - started
         logger.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "scripts.update_account_equity",
+                    "--period",
+                    "1M",
+                    "--timeframe",
+                    "1D",
+                    "--extended-hours",
+                    "true",
+                ],
+                cwd=PROJECT_ROOT,
+                check=True,
+            )
+            LOG.info("ACCOUNT_EQUITY_REFRESH_OK")
+        except Exception:
+            LOG.warning("ACCOUNT_EQUITY_REFRESH_FAILED", exc_info=True)
         _reload_dashboard(args.reload_web.lower() == "true")
         should_raise = LOG.name != "pipeline" or os.environ.get("JBR_PIPELINE_RAISE", "").lower() in {
             "1",
