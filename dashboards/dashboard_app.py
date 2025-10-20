@@ -1885,79 +1885,123 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-account":
-        trades_df, trade_alert = load_csv(
-            trades_log_real_path,
-            ["symbol", "entry_price", "exit_price", "qty", "net_pnl"],
-            alert_prefix="Real trades",
-        )
-        equity_df, equity_alert = load_csv(
-            "data/account_equity.csv", ["date", "equity"]
-        )
+        paper_mode = _is_paper_mode()
+        components: list[Any] = []
+        alerts: list[Any] = []
 
-        alerts = []
-        if trade_alert:
-            alerts.append(trade_alert)
+        trades_df: pd.DataFrame | None = None
+        if not paper_mode:
+            trades_df, trade_alert = load_csv(
+                trades_log_real_path,
+                ["symbol", "entry_price", "exit_price", "qty", "net_pnl"],
+                alert_prefix="Real trades",
+            )
+            if trade_alert:
+                alerts.append(trade_alert)
+
+        equity_df, equity_alert = load_csv(
+            account_equity_path,
+            ["timestamp", "equity"],
+            alert_prefix="Account equity",
+        )
         if equity_alert:
             alerts.append(equity_alert)
+
         if alerts:
-            return dbc.Container(alerts, fluid=True)
+            components.extend(alerts)
 
-        trades_df["exit_time"] = pd.to_datetime(trades_df["exit_time"])
-        trades_df["pct_profit"] = (
-            trades_df["net_pnl"]
-            / (trades_df["entry_price"] * trades_df["qty"])
-        ) * 100
-        trades_df["pct_profit"].replace([np.inf, -np.inf], 0, inplace=True)
-        top_trades = trades_df[trades_df["net_pnl"] > 0].nlargest(10, "pct_profit")
+        if equity_df is not None:
+            if "timestamp" not in equity_df.columns and "date" in equity_df.columns:
+                equity_df["timestamp"] = equity_df["date"]
+            equity_df["timestamp"] = pd.to_datetime(
+                equity_df["timestamp"], utc=True, errors="coerce"
+            )
+            equity_df = equity_df.dropna(subset=["timestamp"])
+            equity_fig = px.line(
+                equity_df,
+                x="timestamp",
+                y="equity",
+                title="Account Equity Over Time",
+                template="plotly_dark",
+            )
+            last_updated = format_time(get_file_mtime(account_equity_path))
+            graphs: list[dbc.Col] = [dbc.Col(dcc.Graph(figure=equity_fig), md=6)]
+        else:
+            graphs = []
+            last_updated = None
 
-        equity_fig = px.line(
-            equity_df,
-            x="date",
-            y="equity",
-            title="Account Equity Over Time",
-            template="plotly_dark",
-        )
+        monthly_fig = None
+        top_trades_table = None
+        if not paper_mode and trades_df is not None and not trades_df.empty:
+            exit_times = None
+            if "exit_time" in trades_df.columns:
+                exit_times = pd.to_datetime(trades_df["exit_time"], errors="coerce")
+                trades_df = trades_df.assign(exit_time=exit_times)
+            trades_df["pct_profit"] = (
+                trades_df["net_pnl"]
+                / (trades_df["entry_price"] * trades_df["qty"])
+            ) * 100
+            trades_df["pct_profit"].replace([np.inf, -np.inf], 0, inplace=True)
+            top_trades = trades_df[trades_df["net_pnl"] > 0].nlargest(
+                10, "pct_profit"
+            )
 
-        monthly_pnl = (
-            trades_df.groupby(
-                pd.to_datetime(trades_df["exit_time"]).dt.strftime("%Y-%m")
-            )["net_pnl"]
-            .sum()
-            .reset_index()
-        )
-        monthly_fig = px.bar(
-            monthly_pnl,
-            x="exit_time",
-            y="net_pnl",
-            title="Monthly Profit/Loss",
-            template="plotly_dark",
-        )
+            if exit_times is not None:
+                monthly_series = trades_df.dropna(subset=["exit_time"]).copy()
+                if not monthly_series.empty:
+                    monthly_series["month"] = (
+                        monthly_series["exit_time"].dt.to_period("M").astype(str)
+                    )
+                    monthly_pnl = (
+                        monthly_series.groupby("month")["net_pnl"].sum().reset_index()
+                    )
+                    if not monthly_pnl.empty:
+                        monthly_fig = px.bar(
+                            monthly_pnl,
+                            x="month",
+                            y="net_pnl",
+                            title="Monthly Profit/Loss",
+                            template="plotly_dark",
+                        )
 
-        top_trades_table = dash_table.DataTable(
-            data=top_trades.to_dict("records"),
-            columns=[
-                {"name": i.title(), "id": i}
-                for i in ["symbol", "entry_price", "exit_price", "pct_profit", "net_pnl"]
-            ],
-            style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-            style_data_conditional=[
-                {"if": {"filter_query": "{net_pnl} > 0"}, "color": "green"},
-                {"if": {"filter_query": "{net_pnl} < 0"}, "color": "red"},
-            ],
-        )
+            top_trades_table = dash_table.DataTable(
+                data=top_trades.to_dict("records"),
+                columns=[
+                    {"name": i.title(), "id": i}
+                    for i in [
+                        "symbol",
+                        "entry_price",
+                        "exit_price",
+                        "pct_profit",
+                        "net_pnl",
+                    ]
+                ],
+                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+                style_data_conditional=[
+                    {"if": {"filter_query": "{net_pnl} > 0"}, "color": "green"},
+                    {"if": {"filter_query": "{net_pnl} < 0"}, "color": "red"},
+                ],
+            )
 
-        last_updated = format_time(get_file_mtime("data/account_equity.csv"))
-        return dbc.Container(
-            [
-                html.Div(f"Last Updated: {last_updated}"),
-                dbc.Row([
-                    dbc.Col(dcc.Graph(figure=equity_fig), md=6),
-                    dbc.Col(dcc.Graph(figure=monthly_fig), md=6),
-                ]),
-                dbc.Row([dbc.Col(top_trades_table, width=12)]),
-            ],
-            fluid=True,
-        )
+        if last_updated:
+            components.append(html.Div(f"Last Updated: {last_updated}"))
+        if graphs:
+            if monthly_fig is not None:
+                graphs.append(dbc.Col(dcc.Graph(figure=monthly_fig), md=6))
+            components.append(dbc.Row(graphs))
+
+        if paper_mode:
+            components.append(
+                dbc.Alert(
+                    "Paper mode: real-trades feed is intentionally disabled.",
+                    color="info",
+                    className="mb-3",
+                )
+            )
+        elif top_trades_table is not None:
+            components.append(dbc.Row([dbc.Col(top_trades_table, width=12)]))
+
+        return dbc.Container(components, fluid=True)
 
     elif tab == "tab-monitor":
         # Load open positions
