@@ -19,6 +19,7 @@ import pytz
 import re
 from pathlib import Path
 from typing import Any, Optional
+from flask import jsonify
 
 os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 
@@ -64,8 +65,8 @@ pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json
 STALE_THRESHOLD_MINUTES = 1440  # 24 hours
 ERROR_RETENTION_DAYS = 1
 
-# Accept both "[INFO]" and " - INFO - " markers emitted by the pipeline logger
-LEVEL_TOKEN = re.compile(r"\[(INFO|ERROR)\]| - (INFO|ERROR) - ")
+LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+LEVEL_HINTS = ("[INFO]", "[ERROR]", " - INFO - ", " - ERROR - ")
 
 # Displayed configuration values
 MAX_OPEN_TRADES = 10
@@ -85,22 +86,34 @@ def tail_log(log_path: str, limit: int = 10) -> list[str]:
     return trimmed[-limit:]
 
 
-def is_log_stale(log_path):
-    """Return True if the most recent INFO/ERROR entry in ``log_path`` is older than 24 hours."""
-    if not os.path.exists(log_path):
-        return True
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def is_log_stale(path, max_age_hours: int = 24) -> bool:
+    """Return True if the most recent INFO/ERROR entry is older than ``max_age_hours``."""
+
     try:
-        with open(log_path, encoding="utf-8") as file:
-            lines = file.readlines()
-        for line in reversed(lines):
-            if not LEVEL_TOKEN.search(line):
-                continue
-            ts_str = line[:19]
-            ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-            return (datetime.utcnow() - ts).total_seconds() > (STALE_THRESHOLD_MINUTES * 60)
+        log_path = Path(path)
+    except TypeError:
+        return True
+
+    try:
+        last_ts = None
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if any(hint in line for hint in LEVEL_HINTS):
+                    match = LOG_TS_RE.match(line)
+                    if match:
+                        last_ts = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+        if not last_ts:
+            mtime = datetime.utcfromtimestamp(os.path.getmtime(log_path))
+            return (_utcnow() - mtime).total_seconds() > max_age_hours * 3600
+        return (_utcnow() - last_ts).total_seconds() > max_age_hours * 3600
+    except FileNotFoundError:
+        return True
     except Exception:
         return True
-    return True
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 API_KEY = os.getenv("APCA_API_KEY_ID")
@@ -579,6 +592,41 @@ app = Dash(
         "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates@V2.1.0/dbc.min.css",
     ],
 )
+
+server = app.server
+
+
+@server.route("/health/overview")
+def health_overview():
+    """Return a lightweight JSON payload describing dashboard health."""
+
+    base = Path(BASE_DIR) / "data"
+    ms_path = base / "metrics_summary.csv"
+    tl_path = base / "trades_log.csv"
+    summary: dict[str, Any] = {
+        "metrics_summary_present": ms_path.exists(),
+        "trades_log_present": tl_path.exists(),
+        "trades_log_rows": None,
+        "kpis": {},
+    }
+
+    try:
+        if summary["metrics_summary_present"]:
+            df = pd.read_csv(ms_path)
+            if not df.empty:
+                summary["kpis"] = df.iloc[-1].to_dict()
+    except Exception as exc:  # pragma: no cover - telemetry helper
+        summary["kpis_error"] = str(exc)
+
+    try:
+        if summary["trades_log_present"]:
+            with open(tl_path, "r", encoding="utf-8", errors="ignore") as handle:
+                row_count = sum(1 for _ in handle)
+            summary["trades_log_rows"] = max(0, row_count - 1)
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, **summary})
 
 # Layout with Tabs and Modals
 app.layout = dbc.Container(
