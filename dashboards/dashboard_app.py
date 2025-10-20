@@ -72,6 +72,25 @@ LEVEL_HINTS = ("[INFO]", "[ERROR]", " - INFO - ", " - ERROR - ")
 MAX_OPEN_TRADES = 10
 
 
+def _normalize_pnl(df: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Return ``df`` with common P&L columns normalized to ``net_pnl``."""
+
+    if df is None:
+        return None
+    for candidate in ("net_pnl", "pnl", "netPnL", "net_pnl_usd"):
+        if candidate in df.columns:
+            if candidate != "net_pnl":
+                df = df.rename(columns={candidate: "net_pnl"})
+            break
+    return df
+
+
+def _is_paper_mode() -> bool:
+    """Return True when the Alpaca base URL indicates paper trading."""
+
+    return "paper-api" in (os.getenv("APCA_API_BASE_URL", "") or "").lower()
+
+
 def tail_log(log_path: str, limit: int = 10) -> list[str]:
     """Return up to ``limit`` most recent non-empty lines from ``log_path``."""
 
@@ -216,7 +235,8 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
             f"{prefix}Unable to read {csv_path}. See logs for details.",
             color="danger",
         )
-    if df.empty:
+    df = _normalize_pnl(df)
+    if df is None or df.empty:
         return None, dbc.Alert(
             f"{prefix}No data yet in {csv_path}.", color="info"
         )
@@ -743,10 +763,11 @@ register_screener_health(app)
 def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     app.logger.info("Rendering tab %s", tab)
     if tab == "tab-overview":
-        overview_sources = [
-            ("Real trades", trades_log_real_path),
-            ("Executed trades", executed_trades_path),
-        ]
+        overview_sources: list[tuple[str, str]] = []
+        if not _is_paper_mode():
+            overview_sources.append(("Real trades", trades_log_real_path))
+        overview_sources.append(("Trades log", trades_log_path))
+        overview_sources.append(("Executed trades", executed_trades_path))
         alerts = []
         trades_df = None
         source_label = ""
@@ -1560,7 +1581,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         executed_exists = os.path.exists(executed_trades_path)
 
         if trades_df is not None:
-            trades_df.sort_values("entry_time", ascending=False, inplace=True)
+            sort_column = "entry_time" if "entry_time" in trades_df.columns else None
+            if sort_column:
+                trades_df.sort_values(sort_column, ascending=False, inplace=True)
             table = dash_table.DataTable(
                 id="executed-trades-table",
                 columns=[
@@ -1571,16 +1594,20 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 page_size=15,
                 style_table={"overflowX": "auto"},
                 style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-                style_data_conditional=[
-                    {
-                        "if": {"filter_query": "{net_pnl} < 0", "column_id": "net_pnl"},
-                        "color": "#E57373",
-                    },
-                    {
-                        "if": {"filter_query": "{net_pnl} > 0", "column_id": "net_pnl"},
-                        "color": "#4DB6AC",
-                    },
-                ],
+                style_data_conditional=(
+                    [
+                        {
+                            "if": {"filter_query": "{net_pnl} < 0", "column_id": "net_pnl"},
+                            "color": "#E57373",
+                        },
+                        {
+                            "if": {"filter_query": "{net_pnl} > 0", "column_id": "net_pnl"},
+                            "color": "#4DB6AC",
+                        },
+                    ]
+                    if "net_pnl" in trades_df.columns
+                    else []
+                ),
             )
         else:
             hint = dbc.Alert(
