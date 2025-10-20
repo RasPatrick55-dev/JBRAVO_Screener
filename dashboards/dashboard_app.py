@@ -91,6 +91,11 @@ def _is_paper_mode() -> bool:
     return "paper-api" in (os.getenv("APCA_API_BASE_URL", "") or "").lower()
 
 
+TRADES_LOG_REAL = Path(trades_log_real_path)
+TRADES_LOG_PAPER = Path(trades_log_path)
+TRADES_LOG_FOR_SYMBOLS = TRADES_LOG_PAPER if _is_paper_mode() else TRADES_LOG_REAL
+
+
 def tail_log(log_path: str, limit: int = 10) -> list[str]:
     """Return up to ``limit`` most recent non-empty lines from ``log_path``."""
 
@@ -247,6 +252,19 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
             color="danger",
         )
     return df, None
+
+
+def load_symbol_perf_df() -> pd.DataFrame | dbc.Alert:
+    """Return the trades dataframe (or alert) for the Symbol Performance tab."""
+
+    df, alert = load_csv(
+        str(TRADES_LOG_FOR_SYMBOLS),
+        ["symbol"],
+        alert_prefix="Symbol Performance",
+    )
+    if alert:
+        return alert
+    return df
 
 
 def _resolve_trades_dataframe() -> tuple[pd.DataFrame | None, str, str, list[Any]]:
@@ -1820,21 +1838,60 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
 
     elif tab == "tab-symbol-performance":
-        trades_df, alert = load_csv(
-            trades_log_real_path,
-            ["symbol", "net_pnl"],
-            alert_prefix="Real trades",
-        )
-        freshness = data_freshness_alert(trades_log_real_path, "Trade log")
-        if alert:
-            return alert
+        paper_mode = _is_paper_mode()
+        symbol_source_path = TRADES_LOG_FOR_SYMBOLS
+        data_or_alert = load_symbol_perf_df()
+        if isinstance(data_or_alert, dbc.Alert):
+            # Friendly message for paper mode with no trades yet.
+            alert_color = None
+            if hasattr(data_or_alert, "props"):
+                alert_color = getattr(data_or_alert, "props", {}).get("color")
+            if alert_color is None and hasattr(data_or_alert, "kwargs"):
+                alert_color = getattr(data_or_alert, "kwargs", {}).get("color")
+            if (
+                paper_mode
+                and symbol_source_path == TRADES_LOG_PAPER
+                and (alert_color in {None, "info"})
+            ):
+                return dbc.Alert(
+                    "Paper mode: no paper trades yet. Run the pre-market executor to populate data/trades_log.csv.",
+                    color="info",
+                    className="m-2",
+                )
+            return data_or_alert
+
+        trades_df = data_or_alert
         if trades_df is None or trades_df.empty:
+            if paper_mode and symbol_source_path == TRADES_LOG_PAPER:
+                return dbc.Alert(
+                    "Paper mode: no paper trades yet. Run the pre-market executor to populate data/trades_log.csv.",
+                    color="info",
+                    className="m-2",
+                )
             return dbc.Alert(
-                "No trade data available in trades_log_real.csv.",
+                f"No trade data available in {symbol_source_path.name}.",
                 color="warning",
                 className="m-2",
             )
-        app.logger.info("Loaded %d trades for symbol performance", len(trades_df))
+
+        if "net_pnl" not in trades_df.columns:
+            for candidate in ("pnl", "profit", "netPnL", "net_pnl_usd"):
+                if candidate in trades_df.columns:
+                    trades_df = trades_df.copy()
+                    trades_df["net_pnl"] = trades_df[candidate]
+                    break
+        if "net_pnl" not in trades_df.columns:
+            return dbc.Alert(
+                "Trades log is missing a P&L column (pnl/net_pnl).",
+                color="warning",
+                className="m-2",
+            )
+
+        app.logger.info(
+            "Loaded %d trades for symbol performance from %s",
+            len(trades_df),
+            symbol_source_path,
+        )
 
         grouped = trades_df.groupby("symbol")["net_pnl"]
         avg_pnl = grouped.mean()
@@ -1873,11 +1930,12 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 },
             ],
         )
-        last_updated = format_time(get_file_mtime(trades_log_real_path))
+        last_updated = format_time(get_file_mtime(str(symbol_source_path)))
         timestamp = html.Div(
             f"Last Updated: {last_updated}",
             className="text-muted mb-2",
         )
+        freshness = data_freshness_alert(str(symbol_source_path), "Trades log")
         components = [timestamp]
         if freshness:
             components.append(freshness)
