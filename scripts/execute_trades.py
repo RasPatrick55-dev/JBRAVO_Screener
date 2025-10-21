@@ -1470,11 +1470,15 @@ class TradeExecutor:
         except Exception:
             bp_display = str(bp_raw)
         if account_buying_power <= 0 or bp_raw in (None, "", 0, "0"):
-            LOGGER.error("[ERROR] NO_BUYING_POWER buying_power=%s", bp_display)
-            self.metrics.api_failures += 1
+            LOGGER.info("EXECUTE_SKIP reason=CASH buying_power=%s", bp_display)
+            self.record_skip_reason(
+                "CASH",
+                detail=f"buying_power={bp_display}",
+                count=max(1, len(candidates)),
+            )
             self.persist_metrics()
             self.log_summary()
-            return 2
+            return 0
 
         slots = max(1, min(self.config.max_positions, len(candidates)))
         try:
@@ -1862,6 +1866,7 @@ class TradeExecutor:
         skips = {key.upper(): int(value) for key, value in self.metrics.skipped_reasons.items()}
         payload: Dict[str, Any] = {
             "orders_submitted": self.metrics.orders_submitted,
+            "orders_filled": self.metrics.orders_filled,
             "trailing_attached": self.metrics.trailing_attached,
         }
         for key in SKIP_REASON_ORDER:
@@ -1870,6 +1875,13 @@ class TradeExecutor:
         for key in extra_keys:
             payload[f"skips.{key}"] = int(skips.get(key, 0))
         log_info("EXECUTE_SUMMARY", **payload)
+        summary_skips = {key: int(value) for key, value in sorted(skips.items())}
+        LOGGER.info(
+            "EXECUTE_SUMMARY orders_submitted=%s orders_filled=%s skips=%s",
+            self.metrics.orders_submitted,
+            self.metrics.orders_filled,
+            summary_skips,
+        )
 
     def persist_metrics(self) -> None:
         payload = self.metrics.as_dict()
@@ -2233,6 +2245,10 @@ def run_executor(
         metrics.skips["TIME_WINDOW"] += len(candidates_df)
         metrics.flush()
         loader.persist_metrics()
+        LOGGER.info(
+            "EXECUTE_SKIP reason=TIME_WINDOW count=%s",
+            len(candidates_df),
+        )
         loader.log_summary()
         return 0
 
@@ -2241,6 +2257,8 @@ def run_executor(
     if candidates_df.empty:
         loader.metrics.record_skip("NO_CANDIDATES", count=1)
         loader.persist_metrics()
+        LOGGER.info("EXECUTE_SKIP reason=NO_CANDIDATES")
+        loader.log_summary()
         return 0
 
     records = loader.hydrate_candidates(candidates_df)
