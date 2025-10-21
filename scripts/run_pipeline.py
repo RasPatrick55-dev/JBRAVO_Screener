@@ -30,6 +30,7 @@ _SPLIT_FLAG_MAP = {
     "--screener-args-split": "screener_args_split",
     "--backtest-args-split": "backtest_args_split",
     "--metrics-args-split": "metrics_args_split",
+    "--exec-args-split": "exec_args_split",
 }
 
 _SUMMARY_RE = re.compile(
@@ -226,6 +227,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Extra CLI arguments forwarded to scripts.execute_trades",
     )
     parser.add_argument(
+        "--exec-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.execute_trades provided as separate tokens",
+    )
+    parser.add_argument(
         "--backtest-args",
         default=os.getenv("JBR_BACKTEST_ARGS", ""),
         help="Extra CLI arguments forwarded to scripts.backtest",
@@ -261,7 +268,13 @@ def determine_steps(raw: Optional[str]) -> list[str]:
     default = "screener,backtest,metrics"
     target = raw or os.environ.get("PIPE_STEPS", default)
     steps = [part.strip().lower() for part in target.split(",") if part.strip()]
-    return steps or default.split(",")
+    normalized: list[str] = []
+    for step in steps or default.split(","):
+        if step == "exec":
+            normalized.append("execute")
+        else:
+            normalized.append(step)
+    return normalized
 
 
 def run_step(name: str, cmd: Sequence[str], *, timeout: Optional[float] = None) -> tuple[int, float]:
@@ -508,6 +521,31 @@ def _reload_dashboard(enabled: bool) -> None:
         )
 
 
+def _split_or_string(exec_args: str, split_list: Optional[Sequence[str]]) -> list[str]:
+    if split_list is not None and len(split_list) > 0:
+        return [token for token in split_list if token != "--"]
+    return _split_args(exec_args)
+
+
+def sync_execute_metrics(base_dir: Path) -> dict[str, Any]:
+    base = Path(base_dir)
+    metrics_path = base / "data" / "execute_metrics.json"
+    payload = _read_json(metrics_path)
+    if not payload:
+        logger.info("EXECUTE_METRICS_SYNC empty path=%s", metrics_path)
+        return {}
+    submitted = payload.get("orders_submitted")
+    filled = payload.get("orders_filled")
+    skips = payload.get("skips") if isinstance(payload.get("skips"), Mapping) else {}
+    logger.info(
+        "EXECUTE_METRICS_SYNC orders_submitted=%s orders_filled=%s skips=%s",
+        submitted,
+        filled,
+        skips,
+    )
+    return payload
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
     _refresh_logger()
     loaded_files, missing_keys = load_env(REQUIRED_ENV_KEYS)
@@ -526,14 +564,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     extras = {
         "screener": _merge_split_args(args.screener_args, args.screener_args_split),
-        "exec": _split_args(args.exec_args),
+        "execute": _split_or_string(args.exec_args, args.exec_args_split),
         "backtest": _merge_split_args(args.backtest_args, args.backtest_args_split),
         "metrics": _merge_split_args(args.metrics_args, args.metrics_args_split),
     }
 
     LOG.info(
-        "[INFO] PIPELINE_ARGS screener=%s backtest=%s metrics=%s",
+        "[INFO] PIPELINE_ARGS screener=%s execute=%s backtest=%s metrics=%s",
         extras["screener"],
+        extras["execute"],
         extras["backtest"],
         extras["metrics"],
     )
@@ -663,19 +702,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             stage_times["metrics"] = secs
             if rc_metrics:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
-        if "exec" in steps:
+        if "execute" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
             cmd = [sys.executable, "-m", "scripts.execute_trades"]
-            exec_args = extras["exec"]
+            exec_args = extras["execute"]
             if not any(arg.startswith("--time-window") for arg in exec_args):
                 cmd.extend(["--time-window", "auto"])
             if exec_args:
                 cmd.extend(exec_args)
-            rc_exec, secs = run_step("exec", cmd, timeout=60 * 10)
-            stage_times["exec"] = secs
+            rc_exec, secs = run_step("execute", cmd, timeout=60 * 10)
+            stage_times["execute"] = secs
             if rc_exec and not rc:
                 rc = rc_exec
+            if rc_exec == 0:
+                try:
+                    sync_execute_metrics(base_dir)
+                except Exception:
+                    logger.exception("EXEC_METRICS_SYNC failed (non-fatal)")
+            else:
+                logger.error("Execute step failed rc=%s", rc_exec)
     except Exception as exc:  # pragma: no cover - defensive guard
         LOG.exception("PIPELINE_FATAL: %s", exc)
         rc = 1
