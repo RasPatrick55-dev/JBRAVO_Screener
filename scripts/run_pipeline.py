@@ -26,6 +26,12 @@ DATA_DIR = PROJECT_ROOT / "data"
 LOG = logging.getLogger("pipeline")
 logger = LOG
 
+_SPLIT_FLAG_MAP = {
+    "--screener-args-split": "screener_args_split",
+    "--backtest-args-split": "backtest_args_split",
+    "--metrics-args-split": "metrics_args_split",
+}
+
 _SUMMARY_RE = re.compile(
     r"PIPELINE_SUMMARY.*?symbols_in=(?P<symbols_in>\d+).*?"
     r"with_bars=(?P<symbols_with_bars>\d+).*?"
@@ -146,10 +152,48 @@ def _split_args(raw: str) -> list[str]:
         return []
 
 
-def _coalesce_args(raw: str, split: Optional[Sequence[str]]) -> list[str]:
-    if split is not None:
-        return list(split)
-    return _split_args(raw)
+def _merge_split_args(raw: str, split: Optional[Sequence[str]]) -> list[str]:
+    merged: list[str] = []
+    if raw:
+        merged.extend(_split_args(raw))
+    if split:
+        merged.extend(token for token in split if token != "--")
+    return merged
+
+
+def _extract_split_tokens(
+    argv: list[str], option_strings: set[str]
+) -> tuple[list[str], dict[str, list[str]]]:
+    filtered: list[str] = []
+    collected: dict[str, list[str]] = {
+        dest: [] for dest in _SPLIT_FLAG_MAP.values()
+    }
+    current_flag: Optional[str] = None
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if current_flag:
+            if token == "--":
+                current_flag = None
+                index += 1
+                continue
+            if token in _SPLIT_FLAG_MAP:
+                current_flag = token
+                index += 1
+                continue
+            if token.startswith("--") and token in option_strings:
+                current_flag = None
+                continue
+            collected[_SPLIT_FLAG_MAP[current_flag]].append(token)
+            index += 1
+            continue
+        if token in _SPLIT_FLAG_MAP:
+            current_flag = token
+            index += 1
+            continue
+        filtered.append(token)
+        index += 1
+    return filtered, collected
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -203,7 +247,14 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default=None,
         help="Extra CLI arguments for scripts.metrics provided as separate tokens",
     )
-    return parser.parse_args(list(argv) if argv is not None else None)
+    raw_args = list(argv) if argv is not None else sys.argv[1:]
+    option_strings = set(parser._option_string_actions.keys())
+    filtered_args, collected = _extract_split_tokens(raw_args, option_strings)
+    namespace = parser.parse_args(filtered_args)
+    for dest in _SPLIT_FLAG_MAP.values():
+        tokens = collected.get(dest)
+        setattr(namespace, dest, tokens if tokens else None)
+    return namespace
 
 
 def determine_steps(raw: Optional[str]) -> list[str]:
@@ -474,11 +525,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     base_dir = _resolve_base_dir()
 
     extras = {
-        "screener": _coalesce_args(args.screener_args, args.screener_args_split),
+        "screener": _merge_split_args(args.screener_args, args.screener_args_split),
         "exec": _split_args(args.exec_args),
-        "backtest": _coalesce_args(args.backtest_args, args.backtest_args_split),
-        "metrics": _coalesce_args(args.metrics_args, args.metrics_args_split),
+        "backtest": _merge_split_args(args.backtest_args, args.backtest_args_split),
+        "metrics": _merge_split_args(args.metrics_args, args.metrics_args_split),
     }
+
+    LOG.info(
+        "[INFO] PIPELINE_ARGS screener=%s backtest=%s metrics=%s",
+        extras["screener"],
+        extras["backtest"],
+        extras["metrics"],
+    )
 
     started = time.time()
     metrics: dict[str, Any] = {}
