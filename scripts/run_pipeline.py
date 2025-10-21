@@ -146,6 +146,12 @@ def _split_args(raw: str) -> list[str]:
         return []
 
 
+def _coalesce_args(raw: str, split: Optional[Sequence[str]]) -> list[str]:
+    if split is not None:
+        return list(split)
+    return _split_args(raw)
+
+
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the JBRAVO daily pipeline")
     parser.add_argument(
@@ -165,6 +171,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Extra CLI arguments forwarded to scripts.screener",
     )
     parser.add_argument(
+        "--screener-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.screener provided as separate tokens",
+    )
+    parser.add_argument(
         "--exec-args",
         default=os.getenv("JBR_EXEC_ARGS", ""),
         help="Extra CLI arguments forwarded to scripts.execute_trades",
@@ -175,9 +187,21 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Extra CLI arguments forwarded to scripts.backtest",
     )
     parser.add_argument(
+        "--backtest-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.backtest provided as separate tokens",
+    )
+    parser.add_argument(
         "--metrics-args",
         default=os.getenv("JBR_METRICS_ARGS", ""),
         help="Extra CLI arguments forwarded to scripts.metrics",
+    )
+    parser.add_argument(
+        "--metrics-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.metrics provided as separate tokens",
     )
     return parser.parse_args(list(argv) if argv is not None else None)
 
@@ -450,10 +474,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     base_dir = _resolve_base_dir()
 
     extras = {
-        "screener": _split_args(args.screener_args),
+        "screener": _coalesce_args(args.screener_args, args.screener_args_split),
         "exec": _split_args(args.exec_args),
-        "backtest": _split_args(args.backtest_args),
-        "metrics": _split_args(args.metrics_args),
+        "backtest": _coalesce_args(args.backtest_args, args.backtest_args_split),
+        "metrics": _coalesce_args(args.metrics_args, args.metrics_args_split),
     }
 
     started = time.time()
