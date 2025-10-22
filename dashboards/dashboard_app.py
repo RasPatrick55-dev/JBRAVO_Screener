@@ -41,6 +41,9 @@ screener_metrics_path = os.path.join(BASE_DIR, "data", "screener_metrics.json")
 predictions_dir_path = os.path.join(BASE_DIR, "data", "predictions")
 latest_candidates_path = os.path.join(BASE_DIR, "data", "latest_candidates.csv")
 
+TOP_CANDIDATES = Path(top_candidates_path)
+LATEST_CANDIDATES = Path(latest_candidates_path)
+
 # Additional datasets introduced for monitoring
 metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
 executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
@@ -252,6 +255,45 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
             color="danger",
         )
     return df, None
+
+
+def load_top_or_latest_candidates(required_columns: Optional[set[str] | list[str]] = None):
+    """Prefer latest_candidates.csv, fallback to top_candidates.csv if needed."""
+
+    if required_columns is None:
+        req = {"symbol", "score"}
+    else:
+        req = set(required_columns)
+    req_list = sorted(req)
+
+    latest_df: pd.DataFrame | None = None
+    latest_alert = None
+    if LATEST_CANDIDATES.exists():
+        latest_df, latest_alert = load_csv(
+            str(LATEST_CANDIDATES),
+            required_columns=req_list,
+            alert_prefix="Candidates (latest)",
+        )
+        if latest_alert is None and latest_df is not None and not latest_df.empty:
+            work = latest_df.copy()
+            work["__source"] = "latest_candidates.csv"
+            return work, None
+
+    top_df, top_alert = load_csv(
+        str(TOP_CANDIDATES),
+        required_columns=req_list,
+        alert_prefix="Top candidates",
+    )
+    if top_alert is None and top_df is not None and not top_df.empty:
+        work = top_df.copy()
+        work["__source"] = "top_candidates.csv"
+        return work, None
+
+    if top_alert:
+        return None, top_alert
+    if latest_alert:
+        return None, latest_alert
+    return top_df, None
 
 
 def load_symbol_perf_df() -> pd.DataFrame | dbc.Alert:
@@ -1051,7 +1093,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     color="danger",
                 )
 
-        df, alert = load_csv(top_candidates_path)
+        df, alert = load_top_or_latest_candidates()
         fallback_count = 0
         if df is not None and not df.empty:
             source_column = None
@@ -2212,13 +2254,22 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
 # Periodically refresh screener table
 @app.callback(Output("screener-table", "data"), Input("interval-update", "n_intervals"))
 def update_screener_table(n):
-    df, alert = load_csv(top_candidates_path)
+    df, alert = load_top_or_latest_candidates()
     if alert:
         return []
-    logger.info(
-        "Screener table updated successfully with %d records.", len(df)
+    if df is None or df.empty:
+        logger.info("Screener table update skipped; no rows available.")
+        return []
+    source_note = (
+        df["__source"].iloc[0] if "__source" in df.columns else "unknown"
     )
-    return df.to_dict("records") if df is not None and not df.empty else []
+    payload = df.drop(columns=["__source"], errors="ignore")
+    logger.info(
+        "Screener table updated successfully with %d records (source=%s).",
+        len(payload),
+        source_note,
+    )
+    return payload.to_dict("records")
 
 
 # Periodically refresh metrics log display
