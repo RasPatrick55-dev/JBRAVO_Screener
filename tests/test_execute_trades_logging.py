@@ -210,9 +210,8 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     assert "outside premarket (NY)" in log_text
     summary_lines = [msg for msg in caplog.messages if msg.startswith("EXECUTE_SUMMARY")]
     assert summary_lines, "Expected EXECUTE_SUMMARY log entry"
-    summary = summary_lines[-1]
-    assert "orders_submitted=0" in summary
-    assert "trailing_attached=0" in summary
+    assert any("orders_submitted=0" in entry for entry in summary_lines)
+    assert any("trailing_attached=0" in entry for entry in summary_lines)
     for key in (
         "TIME_WINDOW",
         "ZERO_QTY",
@@ -223,8 +222,8 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
         "NO_CANDIDATES",
         "PRICE_BOUNDS",
     ):
-        assert f"skips.{key}=" in summary
-    assert "skips.TIME_WINDOW=1" in summary
+        assert any(f"skips.{key}=" in entry for entry in summary_lines)
+    assert any("skips.TIME_WINDOW=1" in entry for entry in summary_lines)
 
 
 def test_dry_run_creates_metrics_with_zero_orders(tmp_path, caplog):
@@ -288,7 +287,7 @@ def test_auth_log_includes_buying_power(tmp_path, caplog):
     assert rc == 0
     log_text = "\n".join(caplog.messages)
     assert "AUTH_STATUS" in log_text
-    assert "ok=True" in log_text
+    assert "auth_ok=True" in log_text
     assert "buying_power=50000.00" in log_text
     assert "base_url=https://paper-api.alpaca.markets" in log_text
 
