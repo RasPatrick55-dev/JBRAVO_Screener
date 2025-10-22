@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import logging
 import os
@@ -67,6 +68,40 @@ def _resolve_base_dir(base_dir: Path | None = None) -> Path:
     if cwd != PROJECT_ROOT and (cwd / "data").exists():
         return cwd
     return BASE_DIR
+
+
+def _count_csv_rows(path: Path) -> int:
+    try:
+        with path.open(newline="") as handle:
+            reader = csv.reader(handle)
+            try:
+                next(reader)
+            except StopIteration:
+                return 0
+            return sum(1 for _ in reader)
+    except FileNotFoundError:
+        return 0
+    except Exception:
+        logger.exception("LATEST_SYNC_COUNT_ERROR path=%s", path)
+        return 0
+
+
+def _sync_top_candidates_to_latest(base_dir: Path | None = None) -> None:
+    base = _resolve_base_dir(base_dir)
+    data_dir = base / "data"
+    top = data_dir / "top_candidates.csv"
+    latest = data_dir / "latest_candidates.csv"
+    try:
+        rows_top = _count_csv_rows(top)
+        if rows_top > 0:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(top, latest)
+            logger.info("LATEST_SYNC source=top_candidates rows=%s", rows_top)
+        else:
+            rows_latest = _count_csv_rows(latest)
+            logger.info("LATEST_SYNC source=fallback_or_screener rows=%s", rows_latest)
+    except Exception:
+        logger.exception("LATEST_SYNC_ERROR path_top=%s path_latest=%s", top, latest)
 
 
 def refresh_latest_candidates(base_dir: Path | None = None) -> pd.DataFrame:
@@ -650,6 +685,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 latest_rows,
                 latest_source,
             )
+            _sync_top_candidates_to_latest(base_dir)
         else:
             LOG.info("[INFO] FALLBACK_CHECK start origin=latest")
             metrics = _read_json(SCREENER_METRICS_PATH)
@@ -702,6 +738,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             stage_times["metrics"] = secs
             if rc_metrics:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
+            _sync_top_candidates_to_latest(base_dir)
         if "execute" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
