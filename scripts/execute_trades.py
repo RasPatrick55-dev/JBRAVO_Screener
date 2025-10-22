@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -245,8 +246,47 @@ def _load_execute_metrics() -> Optional[Dict[str, Any]]:
     return None
 
 
+_HHMM_RE = re.compile(r"^\d{4}$")
+
+
 def _ny_now() -> datetime:
     return datetime.now(NY)
+
+
+def _parse_hhmm(raw: str | None, default: tuple[int, int]) -> tuple[int, int]:
+    if isinstance(raw, str):
+        candidate = raw.strip()
+        if _HHMM_RE.fullmatch(candidate):
+            hour = int(candidate[:2])
+            minute = int(candidate[2:])
+            if 0 <= hour < 24 and 0 <= minute < 60:
+                return hour, minute
+    return default
+
+
+def _premarket_bounds_components() -> tuple[tuple[int, int], tuple[int, int]]:
+    default_start = (7, 0)
+    default_end = (9, 30)
+    start = _parse_hhmm(os.getenv("JBRAVO_PREMARKET_START"), default_start)
+    end = _parse_hhmm(os.getenv("JBRAVO_PREMARKET_END"), default_end)
+    if start >= end:
+        return default_start, default_end
+    return start, end
+
+
+def _premarket_bounds_naive() -> tuple[dtime, dtime]:
+    (sh, sm), (eh, em) = _premarket_bounds_components()
+    return dtime(sh, sm), dtime(eh, em)
+
+
+def _premarket_bounds_tz() -> tuple[dtime, dtime]:
+    start, end = _premarket_bounds_naive()
+    return start.replace(tzinfo=NY), end.replace(tzinfo=NY)
+
+
+def _premarket_bounds_strings() -> tuple[str, str]:
+    start, end = _premarket_bounds_naive()
+    return start.strftime("%H:%M"), end.strftime("%H:%M")
 
 
 def _clock_is_in_window(client: Any, window: str) -> tuple[bool, str]:
@@ -264,15 +304,22 @@ def _clock_is_in_window(client: Any, window: str) -> tuple[bool, str]:
             now_ny = datetime.now(ny)
         hhmm = now_ny.strftime("%H:%M")
         target = (window or "auto").lower()
+        start_str, end_str = _premarket_bounds_strings()
         if target == "premarket":
-            in_window = "07:00" <= hhmm < "09:30"
+            in_window = start_str <= hhmm < end_str
         elif target == "regular":
             in_window = "09:30" <= hhmm < "16:00"
         elif target == "any":
             in_window = True
         else:  # auto and unknown default to premarket guard
-            in_window = "07:00" <= hhmm < "09:30"
-        log_info("MARKET_TIME", ny_now=str(now_ny), window=target, in_window=in_window)
+            in_window = start_str <= hhmm < end_str
+        log_info(
+            "MARKET_TIME",
+            ny_now=str(now_ny),
+            window=target,
+            in_window=in_window,
+            premarket_bounds=f"{start_str}-{end_str}",
+        )
         return in_window, hhmm
     except Exception as exc:  # pragma: no cover - defensive logging
         log_info("CLOCK_FETCH_FAILED", error=str(exc)[:200])
@@ -283,8 +330,7 @@ def _resolve_time_window(requested: str):
     req = (requested or "auto").strip().lower()
     now = _ny_now()
     tnow = now.timetz()
-    prem_open = dtime(7, 0, tzinfo=NY)
-    prem_close = dtime(9, 30, tzinfo=NY)
+    prem_open, prem_close = _premarket_bounds_tz()
     reg_open = dtime(9, 30, tzinfo=NY)
     reg_close = dtime(16, 0, tzinfo=NY)
 
@@ -1252,22 +1298,22 @@ class TradeExecutor:
             ny_now_dt.microsecond,
         )
 
-        premarket_start = dtime(4, 0)
+        premarket_start, premarket_end = _premarket_bounds_naive()
         regular_start = dtime(9, 30)
         regular_end = dtime(16, 0)
         postmarket_end = dtime(20, 0)
 
-        within_premarket = premarket_start <= current_time < regular_start
+        within_premarket = premarket_start <= current_time < premarket_end
         within_regular = regular_start <= current_time < regular_end
         within_post = regular_end <= current_time < postmarket_end
-        ny_within_premarket = premarket_start <= ny_time < regular_start
+        ny_within_premarket = premarket_start <= ny_time < premarket_end
         ny_within_regular = regular_start <= ny_time < regular_end
 
         mode = (self.config.time_window or "auto").lower()
         resolved_window = mode
         auto_branch = None
         if mode == "auto":
-            if dtime(7, 0) <= ny_time < regular_start:
+            if premarket_start <= ny_time < premarket_end:
                 resolved_window = "premarket"
                 auto_branch = "premarket"
             elif ny_within_regular:
@@ -2231,16 +2277,19 @@ def run_executor(
             buying_power = 0.0
     log_info(
         "AUTH_STATUS",
-        ok=acc is not None and acc_err is None,
+        auth_ok=acc is not None and acc_err is None,
         buying_power=f"{buying_power:.2f}",
     )
 
     if not in_window:
+        start_str, end_str = _premarket_bounds_strings()
         log_info(
             "TIME_WINDOW",
             window=win,
             status="outside",
             count=len(candidates_df),
+            ny_now=now_ny.isoformat(),
+            premarket_bounds=f"{start_str}-{end_str}",
         )
         metrics.skips["TIME_WINDOW"] += len(candidates_df)
         metrics.flush()
