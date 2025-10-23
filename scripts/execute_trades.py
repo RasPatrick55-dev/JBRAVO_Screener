@@ -14,7 +14,7 @@ import time as _time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, time as dtime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
@@ -157,7 +157,9 @@ def _mask_key_hint(raw: Optional[str]) -> str:
     return f"{prefix}…{suffix}"
 
 
-def _log_account_probe(creds_snapshot: Mapping[str, Any] | None = None) -> None:
+def _log_account_probe(
+    creds_snapshot: Mapping[str, Any] | None = None,
+) -> tuple[bool, str]:
     env_files = [
         Path(path).name
         for path in _ENV_FILES_LOADED
@@ -214,6 +216,7 @@ def _log_account_probe(creds_snapshot: Mapping[str, Any] | None = None) -> None:
         "yes" if has_env_file else "no",
         key_hint,
     )
+    return bool(auth_ok), str(bp_display)
 
 
 def _paper_only_guard(trading_client: Any | None, base_url: str | None = "") -> None:
@@ -2265,19 +2268,31 @@ def run_executor(
         in_window=bool(in_window),
         candidates=len(candidates_df),
     )
+    probe_auth_ok, probe_bp_display = _log_account_probe(creds_snapshot)
     acc = None
     acc_err = None
     if trading_probe is not None and hasattr(trading_probe, "get_account"):
         acc, acc_err = _log_call("get_account", trading_probe.get_account)
     buying_power = 0.0
-    if acc and hasattr(acc, "buying_power"):
+    auth_ok = False
+    if acc and hasattr(acc, "buying_power") and acc_err is None:
         try:
             buying_power = float(acc.buying_power or 0)
+            auth_ok = True
         except Exception:
             buying_power = 0.0
+    if not auth_ok:
+        if probe_auth_ok:
+            auth_ok = True
+        candidate_bp = str(probe_bp_display).replace(",", "")
+        try:
+            buying_power = float(Decimal(candidate_bp))
+        except (InvalidOperation, ValueError, TypeError):
+            if not auth_ok:
+                buying_power = 0.0
     log_info(
         "AUTH_STATUS",
-        auth_ok=acc is not None and acc_err is None,
+        auth_ok=bool(auth_ok),
         buying_power=f"{buying_power:.2f}",
     )
 
@@ -2300,8 +2315,6 @@ def run_executor(
         )
         loader.log_summary()
         return 0
-
-    _log_account_probe(creds_snapshot)
 
     if candidates_df.empty:
         loader.metrics.record_skip("NO_CANDIDATES", count=1)
