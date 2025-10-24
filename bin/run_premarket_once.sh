@@ -20,13 +20,24 @@ PY
 
 # Ensure ≥1 candidate (robust wc)
 SRC="data/latest_candidates.csv"
-rows="$({ wc -l < "$SRC"; } 2>/dev/null || echo 0)"
-if [[ "${rows:-0}" -lt 2 ]]; then
-  python -m scripts.fallback_candidates --top-n 3
+rows="$(wc -l < "${SRC}" 2>/dev/null || echo 0)"
+rows="${rows:-0}"
+if [ "${rows}" -lt 2 ]; then
+  echo "[WRAPPER] candidates header-only; running fallback..."
+  /home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.fallback_candidates --top-n 3
 fi
 
-# Execute once with auto window (premarket enforced by strategy)
-python -m scripts.execute_trades \
-  --source "$SRC" --allocation-pct 0.06 --min-order-usd 300 --max-positions 4 \
-  --trailing-percent 3 --time-window auto --limit-buffer-pct 1.0 --extended-hours true \
-  --cancel-after-min 35
+# Force pre-market window to avoid “window=closed” when scheduled properly.
+# (You may switch back to 'auto' once schedule is proven correct.)
+EXEC_WINDOW="${EXEC_WINDOW:-premarket}"
+
+/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.execute_trades \
+  --source "${SRC}" \
+  --allocation-pct "${ALLOCATION_PCT:-0.06}" \
+  --min-order-usd "${MIN_ORDER_USD:-300}" \
+  --max-positions "${MAX_POSITIONS:-4}" \
+  --trailing-percent "${TRAILING_PCT:-3}" \
+  --time-window "${EXEC_WINDOW}" \
+  --extended-hours true \
+  --cancel-after-min "${CANCEL_AFTER_MIN:-35}" \
+  --limit-buffer-pct "${LIMIT_BUFFER_PCT:-1.0}"

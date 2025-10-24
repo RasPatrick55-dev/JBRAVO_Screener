@@ -83,6 +83,82 @@ logger = logging.getLogger("execute_trades")
 LOGGER = logger
 
 
+# --- Canonicalize incoming candidates to the executor's schema ---
+# Ensures dashboard/pipeline/fallback outputs are accepted even if column
+# names differ slightly (e.g., 'price' vs 'close'). Keeps extras without error.
+def _canonicalize_candidate_header(df):
+    import pandas as pd
+    from datetime import datetime, timezone
+
+    if df is None:
+        return df
+
+    df = df.copy()
+    # normalize column names
+    def _normalize_name(name: Any) -> str:
+        key = str(name).strip().lower()
+        key = re.sub(r"[^a-z0-9]+", "_", key)
+        return key.strip("_")
+
+    df.columns = [_normalize_name(c) for c in df.columns]
+    # known aliases → canonical
+    rename_map = {
+        "price": "close",
+        "last": "close",
+        "entry": "entry_price",
+        "entryprice": "entry_price",
+        "avg_daily_dollar_volume_20d": "adv20",
+        "avg_dollar_vol_20d": "adv20",
+        "avgdailydollarvolume20d": "adv20",
+        "avgdollarvol20d": "adv20",
+        "atrp_14": "atrp",
+        "scorebreakdown": "score_breakdown",
+    }
+    for k, v in rename_map.items():
+        if k in df.columns and v not in df.columns:
+            df.rename(columns={k: v}, inplace=True)
+    # canonical columns (dashboard/pipeline contract)
+    required = [
+        "timestamp",
+        "symbol",
+        "score",
+        "exchange",
+        "close",
+        "volume",
+        "universe_count",
+        "score_breakdown",
+        "entry_price",
+        "adv20",
+        "atrp",
+        "source",
+    ]
+    # safe defaults if missing
+    if "timestamp" not in df.columns:
+        df["timestamp"] = datetime.now(timezone.utc).isoformat()
+    if "entry_price" not in df.columns:
+        df["entry_price"] = df["close"] if "close" in df.columns else pd.NA
+    for col in [
+        "exchange",
+        "volume",
+        "universe_count",
+        "adv20",
+        "atrp",
+        "source",
+    ]:
+        if col not in df.columns:
+            df[col] = pd.NA
+    if "score_breakdown" not in df.columns:
+        df["score_breakdown"] = "{}"
+    else:
+        df["score_breakdown"] = (
+            df["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
+        )
+    # stable ordering (keep any extras at the end)
+    ordered = [c for c in required if c in df.columns]
+    df = df[ordered + [c for c in df.columns if c not in ordered]]
+    return df
+
+
 def log_info(tag: str, **kv: Any) -> None:
     payload = " ".join(f"{key}={kv[key]}" for key in sorted(kv)) if kv else ""
     message = f"{tag} {payload}".strip()
@@ -2464,51 +2540,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 1
 
 
-if __name__ == "__main__":  # pragma: no cover - CLI entry point
-    sys.exit(main())
 def _warn_context(context: str, message: str) -> None:
     LOGGER.warning("[WARN] %s: %s", context, message)
 
 
-def _canonicalize_candidate_header(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    working = df.copy()
-    log_required = False
-    canonical_present = set()
-    for column in working.columns:
-        key = str(column).strip()
-        canonical = CANON.get(key, CANON.get(key.lower(), key.lower()))
-        canonical_present.add(canonical)
-    if "score_breakdown" not in canonical_present:
-        working["score_breakdown"] = "{}"
-        log_required = True
-    columns_after = list(working.columns)
-    canonical_to_actual: dict[str, str] = {}
-    for column in columns_after:
-        key = str(column).strip()
-        canonical = CANON.get(key, CANON.get(key.lower(), key.lower()))
-        if canonical not in canonical_to_actual:
-            canonical_to_actual[canonical] = column
-    score_column = canonical_to_actual.get("score_breakdown")
-    if score_column is not None:
-        sb_series = working[score_column].astype("string").fillna("")
-        normalized_sb = sb_series.replace({"": "{}", "fallback": "{}"})
-        if not normalized_sb.equals(sb_series):
-            working[score_column] = normalized_sb
-    ordered_actual: list[str] = []
-    for canonical in CANONICAL_COLUMNS:
-        actual = canonical_to_actual.get(canonical)
-        if actual is None:
-            continue
-        ordered_actual.append(actual)
-    ordered_set = set(ordered_actual)
-    extras = [col for col in working.columns if col not in ordered_set]
-    new_order = ordered_actual + extras
-    if new_order != list(working.columns):
-        working = working.reindex(columns=new_order)
-        log_required = True
-    if log_required:
-        LOGGER.info("[INFO] CANDIDATES_CANONICALIZED columns=%s", [str(col) for col in working.columns])
-    return working
-
+# Keep the import-safe entrypoint at EOF so helpers above are always defined
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
+    raise SystemExit(main())
