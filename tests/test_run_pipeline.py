@@ -49,7 +49,10 @@ def test_log_event_appends_and_valid_json(tmp_path, monkeypatch):
 def test_pipeline_refresh_latest(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    (data_dir / "top_candidates.csv").write_text("symbol\nAAPL\n", encoding="utf-8")
+    (data_dir / "top_candidates.csv").write_text(
+        "symbol,score,close\nAAPL,5,123.45\n",
+        encoding="utf-8",
+    )
     metrics_path = data_dir / "screener_metrics.json"
     metrics_path.write_text("{}", encoding="utf-8")
 

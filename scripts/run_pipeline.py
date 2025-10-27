@@ -61,6 +61,173 @@ def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy h
     return {}
 
 
+REQUIRED_CAND_COLS = list(CANONICAL_COLUMNS)
+
+
+def _coerce_canonical(df_scored: Optional[pd.DataFrame], df_top: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """Return a canonical candidates DataFrame derived from pipeline outputs."""
+
+    if df_top is None or df_top.empty:
+        return pd.DataFrame(columns=REQUIRED_CAND_COLS)
+
+    base = df_top.copy()
+    base.columns = [str(col).strip().lower() for col in base.columns]
+    base = base.loc[:, ~base.columns.duplicated()]
+
+    if "symbol" not in base.columns or "score" not in base.columns:
+        return pd.DataFrame(columns=REQUIRED_CAND_COLS)
+
+    base["symbol"] = (
+        base["symbol"].astype("string").fillna("").str.strip().str.upper()
+    )
+    base = base.loc[base["symbol"].str.len() > 0]
+
+    if base.empty:
+        return pd.DataFrame(columns=REQUIRED_CAND_COLS)
+
+    if "timestamp" not in base.columns:
+        base["timestamp"] = datetime.now(timezone.utc).isoformat()
+    else:
+        ts_series = base["timestamp"].astype("string").fillna("")
+        now_value = datetime.now(timezone.utc).isoformat()
+        base["timestamp"] = ts_series.replace({"": now_value})
+
+    numeric_columns = ["score", "close", "volume", "universe_count", "entry_price", "adv20", "atrp"]
+    for column in numeric_columns:
+        if column in base.columns:
+            base[column] = pd.to_numeric(base[column], errors="coerce")
+
+    if df_scored is not None and not df_scored.empty and "symbol" in df_scored.columns:
+        join_cols = [
+            col
+            for col in ("symbol", "close", "exchange", "volume", "adv20")
+            if col in df_scored.columns
+        ]
+        if join_cols:
+            joinable = df_scored[join_cols].drop_duplicates("symbol")
+            base = base.merge(joinable, on="symbol", how="left", suffixes=("", "_scored"))
+            for col in ("close", "exchange", "volume", "adv20"):
+                scored_col = f"{col}_scored"
+                if scored_col not in base.columns:
+                    continue
+                if col == "exchange":
+                    existing = (
+                        base[col].astype("string").fillna("") if col in base.columns else pd.Series("", index=base.index)
+                    )
+                    fallback = base[scored_col].astype("string").fillna("")
+                    base[col] = existing.where(existing.str.strip() != "", fallback)
+                else:
+                    if col not in base.columns:
+                        base[col] = pd.NA
+                    series = base[col]
+                    mask_missing = series.isna()
+                    if col in {"volume", "adv20"}:
+                        numeric_series = pd.to_numeric(series, errors="coerce")
+                        mask_missing = numeric_series.isna()
+                        base[col] = numeric_series
+                    base.loc[mask_missing, col] = base.loc[mask_missing, scored_col]
+                base.drop(columns=[scored_col], inplace=True)
+
+    if "close" not in base.columns:
+        base["close"] = pd.NA
+    if "entry_price" not in base.columns:
+        base["entry_price"] = pd.NA
+
+    close_series = pd.to_numeric(base["close"], errors="coerce")
+    entry_series = pd.to_numeric(base["entry_price"], errors="coerce")
+    close_missing = close_series.isna()
+    entry_missing = entry_series.isna()
+    entry_series.loc[entry_missing] = close_series.loc[entry_missing]
+    close_series.loc[close_missing] = entry_series.loc[close_missing]
+    base["close"] = close_series
+    base["entry_price"] = entry_series
+
+    if "score_breakdown" in base.columns:
+        base["score_breakdown"] = (
+            base["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
+        )
+    else:
+        base["score_breakdown"] = "{}"
+
+    if "source" in base.columns:
+        source_series = base["source"].astype("string").fillna("")
+        base["source"] = source_series.replace({"": "screener"})
+    else:
+        base["source"] = "screener"
+
+    if "universe_count" in base.columns:
+        base["universe_count"] = (
+            pd.to_numeric(base["universe_count"], errors="coerce").fillna(0).astype(int)
+        )
+    else:
+        base["universe_count"] = 0
+
+    if "atrp" in base.columns:
+        base["atrp"] = pd.to_numeric(base["atrp"], errors="coerce").fillna(0.0)
+    else:
+        base["atrp"] = 0.0
+
+    if "volume" in base.columns:
+        base["volume"] = pd.to_numeric(base["volume"], errors="coerce").fillna(0)
+    else:
+        base["volume"] = 0
+
+    if "adv20" in base.columns:
+        base["adv20"] = pd.to_numeric(base["adv20"], errors="coerce").fillna(0.0)
+    else:
+        base["adv20"] = 0.0
+
+    for column in REQUIRED_CAND_COLS:
+        if column not in base.columns:
+            base[column] = pd.NA
+
+    ordered = REQUIRED_CAND_COLS + [col for col in base.columns if col not in REQUIRED_CAND_COLS]
+    canonical = base[ordered]
+    canonical = canonical.loc[canonical["symbol"].astype("string").str.len() > 0]
+    return canonical[REQUIRED_CAND_COLS]
+
+
+def write_latest_candidates_canonical(base_dir: Path) -> pd.DataFrame:
+    data_dir = base_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    top_path = data_dir / "top_candidates.csv"
+    scored_path = data_dir / "scored_candidates.csv"
+    latest_path = data_dir / "latest_candidates.csv"
+
+    df_top = None
+    if top_path.exists() and top_path.stat().st_size > 0:
+        try:
+            df_top = pd.read_csv(top_path)
+        except Exception:
+            logger.exception("Failed to read top_candidates.csv for canonicalization")
+            df_top = None
+
+    df_scored = None
+    if scored_path.exists() and scored_path.stat().st_size > 0:
+        try:
+            df_scored = pd.read_csv(scored_path)
+        except Exception:
+            logger.exception("Failed to read scored_candidates.csv for canonicalization")
+            df_scored = None
+
+    canonical = _coerce_canonical(df_scored, df_top)
+    if not canonical.empty and "close" in canonical.columns and canonical["close"].notna().any():
+        canonical = canonical[REQUIRED_CAND_COLS]
+        if top_path.exists():
+            try:
+                copyfile(str(top_path), str(latest_path))
+            except Exception:
+                logger.debug("LATEST_CANDIDATES pre-copy failed", exc_info=True)
+        canonical.to_csv(latest_path, index=False)
+        logger.info(
+            "LATEST_CANDIDATES canonicalized from top_candidates rows=%d",
+            len(canonical.index),
+        )
+    else:
+        logger.info("LATEST_CANDIDATES not overwritten (top_candidates lacks canonical fields)")
+    return canonical
+
+
 def _resolve_base_dir(base_dir: Path | None = None) -> Path:
     if base_dir is not None:
         return Path(base_dir)
@@ -92,11 +259,9 @@ def _sync_top_candidates_to_latest(base_dir: Path | None = None) -> None:
     top = data_dir / "top_candidates.csv"
     latest = data_dir / "latest_candidates.csv"
     try:
-        rows_top = _count_csv_rows(top)
-        if rows_top > 0:
-            data_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(top, latest)
-            logger.info("LATEST_SYNC source=top_candidates rows=%s", rows_top)
+        canonical = write_latest_candidates_canonical(base)
+        if not canonical.empty and canonical["close"].notna().any():
+            logger.info("LATEST_SYNC source=top_candidates rows=%s", len(canonical.index))
         else:
             rows_latest = _count_csv_rows(latest)
             logger.info("LATEST_SYNC source=fallback_or_screener rows=%s", rows_latest)
@@ -111,17 +276,18 @@ def refresh_latest_candidates(base_dir: Path | None = None) -> pd.DataFrame:
     latest_path = data_dir / "latest_candidates.csv"
     metrics_path = data_dir / "screener_metrics.json"
     data_dir.mkdir(parents=True, exist_ok=True)
-    if top_path.exists() and top_path.stat().st_size > 0:
-        copyfile(str(top_path), str(latest_path))
-        try:
-            frame = pd.read_csv(top_path)
-        except Exception:
-            frame = pd.DataFrame(columns=list(CANONICAL_COLUMNS))
-        normalized = normalize_candidate_df(frame)
-        normalized = normalized[list(CANONICAL_COLUMNS)]
-        write_csv_atomic(str(latest_path), normalized)
+    canonical = write_latest_candidates_canonical(base)
+    if not canonical.empty and canonical["close"].notna().any():
         _write_refresh_metrics(metrics_path)
-        return normalized
+        return canonical
+    if latest_path.exists() and latest_path.stat().st_size > 0:
+        try:
+            existing = pd.read_csv(latest_path)
+            if not existing.empty:
+                _write_refresh_metrics(metrics_path)
+                return existing
+        except Exception:
+            logger.exception("Failed reading existing latest_candidates.csv during refresh")
     frame, _ = build_latest_candidates(base)
     _write_refresh_metrics(metrics_path)
     return frame

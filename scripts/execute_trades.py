@@ -26,7 +26,7 @@ NY = ZoneInfo("America/New_York")
 import pandas as pd
 import requests
 
-from scripts.fallback_candidates import CANON, CANONICAL_COLUMNS, normalize_candidate_df
+from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.utils.env import load_env
 from utils.env import (
     AlpacaCredentialsError,
@@ -84,24 +84,26 @@ LOGGER = logger
 
 
 # --- Canonicalize incoming candidates to the executor's schema ---
-# Ensures dashboard/pipeline/fallback outputs are accepted even if column
-# names differ slightly (e.g., 'price' vs 'close'). Keeps extras without error.
-def _canonicalize_candidate_header(df):
-    import pandas as pd
-    from datetime import datetime, timezone
+REQUIRED = list(CANONICAL_COLUMNS)
 
-    if df is None:
-        return df
 
-    df = df.copy()
-    # normalize column names
+def _canonicalize_candidate_header(
+    df: Optional[pd.DataFrame], base_dir: Path | str | None
+) -> pd.DataFrame:
+    """Best-effort canonicalization for executor input."""
+
+    if df is None or df.empty:
+        return pd.DataFrame(columns=REQUIRED)
+
+    frame = df.copy()
+
     def _normalize_name(name: Any) -> str:
         key = str(name).strip().lower()
         key = re.sub(r"[^a-z0-9]+", "_", key)
         return key.strip("_")
 
-    df.columns = [_normalize_name(c) for c in df.columns]
-    # known aliases → canonical
+    frame.columns = [_normalize_name(col) for col in frame.columns]
+
     rename_map = {
         "price": "close",
         "last": "close",
@@ -114,49 +116,131 @@ def _canonicalize_candidate_header(df):
         "atrp_14": "atrp",
         "scorebreakdown": "score_breakdown",
     }
-    for k, v in rename_map.items():
-        if k in df.columns and v not in df.columns:
-            df.rename(columns={k: v}, inplace=True)
-    # canonical columns (dashboard/pipeline contract)
-    required = [
-        "timestamp",
-        "symbol",
-        "score",
-        "exchange",
-        "close",
-        "volume",
-        "universe_count",
-        "score_breakdown",
-        "entry_price",
-        "adv20",
-        "atrp",
-        "source",
-    ]
-    # safe defaults if missing
-    if "timestamp" not in df.columns:
-        df["timestamp"] = datetime.now(timezone.utc).isoformat()
-    if "entry_price" not in df.columns:
-        df["entry_price"] = df["close"] if "close" in df.columns else pd.NA
-    for col in [
-        "exchange",
-        "volume",
-        "universe_count",
-        "adv20",
-        "atrp",
-        "source",
-    ]:
-        if col not in df.columns:
-            df[col] = pd.NA
-    if "score_breakdown" not in df.columns:
-        df["score_breakdown"] = "{}"
+    for key, value in rename_map.items():
+        if key in frame.columns and value not in frame.columns:
+            frame.rename(columns={key: value}, inplace=True)
+
+    if "symbol" not in frame.columns:
+        return pd.DataFrame(columns=REQUIRED)
+
+    frame["symbol"] = (
+        frame["symbol"].astype("string").fillna("").str.strip().str.upper()
+    )
+    frame = frame.loc[frame["symbol"].str.len() > 0]
+
+    if frame.empty:
+        return pd.DataFrame(columns=REQUIRED)
+
+    now_value = datetime.now(timezone.utc).isoformat()
+    if "timestamp" not in frame.columns:
+        frame["timestamp"] = now_value
     else:
-        df["score_breakdown"] = (
-            df["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
+        ts_series = frame["timestamp"].astype("string").fillna("")
+        frame["timestamp"] = ts_series.replace({"": now_value})
+
+    numeric_columns = ("score", "close", "volume", "universe_count", "entry_price", "adv20", "atrp")
+    for column in numeric_columns:
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
+    base_path: Optional[Path] = None
+    if base_dir is not None:
+        try:
+            base_path = Path(base_dir)
+        except TypeError:
+            base_path = Path(str(base_dir))
+    if base_path and base_path.is_file():
+        base_path = base_path.parent.parent
+    scored = pd.DataFrame()
+    if base_path:
+        scored_path = base_path / "data" / "scored_candidates.csv"
+        if scored_path.exists():
+            try:
+                scored = pd.read_csv(scored_path)
+            except Exception:
+                scored = pd.DataFrame()
+
+    if ("close" not in frame.columns or frame["close"].isna().all()) and "entry_price" in frame.columns:
+        frame.loc[:, "close"] = frame["entry_price"]
+
+    if not scored.empty and "symbol" in scored.columns:
+        join_cols = [
+            column
+            for column in ("symbol", "close", "exchange", "volume", "adv20")
+            if column in scored.columns
+        ]
+        if join_cols:
+            joinable = scored[join_cols].drop_duplicates("symbol")
+            frame = frame.merge(joinable, on="symbol", how="left", suffixes=("", "_scored"))
+            for column in ("close", "exchange", "volume", "adv20"):
+                scored_col = f"{column}_scored"
+                if scored_col not in frame.columns:
+                    continue
+                if column == "exchange":
+                    current = (
+                        frame[column]
+                        if column in frame.columns
+                        else pd.Series("", index=frame.index, dtype="string")
+                    )
+                    fallback = frame[scored_col].astype("string").fillna("")
+                    frame[column] = current.where(current.str.strip() != "", fallback)
+                else:
+                    if column in frame.columns:
+                        current_numeric = pd.to_numeric(frame[column], errors="coerce")
+                    else:
+                        current_numeric = pd.Series(pd.NA, index=frame.index, dtype="float64")
+                    scored_numeric = pd.to_numeric(frame[scored_col], errors="coerce")
+                    mask_missing = current_numeric.isna()
+                    frame[column] = current_numeric
+                    frame.loc[mask_missing, column] = scored_numeric.loc[mask_missing]
+                frame.drop(columns=[scored_col], inplace=True)
+
+    if "close" not in frame.columns:
+        frame["close"] = pd.NA
+    if "entry_price" not in frame.columns:
+        frame["entry_price"] = pd.NA
+
+    close_series = pd.to_numeric(frame["close"], errors="coerce")
+    entry_series = pd.to_numeric(frame["entry_price"], errors="coerce")
+    entry_missing = entry_series.isna()
+    entry_series.loc[entry_missing] = close_series.loc[entry_missing]
+    close_missing = close_series.isna()
+    close_series.loc[close_missing] = entry_series.loc[close_missing]
+    frame["close"] = close_series
+    frame["entry_price"] = entry_series
+
+    if "score_breakdown" in frame.columns:
+        frame["score_breakdown"] = (
+            frame["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
         )
-    # stable ordering (keep any extras at the end)
-    ordered = [c for c in required if c in df.columns]
-    df = df[ordered + [c for c in df.columns if c not in ordered]]
-    return df
+    else:
+        frame["score_breakdown"] = "{}"
+
+    if "source" in frame.columns:
+        frame["source"] = frame["source"].astype("string").fillna("").replace({"": "screener"})
+    else:
+        frame["source"] = "screener"
+
+    volume_series = frame["volume"] if "volume" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    frame["volume"] = pd.to_numeric(volume_series, errors="coerce").fillna(0)
+
+    adv_series = frame["adv20"] if "adv20" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    frame["adv20"] = pd.to_numeric(adv_series, errors="coerce").fillna(0.0)
+
+    atrp_series = frame["atrp"] if "atrp" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    frame["atrp"] = pd.to_numeric(atrp_series, errors="coerce").fillna(0.0)
+
+    universe_series = (
+        frame["universe_count"] if "universe_count" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    )
+    frame["universe_count"] = pd.to_numeric(universe_series, errors="coerce").fillna(0).astype(int)
+
+    for column in REQUIRED:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+
+    ordered = REQUIRED + [column for column in frame.columns if column not in REQUIRED]
+    return frame[ordered]
 
 
 def log_info(tag: str, **kv: Any) -> None:
@@ -1467,14 +1551,24 @@ class TradeExecutor:
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
-        df = _canonicalize_candidate_header(df)
-        canonical_available = set()
-        for column in df.columns:
-            key = str(column).strip()
-            canonical = CANON.get(key, CANON.get(key.lower(), key))
-            canonical_available.add(str(canonical))
+        try:
+            base_dir = path.resolve().parent.parent
+        except Exception:
+            base_dir = Path.cwd()
+        df = _canonicalize_candidate_header(df, base_dir)
+        if df.empty:
+            LOGGER.info("[INFO] NO_CANONICAL_CANDIDATES")
+            return df
+        missing = [
+            column
+            for column in ("symbol", "score", "close")
+            if column not in df.columns or df[column].isna().all()
+        ]
+        if missing:
+            joined = ", ".join(sorted(missing))
+            raise CandidateLoadError(f"Missing required columns: {joined}")
         normalized = normalize_candidate_df(df, now_ts=None)
-        missing_required = [column for column in REQUIRED_COLUMNS if column not in canonical_available]
+        missing_required = [column for column in REQUIRED_COLUMNS if column not in normalized.columns]
         if missing_required:
             joined = ", ".join(sorted(missing_required))
             raise CandidateLoadError(f"Missing required columns: {joined}")

@@ -20,9 +20,8 @@ PY
 
 # Ensure ≥1 candidate (robust wc)
 SRC="data/latest_candidates.csv"
-rows="$(wc -l < "${SRC}" 2>/dev/null || echo 0)"
-rows="${rows:-0}"
-if [ "${rows}" -lt 2 ]; then
+rows=$(wc -l < "${SRC}" 2>/dev/null || echo 0)
+if [ "${rows:-0}" -lt 2 ]; then
   echo "[WRAPPER] candidates header-only; running fallback..."
   /home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.fallback_candidates --top-n 3
 fi
