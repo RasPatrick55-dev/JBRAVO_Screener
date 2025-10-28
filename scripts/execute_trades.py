@@ -14,7 +14,7 @@ import time as _time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, time as dtime
-from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
@@ -38,6 +38,7 @@ from utils.env import (
 import utils.telemetry as telemetry
 
 try:  # pragma: no cover - import guard for optional dependency
+    from alpaca.common.exceptions import APIError
     from alpaca.trading.client import TradingClient
     from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
     from alpaca.trading.requests import (
@@ -47,6 +48,11 @@ try:  # pragma: no cover - import guard for optional dependency
     )
 except Exception:  # pragma: no cover - lightweight fallback for tests
     TradingClient = None  # type: ignore
+
+    class APIError(Exception):
+        def __init__(self, message: str = "", code: int | None = None) -> None:
+            super().__init__(message)
+            self.code = code or 0
 
     class _Enum(str):
         def __new__(cls, value: str):
@@ -81,6 +87,24 @@ except Exception:  # pragma: no cover - lightweight fallback for tests
 
 logger = logging.getLogger("execute_trades")
 LOGGER = logger
+
+
+# --- MPV helpers (Alpaca equities) ---
+#  >= $1.00  →  two decimals
+#  <  $1.00  →  four decimals    (per Alpaca docs)
+#  Buys round DOWN, sells round UP to maintain trader intent and avoid 42210000.
+def _mpv_step(price: float) -> Decimal:
+    d = Decimal(str(price))
+    return Decimal("0.01") if d >= Decimal("1") else Decimal("0.0001")
+
+
+def normalize_price_for_alpaca(price: float, side: str) -> float:
+    side = (side or "").lower()
+    d = Decimal(str(price))
+    step = _mpv_step(price)
+    rounding = ROUND_DOWN if side == "buy" else ROUND_UP
+    normalized = d.quantize(step, rounding=rounding)
+    return float(normalized)
 
 
 # --- Canonicalize incoming candidates to the executor's schema ---
@@ -873,19 +897,13 @@ class ExecutionMetrics:
         return self.skipped_reasons
 
 
-def round_to_tick(value: float, tick: float = 0.01) -> float:
-    decimal_value = Decimal(str(value))
-    quant = Decimal(str(tick))
-    return float(decimal_value.quantize(quant, rounding=ROUND_HALF_UP))
-
-
 def compute_limit_price(row: Dict[str, Any], buffer_bps: int = 75) -> float:
     base_price = row.get("entry_price") if row.get("entry_price") not in (None, "") else row.get("close")
     if base_price is None or pd.isna(base_price):
         raise ValueError("Row must contain either entry_price or close")
     base_price_f = float(base_price)
     limit = base_price_f * (1 + buffer_bps / 10_000)
-    return round_to_tick(limit, 0.01)
+    return float(limit)
 
 
 def _compute_qty(
@@ -1770,19 +1788,26 @@ class TradeExecutor:
                 qty,
             )
 
-            limit_price = compute_limit_price(record, self.config.entry_buffer_bps)
-            limit_price = max(limit_price, limit_px)
-            notional = qty * limit_price
+            limit_price_raw = compute_limit_price(record, self.config.entry_buffer_bps)
+            limit_price = max(limit_price_raw, limit_px)
+            normalized_limit = normalize_price_for_alpaca(limit_price, "buy")
+            notional = qty * normalized_limit
             if notional > account_buying_power:
                 detail = f"required={notional:.2f} available={account_buying_power:.2f}"
                 self.record_skip_reason("CASH", symbol=symbol, detail=detail)
                 continue
 
             if self.config.dry_run:
-                self.log_info("DRY_RUN_ORDER", symbol=symbol, qty=qty, limit_price=f"{limit_price:.2f}")
+                self.log_info(
+                    "DRY_RUN_ORDER",
+                    symbol=symbol,
+                    qty=qty,
+                    limit_price=f"{normalized_limit:.4f}",
+                    limit_raw=f"{limit_price:.8f}",
+                )
                 continue
 
-            outcome = self.execute_order(symbol, qty, limit_price)
+            outcome = self.execute_order(symbol, qty, normalized_limit, raw_limit=limit_price)
             if outcome.get("filled_qty", 0) > 0:
                 existing_positions.add(symbol)
                 account_buying_power = max(0.0, account_buying_power - notional)
@@ -1882,8 +1907,18 @@ class TradeExecutor:
         self.account_snapshot = snapshot
         return 0.0
 
-    def execute_order(self, symbol: str, qty: int, limit_price: float) -> Dict[str, Any]:
+    def execute_order(
+        self,
+        symbol: str,
+        qty: int,
+        limit_price: float,
+        *,
+        raw_limit: Optional[float] = None,
+    ) -> Dict[str, Any]:
         outcome: Dict[str, Any] = {"submitted": False, "filled_qty": 0.0}
+        raw_limit_price = float(raw_limit if raw_limit is not None else limit_price)
+        normalized_limit = normalize_price_for_alpaca(raw_limit_price, "buy")
+        limit_price = normalized_limit
         order_request = LimitOrderRequest(
             symbol=symbol,
             qty=qty,
@@ -1893,6 +1928,7 @@ class TradeExecutor:
             time_in_force=TimeInForce.DAY,
             extended_hours=self.config.extended_hours,
         )
+        setattr(order_request, "_normalized_limit", True)
         submitted_order = self.submit_with_retries(order_request)
         if submitted_order is None:
             return outcome
@@ -1904,7 +1940,8 @@ class TradeExecutor:
             "BUY_SUBMIT",
             symbol=symbol,
             qty=str(qty),
-            limit=f"{limit_price:.2f}",
+            limit=f"{limit_price:.4f}",
+            limit_raw=f"{raw_limit_price:.8f}",
             extended_hours=extended_hours_flag,
             order_id=order_id or "",
         )
@@ -2067,6 +2104,46 @@ class TradeExecutor:
                 if attempt > 1:
                     self.log_info("API_RETRY_SUCCESS", attempt=attempt)
                 return result
+            except APIError as exc:
+                last_error = exc
+                error_message = str(exc)
+                code = getattr(exc, "code", None)
+                side_value = str(getattr(request, "side", "")).lower()
+                if (
+                    attempt < attempts
+                    and code == 42210000
+                    and "sub-penny increment" in error_message.lower()
+                    and getattr(request, "_normalized_limit", False)
+                    and not getattr(request, "_retry_tick_applied", False)
+                    and hasattr(request, "limit_price")
+                ):
+                    current_limit = float(getattr(request, "limit_price") or 0.0)
+                    step = float(_mpv_step(current_limit or 0.0))
+                    step = step if step > 0 else 0.01
+                    canonical_side = "buy" if side_value == "buy" else "sell"
+                    if canonical_side == "buy":
+                        adjusted_seed = max(current_limit - step, step)
+                    else:
+                        adjusted_seed = current_limit + step
+                    new_limit = normalize_price_for_alpaca(adjusted_seed, canonical_side)
+                    request.limit_price = new_limit
+                    setattr(request, "_retry_tick_applied", True)
+                    LOGGER.warning("[RETRY_TICK] side=%s new_limit=%.4f", canonical_side, new_limit)
+                    self.log_info(
+                        "RETRY_TICK",
+                        side=canonical_side,
+                        new_limit=f"{new_limit:.4f}",
+                    )
+                    self.metrics.api_retries += 1
+                    continue
+                if attempt < attempts:
+                    self.metrics.api_retries += 1
+                    self.log_info("API_RETRY", attempt=attempt, error=error_message)
+                    self.sleep(delay)
+                    delay *= backoff
+                    continue
+                self.metrics.api_failures += 1
+                _warn_context("alpaca.submit_order", f"failed: {exc}")
             except Exception as exc:
                 last_error = exc
                 if attempt < attempts:
