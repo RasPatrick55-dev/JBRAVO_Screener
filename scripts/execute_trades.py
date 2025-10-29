@@ -28,6 +28,7 @@ import requests
 
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.utils.env import load_env
+from utils import write_csv_atomic
 from utils.env import (
     AlpacaCredentialsError,
     AlpacaUnauthorizedError,
@@ -108,6 +109,123 @@ def normalize_price_for_alpaca(price: float, side: str) -> float:
 
 
 # --- Canonicalize incoming candidates to the executor's schema ---
+
+
+def _round_limit_price(price: float) -> float:
+    """Round ``price`` to Alpaca-friendly precision (two decimals >= $1)."""
+
+    try:
+        value = float(price)
+    except (TypeError, ValueError):
+        return 0.0
+    decimals = 4 if value < 1 else 2
+    try:
+        quantum = Decimal("0.0001") if decimals == 4 else Decimal("0.01")
+        return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_DOWN))
+    except Exception:
+        return round(value + 1e-9, decimals)
+
+
+def _coerce_trade_timestamp(timestamp: Any | None) -> str:
+    """Return an ISO-8601 UTC timestamp string for ``timestamp``."""
+
+    if timestamp is None or timestamp == "":
+        return datetime.now(timezone.utc).isoformat()
+    if isinstance(timestamp, datetime):
+        dt = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    try:
+        parsed = pd.to_datetime(timestamp, utc=True)
+    except Exception:
+        return datetime.now(timezone.utc).isoformat()
+    if isinstance(parsed, pd.Series):
+        if parsed.empty:
+            return datetime.now(timezone.utc).isoformat()
+        parsed = parsed.iloc[0]
+    if pd.isna(parsed):
+        return datetime.now(timezone.utc).isoformat()
+    if isinstance(parsed, pd.Timestamp):
+        if parsed.tzinfo is None:
+            parsed = parsed.tz_localize(timezone.utc)
+        return parsed.tz_convert(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).isoformat()
+
+
+def record_executed_trade(
+    *,
+    symbol: str,
+    side: str,
+    qty: float,
+    price: float,
+    status: str,
+    order_id: str,
+    order_type: str,
+    timestamp: Any | None = None,
+) -> None:
+    """Append a trade execution event to ``executed_trades.csv``."""
+
+    side_value = (side or "").lower()
+    try:
+        qty_value = float(qty)
+    except (TypeError, ValueError):
+        qty_value = 0.0
+    try:
+        price_value = float(price)
+    except (TypeError, ValueError):
+        price_value = 0.0
+    entry_price = price_value if side_value == "buy" else 0.0
+    current_price = price_value if side_value == "buy" else 0.0
+    entry_time = _coerce_trade_timestamp(timestamp)
+
+    row = {
+        "order_id": str(order_id or ""),
+        "symbol": str(symbol or "").upper(),
+        "qty": qty_value,
+        "avg_entry_price": entry_price,
+        "current_price": current_price,
+        "unrealized_pl": 0.0,
+        "entry_price": entry_price,
+        "entry_time": entry_time,
+        "exit_price": 0.0,
+        "exit_time": "",
+        "net_pnl": 0.0,
+        "pnl": 0.0,
+        "order_status": str(status or ""),
+        "order_type": str(order_type or ""),
+        "side": side_value,
+    }
+
+    existing: pd.DataFrame
+    if EXECUTED_TRADES_PATH.exists():
+        try:
+            existing = pd.read_csv(EXECUTED_TRADES_PATH)
+        except Exception:
+            LOGGER.exception(
+                "Failed to read existing executed trades log at %s",
+                EXECUTED_TRADES_PATH,
+            )
+            existing = pd.DataFrame(columns=EXECUTED_TRADES_COLUMNS)
+    else:
+        existing = pd.DataFrame(columns=EXECUTED_TRADES_COLUMNS)
+
+    for column in EXECUTED_TRADES_COLUMNS:
+        if column not in existing.columns:
+            existing[column] = pd.NA
+
+    updated = pd.concat(
+        [existing[EXECUTED_TRADES_COLUMNS], pd.DataFrame([row])],
+        ignore_index=True,
+    )
+
+    try:
+        write_csv_atomic(str(EXECUTED_TRADES_PATH), updated[EXECUTED_TRADES_COLUMNS])
+    except Exception:
+        LOGGER.exception(
+            "Failed to append executed trade for %s to %s",
+            symbol,
+            EXECUTED_TRADES_PATH,
+        )
+
 REQUIRED = list(CANONICAL_COLUMNS)
 
 
@@ -284,6 +402,24 @@ def _log_call(label, fn, *args, **kwargs):
         return None, e
 LOG_PATH = Path("logs") / "execute_trades.log"
 METRICS_PATH = Path("data") / "execute_metrics.json"
+EXECUTED_TRADES_PATH = Path("data") / "executed_trades.csv"
+EXECUTED_TRADES_COLUMNS: list[str] = [
+    "order_id",
+    "symbol",
+    "qty",
+    "avg_entry_price",
+    "current_price",
+    "unrealized_pl",
+    "entry_price",
+    "entry_time",
+    "exit_price",
+    "exit_time",
+    "net_pnl",
+    "pnl",
+    "order_status",
+    "order_type",
+    "side",
+]
 DEFAULT_BAR_DIRECTORIES: Sequence[Path] = (
     Path("data") / "daily",
     Path("data") / "bars" / "daily",
@@ -1791,7 +1927,8 @@ class TradeExecutor:
             limit_price_raw = compute_limit_price(record, self.config.entry_buffer_bps)
             limit_price = max(limit_price_raw, limit_px)
             normalized_limit = normalize_price_for_alpaca(limit_price, "buy")
-            notional = qty * normalized_limit
+            rounded_limit = _round_limit_price(normalized_limit)
+            notional = qty * rounded_limit
             if notional > account_buying_power:
                 detail = f"required={notional:.2f} available={account_buying_power:.2f}"
                 self.record_skip_reason("CASH", symbol=symbol, detail=detail)
@@ -1802,12 +1939,12 @@ class TradeExecutor:
                     "DRY_RUN_ORDER",
                     symbol=symbol,
                     qty=qty,
-                    limit_price=f"{normalized_limit:.4f}",
+                    limit_price=f"{rounded_limit:.4f}",
                     limit_raw=f"{limit_price:.8f}",
                 )
                 continue
 
-            outcome = self.execute_order(symbol, qty, normalized_limit, raw_limit=limit_price)
+            outcome = self.execute_order(symbol, qty, rounded_limit, raw_limit=limit_price)
             if outcome.get("filled_qty", 0) > 0:
                 existing_positions.add(symbol)
                 account_buying_power = max(0.0, account_buying_power - notional)
@@ -1907,6 +2044,60 @@ class TradeExecutor:
         self.account_snapshot = snapshot
         return 0.0
 
+    def _record_buy_execution(
+        self,
+        symbol: str,
+        qty: float,
+        avg_price: Any,
+        order_id: str,
+        status: str,
+        filled_at: Any | None,
+    ) -> None:
+        try:
+            price_value = float(avg_price)
+        except (TypeError, ValueError):
+            price_value = 0.0
+        try:
+            record_executed_trade(
+                symbol=symbol,
+                side="buy",
+                qty=qty,
+                price=price_value,
+                status=status,
+                order_id=order_id,
+                order_type="limit",
+                timestamp=filled_at,
+            )
+        except Exception:
+            LOGGER.exception("Failed to record executed buy trade for %s", symbol)
+
+    def _record_trailing_submit(
+        self,
+        symbol: str,
+        qty: float,
+        avg_price: Any,
+        order_id: str,
+        status: str,
+        submitted_at: Any | None,
+    ) -> None:
+        try:
+            price_value = float(avg_price)
+        except (TypeError, ValueError):
+            price_value = 0.0
+        try:
+            record_executed_trade(
+                symbol=symbol,
+                side="sell",
+                qty=qty,
+                price=price_value,
+                status=status,
+                order_id=order_id,
+                order_type="trailing_stop",
+                timestamp=submitted_at,
+            )
+        except Exception:
+            LOGGER.exception("Failed to record trailing stop submit for %s", symbol)
+
     def execute_order(
         self,
         symbol: str,
@@ -1918,7 +2109,7 @@ class TradeExecutor:
         outcome: Dict[str, Any] = {"submitted": False, "filled_qty": 0.0}
         raw_limit_price = float(raw_limit if raw_limit is not None else limit_price)
         normalized_limit = normalize_price_for_alpaca(raw_limit_price, "buy")
-        limit_price = normalized_limit
+        limit_price = _round_limit_price(normalized_limit)
         order_request = LimitOrderRequest(
             symbol=symbol,
             qty=qty,
@@ -1952,6 +2143,7 @@ class TradeExecutor:
         filled_qty = 0.0
         filled_avg_price = None
         status = "open"
+        last_order_snapshot: Any | None = None
 
         while datetime.now(timezone.utc) < fill_deadline:
             try:
@@ -1960,6 +2152,7 @@ class TradeExecutor:
             except Exception as exc:
                 _warn_context("alpaca.get_order", f"{order_id}: {exc}")
                 break
+            last_order_snapshot = order
             status = str(getattr(order, "status", "")).lower()
             filled_qty = float(getattr(order, "filled_qty", filled_qty) or 0)
             filled_avg_price = getattr(order, "filled_avg_price", filled_avg_price)
@@ -1973,6 +2166,15 @@ class TradeExecutor:
                     filled_qty=f"{filled_qty:.0f}",
                     avg_price=f"{float(filled_avg_price or 0):.2f}",
                     order_id=order_id,
+                )
+                filled_at = getattr(order, "filled_at", None)
+                self._record_buy_execution(
+                    symbol,
+                    filled_qty,
+                    filled_avg_price,
+                    order_id,
+                    status,
+                    filled_at,
                 )
                 self.attach_trailing_stop(symbol, filled_qty, filled_avg_price)
                 outcome["filled_qty"] = filled_qty
@@ -1989,6 +2191,16 @@ class TradeExecutor:
                     filled_qty=f"{filled_qty:.0f}",
                     avg_price=f"{float(filled_avg_price or 0):.2f}",
                     order_id=order_id,
+                )
+                filled_at = getattr(order, "filled_at", None)
+                status_label = status or "filled"
+                self._record_buy_execution(
+                    symbol,
+                    filled_qty,
+                    filled_avg_price,
+                    order_id,
+                    status_label,
+                    filled_at,
                 )
                 self.attach_trailing_stop(symbol, filled_qty, filled_avg_price)
                 outcome["filled_qty"] = filled_qty
@@ -2018,6 +2230,16 @@ class TradeExecutor:
                 avg_price=f"{float(filled_avg_price or 0):.2f}",
                 partial="true",
                 order_id=order_id,
+            )
+            status_label = status or "partially_filled"
+            filled_at = getattr(last_order_snapshot, "filled_at", None)
+            self._record_buy_execution(
+                symbol,
+                filled_qty,
+                filled_avg_price,
+                order_id,
+                status_label,
+                filled_at,
             )
             self.attach_trailing_stop(symbol, filled_qty, filled_avg_price)
             outcome["filled_qty"] = filled_qty
@@ -2074,6 +2296,10 @@ class TradeExecutor:
             return
         self.metrics.trailing_attached += 1
         order_id = str(getattr(trailing_order, "id", ""))
+        status = str(getattr(trailing_order, "status", ""))
+        submitted_at = getattr(trailing_order, "submitted_at", None)
+        if submitted_at is None:
+            submitted_at = getattr(trailing_order, "created_at", None)
         LOGGER.info(
             "TRAIL_CONFIRMED symbol=%s qty=%s order_id=%s",
             symbol,
@@ -2085,6 +2311,14 @@ class TradeExecutor:
             symbol=symbol,
             qty=str(qty_int),
             order_id=order_id,
+        )
+        self._record_trailing_submit(
+            symbol,
+            float(qty_int),
+            avg_price,
+            order_id,
+            status,
+            submitted_at,
         )
 
     def submit_with_retries(self, request: Any) -> Optional[Any]:
@@ -2126,6 +2360,7 @@ class TradeExecutor:
                     else:
                         adjusted_seed = current_limit + step
                     new_limit = normalize_price_for_alpaca(adjusted_seed, canonical_side)
+                    new_limit = _round_limit_price(new_limit)
                     request.limit_price = new_limit
                     setattr(request, "_retry_tick_applied", True)
                     LOGGER.warning("[RETRY_TICK] side=%s new_limit=%.4f", canonical_side, new_limit)
