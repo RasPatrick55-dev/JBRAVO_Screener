@@ -14,7 +14,7 @@ import time as _time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, time as dtime
-from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP, ROUND_HALF_UP
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
@@ -124,6 +124,18 @@ def _round_limit_price(price: float) -> float:
         return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_DOWN))
     except Exception:
         return round(value + 1e-9, decimals)
+
+
+def _round_to_tick(price: float, tick: float = 0.01) -> float:
+    """Round ``price`` to the nearest ``tick`` using bankers-safe rounding."""
+
+    try:
+        q = (Decimal(str(price)) / Decimal(str(tick))).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+        return float(q * Decimal(str(tick)))
+    except (InvalidOperation, ValueError, TypeError):
+        return float(price)
 
 
 def _coerce_trade_timestamp(timestamp: Any | None) -> str:
@@ -742,6 +754,149 @@ def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _fetch_latest_quote_from_alpaca(
+    symbol: str, *, feed: str | None = None
+) -> Dict[str, Optional[float | str]]:
+    api_key, api_secret, _, default_feed = get_alpaca_creds()
+    if not api_key or not api_secret:
+        return {}
+    base_url = None
+    for env_name in DATA_URL_ENV_VARS:
+        candidate = os.getenv(env_name)
+        if candidate:
+            base_url = candidate
+            break
+    base_url = base_url or DEFAULT_DATA_BASE_URL
+    url = f"{base_url.rstrip('/')}/v2/stocks/{symbol}/quotes/latest"
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+    resolved_feed = feed or default_feed
+    params: Dict[str, str] = {}
+    if resolved_feed:
+        params["feed"] = str(resolved_feed)
+    log_info("alpaca.latest_quote", symbol=symbol, feed=params.get("feed"))
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=5)
+    except Exception as exc:
+        _warn_context("alpaca.latest_quote", f"{symbol}: {exc}")
+        return {}
+    if response.status_code in (401, 403):
+        _warn_context(
+            "alpaca.latest_quote",
+            f"{symbol} unauthorized status={response.status_code}",
+        )
+        return {}
+    if response.status_code != 200:
+        _warn_context(
+            "alpaca.latest_quote",
+            f"{symbol} status={response.status_code}",
+        )
+        return {}
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        _warn_context("alpaca.latest_quote", f"{symbol} decode_failed: {exc}")
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    quote = payload.get("quote")
+    if not isinstance(quote, Mapping):
+        return {}
+
+    def _as_float(value: Any) -> Optional[float]:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            try:
+                return float(str(value))
+            except Exception:
+                return None
+
+    ask = _as_float(quote.get("ap") if "ap" in quote else quote.get("ask_price"))
+    bid = _as_float(quote.get("bp") if "bp" in quote else quote.get("bid_price"))
+    ts = quote.get("t") or quote.get("timestamp")
+    resolved = params.get("feed") or payload.get("feed")
+    snapshot: Dict[str, Optional[float | str]] = {
+        "ask": ask,
+        "bid": bid,
+        "timestamp": ts,
+        "feed": resolved,
+    }
+    return snapshot
+
+
+def _fetch_latest_trade_from_alpaca(
+    symbol: str, *, feed: str | None = None
+) -> Dict[str, Optional[float | str]]:
+    api_key, api_secret, _, default_feed = get_alpaca_creds()
+    if not api_key or not api_secret:
+        return {}
+    base_url = None
+    for env_name in DATA_URL_ENV_VARS:
+        candidate = os.getenv(env_name)
+        if candidate:
+            base_url = candidate
+            break
+    base_url = base_url or DEFAULT_DATA_BASE_URL
+    url = f"{base_url.rstrip('/')}/v2/stocks/{symbol}/trades/latest"
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+    resolved_feed = feed or default_feed
+    params: Dict[str, str] = {}
+    if resolved_feed:
+        params["feed"] = str(resolved_feed)
+    log_info("alpaca.latest_trade", symbol=symbol, feed=params.get("feed"))
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=5)
+    except Exception as exc:
+        _warn_context("alpaca.latest_trade", f"{symbol}: {exc}")
+        return {}
+    if response.status_code in (401, 403):
+        _warn_context(
+            "alpaca.latest_trade",
+            f"{symbol} unauthorized status={response.status_code}",
+        )
+        return {}
+    if response.status_code != 200:
+        _warn_context(
+            "alpaca.latest_trade",
+            f"{symbol} status={response.status_code}",
+        )
+        return {}
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        _warn_context("alpaca.latest_trade", f"{symbol} decode_failed: {exc}")
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    trade = payload.get("trade")
+    if not isinstance(trade, Mapping):
+        return {}
+
+    def _as_float(value: Any) -> Optional[float]:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            try:
+                return float(str(value))
+            except Exception:
+                return None
+
+    price = _as_float(trade.get("p") if "p" in trade else trade.get("price"))
+    ts = trade.get("t") or trade.get("timestamp")
+    resolved = params.get("feed") or payload.get("feed")
+    return {"price": price, "timestamp": ts, "feed": resolved}
 
 
 def _fetch_latest_daily_bars(symbols: Sequence[str]) -> Dict[str, Dict[str, Optional[float]]]:
@@ -1819,7 +1974,7 @@ class TradeExecutor:
             self.log_summary()
             return 0
 
-        allowed, status, _ = self.evaluate_time_window()
+        allowed, status, resolved_window = self.evaluate_time_window()
         if not allowed:
             self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
             self.persist_metrics()
@@ -1859,6 +2014,10 @@ class TradeExecutor:
         except (TypeError, ValueError):
             allocation_pct = 0.0
         limit_buffer_ratio = max(0.0, float(self.config.limit_buffer_pct)) / 100.0
+        premarket_active = resolved_window == "premarket" and self.config.extended_hours
+        preferred_feed = (
+            os.getenv("LIMIT_PRICE_FEED") or os.getenv("ALPACA_DATA_FEED") or None
+        )
 
         for record in candidates:
             symbol = record.get("symbol", "").upper()
@@ -1883,10 +2042,86 @@ class TradeExecutor:
                 self.record_skip_reason("ZERO_QTY", symbol=symbol, detail="invalid_price")
                 continue
 
+            price_ref = price_f
+            price_src = "entry"
+            quote_snapshot: Dict[str, Optional[float | str]] = {}
+            trade_snapshot: Dict[str, Optional[float | str]] = {}
+            if premarket_active:
+                quote_snapshot = _fetch_latest_quote_from_alpaca(symbol, feed=preferred_feed)
+                ask_price: Optional[float] = None
+                if isinstance(quote_snapshot, Mapping):
+                    raw_ask = quote_snapshot.get("ask")
+                    if raw_ask is not None:
+                        try:
+                            ask_price = float(raw_ask)
+                        except (TypeError, ValueError):
+                            ask_price = None
+                ask_display = "nan"
+                if ask_price is not None:
+                    ask_display = "nan" if math.isnan(ask_price) else f"{ask_price:.4f}"
+                if ask_price is not None and not math.isnan(ask_price) and ask_price > 0:
+                    price_ref = max(price_ref, ask_price)
+                    quote_feed = (
+                        quote_snapshot.get("feed") if isinstance(quote_snapshot, Mapping) else None
+                    )
+                    feed_label = str(quote_feed).strip() or "default"
+                    price_src = f"ask[{feed_label}]"
+                else:
+                    trade_snapshot = _fetch_latest_trade_from_alpaca(symbol, feed=preferred_feed)
+                trade_price: Optional[float] = None
+                if isinstance(trade_snapshot, Mapping):
+                    raw_trade = trade_snapshot.get("price")
+                    if raw_trade is not None:
+                        try:
+                            trade_price = float(raw_trade)
+                        except (TypeError, ValueError):
+                            trade_price = None
+                trade_display = "nan"
+                if trade_price is not None:
+                    trade_display = "nan" if math.isnan(trade_price) else f"{trade_price:.4f}"
+                if (trade_price is not None and not math.isnan(trade_price) and trade_price > 0):
+                    price_ref = max(price_ref, trade_price)
+                    trade_feed = (
+                        trade_snapshot.get("feed") if isinstance(trade_snapshot, Mapping) else None
+                    )
+                    feed_label = str(trade_feed).strip() or "default"
+                    price_src = f"trade[{feed_label}]"
+                quote_feed = (
+                    quote_snapshot.get("feed") if isinstance(quote_snapshot, Mapping) else None
+                )
+                trade_feed = (
+                    trade_snapshot.get("feed") if isinstance(trade_snapshot, Mapping) else None
+                )
+                quote_ts = (
+                    quote_snapshot.get("timestamp")
+                    if isinstance(quote_snapshot, Mapping)
+                    else None
+                )
+                trade_ts = (
+                    trade_snapshot.get("timestamp")
+                    if isinstance(trade_snapshot, Mapping)
+                    else None
+                )
+                LOGGER.info(
+                    "PRICE_REF symbol=%s entry=%.4f ask=%s trade=%s ref=%.4f src=%s feed=%s q_ts=%s t_ts=%s",
+                    symbol,
+                    price_f,
+                    ask_display,
+                    trade_display,
+                    price_ref,
+                    price_src,
+                    str(quote_feed or trade_feed or preferred_feed or ""),
+                    str(quote_ts or ""),
+                    str(trade_ts or ""),
+                )
+
             base_notional = max(0.0, allocation_pct * max(account_buying_power, 0.0))
             min_order = max(0.0, float(self.config.min_order_usd))
             target_notional = max(base_notional, min_order)
-            limit_px = price_f * (1 + limit_buffer_ratio)
+            if premarket_active:
+                limit_px = _round_to_tick(price_ref * (1 + limit_buffer_ratio), tick=0.01)
+            else:
+                limit_px = price_f * (1 + limit_buffer_ratio)
             limit_px = max(limit_px, 0.01)
             qty = _compute_qty(account_buying_power, limit_px, allocation_pct, min_order)
             if qty < 1 and self.config.allow_bump_to_one and not self.config.allow_fractional:
