@@ -59,6 +59,10 @@ def obv(df: pd.DataFrame) -> pd.Series:
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+
     df["ma50"] = df["close"].rolling(50).mean()
     df["ma200"] = df["close"].rolling(200).mean()
     df["rsi"] = rsi(df["close"])
@@ -72,4 +76,15 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["vol_avg30"] = df["volume"].rolling(30).mean()
     df["month_high"] = df["high"].rolling(21).max().shift(1)
     df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    df["ATR14"] = true_range.rolling(window=14, min_periods=1).mean()
+
     return df

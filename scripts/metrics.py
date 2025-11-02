@@ -36,6 +36,8 @@ REQUIRED_COLUMNS = [
     "expectancy",
     "profit_factor",
     "max_drawdown",
+    "sharpe",
+    "sortino",
 ]
 
 # Required columns expected in the trades log
@@ -154,6 +156,8 @@ def calculate_metrics(trades_df: pd.DataFrame) -> dict:
             "expectancy": 0.0,
             "profit_factor": 0.0,
             "max_drawdown": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
         }
 
     if "pnl" not in trades_df.columns:
@@ -162,6 +166,12 @@ def calculate_metrics(trades_df: pd.DataFrame) -> dict:
         else:
             trades_df["pnl"] = 0.0
     trades_df["pnl"] = pd.to_numeric(trades_df["pnl"], errors="coerce").fillna(0.0)
+    if "qty" in trades_df.columns:
+        trades_df["qty"] = pd.to_numeric(trades_df["qty"], errors="coerce").abs()
+    if "entry_price" in trades_df.columns:
+        trades_df["entry_price"] = pd.to_numeric(
+            trades_df["entry_price"], errors="coerce"
+        )
     for col in ("entry_time", "exit_time"):
         if col in trades_df.columns:
             trades_df[col] = pd.to_datetime(trades_df[col], errors="coerce")
@@ -176,6 +186,25 @@ def calculate_metrics(trades_df: pd.DataFrame) -> dict:
     cumulative = trades_df["pnl"].cumsum()
     max_drawdown = (cumulative - cumulative.cummax()).min() if not cumulative.empty else 0.0
 
+    if {"entry_price", "qty"}.issubset(trades_df.columns):
+        exposure = (trades_df["entry_price"].abs() * trades_df["qty"].replace(0, np.nan))
+        returns = trades_df["pnl"] / exposure
+    else:
+        returns = trades_df["pnl"]
+    returns = returns.replace([np.inf, -np.inf], np.nan).dropna()
+
+    sharpe = 0.0
+    sortino = 0.0
+    if not returns.empty:
+        mean_return = returns.mean()
+        std_return = returns.std(ddof=0)
+        if std_return and not np.isnan(std_return):
+            sharpe = float(np.sqrt(len(returns)) * mean_return / std_return)
+        downside = returns[returns < 0]
+        downside_std = downside.std(ddof=0)
+        if downside_std and not np.isnan(downside_std):
+            sortino = float(np.sqrt(len(returns)) * mean_return / downside_std)
+
     return {
         "total_trades": int(total_trades),
         "net_pnl": float(net_pnl),
@@ -183,6 +212,8 @@ def calculate_metrics(trades_df: pd.DataFrame) -> dict:
         "expectancy": float(expectancy),
         "profit_factor": float(profit_factor),
         "max_drawdown": float(max_drawdown),
+        "sharpe": float(sharpe),
+        "sortino": float(sortino),
     }
 
 # Scoring and ranking candidates based on performance metrics
@@ -312,13 +343,15 @@ def main():
     if not trades_df.empty:
         logger.info(
             "Calculated Metrics: Trades=%s, Net PnL=%.2f, Win Rate=%.2f%%, "
-            "Expectancy=%.2f, Profit Factor=%s, Max Drawdown=%.2f",
+            "Expectancy=%.2f, Profit Factor=%s, Max Drawdown=%.2f, Sharpe=%.2f, Sortino=%.2f",
             summary_metrics.get("total_trades", 0),
             summary_metrics.get("net_pnl", 0.0),
             summary_metrics.get("win_rate", 0.0),
             summary_metrics.get("expectancy", 0.0),
             summary_metrics.get("profit_factor", 0.0),
             summary_metrics.get("max_drawdown", 0.0),
+            summary_metrics.get("sharpe", 0.0),
+            summary_metrics.get("sortino", 0.0),
         )
 
     try:

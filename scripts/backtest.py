@@ -178,7 +178,8 @@ class Position:
     entry_price: float
     entry_time: pd.Timestamp
     highest_close: float
-    trailing_stop: float
+    trailing_stop: Optional[float] = None
+    atr_stop: Optional[float] = None
 
 
 @dataclass
@@ -203,10 +204,11 @@ class PortfolioBacktester:
         alloc_pct: float = 0.03,
         top_n: int = 3,
         max_positions: int = 4,
-        trail_pct: float = 0.03,
+        trail_pct: Optional[float] = 0.03,
         max_hold_days: int = 7,
         trade_cost: float = 0.0,
         slippage: float = 0.0,
+        atr_multiple: float = 1.0,
     ) -> None:
         self.data = data
         self.initial_cash = initial_cash
@@ -214,10 +216,12 @@ class PortfolioBacktester:
         self.alloc_pct = alloc_pct
         self.top_n = top_n
         self.max_positions = max_positions
-        self.trail_pct = trail_pct
+        self.trail_pct = trail_pct if trail_pct and trail_pct > 0 else None
         self.max_hold_days = max_hold_days
         self.trade_cost = trade_cost
         self.slippage = slippage
+        self.atr_multiple = max(float(atr_multiple), 0.0)
+        self.use_trailing = self.trail_pct is not None
 
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
@@ -227,7 +231,10 @@ class PortfolioBacktester:
         indices = [df.index for df in self.data.values()]
         self.dates = sorted(set().union(*indices))
 
-    def _open_position(self, symbol: str, price: float, date: pd.Timestamp) -> None:
+    def _open_position(
+        self, symbol: str, row: pd.Series, date: pd.Timestamp
+    ) -> None:
+        price = float(row["close"])
         alloc = self.cash * self.alloc_pct
         qty = math.floor(alloc / price)
         if qty <= 0:
@@ -236,7 +243,14 @@ class PortfolioBacktester:
         if cost > self.cash:
             return
         self.cash -= cost
-        trailing = price * (1 - self.trail_pct)
+        trailing = None
+        if self.use_trailing:
+            trailing = price * (1 - float(self.trail_pct))
+
+        atr_stop = None
+        atr_value = pd.to_numeric(row.get("ATR14"), errors="coerce")
+        if pd.notna(atr_value) and atr_value > 0 and self.atr_multiple > 0:
+            atr_stop = max(0.0, price - self.atr_multiple * float(atr_value))
         self.positions[symbol] = Position(
             symbol=symbol,
             qty=qty,
@@ -244,6 +258,7 @@ class PortfolioBacktester:
             entry_time=date,
             highest_close=price,
             trailing_stop=trailing,
+            atr_stop=atr_stop,
         )
         logger.info("Opened %s @ %.2f (%d shares)", symbol, price, qty)
 
@@ -277,28 +292,42 @@ class PortfolioBacktester:
                     continue
                 row = df.loc[date]
                 pos = self.positions[symbol]
-                close = row["close"]
+                close = float(row["close"])
+                low = float(row.get("low", close))
 
-                pos.highest_close = max(pos.highest_close, close)
-                pos.trailing_stop = max(
-                    pos.trailing_stop, pos.highest_close * (1 - self.trail_pct)
-                )
+                if self.use_trailing:
+                    pos.highest_close = max(pos.highest_close, close)
+                    trailing_candidate = pos.highest_close * (1 - float(self.trail_pct))
+                    if pos.trailing_stop is None:
+                        pos.trailing_stop = trailing_candidate
+                    else:
+                        pos.trailing_stop = max(pos.trailing_stop, trailing_candidate)
+
+                atr_value = pd.to_numeric(row.get("ATR14"), errors="coerce")
+                if pd.notna(atr_value) and atr_value > 0 and self.atr_multiple > 0:
+                    atr_candidate = close - self.atr_multiple * float(atr_value)
+                    atr_candidate = max(0.0, atr_candidate)
+                    if pos.atr_stop is None:
+                        pos.atr_stop = atr_candidate
+                    else:
+                        pos.atr_stop = max(pos.atr_stop, atr_candidate)
+
                 hold_days = (date - pos.entry_time).days
 
-                exit_price = close
-                reason = None
-                if close <= pos.trailing_stop:
+                exit_price: Optional[float] = None
+                reason: Optional[str] = None
+                if pos.atr_stop is not None and low <= pos.atr_stop:
+                    exit_price = pos.atr_stop
+                    reason = "ATR Stop"
+                elif self.use_trailing and pos.trailing_stop is not None and low <= pos.trailing_stop:
                     exit_price = pos.trailing_stop
                     reason = "Trailing Stop"
-                elif close < row["ema20"]:
-                    reason = "EMA20"
-                elif row["rsi"] > 70:
-                    reason = "RSI70"
                 elif hold_days >= self.max_hold_days:
-                    reason = "MaxHold"
+                    exit_price = close
+                    reason = "Time Stop"
 
                 if reason:
-                    self._close_position(symbol, exit_price, date, reason)
+                    self._close_position(symbol, float(exit_price), date, reason)
 
             # Determine today's top candidates
             scores = []
@@ -320,7 +349,7 @@ class PortfolioBacktester:
                     break
                 if new_trades >= self.top_n:
                     break
-                self._open_position(symbol, row["close"], date)
+                self._open_position(symbol, row, date)
                 new_trades += 1
 
             # Calculate equity
@@ -403,10 +432,15 @@ def run_backtest(symbols: List[str]) -> dict:
         logger.error("No valid data to run backtest.")
         return {"tested": 0, "skipped": len(valid_symbols)}
 
+    trail_pct = CONFIG.get('trail_pct', 0.03)
+    if not CONFIG.get('use_trailing_stop', True):
+        trail_pct = None
+
     bt = PortfolioBacktester(
         data,
-        trail_pct=CONFIG.get('trail_pct', 0.03),
+        trail_pct=trail_pct,
         max_hold_days=CONFIG.get('max_hold_days', 7),
+        atr_multiple=CONFIG.get('atr_multiple', 1.0),
     )
 
     trades_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
@@ -441,20 +475,93 @@ def run_backtest(symbols: List[str]) -> dict:
 
         # Aggregate per-symbol metrics from the trades log
         if not trades_df.empty:
+            symbol_groups = trades_df.groupby("symbol")
+
             summary_df = (
-                trades_df.groupby("symbol")
+                symbol_groups
                 .agg(
                     trades=("pnl", "size"),
                     wins=("pnl", lambda x: (x > 0).sum()),
                     losses=("pnl", lambda x: (x <= 0).sum()),
                     net_pnl=("pnl", "sum"),
+                    expectancy=("pnl", "mean"),
                 )
                 .reset_index()
             )
+
             summary_df["win_rate"] = summary_df["wins"] / summary_df["trades"] * 100
+
+            def _profit_factor(series: pd.Series) -> float:
+                gains = series[series > 0].sum()
+                losses = series[series < 0].sum()
+                if losses == 0:
+                    return float("inf") if gains > 0 else 0.0
+                return float(gains / abs(losses))
+
+            profit_factors = symbol_groups["pnl"].apply(_profit_factor)
+
+            def _max_drawdown(group: pd.DataFrame) -> float:
+                ordered = group.sort_values("exit_time") if "exit_time" in group else group
+                cumulative = ordered["pnl"].cumsum()
+                if cumulative.empty:
+                    return 0.0
+                drawdown = cumulative - cumulative.cummax()
+                return float(drawdown.min()) if not drawdown.empty else 0.0
+
+            max_drawdowns = symbol_groups.apply(_max_drawdown)
+
+            def _trade_returns(group: pd.DataFrame) -> pd.Series:
+                if {"entry_price", "qty"}.issubset(group.columns):
+                    entry_val = (
+                        pd.to_numeric(group["entry_price"], errors="coerce")
+                        * pd.to_numeric(group["qty"], errors="coerce").abs()
+                    )
+                    returns = group["pnl"] / entry_val.replace(0, np.nan)
+                else:
+                    returns = group["pnl"]
+                return returns.replace([np.inf, -np.inf], np.nan).dropna()
+
+            def _sharpe(group: pd.DataFrame) -> float:
+                returns = _trade_returns(group)
+                if returns.empty:
+                    return 0.0
+                std = returns.std(ddof=0)
+                if std == 0 or np.isnan(std):
+                    return 0.0
+                return float(np.sqrt(len(returns)) * returns.mean() / std)
+
+            def _sortino(group: pd.DataFrame) -> float:
+                returns = _trade_returns(group)
+                if returns.empty:
+                    return 0.0
+                downside = returns[returns < 0]
+                downside_std = downside.std(ddof=0)
+                if downside_std == 0 or np.isnan(downside_std):
+                    return 0.0
+                return float(np.sqrt(len(returns)) * returns.mean() / downside_std)
+
+            sharpes = symbol_groups.apply(_sharpe)
+            sortinos = symbol_groups.apply(_sortino)
+
+            summary_df["profit_factor"] = summary_df["symbol"].map(profit_factors)
+            summary_df["max_drawdown"] = summary_df["symbol"].map(max_drawdowns)
+            summary_df["sharpe"] = summary_df["symbol"].map(sharpes)
+            summary_df["sortino"] = summary_df["symbol"].map(sortinos)
         else:
             summary_df = pd.DataFrame(
-                columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
+                columns=[
+                    "symbol",
+                    "trades",
+                    "wins",
+                    "losses",
+                    "net_pnl",
+                    "win_rate",
+                    "expectancy",
+                    "profit_factor",
+                    "max_drawdown",
+                    "sharpe",
+                    "sortino",
+                ]
             )
 
         summary_df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
