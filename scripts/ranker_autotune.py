@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,8 @@ class AutotuneConfig:
     min_sample: int = 50
     as_of: Optional[datetime] = None
     changelog_path: Optional[Path] = None
+    min_improvement: float = 0.001
+    variance_cap: float = 4e-4
 
 
 @dataclass
@@ -49,6 +52,7 @@ class CandidateResult:
     aggregate_profit_factor: float
     aggregate_drawdown: float
     total_sample: int
+    expectancy_variance: float
 
 
 class AutotuneError(RuntimeError):
@@ -215,7 +219,7 @@ def _evaluate_candidate(
     cfg: AutotuneConfig,
 ) -> CandidateResult:
     fold_metrics: list[FoldMetrics] = []
-    collected_returns: list[pd.Series] = []
+    collected_frames: list[pd.DataFrame] = []
 
     for train_mask, test_mask in _walk_forward_splits(df["as_of"], cfg.splits):
         train = df.loc[train_mask]
@@ -227,29 +231,37 @@ def _evaluate_candidate(
         threshold = np.quantile(test_scores, 1 - cfg.top_quantile)
         selected = test_scores >= threshold
         selected_returns = test.loc[selected, "nextday_ret"].astype(float)
-        if selected_returns.empty:
+        selected_dates = pd.to_datetime(test.loc[selected, "as_of"], errors="coerce")
+        selected_frame = pd.DataFrame({"ret": selected_returns.to_numpy(), "as_of": selected_dates.to_numpy()})
+        selected_frame.dropna(subset=["ret", "as_of"], inplace=True)
+        if selected_frame.empty:
             continue
-        pf = _profit_factor(selected_returns)
-        dd = _max_drawdown(selected_returns, test.loc[selected, "as_of"])
-        expectancy = float(selected_returns.mean())
+        pf = _profit_factor(selected_frame["ret"])
+        dd = _max_drawdown(selected_frame["ret"], selected_frame["as_of"])
+        expectancy = float(selected_frame["ret"].mean())
         fold_metrics.append(
             FoldMetrics(
                 expectancy=expectancy,
                 profit_factor=float(pf),
                 max_drawdown=float(dd),
-                sample_size=int(selected_returns.size),
+                sample_size=int(selected_frame.shape[0]),
             )
         )
-        collected_returns.append(selected_returns)
+        collected_frames.append(selected_frame)
 
-    if not fold_metrics:
+    if not fold_metrics or not collected_frames:
         raise AutotuneError("Unable to evaluate candidate; insufficient folds")
 
-    combined_returns = pd.concat(collected_returns).sort_index()
-    aggregate_expectancy = float(combined_returns.mean())
-    aggregate_profit_factor = float(_profit_factor(combined_returns))
-    aggregate_drawdown = float(_max_drawdown(combined_returns, df.loc[combined_returns.index, "as_of"]))
-    total_sample = int(combined_returns.size)
+    combined = pd.concat(collected_frames, ignore_index=True)
+    combined.sort_values("as_of", inplace=True)
+    returns_series = combined["ret"].astype(float)
+    dates_series = combined["as_of"]
+    aggregate_expectancy = float(returns_series.mean())
+    aggregate_profit_factor = float(_profit_factor(returns_series))
+    aggregate_drawdown = float(_max_drawdown(returns_series, dates_series))
+    total_sample = int(returns_series.size)
+    fold_expectancies = np.array([fold.expectancy for fold in fold_metrics], dtype=float)
+    expectancy_variance = float(np.var(fold_expectancies, ddof=0)) if fold_expectancies.size > 1 else 0.0
 
     return CandidateResult(
         weights=weights,
@@ -258,6 +270,7 @@ def _evaluate_candidate(
         aggregate_profit_factor=aggregate_profit_factor,
         aggregate_drawdown=aggregate_drawdown,
         total_sample=total_sample,
+        expectancy_variance=expectancy_variance,
     )
 
 
@@ -276,33 +289,43 @@ def _guardrails_pass(result: CandidateResult, cfg: AutotuneConfig) -> bool:
         return False
     if result.aggregate_drawdown < -cfg.max_drawdown:
         return False
+    if not math.isfinite(result.expectancy_variance) or result.expectancy_variance > cfg.variance_cap:
+        return False
     return True
 
 
 def _append_changelog(path: Path, as_of: datetime, baseline: CandidateResult, candidate: CandidateResult) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    improvement = candidate.aggregate_expectancy - baseline.aggregate_expectancy
     lines = [
         f"## {as_of.strftime('%Y-%m-%d')}",
         "", "Baseline:",
         f"- Expectancy: {baseline.aggregate_expectancy:.6f}",
         f"- Profit Factor: {baseline.aggregate_profit_factor:.3f}",
         f"- Max Drawdown: {baseline.aggregate_drawdown:.3f}",
+        f"- Variance: {baseline.expectancy_variance:.6f}",
+        f"- Samples: {baseline.total_sample}",
         "", "Candidate:",
         f"- Expectancy: {candidate.aggregate_expectancy:.6f}",
         f"- Profit Factor: {candidate.aggregate_profit_factor:.3f}",
         f"- Max Drawdown: {candidate.aggregate_drawdown:.3f}",
+        f"- Variance: {candidate.expectancy_variance:.6f}",
+        f"- Samples: {candidate.total_sample}",
+        f"- Expectancy Improvement: {improvement:.6f}",
         "", "Weights:",
     ]
     for key, value in candidate.weights.items():
         lines.append(f"- {key}: {value:.6f}")
     lines.append("")
 
-    content = "\n".join(lines)
+    content = "\n".join(lines) + "\n"
     if path.exists():
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(content + "\n")
-    else:
-        atomic_write_bytes(path, (content + "\n").encode("utf-8"))
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except OSError:
+            existing = ""
+        content = existing + content
+    atomic_write_bytes(path, content.encode("utf-8"))
 
 
 def autotune(cfg: AutotuneConfig) -> Optional[Path]:
@@ -321,12 +344,26 @@ def autotune(cfg: AutotuneConfig) -> Optional[Path]:
 
     for candidate_weights in _generate_candidates(base_weights):
         result = _evaluate_candidate(df, candidate_weights, feature_keys, cfg)
-        if result.aggregate_expectancy > best_result.aggregate_expectancy + 1e-6 and _guardrails_pass(result, cfg):
-            best_result = result
-            best_weights = candidate_weights
+        if not _guardrails_pass(result, cfg):
+            continue
+        improvement = result.aggregate_expectancy - baseline_result.aggregate_expectancy
+        if improvement < cfg.min_improvement:
+            continue
+        if result.aggregate_expectancy <= best_result.aggregate_expectancy:
+            continue
+        best_result = result
+        best_weights = candidate_weights
 
-    if best_result is baseline_result or not _guardrails_pass(best_result, cfg):
-        print("Guardrails not met or no improvement; keeping existing configuration.")
+    if best_result is baseline_result:
+        print("No candidate exceeded the baseline; keeping existing configuration.")
+        return None
+
+    if not _guardrails_pass(best_result, cfg):
+        print("Guardrails not met; keeping existing configuration.")
+        return None
+
+    if best_result.aggregate_expectancy < baseline_result.aggregate_expectancy + cfg.min_improvement:
+        print("Improvement threshold not met; keeping existing configuration.")
         return None
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
@@ -336,24 +373,44 @@ def autotune(cfg: AutotuneConfig) -> Optional[Path]:
     output_path = cfg.output_dir / f"{version_name}.yml"
     _write_config(output_path, best_weights, base)
 
-    current_link = cfg.output_dir / "ranker_v2_current.yml"
-    if current_link.exists() or current_link.is_symlink():
-        current_link.unlink()
-    current_link.symlink_to(output_path.name)
+    target_link = cfg.config_path
+    target_link.parent.mkdir(parents=True, exist_ok=True)
+    tmp_link = target_link.with_suffix(target_link.suffix + ".tmp")
+    if tmp_link.exists() or tmp_link.is_symlink():
+        tmp_link.unlink()
+    relative_target = os.path.relpath(output_path, target_link.parent)
+    tmp_link.symlink_to(relative_target)
+    try:
+        tmp_link.replace(target_link)
+    except OSError:
+        if target_link.exists() or target_link.is_symlink():
+            target_link.unlink()
+        target_link.symlink_to(relative_target)
 
     if cfg.changelog_path:
         _append_changelog(cfg.changelog_path, as_of, baseline_result, best_result)
 
+    improvement = best_result.aggregate_expectancy - baseline_result.aggregate_expectancy
     metadata = {
         "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "as_of": as_of.strftime(DATE_FORMAT),
         "output": str(output_path),
         "weights": best_weights,
         "baseline_expectancy": baseline_result.aggregate_expectancy,
+        "baseline_profit_factor": baseline_result.aggregate_profit_factor,
+        "baseline_drawdown": baseline_result.aggregate_drawdown,
+        "baseline_variance": baseline_result.expectancy_variance,
         "candidate_expectancy": best_result.aggregate_expectancy,
         "candidate_profit_factor": best_result.aggregate_profit_factor,
         "candidate_drawdown": best_result.aggregate_drawdown,
+        "candidate_variance": best_result.expectancy_variance,
+        "expectancy_improvement": improvement,
+        "min_improvement": cfg.min_improvement,
+        "pf_threshold": cfg.pf_threshold,
+        "max_drawdown_limit": cfg.max_drawdown,
+        "variance_cap": cfg.variance_cap,
         "sample_size": best_result.total_sample,
+        "folds_evaluated": len(best_result.fold_metrics),
     }
     atomic_write_bytes(
         (cfg.output_dir / f"{version_name}.json"),
@@ -419,6 +476,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum number of validation samples required to accept a candidate.",
     )
     parser.add_argument(
+        "--min-improvement",
+        type=float,
+        default=0.001,
+        help="Minimum daily expectancy improvement required to promote new weights.",
+    )
+    parser.add_argument(
         "--as-of",
         type=_parse_date,
         help="Override the as-of date used for filtering realized labels.",
@@ -428,6 +491,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("configs") / "ranker_v2_changelog.md",
         help="Path to the changelog file that records accepted updates.",
+    )
+    parser.add_argument(
+        "--variance-cap",
+        type=float,
+        default=4e-4,
+        help="Maximum variance across fold expectancies permitted for promotion.",
     )
     return parser
 
@@ -447,6 +516,8 @@ def main(argv: Optional[Iterable[str]] = None) -> Optional[Path]:
         min_sample=args.min_sample,
         as_of=args.as_of,
         changelog_path=args.changelog,
+        min_improvement=args.min_improvement,
+        variance_cap=args.variance_cap,
     )
     return autotune(cfg)
 

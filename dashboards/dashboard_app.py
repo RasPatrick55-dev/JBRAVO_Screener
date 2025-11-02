@@ -7,6 +7,7 @@ from dash.dependencies import Input, Output, State
 from datetime import datetime, timezone, timedelta
 import subprocess
 import json
+import math
 from alpaca.trading.client import TradingClient
 from dotenv import load_dotenv
 import logging
@@ -39,7 +40,7 @@ top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
 scored_candidates_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
 screener_metrics_path = os.path.join(BASE_DIR, "data", "screener_metrics.json")
 predictions_dir_path = os.path.join(BASE_DIR, "data", "predictions")
-ranker_eval_dir_path = os.path.join(BASE_DIR, "ranker_eval")
+ranker_eval_dir_path = os.path.join(BASE_DIR, "data", "ranker_eval")
 latest_candidates_path = os.path.join(BASE_DIR, "data", "latest_candidates.csv")
 
 TOP_CANDIDATES = Path(top_candidates_path)
@@ -2304,25 +2305,35 @@ def ranker_eval_layout():
     summary_path, summary = summary_payload
     metrics = summary.get("metrics", {})
     as_of = summary.get("as_of", "?")
-    hit_rate_value = metrics.get("hit_rate")
-    expectancy_value = metrics.get("expectancy")
-    profit_factor_value = metrics.get("profit_factor")
-    sharpe_value = metrics.get("sharpe")
 
     def _ensure_numeric(value: Any) -> float:
-        return float(value) if isinstance(value, (int, float)) and not pd.isna(value) else float("nan")
+        if isinstance(value, (int, float)) and not pd.isna(value):
+            return float(value)
+        if isinstance(value, (int, float)) and math.isinf(value):
+            return float(value)
+        return float("nan")
 
-    hit_rate_value = _ensure_numeric(hit_rate_value)
-    expectancy_value = _ensure_numeric(expectancy_value)
-    profit_factor_value = _ensure_numeric(profit_factor_value)
-    sharpe_value = _ensure_numeric(sharpe_value)
+    def _format_value(value: float, fmt: str, infinite_label: str = "∞") -> str:
+        if math.isnan(value):
+            return "n/a"
+        if math.isinf(value):
+            return infinite_label if value > 0 else f"-{infinite_label}"
+        return fmt.format(value)
+
+    hit_rate_value = _ensure_numeric(metrics.get("hit_rate"))
+    expectancy_value = _ensure_numeric(metrics.get("expectancy"))
+    profit_factor_value = _ensure_numeric(metrics.get("profit_factor"))
+    sharpe_value = _ensure_numeric(metrics.get("sharpe"))
+    drawdown_value = _ensure_numeric(metrics.get("max_drawdown"))
+    expectancy_std_value = _ensure_numeric(metrics.get("expectancy_std"))
+
     cards = dbc.Row(
         [
             dbc.Col(
                 dbc.Card(
                     [
                         dbc.CardHeader("Hit Rate"),
-                        dbc.CardBody(html.H4(f"{hit_rate_value:.2%}")),
+                        dbc.CardBody(html.H4(_format_value(hit_rate_value, "{:.2%}"))),
                     ]
                 ),
                 md=3,
@@ -2331,7 +2342,7 @@ def ranker_eval_layout():
                 dbc.Card(
                     [
                         dbc.CardHeader("Expectancy"),
-                        dbc.CardBody(html.H4(f"{expectancy_value:.4f}")),
+                        dbc.CardBody(html.H4(_format_value(expectancy_value, "{:.4f}"))),
                     ]
                 ),
                 md=3,
@@ -2340,7 +2351,7 @@ def ranker_eval_layout():
                 dbc.Card(
                     [
                         dbc.CardHeader("Profit Factor"),
-                        dbc.CardBody(html.H4(f"{profit_factor_value:.2f}")),
+                        dbc.CardBody(html.H4(_format_value(profit_factor_value, "{:.2f}"))),
                     ]
                 ),
                 md=3,
@@ -2349,7 +2360,31 @@ def ranker_eval_layout():
                 dbc.Card(
                     [
                         dbc.CardHeader("Sharpe"),
-                        dbc.CardBody(html.H4(f"{sharpe_value:.2f}")),
+                        dbc.CardBody(html.H4(_format_value(sharpe_value, "{:.2f}"))),
+                    ]
+                ),
+                md=3,
+            ),
+        ],
+        className="mb-4",
+    )
+
+    secondary_cards = dbc.Row(
+        [
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader("Max Drawdown"),
+                        dbc.CardBody(html.H4(_format_value(drawdown_value, "{:.2%}"))),
+                    ]
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader("Return Volatility"),
+                        dbc.CardBody(html.H4(_format_value(expectancy_std_value, "{:.4f}"))),
                     ]
                 ),
                 md=3,
@@ -2383,8 +2418,10 @@ def ranker_eval_layout():
 
     return html.Div(
         [
+            html.Div(f"Evaluation as of {as_of}", className="text-light"),
             html.Div(f"Summary generated: {updated}", className="text-light mb-3"),
             cards,
+            secondary_cards,
             html.H4("Decile Performance", className="text-light"),
             deciles_component,
             html.Hr(),
