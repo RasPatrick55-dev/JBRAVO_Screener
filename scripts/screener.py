@@ -2165,9 +2165,10 @@ def _append_secondary_indicators(enriched: pd.DataFrame, raw_df: pd.DataFrame) -
 
     volume = pd.to_numeric(working["volume"], errors="coerce").fillna(0.0)
 
-    rel_vol = _groupby("volume").transform(
-        lambda s: s / s.rolling(20, min_periods=1).mean().replace(0, np.nan)
+    vol_ma30 = _groupby("volume").transform(
+        lambda s: s.rolling(30, min_periods=1).mean()
     )
+    rel_vol = volume / vol_ma30.replace(0, np.nan)
 
     close_diff = _groupby("close").diff().fillna(0.0)
     direction = np.sign(close_diff)
@@ -2197,7 +2198,10 @@ def _append_secondary_indicators(enriched: pd.DataFrame, raw_df: pd.DataFrame) -
             "symbol": working["symbol"],
             "timestamp": working["timestamp"],
             "REL_VOLUME": pd.to_numeric(rel_vol, errors="coerce"),
+            "OBV": pd.to_numeric(flow_df["OBV"], errors="coerce"),
             "OBV_DELTA": pd.to_numeric(obv_delta, errors="coerce"),
+            "BB_UPPER": pd.to_numeric(upper, errors="coerce"),
+            "BB_LOWER": pd.to_numeric(lower, errors="coerce"),
             "BB_BANDWIDTH": pd.to_numeric(bb_bandwidth, errors="coerce"),
         }
     )
@@ -2209,7 +2213,16 @@ def _append_secondary_indicators(enriched: pd.DataFrame, raw_df: pd.DataFrame) -
         )
         merged["ATR_pct"] = atr_pct
 
-    for column in ("REL_VOLUME", "OBV_DELTA", "BB_BANDWIDTH", "ATR_pct"):
+    for column in (
+        "REL_VOLUME",
+        "VOL_MA30",
+        "OBV",
+        "OBV_DELTA",
+        "BB_UPPER",
+        "BB_LOWER",
+        "BB_BANDWIDTH",
+        "ATR_pct",
+    ):
         if column in merged.columns:
             merged[column] = pd.to_numeric(merged[column], errors="coerce")
 
@@ -3392,6 +3405,15 @@ def _prepare_predictions_frame(
         return pd.to_numeric(series, errors="coerce")
 
     score_breakdowns = frame.get("score_breakdown", pd.Series(dtype="string")).fillna("").astype(str)
+    component_breakdowns = (
+        frame.get("component_breakdown", pd.Series(dtype="string")).fillna("").astype(str)
+    )
+    if component_breakdowns.str.strip().eq("").all():
+        component_breakdowns = score_breakdowns
+    else:
+        component_breakdowns = component_breakdowns.mask(
+            component_breakdowns.str.strip() == "", score_breakdowns
+        )
 
     payload = pd.DataFrame({
         "run_date": run_date_str,
@@ -3431,7 +3453,7 @@ def _prepare_predictions_frame(
         "obv_delta": _coerce_float(frame.get("OBV_DELTA")),
         "bb_bandwidth": _coerce_float(frame.get("BB_BANDWIDTH")),
         "atr_pct": _coerce_float(frame.get("ATR_pct")),
-        "components_json": score_breakdowns,
+        "components_json": component_breakdowns,
     })
 
     payload["score_breakdown_json"] = payload["score_breakdown_json"].apply(
