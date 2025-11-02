@@ -39,10 +39,12 @@ top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
 scored_candidates_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
 screener_metrics_path = os.path.join(BASE_DIR, "data", "screener_metrics.json")
 predictions_dir_path = os.path.join(BASE_DIR, "data", "predictions")
+ranker_eval_dir_path = os.path.join(BASE_DIR, "ranker_eval")
 latest_candidates_path = os.path.join(BASE_DIR, "data", "latest_candidates.csv")
 
 TOP_CANDIDATES = Path(top_candidates_path)
 LATEST_CANDIDATES = Path(latest_candidates_path)
+RANKER_EVAL_DIR = Path(ranker_eval_dir_path)
 
 # Additional datasets introduced for monitoring
 metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
@@ -357,6 +359,51 @@ def load_prediction_history(limit: int = 7) -> list[tuple[str, pd.DataFrame]]:
     return frames[-limit:]
 
 
+def _latest_prediction_snapshot() -> tuple[Path, pd.DataFrame] | None:
+    directory = Path(predictions_dir_path)
+    if not directory.exists():
+        return None
+    candidates: list[tuple[datetime, Path]] = []
+    for path in directory.glob("*.csv"):
+        if path.name == "latest.csv":
+            continue
+        try:
+            snapshot_date = datetime.strptime(path.stem, "%Y-%m-%d")
+        except ValueError:
+            snapshot_date = datetime.utcfromtimestamp(path.stat().st_mtime)
+        candidates.append((snapshot_date, path))
+    if not candidates:
+        return None
+    _, latest_path = max(candidates, key=lambda item: item[0])
+    try:
+        df = pd.read_csv(latest_path)
+    except Exception:
+        return None
+    return latest_path, df
+
+
+def _read_ranker_eval_summary() -> tuple[Path, dict] | None:
+    summary_path = RANKER_EVAL_DIR / "summary.json"
+    if not summary_path.exists():
+        return None
+    try:
+        with open(summary_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return None
+    return summary_path, payload
+
+
+def _load_deciles(as_of: str) -> pd.DataFrame | None:
+    decile_path = RANKER_EVAL_DIR / f"deciles_{as_of}.csv"
+    if not decile_path.exists():
+        return None
+    try:
+        return pd.read_csv(decile_path)
+    except Exception:
+        return None
+
+
 def read_recent_lines(filepath, num_lines=50, since_days=None):
     """Return recent lines from ``filepath``.
 
@@ -510,6 +557,18 @@ def create_open_positions_table(df: pd.DataFrame) -> dash_table.DataTable:
                 "color": "#4DB6AC",
             },
         ],
+    )
+
+
+def _styled_table(df: pd.DataFrame, table_id: str | None = None, page_size: int = 25) -> dash_table.DataTable:
+    columns = [{"name": c.replace("_", " ").title(), "id": c} for c in df.columns]
+    return dash_table.DataTable(
+        id=table_id,
+        data=df.to_dict("records"),
+        columns=columns,
+        style_table={"overflowX": "auto", "maxHeight": "450px", "overflowY": "auto"},
+        style_cell={"backgroundColor": "#212529", "color": "#E0E0E0", "fontSize": "0.85rem"},
+        page_size=page_size,
     )
 
 
@@ -741,6 +800,20 @@ app.layout = dbc.Container(
                 dbc.Tab(
                     label="Screener",
                     tab_id="tab-screener",
+                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                    className="custom-tab",
+                ),
+                dbc.Tab(
+                    label="Predictions",
+                    tab_id="tab-predictions",
+                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                    className="custom-tab",
+                ),
+                dbc.Tab(
+                    label="Ranker Eval",
+                    tab_id="tab-ranker-eval",
                     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                     className="custom-tab",
@@ -2185,6 +2258,145 @@ def screener_layout():
     return _render_tab("tab-screener", 0, 0, None)
 
 
+def predictions_layout():
+    snapshot = _latest_prediction_snapshot()
+    if snapshot is None:
+        return dbc.Alert("Prediction snapshot not available yet.", color="secondary")
+
+    path, df = snapshot
+    if df.empty:
+        return dbc.Alert(
+            f"{path.name} does not contain any rows yet.",
+            color="secondary",
+        )
+
+    display_df = df.copy()
+    display_df.columns = [str(col) for col in display_df.columns]
+    table = _styled_table(display_df.head(100), table_id="predictions-table", page_size=25)
+
+    updated = format_time(get_file_mtime(str(path)))
+    meta = dbc.Row(
+        [
+            dbc.Col(html.Div(f"Snapshot: {path.name}"), md=6),
+            dbc.Col(html.Div(f"Last updated: {updated}"), md=6),
+        ],
+        className="mb-3 text-light",
+    )
+
+    return html.Div(
+        [
+            meta,
+            dbc.Alert(
+                "Showing up to 100 rows from the latest predictions snapshot.",
+                color="info",
+                className="mb-3",
+            ),
+            table,
+        ]
+    )
+
+
+def ranker_eval_layout():
+    summary_payload = _read_ranker_eval_summary()
+    if summary_payload is None:
+        return dbc.Alert("Ranker evaluation artefacts are not available yet.", color="secondary")
+
+    summary_path, summary = summary_payload
+    metrics = summary.get("metrics", {})
+    as_of = summary.get("as_of", "?")
+    hit_rate_value = metrics.get("hit_rate")
+    expectancy_value = metrics.get("expectancy")
+    profit_factor_value = metrics.get("profit_factor")
+    sharpe_value = metrics.get("sharpe")
+
+    def _ensure_numeric(value: Any) -> float:
+        return float(value) if isinstance(value, (int, float)) and not pd.isna(value) else float("nan")
+
+    hit_rate_value = _ensure_numeric(hit_rate_value)
+    expectancy_value = _ensure_numeric(expectancy_value)
+    profit_factor_value = _ensure_numeric(profit_factor_value)
+    sharpe_value = _ensure_numeric(sharpe_value)
+    cards = dbc.Row(
+        [
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader("Hit Rate"),
+                        dbc.CardBody(html.H4(f"{hit_rate_value:.2%}")),
+                    ]
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader("Expectancy"),
+                        dbc.CardBody(html.H4(f"{expectancy_value:.4f}")),
+                    ]
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader("Profit Factor"),
+                        dbc.CardBody(html.H4(f"{profit_factor_value:.2f}")),
+                    ]
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader("Sharpe"),
+                        dbc.CardBody(html.H4(f"{sharpe_value:.2f}")),
+                    ]
+                ),
+                md=3,
+            ),
+        ],
+        className="mb-4",
+    )
+
+    deciles_df = _load_deciles(as_of)
+    deciles_component = (
+        _styled_table(deciles_df, table_id="ranker-deciles", page_size=10)
+        if deciles_df is not None and not deciles_df.empty
+        else dbc.Alert("Decile breakdown not available.", color="secondary")
+    )
+
+    calibration_records = summary.get("calibration", [])
+    calibration_component = (
+        _styled_table(pd.DataFrame(calibration_records), table_id="ranker-calibration", page_size=10)
+        if calibration_records
+        else dbc.Alert("Calibration data not available.", color="secondary")
+    )
+
+    stability_records = summary.get("stability", [])
+    stability_component = (
+        _styled_table(pd.DataFrame(stability_records), table_id="ranker-stability", page_size=10)
+        if stability_records
+        else dbc.Alert("Stability metrics not available.", color="secondary")
+    )
+
+    updated = format_time(get_file_mtime(str(summary_path)))
+
+    return html.Div(
+        [
+            html.Div(f"Summary generated: {updated}", className="text-light mb-3"),
+            cards,
+            html.H4("Decile Performance", className="text-light"),
+            deciles_component,
+            html.Hr(),
+            html.H4("Calibration", className="text-light"),
+            calibration_component,
+            html.Hr(),
+            html.H4("Monthly Stability", className="text-light"),
+            stability_component,
+        ]
+    )
+
+
 @app.callback(Output("tabs-content", "children"), [Input("tabs", "active_tab")])
 def render_tab(tab):
     if tab == "tab-screener-health":
@@ -2202,6 +2414,12 @@ def render_tab(tab):
     elif tab == "tab-monitor":
         logger.info("Rendering content for tab: %s", tab)
         return monitor_positions_layout()
+    elif tab == "tab-predictions":
+        logger.info("Rendering content for tab: %s", tab)
+        return predictions_layout()
+    elif tab == "tab-ranker-eval":
+        logger.info("Rendering content for tab: %s", tab)
+        return ranker_eval_layout()
     elif tab == "tab-execute":
         logger.info("Rendering content for tab: %s", tab)
         return execute_trades_layout()
