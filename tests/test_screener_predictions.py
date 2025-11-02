@@ -30,6 +30,20 @@ def test_prepare_predictions_frame_orders_columns():
             "VOLexp": [1.2, 0.8],
             "GAPpen": [0.01, 0.02],
             "LIQpen": [0.0, 0.1],
+            "trend_score": [0.8, -0.4],
+            "momentum_score": [0.6, -0.3],
+            "volume_score": [0.5, -0.2],
+            "volatility_score": [0.4, -0.1],
+            "risk_score": [0.3, -0.05],
+            "trend_contribution": [0.24, -0.12],
+            "momentum_contribution": [0.15, -0.075],
+            "volume_contribution": [0.10, -0.04],
+            "volatility_contribution": [0.06, -0.015],
+            "risk_contribution": [0.03, -0.005],
+            "REL_VOLUME": [2.0, 0.8],
+            "OBV_DELTA": [1_000, -500],
+            "BB_BANDWIDTH": [0.05, 0.12],
+            "ATR_pct": [0.05, 0.08],
             "score_breakdown": ['{"TS": 1.0, "MS": 0.5}', '{"TS": -1.0, "MS": -0.5}'],
         }
     )
@@ -66,6 +80,22 @@ def test_prepare_predictions_frame_orders_columns():
         "gap_pen",
         "liq_pen",
         "score_breakdown_json",
+        "trend_score",
+        "momentum_score",
+        "volume_score",
+        "volatility_score",
+        "risk_score",
+        "trend_contribution",
+        "momentum_contribution",
+        "volume_contribution",
+        "volatility_contribution",
+        "risk_contribution",
+        "rel_volume",
+        "obv_delta",
+        "bb_bandwidth",
+        "atr_pct",
+        "components_json",
+        "relax_gates",
     ]
     assert list(prepared.columns) == expected_columns
     assert prepared.loc[0, "run_date"] == "2024-01-02"
@@ -73,3 +103,4 @@ def test_prepare_predictions_frame_orders_columns():
     assert bool(prepared.loc[0, "passed_gates"]) is True
     assert prepared.loc[0, "score"] == pytest.approx(1.2)
     assert prepared.loc[0, "adv20"] == pytest.approx(2_000_000)
+    assert prepared.loc[0, "components_json"] == prepared.loc[0, "score_breakdown_json"]

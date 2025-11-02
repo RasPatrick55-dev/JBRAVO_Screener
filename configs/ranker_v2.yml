@@ -1,0 +1,12 @@
+version: 2
+weights:
+  trend: 0.30
+  momentum: 0.25
+  volume: 0.20
+  volatility: 0.15
+  risk: 0.10
+thresholds:
+  rel_vol_min: 1.8
+  adx_min: 20
+  atr_pct_max: 0.07
+  bb_bw_pctile: 0.15
