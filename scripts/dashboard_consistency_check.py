@@ -32,6 +32,28 @@ PIPELINE_MARKERS = (
     "DASH RELOAD",
 )
 
+EXECUTION_TOKENS = (
+    "BUY_SUBMIT",
+    "BUY_FILL",
+    "BUY_CANCELLED",
+    "TRAIL_SUBMIT",
+    "TRAIL_CONFIRMED",
+    "TRAIL_FAILED",
+    "TIME_WINDOW",
+    "CASH",
+    "ZERO_QTY",
+    "PRICE_BOUNDS",
+    "MAX_POSITIONS",
+)
+
+EXECUTION_SKIP_TOKENS = (
+    "TIME_WINDOW",
+    "CASH",
+    "ZERO_QTY",
+    "PRICE_BOUNDS",
+    "MAX_POSITIONS",
+)
+
 CANDIDATE_CANONICAL_LOWER = {"symbol", "score"}
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -208,6 +230,42 @@ def _parse_pipeline_tokens(text: str) -> dict[str, Any]:
     return result
 
 
+def _parse_executor_tokens(text: str) -> dict[str, Any]:
+    tokens: dict[str, list[dict[str, Any]]] = {token: [] for token in EXECUTION_TOKENS}
+    if not text:
+        return {
+            token: {"present": False, "count": 0, "latest": {}, "entries": []}
+            for token in EXECUTION_TOKENS
+        }
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        for token in EXECUTION_TOKENS:
+            if token not in line:
+                continue
+            entry: dict[str, Any] = {
+                "line": line,
+                "timestamp_utc": _extract_timestamp(raw_line),
+                "data": {},
+                "tail": "",
+            }
+            tail = line.split(token, 1)[1].strip() if token in line else ""
+            entry["tail"] = tail
+            if tail:
+                entry["data"] = _parse_key_values(tail)
+            tokens[token].append(entry)
+
+    parsed: dict[str, Any] = {}
+    for token, entries in tokens.items():
+        parsed[token] = {
+            "present": bool(entries),
+            "count": len(entries),
+            "latest": entries[-1] if entries else {},
+            "entries": entries,
+        }
+    return parsed
+
+
 def _numeric(value: Any) -> float:
     try:
         if value is None:
@@ -333,30 +391,20 @@ def _timings(metrics: Mapping[str, Any], summary_data: Mapping[str, Any]) -> dic
 
 
 def _parse_executor_log(text: str) -> dict[str, Any]:
+    tokens = _parse_executor_tokens(text)
+    skip_reasons: dict[str, int] = {}
+    for reason in EXECUTION_SKIP_TOKENS:
+        count = tokens.get(reason, {}).get("count", 0)
+        if count:
+            skip_reasons[reason] = int(count)
     summary = {
-        "orders_submitted": 0,
-        "orders_filled": 0,
-        "orders_canceled": 0,
-        "trailing_attached": 0,
-        "skip_reasons": {},
+        "orders_submitted": tokens.get("BUY_SUBMIT", {}).get("count", 0),
+        "orders_filled": tokens.get("BUY_FILL", {}).get("count", 0),
+        "orders_canceled": tokens.get("BUY_CANCELLED", {}).get("count", 0),
+        "trailing_attached": tokens.get("TRAIL_CONFIRMED", {}).get("count", 0),
+        "skip_reasons": skip_reasons,
+        "tokens": tokens,
     }
-    if not text:
-        return summary
-    for line in text.splitlines():
-        lower = line.lower()
-        if "submitting" in lower and "order" in lower:
-            summary["orders_submitted"] += 1
-        if "order filled" in lower:
-            summary["orders_filled"] += 1
-        if "order cancel" in lower or "order canceled" in lower or "order cancelled" in lower:
-            summary["orders_canceled"] += 1
-        if "trailing" in lower and ("stop" in lower or "attach" in lower):
-            summary["trailing_attached"] += 1
-        match = re.search(r"SKIP[^A-Z]*([A-Z_]{3,})", line)
-        if match:
-            reason = match.group(1)
-            reasons = summary["skip_reasons"]
-            reasons[reason] = reasons.get(reason, 0) + 1
     return summary
 
 
@@ -367,8 +415,9 @@ def _executor_summary(metrics: Mapping[str, Any], log_text: str) -> dict[str, An
         "orders_filled": summary_from_log["orders_filled"],
         "orders_canceled": summary_from_log["orders_canceled"],
         "trailing_attached": summary_from_log["trailing_attached"],
-        "skip_reasons": summary_from_log["skip_reasons"],
+        "skip_reasons": dict(summary_from_log["skip_reasons"]),
         "metrics_present": bool(metrics),
+        "tokens": summary_from_log.get("tokens", {}),
     }
     if isinstance(metrics, Mapping) and metrics:
         for key in ("orders_submitted", "orders_filled", "orders_canceled", "trailing_attached"):
@@ -376,9 +425,13 @@ def _executor_summary(metrics: Mapping[str, Any], log_text: str) -> dict[str, An
                 data[key] = int(_numeric(metrics.get(key)))
         skip = metrics.get("skip_reasons")
         if isinstance(skip, Mapping):
-            data["skip_reasons"] = {
-                str(reason): int(_numeric(count)) for reason, count in skip.items()
-            }
+            merged: dict[str, int] = dict(data.get("skip_reasons", {}))
+            for reason, count in skip.items():
+                try:
+                    merged[str(reason)] = int(_numeric(count))
+                except Exception:
+                    continue
+            data["skip_reasons"] = merged
     return data
 
 
@@ -505,6 +558,65 @@ def _write_findings(path: Path, report: Mapping[str, Any]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def collect_evidence(
+    report: Mapping[str, Any], *, base_dir: Path | str = BASE_DIR, evidence_dir: Path | str | None = None
+) -> Path:
+    base = Path(base_dir)
+    destination = Path(evidence_dir) if evidence_dir else base / "reports" / "evidence"
+    destination.mkdir(parents=True, exist_ok=True)
+
+    pipeline_tail = _read_tail(base / "logs" / "pipeline.log")
+    (destination / "pipeline_tail.log").write_text(pipeline_tail, encoding="utf-8")
+
+    execute_tail = _read_tail(base / "logs" / "execute_trades.log")
+    (destination / "execute_tail.log").write_text(execute_tail, encoding="utf-8")
+
+    checks = report.get("checks", {}) if isinstance(report, Mapping) else {}
+    candidates = checks.get("candidates", {}) if isinstance(checks, Mapping) else {}
+
+    pipeline_tokens = checks.get("pipeline_tokens", {}) if isinstance(checks, Mapping) else {}
+    (destination / "pipeline_tokens.json").write_text(
+        json.dumps(pipeline_tokens, indent=2, default=str), encoding="utf-8"
+    )
+
+    executor_tokens = checks.get("executor", {}).get("tokens", {}) if isinstance(checks, Mapping) else {}
+    (destination / "executor_tokens.json").write_text(
+        json.dumps(executor_tokens, indent=2, default=str), encoding="utf-8"
+    )
+
+    header_snapshot: dict[str, Any] = {}
+    for label in ("latest", "top", "scored"):
+        info = candidates.get(label, {}) if isinstance(candidates, Mapping) else {}
+        header_snapshot[label] = {
+            "columns": info.get("columns"),
+            "canonical_sequence": info.get("canonical_sequence"),
+            "missing_canonical": info.get("missing_canonical"),
+            "first_rows": info.get("first_rows"),
+        }
+    (destination / "candidate_headers.json").write_text(
+        json.dumps(header_snapshot, indent=2, default=str), encoding="utf-8"
+    )
+
+    screener_metrics, _ = _safe_read_json(base / "data" / "screener_metrics.json")
+    execute_metrics, _ = _safe_read_json(base / "data" / "execute_metrics.json")
+    metrics_summary_df, _ = _safe_read_csv(base / "data" / "metrics_summary.csv")
+    metrics_snapshot: dict[str, Any] = {
+        "screener_metrics": screener_metrics,
+        "execute_metrics": execute_metrics,
+        "metrics_summary_latest": [],
+    }
+    if metrics_summary_df is not None and not metrics_summary_df.empty:
+        latest_row = metrics_summary_df.tail(1).to_dict(orient="records")
+        metrics_snapshot["metrics_summary_latest"] = json.loads(
+            json.dumps(latest_row, default=str)
+        )
+    (destination / "metrics_snapshot.json").write_text(
+        json.dumps(metrics_snapshot, indent=2, default=str), encoding="utf-8"
+    )
+
+    return destination
+
+
 def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | None = None) -> dict[str, Any]:
     base = Path(base_dir)
     reports_path = Path(reports_dir) if reports_dir else base / "reports"
@@ -617,6 +729,16 @@ def main(argv: Iterable[str] | None = None) -> int:
         default=None,
         help="Optional directory for report outputs (defaults to <base>/reports)",
     )
+    parser.add_argument(
+        "--write-evidence",
+        action="store_true",
+        help="Collect an evidence bundle with tokens, log snippets, and metrics",
+    )
+    parser.add_argument(
+        "--evidence-dir",
+        default=None,
+        help="Optional directory for evidence outputs (defaults to <reports>/evidence)",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     base = Path(args.base).resolve()
     target_reports_dir = (
@@ -625,6 +747,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     report = generate_report(base_dir=base, reports_dir=target_reports_dir)
     LOGGER.info("Dashboard consistency report written to %s", target_reports_dir)
     LOGGER.debug("Report summary: %s", json.dumps(report, indent=2, default=str))
+    if args.write_evidence:
+        evidence_target = (
+            Path(args.evidence_dir).resolve()
+            if args.evidence_dir
+            else target_reports_dir / "evidence"
+        )
+        evidence_path = collect_evidence(report, base_dir=base, evidence_dir=evidence_target)
+        LOGGER.info("Dashboard evidence bundle written to %s", evidence_path)
     return 0
 
 

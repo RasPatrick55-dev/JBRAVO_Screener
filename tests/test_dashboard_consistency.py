@@ -140,7 +140,7 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
         "\n".join(
             [
                 "2024-01-01 09:00:00 [INFO] PIPELINE_START steps=screener,metrics",
-                "2024-01-01 09:05:00 [INFO] PIPELINE_SUMMARY symbols_in=12 with_bars=10 rows=2 fetch_secs=12.3 feature_secs=4.5 rank_secs=1.2 gate_secs=0.8",
+                "2024-01-01 09:05:00 [INFO] PIPELINE_SUMMARY symbols_in=12 with_bars=10 rows=2 fetch_secs=12.3 feature_secs=4.5 rank_secs=1.2 gate_secs=0.8 bars_rows_total=240 source=screener",
                 "2024-01-01 09:05:01 [INFO] FALLBACK_CHECK rows_out=2 source=screener",
                 "2024-01-01 09:05:02 [INFO] PIPELINE_END rc=0 duration=62.5s",
                 "2024-01-01 09:05:03 [INFO] DASH RELOAD method=touch rc=0 path=/tmp/app.wsgi",
@@ -152,11 +152,13 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
     (logs_dir / "execute_trades.log").write_text(
         "\n".join(
             [
-                "2024-01-01 09:05:10 [INFO] Submitting limit buy order for AAPL",
-                "2024-01-01 09:05:11 [INFO] Order filled for AAPL",
-                "2024-01-01 09:05:12 [INFO] Order canceled for BETA",
-                "2024-01-01 09:05:13 [INFO] Creating trailing stop for AAPL",
-                "2024-01-01 09:05:14 [INFO] SKIP due to CASH",
+                "2024-01-01 09:05:10 [INFO] BUY_SUBMIT symbol=AAPL qty=10 limit=125.50",
+                "2024-01-01 09:05:11 [INFO] BUY_FILL symbol=AAPL filled_qty=10 avg_price=125.55",
+                "2024-01-01 09:05:12 [INFO] BUY_CANCELLED symbol=BETA remaining_qty=10 status=cancelled",
+                "2024-01-01 09:05:13 [INFO] TRAIL_SUBMIT symbol=AAPL trail_pct=3 route=trailing_stop",
+                "2024-01-01 09:05:14 [INFO] TRAIL_CONFIRMED symbol=AAPL qty=10 order_id=abc123",
+                "2024-01-01 09:05:15 [INFO] TIME_WINDOW reason=outside_window",
+                "2024-01-01 09:05:16 [INFO] CASH symbol=BETA detail=insufficient",
             ]
         ),
         encoding="utf-8",
@@ -172,6 +174,11 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
     assert pipeline_tokens["PIPELINE_SUMMARY"]["data"]["rows"] == 2
     assert report["checks"]["trades_log"]["present"] is False
     assert report["checks"]["executor"]["orders_submitted"] == 2
+    assert report["checks"]["executor"]["orders_canceled"] == 1
+    assert report["checks"]["executor"]["tokens"]["BUY_SUBMIT"]["count"] == 1
+    assert report["checks"]["executor"]["tokens"]["TIME_WINDOW"]["count"] == 1
+    assert report["checks"]["executor"]["skip_reasons"]["CASH"] == 1
+    assert report["checks"]["executor"]["skip_reasons"]["TIME_WINDOW"] == 1
     assert report["checks"]["predictions"]["prediction_rows"] == 2
     assert report["checks"]["prefix_sanity"]["ok"] is True
 
@@ -180,6 +187,14 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
     assert (reports_dir / "dashboard_findings.txt").exists()
     findings_text = (reports_dir / "dashboard_findings.txt").read_text(encoding="utf-8")
     assert "candidates_header=canonical:true" in findings_text
+
+    evidence_dir = base / "evidence"
+    bundle = checker.collect_evidence(report, base_dir=base, evidence_dir=evidence_dir)
+    assert bundle.exists()
+    assert (bundle / "pipeline_tokens.json").exists()
+    assert (bundle / "executor_tokens.json").exists()
+    assert (bundle / "candidate_headers.json").exists()
+    assert (bundle / "metrics_snapshot.json").exists()
 
 
 @pytest.mark.alpaca_optional

@@ -21,21 +21,25 @@ export PROJECT_HOME
 VENV="${VENV:-/home/RasPatrick/.virtualenvs/jbravo-env}"
 PYTHON="${VENV}/bin/python"
 WSGI_PATH="${PROJECT_HOME}/raspatrick_pythonanywhere_com_wsgi.py"
+RUN_STARTED_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 cd "$PROJECT_HOME"
 source "$VENV/bin/activate"
 set -a; . ~/.config/jbravo/.env; set +a
 
 log "probing Alpaca credentials"
-"$PYTHON" - <<'PY'
-import os, requests
+AUTH_OUTPUT="$("$PYTHON" - <<'PY'
+import json
+import os
 from urllib.parse import urljoin
 
-base=os.getenv("APCA_API_BASE_URL", "").strip()
-key=os.getenv("APCA_API_KEY_ID", "")
-secret=os.getenv("APCA_API_SECRET_KEY", "")
-status="ERR"
-buying_power="0.00"
+import requests
+
+base = os.getenv("APCA_API_BASE_URL", "").strip()
+key = os.getenv("APCA_API_KEY_ID", "")
+secret = os.getenv("APCA_API_SECRET_KEY", "")
+status = "ERR"
+buying_power = "0.00"
 if base and key and secret:
     try:
         resp = requests.get(
@@ -48,8 +52,14 @@ if base and key and secret:
             buying_power = resp.json().get("buying_power", "0.00")
     except Exception as exc:  # pragma: no cover - network guard
         status = f"ERR:{exc.__class__.__name__}"
+payload = {"status": status, "buying_power": buying_power, "auth_ok": status == "OK"}
 print(f"[WRAPPER] AUTH status={status} buying_power={buying_power}")
+print(json.dumps(payload))
 PY
+)"
+printf '%s\n' "$AUTH_OUTPUT"
+AUTH_JSON=$(printf '%s\n' "$AUTH_OUTPUT" | tail -n1)
+[ -z "$AUTH_JSON" ] && AUTH_JSON='{}'
 
 check_pipeline() {
   "$PYTHON" - <<'PY'
@@ -129,36 +139,45 @@ PY
 
 update_status "Screener" "${PIPE_EPOCH}"
 
-count_candidates() {
+inspect_candidates() {
   SRC_PATH="$1" "$PYTHON" - <<'PY'
 import csv
 import os
 from pathlib import Path
 
+from scripts.fallback_candidates import CANONICAL_COLUMNS
+
 src = Path(os.environ["SRC_PATH"])
-if not src.exists():
-    print(0)
-else:
+rows = 0
+header_ok = False
+header_only = False
+if src.exists() and src.stat().st_size > 0:
     try:
-        with src.open("r", encoding="utf-8") as handle:
+        with src.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.reader(handle)
-            next(reader, None)  # header
-            rows = sum(1 for _ in reader)
+            header = next(reader, [])
+            normalized = [str(col).strip().lower() for col in header]
+            header_ok = normalized == [col.lower() for col in CANONICAL_COLUMNS]
+            for _ in reader:
+                rows += 1
+        header_only = rows == 0
     except Exception:
         rows = 0
-    print(rows)
+        header_ok = False
+        header_only = False
+print(f"{rows}|{int(header_ok)}|{int(header_only)}")
 PY
 }
 
 [ -z "${SRC:-}" ] && SRC="data/latest_candidates.csv"
-CAND_ROWS=$(count_candidates "$SRC")
-if [[ "$CAND_ROWS" -le 0 ]]; then
-  log "candidates empty; invoking fallback"
+IFS='|' read -r CAND_ROWS HEADER_OK HEADER_ONLY <<<"$(inspect_candidates "$SRC")"
+if [[ "$HEADER_OK" -ne 1 || "$HEADER_ONLY" -eq 1 || "$CAND_ROWS" -le 0 ]]; then
+  log "candidates invalid header_ok=${HEADER_OK} header_only=${HEADER_ONLY} rows=${CAND_ROWS}; invoking fallback"
   "$PYTHON" -m scripts.fallback_candidates --top-n "${FALLBACK_TOP_N:-3}"
-  CAND_ROWS=$(count_candidates "$SRC")
+  IFS='|' read -r CAND_ROWS HEADER_OK HEADER_ONLY <<<"$(inspect_candidates "$SRC")"
 fi
 
-if [[ "$CAND_ROWS" -le 0 ]]; then
+if [[ "$CAND_ROWS" -le 0 || "$HEADER_OK" -ne 1 ]]; then
   log "no candidates available after fallback"
   exit 1
 fi
@@ -184,3 +203,67 @@ ATR_TARGET_PCT="${ATR_TARGET_PCT:-0.02}"
 
 update_status "Execution" "$(date +%s)"
 log "execution complete"
+
+export AUTH_JSON PIPE_STATE PIPE_ISO CAND_ROWS RUN_STARTED_UTC EXEC_WINDOW
+"$PYTHON" - <<'PY'
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+from scripts.execute_trades import _resolve_time_window
+
+base = Path(os.environ["PROJECT_HOME"])
+data_dir = base / "data"
+data_dir.mkdir(parents=True, exist_ok=True)
+
+auth_raw = os.environ.get("AUTH_JSON", "{}")
+try:
+    auth_info = json.loads(auth_raw)
+except json.JSONDecodeError:
+    auth_info = {}
+
+window_req = os.environ.get("EXEC_WINDOW", "auto")
+window, in_window, now = _resolve_time_window(window_req)
+
+payload = {
+    "started_utc": os.environ.get("RUN_STARTED_UTC"),
+    "ny_now": now.isoformat(),
+    "window": window,
+    "in_window": bool(in_window),
+    "candidates_in": int(os.environ.get("CAND_ROWS", "0") or 0),
+    "auth_ok": bool(auth_info.get("auth_ok")),
+    "auth_status": auth_info.get("status"),
+    "buying_power": auth_info.get("buying_power"),
+    "orders_submitted": 0,
+    "skip_counts": {},
+    "pipeline_state": os.environ.get("PIPE_STATE"),
+    "pipeline_timestamp": os.environ.get("PIPE_ISO"),
+    "generated_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+
+metrics_path = data_dir / "execute_metrics.json"
+if metrics_path.exists():
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except Exception:
+        metrics = {}
+    orders_val = metrics.get("orders_submitted")
+    try:
+        payload["orders_submitted"] = int(float(orders_val)) if orders_val is not None else 0
+    except Exception:
+        payload["orders_submitted"] = 0
+    skip_map = metrics.get("skip_reasons") or metrics.get("skips")
+    if isinstance(skip_map, dict):
+        cleaned: dict[str, int] = {}
+        for key, value in skip_map.items():
+            try:
+                cleaned[str(key)] = int(float(value))
+            except Exception:
+                continue
+        payload["skip_counts"] = cleaned
+
+output_path = data_dir / "last_premarket_run.json"
+output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+print(f"[WRAPPER] wrote {output_path}")
+PY

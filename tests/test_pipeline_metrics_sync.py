@@ -24,7 +24,7 @@ def test_write_complete_screener_metrics_backfills_from_log(tmp_path):
 
     log_lines = [
         "2024-05-20T11:59:59Z [INFO] PIPELINE_START steps=screener,metrics",
-        "2024-05-20T12:00:02Z [INFO] PIPELINE_SUMMARY symbols_in=25 with_bars=20 rows=9 bar_rows=450",
+        "2024-05-20T12:00:02Z [INFO] PIPELINE_SUMMARY symbols_in=25 with_bars=20 rows=9 fetch_secs=1.0 feature_secs=2.0 rank_secs=3.0 gate_secs=4.0 bars_rows_total=450 source=screener",
         "2024-05-20T12:00:03Z [INFO] PIPELINE_END rc=0 duration=4.0s",
     ]
     _write(logs_dir / "pipeline.log", "\n".join(log_lines))
