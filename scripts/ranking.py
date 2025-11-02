@@ -241,145 +241,164 @@ def _select_latest(bars_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.DataFrame:
-    latest = _select_latest(bars_df)
-    if latest.empty:
-        empty = latest.copy()
-        empty["Score"] = pd.Series(dtype="float64")
-        empty["score_breakdown"] = pd.Series(dtype="object")
+    if bars_df is None or bars_df.empty:
+        empty = pd.DataFrame(columns=["symbol", "timestamp", "Score", "score_breakdown"])
         return empty
 
-    latest = latest.copy()
+    working = bars_df.copy()
+    working["timestamp"] = pd.to_datetime(working.get("timestamp"), utc=True, errors="coerce")
+    working = working.dropna(subset=["symbol", "timestamp"]).copy()
+    if working.empty:
+        empty = pd.DataFrame(columns=["symbol", "timestamp", "Score", "score_breakdown"])
+        return empty
 
-    numeric_columns = [
-        "TS",
-        "PT",
+    working["symbol"] = working["symbol"].astype("string").str.upper()
+    working.sort_values(["symbol", "timestamp"], inplace=True)
+
+    required_numeric = [
+        "SMA9",
+        "EMA20",
+        "SMA180",
+        "WK52_PROX",
+        "RSI14",
         "RSI",
-        "MH",
         "MACD",
-        "MACD_SIGNAL",
         "MACD_HIST",
         "ADX",
-        "AROON",
-        "VCP",
-        "VOLexp",
-        "GAPpen",
-        "LIQpen",
-        "ATR14",
-        "close",
+        "AROON_UP",
+        "AROON_DN",
         "REL_VOLUME",
         "OBV_DELTA",
         "BB_BANDWIDTH",
         "ATR_pct",
     ]
 
-    for column in numeric_columns:
-        if column in latest.columns:
-            latest[column] = pd.to_numeric(latest[column], errors="coerce")
+    for column in required_numeric:
+        if column not in working.columns:
+            working[column] = np.nan
+        working[column] = pd.to_numeric(working[column], errors="coerce")
 
-    if "MACD_HIST" not in latest.columns or latest["MACD_HIST"].isna().all():
-        if "MH" in latest.columns and "ATR14" in latest.columns:
-            macd_hist = pd.to_numeric(latest["MH"], errors="coerce") * pd.to_numeric(
-                latest["ATR14"], errors="coerce"
-            )
-            latest["MACD_HIST"] = macd_hist
+    grouped = working.groupby("symbol", group_keys=False)
+    working["prev_MACD_HIST"] = grouped["MACD_HIST"].shift(1)
+    working["prev_AROON_UP"] = grouped["AROON_UP"].shift(1)
+    working["prev_AROON_DN"] = grouped["AROON_DN"].shift(1)
 
-    if "ATR_pct" not in latest.columns and {"ATR14", "close"}.issubset(latest.columns):
-        atr_pct = (pd.to_numeric(latest["ATR14"], errors="coerce") / latest["close"]).replace(
-            [np.inf, -np.inf], np.nan
-        )
-        latest["ATR_pct"] = atr_pct
+    latest_idx = grouped["timestamp"].idxmax()
+    latest = working.loc[latest_idx].copy()
+    latest.reset_index(drop=True, inplace=True)
 
     thresholds_cfg = cfg.get("thresholds") if isinstance(cfg.get("thresholds"), Mapping) else {}
 
     rel_vol_min = _resolve_float(thresholds_cfg.get("rel_vol_min")) if thresholds_cfg else None
+    if rel_vol_min is None:
+        rel_vol_min = 1.5
     adx_min = _resolve_float(thresholds_cfg.get("adx_min")) if thresholds_cfg else None
+    if adx_min is None:
+        adx_min = 20.0
     atr_pct_max = _resolve_float(thresholds_cfg.get("atr_pct_max")) if thresholds_cfg else None
     bb_pctile = thresholds_cfg.get("bb_bw_pctile") if thresholds_cfg else None
     try:
         bb_pctile = float(bb_pctile)
     except (TypeError, ValueError):
         bb_pctile = None
+    if bb_pctile is None or not (0 < bb_pctile < 1):
+        bb_pctile = 0.15
 
-    def _series(name: str) -> pd.Series:
+    def _num(name: str) -> pd.Series:
         if name in latest.columns:
             return pd.to_numeric(latest[name], errors="coerce")
         return pd.Series(np.nan, index=latest.index)
 
-    ts_series = _series("TS")
-    pt_series = _series("PT")
-    adx_series = _series("ADX")
-    rsi_series = _series("RSI")
-    macd_hist_series = _series("MACD_HIST")
-    aroon_series = _series("AROON")
-    volexp_series = _series("VOLexp")
-    rel_vol_series = _series("REL_VOLUME")
-    obv_delta_series = _series("OBV_DELTA")
-    vcp_series = _series("VCP")
-    bb_band_series = _series("BB_BANDWIDTH")
-    atr_pct_series = _series("ATR_pct")
-    liq_pen_series = _series("LIQpen")
+    sma9 = _num("SMA9")
+    ema20 = _num("EMA20")
+    sma180 = _num("SMA180")
+    wk52 = _num("WK52_PROX")
+    rsi = _num("RSI") if "RSI" in latest.columns else _num("RSI14")
+    macd = _num("MACD")
+    macd_hist = _num("MACD_HIST")
+    macd_hist_prev = _num("prev_MACD_HIST")
+    rel_vol = _num("REL_VOLUME")
+    obv_delta = _num("OBV_DELTA")
+    bb_band = _num("BB_BANDWIDTH")
+    atr_pct = _num("ATR_pct")
+    aroon_up = _num("AROON_UP")
+    aroon_dn = _num("AROON_DN")
+    aroon_up_prev = _num("prev_AROON_UP")
+    aroon_dn_prev = _num("prev_AROON_DN")
+    adx = _num("ADX")
 
-    trend_components = pd.concat(
-        [_standardize(ts_series), _standardize(pt_series), _standardize(adx_series)], axis=1
-    ).fillna(0.0)
-    trend_raw = trend_components.mean(axis=1)
+    trend_ma_align = pd.Series(
+        np.where((sma9 > ema20) & (ema20 > sma180), 1.0, 0.0), index=latest.index
+    )
+    trend_52w = pd.Series(np.where(wk52 >= 0.90, 0.5, 0.0), index=latest.index)
+    mom_rsi = pd.Series(np.where(rsi > 50, 0.5, 0.0), index=latest.index)
+    mom_macd_pos = pd.Series(np.where(macd > 0, 0.5, 0.0), index=latest.index)
+    mom_macd_hist_rising = pd.Series(
+        np.where(macd_hist > macd_hist_prev, 0.25, 0.0), index=latest.index
+    )
+    vol_rel = pd.Series(np.where(rel_vol >= rel_vol_min, 0.5, 0.0), index=latest.index)
+    vol_obv_up = pd.Series(np.where(obv_delta > 0, 0.5, 0.0), index=latest.index)
 
-    momentum_components = pd.concat(
-        [_standardize(rsi_series), _standardize(macd_hist_series), _standardize(aroon_series)], axis=1
-    ).fillna(0.0)
-    momentum_raw = momentum_components.mean(axis=1)
-
-    volume_components = pd.concat(
-        [_standardize(volexp_series), _standardize(rel_vol_series), _standardize(obv_delta_series)], axis=1
-    ).fillna(0.0)
-    volume_raw = volume_components.mean(axis=1)
-
-    volatility_components = pd.concat(
-        [_standardize(vcp_series), _standardize(-bb_band_series), _standardize(-atr_pct_series)], axis=1
-    ).fillna(0.0)
-    volatility_raw = volatility_components.mean(axis=1)
-
-    risk_components = pd.concat([_standardize(-liq_pen_series)], axis=1).fillna(0.0)
-    risk_raw = risk_components.mean(axis=1)
-
-    if rel_vol_min is not None:
-        penalty = pd.Series(0.0, index=volume_raw.index)
-        penalty[rel_vol_series < rel_vol_min] = -1.0
-        volume_raw = volume_raw.add(penalty, fill_value=0.0)
-
-    if adx_min is not None:
-        penalty = pd.Series(0.0, index=trend_raw.index)
-        penalty[adx_series < adx_min] = -1.0
-        trend_raw = trend_raw.add(penalty, fill_value=0.0)
-
-    if atr_pct_max is not None:
-        penalty = pd.Series(0.0, index=risk_raw.index)
-        penalty[atr_pct_series > atr_pct_max] = -1.0
-        risk_raw = risk_raw.add(penalty, fill_value=0.0)
-
-    if bb_pctile is not None and 0 < bb_pctile < 1 and bb_band_series.notna().any():
+    squeeze_threshold = np.nan
+    if bb_band.notna().any():
         try:
-            squeeze_threshold = float(bb_band_series.dropna().quantile(bb_pctile))
+            squeeze_threshold = float(bb_band.dropna().quantile(bb_pctile))
         except ValueError:
-            squeeze_threshold = None
-        if squeeze_threshold is not None:
-            bonus = pd.Series(0.0, index=volatility_raw.index)
-            bonus[bb_band_series <= squeeze_threshold] = 0.5
-            volatility_raw = volatility_raw.add(bonus, fill_value=0.0)
+            squeeze_threshold = np.nan
+    vol_bb_squeeze = pd.Series(
+        np.where(bb_band <= squeeze_threshold, 0.5, 0.0), index=latest.index
+    )
+    vol_bb_squeeze = vol_bb_squeeze.where(np.isfinite(squeeze_threshold), 0.0)
 
-    categories_raw = {
-        "trend": trend_raw.fillna(0.0),
-        "momentum": momentum_raw.fillna(0.0),
-        "volume": volume_raw.fillna(0.0),
-        "volatility": volatility_raw.fillna(0.0),
-        "risk": risk_raw.fillna(0.0),
+    risk_atr_penalty = pd.Series(0.0, index=latest.index)
+    if atr_pct_max is not None:
+        risk_atr_penalty = pd.Series(
+            np.where(atr_pct > atr_pct_max, -0.5, 0.0), index=latest.index
+        )
+
+    aroon_cross = pd.Series(
+        np.where(
+            (aroon_up > aroon_dn) & (aroon_up_prev <= aroon_dn_prev),
+            0.5,
+            0.0,
+        ),
+        index=latest.index,
+    )
+    adx_trend = pd.Series(np.where(adx >= adx_min, 0.5, 0.0), index=latest.index)
+
+    components = pd.DataFrame(
+        {
+            "trend_ma_align": trend_ma_align,
+            "trend_52w": trend_52w,
+            "mom_rsi": mom_rsi,
+            "mom_macd_pos": mom_macd_pos,
+            "mom_macd_hist_rising": mom_macd_hist_rising,
+            "vol_rel": vol_rel,
+            "vol_obv_up": vol_obv_up,
+            "vol_bb_squeeze": vol_bb_squeeze,
+            "risk_atr_penalty": risk_atr_penalty,
+            "aroon_cross": aroon_cross,
+            "adx_trend": adx_trend,
+        }
+    ).fillna(0.0)
+
+    category_map = {
+        "trend": ["trend_ma_align", "trend_52w", "aroon_cross", "adx_trend"],
+        "momentum": ["mom_rsi", "mom_macd_pos", "mom_macd_hist_rising"],
+        "volume": ["vol_rel", "vol_obv_up"],
+        "volatility": ["vol_bb_squeeze"],
+        "risk": ["risk_atr_penalty"],
     }
 
-    category_scores = {name: _standardize(series) for name, series in categories_raw.items()}
-    weights = _normalise_category_weights(cfg.get("weights") if isinstance(cfg, Mapping) else None)
+    category_scores: dict[str, pd.Series] = {}
+    for name, cols in category_map.items():
+        subset = components[cols] if cols else pd.DataFrame(index=latest.index)
+        category_scores[name] = subset.sum(axis=1).fillna(0.0)
 
+    weights = _normalise_category_weights(cfg.get("weights") if isinstance(cfg, Mapping) else None)
     contributions = {
-        name: category_scores[name] * weights.get(name, 0.0) for name in category_scores
+        name: category_scores[name] * weights.get(name, 0.0)
+        for name in category_scores
     }
     contributions_df = pd.DataFrame(contributions).fillna(0.0)
     score_series = contributions_df.sum(axis=1).fillna(0.0)
@@ -391,6 +410,9 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
         latest[f"{name}_contribution"] = series.round(4)
 
     latest["score_breakdown"] = contributions_df.apply(
+        lambda row: json.dumps({k: round(float(v), 4) for k, v in row.items()}), axis=1
+    )
+    latest["component_breakdown"] = components.apply(
         lambda row: json.dumps({k: round(float(v), 4) for k, v in row.items()}), axis=1
     )
 

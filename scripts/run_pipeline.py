@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
 from typing import Any, Optional, Sequence
 from types import SimpleNamespace
@@ -20,7 +20,7 @@ import pandas as pd
 
 from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
 from scripts.utils.env import load_env
-from utils import write_csv_atomic
+from utils import write_csv_atomic, atomic_write_bytes
 from utils.telemetry import emit_event
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +60,56 @@ LATEST_HEADER = ",".join(LATEST_COLUMNS) + "\n"
 
 def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy hook
     return {}
+
+
+def _parse_summary_line(line: str) -> Optional[SimpleNamespace]:
+    match = _SUMMARY_RE.search(line)
+    if not match:
+        return None
+    try:
+        payload = {
+            "symbols_in": int(match.group("symbols_in")),
+            "with_bars": int(match.group("symbols_with_bars")),
+            "rows": int(match.group("rows")),
+            "bars_rows_total": (
+                int(match.group("bars_rows_total")) if match.group("bars_rows_total") else None
+            ),
+        }
+    except (TypeError, ValueError):
+        return None
+    payload["raw_line"] = line.strip()
+    return SimpleNamespace(**payload)
+
+
+def _latest_summary_for_date(base_dir: Path, day: date) -> Optional[SimpleNamespace]:
+    log_path = Path(base_dir) / "logs" / "pipeline.log"
+    if not log_path.exists():
+        return None
+    date_token = day.strftime("%Y-%m-%d")
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="ignore")[-100000:]
+    except Exception:
+        return None
+    for line in reversed(tail.splitlines()):
+        if "PIPELINE_SUMMARY" not in line:
+            continue
+        if date_token not in line:
+            continue
+        parsed = _parse_summary_line(line)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _write_status_json(base_dir: Path, payload: Mapping[str, Any]) -> None:
+    base_dir = Path(base_dir)
+    status_path = base_dir / "data" / "pipeline_status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        serialised = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+        atomic_write_bytes(status_path, serialised)
+    except Exception:
+        LOG.exception("PIPELINE_STATUS_WRITE_FAILED path=%s", status_path)
 
 
 REQUIRED_CAND_COLS = list(CANONICAL_COLUMNS)
@@ -1036,6 +1086,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         LOG.info(" ".join(summary_parts))
         metrics_path = base_dir / "data" / "screener_metrics.json"
         metrics = _backfill_metrics_from_summary(metrics_path, metrics, summary)
+        today = datetime.now(timezone.utc).date()
+        todays_summary = _latest_summary_for_date(base_dir, today)
+        if todays_summary is None:
+            LOG.warning("[WARN] SUMMARY_TODAY_MISSING date=%s", today.isoformat())
         try:
             kpis = write_complete_screener_metrics(base_dir)
             LOG.info(
@@ -1047,6 +1101,24 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         except Exception:
             LOG.exception("Failed to backfill screener_metrics.json")
+        status_payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "rc": int(rc),
+            "steps": list(steps),
+            "symbols_in": int(summary.symbols_in or 0),
+            "symbols_with_bars": int(summary.with_bars or 0),
+            "rows": int(summary.rows or 0) if summary.rows is not None else 0,
+            "bars_rows_total": int(summary.bars_rows_total or 0)
+            if summary.bars_rows_total is not None
+            else None,
+            "latest_source": summary.source,
+            "stage_times": {k: float(v) for k, v in stage_times.items()},
+            "trading_ok": trading_ok,
+            "data_ok": data_ok,
+            "has_today_summary": todays_summary is not None,
+            "summary_line": getattr(todays_summary, "raw_line", ""),
+        }
+        _write_status_json(base_dir, status_payload)
         logger.info(
             "[INFO] HEALTH trading_ok=%s data_ok=%s stage=end trading_status=%s data_status=%s",
             health.trading_ok,

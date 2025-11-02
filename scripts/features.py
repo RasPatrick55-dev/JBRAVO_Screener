@@ -28,10 +28,13 @@ class FeatureConfig:
     ema_mid: int = 20
     sma_mid: int = 50
     sma_slow: int = 100
+    sma_long: int = 180
     breakout_lookback: int = 20
     vcp_long: int = 90
     vol_short: int = 10
     vol_long: int = 90
+    vol_ma: int = 30
+    week52_period: int = 252
     robust_clip: float = 3.0  # z-score clip
 
 
@@ -62,9 +65,11 @@ INTERMEDIATE_COLUMNS: Sequence[str] = (
     "EMA20",
     "SMA50",
     "SMA100",
+    "SMA180",
     "H20",
     "L20",
     "ADV20",
+    "VOL_MA30",
     "+DI",
     "-DI",
     "AROON_UP",
@@ -75,6 +80,8 @@ INTERMEDIATE_COLUMNS: Sequence[str] = (
     "MACD_HIST",
     "ADX14",
     "AROON_DIFF",
+    "WK52_HIGH",
+    "WK52_PROX",
 )
 
 
@@ -324,6 +331,7 @@ def compute_all_features(
     df = ema(df, "close", fc.ema_mid, "EMA20")
     df = sma(df, "close", fc.sma_mid, "SMA50")
     df = sma(df, "close", fc.sma_slow, "SMA100")
+    df = sma(df, "close", fc.sma_long, "SMA180")
     df = atr(df, fc.atr_period, "ATR14")
     df = rsi(df, fc.rsi_period, "RSI14")
     df = macd(df, fc.macd_fast, fc.macd_slow, fc.macd_signal, "MACD", "MACD_SIGNAL", "MACD_HIST")
@@ -336,6 +344,8 @@ def compute_all_features(
         out_max="H20",
         out_min="L20",
     )
+    df = rolling_extrema(df, "close", fc.week52_period, out_max="WK52_HIGH")
+    df["WK52_PROX"] = (df["close"] / df["WK52_HIGH"].replace(0, np.nan)).astype("float64")
 
     def _linreg_slope_r2(x: pd.Series) -> float:
         y = np.log(x.replace(0, np.nan)).dropna()
@@ -378,6 +388,9 @@ def compute_all_features(
         * _gb(df)["volume"].transform(lambda s: s.rolling(20, min_periods=1).mean())
     )
     df["ADV20"] = adv20.astype("float64")
+    df["VOL_MA30"] = _gb(df)["volume"].transform(
+        lambda s: s.rolling(fc.vol_ma, min_periods=1).mean()
+    )
     LIQpen = (1_000_000 - adv20) / 1_000_000
     LIQpen = LIQpen.clip(lower=0)
 
@@ -421,8 +434,11 @@ def compute_all_features(
         "MACD_HIST",
         "AROON_UP",
         "AROON_DN",
+        "WK52_HIGH",
+        "WK52_PROX",
         "+DI",
         "-DI",
+        "VOL_MA30",
         "TS",
         "MS",
         "BP",
