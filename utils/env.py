@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
@@ -273,6 +274,12 @@ def write_auth_error_artifacts(
             "auth_hint": dict(sanitized),
         }
     )
+    existing["error"] = {
+        "message": "auth_error",
+        "reason": reason,
+        "missing": missing_list,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
     metrics_file.write_text(
         json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8"

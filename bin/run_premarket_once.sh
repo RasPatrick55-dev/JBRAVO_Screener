@@ -5,6 +5,30 @@ log() {
   echo "[WRAPPER] $*"
 }
 
+send_alert() {
+  local msg="$1"
+  if [[ -z "${ALERT_WEBHOOK_URL:-}" || -z "$msg" ]]; then
+    return
+  fi
+  MESSAGE="$msg" "$PYTHON" - <<'PY'
+import os
+
+try:
+    import requests  # type: ignore
+except Exception:  # pragma: no cover - requests unavailable
+    raise SystemExit(0)
+
+message = os.environ.get("MESSAGE", "")
+url = os.environ.get("ALERT_WEBHOOK_URL", "")
+if not message or not url:
+    raise SystemExit(0)
+try:
+    requests.post(url, json={"text": message}, timeout=5)
+except Exception:
+    pass
+PY
+}
+
 fail_trap() {
   local rc=$?
   if [[ $rc -ne 0 ]]; then
@@ -64,16 +88,19 @@ AUTH_JSON=$(printf '%s\n' "$AUTH_OUTPUT" | tail -n1)
 check_pipeline() {
   "$PYTHON" - <<'PY'
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 base = Path(".")
 metrics_path = base / "data" / "screener_metrics.json"
-today = datetime.now(ZoneInfo("America/New_York")).date()
-state = "stale"
-iso = ""
-epoch = ""
+log_path = base / "logs" / "pipeline.log"
+tz = ZoneInfo("America/New_York")
+today = datetime.now(tz).date()
+
+metrics_iso = ""
+metrics_epoch = ""
 if metrics_path.exists():
     try:
         payload = json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -83,32 +110,73 @@ if metrics_path.exists():
     if isinstance(ts, str) and ts:
         try:
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            iso = dt.astimezone(ZoneInfo("America/New_York")).isoformat()
-            epoch = str(int(dt.timestamp()))
-            if dt.astimezone(ZoneInfo("America/New_York")).date() == today:
-                state = "fresh"
+            metrics_iso = dt.astimezone(tz).isoformat()
+            metrics_epoch = str(int(dt.timestamp()))
         except Exception:
-            iso = ""
-            epoch = ""
-print(f"{state}|{iso}|{epoch}")
+            metrics_iso = ""
+            metrics_epoch = ""
+
+state = "stale"
+iso = metrics_iso
+epoch = metrics_epoch
+rc_text = ""
+if log_path.exists():
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="ignore")[-200000:]
+    except Exception:
+        tail = ""
+    rc_pattern = re.compile(r"rc=(\d+)")
+    stamp_pattern = re.compile(r"(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:Z)?)")
+    for line in reversed(tail.splitlines()):
+        if "PIPELINE_END" not in line:
+            continue
+        rc_match = rc_pattern.search(line)
+        stamp_match = stamp_pattern.search(line)
+        dt_local = None
+        if stamp_match:
+            stamp = stamp_match.group(1)
+            try:
+                iso_stamp = stamp.replace(" ", "T")
+                dt = datetime.fromisoformat(iso_stamp.replace("Z", "+00:00"))
+                dt_local = dt.astimezone(tz)
+            except Exception:
+                dt_local = None
+        if dt_local is None or dt_local.date() != today:
+            continue
+        iso = dt_local.isoformat()
+        epoch = str(int(dt_local.timestamp()))
+        if rc_match:
+            rc_text = rc_match.group(1)
+        state = "fresh" if rc_text == "0" else "stale"
+        break
+
+print(f"{state}|{iso}|{epoch}|{rc_text}")
 PY
 }
 
 PIPELINE_STATE=$(check_pipeline)
-IFS='|' read -r PIPE_STATE PIPE_ISO PIPE_EPOCH <<<"$PIPELINE_STATE"
+IFS='|' read -r PIPE_STATE PIPE_ISO PIPE_EPOCH PIPE_RC <<<"$PIPELINE_STATE"
 if [[ "$PIPE_STATE" != "fresh" ]]; then
   log "pipeline summary stale -> running pipeline"
   "$PYTHON" -m scripts.run_pipeline --steps screener --reload-web false
   PIPELINE_STATE=$(check_pipeline)
-  IFS='|' read -r PIPE_STATE PIPE_ISO PIPE_EPOCH <<<"$PIPELINE_STATE"
+  IFS='|' read -r PIPE_STATE PIPE_ISO PIPE_EPOCH PIPE_RC <<<"$PIPELINE_STATE"
+fi
+
+if [[ "$PIPE_STATE" != "fresh" ]]; then
+  log "pipeline end token missing or failed (state=${PIPE_STATE} rc=${PIPE_RC:-unknown})"
+  send_alert "Premarket wrapper aborted: no PIPELINE_END rc=0 today (rc=${PIPE_RC:-unknown})"
+  exit 1
 fi
 
 if [[ -z "$PIPE_EPOCH" ]]; then
   log "unable to confirm pipeline metrics timestamp"
+  send_alert "Premarket wrapper aborted: missing pipeline timestamp"
   exit 1
 fi
 
-log "pipeline summary fresh=${PIPE_STATE} timestamp=${PIPE_ISO:-unknown}"
+log "pipeline summary fresh=${PIPE_STATE} timestamp=${PIPE_ISO:-unknown} rc=${PIPE_RC:-unknown}"
+export PIPE_RC
 
 if [[ -f "$WSGI_PATH" ]]; then
   touch "$WSGI_PATH"
@@ -179,6 +247,7 @@ fi
 
 if [[ "$CAND_ROWS" -le 0 || "$HEADER_OK" -ne 1 ]]; then
   log "no candidates available after fallback"
+  send_alert "Premarket wrapper aborted: fallback candidates empty"
   exit 1
 fi
 
@@ -204,7 +273,7 @@ ATR_TARGET_PCT="${ATR_TARGET_PCT:-0.02}"
 update_status "Execution" "$(date +%s)"
 log "execution complete"
 
-export AUTH_JSON PIPE_STATE PIPE_ISO CAND_ROWS RUN_STARTED_UTC EXEC_WINDOW
+export AUTH_JSON PIPE_STATE PIPE_ISO PIPE_RC CAND_ROWS RUN_STARTED_UTC EXEC_WINDOW
 "$PYTHON" - <<'PY'
 import json
 import os
@@ -238,6 +307,7 @@ payload = {
     "orders_submitted": 0,
     "skip_counts": {},
     "pipeline_state": os.environ.get("PIPE_STATE"),
+    "pipeline_rc": os.environ.get("PIPE_RC"),
     "pipeline_timestamp": os.environ.get("PIPE_ISO"),
     "generated_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
 }
