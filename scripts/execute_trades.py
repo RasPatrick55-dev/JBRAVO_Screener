@@ -1113,6 +1113,8 @@ class ExecutorConfig:
     min_order_usd: float = 200.0
     allow_bump_to_one: bool = True
     allow_fractional: bool = False
+    position_sizer: str = "notional"
+    atr_target_pct: float = 0.02
 
 
 @dataclass
@@ -1197,14 +1199,33 @@ def compute_limit_price(row: Dict[str, Any], buffer_bps: int = 75) -> float:
     return float(limit)
 
 
+def _sanitize_atr_pct(value: Any) -> float:
+    try:
+        atr = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if math.isnan(atr) or atr <= 0:
+        return 0.0
+    if atr > 1.0:
+        atr /= 100.0
+    return max(0.0, atr)
+
+
 def _compute_qty(
     buying_power: float,
     limit_price: float,
     allocation_pct: float,
     min_order_usd: float,
+    *,
+    target_notional: float | None = None,
 ) -> int:
     limit_floor = max(0.01, float(limit_price or 0))
-    alloc_qty = math.floor(max(0.0, buying_power) * max(0.0, allocation_pct) / limit_floor)
+    notional_budget = (
+        max(0.0, buying_power) * max(0.0, allocation_pct)
+        if target_notional is None
+        else max(0.0, float(target_notional))
+    )
+    alloc_qty = math.floor(notional_budget / limit_floor)
     min_qty = (
         math.floor(max(0.0, min_order_usd) / limit_floor)
         if min_order_usd
@@ -2116,14 +2137,28 @@ class TradeExecutor:
                 )
 
             base_notional = max(0.0, allocation_pct * max(account_buying_power, 0.0))
+            atr_pct = _sanitize_atr_pct(record.get("atrp"))
+            atr_scale = 1.0
+            target_notional = base_notional
+            if (self.config.position_sizer or "").lower() == "atr":
+                target_pct = max(0.0, float(self.config.atr_target_pct))
+                if target_pct > 0 and atr_pct > 0:
+                    atr_scale = min(1.0, target_pct / atr_pct)
+                    target_notional = base_notional * atr_scale
             min_order = max(0.0, float(self.config.min_order_usd))
-            target_notional = max(base_notional, min_order)
+            target_notional = max(target_notional, min_order)
             if premarket_active:
                 limit_px = _round_to_tick(price_ref * (1 + limit_buffer_ratio), tick=0.01)
             else:
                 limit_px = price_f * (1 + limit_buffer_ratio)
             limit_px = max(limit_px, 0.01)
-            qty = _compute_qty(account_buying_power, limit_px, allocation_pct, min_order)
+            qty = _compute_qty(
+                account_buying_power,
+                limit_px,
+                allocation_pct,
+                min_order,
+                target_notional=target_notional,
+            )
             if qty < 1 and self.config.allow_bump_to_one and not self.config.allow_fractional:
                 qty = 1 if limit_px > 0 and target_notional >= limit_px else qty
             if qty < 1:
@@ -2148,7 +2183,7 @@ class TradeExecutor:
                 self.record_skip_reason("ZERO_QTY", symbol=symbol)
                 continue
             LOGGER.debug(
-                "CALC symbol=%s price=%.2f bp=%.2f alloc_pct=%.4f slots=%d notional=%.2f limit_px=%.2f qty=%d",
+                "CALC symbol=%s price=%.2f bp=%.2f alloc_pct=%.4f slots=%d notional=%.2f limit_px=%.2f qty=%d sizer=%s atr=%.4f scale=%.3f",
                 symbol,
                 price_f,
                 account_buying_power,
@@ -2157,6 +2192,9 @@ class TradeExecutor:
                 target_notional,
                 limit_px,
                 qty,
+                (self.config.position_sizer or "notional"),
+                atr_pct,
+                atr_scale,
             )
 
             limit_price_raw = compute_limit_price(record, self.config.entry_buffer_bps)
@@ -2857,6 +2895,18 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Allow fractional share orders when full shares are not affordable",
     )
     parser.add_argument(
+        "--position-sizer",
+        choices=("notional", "atr"),
+        default=ExecutorConfig.position_sizer,
+        help="Strategy used to determine order size (default: notional)",
+    )
+    parser.add_argument(
+        "--atr-target-pct",
+        type=float,
+        default=ExecutorConfig.atr_target_pct,
+        help="Target ATR%% used when position_sizer=atr (expressed as decimal, e.g. 0.02)",
+    )
+    parser.add_argument(
         "--min-adv20",
         type=int,
         default=ExecutorConfig.min_adv20,
@@ -2911,6 +2961,8 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         min_order_usd=args.min_order_usd,
         allow_bump_to_one=args.allow_bump_to_one,
         allow_fractional=args.allow_fractional,
+        position_sizer=(args.position_sizer or "notional").lower(),
+        atr_target_pct=args.atr_target_pct,
         min_adv20=args.min_adv20,
         min_price=args.min_price,
         max_price=args.max_price,
