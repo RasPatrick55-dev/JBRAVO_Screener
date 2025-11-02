@@ -415,6 +415,50 @@ def _log_call(label, fn, *args, **kwargs):
 LOG_PATH = Path("logs") / "execute_trades.log"
 METRICS_PATH = Path("data") / "execute_metrics.json"
 EXECUTED_TRADES_PATH = Path("data") / "executed_trades.csv"
+
+
+def _write_execute_metrics_error(
+    message: str,
+    *,
+    status: str = "error",
+    rc: int | None = None,
+    **extra: Any,
+) -> None:
+    """Persist an error snapshot so dashboards surface a clear banner."""
+
+    METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = json.loads(METRICS_PATH.read_text(encoding="utf-8")) if METRICS_PATH.exists() else {}
+    except Exception:
+        existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+    payload: Dict[str, Any] = dict(existing)
+    payload["status"] = status
+    error_block: Dict[str, Any] = {
+        "message": message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if rc is not None:
+        try:
+            error_block["rc"] = int(rc)
+        except Exception:
+            error_block["rc"] = rc
+    for key, value in extra.items():
+        if value is None:
+            continue
+        try:
+            json.dumps({key: value})
+            error_block[key] = value
+        except TypeError:
+            error_block[key] = str(value)
+    payload["error"] = error_block
+    payload.setdefault("skips", {})
+    payload.setdefault("orders_submitted", 0)
+    payload.setdefault("orders_filled", 0)
+    payload.setdefault("trailing_attached", 0)
+    payload["last_run_utc"] = datetime.now(timezone.utc).isoformat()
+    METRICS_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 EXECUTED_TRADES_COLUMNS: list[str] = [
     "order_id",
     "symbol",
@@ -449,14 +493,16 @@ REQUIRED_COLUMNS = [
 
 OPTIONAL_COLUMNS = {"atrp", "exchange", "adv20", "entry_price"}
 SKIP_REASON_ORDER: tuple[str, ...] = (
-    "CASH",
-    "EXISTING_POSITION",
-    "MAX_POSITIONS",
-    "NO_CANDIDATES",
-    "OPEN_ORDER",
-    "PRICE_BOUNDS",
     "TIME_WINDOW",
+    "CASH",
     "ZERO_QTY",
+    "PRICE_BOUNDS",
+    "MAX_POSITIONS",
+    "API_FAIL",
+    "DATA_MISSING",
+    "EXISTING_POSITION",
+    "OPEN_ORDER",
+    "NO_CANDIDATES",
 )
 SKIP_REASON_KEYS = set(SKIP_REASON_ORDER)
 IMPORT_SENTINEL_ENV = "JBRAVO_IMPORT_SENTINEL"
@@ -1128,6 +1174,8 @@ class ExecutionMetrics:
     api_failures: int = 0
     latency_samples: List[float] = field(default_factory=list)
     skipped_reasons: Counter = field(default_factory=Counter)
+    status: str = "ok"
+    _error_info: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         # Maintain backward compatibility with legacy attribute name
@@ -1143,6 +1191,21 @@ class ExecutionMetrics:
     def record_latency(self, seconds: float) -> None:
         if seconds > 0:
             self.latency_samples.append(seconds)
+
+    def record_error(self, message: str, **details: Any) -> None:
+        payload = {"message": message}
+        for key, value in details.items():
+            if value is None:
+                continue
+            try:
+                json.dumps({key: value})  # validate serialisable
+                payload[key] = value
+            except TypeError:
+                payload[key] = str(value)
+        payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        self._error_info = payload
+        if self.status != "auth_error":
+            self.status = "error"
 
     def percentile(self, p: float) -> float:
         if not self.latency_samples:
@@ -1166,7 +1229,7 @@ class ExecutionMetrics:
         for key, value in sorted(self.skipped_reasons.items()):
             if key not in skip_payload:
                 skip_payload[key] = int(value)
-        return {
+        payload: Dict[str, Any] = {
             "last_run_utc": datetime.now(timezone.utc).isoformat(),
             "symbols_in": self.symbols_in,
             "orders_submitted": self.orders_submitted,
@@ -1180,7 +1243,11 @@ class ExecutionMetrics:
                 "p95": self.percentile(0.95),
             },
             "skips": skip_payload,
+            "status": self.status,
         }
+        if self._error_info:
+            payload["error"] = dict(self._error_info)
+        return payload
 
     def flush(self) -> None:
         return None
@@ -1937,7 +2004,7 @@ class TradeExecutor:
                     "PRICE_BOUNDS",
                     symbol=symbol,
                     detail="missing_price",
-                    aliases=("MISSING_PRICE",),
+                    aliases=("MISSING_PRICE", "DATA_MISSING"),
                 )
                 continue
             price_f = float(price)
@@ -2060,7 +2127,12 @@ class TradeExecutor:
             price_series = pd.to_numeric(pd.Series([price_value]), errors="coerce").fillna(0.0)
             price_f = float(price_series.iloc[0])
             if price_f <= 0:
-                self.record_skip_reason("ZERO_QTY", symbol=symbol, detail="invalid_price")
+                self.record_skip_reason(
+                    "ZERO_QTY",
+                    symbol=symbol,
+                    detail="invalid_price",
+                    aliases=("DATA_MISSING",),
+                )
                 continue
 
             price_ref = price_f
@@ -2395,6 +2467,7 @@ class TradeExecutor:
         setattr(order_request, "_normalized_limit", True)
         submitted_order = self.submit_with_retries(order_request)
         if submitted_order is None:
+            self.record_skip_reason("API_FAIL", symbol=symbol, detail="submit_failed")
             return outcome
         outcome["submitted"] = True
         order_id = str(getattr(submitted_order, "id", ""))
@@ -2566,6 +2639,7 @@ class TradeExecutor:
         if trailing_order is None:
             LOGGER.error("[ERROR] TRAIL_FAILED symbol=%s reason=submit_failed", symbol)
             self.log_info("TRAIL_FAILED", symbol=symbol, reason="submit_failed")
+            self.record_skip_reason("API_FAIL", symbol=symbol, detail="trail_submit_failed")
             return
         self.metrics.trailing_attached += 1
         order_id = str(getattr(trailing_order, "id", ""))
@@ -2706,6 +2780,12 @@ class TradeExecutor:
         skips_merged = dict(existing_skips)
         skips_merged.update(payload_skips)
         merged["skips"] = skips_merged
+        merged["status"] = payload.get("status", merged.get("status", "ok"))
+        if payload.get("error"):
+            merged["error"] = payload["error"]
+        else:
+            merged.pop("error", None)
+        merged["last_run_utc"] = payload.get("last_run_utc", datetime.now(timezone.utc).isoformat())
         try:
             METRICS_PATH.write_text(
                 json.dumps(merged, indent=2, sort_keys=True),
@@ -2993,6 +3073,12 @@ def run_executor(
     except CandidateLoadError as exc:
         LOGGER.error("%s", exc)
         metrics.api_failures += 1
+        metrics.record_skip("DATA_MISSING", count=1)
+        metrics.record_error(
+            "candidate_load_error",
+            detail=str(exc),
+            exception=exc.__class__.__name__,
+        )
         loader.persist_metrics()
         return 1
 
@@ -3120,6 +3206,12 @@ def run_executor(
             account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
         except AlpacaAuthFailure:
             metrics.api_failures += 1
+            metrics.record_skip("API_FAIL", count=max(1, len(candidates_df)))
+            metrics.record_error(
+                "auth_failure",
+                stage="ensure_trading_auth",
+                base_url=base_url or "",
+            )
             loader.persist_metrics()
             return 2
 
@@ -3187,6 +3279,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             json.dumps(exc.sanitized, sort_keys=True),
         )
         _record_auth_error(exc.reason, exc.sanitized, missing)
+        _write_execute_metrics_error(
+            "credentials_invalid",
+            status="auth_error",
+            rc=2,
+            reason=exc.reason,
+            missing=missing,
+        )
         return 2
 
     LOGGER.info(
@@ -3227,9 +3326,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             exc.feed or "",
         )
         _record_auth_error("unauthorized", creds_snapshot)
+        _write_execute_metrics_error(
+            "unauthorized",
+            status="auth_error",
+            rc=2,
+            endpoint=exc.endpoint or "",
+            feed=exc.feed or "",
+        )
         return 2
     except Exception as exc:  # pragma: no cover - top-level guard
         LOGGER.exception("Executor failed: %s", exc)
+        _write_execute_metrics_error(
+            "executor_exception",
+            rc=1,
+            exception=exc.__class__.__name__,
+            detail=str(exc),
+        )
         return 1
 
 

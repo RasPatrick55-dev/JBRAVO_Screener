@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -613,6 +614,21 @@ def collect_evidence(
     (destination / "metrics_snapshot.json").write_text(
         json.dumps(metrics_snapshot, indent=2, default=str), encoding="utf-8"
     )
+
+    reports_root = base / "reports"
+    evidence_copies = {
+        "dashboard_consistency.json": "dashboard_consistency.json",
+        "dashboard_kpis.csv": "dashboard_kpis.csv",
+        "dashboard_findings.txt": "dashboard_findings.txt",
+    }
+    for src_name, dest_name in evidence_copies.items():
+        src_path = reports_root / src_name
+        if not src_path.exists():
+            continue
+        try:
+            shutil.copy2(src_path, destination / dest_name)
+        except Exception:
+            LOGGER.warning("Failed to copy evidence artifact %s", src_path)
 
     return destination
 

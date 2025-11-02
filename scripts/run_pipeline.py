@@ -731,6 +731,54 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
     return payload
 
 
+def _annotate_screener_metrics(
+    base_dir: Path,
+    *,
+    rc: int,
+    steps: Sequence[str],
+    step_rcs: Mapping[str, int],
+    stage_times: Mapping[str, float],
+    latest_source: str | None,
+    error: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    metrics_path = Path(base_dir) / "data" / "screener_metrics.json"
+    payload: dict[str, Any] = {}
+    if metrics_path.exists():
+        try:
+            existing = json.loads(metrics_path.read_text(encoding="utf-8"))
+            if isinstance(existing, Mapping):
+                payload.update(existing)
+        except Exception:
+            payload = {}
+    payload["status"] = "ok" if rc == 0 else "error"
+    payload["last_run_utc"] = datetime.now(timezone.utc).isoformat()
+    payload["stage_times"] = {k: float(v) for k, v in stage_times.items()}
+    payload["step_rcs"] = {step: int(step_rcs.get(step, 0)) for step in steps}
+    if latest_source:
+        payload["latest_source"] = latest_source
+    if rc == 0:
+        payload.pop("error", None)
+    else:
+        error_block: dict[str, Any] = {
+            "message": "pipeline_failed",
+            "rc": int(rc),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        if isinstance(error, Mapping):
+            for key, value in error.items():
+                if value is None:
+                    continue
+                try:
+                    json.dumps({key: value})
+                    error_block[key] = value
+                except TypeError:
+                    error_block[key] = str(value)
+        payload["error"] = error_block
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return payload
+
+
 def _ensure_latest_headers() -> None:
     if LATEST_CANDIDATES.exists() and LATEST_CANDIDATES.stat().st_size > 0:
         return
@@ -874,6 +922,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         "metrics": _merge_split_args(args.metrics_args, args.metrics_args_split),
     }
 
+    step_rcs: dict[str, int] = {step: 0 for step in steps}
+
     LOG.info(
         "[INFO] PIPELINE_ARGS screener=%s execute=%s backtest=%s metrics=%s",
         extras["screener"],
@@ -892,6 +942,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     metrics_rows: int | None = None
     latest_source: str | None = "unknown"
+    error_info: dict[str, Any] | None = None
     try:
         if "screener" in steps:
             cmd = [sys.executable, "-m", "scripts.screener", "--mode", "screener"]
@@ -899,8 +950,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 cmd.extend(extras["screener"])
             rc_scr, secs = run_step("screener", cmd, timeout=60 * 20)
             stage_times["screener"] = secs
+            step_rcs["screener"] = rc_scr
             if rc_scr:
                 rc = rc_scr
+                if error_info is None:
+                    error_info = {"step": "screener", "rc": int(rc_scr), "message": "step_failed"}
             metrics = _read_json(SCREENER_METRICS_PATH)
             symbols_in = int(metrics.get("symbols_in", 0) or 0)
             symbols_with_bars = int(metrics.get("symbols_with_bars", 0) or 0)
@@ -987,8 +1041,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 cmd.extend(extras["backtest"])
             rc_bt, secs = run_step("backtest", cmd, timeout=60 * 3)
             stage_times["backtest"] = secs
+            step_rcs["backtest"] = rc_bt
             if rc_bt and not rc:
                 rc = rc_bt
+                if error_info is None:
+                    error_info = {"step": "backtest", "rc": int(rc_bt), "message": "step_failed"}
 
         if "metrics" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
@@ -1007,6 +1064,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 logger.warning("METRICS non-fatal error: %s", e)
                 rc_metrics, secs = 0, 0.0
             stage_times["metrics"] = secs
+            step_rcs["metrics"] = rc_metrics
             if rc_metrics:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
             _sync_top_candidates_to_latest(base_dir)
@@ -1021,8 +1079,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 cmd.extend(exec_args)
             rc_exec, secs = run_step("execute", cmd, timeout=60 * 10)
             stage_times["execute"] = secs
+            step_rcs["execute"] = rc_exec
             if rc_exec and not rc:
                 rc = rc_exec
+                if error_info is None:
+                    error_info = {"step": "execute", "rc": int(rc_exec), "message": "step_failed"}
             if rc_exec == 0:
                 try:
                     sync_execute_metrics(base_dir)
@@ -1033,6 +1094,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     except Exception as exc:  # pragma: no cover - defensive guard
         LOG.exception("PIPELINE_FATAL: %s", exc)
         rc = 1
+        error_info = {
+            "step": "pipeline",
+            "message": str(exc),
+            "exception": exc.__class__.__name__,
+        }
     finally:
         fetch_secs = _extract_timing(metrics, "fetch_secs")
         feature_secs = _extract_timing(metrics, "feature_secs")
@@ -1101,6 +1167,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         except Exception:
             LOG.exception("Failed to backfill screener_metrics.json")
+        try:
+            annotated = _annotate_screener_metrics(
+                base_dir,
+                rc=rc,
+                steps=steps,
+                step_rcs=step_rcs,
+                stage_times=stage_times,
+                latest_source=latest_source,
+                error=error_info,
+            )
+            if isinstance(annotated, Mapping):
+                metrics.update(dict(annotated))
+        except Exception:
+            LOG.exception("Failed to annotate screener_metrics.json with status")
         status_payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "rc": int(rc),
@@ -1118,6 +1198,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "has_today_summary": todays_summary is not None,
             "summary_line": getattr(todays_summary, "raw_line", ""),
         }
+        status_payload["step_rcs"] = {k: int(v) for k, v in step_rcs.items()}
+        if error_info:
+            status_payload["error"] = dict(error_info)
         _write_status_json(base_dir, status_payload)
         logger.info(
             "[INFO] HEALTH trading_ok=%s data_ok=%s stage=end trading_status=%s data_status=%s",
