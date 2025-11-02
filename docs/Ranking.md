@@ -39,54 +39,48 @@ sourced from `data/daily_prices.csv` (or an alternative path passed via
    first, or the horizon expires without a hit, mark the row as a miss.
 
 Running `scripts/ranker_eval.py` over the rolling history of labels produces a
-compact nightly summary at `ranker_eval/summary.json` alongside a decile
-breakdown stored as `ranker_eval/deciles_YYYY-MM-DD.csv`. The JSON payload
-includes:
+compact nightly summary at `data/ranker_eval/summary.json` alongside a decile
+breakdown stored as `data/ranker_eval/deciles_YYYY-MM-DD.csv`. A `latest.json`
+symlink mirrors the most recent summary for dashboard consumers. The JSON
+payload includes:
 
-- metadata fields (`generated_at_utc`, `window_days`, `label_horizon_days`,
-  thresholds, evaluated population)
-- a `metrics` object with ROC AUC (`auc`), precision-recall AUC (`pr_auc`),
-  and optional extras such as `gate_pass_rate`
-- a `deciles` object containing parallel arrays for `rank_decile`,
-  per-decile `hit_rate`, average forward return (`avg_return`), and sample
-  counts (`count`)
+- metadata fields (`generated_at_utc`, `window_days`, evaluated population)
+- a `metrics` object covering hit rate, average expectancy, profit factor,
+  Sharpe, maximum drawdown, and the standard deviation of realised returns
+- calibration bins (`calibration`) and monthly stability aggregates
+  (`stability`) for quick sanity checks
 
 All numeric metrics are serialised as native floats (or `null` when not
-available) to simplify dashboarding.
+available) and the decile CSV is re-exported as `latest_deciles.csv` for simple
+embedding inside dashboards.
 
 ## Autotuning workflow
 
 `scripts/ranker_autotune.py` consumes the labelled dataset to propose updated
-component weights. The process is:
+component weights via walk-forward cross validation. The process is:
 
-1. Load the latest `config/ranker.yml` weights and component order.
-2. Build a training matrix from the `score_breakdown` z-scores exported in the
-   nightly snapshots.
-3. Split the history by date into training and validation windows (most recent
-   20% of days by default).
-4. Fit an L2-regularised logistic regression on the training portion.
-5. Rescale the fitted coefficients to the same magnitude as the current weights
-   and constrain each component to ±20% of its existing value. Trend-oriented
-   components (`trend`, `momentum`, `breakout`, `pivot_trend`, `multi_horizon`)
-   keep their original sign.
-6. Accept the proposal only if the validation ROC AUC improves by at least
-   `--delta` (default 0.01) **and** the validation sample contains at least
-   `--min-sample` rows.
+1. Load the latest `configs/ranker_v2.yml` weights and feature order.
+2. Collect realised labels for the requested lookback window and standardise the
+   component columns.
+3. Split the history into chronological folds (default: four walk-forward
+   splits) and score each test fold with the candidate weights.
+4. Evaluate the top quantile of scores for expectancy, profit factor, and
+   drawdown while tracking per-fold expectancy variance.
+5. Apply guardrails: profit factor must exceed 1.2, maximum drawdown must not
+   breach the configured cap, and fold-level expectancy variance must remain
+   below the supplied limit. Candidates must also beat the incumbent by at
+   least `--min-improvement` (defaults to 10 bps/day).
 
-Accepted proposals are versioned under `configs/ranker_v2_YYYYMMDD.yml` and the
-latest approved file is exposed via the `configs/ranker_v2_current.yml`
-symlink. Each accepted update appends an entry to
-`configs/ranker_v2_changelog.md` describing the baseline vs candidate
-performance. The JSON sidecar (`configs/ranker_v2_YYYYMMDD.json`) stores:
+Accepted proposals are versioned under `configs/ranker_v2_YYYYMMDD.yml`. The
+script updates the canonical `configs/ranker_v2.yml` symlink atomically and
+appends a Markdown entry to `configs/ranker_v2_changelog.md` summarising the
+baseline versus candidate metrics. The JSON sidecar
+(`configs/ranker_v2_YYYYMMDD.json`) records the aggregated expectancy,
+guardrail checks, improvement margin, and the evaluated fold statistics for
+auditability.
 
-- baseline vs candidate AUC, absolute improvement, thresholds used
-- train/validation sample sizes and date ranges
-- current weights, raw logistic fit, and constrained preview weights
-- the logistic model bias and raw coefficients (for auditability)
-- a flag indicating whether the update met the acceptance criteria
-
-The autotuner never edits `config/ranker.yml`; operations are limited to the
-preview JSON so human review can decide whether to apply changes.
+No files outside `configs/` are touched—human review can continue to manage the
+primary `config/ranker.yml` manually when desired.
 
 ## Usage summary
 

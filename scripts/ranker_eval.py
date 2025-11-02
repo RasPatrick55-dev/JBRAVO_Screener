@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -18,7 +19,7 @@ DATE_FORMAT = "%Y-%m-%d"
 @dataclass
 class EvalConfig:
     labels_dir: Path
-    output_dir: Path
+    output_dir: Path = Path("data") / "ranker_eval"
     days: int = 60
     score_column: str = "Score"
     as_of: Optional[datetime] = None
@@ -113,11 +114,17 @@ def _profit_factor(returns: pd.Series) -> float:
     return gains / abs(losses)
 
 
-def _max_drawdown(returns: pd.Series) -> float:
-    equity = (1 + returns.fillna(0.0)).cumprod()
+def _max_drawdown(returns: pd.Series, dates: Optional[pd.Series] = None) -> float:
+    series = returns.fillna(0.0)
+    if dates is not None:
+        frame = pd.DataFrame({"ret": series, "as_of": pd.to_datetime(dates, errors="coerce")})
+        frame.dropna(subset=["as_of"], inplace=True)
+        frame.sort_values("as_of", inplace=True)
+        series = frame["ret"].fillna(0.0)
+    equity = (1 + series).cumprod()
     running_max = equity.cummax()
     drawdown = (equity / running_max) - 1
-    return drawdown.min()
+    return float(drawdown.min())
 
 
 def _decile_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -191,6 +198,7 @@ def evaluate(cfg: EvalConfig) -> EvalOutputs:
     pf = float(_profit_factor(returns))
     sharpe = float("nan")
     std = returns.std(ddof=0)
+    drawdown = float(_max_drawdown(returns, combined["as_of"]))
     if std and std > 0:
         sharpe = float(expectancy / std * np.sqrt(252))
 
@@ -199,10 +207,11 @@ def evaluate(cfg: EvalConfig) -> EvalOutputs:
     summary_path = cfg.output_dir / "summary.json"
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
-    atomic_write_bytes(decile_path, deciles_output.to_csv(index=False).encode("utf-8"))
+    decile_bytes = deciles_output.to_csv(index=False).encode("utf-8")
+    atomic_write_bytes(decile_path, decile_bytes)
 
     summary_payload = {
-        "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "as_of": as_of_date.strftime(DATE_FORMAT),
         "window_days": cfg.days,
         "sample_size": int(len(combined)),
@@ -211,11 +220,36 @@ def evaluate(cfg: EvalConfig) -> EvalOutputs:
             "expectancy": expectancy,
             "profit_factor": pf,
             "sharpe": sharpe,
+            "max_drawdown": drawdown,
+            "expectancy_std": float(std) if np.isfinite(std) else None,
         },
         "calibration": _calibration_points(combined),
         "stability": _stability(combined),
     }
-    atomic_write_bytes(summary_path, json.dumps(summary_payload, indent=2).encode("utf-8"))
+    summary_bytes = json.dumps(summary_payload, indent=2).encode("utf-8")
+    atomic_write_bytes(summary_path, summary_bytes)
+
+    latest_path = cfg.output_dir / "latest.json"
+    try:
+        tmp_link = cfg.output_dir / ".latest.json.tmp"
+        if tmp_link.exists() or tmp_link.is_symlink():
+            tmp_link.unlink()
+        relative = os.path.relpath(summary_path, cfg.output_dir)
+        tmp_link.symlink_to(relative)
+        tmp_link.replace(latest_path)
+    except OSError:
+        atomic_write_bytes(latest_path, summary_bytes)
+
+    latest_deciles = cfg.output_dir / "latest_deciles.csv"
+    try:
+        tmp_deciles = cfg.output_dir / ".latest_deciles.csv.tmp"
+        if tmp_deciles.exists() or tmp_deciles.is_symlink():
+            tmp_deciles.unlink()
+        relative_csv = os.path.relpath(decile_path, cfg.output_dir)
+        tmp_deciles.symlink_to(relative_csv)
+        tmp_deciles.replace(latest_deciles)
+    except OSError:
+        atomic_write_bytes(latest_deciles, decile_bytes)
 
     return EvalOutputs(summary_path=summary_path, deciles_path=decile_path)
 
@@ -231,7 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("ranker_eval"),
+        default=Path("data") / "ranker_eval",
         help="Directory for evaluation artefacts.",
     )
     parser.add_argument(
