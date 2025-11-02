@@ -4,6 +4,7 @@ import dash
 from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
+from dash.exceptions import PreventUpdate
 from datetime import datetime, timezone, timedelta
 import subprocess
 import json
@@ -21,11 +22,14 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 from flask import jsonify
+from plotly.subplots import make_subplots
 
 os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 
 from dashboards.screener_health import build_layout as build_screener_health
 from dashboards.screener_health import register_callbacks as register_screener_health
+from scripts.run_pipeline import write_complete_screener_metrics
+from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
 
 # Base directory of the project (parent of this file)
 BASE_DIR = os.environ.get(
@@ -71,7 +75,8 @@ pipeline_status_json_path = os.path.join(BASE_DIR, "data", "pipeline_status.json
 STALE_THRESHOLD_MINUTES = 1440  # 24 hours
 ERROR_RETENTION_DAYS = 1
 
-LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+LOG_TS_RE = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})")
+LOG_LEVEL_RE = re.compile(r"\b(INFO|ERROR)\b")
 LEVEL_HINTS = ("[INFO]", "[ERROR]", " - INFO - ", " - ERROR - ")
 
 # Displayed configuration values
@@ -116,6 +121,98 @@ def tail_log(log_path: str, limit: int = 10) -> list[str]:
     return trimmed[-limit:]
 
 
+def _line_contains_level(line: str) -> bool:
+    return bool(LOG_LEVEL_RE.search(line)) or any(hint in line for hint in LEVEL_HINTS)
+
+
+def _parse_log_timestamp(line: str) -> Optional[datetime]:
+    match = LOG_TS_RE.match(line.strip())
+    if not match:
+        return None
+    ts_str = match.group("ts")
+    ts_str = ts_str.replace("T", " ")
+    try:
+        parsed = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return parsed
+
+
+def _log_activity_badge(lines: list[str], *, path: str | None = None) -> Optional[dbc.Badge]:
+    last_event: Optional[datetime] = None
+    for raw_line in reversed(lines):
+        if not _line_contains_level(raw_line):
+            continue
+        candidate = _parse_log_timestamp(raw_line)
+        if candidate:
+            last_event = candidate
+            break
+    if last_event is None and path:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = None
+        if mtime:
+            last_event = datetime.utcfromtimestamp(mtime)
+    if not last_event:
+        return None
+    age = (_utcnow() - last_event).total_seconds() / 3600
+    if age < 1:
+        color = "success"
+    elif age < 24:
+        color = "warning"
+    else:
+        color = "danger"
+    label = last_event.strftime("Last event: %Y-%m-%d %H:%M UTC")
+    return dbc.Badge(label, color=color, pill=True, className="ms-2 small")
+
+
+def _freshness_badge(path: str) -> Optional[dbc.Badge]:
+    mtime = get_file_mtime(path)
+    if not mtime:
+        return None
+    dt = datetime.utcfromtimestamp(mtime)
+    age_minutes = int((_utcnow() - dt).total_seconds() / 60)
+    if age_minutes < 60:
+        color = "success"
+    elif age_minutes < 60 * 6:
+        color = "warning"
+    else:
+        color = "danger"
+    label = dt.strftime("Data freshness: %Y-%m-%d %H:%M UTC")
+    return dbc.Badge(label, color=color, pill=True, className="ms-2 small")
+
+
+def _score_breakdown_badges(raw: Any) -> str:
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            data = {}
+    elif isinstance(raw, dict):
+        data = raw
+    else:
+        data = {}
+    if not data:
+        return ""
+    fragments: list[str] = []
+    for key, value in sorted(data.items()):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric > 0:
+            color = "success"
+        elif numeric < 0:
+            color = "danger"
+        else:
+            color = "secondary"
+        fragments.append(
+            f'<span class="badge bg-{color} me-1">{key}: {numeric:+.2f}</span>'
+        )
+    return "".join(fragments)
+
+
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -132,10 +229,11 @@ def is_log_stale(path, max_age_hours: int = 24) -> bool:
         last_ts = None
         with open(log_path, "r", encoding="utf-8", errors="ignore") as handle:
             for line in handle:
-                if any(hint in line for hint in LEVEL_HINTS):
-                    match = LOG_TS_RE.match(line)
-                    if match:
-                        last_ts = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+                if not _line_contains_level(line):
+                    continue
+                candidate = _parse_log_timestamp(line)
+                if candidate:
+                    last_ts = candidate
         if not last_ts:
             mtime = datetime.utcfromtimestamp(os.path.getmtime(log_path))
             return (_utcnow() - mtime).total_seconds() > max_age_hours * 3600
@@ -573,11 +671,18 @@ def _styled_table(df: pd.DataFrame, table_id: str | None = None, page_size: int 
     )
 
 
-def log_box(title: str, lines: list[str], element_id: str) -> html.Div:
+def log_box(title: str, lines: list[str], element_id: str, log_path: str | None = None) -> html.Div:
     """Return a styled log display box."""
+    header_children: list[Any] = [html.Span(title, className="text-light")]
+    badge = _log_activity_badge(lines, path=log_path)
+    if badge:
+        header_children.append(badge)
     return html.Div(
         [
-            html.H5(title, className="text-light"),
+            html.Div(
+                header_children,
+                className="d-flex align-items-center justify-content-between",
+            ),
             html.Pre(
                 format_log_lines(lines),
                 id=element_id,
@@ -779,93 +884,132 @@ app.layout = dbc.Container(
                 )
             )
         ),
-        dbc.Tabs(
-            id="tabs",
-            active_tab="tab-overview",
-            class_name="mb-3",
-            children=[
-                dbc.Tab(
-                    label="Screener Health",
-                    tab_id="tab-screener-health",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
+        html.Div(
+            [
+                html.Div("Ops", className="text-uppercase small text-muted mb-2 fw-bold"),
+                dbc.Button(
+                    "Pipeline Log",
+                    id="ops-btn-pipeline",
+                    color="secondary",
+                    size="sm",
+                    className="mb-2",
                 ),
-                dbc.Tab(
-                    label="Overview",
-                    tab_id="tab-overview",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
+                dbc.Button(
+                    "Execute Log",
+                    id="ops-btn-exec",
+                    color="secondary",
+                    size="sm",
+                    className="mb-2",
                 ),
-                dbc.Tab(
-                    label="Screener",
-                    tab_id="tab-screener",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
+                dbc.Button(
+                    "Latest Candidates",
+                    id="ops-btn-candidates",
+                    color="secondary",
+                    size="sm",
+                    className="mb-2",
                 ),
-                dbc.Tab(
-                    label="Predictions",
-                    tab_id="tab-predictions",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
-                ),
-                dbc.Tab(
-                    label="Ranker Eval",
-                    tab_id="tab-ranker-eval",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
-                ),
-                dbc.Tab(
-                    label="Execute Trades",
-                    tab_id="tab-execute",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
-                ),
-                dbc.Tab(
-                    label="Account",
-                    tab_id="tab-account",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
-                ),
-                # Consolidated into Monitoring Positions tab
-                # dbc.Tab(
-                #     label="Open Positions",
-                #     tab_id="tab-positions",
-                #     tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                #     active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                #     className="custom-tab",
-                # ),
-                dbc.Tab(
-                    label="Symbol Performance",
-                    tab_id="tab-symbol-performance",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
-                ),
-                dbc.Tab(
-                    label="Monitoring Positions",
-                    tab_id="tab-monitor",
-                    tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                    active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                    className="custom-tab",
+                dbc.Button(
+                    "Screener Metrics",
+                    id="ops-btn-metrics",
+                    color="secondary",
+                    size="sm",
                 ),
             ],
+            id="ops-sidebar",
+            className="p-3 bg-dark rounded d-none d-md-block",
+            style={
+                "position": "fixed",
+                "top": "120px",
+                "left": "20px",
+                "width": "180px",
+                "zIndex": 1050,
+                "boxShadow": "0 0 10px rgba(0,0,0,0.4)",
+            },
         ),
-        html.Button(
-            "Refresh Now",
-            id="refresh-button",
-            className="btn btn-secondary mb-2",
-        ),
-        dcc.Loading(
-            id="loading",
-            children=html.Div(id="tabs-content", className="mt-4"),
-            type="default",
+        html.Div(
+            [
+                dbc.Tabs(
+                    id="tabs",
+                    active_tab="tab-overview",
+                    class_name="mb-3",
+                    children=[
+                        dbc.Tab(
+                            label="Screener Health",
+                            tab_id="tab-screener-health",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Overview",
+                            tab_id="tab-overview",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Screener",
+                            tab_id="tab-screener",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Predictions",
+                            tab_id="tab-predictions",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Ranker Eval",
+                            tab_id="tab-ranker-eval",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Execute Trades",
+                            tab_id="tab-execute",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Account",
+                            tab_id="tab-account",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Symbol Performance",
+                            tab_id="tab-symbol-performance",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Monitoring Positions",
+                            tab_id="tab-monitor",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                    ],
+                ),
+                html.Button(
+                    "Refresh Now",
+                    id="refresh-button",
+                    className="btn btn-secondary mb-2",
+                ),
+                dcc.Loading(
+                    id="loading",
+                    children=html.Div(id="tabs-content", className="mt-4"),
+                    type="default",
+                ),
+            ],
+            style={"marginLeft": "220px"},
         ),
         # Refresh dashboards roughly every 15 seconds to reflect new logs
         dcc.Interval(id="interval-update", interval=15000, n_intervals=0),
@@ -880,6 +1024,18 @@ app.layout = dbc.Container(
                 dbc.ModalBody(id="modal-content"),
                 dbc.ModalFooter(
                     dbc.Button("Close", id="close-modal", className="ms-auto")
+                ),
+            ],
+        ),
+        dbc.Modal(
+            id="ops-modal",
+            is_open=False,
+            size="lg",
+            children=[
+                dbc.ModalHeader(dbc.ModalTitle("Operations Snapshot")),
+                dbc.ModalBody(id="ops-modal-body"),
+                dbc.ModalFooter(
+                    dbc.Button("Close", id="ops-modal-close", className="ms-auto")
                 ),
             ],
         ),
@@ -1012,80 +1168,78 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         if metrics_df is not None and not metrics_df.empty:
             latest_metrics = metrics_df.iloc[-1]
-            total_trades = latest_metrics["total_trades"]
-            total_pnl = latest_metrics["net_pnl"]
-            win_rate_val = latest_metrics["win_rate"]
-            expectancy = latest_metrics["expectancy"]
-            profit_factor_val = latest_metrics["profit_factor"]
-            max_drawdown_val = latest_metrics["max_drawdown"]
+            total_trades = latest_metrics.get("total_trades", len(trades_df))
+            total_pnl = latest_metrics.get("net_pnl", trades_df["pnl"].sum())
+            win_rate_val = latest_metrics.get("win_rate", (trades_df["pnl"] > 0).mean() * 100)
+            expectancy = latest_metrics.get("expectancy", trades_df["pnl"].mean())
+            profit_factor_val = latest_metrics.get("profit_factor")
+            max_drawdown_val = latest_metrics.get("max_drawdown")
+            sharpe_val = latest_metrics.get("sharpe")
         else:
             total_trades = len(trades_df)
             total_pnl = trades_df["pnl"].sum()
             win_rate_val = (trades_df["pnl"] > 0).mean() * 100
             expectancy = trades_df["pnl"].mean()
-            profit_factor_val = (
-                trades_df[trades_df["pnl"] > 0]["pnl"].sum()
-                / abs(trades_df[trades_df["pnl"] < 0]["pnl"].sum())
-                if not trades_df[trades_df["pnl"] < 0].empty
-                else 0
+            wins = trades_df[trades_df["pnl"] > 0]["pnl"].sum()
+            losses = trades_df[trades_df["pnl"] < 0]["pnl"].sum()
+            profit_factor_val = wins / abs(losses) if losses else float("nan")
+            max_drawdown_val = trades_df["drawdown"].min() if "drawdown" in trades_df.columns else float("nan")
+            pnl_std = trades_df["pnl"].std(ddof=0)
+            sharpe_val = (expectancy / pnl_std) if pnl_std else float("nan")
+
+        def _overview_card(label: str, value: Any, fmt: str = "{}", tooltip: str | None = None, prefix: str = "") -> dbc.Col:
+            card_id = f"overview-{label.lower().replace(' ', '-')}-card"
+            try:
+                if value in (None, ""):
+                    rendered = "n/a"
+                elif isinstance(value, float) and math.isnan(value):
+                    rendered = "n/a"
+                else:
+                    rendered = fmt.format(value)
+            except Exception:
+                rendered = str(value)
+            card = dbc.Card(
+                [
+                    dbc.CardHeader(label, id=f"{card_id}-header"),
+                    dbc.CardBody(html.H4(f"{prefix}{rendered}", className="mb-0")),
+                ],
+                className="h-100",
             )
-            max_drawdown_val = trades_df["drawdown"].min() if "drawdown" in trades_df.columns else 0
+            if tooltip:
+                tooltip_component = dbc.Tooltip(tooltip, target=f"{card_id}-header", placement="top")
+                return dbc.Col(html.Div([card, tooltip_component]), md=2, className="mb-3")
+            return dbc.Col(card, md=2, className="mb-3")
 
         kpis = dbc.Row(
             [
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Total Trades"),
-                            dbc.CardBody(html.H4(f"{total_trades}")),
-                        ]
-                    ),
-                    width=2,
+                _overview_card("Total Trades", total_trades, "{:.0f}"),
+                _overview_card("Total Net PnL", total_pnl, "{:.2f}", prefix="$"),
+                _overview_card("Win Rate", win_rate_val, "{:.2f}%"),
+                _overview_card(
+                    "Expectancy",
+                    expectancy,
+                    "{:.2f}",
+                    tooltip="Average per-trade profit after costs.",
+                    prefix="$",
                 ),
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Total Net PnL"),
-                            dbc.CardBody(html.H4(f"${total_pnl:.2f}")),
-                        ]
-                    ),
-                    width=2,
+                _overview_card(
+                    "Profit Factor",
+                    profit_factor_val,
+                    "{:.2f}",
+                    tooltip="Gross profits divided by gross losses.",
                 ),
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Win Rate"),
-                            dbc.CardBody(html.H4(f"{win_rate_val:.2f}%")),
-                        ]
-                    ),
-                    width=2,
+                _overview_card(
+                    "Max Drawdown",
+                    max_drawdown_val,
+                    "{:.2f}",
+                    tooltip="Largest peak-to-trough equity decline.",
+                    prefix="$",
                 ),
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Expectancy"),
-                            dbc.CardBody(html.H4(f"${expectancy:.2f}")),
-                        ]
-                    ),
-                    width=2,
-                ),
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Profit Factor"),
-                            dbc.CardBody(html.H4(f"{profit_factor_val:.2f}")),
-                        ]
-                    ),
-                    width=2,
-                ),
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Max Drawdown"),
-                            dbc.CardBody(html.H4(f"${max_drawdown_val:.2f}")),
-                        ]
-                    ),
-                    width=2,
+                _overview_card(
+                    "Sharpe",
+                    sharpe_val,
+                    "{:.2f}",
+                    tooltip="Per-trade Sharpe ratio (mean divided by volatility).",
                 ),
             ],
             className="mb-4",
@@ -1133,6 +1287,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     elif tab == "tab-screener":
         metrics_data: dict = {}
         metrics_alert = None
+        backfill_banner = None
+        metrics_freshness_chip = None
         if os.path.exists(screener_metrics_path):
             try:
                 with open(screener_metrics_path, "r", encoding="utf-8") as handle:
@@ -1147,6 +1303,36 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 "Screener metrics not available yet.",
                 color="warning",
             )
+
+        if metrics_data:
+            metrics_freshness_chip = _freshness_badge(screener_metrics_path)
+
+            def _needs_backfill(payload: dict[str, Any]) -> bool:
+                for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "candidates_out"):
+                    value = payload.get(key)
+                    if value in (None, "", []):
+                        return True
+                    if isinstance(value, float) and math.isnan(value):
+                        return True
+                return False
+
+            if _needs_backfill(metrics_data):
+                try:
+                    recovered = write_complete_screener_metrics(Path(BASE_DIR))
+                except Exception as exc:
+                    if metrics_alert is None:
+                        metrics_alert = dbc.Alert(
+                            f"Unable to backfill screener metrics: {exc}",
+                            color="danger",
+                        )
+                else:
+                    if isinstance(recovered, dict):
+                        metrics_data.update(recovered)
+                    backfill_banner = dbc.Alert(
+                        "Backfilled from PIPELINE_SUMMARY to fill missing KPIs.",
+                        color="info",
+                        className="mb-3",
+                    )
 
         execute_metrics: dict = {}
         execute_alert = None
@@ -1583,56 +1769,29 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         logs_row = dbc.Row(
             [
                 dbc.Col(
-                    html.Div(
-                        [
-                            html.H5("Pipeline Log", className="text-light"),
-                            html.Pre(
-                                format_log_lines(pipeline_lines),
-                                style={
-                                    "maxHeight": "220px",
-                                    "overflowY": "auto",
-                                    "backgroundColor": "#272B30",
-                                    "color": "#E0E0E0",
-                                    "padding": "0.5rem",
-                                },
-                            ),
-                        ]
+                    log_box(
+                        "Pipeline Log",
+                        pipeline_lines,
+                        "pipeline-log",
+                        log_path=pipeline_log_path,
                     ),
                     md=4,
                 ),
                 dbc.Col(
-                    html.Div(
-                        [
-                            html.H5("Screener Log", className="text-light"),
-                            html.Pre(
-                                format_log_lines(screener_lines),
-                                style={
-                                    "maxHeight": "220px",
-                                    "overflowY": "auto",
-                                    "backgroundColor": "#272B30",
-                                    "color": "#E0E0E0",
-                                    "padding": "0.5rem",
-                                },
-                            ),
-                        ]
+                    log_box(
+                        "Screener Log",
+                        screener_lines,
+                        "screener-log",
+                        log_path=screener_log_path,
                     ),
                     md=4,
                 ),
                 dbc.Col(
-                    html.Div(
-                        [
-                            html.H5("Backtest Log", className="text-light"),
-                            html.Pre(
-                                format_log_lines(backtest_lines),
-                                style={
-                                    "maxHeight": "220px",
-                                    "overflowY": "auto",
-                                    "backgroundColor": "#272B30",
-                                    "color": "#E0E0E0",
-                                    "padding": "0.5rem",
-                                },
-                            ),
-                        ]
+                    log_box(
+                        "Backtest Log",
+                        backtest_lines,
+                        "backtest-log",
+                        log_path=backtest_log_path,
                     ),
                     md=4,
                 ),
@@ -1667,6 +1826,10 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             components.append(html.Div(connectivity_chip, className="mb-3"))
         if latest_notice:
             components.append(latest_notice)
+        if metrics_freshness_chip:
+            components.append(html.Div(metrics_freshness_chip, className="mb-3"))
+        if backfill_banner:
+            components.append(backfill_banner)
         components.extend(alerts)
 
         metrics_sections = []
@@ -2203,9 +2366,16 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             error_log_path, num_lines=100, since_days=ERROR_RETENTION_DAYS
         )[::-1]
 
-        monitor_log_box = log_box("Monitor Log", monitor_lines, "monitor-log")
-        exec_log_box = log_box("Execution Log", exec_lines, "exec-log")
-        error_log_box = log_box("Errors", error_lines, "error-log")
+        monitor_log_box = log_box(
+            "Monitor Log", monitor_lines, "monitor-log", log_path=monitor_log_path
+        )
+        exec_log_box = log_box(
+            "Execution Log",
+            exec_lines,
+            "exec-log",
+            log_path=execute_trades_log_path,
+        )
+        error_log_box = log_box("Errors", error_lines, "error-log", log_path=error_log_path)
 
         stale_warning_banner = stale_warning(
             [monitor_log_path, open_positions_path], threshold_minutes=10
@@ -2273,7 +2443,41 @@ def predictions_layout():
 
     display_df = df.copy()
     display_df.columns = [str(col) for col in display_df.columns]
-    table = _styled_table(display_df.head(100), table_id="predictions-table", page_size=25)
+
+    def _find_column(candidates: set[str]) -> Optional[str]:
+        for col in display_df.columns:
+            if str(col).strip().lower() in candidates:
+                return col
+        return None
+
+    score_col = _find_column({"score", "total_score"})
+    relvol_col = _find_column({"rel_volume", "relvol", "rel_vol"})
+    atr_col = _find_column({"atr_percent", "atrp", "atr_pct"})
+    breakdown_col = _find_column({"score_breakdown", "score_breakdown_json", "breakdown"})
+
+    work = pd.DataFrame()
+    work["symbol"] = display_df.get("symbol", pd.Series(dtype="string"))
+    if score_col:
+        work["score"] = pd.to_numeric(display_df[score_col], errors="coerce")
+    else:
+        work["score"] = pd.Series(dtype="float64")
+    if relvol_col:
+        work["rel_volume"] = pd.to_numeric(display_df[relvol_col], errors="coerce")
+    else:
+        work["rel_volume"] = pd.Series(dtype="float64")
+    if atr_col:
+        work["atr_percent"] = pd.to_numeric(display_df[atr_col], errors="coerce")
+    else:
+        work["atr_percent"] = pd.Series(dtype="float64")
+    if breakdown_col:
+        work["breakdown_raw"] = display_df[breakdown_col]
+    else:
+        work["breakdown_raw"] = "{}"
+
+    work.fillna({"rel_volume": 0.0, "atr_percent": 0.0}, inplace=True)
+    work["breakdown_html"] = work["breakdown_raw"].apply(_score_breakdown_badges)
+
+    store_payload = work.to_dict("records")
 
     updated = format_time(get_file_mtime(str(path)))
     meta = dbc.Row(
@@ -2284,14 +2488,73 @@ def predictions_layout():
         className="mb-3 text-light",
     )
 
+    controls = dbc.Row(
+        [
+            dbc.Col(
+                dbc.Input(
+                    id="predictions-search",
+                    placeholder="Search symbol",
+                    type="text",
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                dbc.Input(
+                    id="predictions-min-score",
+                    placeholder="Min score",
+                    type="number",
+                    step="0.05",
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                dbc.Input(
+                    id="predictions-min-relvol",
+                    placeholder="Min rel-vol",
+                    type="number",
+                    step="0.1",
+                ),
+                md=3,
+            ),
+            dbc.Col(
+                dbc.Input(
+                    id="predictions-max-atrp",
+                    placeholder="Max ATR %",
+                    type="number",
+                    step="0.1",
+                ),
+                md=3,
+            ),
+        ],
+        className="g-2 mb-3",
+    )
+
+    table = dash_table.DataTable(
+        id="predictions-table",
+        columns=[
+            {"name": "Symbol", "id": "symbol"},
+            {"name": "Score", "id": "score", "type": "numeric", "format": {"specifier": ".4f"}},
+            {"name": "Rel Vol", "id": "rel_volume", "type": "numeric", "format": {"specifier": ".2f"}},
+            {"name": "ATR %", "id": "atr_percent", "type": "numeric", "format": {"specifier": ".2f"}},
+            {"name": "Score Breakdown", "id": "breakdown_html"},
+        ],
+        data=[],
+        sort_action="native",
+        page_size=25,
+        style_table={"overflowX": "auto", "maxHeight": "520px", "overflowY": "auto"},
+        style_cell={"backgroundColor": "#212529", "color": "#E0E0E0", "fontSize": "0.85rem"},
+        style_header={"backgroundColor": "#343a40", "color": "#FFFFFF", "fontWeight": "bold"},
+        style_data_conditional=[
+            {"if": {"column_id": "score"}, "fontWeight": "bold"},
+        ],
+        dangerously_allow_html=True,
+    )
+
     return html.Div(
         [
             meta,
-            dbc.Alert(
-                "Showing up to 100 rows from the latest predictions snapshot.",
-                color="info",
-                className="mb-3",
-            ),
+            controls,
+            dcc.Store(id="predictions-store", data=store_payload),
             table,
         ]
     )
@@ -2303,7 +2566,7 @@ def ranker_eval_layout():
         return dbc.Alert("Ranker evaluation artefacts are not available yet.", color="secondary")
 
     summary_path, summary = summary_payload
-    metrics = summary.get("metrics", {})
+    metrics = summary.get("metrics", {}) or {}
     as_of = summary.get("as_of", "?")
 
     def _ensure_numeric(value: Any) -> float:
@@ -2313,125 +2576,158 @@ def ranker_eval_layout():
             return float(value)
         return float("nan")
 
-    def _format_value(value: float, fmt: str, infinite_label: str = "∞") -> str:
+    def _format_value(value: float, fmt: str, *, infinite_label: str = "∞") -> str:
         if math.isnan(value):
             return "n/a"
         if math.isinf(value):
             return infinite_label if value > 0 else f"-{infinite_label}"
         return fmt.format(value)
 
-    hit_rate_value = _ensure_numeric(metrics.get("hit_rate"))
-    expectancy_value = _ensure_numeric(metrics.get("expectancy"))
-    profit_factor_value = _ensure_numeric(metrics.get("profit_factor"))
-    sharpe_value = _ensure_numeric(metrics.get("sharpe"))
-    drawdown_value = _ensure_numeric(metrics.get("max_drawdown"))
-    expectancy_std_value = _ensure_numeric(metrics.get("expectancy_std"))
+    def _normalise_columns(frame: pd.DataFrame) -> pd.DataFrame:
+        renamed = {col: str(col).strip().lower() for col in frame.columns}
+        return frame.rename(columns=renamed)
+
+    deciles_df = _load_deciles(as_of)
+    if deciles_df is None:
+        latest_deciles = RANKER_EVAL_DIR / "latest_deciles.csv"
+        if latest_deciles.exists():
+            try:
+                deciles_df = pd.read_csv(latest_deciles)
+            except Exception:
+                deciles_df = None
+    decile_chart = None
+    if deciles_df is not None and not deciles_df.empty:
+        deciles_df = _normalise_columns(deciles_df)
+        if "decile" in deciles_df.columns:
+            working = deciles_df.copy()
+            working.sort_values("decile", inplace=True)
+            if "avg_return" in working.columns:
+                working["avg_return"] = working["avg_return"].astype(float)
+            decile_chart = px.bar(
+                working,
+                x=working["decile"].astype(str),
+                y="avg_return",
+                title="Decile Next-Day Returns",
+                template="plotly_dark",
+            )
+            decile_chart.update_yaxes(tickformat=".2%")
+            decile_chart.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+
+    calibration_records = summary.get("calibration", []) or []
+    calibration_chart = None
+    if calibration_records:
+        calibration_df = _normalise_columns(pd.DataFrame(calibration_records))
+        if {"avg_score", "hit_rate"}.issubset(calibration_df.columns):
+            calibration_df.sort_values("avg_score", inplace=True)
+            calibration_chart = px.line(
+                calibration_df,
+                x="avg_score",
+                y="hit_rate",
+                markers=True,
+                title="Score Calibration",
+                template="plotly_dark",
+            )
+            calibration_chart.update_yaxes(tickformat=".2%")
+
+    history_records = summary.get("history") or summary.get("sessions") or []
+    if isinstance(history_records, dict):
+        history_records = history_records.get("data") or list(history_records.values())
+    history_df = pd.DataFrame(history_records)
+    if history_df.empty:
+        candidate_row = {k: metrics.get(k) for k in ("expectancy", "profit_factor", "sharpe")}
+        candidate_row["as_of"] = as_of
+        history_df = pd.DataFrame([candidate_row])
+    history_chart = None
+    if not history_df.empty:
+        history_df = _normalise_columns(history_df)
+        if "as_of" in history_df.columns:
+            history_df["as_of"] = pd.to_datetime(history_df["as_of"], errors="coerce")
+            history_df = history_df.dropna(subset=["as_of"])
+        history_df = history_df.tail(20)
+        value_columns = [col for col in ("expectancy", "profit_factor", "sharpe") if col in history_df.columns]
+        if value_columns and not history_df.empty:
+            melted = history_df.melt(id_vars=[col for col in ("as_of", "session") if col in history_df.columns], value_vars=value_columns, var_name="metric", value_name="value")
+            x_axis = "as_of" if "as_of" in history_df.columns else "session"
+            history_chart = px.line(
+                melted,
+                x=x_axis,
+                y="value",
+                color="metric",
+                title="Trailing KPI Trend (last 20 sessions)",
+                template="plotly_dark",
+            )
+
+    def _metric_card(title: str, value: Any, tooltip: str, fmt: str = "{}") -> dbc.Col:
+        number = _ensure_numeric(value)
+        rendered = _format_value(number, fmt)
+        card_id = f"ranker-kpi-{title.lower().replace(' ', '-') }"
+        card = dbc.Card(
+            [
+                dbc.CardHeader(title, id=f"{card_id}-header"),
+                dbc.CardBody(html.H4(rendered, className="mb-0")),
+            ]
+        )
+        tooltip_component = dbc.Tooltip(tooltip, target=f"{card_id}-header", placement="top")
+        return dbc.Col(html.Div([card, tooltip_component]), md=3, className="mb-3")
 
     cards = dbc.Row(
         [
-            dbc.Col(
-                dbc.Card(
-                    [
-                        dbc.CardHeader("Hit Rate"),
-                        dbc.CardBody(html.H4(_format_value(hit_rate_value, "{:.2%}"))),
-                    ]
-                ),
-                md=3,
-            ),
-            dbc.Col(
-                dbc.Card(
-                    [
-                        dbc.CardHeader("Expectancy"),
-                        dbc.CardBody(html.H4(_format_value(expectancy_value, "{:.4f}"))),
-                    ]
-                ),
-                md=3,
-            ),
-            dbc.Col(
-                dbc.Card(
-                    [
-                        dbc.CardHeader("Profit Factor"),
-                        dbc.CardBody(html.H4(_format_value(profit_factor_value, "{:.2f}"))),
-                    ]
-                ),
-                md=3,
-            ),
-            dbc.Col(
-                dbc.Card(
-                    [
-                        dbc.CardHeader("Sharpe"),
-                        dbc.CardBody(html.H4(_format_value(sharpe_value, "{:.2f}"))),
-                    ]
-                ),
-                md=3,
-            ),
-        ],
-        className="mb-4",
+            _metric_card("Expectancy", metrics.get("expectancy"), "Average next-day return per trade.", fmt="{:.4f}"),
+            _metric_card("Profit Factor", metrics.get("profit_factor"), "Gross wins divided by gross losses.", fmt="{:.2f}"),
+            _metric_card("Sharpe", metrics.get("sharpe"), "Annualised Sharpe ratio over the evaluation window.", fmt="{:.2f}"),
+            _metric_card("Hit Rate", metrics.get("hit_rate"), "Share of trades ending positive.", fmt="{:.2%}"),
+        ]
     )
 
     secondary_cards = dbc.Row(
         [
-            dbc.Col(
-                dbc.Card(
-                    [
-                        dbc.CardHeader("Max Drawdown"),
-                        dbc.CardBody(html.H4(_format_value(drawdown_value, "{:.2%}"))),
-                    ]
-                ),
-                md=3,
-            ),
-            dbc.Col(
-                dbc.Card(
-                    [
-                        dbc.CardHeader("Return Volatility"),
-                        dbc.CardBody(html.H4(_format_value(expectancy_std_value, "{:.4f}"))),
-                    ]
-                ),
-                md=3,
-            ),
-        ],
-        className="mb-4",
-    )
-
-    deciles_df = _load_deciles(as_of)
-    deciles_component = (
-        _styled_table(deciles_df, table_id="ranker-deciles", page_size=10)
-        if deciles_df is not None and not deciles_df.empty
-        else dbc.Alert("Decile breakdown not available.", color="secondary")
-    )
-
-    calibration_records = summary.get("calibration", [])
-    calibration_component = (
-        _styled_table(pd.DataFrame(calibration_records), table_id="ranker-calibration", page_size=10)
-        if calibration_records
-        else dbc.Alert("Calibration data not available.", color="secondary")
-    )
-
-    stability_records = summary.get("stability", [])
-    stability_component = (
-        _styled_table(pd.DataFrame(stability_records), table_id="ranker-stability", page_size=10)
-        if stability_records
-        else dbc.Alert("Stability metrics not available.", color="secondary")
+            _metric_card("Max Drawdown", metrics.get("max_drawdown"), "Worst peak-to-trough decline during the window.", fmt="{:.2%}"),
+            _metric_card("Return Volatility", metrics.get("expectancy_std"), "Standard deviation of realised returns.", fmt="{:.4f}"),
+        ]
     )
 
     updated = format_time(get_file_mtime(str(summary_path)))
 
-    return html.Div(
-        [
-            html.Div(f"Evaluation as of {as_of}", className="text-light"),
-            html.Div(f"Summary generated: {updated}", className="text-light mb-3"),
-            cards,
-            secondary_cards,
-            html.H4("Decile Performance", className="text-light"),
-            deciles_component,
-            html.Hr(),
-            html.H4("Calibration", className="text-light"),
-            calibration_component,
-            html.Hr(),
-            html.H4("Monthly Stability", className="text-light"),
-            stability_component,
-        ]
-    )
+    components: list[Any] = [
+        html.Div(f"Evaluation as of {as_of}", className="text-light"),
+        html.Div(f"Summary generated: {updated}", className="text-light mb-3"),
+        cards,
+        secondary_cards,
+    ]
+
+    if decile_chart is not None:
+        components.extend(
+            [
+                html.H4("Decile Performance", className="text-light"),
+                dcc.Graph(figure=decile_chart),
+            ]
+        )
+    else:
+        components.append(dbc.Alert("Decile breakdown not available.", color="secondary"))
+
+    if calibration_chart is not None:
+        components.extend(
+            [
+                html.Hr(),
+                html.H4("Calibration", className="text-light"),
+                dcc.Graph(figure=calibration_chart),
+            ]
+        )
+    else:
+        components.append(dbc.Alert("Calibration data not available.", color="secondary"))
+
+    if history_chart is not None:
+        components.extend(
+            [
+                html.Hr(),
+                html.H4("Summary KPIs (20 sessions)", className="text-light"),
+                dcc.Graph(figure=history_chart),
+            ]
+        )
+    else:
+        components.append(dbc.Alert("Historical KPI trend not available yet.", color="secondary"))
+
+    return html.Div(components)
 
 
 @app.callback(Output("tabs-content", "children"), [Input("tabs", "active_tab")])
@@ -2487,23 +2783,258 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
                 df = pd.read_csv(path)
             except Exception as exc:
                 return True, dbc.Alert(f"Error loading data for {symbol}: {exc}", color="danger")
-            fig = go.Figure()
+            df = df.dropna(subset=["timestamp", "close", "open", "high", "low"])
+            if df.empty:
+                return True, dbc.Alert("Insufficient historical data for chart.", color="warning")
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+            df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+            close_series = pd.to_numeric(df["close"], errors="coerce")
+            df["SMA9"] = close_series.rolling(9).mean()
+            df["EMA20"] = close_series.ewm(span=20, adjust=False).mean()
+            df["SMA180"] = close_series.rolling(180).mean()
+            mid = close_series.rolling(20).mean()
+            std = close_series.rolling(20).std(ddof=0)
+            df["BB_MID"] = mid
+            df["BB_UPPER"] = mid + 2 * std
+            df["BB_LOWER"] = mid - 2 * std
+            macd_line, macd_signal, macd_hist = _macd(close_series)
+            df["MACD_LINE"] = macd_line
+            df["MACD_SIGNAL"] = macd_signal
+            df["MACD_HIST"] = macd_hist
+            df["RSI"] = _rsi(close_series)
+            df["ADX"] = _adx(df, period=14)
+            df["OBV"] = _obv(df)
+            volume_series = pd.to_numeric(df.get("volume"), errors="coerce").fillna(0)
+
+            specs = [
+                [{"secondary_y": False}],
+                [{"secondary_y": True}],
+                [{"secondary_y": False}],
+                [{"secondary_y": False}],
+                [{"secondary_y": False}],
+            ]
+            fig = make_subplots(
+                rows=5,
+                cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.02,
+                row_heights=[0.45, 0.2, 0.15, 0.1, 0.1],
+                specs=specs,
+            )
             fig.add_trace(
                 go.Candlestick(
                     x=df["timestamp"],
                     open=df["open"],
                     high=df["high"],
                     low=df["low"],
-                    close=df["close"],
-                    name=symbol,
-                )
+                    close=close_series,
+                    name="Price",
+                    increasing_line_color="#26a69a",
+                    decreasing_line_color="#ef5350",
+                ),
+                row=1,
+                col=1,
             )
-            fig.update_layout(template="plotly_dark", title=f"{symbol} Price")
+            fig.add_trace(
+                go.Scatter(x=df["timestamp"], y=df["SMA9"], name="SMA9", line=dict(color="#feca57")),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(x=df["timestamp"], y=df["EMA20"], name="EMA20", line=dict(color="#54a0ff")),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(x=df["timestamp"], y=df["SMA180"], name="SMA180", line=dict(color="#ff6b6b")),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=df["BB_UPPER"],
+                    name="Bollinger Upper",
+                    line=dict(color="#8395a7", width=1),
+                ),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=df["BB_LOWER"],
+                    name="Bollinger Lower",
+                    line=dict(color="#8395a7", width=1),
+                    fill="tonexty",
+                    fillcolor="rgba(131,149,167,0.15)",
+                ),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Bar(x=df["timestamp"], y=volume_series, name="Volume", marker_color="#576574"),
+                row=2,
+                col=1,
+                secondary_y=False,
+            )
+            fig.add_trace(
+                go.Scatter(x=df["timestamp"], y=df["OBV"], name="OBV", line=dict(color="#1dd1a1")),
+                row=2,
+                col=1,
+                secondary_y=True,
+            )
+            fig.add_trace(
+                go.Bar(x=df["timestamp"], y=df["MACD_HIST"], name="MACD Hist", marker_color="#10ac84"),
+                row=3,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(x=df["timestamp"], y=df["MACD_LINE"], name="MACD", line=dict(color="#ff9f43")),
+                row=3,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(x=df["timestamp"], y=df["MACD_SIGNAL"], name="Signal", line=dict(color="#54a0ff")),
+                row=3,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(x=df["timestamp"], y=df["RSI"], name="RSI", line=dict(color="#c8d6e5")),
+                row=4,
+                col=1,
+            )
+            fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=4, col=1)
+            fig.add_hline(y=30, line=dict(color="#54a0ff", width=1, dash="dash"), row=4, col=1)
+            fig.add_trace(
+                go.Scatter(x=df["timestamp"], y=df["ADX"], name="ADX", line=dict(color="#ff9ff3")),
+                row=5,
+                col=1,
+            )
+            fig.update_layout(
+                template="plotly_dark",
+                title=f"{symbol} Daily Technical Overview",
+                height=900,
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            )
+            fig.update_yaxes(title_text="Price", row=1, col=1)
+            fig.update_yaxes(title_text="Volume", row=2, col=1, secondary_y=False)
+            fig.update_yaxes(title_text="OBV", row=2, col=1, secondary_y=True)
+            fig.update_yaxes(title_text="MACD", row=3, col=1)
+            fig.update_yaxes(title_text="RSI", row=4, col=1, range=[0, 100])
+            fig.update_yaxes(title_text="ADX", row=5, col=1)
             return True, dcc.Graph(figure=fig)
         return True, html.Div(f"No data for {symbol}")
     if close_click and is_open:
         return False, ""
     return is_open, ""
+
+
+@app.callback(
+    [Output("ops-modal", "is_open"), Output("ops-modal-body", "children")],
+    [
+        Input("ops-btn-pipeline", "n_clicks"),
+        Input("ops-btn-exec", "n_clicks"),
+        Input("ops-btn-candidates", "n_clicks"),
+        Input("ops-btn-metrics", "n_clicks"),
+        Input("ops-modal-close", "n_clicks"),
+    ],
+    State("ops-modal", "is_open"),
+)
+def toggle_ops_modal(pipeline_click, exec_click, candidates_click, metrics_click, close_click, is_open):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+    trigger = ctx.triggered[0]["prop_id"].split(".")[0]
+    if trigger == "ops-modal-close":
+        return False, dash.no_update
+
+    def _log_content(path: str, label: str) -> Any:
+        lines = tail_log(path, limit=40)
+        if not lines:
+            return dbc.Alert(f"No recent entries for {label}.", color="warning")
+        return html.Pre(
+            format_log_lines(lines),
+            style={
+                "maxHeight": "400px",
+                "overflowY": "auto",
+                "backgroundColor": "#272B30",
+                "color": "#E0E0E0",
+                "padding": "0.75rem",
+            },
+        )
+
+    if trigger == "ops-btn-pipeline":
+        content = _log_content(pipeline_log_path, "pipeline.log")
+    elif trigger == "ops-btn-exec":
+        content = _log_content(execute_trades_log_path, "execute_trades.log")
+    elif trigger == "ops-btn-candidates":
+        if not os.path.exists(latest_candidates_path):
+            content = dbc.Alert("latest_candidates.csv not found.", color="warning")
+        else:
+            try:
+                preview = pd.read_csv(latest_candidates_path, nrows=2)
+            except Exception as exc:
+                content = dbc.Alert(f"Failed to read latest candidates: {exc}", color="danger")
+            else:
+                if preview.empty:
+                    content = dbc.Alert("File exists but no rows are available yet.", color="info")
+                else:
+                    preview.columns = [str(c) for c in preview.columns]
+                    content = dash_table.DataTable(
+                        data=preview.to_dict("records"),
+                        columns=[{"name": c, "id": c} for c in preview.columns],
+                        style_cell={
+                            "backgroundColor": "#212529",
+                            "color": "#E0E0E0",
+                            "fontSize": "0.85rem",
+                        },
+                        style_header={"backgroundColor": "#343a40", "color": "#FFFFFF"},
+                        page_size=2,
+                    )
+    elif trigger == "ops-btn-metrics":
+        if not os.path.exists(screener_metrics_path):
+            content = dbc.Alert("screener_metrics.json not found.", color="warning")
+        else:
+            try:
+                with open(screener_metrics_path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle) or {}
+            except Exception as exc:
+                content = dbc.Alert(f"Failed to load screener metrics: {exc}", color="danger")
+            else:
+                rows: list[dict[str, Any]] = []
+                for key, value in sorted(payload.items()):
+                    if isinstance(value, dict):
+                        for sub_key, sub_value in sorted(value.items()):
+                            rows.append({"Key": f"{key}.{sub_key}", "Value": sub_value})
+                    else:
+                        rows.append({"Key": key, "Value": value})
+                metrics_table = dash_table.DataTable(
+                    data=rows,
+                    columns=[{"name": c, "id": c} for c in ("Key", "Value")],
+                    style_cell={
+                        "backgroundColor": "#212529",
+                        "color": "#E0E0E0",
+                        "fontSize": "0.85rem",
+                        "textAlign": "left",
+                        "whiteSpace": "normal",
+                        "height": "auto",
+                    },
+                    page_size=10,
+                )
+                freshness = _freshness_badge(screener_metrics_path)
+                content = html.Div(
+                    [
+                        html.Div(f"Metrics entries: {len(rows)}", className="text-light mb-2"),
+                        html.Div(freshness) if freshness else html.Div(),
+                        metrics_table,
+                    ]
+                )
+    else:
+        content = dbc.Alert("No content available.", color="warning")
+
+    return True, content
 
 
 # Periodically refresh screener table
@@ -2541,6 +3072,40 @@ def update_metrics_logs(n):
         return "".join(recent_log_lines)
     except FileNotFoundError:
         return "Metrics log file not found."
+
+
+# Update predictions table based on filters
+@app.callback(
+    Output("predictions-table", "data"),
+    [
+        Input("predictions-store", "data"),
+        Input("predictions-search", "value"),
+        Input("predictions-min-score", "value"),
+        Input("predictions-min-relvol", "value"),
+        Input("predictions-max-atrp", "value"),
+    ],
+)
+def filter_predictions_table(store, search, min_score, min_relvol, max_atrp):
+    if not store:
+        return []
+    frame = pd.DataFrame(store)
+    if frame.empty:
+        return []
+    work = frame.copy()
+    if search:
+        mask = work.get("symbol", pd.Series(dtype="string")).astype(str).str.contains(
+            str(search), case=False, na=False
+        )
+        work = work[mask]
+    if min_score is not None and "score" in work.columns:
+        work = work[pd.to_numeric(work["score"], errors="coerce") >= float(min_score)]
+    if min_relvol is not None and "rel_volume" in work.columns:
+        work = work[pd.to_numeric(work["rel_volume"], errors="coerce") >= float(min_relvol)]
+    if max_atrp is not None and "atr_percent" in work.columns:
+        work = work[pd.to_numeric(work["atr_percent"], errors="coerce") <= float(max_atrp)]
+    if "score" in work.columns:
+        work = work.sort_values("score", ascending=False)
+    return work.to_dict("records")
 
 
 # Periodically refresh executed trades table
