@@ -26,10 +26,10 @@ context for filtering experiments.
 
 ## Label computation
 
-`scripts/eval_ranker.py` transforms the rolling window of prediction snapshots
-into binary classification labels based on forward returns. Labels are derived
-using daily OHLC data sourced from `data/daily_prices.csv` (or an alternative
-path passed via `--prices`). For each prediction row:
+`scripts/labels/make_nextday_labels.py` joins the nightly prediction snapshot
+with realized forward performance. Labels are derived using daily OHLC data
+sourced from `data/daily_prices.csv` (or an alternative path passed via
+`--prices`). For each prediction row:
 
 1. Locate the matching close on the prediction date.
 2. Scan the next *H* trading days (defaults to `--label-horizon 3`).
@@ -38,8 +38,10 @@ path passed via `--prices`). For each prediction row:
 4. If a drawdown of `drawdown_threshold` (defaults to the hit threshold) occurs
    first, or the horizon expires without a hit, mark the row as a miss.
 
-The evaluator emits `data/ranker_eval/YYYY-MM-DD.json` containing a compact
-summary with:
+Running `scripts/ranker_eval.py` over the rolling history of labels produces a
+compact nightly summary at `ranker_eval/summary.json` alongside a decile
+breakdown stored as `ranker_eval/deciles_YYYY-MM-DD.csv`. The JSON payload
+includes:
 
 - metadata fields (`generated_at_utc`, `window_days`, `label_horizon_days`,
   thresholds, evaluated population)
@@ -54,7 +56,7 @@ available) to simplify dashboarding.
 
 ## Autotuning workflow
 
-`scripts/autotune_ranker.py` consumes the labelled dataset to propose updated
+`scripts/ranker_autotune.py` consumes the labelled dataset to propose updated
 component weights. The process is:
 
 1. Load the latest `config/ranker.yml` weights and component order.
@@ -71,7 +73,11 @@ component weights. The process is:
    `--delta` (default 0.01) **and** the validation sample contains at least
    `--min-sample` rows.
 
-Results are persisted to `data/model_state.json`. The payload includes:
+Accepted proposals are versioned under `configs/ranker_v2_YYYYMMDD.yml` and the
+latest approved file is exposed via the `configs/ranker_v2_current.yml`
+symlink. Each accepted update appends an entry to
+`configs/ranker_v2_changelog.md` describing the baseline vs candidate
+performance. The JSON sidecar (`configs/ranker_v2_YYYYMMDD.json`) stores:
 
 - baseline vs candidate AUC, absolute improvement, thresholds used
 - train/validation sample sizes and date ranges
@@ -85,13 +91,15 @@ preview JSON so human review can decide whether to apply changes.
 ## Usage summary
 
 ```bash
-# Evaluate the last 90 prediction files with a 4% hit threshold
-python -m scripts.eval_ranker --days 90 --label-horizon 3 --hit-threshold 0.04 \
-    --predictions-dir data/predictions --prices data/daily_prices.csv
+# Derive next-day labels for the 2025-01-15 predictions snapshot
+python -m scripts.labels.make_nextday_labels data/predictions/2025-01-15.csv \
+    --prices data/daily_prices.csv
 
-# Propose new weights using the last 120 days, requiring +0.015 AUC uplift
-python -m scripts.autotune_ranker --train-days 120 --delta 0.015 \
-    --state-path data/model_state.json
+# Evaluate the trailing 90 labelled days and write ranker artefacts
+python -m scripts.ranker_eval --days 90 --labels-dir data/labels --output-dir ranker_eval
+
+# Run the guarded walk-forward autotuner using the last 18 weeks of labels
+python -m scripts.ranker_autotune --lookback-days 126 --splits 5
 ```
 
 Both commands write their artefacts atomically so downstream jobs always observe
