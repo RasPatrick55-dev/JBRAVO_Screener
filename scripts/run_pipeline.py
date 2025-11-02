@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 import os
 import re
 import shlex
@@ -62,6 +63,59 @@ def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy h
 
 
 REQUIRED_CAND_COLS = list(CANONICAL_COLUMNS)
+
+
+def _coerce_optional_int(value: Any) -> Optional[int]:
+    """Attempt to coerce ``value`` into an ``int`` while tolerating garbage."""
+
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and not math.isnan(value):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            return None
+    return None
+
+
+def _backfill_metrics_from_summary(
+    metrics_path: Path, metrics: Mapping[str, Any] | None, summary: SimpleNamespace
+) -> dict[str, Any]:
+    """Backfill numeric KPIs in ``metrics`` using a fresh ``PIPELINE_SUMMARY``."""
+
+    payload = dict(metrics or {})
+    updated_fields: list[str] = []
+    summary_map = {
+        "symbols_in": getattr(summary, "symbols_in", None),
+        "symbols_with_bars": getattr(summary, "with_bars", None),
+        "rows": getattr(summary, "rows", None),
+        "bars_rows_total": getattr(summary, "bars_rows_total", None),
+    }
+    for key, summary_value in summary_map.items():
+        summary_int = _coerce_optional_int(summary_value)
+        if summary_int is None:
+            continue
+        existing_int = _coerce_optional_int(payload.get(key))
+        if existing_int is None:
+            payload[key] = summary_int
+            updated_fields.append(key)
+    if updated_fields:
+        try:
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            LOG.info(
+                "SCREENER_METRICS_BACKFILL source=pipeline_summary fields=%s",",".join(sorted(updated_fields))
+            )
+        except Exception:
+            LOG.exception("SCREENER_METRICS_BACKFILL_FAILED path=%s", metrics_path)
+    return payload
 
 
 def _coerce_canonical(df_scored: Optional[pd.DataFrame], df_top: Optional[pd.DataFrame]) -> pd.DataFrame:
@@ -787,6 +841,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     rc = 0
 
     metrics_rows: int | None = None
+    latest_source: str | None = "unknown"
     try:
         if "screener" in steps:
             cmd = [sys.executable, "-m", "scripts.screener", "--mode", "screener"]
@@ -934,10 +989,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         rank_secs = _extract_timing(metrics, "rank_secs")
         gate_secs = _extract_timing(metrics, "gate_secs")
         summary_rows = metrics_rows if metrics_rows is not None else rows
+        bars_rows_total = None
+        if isinstance(metrics, Mapping):
+            for key in ("bars_rows_total", "bars_rows", "bar_rows_total", "bar_rows"):
+                candidate = _coerce_optional_int(metrics.get(key))
+                if candidate is not None:
+                    bars_rows_total = candidate
+                    break
         summary = SimpleNamespace(
             symbols_in=symbols_in,
             with_bars=symbols_with_bars,
             rows=summary_rows,
+            bars_rows_total=bars_rows_total,
+            source=latest_source,
         )
         t = SimpleNamespace(
             fetch=fetch_secs,
@@ -955,16 +1019,23 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             trading_status=trading_status,
             data_status=data_status,
         )
-        LOG.info(
-            "[INFO] PIPELINE_SUMMARY symbols_in=%d with_bars=%d rows=%d fetch_secs=%.3f feature_secs=%.3f rank_secs=%.3f gate_secs=%.3f",
-            summary.symbols_in,
-            summary.with_bars,
-            summary.rows,
-            t.fetch,
-            t.features,
-            t.rank,
-            t.gates,
-        )
+        summary_parts = [
+            "[INFO] PIPELINE_SUMMARY",
+            f"symbols_in={summary.symbols_in}",
+            f"with_bars={summary.with_bars}",
+            f"rows={summary.rows}",
+            f"fetch_secs={t.fetch:.3f}",
+            f"feature_secs={t.features:.3f}",
+            f"rank_secs={t.rank:.3f}",
+            f"gate_secs={t.gates:.3f}",
+        ]
+        if summary.bars_rows_total is not None:
+            summary_parts.append(f"bars_rows_total={summary.bars_rows_total}")
+        if isinstance(summary.source, str) and summary.source:
+            summary_parts.append(f"source={summary.source}")
+        LOG.info(" ".join(summary_parts))
+        metrics_path = base_dir / "data" / "screener_metrics.json"
+        metrics = _backfill_metrics_from_summary(metrics_path, metrics, summary)
         try:
             kpis = write_complete_screener_metrics(base_dir)
             LOG.info(
