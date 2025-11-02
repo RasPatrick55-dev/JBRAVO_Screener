@@ -51,6 +51,15 @@ DEFAULT_WEIGHTS: Mapping[str, float] = {
 }
 
 
+DEFAULT_CATEGORY_WEIGHTS: Mapping[str, float] = {
+    "trend": 0.30,
+    "momentum": 0.25,
+    "volume": 0.20,
+    "volatility": 0.15,
+    "risk": 0.10,
+}
+
+
 DEFAULT_GATES: Mapping[str, float | bool] = {
     "min_history": 20,
     "min_rsi": None,
@@ -188,6 +197,38 @@ def _normalise_config(mapping: Optional[Mapping[str, float]]) -> Dict[str, float
     return base
 
 
+def _normalise_category_weights(mapping: Optional[Mapping[str, float]]) -> Dict[str, float]:
+    base = dict(DEFAULT_CATEGORY_WEIGHTS)
+    if not mapping:
+        return base
+    for key, value in mapping.items():
+        try:
+            base[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return base
+
+
+def _config_version(cfg: Optional[Mapping[str, object]]) -> int:
+    if not cfg:
+        return 1
+    version = cfg.get("version")
+    if version is None:
+        return 1
+    if isinstance(version, (int, float, np.integer, np.floating)):
+        return 2 if float(version) >= 2 else 1
+    version_str = str(version).strip().lower()
+    try:
+        numeric = float(version_str)
+    except (TypeError, ValueError):
+        numeric = None
+    if numeric is not None:
+        return 2 if numeric >= 2 else 1
+    if version_str.startswith("v2") or version_str.startswith("2"):
+        return 2
+    return 1
+
+
 def _select_latest(bars_df: pd.DataFrame) -> pd.DataFrame:
     if "timestamp" not in bars_df.columns:
         return bars_df.copy()
@@ -195,6 +236,165 @@ def _select_latest(bars_df: pd.DataFrame) -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
     df = df.sort_values(["symbol", "timestamp"])
     latest = df.groupby("symbol", as_index=False).tail(1)
+    latest.reset_index(drop=True, inplace=True)
+    return latest
+
+
+def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.DataFrame:
+    latest = _select_latest(bars_df)
+    if latest.empty:
+        empty = latest.copy()
+        empty["Score"] = pd.Series(dtype="float64")
+        empty["score_breakdown"] = pd.Series(dtype="object")
+        return empty
+
+    latest = latest.copy()
+
+    numeric_columns = [
+        "TS",
+        "PT",
+        "RSI",
+        "MH",
+        "MACD",
+        "MACD_SIGNAL",
+        "MACD_HIST",
+        "ADX",
+        "AROON",
+        "VCP",
+        "VOLexp",
+        "GAPpen",
+        "LIQpen",
+        "ATR14",
+        "close",
+        "REL_VOLUME",
+        "OBV_DELTA",
+        "BB_BANDWIDTH",
+        "ATR_pct",
+    ]
+
+    for column in numeric_columns:
+        if column in latest.columns:
+            latest[column] = pd.to_numeric(latest[column], errors="coerce")
+
+    if "MACD_HIST" not in latest.columns or latest["MACD_HIST"].isna().all():
+        if "MH" in latest.columns and "ATR14" in latest.columns:
+            macd_hist = pd.to_numeric(latest["MH"], errors="coerce") * pd.to_numeric(
+                latest["ATR14"], errors="coerce"
+            )
+            latest["MACD_HIST"] = macd_hist
+
+    if "ATR_pct" not in latest.columns and {"ATR14", "close"}.issubset(latest.columns):
+        atr_pct = (pd.to_numeric(latest["ATR14"], errors="coerce") / latest["close"]).replace(
+            [np.inf, -np.inf], np.nan
+        )
+        latest["ATR_pct"] = atr_pct
+
+    thresholds_cfg = cfg.get("thresholds") if isinstance(cfg.get("thresholds"), Mapping) else {}
+
+    rel_vol_min = _resolve_float(thresholds_cfg.get("rel_vol_min")) if thresholds_cfg else None
+    adx_min = _resolve_float(thresholds_cfg.get("adx_min")) if thresholds_cfg else None
+    atr_pct_max = _resolve_float(thresholds_cfg.get("atr_pct_max")) if thresholds_cfg else None
+    bb_pctile = thresholds_cfg.get("bb_bw_pctile") if thresholds_cfg else None
+    try:
+        bb_pctile = float(bb_pctile)
+    except (TypeError, ValueError):
+        bb_pctile = None
+
+    def _series(name: str) -> pd.Series:
+        if name in latest.columns:
+            return pd.to_numeric(latest[name], errors="coerce")
+        return pd.Series(np.nan, index=latest.index)
+
+    ts_series = _series("TS")
+    pt_series = _series("PT")
+    adx_series = _series("ADX")
+    rsi_series = _series("RSI")
+    macd_hist_series = _series("MACD_HIST")
+    aroon_series = _series("AROON")
+    volexp_series = _series("VOLexp")
+    rel_vol_series = _series("REL_VOLUME")
+    obv_delta_series = _series("OBV_DELTA")
+    vcp_series = _series("VCP")
+    bb_band_series = _series("BB_BANDWIDTH")
+    atr_pct_series = _series("ATR_pct")
+    liq_pen_series = _series("LIQpen")
+
+    trend_components = pd.concat(
+        [_standardize(ts_series), _standardize(pt_series), _standardize(adx_series)], axis=1
+    ).fillna(0.0)
+    trend_raw = trend_components.mean(axis=1)
+
+    momentum_components = pd.concat(
+        [_standardize(rsi_series), _standardize(macd_hist_series), _standardize(aroon_series)], axis=1
+    ).fillna(0.0)
+    momentum_raw = momentum_components.mean(axis=1)
+
+    volume_components = pd.concat(
+        [_standardize(volexp_series), _standardize(rel_vol_series), _standardize(obv_delta_series)], axis=1
+    ).fillna(0.0)
+    volume_raw = volume_components.mean(axis=1)
+
+    volatility_components = pd.concat(
+        [_standardize(vcp_series), _standardize(-bb_band_series), _standardize(-atr_pct_series)], axis=1
+    ).fillna(0.0)
+    volatility_raw = volatility_components.mean(axis=1)
+
+    risk_components = pd.concat([_standardize(-liq_pen_series)], axis=1).fillna(0.0)
+    risk_raw = risk_components.mean(axis=1)
+
+    if rel_vol_min is not None:
+        penalty = pd.Series(0.0, index=volume_raw.index)
+        penalty[rel_vol_series < rel_vol_min] = -1.0
+        volume_raw = volume_raw.add(penalty, fill_value=0.0)
+
+    if adx_min is not None:
+        penalty = pd.Series(0.0, index=trend_raw.index)
+        penalty[adx_series < adx_min] = -1.0
+        trend_raw = trend_raw.add(penalty, fill_value=0.0)
+
+    if atr_pct_max is not None:
+        penalty = pd.Series(0.0, index=risk_raw.index)
+        penalty[atr_pct_series > atr_pct_max] = -1.0
+        risk_raw = risk_raw.add(penalty, fill_value=0.0)
+
+    if bb_pctile is not None and 0 < bb_pctile < 1 and bb_band_series.notna().any():
+        try:
+            squeeze_threshold = float(bb_band_series.dropna().quantile(bb_pctile))
+        except ValueError:
+            squeeze_threshold = None
+        if squeeze_threshold is not None:
+            bonus = pd.Series(0.0, index=volatility_raw.index)
+            bonus[bb_band_series <= squeeze_threshold] = 0.5
+            volatility_raw = volatility_raw.add(bonus, fill_value=0.0)
+
+    categories_raw = {
+        "trend": trend_raw.fillna(0.0),
+        "momentum": momentum_raw.fillna(0.0),
+        "volume": volume_raw.fillna(0.0),
+        "volatility": volatility_raw.fillna(0.0),
+        "risk": risk_raw.fillna(0.0),
+    }
+
+    category_scores = {name: _standardize(series) for name, series in categories_raw.items()}
+    weights = _normalise_category_weights(cfg.get("weights") if isinstance(cfg, Mapping) else None)
+
+    contributions = {
+        name: category_scores[name] * weights.get(name, 0.0) for name in category_scores
+    }
+    contributions_df = pd.DataFrame(contributions).fillna(0.0)
+    score_series = contributions_df.sum(axis=1).fillna(0.0)
+
+    latest["Score"] = score_series.round(4)
+    for name, series in category_scores.items():
+        latest[f"{name}_score"] = series.round(4)
+    for name, series in contributions.items():
+        latest[f"{name}_contribution"] = series.round(4)
+
+    latest["score_breakdown"] = contributions_df.apply(
+        lambda row: json.dumps({k: round(float(v), 4) for k, v in row.items()}), axis=1
+    )
+
+    latest.sort_values("Score", ascending=False, inplace=True)
     latest.reset_index(drop=True, inplace=True)
     return latest
 
@@ -222,6 +422,9 @@ def score_universe(bars_df: pd.DataFrame, cfg: Optional[Mapping[str, object]] = 
     """
 
     cfg = cfg or {}
+    if _config_version(cfg) >= 2:
+        return _score_universe_v2(bars_df, cfg)
+
     latest = _select_latest(bars_df)
     if latest.empty:
         empty = latest.copy()

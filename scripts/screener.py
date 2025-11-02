@@ -173,7 +173,7 @@ INPUT_COLUMNS = [
     "volume",
 ]
 
-RANKER_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "ranker.yml"
+RANKER_CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "ranker_v2.yml"
 
 CORE_FEATURE_COLUMNS = [
     "TS",
@@ -190,7 +190,22 @@ CORE_FEATURE_COLUMNS = [
     "LIQpen",
 ]
 
-COARSE_RANK_COLUMNS = tuple(dict.fromkeys(DEFAULT_COMPONENT_MAP.values()))
+COARSE_RANK_COLUMNS = (
+    "TS",
+    "PT",
+    "RSI",
+    "MACD_HIST",
+    "ADX",
+    "AROON",
+    "VCP",
+    "VOLexp",
+    "REL_VOLUME",
+    "OBV_DELTA",
+    "BB_BANDWIDTH",
+    "ATR_pct",
+    "GAPpen",
+    "LIQpen",
+)
 
 TOP_CANDIDATE_COLUMNS = [
     "timestamp",
@@ -209,6 +224,20 @@ TOP_CANDIDATE_COLUMNS = [
     "volume",
     "adv20",
     "atrp",
+    "trend_score",
+    "momentum_score",
+    "volume_score",
+    "volatility_score",
+    "risk_score",
+    "trend_contribution",
+    "momentum_contribution",
+    "volume_contribution",
+    "volatility_contribution",
+    "risk_contribution",
+    "REL_VOLUME",
+    "OBV_DELTA",
+    "BB_BANDWIDTH",
+    "ATR_pct",
     "score_breakdown",
     "RSI",
     "ADX",
@@ -2109,7 +2138,82 @@ def build_enriched_bars(
     if "exchange" in enriched.columns:
         enriched["exchange"] = enriched["exchange"].astype("string").fillna("").str.upper()
 
+    enriched = _append_secondary_indicators(enriched, df)
+
     return enriched
+
+
+def _append_secondary_indicators(enriched: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    if enriched is None or enriched.empty:
+        return enriched
+
+    required = {"symbol", "timestamp", "close", "volume", "high", "low"}
+    if not required.issubset(raw_df.columns):
+        return enriched
+
+    working = raw_df.copy()
+    working = working.loc[:, list(required)].dropna(subset=["symbol", "timestamp"]).copy()
+    if working.empty:
+        return enriched
+
+    working["symbol"] = working["symbol"].astype("string").str.upper()
+    working["timestamp"] = pd.to_datetime(working["timestamp"], utc=True, errors="coerce")
+    working.sort_values(["symbol", "timestamp"], inplace=True)
+
+    def _groupby(col: str):
+        return working.groupby("symbol", group_keys=False)[col]
+
+    volume = pd.to_numeric(working["volume"], errors="coerce").fillna(0.0)
+
+    rel_vol = _groupby("volume").transform(
+        lambda s: s / s.rolling(20, min_periods=1).mean().replace(0, np.nan)
+    )
+
+    close_diff = _groupby("close").diff().fillna(0.0)
+    direction = np.sign(close_diff)
+    obv_flow = direction * volume
+
+    # pandas groupby transform does not support direct cumulative sum on Series derived above without
+    # creating an aligned Series. Construct a DataFrame to ensure alignment.
+    flow_df = pd.DataFrame(
+        {
+            "symbol": working["symbol"],
+            "timestamp": working["timestamp"],
+            "obv_flow": obv_flow,
+        }
+    )
+    flow_df.sort_values(["symbol", "timestamp"], inplace=True)
+    flow_df["OBV"] = flow_df.groupby("symbol", group_keys=False)["obv_flow"].cumsum()
+    obv_delta = flow_df.groupby("symbol", group_keys=False)["OBV"].diff()
+
+    ma20 = _groupby("close").transform(lambda s: s.rolling(20, min_periods=1).mean())
+    std20 = _groupby("close").transform(lambda s: s.rolling(20, min_periods=1).std(ddof=0))
+    upper = ma20 + 2 * std20
+    lower = ma20 - 2 * std20
+    bb_bandwidth = (upper - lower) / ma20.replace(0, np.nan)
+
+    secondary = pd.DataFrame(
+        {
+            "symbol": working["symbol"],
+            "timestamp": working["timestamp"],
+            "REL_VOLUME": pd.to_numeric(rel_vol, errors="coerce"),
+            "OBV_DELTA": pd.to_numeric(obv_delta, errors="coerce"),
+            "BB_BANDWIDTH": pd.to_numeric(bb_bandwidth, errors="coerce"),
+        }
+    )
+
+    merged = enriched.merge(secondary, on=["symbol", "timestamp"], how="left")
+    if "ATR14" in merged.columns and "close" in merged.columns:
+        atr_pct = (pd.to_numeric(merged["ATR14"], errors="coerce") / merged["close"]).replace(
+            [np.inf, -np.inf], np.nan
+        )
+        merged["ATR_pct"] = atr_pct
+
+    for column in ("REL_VOLUME", "OBV_DELTA", "BB_BANDWIDTH", "ATR_pct"):
+        if column in merged.columns:
+            merged[column] = pd.to_numeric(merged[column], errors="coerce")
+
+    return merged
 
 
 def _prepare_top_frame(candidates_df: pd.DataFrame, top_n: int) -> pd.DataFrame:
@@ -2212,6 +2316,30 @@ def _normalise_top_candidates(
     optional_defaults = {
         "adv20": frame.get("adv20", pd.Series(pd.NA, index=frame.index)),
         "atrp": frame.get("atrp", pd.Series(pd.NA, index=frame.index)),
+        "trend_score": frame.get("trend_score", pd.Series(pd.NA, index=frame.index)),
+        "momentum_score": frame.get("momentum_score", pd.Series(pd.NA, index=frame.index)),
+        "volume_score": frame.get("volume_score", pd.Series(pd.NA, index=frame.index)),
+        "volatility_score": frame.get("volatility_score", pd.Series(pd.NA, index=frame.index)),
+        "risk_score": frame.get("risk_score", pd.Series(pd.NA, index=frame.index)),
+        "trend_contribution": frame.get(
+            "trend_contribution", pd.Series(pd.NA, index=frame.index)
+        ),
+        "momentum_contribution": frame.get(
+            "momentum_contribution", pd.Series(pd.NA, index=frame.index)
+        ),
+        "volume_contribution": frame.get(
+            "volume_contribution", pd.Series(pd.NA, index=frame.index)
+        ),
+        "volatility_contribution": frame.get(
+            "volatility_contribution", pd.Series(pd.NA, index=frame.index)
+        ),
+        "risk_contribution": frame.get(
+            "risk_contribution", pd.Series(pd.NA, index=frame.index)
+        ),
+        "REL_VOLUME": frame.get("REL_VOLUME", pd.Series(pd.NA, index=frame.index)),
+        "OBV_DELTA": frame.get("OBV_DELTA", pd.Series(pd.NA, index=frame.index)),
+        "BB_BANDWIDTH": frame.get("BB_BANDWIDTH", pd.Series(pd.NA, index=frame.index)),
+        "ATR_pct": frame.get("ATR_pct", pd.Series(pd.NA, index=frame.index)),
     }
     for column, series in optional_defaults.items():
         if column not in frame.columns:
@@ -2920,8 +3048,9 @@ def run_coarse_features(args: argparse.Namespace, base_dir: Path) -> int:
         limit=limit,
     )
 
+    ranker_path = getattr(args, "ranker_config", RANKER_CONFIG_PATH)
     ranker_cfg = _prepare_ranker_config(
-        _load_ranker_config(),
+        _load_ranker_config(ranker_path),
         preset_key=str(getattr(args, "gate_preset", "standard") or "standard"),
         relax_mode=str(getattr(args, "relax_gates", "none") or "none"),
         min_history=int(getattr(args, "min_history", DEFAULT_MIN_HISTORY) or DEFAULT_MIN_HISTORY),
@@ -3096,6 +3225,9 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
     _write_universe_prefix_metrics(pd.DataFrame({"symbol": shortlist_df["symbol"]}), fetch_metrics)
 
     now = datetime.now(timezone.utc)
+    ranker_path = getattr(args, "ranker_config", RANKER_CONFIG_PATH)
+    base_ranker_cfg = _load_ranker_config(ranker_path)
+
     top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters, ranker_cfg, timing_info = run_screener(
         bars_df,
         top_n=int(getattr(args, "top_n", DEFAULT_TOP_N) or DEFAULT_TOP_N),
@@ -3106,6 +3238,7 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         gate_preset=str(getattr(args, "gate_preset", "standard") or "standard"),
         relax_gates=str(getattr(args, "relax_gates", "none") or "none"),
         dollar_vol_min=getattr(args, "dollar_vol_min", None),
+        ranker_config=base_ranker_cfg,
         shortlist_size=shortlist_size,
         shortlist_path=coarse_path,
     )
@@ -3155,62 +3288,34 @@ def write_predictions(
     run_meta: Optional[Mapping[str, object]],
     top_n: int = 200,
 ) -> None:
-    run_date = datetime.now(tz=timezone.utc).date().isoformat()
+    run_ts = datetime.now(tz=timezone.utc)
+    run_date = run_ts.date().isoformat()
     pred_dir = Path("data") / "predictions"
     pred_dir.mkdir(parents=True, exist_ok=True)
 
-    keep = [
-        "symbol",
-        "Score",
-        "rank",
-        "timestamp",
-        "close",
-        "ATR14",
-        "ADV20",
-        "TS",
-        "MS",
-        "BP",
-        "PT",
-        "RSI",
-        "MH",
-        "ADX",
-        "AROON",
-        "VCP",
-        "VOLexp",
-        "GAPpen",
-        "LIQpen",
-        "score_breakdown",
-    ]
-    cols = ["run_date"] + keep + ["ranker_version", "gate_preset", "relax_gates"]
-
-    if isinstance(ranked_df, pd.DataFrame):
-        out = ranked_df.copy()
-    else:
-        out = pd.DataFrame(columns=keep)
-
-    if out.empty:
-        out = pd.DataFrame(columns=keep)
-    else:
-        out = out.reset_index(drop=True)
-
-    out["rank"] = range(1, len(out) + 1)
-    for column in keep:
-        if column not in out.columns:
-            out[column] = pd.NA
-
     meta = run_meta or {}
-    out["run_date"] = run_date
-    out["ranker_version"] = str(meta.get("ranker_version", "1.0.0"))
-    out["gate_preset"] = str(meta.get("gate_preset", "standard"))
-    out["relax_gates"] = str(meta.get("relax_gates", "none"))
+    gate_info: Mapping[str, object] = {
+        "gate_preset": meta.get("gate_preset", "standard"),
+    }
+    ranker_info: Mapping[str, object] = {
+        "version": meta.get("ranker_version", ""),
+    }
 
-    out = out[[col for col in cols if col in out.columns]]
+    frame = ranked_df.copy() if isinstance(ranked_df, pd.DataFrame) else pd.DataFrame()
 
-    head = out.head(top_n)
+    payload = _prepare_predictions_frame(
+        frame,
+        run_date=run_ts,
+        gate_counters=gate_info,
+        ranker_cfg=ranker_info,
+        limit=top_n,
+    )
+    payload["relax_gates"] = str(meta.get("relax_gates", "none"))
+
     daily_path = pred_dir / f"{run_date}.csv"
-    head.to_csv(daily_path, index=False)
-    head.to_csv(pred_dir / "latest.csv", index=False)
-    LOGGER.info("[STAGE] predictions written: %s (top_n=%d)", daily_path, top_n)
+    payload.to_csv(daily_path, index=False)
+    payload.to_csv(pred_dir / "latest.csv", index=False)
+    LOGGER.info("[STAGE] predictions written: %s (top_n=%d)", daily_path, payload.shape[0])
 
 
 def _prepare_predictions_frame(
@@ -3245,6 +3350,22 @@ def _prepare_predictions_frame(
         "gap_pen",
         "liq_pen",
         "score_breakdown_json",
+        "trend_score",
+        "momentum_score",
+        "volume_score",
+        "volatility_score",
+        "risk_score",
+        "trend_contribution",
+        "momentum_contribution",
+        "volume_contribution",
+        "volatility_contribution",
+        "risk_contribution",
+        "rel_volume",
+        "obv_delta",
+        "bb_bandwidth",
+        "atr_pct",
+        "components_json",
+        "relax_gates",
     ]
     if scored_df is None or scored_df.empty:
         return pd.DataFrame(columns=columns)
@@ -3296,9 +3417,27 @@ def _prepare_predictions_frame(
         "gap_pen": _coerce_float(frame.get("GAPpen")),
         "liq_pen": _coerce_float(frame.get("LIQpen")),
         "score_breakdown_json": score_breakdowns,
+        "trend_score": _coerce_float(frame.get("trend_score")),
+        "momentum_score": _coerce_float(frame.get("momentum_score")),
+        "volume_score": _coerce_float(frame.get("volume_score")),
+        "volatility_score": _coerce_float(frame.get("volatility_score")),
+        "risk_score": _coerce_float(frame.get("risk_score")),
+        "trend_contribution": _coerce_float(frame.get("trend_contribution")),
+        "momentum_contribution": _coerce_float(frame.get("momentum_contribution")),
+        "volume_contribution": _coerce_float(frame.get("volume_contribution")),
+        "volatility_contribution": _coerce_float(frame.get("volatility_contribution")),
+        "risk_contribution": _coerce_float(frame.get("risk_contribution")),
+        "rel_volume": _coerce_float(frame.get("REL_VOLUME")),
+        "obv_delta": _coerce_float(frame.get("OBV_DELTA")),
+        "bb_bandwidth": _coerce_float(frame.get("BB_BANDWIDTH")),
+        "atr_pct": _coerce_float(frame.get("ATR_pct")),
+        "components_json": score_breakdowns,
     })
 
     payload["score_breakdown_json"] = payload["score_breakdown_json"].apply(
+        lambda s: s[:1024] if isinstance(s, str) else ""
+    )
+    payload["components_json"] = payload["components_json"].apply(
         lambda s: s[:1024] if isinstance(s, str) else ""
     )
     payload = payload.reindex(columns=columns)
@@ -4099,6 +4238,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--output-dir",
         help="Directory to write outputs (defaults to repo root)",
     )
+    parser.add_argument(
+        "--ranker-config",
+        type=Path,
+        default=RANKER_CONFIG_PATH,
+        help="Path to the ranker configuration file (default: configs/ranker_v2.yml)",
+    )
     parser.add_argument("--days", type=int, default=750, help="Number of trading days to request")
     parser.add_argument(
         "--prefilter-days",
@@ -4232,6 +4377,10 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         parsed.iex_only = _as_bool(parsed.iex_only, True)
     parsed.reuse_cache = _as_bool(getattr(parsed, "reuse_cache", True), True)
     parsed.refresh_latest = _as_bool(getattr(parsed, "refresh_latest", True), True)
+    try:
+        parsed.ranker_config = Path(parsed.ranker_config)
+    except Exception:
+        parsed.ranker_config = RANKER_CONFIG_PATH
     return parsed
 
 
@@ -4377,6 +4526,9 @@ def main(
                 int(frame.shape[0]) if hasattr(frame, "shape") else 0,
                 fetch_elapsed,
             )
+        ranker_path = getattr(args, "ranker_config", RANKER_CONFIG_PATH)
+        base_ranker_cfg = _load_ranker_config(ranker_path)
+
         (
             top_df,
             scored_df,
@@ -4396,6 +4548,7 @@ def main(
             gate_preset=args.gate_preset,
             relax_gates=args.relax_gates,
             dollar_vol_min=args.dollar_vol_min,
+            ranker_config=base_ranker_cfg,
         )
         timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(fetch_elapsed, 3)
         write_outputs(
