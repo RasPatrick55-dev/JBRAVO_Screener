@@ -2229,6 +2229,31 @@ def _append_secondary_indicators(enriched: pd.DataFrame, raw_df: pd.DataFrame) -
     return merged
 
 
+def finalize_candidates(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop clearly invalid rows (e.g., zero price/volume) before ranking."""
+
+    if df is None:
+        return pd.DataFrame()
+
+    frame = df.copy()
+    if frame.empty:
+        return frame
+
+    if "close" in frame.columns:
+        close_series = pd.to_numeric(frame["close"], errors="coerce")
+        frame = frame[close_series > 0]
+
+    if "volume" in frame.columns:
+        volume_series = pd.to_numeric(frame["volume"], errors="coerce")
+        frame = frame[volume_series > 0]
+
+    if "adv20" in frame.columns:
+        adv_series = pd.to_numeric(frame["adv20"], errors="coerce")
+        frame = frame[adv_series > 0]
+
+    return frame
+
+
 def _prepare_top_frame(candidates_df: pd.DataFrame, top_n: int) -> pd.DataFrame:
     if candidates_df is None or candidates_df.empty or top_n <= 0:
         return pd.DataFrame(columns=TOP_CANDIDATE_COLUMNS)
@@ -3717,6 +3742,17 @@ def run_screener(
         timings=timing_info,
     )
     LOGGER.info("[STAGE] full features end (rows=%d)", int(enriched.shape[0]))
+
+    if not enriched.empty:
+        before_rows = int(enriched.shape[0])
+        enriched = finalize_candidates(enriched)
+        after_rows = int(enriched.shape[0])
+        if after_rows != before_rows:
+            LOGGER.info(
+                "[STAGE] finalize candidates pruned rows=%d -> %d",
+                before_rows,
+                after_rows,
+            )
 
     rank_timer = T()
     LOGGER.info("[STAGE] full rank start")

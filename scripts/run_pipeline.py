@@ -985,6 +985,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     metrics_rows: int | None = None
     latest_source: str | None = "unknown"
     error_info: dict[str, Any] | None = None
+    degraded = False
     try:
         if "screener" in steps:
             cmd = [sys.executable, "-m", "scripts.screener", "--mode", "screener"]
@@ -1143,12 +1144,28 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         }
         write_error_report(step="pipeline", detail=str(exc))
     finally:
+        rows_out = metrics_rows if metrics_rows is not None else rows
+        screener_rc = step_rcs.get("screener") if "screener" in step_rcs else None
+        backtest_rc = step_rcs.get("backtest") if "backtest" in step_rcs else None
+        metrics_rc = step_rcs.get("metrics") if "metrics" in step_rcs else None
+        degraded = (
+            "screener" in steps
+            and "backtest" in steps
+            and "metrics" in steps
+            and screener_rc not in (None, 0)
+            and backtest_rc in (0, None)
+            and metrics_rc in (0, None)
+            and latest_source == "fallback"
+        )
+        if degraded and rc != 0:
+            logger.warning("[WARN] SCREENER_FAILED_FALLBACK_USED rows=%s", rows_out)
+            rc = 0
         safe_write_pipeline_summary(rc, base_dir=base_dir)
         fetch_secs = _extract_timing(metrics, "fetch_secs")
         feature_secs = _extract_timing(metrics, "feature_secs")
         rank_secs = _extract_timing(metrics, "rank_secs")
         gate_secs = _extract_timing(metrics, "gate_secs")
-        summary_rows = metrics_rows if metrics_rows is not None else rows
+        summary_rows = rows_out
         bars_rows_total = None
         if isinstance(metrics, Mapping):
             for key in ("bars_rows_total", "bars_rows", "bar_rows_total", "bar_rows"):
@@ -1242,6 +1259,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "has_today_summary": todays_summary is not None,
             "summary_line": getattr(todays_summary, "raw_line", ""),
         }
+        status_payload["degraded"] = bool(degraded)
         status_payload["step_rcs"] = {k: int(v) for k, v in step_rcs.items()}
         if error_info:
             status_payload["error"] = dict(error_info)

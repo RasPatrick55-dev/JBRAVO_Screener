@@ -573,7 +573,7 @@ def run_backtest(symbols: List[str]) -> dict:
                 drawdown = cumulative - cumulative.cummax()
                 return float(drawdown.min()) if not drawdown.empty else 0.0
 
-            max_drawdowns = symbol_groups.apply(_max_drawdown)
+            max_drawdowns = symbol_groups.apply(_max_drawdown, include_groups=False)
 
             def _trade_returns(group: pd.DataFrame) -> pd.Series:
                 if {"entry_price", "qty"}.issubset(group.columns):
@@ -605,8 +605,8 @@ def run_backtest(symbols: List[str]) -> dict:
                     return 0.0
                 return float(np.sqrt(len(returns)) * returns.mean() / downside_std)
 
-            sharpes = symbol_groups.apply(_sharpe)
-            sortinos = symbol_groups.apply(_sortino)
+            sharpes = symbol_groups.apply(_sharpe, include_groups=False)
+            sortinos = symbol_groups.apply(_sortino, include_groups=False)
 
             summary_df["profit_factor"] = summary_df["symbol"].map(profit_factors)
             summary_df["max_drawdown"] = summary_df["symbol"].map(max_drawdowns)
