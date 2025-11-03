@@ -25,6 +25,9 @@ from utils.telemetry import emit_event
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
+REPORTS_DIR = PROJECT_ROOT / "reports"
+LOG_SNIPS_DIR = REPORTS_DIR / "log_snips"
+PIPELINE_SUMMARY_PATH = REPORTS_DIR / "pipeline_summary.json"
 LOG = logging.getLogger("pipeline")
 logger = LOG
 
@@ -41,6 +44,45 @@ _SUMMARY_RE = re.compile(
     r"rows=(?P<rows>\d+)"
     r"(?:.*?(?:bars?_rows(?:_total)?)=(?P<bars_rows_total>\d+))?"
 )
+
+
+def write_error_report(
+    *, step: str | None = None, detail: str | None = None, base_dir: Path = PROJECT_ROOT
+) -> Path:
+    """Persist a minimal failure artifact for dashboard consumption."""
+
+    reports_dir = Path(base_dir) / "reports" / "log_snips"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    name = f"{(step or 'pipeline').lower()}.err.txt"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    lines = [f"timestamp={timestamp}", f"step={step or 'pipeline'}"]
+    if detail:
+        lines.append(f"detail={detail}")
+    payload = ("\n".join(lines) + "\n").encode("utf-8")
+    target = reports_dir / name
+    try:
+        atomic_write_bytes(target, payload)
+    except Exception:
+        LOG.exception("PIPELINE_ERROR_REPORT_WRITE_FAILED path=%s", target)
+    return target
+
+
+def safe_write_pipeline_summary(rc: int, *, base_dir: Path = PROJECT_ROOT) -> Path:
+    """Ensure a lightweight pipeline summary exists even on failure."""
+
+    reports_dir = Path(base_dir) / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "rc": int(rc),
+    }
+    target = reports_dir / "pipeline_summary.json"
+    try:
+        serialised = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+        atomic_write_bytes(target, serialised)
+    except Exception:
+        LOG.exception("PIPELINE_SUMMARY_WRITE_FAILED path=%s", target)
+    return target
 
 
 def _refresh_logger() -> None:
@@ -1092,14 +1134,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             else:
                 logger.error("Execute step failed rc=%s", rc_exec)
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOG.exception("PIPELINE_FATAL: %s", exc)
         rc = 1
+        LOG.exception("PIPELINE_FATAL")
         error_info = {
             "step": "pipeline",
             "message": str(exc),
             "exception": exc.__class__.__name__,
         }
+        write_error_report(step="pipeline", detail=str(exc))
     finally:
+        safe_write_pipeline_summary(rc, base_dir=base_dir)
         fetch_secs = _extract_timing(metrics, "fetch_secs")
         feature_secs = _extract_timing(metrics, "feature_secs")
         rank_secs = _extract_timing(metrics, "rank_secs")

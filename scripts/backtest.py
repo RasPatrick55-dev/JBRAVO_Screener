@@ -114,6 +114,67 @@ def get_data(symbol: str, days: int = 800) -> pd.DataFrame:
     return df[["open", "high", "low", "close", "volume"]] if not df.empty else pd.DataFrame()
 
 
+def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Compute a rolling Average True Range (ATR) series."""
+
+    if df.empty:
+        return pd.Series(dtype="float64")
+
+    high = pd.to_numeric(df.get("high"), errors="coerce")
+    low = pd.to_numeric(df.get("low"), errors="coerce")
+    close = pd.to_numeric(df.get("close"), errors="coerce")
+    prev_close = close.shift(1)
+
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    return true_range.rolling(window=int(period), min_periods=int(period)).mean()
+
+
+def prepare_series(df: pd.DataFrame) -> pd.DataFrame:
+    """Align indicator columns to price index and drop warm-up NaNs."""
+
+    if df.empty:
+        return df
+
+    frame = df.copy().sort_index()
+    prices = pd.to_numeric(frame.get("close"), errors="coerce")
+    base_index = prices.index
+
+    if "ATR14" in frame.columns:
+        atr_source = pd.to_numeric(frame["ATR14"], errors="coerce")
+    elif "atr" in frame.columns:
+        atr_source = pd.to_numeric(frame["atr"], errors="coerce")
+    else:
+        atr_source = compute_atr(frame)
+
+    atr_series = atr_source.reindex(base_index)
+    ema_series = (
+        pd.to_numeric(frame["ema20"], errors="coerce").reindex(base_index)
+        if "ema20" in frame.columns
+        else prices.ewm(span=20, adjust=False).reindex(base_index)
+    )
+
+    frame = frame.reindex(base_index)
+    frame["close"] = prices
+    frame["ATR14"] = atr_series
+    if "atr" in frame.columns:
+        frame["atr"] = atr_series
+    frame["ema20"] = ema_series
+
+    required = ["close", "ATR14", "ema20"]
+    if "score" in frame.columns:
+        required.append("score")
+
+    aligned = frame.dropna(subset=required)
+    aligned = aligned.loc[~aligned.index.duplicated(keep="last")]
+    return aligned
 
 
 def composite_score(df: pd.DataFrame) -> pd.Series:
@@ -426,7 +487,11 @@ def run_backtest(symbols: List[str]) -> dict:
             continue
         df = compute_indicators(df)
         df["score"] = composite_score(df)
-        data[sym] = df.dropna(subset=["score"])
+        df = prepare_series(df)
+        if df.empty:
+            logger.warning("Skipping %s: insufficient aligned data", sym)
+            continue
+        data[sym] = df
 
     if not data:
         logger.error("No valid data to run backtest.")
