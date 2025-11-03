@@ -240,6 +240,21 @@ def _select_latest(bars_df: pd.DataFrame) -> pd.DataFrame:
     return latest
 
 
+def _shape_safe_where(obj: pd.DataFrame | pd.Series, cond, other):
+    """Align ``cond`` to ``obj`` so :meth:`pandas.DataFrame.where` works reliably."""
+
+    if np.isscalar(cond):
+        if isinstance(obj, pd.DataFrame):
+            cond = pd.DataFrame(cond, index=obj.index, columns=obj.columns)
+        else:
+            cond = pd.Series(cond, index=obj.index)
+    elif isinstance(obj, pd.DataFrame) and not isinstance(cond, pd.DataFrame):
+        cond = pd.DataFrame(cond, index=obj.index, columns=obj.columns)
+    elif isinstance(obj, pd.Series) and not isinstance(cond, pd.Series):
+        cond = pd.Series(cond, index=obj.index)
+    return obj.where(cond, other)
+
+
 def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.DataFrame:
     if bars_df is None or bars_df.empty:
         empty = pd.DataFrame(columns=["symbol", "timestamp", "Score", "score_breakdown"])
@@ -348,7 +363,11 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     vol_bb_squeeze = pd.Series(
         np.where(bb_band <= squeeze_threshold, 0.5, 0.0), index=latest.index
     )
-    vol_bb_squeeze = vol_bb_squeeze.where(np.isfinite(squeeze_threshold), 0.0)
+    vol_bb_squeeze = _shape_safe_where(
+        vol_bb_squeeze,
+        np.isfinite(squeeze_threshold),
+        0.0,
+    )
 
     risk_atr_penalty = pd.Series(0.0, index=latest.index)
     if atr_pct_max is not None:
