@@ -2232,7 +2232,22 @@ def _append_secondary_indicators(enriched: pd.DataFrame, raw_df: pd.DataFrame) -
 def _prepare_top_frame(candidates_df: pd.DataFrame, top_n: int) -> pd.DataFrame:
     if candidates_df is None or candidates_df.empty or top_n <= 0:
         return pd.DataFrame(columns=TOP_CANDIDATE_COLUMNS)
-    subset = candidates_df.head(int(top_n)).copy()
+
+    frame = candidates_df.copy()
+    if not frame.empty:
+        valid_mask = pd.Series(True, index=frame.index)
+        if "close" in frame.columns:
+            valid_mask &= pd.to_numeric(frame["close"], errors="coerce") > 0
+        if "volume" in frame.columns:
+            valid_mask &= pd.to_numeric(frame["volume"], errors="coerce") > 0
+        if "adv20" in frame.columns:
+            valid_mask &= pd.to_numeric(frame["adv20"], errors="coerce") > 0
+        frame = frame.loc[valid_mask]
+
+    if frame.empty:
+        return pd.DataFrame(columns=TOP_CANDIDATE_COLUMNS)
+
+    subset = frame.head(int(top_n)).copy()
     for column in TOP_CANDIDATE_COLUMNS:
         if column not in subset.columns:
             subset[column] = pd.NA

@@ -1944,7 +1944,9 @@ class TradeExecutor:
         path = self.config.source
         if not path.exists():
             raise CandidateLoadError(f"Candidate file not found: {path}")
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, dtype={"symbol": "string"})
+        if "symbol" in df.columns:
+            df["symbol"] = df["symbol"].astype("string")
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
