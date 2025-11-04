@@ -241,7 +241,11 @@ def _select_latest(bars_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _shape_safe_where(obj: pd.DataFrame | pd.Series, cond, other):
-    """Align ``cond`` to ``obj`` so :meth:`pandas.DataFrame.where` works reliably."""
+    """
+    Ensure ``cond`` has the same shape/type as ``obj`` for pandas ``where``/``mask``.
+    - Series → cast ``cond`` to a :class:`pandas.Series` aligned to ``obj``
+    - DataFrame → cast ``cond`` to a :class:`pandas.DataFrame` aligned to ``obj``
+    """
 
     if np.isscalar(cond):
         if isinstance(obj, pd.DataFrame):
@@ -352,7 +356,15 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
         np.where(macd_hist > macd_hist_prev, 0.25, 0.0), index=latest.index
     )
     vol_rel = pd.Series(np.where(rel_vol >= rel_vol_min, 0.5, 0.0), index=latest.index)
-    vol_obv_up = pd.Series(np.where(obv_delta > 0, 0.5, 0.0), index=latest.index)
+
+    # OBV: +0.5 if OBV delta positive (fill NA mask as False before scoring)
+    _obv_delta = obv_delta.astype("float64")
+    if "obv_delta" in latest.columns:
+        _obv_delta = pd.to_numeric(latest["obv_delta"], errors="coerce")
+    if _obv_delta.isna().all() and "OBV" in latest.columns:
+        _obv_delta = pd.to_numeric(latest["OBV"], errors="coerce").diff()
+    mask_obv_up = _obv_delta.gt(0).fillna(False)
+    vol_obv_up = mask_obv_up.astype("float64") * 0.5
 
     squeeze_threshold = np.nan
     if bb_band.notna().any():
