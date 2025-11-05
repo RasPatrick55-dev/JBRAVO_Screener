@@ -11,7 +11,7 @@ dependencies from the rest of that module.
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Mapping, Optional, Tuple, Union
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -159,15 +159,27 @@ def apply_final_gates(df: pd.DataFrame, preset: str = "standard") -> pd.DataFram
     sma100 = _ensure_series(df, "SMA100")
     recent_cross = _ensure_series(df, "recent_cross_bars", default=np.inf).fillna(np.inf)
 
-    rsi_mask = rsi14.between(preset_cfg["rsi_min"], preset_cfg["rsi_max"], inclusive="both")
-    adx_mask = adx >= float(preset_cfg["adx_min"])
-    aroon_mask = aroon_up >= float(preset_cfg["aroon_up_min"])
-    macd_mask = macd_hist >= float(preset_cfg["macd_hist_min"])
-    cross_mask = (sma9 > ema20) | (recent_cross <= float(preset_cfg["cross_lookback"]))
-    stack_mask = cross_mask & (ema20 > sma50) & (sma50 >= sma100)
+    rsi_mask = (
+        rsi14.between(preset_cfg["rsi_min"], preset_cfg["rsi_max"], inclusive="both")
+        .fillna(False)
+    )
+    adx_mask = adx.astype("float64").ge(float(preset_cfg["adx_min"])).fillna(False)
+    aroon_mask = aroon_up.astype("float64").ge(float(preset_cfg["aroon_up_min"])).fillna(False)
+    macd_mask = (
+        macd_hist.astype("float64").ge(float(preset_cfg["macd_hist_min"])).fillna(False)
+    )
+    cross_mask = (
+        sma9.astype("float64").gt(ema20.astype("float64")).fillna(False)
+        |
+        recent_cross.astype("float64").le(float(preset_cfg["cross_lookback"])).fillna(False)
+    )
+    stack_mask = (
+        cross_mask
+        & ema20.astype("float64").gt(sma50.astype("float64")).fillna(False)
+        & sma50.astype("float64").ge(sma100.astype("float64")).fillna(False)
+    )
 
-    pass_mask = rsi_mask & adx_mask & aroon_mask & macd_mask & stack_mask
-    pass_mask = pass_mask.fillna(False)
+    pass_mask = (rsi_mask & adx_mask & aroon_mask & macd_mask & stack_mask).fillna(False)
     return df.loc[pass_mask].copy()
 
 
@@ -242,9 +254,8 @@ def _select_latest(bars_df: pd.DataFrame) -> pd.DataFrame:
 
 def _shape_safe_where(obj: pd.DataFrame | pd.Series, cond, other):
     """
-    Ensure ``cond`` has the same shape/type as ``obj`` for pandas ``where``/``mask``.
-    - Series → cast ``cond`` to a :class:`pandas.Series` aligned to ``obj``
-    - DataFrame → cast ``cond`` to a :class:`pandas.DataFrame` aligned to ``obj``
+    Make ``cond`` the same shape/type as ``obj`` (Series↔Series, DataFrame↔DataFrame),
+    then call :meth:`pandas.DataFrame.where`/:meth:`pandas.Series.where`.
     """
 
     if np.isscalar(cond):
@@ -346,16 +357,31 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     aroon_dn_prev = _num("prev_AROON_DN")
     adx = _num("ADX")
 
-    trend_ma_align = pd.Series(
-        np.where((sma9 > ema20) & (ema20 > sma180), 1.0, 0.0), index=latest.index
+    sma9_f = sma9.astype("float64")
+    ema20_f = ema20.astype("float64")
+    sma180_f = sma180.astype("float64")
+    trend_ma_mask = (
+        sma9_f.gt(ema20_f).fillna(False)
+        & ema20_f.gt(sma180_f).fillna(False)
     )
-    trend_52w = pd.Series(np.where(wk52 >= 0.90, 0.5, 0.0), index=latest.index)
-    mom_rsi = pd.Series(np.where(rsi > 50, 0.5, 0.0), index=latest.index)
-    mom_macd_pos = pd.Series(np.where(macd > 0, 0.5, 0.0), index=latest.index)
-    mom_macd_hist_rising = pd.Series(
-        np.where(macd_hist > macd_hist_prev, 0.25, 0.0), index=latest.index
+    trend_ma_align = trend_ma_mask.astype("float64")
+
+    trend_52w_mask = wk52.astype("float64").ge(0.90).fillna(False)
+    trend_52w = trend_52w_mask.astype("float64") * 0.5
+
+    rsi_mask = rsi.astype("float64").gt(50).fillna(False)
+    mom_rsi = rsi_mask.astype("float64") * 0.5
+
+    macd_mask = macd.astype("float64").gt(0).fillna(False)
+    mom_macd_pos = macd_mask.astype("float64") * 0.5
+
+    macd_hist_mask = (
+        macd_hist.astype("float64").gt(macd_hist_prev.astype("float64")).fillna(False)
     )
-    vol_rel = pd.Series(np.where(rel_vol >= rel_vol_min, 0.5, 0.0), index=latest.index)
+    mom_macd_hist_rising = macd_hist_mask.astype("float64") * 0.25
+
+    rel_vol_mask = rel_vol.astype("float64").ge(rel_vol_min).fillna(False)
+    vol_rel = rel_vol_mask.astype("float64") * 0.5
 
     # OBV: +0.5 if OBV delta positive (fill NA mask as False before scoring)
     _obv_delta = obv_delta.astype("float64")
@@ -372,9 +398,8 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
             squeeze_threshold = float(bb_band.dropna().quantile(bb_pctile))
         except ValueError:
             squeeze_threshold = np.nan
-    vol_bb_squeeze = pd.Series(
-        np.where(bb_band <= squeeze_threshold, 0.5, 0.0), index=latest.index
-    )
+    bb_band_mask = bb_band.astype("float64").le(float(squeeze_threshold)).fillna(False)
+    vol_bb_squeeze = bb_band_mask.astype("float64") * 0.5
     vol_bb_squeeze = _shape_safe_where(
         vol_bb_squeeze,
         np.isfinite(squeeze_threshold),
@@ -383,19 +408,21 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
 
     risk_atr_penalty = pd.Series(0.0, index=latest.index)
     if atr_pct_max is not None:
-        risk_atr_penalty = pd.Series(
-            np.where(atr_pct > atr_pct_max, -0.5, 0.0), index=latest.index
-        )
+        atr_mask = atr_pct.astype("float64").gt(atr_pct_max).fillna(False)
+        risk_atr_penalty = atr_mask.astype("float64") * -0.5
 
-    aroon_cross = pd.Series(
-        np.where(
-            (aroon_up > aroon_dn) & (aroon_up_prev <= aroon_dn_prev),
-            0.5,
-            0.0,
-        ),
-        index=latest.index,
+    aroon_up_f = aroon_up.astype("float64")
+    aroon_dn_f = aroon_dn.astype("float64")
+    aroon_up_prev_f = aroon_up_prev.astype("float64")
+    aroon_dn_prev_f = aroon_dn_prev.astype("float64")
+    aroon_cross_mask = (
+        aroon_up_f.gt(aroon_dn_f).fillna(False)
+        & aroon_up_prev_f.le(aroon_dn_prev_f).fillna(False)
     )
-    adx_trend = pd.Series(np.where(adx >= adx_min, 0.5, 0.0), index=latest.index)
+    aroon_cross = aroon_cross_mask.astype("float64") * 0.5
+
+    adx_mask = adx.astype("float64").ge(adx_min).fillna(False)
+    adx_trend = adx_mask.astype("float64") * 0.5
 
     components = pd.DataFrame(
         {
@@ -543,6 +570,116 @@ def _resolve_float(value: object) -> Optional[float]:
     return parsed
 
 
+def _series_by_aliases(frame: pd.DataFrame, *names: str) -> pd.Series:
+    for name in names:
+        if name in frame.columns:
+            return pd.to_numeric(frame[name], errors="coerce")
+    return pd.Series(np.nan, index=frame.index)
+
+
+def _apply_gate_once_v2(df: pd.DataFrame, thresholds: Mapping[str, object]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+    frame = df.copy()
+
+    rel_vol_min = _resolve_float(thresholds.get("rel_vol_min"))
+    adx_min = _resolve_float(thresholds.get("adx_min"))
+    atr_pct_max = _resolve_float(thresholds.get("atr_pct_max"))
+    wk52_min = _resolve_float(thresholds.get("wk52_min"))
+
+    mask_rel = pd.Series(True, index=frame.index, dtype=bool)
+    if rel_vol_min is not None:
+        rel_series = _series_by_aliases(frame, "rel_vol", "REL_VOLUME")
+        mask_rel = rel_series.astype("float64").ge(rel_vol_min).fillna(False)
+
+    mask_adx = pd.Series(True, index=frame.index, dtype=bool)
+    if adx_min is not None:
+        adx_series = _series_by_aliases(frame, "adx", "ADX")
+        mask_adx = adx_series.astype("float64").ge(adx_min).fillna(False)
+
+    mask_atr = pd.Series(True, index=frame.index, dtype=bool)
+    if atr_pct_max is not None:
+        atr_series = _series_by_aliases(frame, "atr_pct", "ATR_pct", "ATR_PCT")
+        mask_atr = atr_series.astype("float64").le(atr_pct_max).fillna(False)
+
+    mask_wk52 = pd.Series(True, index=frame.index, dtype=bool)
+    if wk52_min is not None:
+        wk52_series = _series_by_aliases(frame, "wk52_prox", "WK52_PROX")
+        mask_wk52 = wk52_series.astype("float64").ge(wk52_min).fillna(False)
+
+    combined_mask = (mask_rel & mask_adx & mask_atr & mask_wk52).fillna(False)
+    return frame.loc[combined_mask].copy()
+
+
+def _apply_gates_v2(
+    df: pd.DataFrame, cfg: Mapping[str, object]
+) -> Tuple[pd.DataFrame, GateCounts, List[Dict[str, str]]]:
+    fail_counts = _initialise_fail_counts()
+    gate_counts: GateCounts = dict(fail_counts)
+    total = int(df.shape[0]) if isinstance(df, pd.DataFrame) else 0
+    gate_counts["gate_preset"] = str(cfg.get("_gate_preset", "policy"))
+    gate_counts["gate_relax_mode"] = str(cfg.get("_gate_relax_mode", "policy"))
+    gate_counts["gate_total_evaluated"] = total
+
+    if df is None or df.empty:
+        gate_counts["gate_total_passed"] = 0
+        gate_counts["gate_total_failed"] = 0
+        gate_counts["gate_policy_tier"] = None
+        return (
+            df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame(),
+            gate_counts,
+            [],
+        )
+
+    thresholds_cfg = (
+        dict(cfg.get("thresholds"))
+        if isinstance(cfg.get("thresholds"), Mapping)
+        else {}
+    )
+    policy = cfg.get("gate_policy") if isinstance(cfg.get("gate_policy"), Mapping) else {}
+    min_candidates = int(policy.get("min_candidates", 0) or 0)
+    max_tiers = int(policy.get("max_tiers", 0) or 0)
+    tiers: List[Mapping[str, object]] = []
+    if isinstance(policy.get("tiers"), Sequence):
+        tiers = [tier for tier in policy["tiers"] if isinstance(tier, Mapping)]
+    if max_tiers > 0:
+        tiers = tiers[:max_tiers]
+
+    base_attempt = _apply_gate_once_v2(df, thresholds_cfg)
+    attempts: List[Tuple[str | int, pd.DataFrame]] = [(0, base_attempt)]
+    for idx, tier in enumerate(tiers, start=1):
+        combined = dict(thresholds_cfg)
+        combined.update(dict(tier))
+        attempts.append((idx, _apply_gate_once_v2(df, combined)))
+
+    for tier_id, gated in attempts:
+        if min_candidates <= 0 or gated.shape[0] >= min_candidates:
+            result = gated.copy()
+            if not result.empty:
+                result["gate_tier"] = tier_id if tier_id else 0
+            gate_counts["gate_total_passed"] = int(result.shape[0])
+            gate_counts["gate_total_failed"] = max(total - int(result.shape[0]), 0)
+            gate_counts["gate_policy_tier"] = tier_id if tier_id else 0
+            return (result, gate_counts, [])
+
+    # Fallback: return best available rows sorted by score
+    score_column = "Score" if "Score" in df.columns else "score"
+    if score_column in df.columns:
+        fallback = df.sort_values(score_column, ascending=False, na_position="last")
+    else:
+        fallback = df.copy()
+    if min_candidates > 0:
+        fallback = fallback.head(min_candidates)
+    fallback = fallback.copy()
+    if not fallback.empty:
+        fallback["gate_tier"] = "fallback"
+    gate_counts["gate_total_passed"] = int(fallback.shape[0])
+    gate_counts["gate_total_failed"] = max(total - int(fallback.shape[0]), 0)
+    gate_counts["gate_policy_tier"] = "fallback"
+    return (fallback, gate_counts, [])
+
+
 def apply_gates(
     df: pd.DataFrame,
     cfg: Optional[Mapping[str, object]] = None,
@@ -550,6 +687,8 @@ def apply_gates(
     """Filter ``df`` according to the configured gate thresholds."""
 
     cfg = cfg or {}
+    if _config_version(cfg) >= 2:
+        return _apply_gates_v2(df, cfg)
     gates_cfg = dict(DEFAULT_GATES)
     gates_cfg.update({key: cfg.get("gates", {}).get(key, gates_cfg.get(key)) for key in gates_cfg})
 

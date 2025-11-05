@@ -135,11 +135,25 @@ def _bootstrap_env() -> list[str]:
         LOGGER.info("[INFO] ENV_LOADED files=%s", files_repr)
         if missing:
             missing_keys = list(missing)
-            LOGGER.error("[ERROR] ENV_MISSING_KEYS=%s", json.dumps(missing_keys))
     finally:
         LOGGER.removeHandler(handler)
         handler.close()
+    defaults: dict[str, str] = {
+        "APCA_API_BASE_URL": "https://paper-api.alpaca.markets",
+        "APCA_DATA_API_BASE_URL": "https://data.alpaca.markets",
+        "ALPACA_DATA_FEED": "iex",
+    }
+    auto_filled: list[str] = []
+    for key in list(missing_keys):
+        default_value = defaults.get(key)
+        if default_value and not os.environ.get(key):
+            os.environ[key] = default_value
+            auto_filled.append(key)
+            missing_keys.remove(key)
+    if auto_filled:
+        LOGGER.info("[INFO] ENV_DEFAULTED keys=%s", json.dumps(auto_filled))
     if missing_keys:
+        LOGGER.error("[ERROR] ENV_MISSING_KEYS=%s", json.dumps(missing_keys))
         raise SystemExit(2)
     _, _, _, feed_value = get_alpaca_creds()
     resolved_feed = (
