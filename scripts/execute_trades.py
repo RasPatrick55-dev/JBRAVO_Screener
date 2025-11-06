@@ -89,14 +89,193 @@ except Exception:  # pragma: no cover - lightweight fallback for tests
 logger = logging.getLogger("execute_trades")
 LOGGER = logger
 
+REQUIRED = list(CANONICAL_COLUMNS)
+
+
+def _canonicalize_candidate_header(
+    df: Optional[pd.DataFrame], base_dir: Path | str | None
+) -> pd.DataFrame:
+    """Best-effort canonicalization for executor input."""
+
+    if df is None or df.empty:
+        return pd.DataFrame(columns=REQUIRED)
+
+    frame = df.copy()
+
+    def _normalize_name(name: Any) -> str:
+        key = str(name).strip().lower()
+        key = re.sub(r"[^a-z0-9]+", "_", key)
+        return key.strip("_")
+
+    frame.columns = [_normalize_name(col) for col in frame.columns]
+
+    rename_map = {
+        "price": "close",
+        "last": "close",
+        "entry": "entry_price",
+        "entryprice": "entry_price",
+        "avg_daily_dollar_volume_20d": "adv20",
+        "avg_dollar_vol_20d": "adv20",
+        "avgdailydollarvolume20d": "adv20",
+        "avgdollarvol20d": "adv20",
+        "atrp_14": "atrp",
+        "scorebreakdown": "score_breakdown",
+    }
+    for key, value in rename_map.items():
+        if key in frame.columns and value not in frame.columns:
+            frame.rename(columns={key: value}, inplace=True)
+
+    if "symbol" not in frame.columns:
+        return pd.DataFrame(columns=REQUIRED)
+
+    frame["symbol"] = (
+        frame["symbol"].astype("string").fillna("").str.strip().str.upper()
+    )
+    frame = frame.loc[frame["symbol"].str.len() > 0]
+
+    if frame.empty:
+        return pd.DataFrame(columns=REQUIRED)
+
+    now_value = datetime.now(timezone.utc).isoformat()
+    if "timestamp" not in frame.columns:
+        frame["timestamp"] = now_value
+    else:
+        ts_series = frame["timestamp"].astype("string").fillna("")
+        frame["timestamp"] = ts_series.replace({"": now_value})
+
+    numeric_columns = ("score", "close", "volume", "universe_count", "entry_price", "adv20", "atrp")
+    for column in numeric_columns:
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
+    base_path: Optional[Path] = None
+    if base_dir is not None:
+        try:
+            base_path = Path(base_dir)
+        except TypeError:
+            base_path = Path(str(base_dir))
+    if base_path and base_path.is_file():
+        base_path = base_path.parent.parent
+    scored = pd.DataFrame()
+    if base_path:
+        scored_path = base_path / "data" / "scored_candidates.csv"
+        if scored_path.exists():
+            try:
+                scored = pd.read_csv(scored_path)
+            except Exception:
+                scored = pd.DataFrame()
+
+    if ("close" not in frame.columns or frame["close"].isna().all()) and "entry_price" in frame.columns:
+        frame.loc[:, "close"] = frame["entry_price"]
+
+    if not scored.empty and "symbol" in scored.columns:
+        scored = scored.copy()
+        scored["symbol"] = scored["symbol"].astype("string").str.upper().str.strip()
+        scored = scored.loc[scored["symbol"].str.len() > 0]
+        scored = scored.drop_duplicates(subset=["symbol"], keep="last")
+        scored.set_index("symbol", inplace=True)
+        if "score_breakdown" in scored.columns and "score_breakdown" not in frame.columns:
+            frame = frame.join(scored["score_breakdown"], on="symbol")
+
+    if "close" not in frame.columns:
+        frame["close"] = pd.NA
+    if "entry_price" not in frame.columns:
+        frame["entry_price"] = pd.NA
+
+    close_series = pd.to_numeric(frame["close"], errors="coerce")
+    entry_series = pd.to_numeric(frame["entry_price"], errors="coerce")
+    entry_missing = entry_series.isna()
+    entry_series.loc[entry_missing] = close_series.loc[entry_missing]
+    close_missing = close_series.isna()
+    close_series.loc[close_missing] = entry_series.loc[close_missing]
+    frame["close"] = close_series
+    frame["entry_price"] = entry_series
+
+    if "score_breakdown" in frame.columns:
+        frame["score_breakdown"] = (
+            frame["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
+        )
+    else:
+        frame["score_breakdown"] = "{}"
+
+    if "source" in frame.columns:
+        frame["source"] = frame["source"].astype("string").fillna("").replace({"": "screener"})
+    else:
+        frame["source"] = "screener"
+
+    volume_series = frame["volume"] if "volume" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    frame["volume"] = pd.to_numeric(volume_series, errors="coerce").fillna(0)
+
+    adv_series = frame["adv20"] if "adv20" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    frame["adv20"] = pd.to_numeric(adv_series, errors="coerce").fillna(0.0)
+
+    atrp_series = frame["atrp"] if "atrp" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    frame["atrp"] = pd.to_numeric(atrp_series, errors="coerce").fillna(0.0)
+
+    universe_series = (
+        frame["universe_count"] if "universe_count" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    )
+    frame["universe_count"] = pd.to_numeric(universe_series, errors="coerce").fillna(0).astype(int)
+
+    for column in REQUIRED:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+
+    ordered = REQUIRED + [column for column in frame.columns if column not in REQUIRED]
+    return frame[ordered]
+
 
 # --- MPV helpers (Alpaca equities) ---
 #  >= $1.00  →  two decimals
 #  <  $1.00  →  four decimals    (per Alpaca docs)
 #  Buys round DOWN, sells round UP to maintain trader intent and avoid 42210000.
+def _tick_for(price: float) -> Decimal:
+    try:
+        p = Decimal(str(price))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal("0.01")
+    if p >= Decimal("1.00"):
+        return Decimal("0.01")
+    return Decimal("0.0001")
+
+
+def round_to_tick(x: float) -> float:
+    try:
+        tick = _tick_for(x)
+        # Alpaca enforces SEC Rule 612 (no sub-penny increments for US equities).
+        # Quantize down so we do not trip 422 "sub-penny increment" errors when submitting.
+        return float(Decimal(str(x)).quantize(tick, rounding=ROUND_DOWN))
+    except (InvalidOperation, ValueError, TypeError):
+        return float(x)
+
+
 def _mpv_step(price: float) -> Decimal:
-    d = Decimal(str(price))
-    return Decimal("0.01") if d >= Decimal("1") else Decimal("0.0001")
+    return _tick_for(price)
+
+
+def _enforce_order_price_ticks(request: Any) -> None:
+    """Round known price fields to valid ticks prior to API submission."""
+
+    price_fields = (
+        "limit_price",
+        "stop_price",
+        "stop_limit_price",
+        "stop_loss_price",
+        "take_profit_price",
+        "trail_price",
+    )
+    for field in price_fields:
+        if not hasattr(request, field):
+            continue
+        value = getattr(request, field)
+        if value in (None, ""):
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        rounded = round_to_tick(numeric)
+        setattr(request, field, rounded)
 
 
 def normalize_price_for_alpaca(price: float, side: str) -> float:
@@ -118,24 +297,11 @@ def _round_limit_price(price: float) -> float:
         value = float(price)
     except (TypeError, ValueError):
         return 0.0
-    decimals = 4 if value < 1 else 2
     try:
-        quantum = Decimal("0.0001") if decimals == 4 else Decimal("0.01")
-        return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_DOWN))
-    except Exception:
-        return round(value + 1e-9, decimals)
-
-
-def _round_to_tick(price: float, tick: float = 0.01) -> float:
-    """Round ``price`` to the nearest ``tick`` using bankers-safe rounding."""
-
-    try:
-        q = (Decimal(str(price)) / Decimal(str(tick))).quantize(
-            Decimal("1"), rounding=ROUND_HALF_UP
-        )
-        return float(q * Decimal(str(tick)))
+        return round_to_tick(value)
     except (InvalidOperation, ValueError, TypeError):
-        return float(price)
+        decimals = 4 if value < 1 else 2
+        return round(value + 1e-9, decimals)
 
 
 def _coerce_trade_timestamp(timestamp: Any | None) -> str:
@@ -238,163 +404,6 @@ def record_executed_trade(
             EXECUTED_TRADES_PATH,
         )
 
-REQUIRED = list(CANONICAL_COLUMNS)
-
-
-def _canonicalize_candidate_header(
-    df: Optional[pd.DataFrame], base_dir: Path | str | None
-) -> pd.DataFrame:
-    """Best-effort canonicalization for executor input."""
-
-    if df is None or df.empty:
-        return pd.DataFrame(columns=REQUIRED)
-
-    frame = df.copy()
-
-    def _normalize_name(name: Any) -> str:
-        key = str(name).strip().lower()
-        key = re.sub(r"[^a-z0-9]+", "_", key)
-        return key.strip("_")
-
-    frame.columns = [_normalize_name(col) for col in frame.columns]
-
-    rename_map = {
-        "price": "close",
-        "last": "close",
-        "entry": "entry_price",
-        "entryprice": "entry_price",
-        "avg_daily_dollar_volume_20d": "adv20",
-        "avg_dollar_vol_20d": "adv20",
-        "avgdailydollarvolume20d": "adv20",
-        "avgdollarvol20d": "adv20",
-        "atrp_14": "atrp",
-        "scorebreakdown": "score_breakdown",
-    }
-    for key, value in rename_map.items():
-        if key in frame.columns and value not in frame.columns:
-            frame.rename(columns={key: value}, inplace=True)
-
-    if "symbol" not in frame.columns:
-        return pd.DataFrame(columns=REQUIRED)
-
-    frame["symbol"] = (
-        frame["symbol"].astype("string").fillna("").str.strip().str.upper()
-    )
-    frame = frame.loc[frame["symbol"].str.len() > 0]
-
-    if frame.empty:
-        return pd.DataFrame(columns=REQUIRED)
-
-    now_value = datetime.now(timezone.utc).isoformat()
-    if "timestamp" not in frame.columns:
-        frame["timestamp"] = now_value
-    else:
-        ts_series = frame["timestamp"].astype("string").fillna("")
-        frame["timestamp"] = ts_series.replace({"": now_value})
-
-    numeric_columns = ("score", "close", "volume", "universe_count", "entry_price", "adv20", "atrp")
-    for column in numeric_columns:
-        if column in frame.columns:
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
-
-    base_path: Optional[Path] = None
-    if base_dir is not None:
-        try:
-            base_path = Path(base_dir)
-        except TypeError:
-            base_path = Path(str(base_dir))
-    if base_path and base_path.is_file():
-        base_path = base_path.parent.parent
-    scored = pd.DataFrame()
-    if base_path:
-        scored_path = base_path / "data" / "scored_candidates.csv"
-        if scored_path.exists():
-            try:
-                scored = pd.read_csv(scored_path)
-            except Exception:
-                scored = pd.DataFrame()
-
-    if ("close" not in frame.columns or frame["close"].isna().all()) and "entry_price" in frame.columns:
-        frame.loc[:, "close"] = frame["entry_price"]
-
-    if not scored.empty and "symbol" in scored.columns:
-        join_cols = [
-            column
-            for column in ("symbol", "close", "exchange", "volume", "adv20")
-            if column in scored.columns
-        ]
-        if join_cols:
-            joinable = scored[join_cols].drop_duplicates("symbol")
-            frame = frame.merge(joinable, on="symbol", how="left", suffixes=("", "_scored"))
-            for column in ("close", "exchange", "volume", "adv20"):
-                scored_col = f"{column}_scored"
-                if scored_col not in frame.columns:
-                    continue
-                if column == "exchange":
-                    current = (
-                        frame[column]
-                        if column in frame.columns
-                        else pd.Series("", index=frame.index, dtype="string")
-                    )
-                    fallback = frame[scored_col].astype("string").fillna("")
-                    frame[column] = current.where(current.str.strip() != "", fallback)
-                else:
-                    if column in frame.columns:
-                        current_numeric = pd.to_numeric(frame[column], errors="coerce")
-                    else:
-                        current_numeric = pd.Series(pd.NA, index=frame.index, dtype="float64")
-                    scored_numeric = pd.to_numeric(frame[scored_col], errors="coerce")
-                    mask_missing = current_numeric.isna()
-                    frame[column] = current_numeric
-                    frame.loc[mask_missing, column] = scored_numeric.loc[mask_missing]
-                frame.drop(columns=[scored_col], inplace=True)
-
-    if "close" not in frame.columns:
-        frame["close"] = pd.NA
-    if "entry_price" not in frame.columns:
-        frame["entry_price"] = pd.NA
-
-    close_series = pd.to_numeric(frame["close"], errors="coerce")
-    entry_series = pd.to_numeric(frame["entry_price"], errors="coerce")
-    entry_missing = entry_series.isna()
-    entry_series.loc[entry_missing] = close_series.loc[entry_missing]
-    close_missing = close_series.isna()
-    close_series.loc[close_missing] = entry_series.loc[close_missing]
-    frame["close"] = close_series
-    frame["entry_price"] = entry_series
-
-    if "score_breakdown" in frame.columns:
-        frame["score_breakdown"] = (
-            frame["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
-        )
-    else:
-        frame["score_breakdown"] = "{}"
-
-    if "source" in frame.columns:
-        frame["source"] = frame["source"].astype("string").fillna("").replace({"": "screener"})
-    else:
-        frame["source"] = "screener"
-
-    volume_series = frame["volume"] if "volume" in frame.columns else pd.Series(pd.NA, index=frame.index)
-    frame["volume"] = pd.to_numeric(volume_series, errors="coerce").fillna(0)
-
-    adv_series = frame["adv20"] if "adv20" in frame.columns else pd.Series(pd.NA, index=frame.index)
-    frame["adv20"] = pd.to_numeric(adv_series, errors="coerce").fillna(0.0)
-
-    atrp_series = frame["atrp"] if "atrp" in frame.columns else pd.Series(pd.NA, index=frame.index)
-    frame["atrp"] = pd.to_numeric(atrp_series, errors="coerce").fillna(0.0)
-
-    universe_series = (
-        frame["universe_count"] if "universe_count" in frame.columns else pd.Series(pd.NA, index=frame.index)
-    )
-    frame["universe_count"] = pd.to_numeric(universe_series, errors="coerce").fillna(0).astype(int)
-
-    for column in REQUIRED:
-        if column not in frame.columns:
-            frame[column] = pd.NA
-
-    ordered = REQUIRED + [column for column in frame.columns if column not in REQUIRED]
-    return frame[ordered]
 
 
 def log_info(tag: str, **kv: Any) -> None:
@@ -1263,7 +1272,7 @@ def compute_limit_price(row: Dict[str, Any], buffer_bps: int = 75) -> float:
         raise ValueError("Row must contain either entry_price or close")
     base_price_f = float(base_price)
     limit = base_price_f * (1 + buffer_bps / 10_000)
-    return float(limit)
+    return float(round_to_tick(limit))
 
 
 def _sanitize_atr_pct(value: Any) -> float:
@@ -2222,9 +2231,11 @@ class TradeExecutor:
             min_order = max(0.0, float(self.config.min_order_usd))
             target_notional = max(target_notional, min_order)
             if premarket_active:
-                limit_px = _round_to_tick(price_ref * (1 + limit_buffer_ratio), tick=0.01)
+                limit_px = price_ref * (1 + limit_buffer_ratio)
             else:
                 limit_px = price_f * (1 + limit_buffer_ratio)
+            # Guard against Alpaca 422 errors (Rule 612 minimum increments).
+            limit_px = round_to_tick(limit_px)
             limit_px = max(limit_px, 0.01)
             qty = _compute_qty(
                 account_buying_power,
@@ -2466,6 +2477,8 @@ class TradeExecutor:
             time_in_force=TimeInForce.DAY,
             extended_hours=self.config.extended_hours,
         )
+        # Alpaca rejects sub-penny increments (Rule 612); keep limit/stop/take-profit fields compliant.
+        _enforce_order_price_ticks(order_request)
         setattr(order_request, "_normalized_limit", True)
         submitted_order = self.submit_with_retries(order_request)
         if submitted_order is None:
@@ -2680,6 +2693,7 @@ class TradeExecutor:
         for attempt in range(1, attempts + 1):
             try:
                 log_info("alpaca.submit_order", attempt=attempt)
+                _enforce_order_price_ticks(request)
                 if isinstance(request, LimitOrderRequest):
                     result = self.client.submit_order(request)
                 else:

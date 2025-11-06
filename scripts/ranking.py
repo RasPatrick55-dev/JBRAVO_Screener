@@ -400,11 +400,9 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
             squeeze_threshold = np.nan
     bb_band_mask = bb_band.astype("float64").le(float(squeeze_threshold)).fillna(False)
     vol_bb_squeeze = bb_band_mask.astype("float64") * 0.5
-    vol_bb_squeeze = _shape_safe_where(
-        vol_bb_squeeze,
-        np.isfinite(squeeze_threshold),
-        0.0,
-    )
+    mask = np.isfinite(vol_bb_squeeze.to_numpy())
+    # Fix for shape-mismatch bug that caused screener to crash.
+    vol_bb_squeeze = vol_bb_squeeze.where(mask, 0.0)
 
     risk_atr_penalty = pd.Series(0.0, index=latest.index)
     if atr_pct_max is not None:
