@@ -5,6 +5,28 @@ log() {
   echo "[WRAPPER] $*"
 }
 
+# Hold the wrapper until the New York pre-market is open to avoid hitting the
+# executor TIME_WINDOW guard too early.
+# --- Wait until NY pre-market opens (07:00 NY) ---
+python - <<'PY'
+import datetime, zoneinfo, time, sys
+
+ny = zoneinfo.ZoneInfo("America/New_York")
+now = datetime.datetime.now(ny)
+open_t = now.replace(hour=7, minute=0, second=0, microsecond=0)
+close_t = now.replace(hour=9, minute=30, second=0, microsecond=0)
+if now < open_t:
+    sleep_s = (open_t - now).total_seconds()
+    print(f"[WRAPPER] Pre-market not open. Sleeping {int(sleep_s)}s until 07:00 NY...")
+    sys.stdout.flush()
+    time.sleep(sleep_s)
+elif now >= close_t:
+    print("[WRAPPER] Pre-market window closed in NY; exiting.")
+    sys.exit(0)
+else:
+    print(f"[WRAPPER] Pre-market open (NY now={now}).")
+PY
+
 send_alert() {
   local msg="$1"
   if [[ -z "${ALERT_WEBHOOK_URL:-}" || -z "$msg" ]]; then
@@ -50,6 +72,13 @@ RUN_STARTED_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cd "$PROJECT_HOME"
 source "$VENV/bin/activate"
 set -a; . ~/.config/jbravo/.env; set +a
+
+# Sanity check that the latest screener output exists before trading.
+rows=$(wc -l < data/latest_candidates.csv 2>/dev/null || echo 0)
+if [[ "$rows" -lt 2 ]]; then
+  log "latest_candidates.csv missing or too small (rows=${rows}); rerunning screener fallback."
+  "$PYTHON" -m scripts.run_pipeline --steps screener --reload-web false
+fi
 
 log "probing Alpaca credentials"
 AUTH_OUTPUT="$("$PYTHON" - <<'PY'

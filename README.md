@@ -27,7 +27,9 @@ Default sizing was tuned for pre-market operation: each slot targets the larger
 of `5%` of buying power or `$200` notional, and price guardrails automatically
 fall back to the previous close when `entry_price` is absent. Trailing stops are
 attached immediately after fills with explicit `TRAIL_SUBMIT` and
-`TRAIL_CONFIRMED` events.
+`TRAIL_CONFIRMED` events. Order submission now rounds prices down to the
+nearest SEC Rule 612 tick before hitting the Alpaca API, preventing 422
+"sub-penny increment" errors during pre-market execution.
 
 The metrics pipeline is resilient to a missing `data/trades_log.csv`; when the
 file is absent an empty `data/metrics_summary.csv` is written and the run still
@@ -67,6 +69,10 @@ automatically:
 python scripts/run_pipeline.py
 ```
 
+Schedule the pre-market executor so it fires at 12:05 UTC during Eastern
+Standard Time (and adjust the trigger when New York observes DST) to ensure the
+wrapper enters the market window after the 07:00 ET pre-market open.
+
 Set `PYTHONANYWHERE_DOMAIN` (e.g., `RasPatrick.pythonanywhere.com`) or `PA_WSGI_PATH` to enable the automatic web reload.
 Disable it per-run via `--reload-web false`.
 
@@ -77,6 +83,8 @@ Pipeline options worth knowing:
 * `--reload-web true` triggers a PythonAnywhere reload when the pipeline finishes. If the `pa_reload_webapp` CLI is not available the runner falls back to touching `/var/www/raspatrick_pythonanywhere_com_wsgi.py` so the dashboard still refreshes automatically.
 * When the screener emits zero rows the pipeline now logs `FALLBACK_CHECK …` and invokes `scripts.fallback_candidates` to guarantee at least one canonical candidate row (columns: `timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entry_price,adv20,atrp,source`). Both `data/top_candidates.csv` and `data/latest_candidates.csv` are rewritten with these safe defaults.
 * `scripts.metrics` tolerates a missing or empty `data/trades_log.csv`, allowing fresh installs (before the first live trade) to produce `data/metrics_summary.csv` without manual scaffolding.
+
+The Bollinger-band squeeze component now applies a shape-safe mask so the ranking pass no longer crashes with NumPy shape mismatch errors.
 
 ### Screener pipeline modes
 
