@@ -290,6 +290,7 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
         "EMA20",
         "SMA180",
         "WK52_PROX",
+        "RS20_SLOPE",
         "RSI14",
         "RSI",
         "MACD",
@@ -301,6 +302,7 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
         "OBV_DELTA",
         "BB_BANDWIDTH",
         "ATR_pct",
+        "SQUEEZE_ON",
     ]
 
     for column in required_numeric:
@@ -366,8 +368,10 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     )
     trend_ma_align = trend_ma_mask.astype("float64")
 
-    trend_52w_mask = wk52.astype("float64").ge(0.90).fillna(False)
-    trend_52w = trend_52w_mask.astype("float64") * 0.5
+    wk52_f = wk52.astype("float64")
+    trend_52w = pd.Series(0.0, index=latest.index, dtype="float64")
+    trend_52w += wk52_f.ge(0.90).fillna(False).astype("float64") * 0.35
+    trend_52w += wk52_f.ge(0.96).fillna(False).astype("float64") * 0.15
 
     rsi_mask = rsi.astype("float64").gt(50).fillna(False)
     mom_rsi = rsi_mask.astype("float64") * 0.5
@@ -379,6 +383,10 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
         macd_hist.astype("float64").gt(macd_hist_prev.astype("float64")).fillna(False)
     )
     mom_macd_hist_rising = macd_hist_mask.astype("float64") * 0.25
+
+    rs20_slope = _num("RS20_SLOPE")
+    rs_slope_mask = rs20_slope.astype("float64").gt(0).fillna(False)
+    mom_rs_slope = rs_slope_mask.astype("float64") * 0.5
 
     rel_vol_mask = rel_vol.astype("float64").ge(rel_vol_min).fillna(False)
     vol_rel = rel_vol_mask.astype("float64") * 0.5
@@ -403,6 +411,20 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     mask = np.isfinite(vol_bb_squeeze.to_numpy())
     # Fix for shape-mismatch bug that caused screener to crash.
     vol_bb_squeeze = vol_bb_squeeze.where(mask, 0.0)
+
+    squeeze_series = latest.get("SQUEEZE_ON")
+    if squeeze_series is None:
+        squeeze_series = pd.Series(False, index=latest.index)
+    elif not isinstance(squeeze_series, pd.Series):
+        squeeze_series = pd.Series(squeeze_series, index=latest.index)
+    else:
+        squeeze_series = squeeze_series.reindex(latest.index, fill_value=False)
+    squeeze_bool = squeeze_series.astype(bool).fillna(False)
+    mom_squeeze = (
+        squeeze_bool
+        & rs_slope_mask
+        & macd_hist_mask
+    ).astype("float64") * 0.25
 
     risk_atr_penalty = pd.Series(0.0, index=latest.index)
     if atr_pct_max is not None:
@@ -429,6 +451,8 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
             "mom_rsi": mom_rsi,
             "mom_macd_pos": mom_macd_pos,
             "mom_macd_hist_rising": mom_macd_hist_rising,
+            "mom_rs_slope": mom_rs_slope,
+            "mom_squeeze": mom_squeeze,
             "vol_rel": vol_rel,
             "vol_obv_up": vol_obv_up,
             "vol_bb_squeeze": vol_bb_squeeze,
@@ -440,7 +464,13 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
 
     category_map = {
         "trend": ["trend_ma_align", "trend_52w", "aroon_cross", "adx_trend"],
-        "momentum": ["mom_rsi", "mom_macd_pos", "mom_macd_hist_rising"],
+        "momentum": [
+            "mom_rsi",
+            "mom_macd_pos",
+            "mom_macd_hist_rising",
+            "mom_rs_slope",
+            "mom_squeeze",
+        ],
         "volume": ["vol_rel", "vol_obv_up"],
         "volatility": ["vol_bb_squeeze"],
         "risk": ["risk_atr_penalty"],
@@ -583,6 +613,7 @@ def _apply_gate_once_v2(df: pd.DataFrame, thresholds: Mapping[str, object]) -> p
 
     rel_vol_min = _resolve_float(thresholds.get("rel_vol_min"))
     adx_min = _resolve_float(thresholds.get("adx_min"))
+    atr_pct_min = _resolve_float(thresholds.get("atr_pct_min"))
     atr_pct_max = _resolve_float(thresholds.get("atr_pct_max"))
     wk52_min = _resolve_float(thresholds.get("wk52_min"))
 
@@ -597,9 +628,11 @@ def _apply_gate_once_v2(df: pd.DataFrame, thresholds: Mapping[str, object]) -> p
         mask_adx = adx_series.astype("float64").ge(adx_min).fillna(False)
 
     mask_atr = pd.Series(True, index=frame.index, dtype=bool)
-    if atr_pct_max is not None:
+    if atr_pct_min is not None or atr_pct_max is not None:
         atr_series = _series_by_aliases(frame, "atr_pct", "ATR_pct", "ATR_PCT")
-        mask_atr = atr_series.astype("float64").le(atr_pct_max).fillna(False)
+        lower = atr_pct_min if atr_pct_min is not None else -np.inf
+        upper = atr_pct_max if atr_pct_max is not None else np.inf
+        mask_atr = atr_series.astype("float64").between(lower, upper).fillna(False)
 
     mask_wk52 = pd.Series(True, index=frame.index, dtype=bool)
     if wk52_min is not None:
