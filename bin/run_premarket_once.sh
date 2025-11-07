@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 log() {
   echo "[WRAPPER] $*"
@@ -73,6 +73,71 @@ cd "$PROJECT_HOME"
 source "$VENV/bin/activate"
 set -a; . ~/.config/jbravo/.env; set +a
 
+# --- Freshness check (trust nightly) ---
+is_fresh_py="$($PYTHON - <<'PY'
+import pathlib, datetime as dt, zoneinfo, re
+
+ny = zoneinfo.ZoneInfo("America/New_York")
+now = dt.datetime.now(ny)
+log = pathlib.Path("logs/pipeline.log")
+latest = pathlib.Path("data/latest_candidates.csv")
+metrics = pathlib.Path("data/screener_metrics.json")
+
+
+def ok_csv(path: pathlib.Path) -> bool:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            header = handle.readline().strip().split(",")
+    except Exception:
+        return False
+    need = {
+        "timestamp",
+        "symbol",
+        "score",
+        "exchange",
+        "close",
+        "volume",
+        "universe_count",
+        "score_breakdown",
+        "entry_price",
+        "adv20",
+        "atrp",
+        "source",
+    }
+    return need.issubset({col.strip().lower() for col in header})
+
+
+def todays_pipeline_ok() -> bool:
+    if not log.exists():
+        return False
+    try:
+        tail = log.read_text(encoding="utf-8", errors="ignore")[-8000:]
+    except Exception:
+        return False
+    pattern = re.compile(r"^(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}.*PIPELINE_END rc=0", re.M)
+    matches = pattern.findall(tail)
+    if not matches:
+        return False
+    last_date = dt.date.fromisoformat(matches[-1])
+    return last_date == now.date()
+
+
+if todays_pipeline_ok() and latest.exists() and ok_csv(latest) and metrics.exists():
+    print("FRESH", end="")
+else:
+    print("STALE", end="")
+PY
+)"
+if [[ "$is_fresh_py" == "FRESH" ]]; then
+  log "nightly artifacts fresh; skipping pipeline re-run"
+else
+  log "nightly artifacts stale; running (fast) refresh"
+  if ! "$PYTHON" -m scripts.screener --mode screener --reuse-cache true --skip-fetch true; then
+    log "fast refresh failed; falling back to full screener pipeline"
+    "$PYTHON" -m scripts.run_pipeline --steps screener --reload-web false || true
+  fi
+fi
+
 # Sanity check that the latest screener output exists before trading.
 rows=$(wc -l < data/latest_candidates.csv 2>/dev/null || echo 0)
 if [[ "$rows" -lt 2 ]]; then
@@ -130,6 +195,7 @@ today = datetime.now(tz).date()
 
 metrics_iso = ""
 metrics_epoch = ""
+metrics_local = None
 if metrics_path.exists():
     try:
         payload = json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -139,11 +205,14 @@ if metrics_path.exists():
     if isinstance(ts, str) and ts:
         try:
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            metrics_iso = dt.astimezone(tz).isoformat()
-            metrics_epoch = str(int(dt.timestamp()))
+            local_dt = dt.astimezone(tz)
+            metrics_iso = local_dt.isoformat()
+            metrics_epoch = str(int(local_dt.timestamp()))
+            metrics_local = local_dt
         except Exception:
             metrics_iso = ""
             metrics_epoch = ""
+            metrics_local = None
 
 state = "stale"
 iso = metrics_iso
@@ -179,20 +248,27 @@ if log_path.exists():
         state = "fresh" if rc_text == "0" else "stale"
         break
 
+if state != "fresh" and metrics_local is not None and metrics_local.date() == today:
+    state = "fast"
+    iso = metrics_local.isoformat()
+    epoch = str(int(metrics_local.timestamp()))
+    if not rc_text:
+        rc_text = "fast"
+
 print(f"{state}|{iso}|{epoch}|{rc_text}")
 PY
 }
 
 PIPELINE_STATE=$(check_pipeline)
 IFS='|' read -r PIPE_STATE PIPE_ISO PIPE_EPOCH PIPE_RC <<<"$PIPELINE_STATE"
-if [[ "$PIPE_STATE" != "fresh" ]]; then
+if [[ "$PIPE_STATE" != "fresh" && "$PIPE_STATE" != "fast" ]]; then
   log "pipeline summary stale -> running pipeline"
   "$PYTHON" -m scripts.run_pipeline --steps screener --reload-web false
   PIPELINE_STATE=$(check_pipeline)
   IFS='|' read -r PIPE_STATE PIPE_ISO PIPE_EPOCH PIPE_RC <<<"$PIPELINE_STATE"
 fi
 
-if [[ "$PIPE_STATE" != "fresh" ]]; then
+if [[ "$PIPE_STATE" != "fresh" && "$PIPE_STATE" != "fast" ]]; then
   log "pipeline end token missing or failed (state=${PIPE_STATE} rc=${PIPE_RC:-unknown})"
   send_alert "Premarket wrapper aborted: no PIPELINE_END rc=0 today (rc=${PIPE_RC:-unknown})"
   exit 1
