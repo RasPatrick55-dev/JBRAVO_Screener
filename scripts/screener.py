@@ -6,6 +6,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import time
@@ -272,6 +273,8 @@ SKIP_KEYS = [
     "VALIDATION_ERROR",
     "NAN_DATA",
     "INSUFFICIENT_HISTORY",
+    "FUND_LIKE",
+    "UNIT_OR_WARRANT",
 ]
 
 DEFAULT_TOP_N = 15
@@ -323,6 +326,9 @@ DEFAULT_BACKTEST_TOP_K = 100
 DEFAULT_BACKTEST_LOOKBACK = 90
 BACKTEST_EXPECTANCY_WEIGHT = 5.0
 BACKTEST_WIN_RATE_WEIGHT = 1.0
+
+BENCHMARK_SYMBOLS: frozenset[str] = frozenset({"SPY"})
+FUND_NAME_PATTERN = re.compile(r"\bETF\b|\bETN\b|\bFUND\b|\bTRUST\b", re.IGNORECASE)
 
 
 def _as_bool(value: object, default: bool = False) -> bool:
@@ -672,7 +678,7 @@ def _fetch_daily_bars(
     start_dt = _parse_iso(start_iso)
     end_dt = _parse_iso(end_iso)
 
-    unique_symbols = [str(sym or "").strip().upper() for sym in symbols if sym]
+    unique_symbols = [str(sym or "").strip().upper() for sym in fetch_symbols if sym]
     unique_symbols = list(dict.fromkeys(unique_symbols))
     metrics: dict[str, Any] = {
         "batches_total": 0,
@@ -700,6 +706,7 @@ def _fetch_daily_bars(
             "retries": 0,
         },
     }
+    metrics["symbols_in"] = len(symbols)
     prescreened: dict[str, str] = {}
     symbols_with_history: set[str] = set()
 
@@ -1336,7 +1343,7 @@ def merge_asset_metadata(bars_df: pd.DataFrame, asset_meta: Dict[str, dict]) -> 
 
     if asset_meta:
         meta_df = pd.DataFrame.from_dict(asset_meta, orient="index")
-        meta_df = meta_df.reindex(columns=["exchange", "asset_class", "tradable"])
+        meta_df = meta_df.reindex(columns=["exchange", "asset_class", "tradable", "name"])
         meta_df = meta_df.rename_axis("symbol").reset_index()
         if not meta_df.empty:
             meta_df["symbol"] = meta_df["symbol"].astype(str).str.upper()
@@ -1351,6 +1358,9 @@ def merge_asset_metadata(bars_df: pd.DataFrame, asset_meta: Dict[str, dict]) -> 
             result["asset_class"] = result["symbol"].map(m_class)
             if tradable_map:
                 result["tradable"] = result["symbol"].map(tradable_map)
+            if "name" in meta_df.columns:
+                m_name = dict(zip(meta_df["symbol"], meta_df["name"]))
+                result["name"] = result["symbol"].map(m_name)
 
     result = ensure_symbol_column(result)
 
@@ -1362,6 +1372,11 @@ def merge_asset_metadata(bars_df: pd.DataFrame, asset_meta: Dict[str, dict]) -> 
         result["tradable"] = True
     else:
         result["tradable"] = result["tradable"].fillna(True).astype(bool)
+
+    if "name" not in result.columns:
+        result["name"] = ""
+    else:
+        result["name"] = result["name"].fillna("").astype(str)
 
     def _kind_from_row(row: pd.Series) -> str:
         exchange = str(row.get("exchange", "") or "").strip().upper()
@@ -1445,6 +1460,7 @@ def _load_alpaca_universe(
         "assets_after_filters": 0,
         "symbols_after_iex_filter": 0,
     }
+    empty_benchmark = pd.DataFrame(columns=BARS_COLUMNS)
     agg_metrics: MutableMapping[str, Any] = metrics if metrics is not None else {}
     for key, value in empty_metrics.items():
         if isinstance(value, list):
@@ -1457,7 +1473,14 @@ def _load_alpaca_universe(
         trading_client = _create_trading_client()
     except Exception as exc:
         LOGGER.error("Unable to create Alpaca trading client: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS), {}, agg_metrics, {}, empty_asset_metrics
+        return (
+            pd.DataFrame(columns=INPUT_COLUMNS),
+            {},
+            agg_metrics,
+            {},
+            empty_asset_metrics,
+            empty_benchmark,
+        )
 
     try:
         symbols, asset_meta, asset_metrics = fetch_active_equity_symbols(
@@ -1467,7 +1490,14 @@ def _load_alpaca_universe(
         )
     except Exception as exc:
         LOGGER.error("Failed to fetch Alpaca asset universe: %s", exc)
-        return pd.DataFrame(columns=INPUT_COLUMNS), {}, agg_metrics, {}, empty_asset_metrics
+        return (
+            pd.DataFrame(columns=INPUT_COLUMNS),
+            {},
+            agg_metrics,
+            {},
+            empty_asset_metrics,
+            empty_benchmark,
+        )
 
     LOGGER.info(
         "Asset metrics: total=%d tradable_equities=%d after_filters=%d",
@@ -1536,6 +1566,15 @@ def _load_alpaca_universe(
                     reason = "UNKNOWN_EXCHANGE"
                 filtered_skips.setdefault(sym, reason)
                 continue
+            name = str(meta.get("name", "") or "")
+            is_fund_like = exchange == "ARCA" or bool(FUND_NAME_PATTERN.search(name))
+            is_warrant_unit = sym.endswith(("W", "WS", "U", "UN"))
+            if is_fund_like:
+                filtered_skips.setdefault(sym, "FUND_LIKE")
+                continue
+            if is_warrant_unit:
+                filtered_skips.setdefault(sym, "UNIT_OR_WARRANT")
+                continue
             if iex_only and exchange not in iex_exchanges:
                 filtered_skips.setdefault(sym, "UNKNOWN_EXCHANGE")
                 continue
@@ -1563,12 +1602,22 @@ def _load_alpaca_universe(
     _write_universe_prefix_metrics(universe_df, agg_metrics)
 
     symbols = universe_df["symbol"].astype(str).str.upper().tolist()
+    benchmark_symbols = sorted(sym for sym in BENCHMARK_SYMBOLS if sym not in symbols)
+    benchmark_symbol_set = {sym.upper() for sym in benchmark_symbols}
+    fetch_symbols = symbols + benchmark_symbols
 
     if asset_meta:
         asset_meta = {sym: asset_meta.get(sym, {}) for sym in symbols if sym in asset_meta}
 
     if not symbols:
-        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, agg_metrics, {}, asset_metrics
+        return (
+            pd.DataFrame(columns=INPUT_COLUMNS),
+            asset_meta,
+            agg_metrics,
+            {},
+            asset_metrics,
+            empty_benchmark,
+        )
 
     agg_metrics["symbols_in"] = len(symbols)
 
@@ -1584,6 +1633,7 @@ def _load_alpaca_universe(
                 agg_metrics,
                 {},
                 asset_metrics,
+                empty_benchmark,
             )
 
     verify_hook_fn = make_verify_hook(bool(verify_request))
@@ -1735,12 +1785,19 @@ def _load_alpaca_universe(
             prescreened.setdefault(sym, reason)
 
     if bars_df.empty:
-        return bars_df, asset_meta, agg_metrics, prescreened, asset_metrics
+        return bars_df, asset_meta, agg_metrics, prescreened, asset_metrics, empty_benchmark
 
     bars_df = bars_df.copy()
     if "symbol" not in bars_df.columns:
         LOGGER.error("Normalized bars missing 'symbol' unexpectedly; skipping merge")
-        return pd.DataFrame(columns=INPUT_COLUMNS), asset_meta, agg_metrics, prescreened, asset_metrics
+        return (
+            pd.DataFrame(columns=INPUT_COLUMNS),
+            asset_meta,
+            agg_metrics,
+            prescreened,
+            asset_metrics,
+            empty_benchmark,
+        )
     if liquidity_top and liquidity_top > 0:
         try:
             bars_df.sort_values(["symbol", "timestamp"], inplace=True)
@@ -1762,7 +1819,13 @@ def _load_alpaca_universe(
         except Exception as exc:
             LOGGER.warning("Failed liquidity filter computation: %s", exc)
     bars_df = merge_asset_metadata(bars_df, asset_meta)
-    return bars_df, asset_meta, agg_metrics, prescreened, asset_metrics
+    benchmark_bars = pd.DataFrame(columns=bars_df.columns)
+    if not bars_df.empty and benchmark_symbol_set:
+        bench_mask = bars_df["symbol"].astype("string").str.upper().isin(benchmark_symbol_set)
+        if bench_mask.any():
+            benchmark_bars = bars_df.loc[bench_mask].copy()
+            bars_df = bars_df.loc[~bench_mask].copy()
+    return bars_df, asset_meta, agg_metrics, prescreened, asset_metrics, benchmark_bars
 
 
 def _ensure_logger() -> None:
@@ -1863,10 +1926,14 @@ def _filter_equity_assets(
             continue
 
         symbols.add(symbol)
+        name = _enum_to_str(
+            _asset_attr(asset, "name", "company_name", "friendly_name", "short_name")
+        ).strip()
         asset_meta[symbol] = {
             "exchange": exchange,
             "asset_class": cls,
             "tradable": tradable,
+            "name": name,
         }
         metrics["assets_after_filters"] += 1
 
@@ -2071,6 +2138,7 @@ def build_enriched_bars(
     timings: Optional[dict[str, float]] = None,
     feature_columns: Optional[Sequence[str]] = None,
     include_intermediate: Optional[bool] = None,
+    benchmark_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     stage_timer = T()
     df = bars_df.copy() if bars_df is not None else pd.DataFrame(columns=INPUT_COLUMNS)
@@ -2110,7 +2178,12 @@ def build_enriched_bars(
     )
 
     add_intermediate = True if include_intermediate is None else bool(include_intermediate)
-    features_df = compute_all_features(df, cfg, add_intermediate=add_intermediate)
+    features_df = compute_all_features(
+        df,
+        cfg,
+        add_intermediate=add_intermediate,
+        benchmark_df=benchmark_df,
+    )
     feature_elapsed = stage_timer.lap("feature_secs")
     if timings is not None:
         timings["feature_secs"] = timings.get("feature_secs", 0.0) + feature_elapsed
@@ -2227,6 +2300,18 @@ def _append_secondary_indicators(enriched: pd.DataFrame, raw_df: pd.DataFrame) -
         )
         merged["ATR_pct"] = atr_pct
 
+    if {"BB_UPPER", "BB_LOWER", "ATR14"}.issubset(merged.columns):
+        bb_upper = pd.to_numeric(merged["BB_UPPER"], errors="coerce")
+        bb_lower = pd.to_numeric(merged["BB_LOWER"], errors="coerce")
+        atr14 = pd.to_numeric(merged["ATR14"], errors="coerce")
+        kc_mid = (bb_upper + bb_lower) / 2.0
+        kc_up = kc_mid + 1.5 * atr14
+        kc_dn = kc_mid - 1.5 * atr14
+        squeeze_on = ((bb_upper < kc_up) & (bb_lower > kc_dn)).fillna(False)
+        merged["SQUEEZE_ON"] = squeeze_on.astype(bool)
+    else:
+        merged["SQUEEZE_ON"] = False
+
     for column in (
         "REL_VOLUME",
         "VOL_MA30",
@@ -2239,6 +2324,9 @@ def _append_secondary_indicators(enriched: pd.DataFrame, raw_df: pd.DataFrame) -
     ):
         if column in merged.columns:
             merged[column] = pd.to_numeric(merged[column], errors="coerce")
+
+    if "SQUEEZE_ON" in merged.columns:
+        merged["SQUEEZE_ON"] = merged["SQUEEZE_ON"].astype(bool)
 
     return merged
 
@@ -3297,6 +3385,7 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
 
     top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters, ranker_cfg, timing_info = run_screener(
         bars_df,
+        benchmark_bars=None,
         top_n=int(getattr(args, "top_n", DEFAULT_TOP_N) or DEFAULT_TOP_N),
         min_history=min_history,
         now=now,
@@ -3532,6 +3621,7 @@ def _coerce_int(value: object) -> int:
 
 def run_screener(
     df: pd.DataFrame,
+    benchmark_bars: Optional[pd.DataFrame] = None,
     *,
     top_n: int = DEFAULT_TOP_N,
     min_history: int = DEFAULT_MIN_HISTORY,
@@ -3683,6 +3773,7 @@ def run_screener(
         timings=timing_info,
         feature_columns=COARSE_RANK_COLUMNS,
         include_intermediate=False,
+        benchmark_df=benchmark_bars,
     )
     LOGGER.info(
         "[STAGE] coarse features end (rows=%d)", int(coarse_enriched.shape[0])
@@ -3754,6 +3845,7 @@ def run_screener(
         shortlist_prepared,
         ranker_cfg,
         timings=timing_info,
+        benchmark_df=benchmark_bars,
     )
     LOGGER.info("[STAGE] full features end (rows=%d)", int(enriched.shape[0]))
 
@@ -4557,6 +4649,7 @@ def main(
         fetch_metrics: dict[str, Any] = {}
         asset_metrics: dict[str, Any] = {}
         prescreened: Dict[str, str] = {}
+        benchmark_bars = pd.DataFrame(columns=BARS_COLUMNS)
         if input_df is not None:
             frame = input_df
             fetch_elapsed = pipeline_timer.lap("fetch_secs")
@@ -4587,6 +4680,7 @@ def main(
                     fetch_metrics,
                     prescreened,
                     asset_metrics,
+                    benchmark_bars,
                 ) = _load_alpaca_universe(
                     base_dir=base_dir,
                     days=max(1, args.days),
@@ -4627,6 +4721,7 @@ def main(
             timing_info,
         ) = run_screener(
             frame,
+            benchmark_bars=benchmark_bars,
             top_n=args.top_n,
             min_history=args.min_history,
             now=now,

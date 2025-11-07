@@ -82,6 +82,8 @@ INTERMEDIATE_COLUMNS: Sequence[str] = (
     "AROON_DIFF",
     "WK52_HIGH",
     "WK52_PROX",
+    "RS20_SLOPE",
+    "SQUEEZE_ON",
 )
 
 
@@ -264,6 +266,7 @@ def compute_all_features(
     cfg: Dict | FeatureConfig | None,
     *,
     add_intermediate: bool = True,
+    benchmark_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Compute ranking features on daily bars.
@@ -276,6 +279,8 @@ def compute_all_features(
         Feature configuration (periods, min_history, z clipping)
     add_intermediate : bool
         If False, drop intermediate MA/ATR/etc. columns in the final output.
+    benchmark_df : DataFrame | None
+        Optional benchmark bars (e.g., SPY) used for relative strength features.
 
     Returns
     -------
@@ -326,6 +331,40 @@ def compute_all_features(
         return pd.DataFrame(columns=columns)
 
     df = df.sort_values(["symbol", "timestamp"], kind="mergesort").reset_index(drop=True)
+
+    benchmark_series = pd.Series(dtype="float64")
+    bench = pd.DataFrame()
+    if benchmark_df is not None and not benchmark_df.empty:
+        bench = benchmark_df.copy()
+    elif "symbol" in bars_df.columns:
+        bench_mask = bars_df["symbol"].astype("string").str.upper() == "SPY"
+        if bench_mask.any():
+            bench = bars_df.loc[bench_mask, ["timestamp", "close"]].copy()
+    if not bench.empty:
+        bench = bench.copy()
+        bench["timestamp"] = pd.to_datetime(bench["timestamp"], utc=True, errors="coerce")
+        bench["close"] = pd.to_numeric(bench["close"], errors="coerce")
+        bench = bench.dropna(subset=["timestamp", "close"]).sort_values("timestamp")
+        bench = bench.drop_duplicates(subset=["timestamp"], keep="last")
+        if not bench.empty:
+            benchmark_series = bench.set_index("timestamp")["close"].astype("float64")
+
+    if not benchmark_series.empty:
+        df = df.merge(
+            benchmark_series.rename("SPY_CLOSE"),
+            on="timestamp",
+            how="left",
+        )
+        ratio = (df["close"] / df["SPY_CLOSE"].replace(0, np.nan)).astype("float64")
+        df["RS_RATIO"] = ratio
+        df["RS20_SLOPE"] = _gb(df)["RS_RATIO"].transform(lambda s: s.pct_change(20))
+        df.drop(columns=[col for col in ["SPY_CLOSE", "RS_RATIO"] if col in df.columns], inplace=True)
+    else:
+        df["RS20_SLOPE"] = np.nan
+
+    df["RS20_SLOPE"] = pd.to_numeric(df["RS20_SLOPE"], errors="coerce")
+    if "SQUEEZE_ON" not in df.columns:
+        df["SQUEEZE_ON"] = False
 
     df = sma(df, "close", fc.sma_fast, "SMA9")
     df = ema(df, "close", fc.ema_mid, "EMA20")
