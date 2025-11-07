@@ -1470,6 +1470,7 @@ def _load_alpaca_universe(
     min_days_fallback: int = 365,
     min_days_final: int = 90,
     reuse_cache: bool = True,
+    skip_fetch: bool = False,
     metrics: Optional[MutableMapping[str, Any]] = None,
 ) -> Tuple[
     pd.DataFrame,
@@ -1671,6 +1672,50 @@ def _load_alpaca_universe(
         )
 
     agg_metrics["symbols_in"] = len(symbols)
+
+    if skip_fetch:
+        LOGGER.info("[FAST] skip-fetch enabled; loading cached bars only")
+        cached_bars = _load_local_bars(
+            base_dir,
+            feed,
+            days,
+            reuse_cache=True,
+            symbols=symbols,
+            limit=limit,
+        )
+        cached_bars = cached_bars.copy()
+        cache_metrics = agg_metrics.get("cache")
+        if isinstance(cache_metrics, dict):
+            cache_metrics["batches_hit"] = int(cache_metrics.get("batches_hit", 0)) + (
+                1 if not cached_bars.empty else 0
+            )
+            cache_metrics["batches_miss"] = int(cache_metrics.get("batches_miss", 0))
+            agg_metrics["cache"] = cache_metrics
+        agg_metrics["bars_rows_total"] = int(cached_bars.shape[0])
+        present_symbols: set[str] = set()
+        if not cached_bars.empty and "symbol" in cached_bars.columns:
+            cached_bars["symbol"] = (
+                cached_bars["symbol"].astype("string").str.strip().str.upper()
+            )
+            present_symbols = set(cached_bars["symbol"].dropna().unique())
+        missing_symbols = sorted(set(symbols) - present_symbols) if symbols else []
+        agg_metrics["symbols_with_bars"] = len(present_symbols)
+        agg_metrics["symbols_no_bars"] = len(missing_symbols)
+        agg_metrics["symbols_no_bars_sample"] = missing_symbols[:20]
+        agg_metrics["window_attempts"] = []
+        agg_metrics["window_used"] = 0
+        agg_metrics["skip_fetch"] = True
+        prescreened = {sym: "INSUFFICIENT_HISTORY" for sym in missing_symbols}
+        cached_bars = merge_asset_metadata(cached_bars, asset_meta)
+        benchmark_bars = pd.DataFrame(columns=cached_bars.columns)
+        if not cached_bars.empty and benchmark_symbol_set:
+            bench_mask = (
+                cached_bars["symbol"].astype("string").str.upper().isin(benchmark_symbol_set)
+            )
+            if bench_mask.any():
+                benchmark_bars = cached_bars.loc[bench_mask].copy()
+                cached_bars = cached_bars.loc[~bench_mask].copy()
+        return cached_bars, asset_meta, agg_metrics, prescreened, asset_metrics, benchmark_bars
 
     data_client: Optional["StockHistoricalDataClient"] = None
     if (bars_source or "http").strip().lower() == "sdk":
@@ -4577,6 +4622,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Reuse cached bars batches when available (default: true)",
     )
     parser.add_argument(
+        "--skip-fetch",
+        choices=["true", "false"],
+        default="false",
+        help="Skip remote bars fetch and reuse cached data (default: false)",
+    )
+    parser.add_argument(
         "--refresh-latest",
         choices=["true", "false"],
         default="true",
@@ -4606,6 +4657,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     if isinstance(parsed.iex_only, str):
         parsed.iex_only = _as_bool(parsed.iex_only, True)
     parsed.reuse_cache = _as_bool(getattr(parsed, "reuse_cache", True), True)
+    parsed.skip_fetch = _as_bool(getattr(parsed, "skip_fetch", False), False)
     parsed.refresh_latest = _as_bool(getattr(parsed, "refresh_latest", True), True)
     try:
         parsed.ranker_config = Path(parsed.ranker_config)
@@ -4753,6 +4805,7 @@ def main(
                     min_days_fallback=args.min_days_fallback,
                     min_days_final=args.min_days_final,
                     reuse_cache=bool(args.reuse_cache),
+                    skip_fetch=bool(args.skip_fetch),
                     metrics=fetch_metrics,
                 )
                 fetch_elapsed = pipeline_timer.lap("fetch_secs")
