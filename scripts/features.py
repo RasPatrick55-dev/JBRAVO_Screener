@@ -3,10 +3,60 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+
+
+def fetch_symbols(
+    feed: str = "iex",
+    dollar_vol_min: int = 2_000_000,
+    reuse_cache: bool = True,
+) -> pd.DataFrame:
+    """Return a DataFrame of tradable US equities filtered by minimum dollar volume."""
+
+    cache_dir = Path("data")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"universe_{feed}.csv"
+
+    if reuse_cache and cache_path.exists():
+        try:
+            cached = pd.read_csv(cache_path)
+            if not cached.empty:
+                return cached
+        except Exception:
+            # Fall through to re-fetch on cache read issues.
+            pass
+
+    try:
+        from alpaca_trade_api.rest import REST  # type: ignore
+    except Exception as exc:  # pragma: no cover - optional dependency in tests
+        raise RuntimeError("alpaca_trade_api is required to fetch symbols") from exc
+
+    api = REST()
+    assets = api.list_assets(status="active")
+    rows: List[Dict[str, object]] = []
+    for asset in assets:
+        if not getattr(asset, "tradable", False):
+            continue
+        if getattr(asset, "exchange", "") not in {"NYSE", "NASDAQ", "AMEX"}:
+            continue
+        rows.append(
+            {
+                "symbol": getattr(asset, "symbol", ""),
+                "exchange": getattr(asset, "exchange", ""),
+                "asset_class": getattr(asset, "asset_class", ""),
+                "status": getattr(asset, "status", ""),
+                "feed": feed,
+                "dollar_vol_min": dollar_vol_min,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    df.to_csv(cache_path, index=False)
+    return df
 
 
 # --------------------------------------------------------------------------------------

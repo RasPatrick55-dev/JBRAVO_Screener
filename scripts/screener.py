@@ -32,56 +32,49 @@ import numpy as np
 import pandas as pd
 import requests
 
-try:  # pragma: no cover - allow reuse if helper moved to features module
-    from scripts.features import fetch_symbols as _external_fetch_symbols
+try:  # pragma: no cover - prefer canonical helper from features module
+    from scripts.features import fetch_symbols
 except Exception:  # pragma: no cover - fallback to local helper definition
-    _external_fetch_symbols = None
 
+    def fetch_symbols(
+        feed: str = "iex",
+        dollar_vol_min: int = 2_000_000,
+        reuse_cache: bool = True,
+    ):
+        """Return a DataFrame of actively tradable US equities."""
 
-def fetch_symbols(
-    feed: str = "iex",
-    dollar_vol_min: int = 2_000_000,
-    reuse_cache: bool = True,
-):
-    """Return a DataFrame of actively tradable US equities."""
-
-    if _external_fetch_symbols is not None:
-        return _external_fetch_symbols(
-            feed=feed, dollar_vol_min=dollar_vol_min, reuse_cache=reuse_cache
-        )
-
-    # Local fallback mirrors historical helper behaviour: rely on Alpaca REST.
-    try:
-        from alpaca_trade_api.rest import REST  # type: ignore
-    except Exception as exc:  # pragma: no cover - alpaca package optional in tests
-        raise RuntimeError("alpaca_trade_api is required to fetch symbols") from exc
-
-    api = REST()
-    assets = api.list_assets(status="active")
-    rows: list[dict[str, object]] = []
-    for asset in assets:
-        if asset.tradable and asset.exchange in {"NYSE", "NASDAQ", "AMEX"}:
-            rows.append(
-                {
-                    "symbol": asset.symbol,
-                    "exchange": asset.exchange,
-                    "class_": asset.asset_class,
-                    "status": asset.status,
-                }
-            )
-
-    df = pd.DataFrame(rows)
-    cache_path = Path("data") / "universe_cache.csv"
-    if reuse_cache and cache_path.exists():
+        # Local fallback mirrors historical helper behaviour: rely on Alpaca REST.
         try:
-            return pd.read_csv(cache_path)
-        except Exception:
-            # Fall back to freshly fetched data if cache is unreadable.
-            pass
+            from alpaca_trade_api.rest import REST  # type: ignore
+        except Exception as exc:  # pragma: no cover - alpaca package optional in tests
+            raise RuntimeError("alpaca_trade_api is required to fetch symbols") from exc
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(cache_path, index=False)
-    return df
+        api = REST()
+        assets = api.list_assets(status="active")
+        rows: list[dict[str, object]] = []
+        for asset in assets:
+            if asset.tradable and asset.exchange in {"NYSE", "NASDAQ", "AMEX"}:
+                rows.append(
+                    {
+                        "symbol": asset.symbol,
+                        "exchange": asset.exchange,
+                        "class_": asset.asset_class,
+                        "status": asset.status,
+                    }
+                )
+
+        df = pd.DataFrame(rows)
+        cache_path = Path("data") / "universe_cache.csv"
+        if reuse_cache and cache_path.exists():
+            try:
+                return pd.read_csv(cache_path)
+            except Exception:
+                # Fall back to freshly fetched data if cache is unreadable.
+                pass
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(cache_path, index=False)
+        return df
 
 try:  # pragma: no cover - preferred module execution path
     from .indicators import adx, aroon, macd, obv, rsi
@@ -4720,7 +4713,7 @@ def main(
         mode = getattr(args, "mode", "screener")
 
         if "fetch_symbols" not in globals() or not callable(globals().get("fetch_symbols")):
-            raise RuntimeError("fetch_symbols() helper missing or not imported correctly")
+            raise RuntimeError("fetch_symbols() helper missing – please restore import/definition")
 
         if mode == "build-symbol-stats":
             return run_build_symbol_stats(args, base_dir)
