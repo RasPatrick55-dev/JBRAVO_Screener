@@ -32,48 +32,26 @@ import numpy as np
 import pandas as pd
 import requests
 
-try:  # pragma: no cover - prefer canonical helper from features module
+try:
     from scripts.features import fetch_symbols
-except Exception:  # pragma: no cover - fallback to local helper definition
+except ImportError:
 
-    def fetch_symbols(
-        feed: str = "iex",
-        dollar_vol_min: int = 2_000_000,
-        reuse_cache: bool = True,
-    ):
-        """Return a DataFrame of actively tradable US equities."""
+    def fetch_symbols(feed="iex", dollar_vol_min=2_000_000, reuse_cache=True):
+        """
+        Return DataFrame of tradable US equities filtered by dollar volume.
+        """
 
-        # Local fallback mirrors historical helper behaviour: rely on Alpaca REST.
-        try:
-            from alpaca_trade_api.rest import REST  # type: ignore
-        except Exception as exc:  # pragma: no cover - alpaca package optional in tests
-            raise RuntimeError("alpaca_trade_api is required to fetch symbols") from exc
+        import pandas as pd
+        from alpaca_trade_api.rest import REST
 
         api = REST()
         assets = api.list_assets(status="active")
-        rows: list[dict[str, object]] = []
-        for asset in assets:
-            if asset.tradable and asset.exchange in {"NYSE", "NASDAQ", "AMEX"}:
-                rows.append(
-                    {
-                        "symbol": asset.symbol,
-                        "exchange": asset.exchange,
-                        "class_": asset.asset_class,
-                        "status": asset.status,
-                    }
-                )
-
+        rows = []
+        for a in assets:
+            if a.tradable and a.exchange in {"NYSE", "NASDAQ", "AMEX"}:
+                rows.append({"symbol": a.symbol, "exchange": a.exchange})
         df = pd.DataFrame(rows)
-        cache_path = Path("data") / "universe_cache.csv"
-        if reuse_cache and cache_path.exists():
-            try:
-                return pd.read_csv(cache_path)
-            except Exception:
-                # Fall back to freshly fetched data if cache is unreadable.
-                pass
-
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(cache_path, index=False)
+        # Optionally filter by dollar_vol_min if bars available
         return df
 
 try:  # pragma: no cover - preferred module execution path
@@ -1649,7 +1627,6 @@ def _load_alpaca_universe(
     symbols = universe_df["symbol"].astype(str).str.upper().tolist()
     benchmark_symbols = sorted(sym for sym in BENCHMARK_SYMBOLS if sym not in symbols)
     benchmark_symbol_set = {sym.upper() for sym in benchmark_symbols}
-    fetch_symbols = symbols + benchmark_symbols
 
     if asset_meta:
         asset_meta = {sym: asset_meta.get(sym, {}) for sym in symbols if sym in asset_meta}
@@ -4712,8 +4689,8 @@ def main(
     def _run() -> int:
         mode = getattr(args, "mode", "screener")
 
-        if "fetch_symbols" not in globals() or not callable(globals().get("fetch_symbols")):
-            raise RuntimeError("fetch_symbols() helper missing – please restore import/definition")
+        if "fetch_symbols" not in globals():
+            raise RuntimeError("fetch_symbols helper missing or not imported correctly")
 
         if mode == "build-symbol-stats":
             return run_build_symbol_stats(args, base_dir)

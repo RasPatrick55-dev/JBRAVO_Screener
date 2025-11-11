@@ -1,3 +1,4 @@
+import os
 import types
 from datetime import datetime, timezone
 
@@ -145,3 +146,13 @@ def test_gate_presets_parsing():
     defaults = screener.parse_args(["--mode", "screener"])
     assert defaults.gate_preset == "standard"
     assert defaults.relax_gates == "none"
+
+
+@pytest.mark.skipif(
+    not os.getenv("APCA_API_KEY_ID"), reason="Alpaca credentials not configured"
+)
+def test_fetch_symbols_not_empty():
+    df = screener.fetch_symbols()
+    assert isinstance(df, pd.DataFrame)
+    assert "symbol" in df.columns
+    assert not df.empty
