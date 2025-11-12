@@ -38,7 +38,7 @@ except ImportError:
 
     def fetch_symbols(feed="iex", dollar_vol_min=2_000_000, reuse_cache=True):
         """
-        Return DataFrame of tradable US equities filtered by dollar volume.
+        Return DataFrame of tradable US equities filtered by basic criteria.
         """
 
         import pandas as pd
@@ -699,6 +699,9 @@ def _fetch_daily_bars(
 
     start_dt = _parse_iso(start_iso)
     end_dt = _parse_iso(end_iso)
+
+    if "fetch_symbols" not in globals():
+        raise RuntimeError("fetch_symbols helper not defined/imported in screener.py")
 
     unique_symbols = [str(sym or "").strip().upper() for sym in symbols if sym]
     unique_symbols = list(dict.fromkeys(unique_symbols))
@@ -1436,6 +1439,7 @@ def _load_alpaca_universe(
     exclude_otc: bool,
     iex_only: bool,
     liquidity_top: int,
+    dollar_vol_min: Optional[float] = None,
     symbols_override: Optional[List[str]] = None,
     verify_request: bool = False,
     min_days_fallback: int = 365,
@@ -1492,42 +1496,95 @@ def _load_alpaca_universe(
             agg_metrics[key] = dict(value)
         else:
             agg_metrics[key] = int(value)
+    fallback_reason = ""
+    iex_exchanges = {"NASDAQ", "NYSE", "ARCA", "AMEX"}
+    min_dollar = 2_000_000
+    if dollar_vol_min is not None:
+        try:
+            min_dollar = max(0, int(float(dollar_vol_min)))
+        except (TypeError, ValueError):
+            min_dollar = 2_000_000
+
+    def _fallback_universe_via_fetch_symbols(reason: str) -> Optional[Tuple[pd.DataFrame, Dict[str, dict], dict[str, Any]]]:
+        if "fetch_symbols" not in globals():
+            raise RuntimeError("fetch_symbols helper not defined/imported in screener.py")
+        try:
+            helper_df = fetch_symbols(
+                feed=feed,
+                dollar_vol_min=min_dollar,
+                reuse_cache=reuse_cache,
+            )
+        except Exception as exc:
+            LOGGER.error("Fallback fetch_symbols failed (%s): %s", reason, exc)
+            return None
+        if not isinstance(helper_df, pd.DataFrame):
+            LOGGER.error("Fallback fetch_symbols returned non-DataFrame (%s)", reason)
+            return None
+        if helper_df.empty:
+            LOGGER.error("Fallback fetch_symbols returned empty universe (%s)", reason)
+            return None
+        if "symbol" not in helper_df.columns:
+            LOGGER.error("Fallback fetch_symbols missing 'symbol' column (%s)", reason)
+            return None
+        df = helper_df.copy()
+        df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+        df = df[df["symbol"].astype(bool)]
+        df.drop_duplicates(subset=["symbol"], inplace=True)
+        if iex_only and "exchange" in df.columns:
+            df["exchange"] = df["exchange"].astype(str).str.strip().str.upper()
+            df = df[df["exchange"].isin(iex_exchanges)]
+        if df.empty:
+            LOGGER.error("Fallback fetch_symbols returned no symbols after filters (%s)", reason)
+            return None
+        df.reset_index(drop=True, inplace=True)
+        fallback_meta: Dict[str, dict] = {}
+        if "exchange" in df.columns:
+            fallback_meta = {
+                row["symbol"]: {
+                    "exchange": str(row.get("exchange", "")).strip().upper(),
+                    "tradable": True,
+                    "asset_class": "US_EQUITY",
+                }
+                for row in df.to_dict("records")
+            }
+        fallback_metrics = dict(empty_asset_metrics)
+        fallback_metrics["assets_total"] = len(df)
+        fallback_metrics["assets_tradable_equities"] = len(df)
+        fallback_metrics["assets_after_filters"] = len(df)
+        fallback_metrics["symbols_after_iex_filter"] = len(df)
+        return df, fallback_meta, fallback_metrics
+
+    trading_client: Optional["TradingClient"] = None
     try:
         trading_client = _create_trading_client()
     except Exception as exc:
+        fallback_reason = f"trading client init failed: {exc}"
         LOGGER.error("Unable to create Alpaca trading client: %s", exc)
-        return (
-            pd.DataFrame(columns=INPUT_COLUMNS),
-            {},
-            agg_metrics,
-            {},
-            empty_asset_metrics,
-            empty_benchmark,
-        )
 
-    try:
-        symbols, asset_meta, asset_metrics = fetch_active_equity_symbols(
-            trading_client,
-            base_dir=base_dir,
-            exclude_otc=exclude_otc,
-        )
-    except Exception as exc:
-        LOGGER.error("Failed to fetch Alpaca asset universe: %s", exc)
-        return (
-            pd.DataFrame(columns=INPUT_COLUMNS),
-            {},
-            agg_metrics,
-            {},
-            empty_asset_metrics,
-            empty_benchmark,
-        )
+    symbols: List[str] = []
+    asset_meta: Dict[str, dict] = {}
+    asset_metrics: dict[str, Any] = dict(empty_asset_metrics)
+    if trading_client is not None:
+        try:
+            symbols, asset_meta, asset_metrics = fetch_active_equity_symbols(
+                trading_client,
+                base_dir=base_dir,
+                exclude_otc=exclude_otc,
+            )
+        except Exception as exc:
+            fallback_reason = f"asset fetch failed: {exc}"
+            LOGGER.error("Failed to fetch Alpaca asset universe: %s", exc)
+            symbols = []
+            asset_meta = {}
+            asset_metrics = dict(empty_asset_metrics)
 
-    LOGGER.info(
-        "Asset metrics: total=%d tradable_equities=%d after_filters=%d",
-        int(asset_metrics.get("assets_total", 0)),
-        int(asset_metrics.get("assets_tradable_equities", 0)),
-        int(asset_metrics.get("assets_after_filters", 0)),
-    )
+    if asset_metrics:
+        LOGGER.info(
+            "Asset metrics: total=%d tradable_equities=%d after_filters=%d",
+            int(asset_metrics.get("assets_total", 0)),
+            int(asset_metrics.get("assets_tradable_equities", 0)),
+            int(asset_metrics.get("assets_after_filters", 0)),
+        )
     if asset_meta:
         sample = list(asset_meta.items())[:5]
         sample_str = ", ".join(f"{sym}:{meta.get('exchange', '')}" for sym, meta in sample)
@@ -1553,7 +1610,6 @@ def _load_alpaca_universe(
             )
 
     raw_symbols = [str(sym).strip().upper() for sym in symbols]
-    iex_exchanges = {"NASDAQ", "NYSE", "ARCA", "AMEX"}
     filtered_symbols: list[str] = []
     filtered_skips: Dict[str, str] = {}
 
@@ -1610,16 +1666,47 @@ def _load_alpaca_universe(
             total_tradable or asset_metrics.get("assets_tradable_equities", 0),
         )
 
-    asset_metrics["symbols_after_iex_filter"] = len(filtered_symbols)
-    asset_metrics["assets_total"] = int(asset_metrics.get("assets_total", len(asset_meta)))
-    asset_metrics["assets_after_filters"] = len(filtered_symbols)
-
-    assets_df = pd.DataFrame({"symbol": filtered_symbols})
-    seed = int(pd.Timestamp.utcnow().strftime("%Y%m%d"))
-    if limit and len(assets_df) > limit:
-        universe_df = assets_df.sample(n=limit, random_state=seed)
+    universe_df: Optional[pd.DataFrame] = None
+    if filtered_symbols:
+        asset_metrics["symbols_after_iex_filter"] = len(filtered_symbols)
+        asset_metrics["assets_total"] = int(asset_metrics.get("assets_total", len(asset_meta)))
+        asset_metrics["assets_after_filters"] = len(filtered_symbols)
+        assets_df = pd.DataFrame({"symbol": filtered_symbols})
+        universe_df = assets_df
     else:
-        universe_df = assets_df.copy()
+        fallback = _fallback_universe_via_fetch_symbols(
+            fallback_reason or "empty Alpaca asset universe"
+        )
+        if fallback is None:
+            return (
+                pd.DataFrame(columns=INPUT_COLUMNS),
+                {},
+                agg_metrics,
+                {},
+                empty_asset_metrics,
+                empty_benchmark,
+            )
+        fallback_df, fallback_meta, fallback_metrics = fallback
+        LOGGER.warning(
+            "Falling back to fetch_symbols universe (%s)", fallback_reason or "alpaca assets unavailable"
+        )
+        asset_meta = {
+            str(sym).strip().upper(): dict(meta or {})
+            for sym, meta in (fallback_meta or {}).items()
+        }
+        asset_metrics = dict(fallback_metrics)
+        filtered_symbols = fallback_df["symbol"].astype(str).str.upper().tolist()
+        raw_symbols = list(filtered_symbols)
+        filtered_skips = {}
+        universe_df = fallback_df
+
+    seed = int(pd.Timestamp.utcnow().strftime("%Y%m%d"))
+    if universe_df is None:
+        universe_df = pd.DataFrame({"symbol": filtered_symbols})
+    if limit and len(universe_df) > limit:
+        universe_df = universe_df.sample(n=limit, random_state=seed)
+    else:
+        universe_df = universe_df.copy()
 
     universe_df = universe_df.reset_index(drop=True)
     _write_universe_prefix_metrics(universe_df, agg_metrics)
@@ -4770,6 +4857,7 @@ def main(
                     exclude_otc=args.exclude_otc,
                     iex_only=args.iex_only,
                     liquidity_top=args.liquidity_top,
+                    dollar_vol_min=args.dollar_vol_min,
                     symbols_override=symbols_override,
                     verify_request=args.verify_request,
                     min_days_fallback=args.min_days_fallback,
