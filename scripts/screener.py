@@ -32,6 +32,35 @@ import numpy as np
 import pandas as pd
 import requests
 
+
+def _to_symbol_list(obj: Iterable[object] | pd.Series | pd.DataFrame | None) -> list[str]:
+    """Normalize a container of symbols into a de-duplicated uppercase list."""
+
+    if obj is None:
+        return []
+    if isinstance(obj, pd.DataFrame):
+        if "symbol" in obj.columns:
+            obj = obj["symbol"].tolist()
+        else:
+            obj = obj.to_dict("records")
+    if isinstance(obj, pd.Series):
+        obj = obj.tolist()
+
+    cleaned: list[str] = []
+    for item in obj:
+        symbol = "" if item is None else str(item)
+        symbol = symbol.strip().upper()
+        if symbol:
+            cleaned.append(symbol)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for sym in cleaned:
+        if sym not in seen:
+            seen.add(sym)
+            unique.append(sym)
+    return unique
+
 try:
     from scripts.features import fetch_symbols
 except ImportError:
@@ -53,6 +82,10 @@ except ImportError:
         df = pd.DataFrame(rows)
         # Optionally filter by dollar_vol_min if bars available
         return df
+
+if "fetch_symbols" in globals() and callable(fetch_symbols):
+    # Allowed elsewhere for backwards-compat, but not used by _fetch_daily_bars.
+    pass
 
 try:  # pragma: no cover - preferred module execution path
     from .indicators import adx, aroon, macd, obv, rsi
@@ -581,8 +614,8 @@ def _collect_batch_pages(
 
 
 def _fetch_daily_bars(
+    symbols: Iterable[object],
     data_client: Optional["StockHistoricalDataClient"],
-    symbols: List[str],
     *,
     days: int,
     start_iso: str,
@@ -597,20 +630,6 @@ def _fetch_daily_bars(
     reuse_cache: bool = True,
     verify_hook: Optional[Callable[[str, dict[str, object]], None]] = None,
 ) -> Tuple[pd.DataFrame, dict[str, Any], Dict[str, str]]:
-    if not symbols:
-        return pd.DataFrame(columns=INPUT_COLUMNS), {
-            "batches_total": 0,
-            "batches_paged": 0,
-            "pages_total": 0,
-            "bars_rows_total": 0,
-            "symbols_with_bars": 0,
-            "symbols_no_bars": 0,
-            "symbols_no_bars_sample": [],
-            "fallback_batches": 0,
-            "insufficient_history": 0,
-            "rate_limited": 0,
-        }, {}
-
     source = (bars_source or "http").strip().lower()
     if source not in {"http", "sdk"}:
         source = "http"
@@ -700,11 +719,9 @@ def _fetch_daily_bars(
     start_dt = _parse_iso(start_iso)
     end_dt = _parse_iso(end_iso)
 
-    if "fetch_symbols" not in globals():
-        raise RuntimeError("fetch_symbols helper not defined/imported in screener.py")
-
-    unique_symbols = [str(sym or "").strip().upper() for sym in symbols if sym]
-    unique_symbols = list(dict.fromkeys(unique_symbols))
+    unique_symbols = _to_symbol_list(symbols)
+    if not unique_symbols:
+        raise ValueError("No symbols provided to _fetch_daily_bars()")
     metrics: dict[str, Any] = {
         "batches_total": 0,
         "batches_paged": 0,
@@ -731,7 +748,7 @@ def _fetch_daily_bars(
             "retries": 0,
         },
     }
-    metrics["symbols_in"] = len(symbols)
+    metrics["symbols_in"] = len(unique_symbols)
     prescreened: dict[str, str] = {}
     symbols_with_history: set[str] = set()
 
@@ -1711,7 +1728,19 @@ def _load_alpaca_universe(
     universe_df = universe_df.reset_index(drop=True)
     _write_universe_prefix_metrics(universe_df, agg_metrics)
 
-    symbols = universe_df["symbol"].astype(str).str.upper().tolist()
+    base_df: Optional[pd.DataFrame] = universe_df if isinstance(universe_df, pd.DataFrame) else None
+    if base_df is None and "assets_df" in locals():
+        assets_df_local = locals().get("assets_df")
+        if isinstance(assets_df_local, pd.DataFrame):
+            base_df = assets_df_local
+    if base_df is None:
+        base_df = pd.DataFrame({"symbol": filtered_symbols})
+
+    universe_symbols = _to_symbol_list(base_df)
+    if not universe_symbols:
+        raise RuntimeError("Universe produced no symbols; check upstream filters")
+
+    symbols = universe_symbols
     benchmark_symbols = sorted(sym for sym in BENCHMARK_SYMBOLS if sym not in symbols)
     benchmark_symbol_set = {sym.upper() for sym in benchmark_symbols}
 
@@ -1836,8 +1865,8 @@ def _load_alpaca_universe(
         )
         use_verify = bool(verify_request) and idx == 0
         bars_df_candidate, metrics_candidate, prescreened_candidate = _fetch_daily_bars(
-            data_client,
-            symbols,
+            symbols=universe_symbols,
+            data_client=data_client,
             days=window_days,
             start_iso=start_iso,
             end_iso=end_iso,
@@ -3507,22 +3536,33 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
             return 1
 
     fetch_timer = T()
-    bars_df, fetch_metrics, prefiltered = _fetch_daily_bars(
-        data_client,
-        symbols,
-        days=days,
-        start_iso=start_iso,
-        end_iso=end_iso,
-        feed=feed,
-        fetch_mode=fetch_mode,
-        batch_size=batch_size,
-        max_workers=max_workers,
-        min_history=min_history,
-        bars_source=bars_source,
-        run_date=last_day,
-        reuse_cache=reuse_cache,
-        verify_hook=verify_hook,
-    )
+    if symbols:
+        bars_df, fetch_metrics, prefiltered = _fetch_daily_bars(
+            symbols=symbols,
+            data_client=data_client,
+            days=days,
+            start_iso=start_iso,
+            end_iso=end_iso,
+            feed=feed,
+            fetch_mode=fetch_mode,
+            batch_size=batch_size,
+            max_workers=max_workers,
+            min_history=min_history,
+            bars_source=bars_source,
+            run_date=last_day,
+            reuse_cache=reuse_cache,
+            verify_hook=verify_hook,
+        )
+    else:
+        bars_df = pd.DataFrame(columns=INPUT_COLUMNS)
+        fetch_metrics = {
+            "symbols_in": 0,
+            "symbols_with_bars": 0,
+            "symbols_no_bars": 0,
+            "symbols_no_bars_sample": [],
+            "bars_rows_total": 0,
+        }
+        prefiltered = {}
     fetch_elapsed = fetch_timer.lap("fetch_secs")
 
     if not bars_df.empty and symbols:
