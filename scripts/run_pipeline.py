@@ -1173,12 +1173,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 if candidate is not None:
                     bars_rows_total = candidate
                     break
+        summary_source = latest_source
+        if screener_rc not in (0, None) and (summary_rows or 0) > 0:
+            summary_source = "fallback"
         summary = SimpleNamespace(
             symbols_in=symbols_in,
             with_bars=symbols_with_bars,
             rows=summary_rows,
             bars_rows_total=bars_rows_total,
-            source=latest_source,
+            source=summary_source,
         )
         t = SimpleNamespace(
             fetch=fetch_secs,
