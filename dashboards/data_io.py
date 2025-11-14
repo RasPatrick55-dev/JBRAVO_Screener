@@ -31,6 +31,16 @@ def _read_csv_safe(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _safe_csv_rows(path: Path) -> int:
+    try:
+        if not path.exists():
+            return 0
+        df = pd.read_csv(path)
+    except Exception:
+        return 0
+    return int(df.shape[0])
+
+
 def _mtime_iso(path: Path) -> Optional[str]:
     try:
         ts = path.stat().st_mtime
@@ -138,28 +148,27 @@ def screener_health() -> Dict[str, Any]:
 
     metrics = _read_json_safe(DATA_DIR / "screener_metrics.json")
     symbols_in = int(metrics.get("symbols_in") or 0)
-    symbols_with_bars = int(
-        metrics.get("symbols_with_bars")
+    with_bars_fetch = (
+        metrics.get("symbols_with_bars_fetch")
         or metrics.get("symbols_with_bars_raw")
+        or metrics.get("symbols_with_bars")
         or 0
     )
-    bars_rows_total = int(metrics.get("bars_rows_total") or 0)
-    rows_premetrics = int(metrics.get("rows") or 0)
-    last_run_utc = metrics.get("last_run_utc")
-
+    bars_rows_fetch = (
+        metrics.get("bars_rows_total_fetch")
+        or metrics.get("bars_rows_total")
+        or 0
+    )
     top_path = DATA_DIR / "top_candidates.csv"
-    latest_path = DATA_DIR / "latest_candidates.csv"
-    top_df = _read_csv_safe(top_path)
-    if not top_df.empty:
-        rows_final = int(top_df.shape[0])
-    else:
-        rows_final = int(_read_csv_safe(latest_path).shape[0])
-
-    if not last_run_utc:
-        last_run_utc = _mtime_iso(top_path) or _mtime_iso(latest_path)
+    top_rows = _safe_csv_rows(top_path)
+    rows_final = top_rows
+    if rows_final == 0 and not top_path.exists():
+        rows_final = int(metrics.get("rows") or 0)
+    rows_premetrics = rows_final or int(metrics.get("rows") or 0)
+    last_run_utc = metrics.get("last_run_utc") or _mtime_iso(top_path)
 
     log_path = LOGS_DIR / "pipeline.log"
-    source = _parse_latest_source(log_path)
+    source = metrics.get("latest_source") or _parse_latest_source(log_path)
     pipeline_rc = _parse_latest_pipeline_end_rc(log_path)
     conn = _read_health_json()
     if not conn:
@@ -169,9 +178,9 @@ def screener_health() -> Dict[str, Any]:
 
     return {
         "symbols_in": symbols_in,
-        "symbols_with_bars": symbols_with_bars,
-        "bars_rows_total": bars_rows_total,
-        "rows_premetrics": rows_premetrics,
+        "symbols_with_bars": int(with_bars_fetch),
+        "bars_rows_total": int(bars_rows_fetch),
+        "rows_premetrics": int(rows_premetrics),
         "rows_final": rows_final,
         "last_run_utc": last_run_utc,
         "source": source,

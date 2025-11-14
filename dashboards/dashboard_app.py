@@ -862,6 +862,19 @@ def health_overview():
 
     return jsonify({"ok": True, **summary})
 
+
+@server.route("/api/health")
+def api_health():
+    snapshot = load_screener_health()
+    return jsonify(snapshot)
+
+
+@server.route("/api/candidates")
+def api_candidates():
+    df, updated, source_file = screener_table()
+    records = df.to_dict("records") if not df.empty else []
+    return jsonify({"rows": records, "updated": updated, "source": source_file})
+
 # Layout with Tabs and Modals
 app.layout = dbc.Container(
     [
@@ -1276,6 +1289,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     elif tab == "tab-screener":
         metrics_data: dict = {}
         health_snapshot = load_screener_health()
+        health_data = health_snapshot or {}
         metrics_alert = None
         backfill_banner = None
         metrics_freshness_chip = None
@@ -1340,7 +1354,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             if not metrics_data.get("last_run_utc"):
                 metrics_data["last_run_utc"] = health_snapshot.get("last_run_utc")
 
-        run_type_label = (health_snapshot or {}).get("run_type") or "nightly"
+        run_type_label = health_data.get("run_type") or "nightly"
 
         def _build_freshness_chip() -> Optional[dbc.Badge]:
             freshness_info = (health_snapshot or {}).get("freshness") or {}
@@ -1470,16 +1484,17 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         last_run_display = _format_iso_display(metrics_data.get("last_run_utc"))
 
         pre_candidates = (
-            (health_snapshot or {}).get("rows_premetrics")
+            health_data.get("rows_premetrics")
+            or health_data.get("rows_final")
             or metrics_data.get("rows")
             or metrics_data.get("candidates_out")
         )
-        final_candidates = (health_snapshot or {}).get("rows_final") or metrics_data.get("rows_final")
+        final_candidates = health_data.get("rows_final") or metrics_data.get("rows_final")
         health_items = [
             ("Last Run (UTC)", last_run_display),
-            ("Symbols In", metrics_data.get("symbols_in")),
-            ("With Bars (raw)", metrics_data.get("symbols_with_bars")),
-            ("Bars Rows", metrics_data.get("bars_rows_total")),
+            ("Symbols In", health_data.get("symbols_in") or metrics_data.get("symbols_in")),
+            ("With Bars (fetch)", health_data.get("symbols_with_bars") or metrics_data.get("symbols_with_bars")),
+            ("Bars Rows (total)", health_data.get("bars_rows_total") or metrics_data.get("bars_rows_total")),
             ("Candidates (pre-metrics)", pre_candidates),
             ("Candidates (final)", final_candidates),
         ]
@@ -1901,7 +1916,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             components.append(backfill_banner)
         components.extend(alerts)
 
-        source_label = str((health_snapshot or {}).get("source") or "unknown")
+        source_label = str(health_data.get("source") or "unknown")
         source_color = (
             "success"
             if source_label == "screener"
@@ -1912,7 +1927,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             color=source_color,
             className="me-2",
         )
-        pipeline_rc = (health_snapshot or {}).get("pipeline_rc")
+        pipeline_rc = health_data.get("pipeline_rc")
         rc_text = f"rc={pipeline_rc}" if pipeline_rc is not None else "rc=n/a"
         rc_color = "success" if pipeline_rc == 0 else ("danger" if pipeline_rc else "secondary")
         rc_badge = dbc.Badge(rc_text, color=rc_color, className="me-2")
@@ -1935,7 +1950,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         metrics_sections = []
-        if metrics_data:
+        if health_data or metrics_data:
             metrics_sections.append(health_cards)
         if execution_card is not None:
             metrics_sections.append(
