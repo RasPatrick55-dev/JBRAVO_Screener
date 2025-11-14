@@ -20,7 +20,7 @@ import os
 import pytz
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from flask import jsonify
 from plotly.subplots import make_subplots
 
@@ -29,6 +29,7 @@ os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 from dashboards.screener_health import build_layout as build_screener_health
 from dashboards.screener_health import register_callbacks as register_screener_health
 from dashboards.data_io import (
+    health_payload_for_api,
     screener_health as load_screener_health,
     screener_table,
     metrics_summary_snapshot,
@@ -304,6 +305,18 @@ def _paper_badge_component() -> dbc.Badge:
         },
         **badge_kwargs,
     )
+
+
+def connection_badge_color(health_data: Mapping[str, Any]) -> Optional[str]:
+    """Return the Bootstrap color for the Alpaca connection badge."""
+
+    trading_ok = health_data.get("trading_ok")
+    data_ok = health_data.get("data_ok")
+    if trading_ok is None and data_ok is None:
+        return None
+    if trading_ok is None or data_ok is None:
+        return "secondary"
+    return "success" if bool(trading_ok) and bool(data_ok) else "danger"
 
 
 def fetch_positions_api():
@@ -868,8 +881,9 @@ def health_overview():
 
 @app.server.route("/api/health")
 def api_health():
-    snapshot = load_screener_health()
-    return app.response_class(
+    snapshot = health_payload_for_api()
+    response_class = app.server.response_class
+    return response_class(
         response=json.dumps(snapshot, default=str),
         status=200,
         mimetype="application/json",
@@ -1962,23 +1976,28 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             color="info",
             className="me-2",
         )
-        trading_ok = health_data.get("trading_ok")
-        data_ok = health_data.get("data_ok")
+        trading_ok_value = health_data.get("trading_ok")
+        data_ok_value = health_data.get("data_ok")
         alpaca_badge = None
-        if trading_ok is not None or data_ok is not None:
-            trading_ok_bool = bool(trading_ok)
-            data_ok_bool = bool(data_ok)
-            alpaca_color = "success" if trading_ok_bool and data_ok_bool else "danger"
+        alpaca_color = connection_badge_color(health_data)
+        if alpaca_color:
             trading_status = health_data.get("trading_status")
             data_status = health_data.get("data_status")
             feed_label = str(health_data.get("feed") or "").upper()
-            badge_children = [html.Span("Alpaca", className="me-2")]
-            trade_label = f"Trading {'✅' if trading_ok_bool else '❌'}"
+
+            def _badge_icon(value: Any) -> str:
+                if value is None:
+                    return "—"
+                return "✅" if bool(value) else "❌"
+
+            trade_label = f"Trading {_badge_icon(trading_ok_value)}"
             if trading_status:
                 trade_label = f"{trade_label} ({trading_status})"
-            data_label = f"Data {'✅' if data_ok_bool else '❌'}"
+            data_label = f"Data {_badge_icon(data_ok_value)}"
             if data_status:
                 data_label = f"{data_label} ({data_status})"
+
+            badge_children = [html.Span("Alpaca", className="me-2")]
             if feed_label:
                 badge_children.append(html.Span(feed_label, className="me-2 text-uppercase"))
             badge_children.extend(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib
 import json
 import logging
 import os
@@ -56,6 +57,42 @@ EXECUTION_SKIP_TOKENS = (
 )
 
 CANDIDATE_CANONICAL_LOWER = {"symbol", "score"}
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value:  # NaN check
+            return None
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes", "on"}:
+            return True
+        if text in {"false", "0", "no", "off"}:
+            return False
+    return None
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -633,6 +670,76 @@ def collect_evidence(
     return destination
 
 
+def _assert_api_payload(base: Path) -> str | None:
+    try:
+        os.environ["JBRAVO_HOME"] = str(base)
+        data_io = importlib.import_module("dashboards.data_io")
+        data_io = importlib.reload(data_io)
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        return f"[API] Unable to load dashboard modules: {exc}"
+    try:
+        loader_snapshot = data_io.screener_health()
+        api_snapshot = data_io.health_payload_for_api()
+    except Exception as exc:  # pragma: no cover - defensive loader guard
+        return f"[API] Failed to evaluate loader payloads: {exc}"
+    if loader_snapshot != api_snapshot:
+        return "[API] /api/health payload differs from screener_health() output"
+    return None
+
+
+def run_assertions(base_dir: Path) -> list[str]:
+    errors: list[str] = []
+    data_dir = base_dir / "data"
+
+    metrics, _ = _safe_read_json(data_dir / "screener_metrics.json")
+    if not isinstance(metrics, Mapping):
+        metrics = {}
+
+    _, top_info = _safe_read_csv(data_dir / "top_candidates.csv")
+    top_rows = _coerce_int(top_info.get("rows"))
+    rows_metric = _coerce_int(metrics.get("rows"))
+    if top_rows is None or rows_metric is None or top_rows != rows_metric:
+        errors.append(
+            f"[PARITY] top_candidates.csv rows={top_rows} does not match screener_metrics.json rows={rows_metric}"
+        )
+
+    for key in ("symbols_with_bars_fetch", "bars_rows_total_fetch"):
+        if _coerce_int(metrics.get(key)) is None:
+            errors.append(f"[FIELDS] screener_metrics.json missing numeric {key}")
+
+    fallback_pairs = (
+        ("symbols_with_bars_fetch", "symbols_with_bars"),
+        ("bars_rows_total_fetch", "bars_rows_total"),
+    )
+    for new_key, legacy_key in fallback_pairs:
+        new_value = _coerce_int(metrics.get(new_key))
+        legacy_value = _coerce_int(metrics.get(legacy_key))
+        if new_value is None:
+            if legacy_value is None:
+                errors.append(
+                    f"[FALLBACK] {new_key} missing and legacy {legacy_key} unavailable"
+                )
+            continue
+        if legacy_value is not None and legacy_value != new_value:
+            errors.append(
+                f"[FALLBACK] {legacy_key}={legacy_value} must match {new_key}={new_value} when both present"
+            )
+
+    conn_payload, _ = _safe_read_json(data_dir / "connection_health.json")
+    trading_ok = _coerce_bool(conn_payload.get("trading_ok")) if isinstance(conn_payload, Mapping) else None
+    data_ok = _coerce_bool(conn_payload.get("data_ok")) if isinstance(conn_payload, Mapping) else None
+    if trading_ok is not True or data_ok is not True:
+        errors.append(
+            f"[CONN] connection_health.json requires trading_ok && data_ok for green badge (found trading_ok={trading_ok} data_ok={data_ok})"
+        )
+
+    api_error = _assert_api_payload(base_dir)
+    if api_error:
+        errors.append(api_error)
+
+    return errors
+
+
 def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | None = None) -> dict[str, Any]:
     base = Path(base_dir)
     reports_path = Path(reports_dir) if reports_dir else base / "reports"
@@ -812,6 +919,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         evidence_path = collect_evidence(report, base_dir=base, evidence_dir=evidence_target)
         LOGGER.info("Dashboard evidence bundle written to %s", evidence_path)
+    failures = run_assertions(base)
+    if failures:
+        for failure in failures:
+            LOGGER.error(failure)
+        return 1
     return 0
 
 
