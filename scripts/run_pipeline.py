@@ -191,6 +191,48 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
     return None
 
 
+def compose_metrics_from_artifacts(
+    base_dir: Path,
+    *,
+    symbols_in: int | None = None,
+    fallback_symbols_with_bars: int | None = None,
+    fallback_bars_rows_total: int | None = None,
+    latest_source: str | None = None,
+) -> dict[str, Any]:
+    base = Path(base_dir)
+    data_dir = base / "data"
+    fetch_stats = _read_json(data_dir / "screener_stage_fetch.json")
+    post_stats = _read_json(data_dir / "screener_stage_post.json")
+    rows_final = _count_rows(data_dir / "top_candidates.csv")
+    if rows_final == 0 and post_stats:
+        hinted = _coerce_optional_int(post_stats.get("candidates_final"))
+        if hinted:
+            rows_final = hinted
+    fetch_symbols = _coerce_optional_int(fetch_stats.get("symbols_with_bars_fetch")) if fetch_stats else None
+    fallback_symbols = _coerce_optional_int(fallback_symbols_with_bars)
+    with_bars_effective = fetch_symbols or fallback_symbols or 0
+    bars_fetch = _coerce_optional_int(fetch_stats.get("bars_rows_total_fetch")) if fetch_stats else None
+    fallback_bars = _coerce_optional_int(fallback_bars_rows_total)
+    bars_effective = bars_fetch or fallback_bars or rows_final
+    payload = {
+        "last_run_utc": _now_iso(),
+        "symbols_in": int(_coerce_optional_int(symbols_in) or 0),
+        "symbols_with_bars": int(with_bars_effective),
+        "symbols_with_bars_raw": int(with_bars_effective),
+        "symbols_with_bars_fetch": fetch_symbols,
+        "symbols_with_bars_post": _coerce_optional_int(post_stats.get("symbols_with_bars_post")) if post_stats else None,
+        "bars_rows_total": int(bars_effective or 0),
+        "bars_rows_total_fetch": bars_fetch,
+        "bars_rows_total_post": _coerce_optional_int(post_stats.get("bars_rows_total_post")) if post_stats else None,
+        "rows": int(rows_final),
+        "rows_premetrics": int(rows_final),
+        "latest_source": latest_source or "unknown",
+    }
+    if post_stats and "candidates_final" in post_stats:
+        payload["candidates_final"] = _coerce_optional_int(post_stats.get("candidates_final")) or int(rows_final)
+    return payload
+
+
 def _backfill_metrics_from_summary(
     metrics_path: Path, metrics: Mapping[str, Any] | None, summary: SimpleNamespace
 ) -> dict[str, Any]:
@@ -715,13 +757,13 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
     base_dir = Path(base_dir)
     data_dir = base_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, Any] = {
-        "last_run_utc": _now_iso(),
+    fallback_hint: dict[str, Any] = {
         "symbols_in": None,
         "symbols_with_bars": None,
         "symbols_with_bars_raw": None,
         "bars_rows_total": None,
         "rows": 0,
+        "latest_source": "fallback",
     }
 
     log_path = base_dir / "logs" / "pipeline.log"
@@ -736,12 +778,12 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
                     continue
                 match = _SUMMARY_RE.search(line)
                 if match:
-                    payload["symbols_in"] = int(match.group("symbols_in"))
-                    payload["symbols_with_bars"] = int(match.group("symbols_with_bars"))
-                    payload["symbols_with_bars_raw"] = payload["symbols_with_bars"]
-                    payload["rows"] = int(match.group("rows"))
+                    fallback_hint["symbols_in"] = int(match.group("symbols_in"))
+                    fallback_hint["symbols_with_bars"] = int(match.group("symbols_with_bars"))
+                    fallback_hint["symbols_with_bars_raw"] = fallback_hint["symbols_with_bars"]
+                    fallback_hint["rows"] = int(match.group("rows"))
                     bars_total = match.group("bars_rows_total")
-                    payload["bars_rows_total"] = int(bars_total) if bars_total else None
+                    fallback_hint["bars_rows_total"] = int(bars_total) if bars_total else None
                 break
 
     latest_candidates = data_dir / "latest_candidates.csv"
@@ -749,48 +791,47 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
     top_rows = _count_csv_lines(top_candidates)
     latest_rows = _count_csv_lines(latest_candidates)
     if top_rows:
-        payload["rows"] = top_rows
-    elif latest_rows and not payload.get("rows"):
-        payload["rows"] = latest_rows
+        fallback_hint["rows"] = top_rows
+    elif latest_rows and not fallback_hint.get("rows"):
+        fallback_hint["rows"] = latest_rows
 
     scored_candidates = data_dir / "scored_candidates.csv"
-    if payload["symbols_in"] is None:
+    if fallback_hint["symbols_in"] is None:
         rows = _count_csv_lines(scored_candidates)
         if rows or scored_candidates.exists():
-            payload["symbols_in"] = rows
+            fallback_hint["symbols_in"] = rows
 
-    if payload["symbols_with_bars"] is None and payload["symbols_in"] is not None:
-        payload["symbols_with_bars"] = payload["symbols_in"]
-    if payload["symbols_with_bars_raw"] is None:
-        payload["symbols_with_bars_raw"] = payload["symbols_with_bars"]
+    if fallback_hint["symbols_with_bars"] is None and fallback_hint["symbols_in"] is not None:
+        fallback_hint["symbols_with_bars"] = fallback_hint["symbols_in"]
+    if fallback_hint["symbols_with_bars_raw"] is None:
+        fallback_hint["symbols_with_bars_raw"] = fallback_hint["symbols_with_bars"]
 
-    if payload["bars_rows_total"] is None:
-        payload["bars_rows_total"] = payload["rows"]
+    if fallback_hint["bars_rows_total"] is None:
+        fallback_hint["bars_rows_total"] = fallback_hint["rows"]
 
     for key in ("symbols_in", "symbols_with_bars", "symbols_with_bars_raw", "bars_rows_total"):
-        if payload[key] is None:
-            payload[key] = 0
+        if fallback_hint[key] is None:
+            fallback_hint[key] = 0
 
-    payload["symbols_with_bars"] = int(payload.get("symbols_with_bars_raw", 0))
+    fallback_hint["symbols_with_bars"] = int(fallback_hint.get("symbols_with_bars_raw", 0))
 
     metrics_path = data_dir / "screener_metrics.json"
-    if metrics_path.exists():
-        try:
-            previous = json.loads(metrics_path.read_text(encoding="utf-8"))
-            if isinstance(previous, Mapping) and previous.get("last_run_utc"):
-                payload["last_run_utc"] = previous["last_run_utc"]
-        except Exception:
-            pass
-
-    metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    metrics_payload = compose_metrics_from_artifacts(
+        base_dir,
+        symbols_in=fallback_hint.get("symbols_in"),
+        fallback_symbols_with_bars=fallback_hint.get("symbols_with_bars"),
+        fallback_bars_rows_total=fallback_hint.get("bars_rows_total"),
+        latest_source=fallback_hint.get("latest_source"),
+    )
+    metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
     logger.info(
         "Wrote screener_metrics.json: symbols_in=%s symbols_with_bars=%s rows=%s bars_rows_total=%s",
-        payload["symbols_in"],
-        payload["symbols_with_bars"],
-        payload["rows"],
-        payload["bars_rows_total"],
+        metrics_payload.get("symbols_in"),
+        metrics_payload.get("symbols_with_bars"),
+        metrics_payload.get("rows"),
+        metrics_payload.get("bars_rows_total"),
     )
-    return payload
+    return metrics_payload
 
 
 def _annotate_screener_metrics(
@@ -1205,12 +1246,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         summary_source = latest_source
         if screener_rc not in (0, None) and (summary_rows or 0) > 0:
             summary_source = "fallback"
-        candidates_final = int(summary_rows or 0)
-        bars_rows_total_int = int(bars_rows_total or 0)
-        symbols_with_bars_raw = int(symbols_with_bars or 0)
-        summary = SimpleNamespace(
+        metrics_path = base_dir / "data" / "screener_metrics.json"
+        metrics_payload = compose_metrics_from_artifacts(
+            base_dir,
             symbols_in=symbols_in,
-            with_bars=symbols_with_bars_raw,
+            fallback_symbols_with_bars=symbols_with_bars,
+            fallback_bars_rows_total=bars_rows_total,
+            latest_source=summary_source,
+        )
+        metrics = dict(metrics or {})
+        metrics.update(metrics_payload)
+        try:
+            _write_json(metrics_path, metrics_payload)
+        except Exception:
+            LOG.exception("SCREENER_METRICS_WRITE_FAILED path=%s", metrics_path)
+        candidates_final = int(metrics_payload.get("rows", 0))
+        bars_rows_total_int = int(metrics_payload.get("bars_rows_total", 0) or 0)
+        with_bars_effective = int(metrics_payload.get("symbols_with_bars", 0) or 0)
+        summary = SimpleNamespace(
+            symbols_in=int(metrics_payload.get("symbols_in", symbols_in) or 0),
+            with_bars=with_bars_effective,
             rows=candidates_final,
             bars_rows_total=bars_rows_total_int,
             source=summary_source,
@@ -1221,7 +1276,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             rank=rank_secs,
             gates=gate_secs,
         )
-        data_ok = bool((summary.rows or 0) > 0)
+        data_ok = bool(candidates_final > 0)
         trading_ok = rc == 0
         trading_status = 200 if trading_ok else 503
         data_status = 200 if data_ok else 204
@@ -1231,18 +1286,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             trading_status=trading_status,
             data_status=data_status,
         )
-        metrics_path = base_dir / "data" / "screener_metrics.json"
-        metrics_payload = {
-            "last_run_utc": _now_iso(),
-            "symbols_in": int(symbols_in or 0),
-            "symbols_with_bars": symbols_with_bars_raw,
-            "symbols_with_bars_raw": symbols_with_bars_raw,
-            "bars_rows_total": bars_rows_total_int,
-            "rows": candidates_final,
-        }
-        _write_json(metrics_path, metrics_payload)
-        metrics = dict(metrics or {})
-        metrics.update(metrics_payload)
         summary_parts = [
             "[INFO] PIPELINE_SUMMARY",
             f"symbols_in={summary.symbols_in}",
@@ -1318,6 +1361,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "data_ok": data_ok,
             "trading_status": int(trading_status),
             "data_status": int(data_status),
+            "feed": (os.getenv("ALPACA_DATA_FEED") or "").lower(),
             "timestamp": _now_iso(),
         }
         _write_json(base_dir / "data" / "connection_health.json", conn_payload)

@@ -646,6 +646,9 @@ def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | N
     execute_metrics, execute_info = _safe_read_json(base / "data" / "execute_metrics.json")
     predictions_df, predictions_info = _safe_read_csv(base / "data" / "predictions" / "latest.csv")
     ranker_eval, ranker_info = _safe_read_json(base / "data" / "ranker_eval" / "latest.json")
+    stage_fetch, stage_fetch_info = _safe_read_json(base / "data" / "screener_stage_fetch.json")
+    stage_post, stage_post_info = _safe_read_json(base / "data" / "screener_stage_post.json")
+    conn_health, conn_info = _safe_read_json(base / "data" / "connection_health.json")
 
     pipeline_log_text = _read_tail(base / "logs" / "pipeline.log")
     execute_log_text = _read_tail(base / "logs" / "execute_trades.log")
@@ -664,6 +667,41 @@ def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | N
     executor = _executor_summary(execute_metrics, execute_log_text)
     predictions = _predictions_summary(predictions_df, predictions_info, ranker_eval)
     prefix_guard = _prefix_sanity({"latest": latest_df, "scored": scored_df, "top": top_df})
+
+    universe_rows = int(universe.get("rows", 0) or 0)
+    top_rows = int(candidates["top"].get("row_count") or 0)
+    if universe_rows == 0 and top_rows == 0:
+        parity = "empty"
+    elif universe_rows == top_rows:
+        parity = "match"
+    else:
+        parity = "mismatch"
+    LOGGER.info(
+        "[CHECK] rows_final=%s top_candidates=%s parity=%s",
+        universe_rows,
+        top_rows,
+        parity,
+    )
+    LOGGER.info(
+        "[CHECK] connection_health present=%s trading_ok=%s data_ok=%s",
+        conn_info.get("present", False),
+        conn_health.get("trading_ok") if isinstance(conn_health, Mapping) else None,
+        conn_health.get("data_ok") if isinstance(conn_health, Mapping) else None,
+    )
+    fetch_present = stage_fetch_info.get("present", False)
+    post_present = stage_post_info.get("present", False)
+    if fetch_present and post_present:
+        split_state = "fetch+post"
+    elif fetch_present:
+        split_state = "fetch-only"
+    else:
+        split_state = "missing"
+    LOGGER.info(
+        "[CHECK] stage_metrics=%s fetch_symbols=%s post_candidates=%s",
+        split_state,
+        stage_fetch.get("symbols_with_bars_fetch") if isinstance(stage_fetch, Mapping) else None,
+        stage_post.get("candidates_final") if isinstance(stage_post, Mapping) else None,
+    )
 
     trades_log_path = base / "data" / "trades_log.csv"
     trades_info = _path_info(trades_log_path)
@@ -706,6 +744,9 @@ def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | N
             "pipeline_log": _path_info(base / "logs" / "pipeline.log"),
             "execute_log": _path_info(base / "logs" / "execute_trades.log"),
             "trades_log": trades_info,
+            "stage_fetch": stage_fetch_info,
+            "stage_post": stage_post_info,
+            "connection_health": conn_info,
         },
         "checks": {
             "timestamps": timestamps,

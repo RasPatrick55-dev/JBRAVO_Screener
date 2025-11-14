@@ -555,6 +555,37 @@ AUTH_CONTEXT: dict[str, object] = {
 }
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _symbol_count(frame: Optional[pd.DataFrame]) -> int:
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return 0
+    if "symbol" not in frame.columns:
+        return 0
+    try:
+        return int(frame["symbol"].astype("string").dropna().str.upper().nunique())
+    except Exception:
+        return int(frame["symbol"].nunique())
+
+
+def _write_stage_snapshot(
+    filename: str,
+    payload: Mapping[str, object],
+    *,
+    base_dir: Optional[Path] = None,
+) -> None:
+    try:
+        root = base_dir or AUTH_CONTEXT.get("base_dir")
+        if not isinstance(root, Path):
+            root = Path(root) if isinstance(root, str) else Path(__file__).resolve().parents[1]
+        target = root / "data" / filename
+        _write_json_atomic(target, dict(payload))
+    except Exception:
+        LOGGER.debug("STAGE_SNAPSHOT_WRITE_FAILED file=%s", filename, exc_info=True)
+
+
 def _auth_paths(base_dir: Optional[Path] = None) -> tuple[Path, Path]:
     root = base_dir or AUTH_CONTEXT.get("base_dir")
     if not isinstance(root, Path):
@@ -3787,6 +3818,16 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
     fetch_metrics["symbols_in"] = len(symbols)
     _write_universe_prefix_metrics(pd.DataFrame({"symbol": shortlist_df["symbol"]}), fetch_metrics)
 
+    _write_stage_snapshot(
+        "screener_stage_fetch.json",
+        {
+            "last_run_utc": _now_iso(),
+            "symbols_with_bars_fetch": _symbol_count(bars_df if isinstance(bars_df, pd.DataFrame) else None),
+            "bars_rows_total_fetch": int(bars_df.shape[0]) if hasattr(bars_df, "shape") else 0,
+        },
+        base_dir=base_dir,
+    )
+
     now = datetime.now(timezone.utc)
     ranker_path = getattr(args, "ranker_config", RANKER_CONFIG_PATH)
     base_ranker_cfg = _load_ranker_config(ranker_path)
@@ -4535,6 +4576,15 @@ def run_screener(
         else:
             LOGGER.info("No candidates passed ranking gates.")
 
+    _write_stage_snapshot(
+        "screener_stage_post.json",
+        {
+            "last_run_utc": _now_iso(),
+            "symbols_with_bars_post": _symbol_count(enriched),
+            "candidates_final": int(top_df.shape[0]) if isinstance(top_df, pd.DataFrame) else 0,
+        },
+    )
+
     return (
         top_df,
         scored_df,
@@ -5138,6 +5188,15 @@ def main(
                 int(frame.shape[0]) if hasattr(frame, "shape") else 0,
                 fetch_elapsed,
             )
+        _write_stage_snapshot(
+            "screener_stage_fetch.json",
+            {
+                "last_run_utc": _now_iso(),
+                "symbols_with_bars_fetch": _symbol_count(frame if isinstance(frame, pd.DataFrame) else None),
+                "bars_rows_total_fetch": int(frame.shape[0]) if hasattr(frame, "shape") else 0,
+            },
+            base_dir=base_dir,
+        )
         ranker_path = getattr(args, "ranker_config", RANKER_CONFIG_PATH)
         base_ranker_cfg = _load_ranker_config(ranker_path)
 
