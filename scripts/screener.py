@@ -61,6 +61,207 @@ def _to_symbol_list(obj: Iterable[object] | pd.Series | pd.DataFrame | None) -> 
             unique.append(sym)
     return unique
 
+
+def _coerce_float(value: object, default: Optional[float] = None) -> Optional[float]:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_common_stock_like(row) -> bool:
+    ex = (row.get("exchange") or "").strip().upper()
+    asset_type = (row.get("asset_type") or row.get("class") or row.get("asset_class") or "").strip().upper()
+    name = (row.get("name") or "").strip().upper()
+    sym = (row.get("symbol") or "").strip().upper()
+
+    fundish_kw = (
+        "ETF",
+        "ETN",
+        "FUND",
+        "TRUST",
+        "CLOSED-END",
+        "CEF",
+        "BDC",
+        "PREFERRED",
+        "DEPOSITARY",
+        "NOTE",
+        "NOTES",
+    )
+    bad_name = any(keyword in name for keyword in fundish_kw)
+    bad_sym = sym.endswith(("W", "WS", "U", "UN", "P", "PR"))
+
+    is_us_listing = ex in {"NYSE", "NASDAQ", "AMEX"}
+    if not ex and asset_type in {"STOCK", "COMMON", "COMMON_STOCK", "EQUITY", "CS", "US_EQUITY"}:
+        is_us_listing = True
+    is_common = asset_type in {"STOCK", "COMMON", "COMMON_STOCK", "EQUITY", "CS", "US_EQUITY"}
+    if not asset_type:
+        is_common = True
+
+    return bool(sym) and is_us_listing and is_common and not (bad_name or bad_sym)
+
+
+def _apply_universe_hygiene(df: Optional[pd.DataFrame], asset_meta: Mapping[str, Mapping[str, object]] | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["symbol"])
+
+    frame = df.copy()
+    frame["symbol"] = frame.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    meta_lookup = {str(sym).upper(): dict(asset_meta.get(sym, {})) for sym in (asset_meta or {})}
+    meta_fields = ("exchange", "asset_type", "asset_class", "class", "name")
+    for field in meta_fields:
+        if field in frame.columns:
+            continue
+        frame[field] = frame["symbol"].map(
+            lambda sym: str(meta_lookup.get(sym, {}).get(field, "") or "")
+        )
+
+    before = int(frame.shape[0])
+    filtered = frame[frame.apply(_is_common_stock_like, axis=1)].copy()
+    if filtered.empty:
+        LOGGER.warning("Universe hygiene removed all rows; retaining original %d symbols", before)
+        return df.copy()
+    LOGGER.info("Universe hygiene filtered %d → %d symbols", before, int(filtered.shape[0]))
+    return filtered.reset_index(drop=True)
+
+
+def _select_numeric_series(frame: pd.DataFrame, *names: str) -> pd.Series:
+    for name in names:
+        if name in frame.columns:
+            return pd.to_numeric(frame[name], errors="coerce")
+    return pd.Series(np.nan, index=frame.index, dtype="float64")
+
+
+def _apply_quality_filters(scored_df: pd.DataFrame, cfg: Optional[Mapping[str, object]]) -> pd.DataFrame:
+    if scored_df is None or scored_df.empty:
+        return scored_df
+
+    working = scored_df.copy()
+    thresholds = cfg.get("thresholds") if isinstance(cfg, Mapping) and isinstance(cfg.get("thresholds"), Mapping) else {}
+    gates_cfg = cfg.get("gates") if isinstance(cfg, Mapping) and isinstance(cfg.get("gates"), Mapping) else {}
+    min_price = _coerce_float(thresholds.get("min_price"), 5.0)
+    adv_min = _coerce_float(thresholds.get("adv20_min"))
+    if adv_min is None:
+        adv_min = _coerce_float(gates_cfg.get("dollar_vol_min"))
+    if adv_min is None:
+        adv_min = 2_000_000.0
+    atr_min = _coerce_float(thresholds.get("atr_min"), 0.02)
+    atr_max = _coerce_float(thresholds.get("atr_max"), 0.08)
+
+    price_series = _select_numeric_series(working, "close")
+    adv_series = _select_numeric_series(working, "adv20", "ADV20")
+    atr_pct_series = _select_numeric_series(working, "ATR_pct", "atrp")
+    if atr_pct_series.isna().all():
+        atr_raw = _select_numeric_series(working, "atr14", "ATR14")
+        atr_pct_series = atr_raw / price_series.replace(0, np.nan)
+    working["atrp"] = atr_pct_series
+
+    mask = pd.Series(True, index=working.index, dtype=bool)
+    if min_price is not None:
+        mask &= price_series.ge(min_price).fillna(False)
+    if adv_series.notna().any() and adv_min is not None:
+        mask &= adv_series.ge(adv_min).fillna(False)
+    if atr_pct_series.notna().any() and (atr_min is not None or atr_max is not None):
+        lower = atr_min if atr_min is not None else -np.inf
+        upper = atr_max if atr_max is not None else np.inf
+        mask &= atr_pct_series.between(lower, upper).fillna(False)
+
+    before = int(working.shape[0])
+    filtered = working.loc[mask].copy()
+    filtered.reset_index(drop=True, inplace=True)
+    if filtered.shape[0] != before:
+        LOGGER.info(
+            "[STAGE] quality filters pruned rows=%d -> %d",
+            before,
+            int(filtered.shape[0]),
+        )
+    return filtered
+
+
+def _soft_gate_with_min(
+    scored_df: pd.DataFrame,
+    candidates_df: pd.DataFrame,
+    cfg: Optional[Mapping[str, object]],
+) -> pd.DataFrame:
+    if cfg is None:
+        cfg = {}
+    policy = cfg.get("gate_policy") if isinstance(cfg, Mapping) and isinstance(cfg.get("gate_policy"), Mapping) else {}
+    try:
+        min_candidates = int(policy.get("min_candidates", 0) or 0)
+    except (TypeError, ValueError):
+        min_candidates = 0
+    if min_candidates <= 0:
+        return candidates_df
+
+    base = candidates_df.copy() if isinstance(candidates_df, pd.DataFrame) else pd.DataFrame()
+    if base.shape[0] >= min_candidates:
+        return base
+
+    tiers = []
+    raw_tiers = policy.get("tiers") if isinstance(policy.get("tiers"), Sequence) else None
+    if raw_tiers:
+        tiers = [tier for tier in raw_tiers if isinstance(tier, Mapping)]
+    if not tiers:
+        tiers = [
+            {"wk52_min": 0.88},
+            {"rel_vol_min": 0.9},
+            {"adx_min": 18},
+            {"atr_max": 0.10},
+        ]
+
+    pool = scored_df.copy() if isinstance(scored_df, pd.DataFrame) else pd.DataFrame()
+    if pool.empty:
+        return base
+    if "Score" in pool.columns:
+        pool = pool.sort_values("Score", ascending=False, na_position="last")
+
+    for tier in tiers:
+        tmp = pool.copy()
+        if tmp.empty:
+            continue
+        if "wk52_min" in tier:
+            wk_series = _select_numeric_series(tmp, "wk52_prox", "WK52_PROX")
+            try:
+                wk_min = float(tier["wk52_min"])
+            except (TypeError, ValueError):
+                wk_min = None
+            if wk_min is not None:
+                tmp = tmp[wk_series.ge(wk_min).fillna(False)]
+        if "rel_vol_min" in tier:
+            rel_series = _select_numeric_series(tmp, "rel_vol", "REL_VOLUME")
+            try:
+                rel_min = float(tier["rel_vol_min"])
+            except (TypeError, ValueError):
+                rel_min = None
+            if rel_min is not None:
+                tmp = tmp[rel_series.ge(rel_min).fillna(False)]
+        if "adx_min" in tier:
+            adx_series = _select_numeric_series(tmp, "adx", "ADX")
+            try:
+                adx_min = float(tier["adx_min"])
+            except (TypeError, ValueError):
+                adx_min = None
+            if adx_min is not None:
+                tmp = tmp[adx_series.ge(adx_min).fillna(False)]
+        if "atr_max" in tier:
+            atr_series = _select_numeric_series(tmp, "atrp", "ATR_pct")
+            try:
+                atr_max = float(tier["atr_max"])
+            except (TypeError, ValueError):
+                atr_max = None
+            if atr_max is not None:
+                tmp = tmp[atr_series.le(atr_max).fillna(False)]
+        if tmp.shape[0] >= min_candidates:
+            tmp = tmp.copy()
+            tmp.reset_index(drop=True, inplace=True)
+            return tmp
+
+    return base
+
 try:
     from scripts.features import fetch_symbols
 except ImportError:
@@ -96,7 +297,12 @@ try:  # pragma: no cover - preferred module execution path
     from .utils.models import BarData, classify_exchange, KNOWN_EQUITY
     from .utils.env import trading_base_url
     from .utils.frame_guards import ensure_symbol_column
-    from .features import ALL_FEATURE_COLUMNS, compute_all_features, REQUIRED_FEATURE_COLUMNS
+    from .features import (
+        ALL_FEATURE_COLUMNS,
+        compute_all_features,
+        REQUIRED_FEATURE_COLUMNS,
+        add_wk52_and_rs,
+    )
     from .ranking import (
         apply_gates,
         score_universe,
@@ -120,6 +326,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
         ALL_FEATURE_COLUMNS,
         compute_all_features,
         REQUIRED_FEATURE_COLUMNS,
+        add_wk52_and_rs,
     )
     from scripts.ranking import (  # type: ignore
         apply_gates,
@@ -1717,6 +1924,13 @@ def _load_alpaca_universe(
         filtered_skips = {}
         universe_df = fallback_df
 
+    universe_df = _apply_universe_hygiene(universe_df, asset_meta)
+    filtered_symbols = universe_df["symbol"].astype("string").str.upper().tolist()
+    asset_metrics["assets_after_filters"] = len(filtered_symbols)
+    remaining = set(raw_symbols or []) - set(filtered_symbols)
+    for sym in remaining:
+        filtered_skips.setdefault(sym, "UNIVERSE_HYGIENE")
+
     seed = int(pd.Timestamp.utcnow().strftime("%Y%m%d"))
     if universe_df is None:
         universe_df = pd.DataFrame({"symbol": filtered_symbols})
@@ -2366,6 +2580,7 @@ def build_enriched_bars(
         add_intermediate=add_intermediate,
         benchmark_df=benchmark_df,
     )
+    features_df = add_wk52_and_rs(features_df, benchmark_df)
     feature_elapsed = stage_timer.lap("feature_secs")
     if timings is not None:
         timings["feature_secs"] = timings.get("feature_secs", 0.0) + feature_elapsed
@@ -4060,6 +4275,7 @@ def run_screener(
     timing_info["rank_secs"] = timing_info.get("rank_secs", 0.0) + rank_timer.lap(
         "rank_secs"
     )
+    scored_df = _apply_quality_filters(scored_df, ranker_cfg)
 
     if not scored_df.empty:
         scored_df = scored_df.copy()
@@ -4093,6 +4309,16 @@ def run_screener(
     timing_info["gates_secs"] = timing_info.get("gates_secs", 0.0) + gates_timer.lap(
         "gates_secs"
     )
+    prev_count = int(candidates_df.shape[0])
+    candidates_df = _soft_gate_with_min(scored_df, candidates_df, ranker_cfg)
+    if isinstance(gate_fail_counts, dict):
+        gate_fail_counts["gate_total_passed"] = int(candidates_df.shape[0])
+        gate_fail_counts["gate_total_failed"] = max(
+            int(scored_df.shape[0]) - int(candidates_df.shape[0]),
+            0,
+        )
+        if int(candidates_df.shape[0]) > prev_count:
+            gate_fail_counts["gate_policy_tier"] = gate_fail_counts.get("gate_policy_tier") or "soft"
 
     if not candidates_df.empty:
         candidates_df["gates_passed"] = True

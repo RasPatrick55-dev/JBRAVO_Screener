@@ -1145,6 +1145,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         write_error_report(step="pipeline", detail=str(exc))
     finally:
         rows_out = metrics_rows if metrics_rows is not None else rows
+        final_rows = None
+        top_path = Path(base_dir) / "data" / "top_candidates.csv"
+        if top_path.exists():
+            try:
+                final_rows = int(pd.read_csv(top_path).shape[0])
+            except Exception as exc:
+                logger.warning("[WARN] PIPELINE_SUMMARY_ROWS_FALLBACK reason=read_error detail=%s", exc)
+        if final_rows is not None:
+            rows_out = final_rows
         screener_rc = step_rcs.get("screener") if "screener" in step_rcs else None
         backtest_rc = step_rcs.get("backtest") if "backtest" in step_rcs else None
         metrics_rc = step_rcs.get("metrics") if "metrics" in step_rcs else None

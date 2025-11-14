@@ -399,20 +399,7 @@ def compute_all_features(
         if not bench.empty:
             benchmark_series = bench.set_index("timestamp")["close"].astype("float64")
 
-    if not benchmark_series.empty:
-        df = df.merge(
-            benchmark_series.rename("SPY_CLOSE"),
-            on="timestamp",
-            how="left",
-        )
-        ratio = (df["close"] / df["SPY_CLOSE"].replace(0, np.nan)).astype("float64")
-        df["RS_RATIO"] = ratio
-        df["RS20_SLOPE"] = _gb(df)["RS_RATIO"].transform(lambda s: s.pct_change(20))
-        df.drop(columns=[col for col in ["SPY_CLOSE", "RS_RATIO"] if col in df.columns], inplace=True)
-    else:
-        df["RS20_SLOPE"] = np.nan
-
-    df["RS20_SLOPE"] = pd.to_numeric(df["RS20_SLOPE"], errors="coerce")
+    df["RS20_SLOPE"] = pd.Series(np.nan, index=df.index, dtype="float64")
     if "SQUEEZE_ON" not in df.columns:
         df["SQUEEZE_ON"] = False
 
@@ -433,8 +420,8 @@ def compute_all_features(
         out_max="H20",
         out_min="L20",
     )
-    df = rolling_extrema(df, "close", fc.week52_period, out_max="WK52_HIGH")
-    df["WK52_PROX"] = (df["close"] / df["WK52_HIGH"].replace(0, np.nan)).astype("float64")
+    df["WK52_HIGH"] = pd.Series(np.nan, index=df.index, dtype="float64")
+    df["WK52_PROX"] = pd.Series(np.nan, index=df.index, dtype="float64")
 
     def _linreg_slope_r2(x: pd.Series) -> float:
         y = np.log(x.replace(0, np.nan)).dropna()
@@ -545,6 +532,8 @@ def compute_all_features(
         if col in df.columns:
             df[col] = df[col].astype("float32")
 
+    df = add_wk52_and_rs(df, benchmark_df)
+
     if not add_intermediate:
         cols = ["symbol", "timestamp", *feature_cols]
         return df[cols].copy()
@@ -552,6 +541,65 @@ def compute_all_features(
     intermediates = [col for col in INTERMEDIATE_COLUMNS if col in df.columns]
     cols = ["symbol", "timestamp", *feature_cols, *intermediates]
     return df[cols].copy()
+
+
+def add_wk52_and_rs(features_df: pd.DataFrame, spy_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """Ensure 52-week proximity and RS slope columns exist with lowercase aliases."""
+
+    if features_df is None or features_df.empty:
+        return features_df if isinstance(features_df, pd.DataFrame) else pd.DataFrame()
+
+    df = features_df.copy()
+    symbol_series = df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    df["symbol"] = symbol_series
+    ts_col = "timestamp" if "timestamp" in df.columns else "date"
+    if ts_col not in df.columns:
+        return df
+    df[ts_col] = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+    close_series = pd.to_numeric(df.get("close"), errors="coerce")
+
+    def _rolling_wk52(series: pd.Series) -> pd.Series:
+        return series.rolling(252, min_periods=60).max()
+
+    wk52_high = (
+        df.assign(close=close_series)
+        .groupby("symbol", group_keys=False)["close"]
+        .transform(_rolling_wk52)
+    )
+    prox = (close_series / wk52_high.replace(0, np.nan)).clip(upper=1.0)
+    df["WK52_HIGH"] = wk52_high
+    df["WK52_PROX"] = prox
+    df["wk52_high"] = wk52_high
+    df["wk52_prox"] = prox
+
+    rs_slope = pd.Series(np.nan, index=df.index, dtype="float64")
+    if isinstance(spy_df, pd.DataFrame) and not spy_df.empty:
+        spy = spy_df.copy()
+        spy_ts_col = "timestamp" if "timestamp" in spy.columns else "date"
+        if spy_ts_col in spy.columns and "close" in spy.columns:
+            spy[spy_ts_col] = pd.to_datetime(spy[spy_ts_col], utc=True, errors="coerce")
+            spy["close"] = pd.to_numeric(spy["close"], errors="coerce")
+            if "symbol" in spy.columns:
+                spy_symbol = spy["symbol"].astype("string").str.upper()
+                spy = spy.loc[spy_symbol == "SPY"]
+            spy = spy.dropna(subset=[spy_ts_col, "close"])
+            if not spy.empty:
+                lookup = spy.drop_duplicates(subset=[spy_ts_col], keep="last").set_index(spy_ts_col)["close"].astype("float64")
+                spy_aligned = df[ts_col].map(lookup)
+                ratio = (close_series / spy_aligned.replace(0, np.nan)).astype("float64")
+                df["__rs_ratio"] = ratio
+                rs_slope = df.groupby("symbol", group_keys=False)["__rs_ratio"].transform(
+                    lambda s: s.pct_change(20)
+                )
+                df.drop(columns=["__rs_ratio"], inplace=True)
+
+    if "RS20_SLOPE" not in df.columns or df["RS20_SLOPE"].isna().all():
+        df["RS20_SLOPE"] = rs_slope
+    else:
+        df["RS20_SLOPE"] = pd.to_numeric(df["RS20_SLOPE"], errors="coerce").fillna(rs_slope)
+    df["rs20_slope"] = pd.to_numeric(df.get("RS20_SLOPE"), errors="coerce")
+
+    return df
 
 
 __all__ = [
@@ -564,5 +612,6 @@ __all__ = [
     "ALL_FEATURE_COLUMNS",
     "robust_z",
     "compute_all_features",
+    "add_wk52_and_rs",
 ]
 
