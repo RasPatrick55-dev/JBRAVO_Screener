@@ -104,6 +104,20 @@ def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy h
     return {}
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _write_json(path: Path | str, payload: Mapping[str, Any]) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        serialised = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+        atomic_write_bytes(target, serialised)
+    except Exception:
+        LOG.exception("PIPELINE_JSON_WRITE_FAILED path=%s", target)
+
+
 def _parse_summary_line(line: str) -> Optional[SimpleNamespace]:
     match = _SUMMARY_RE.search(line)
     if not match:
@@ -702,9 +716,10 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
     data_dir = base_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
-        "last_run_utc": datetime.now(timezone.utc).isoformat(),
+        "last_run_utc": _now_iso(),
         "symbols_in": None,
         "symbols_with_bars": None,
+        "symbols_with_bars_raw": None,
         "bars_rows_total": None,
         "rows": 0,
     }
@@ -723,6 +738,7 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
                 if match:
                     payload["symbols_in"] = int(match.group("symbols_in"))
                     payload["symbols_with_bars"] = int(match.group("symbols_with_bars"))
+                    payload["symbols_with_bars_raw"] = payload["symbols_with_bars"]
                     payload["rows"] = int(match.group("rows"))
                     bars_total = match.group("bars_rows_total")
                     payload["bars_rows_total"] = int(bars_total) if bars_total else None
@@ -730,12 +746,12 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
 
     latest_candidates = data_dir / "latest_candidates.csv"
     top_candidates = data_dir / "top_candidates.csv"
-    if payload.get("rows", 0) == 0:
-        for candidate_path in (latest_candidates, top_candidates):
-            rows = _count_csv_lines(candidate_path)
-            if rows:
-                payload["rows"] = rows
-                break
+    top_rows = _count_csv_lines(top_candidates)
+    latest_rows = _count_csv_lines(latest_candidates)
+    if top_rows:
+        payload["rows"] = top_rows
+    elif latest_rows and not payload.get("rows"):
+        payload["rows"] = latest_rows
 
     scored_candidates = data_dir / "scored_candidates.csv"
     if payload["symbols_in"] is None:
@@ -745,13 +761,17 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
 
     if payload["symbols_with_bars"] is None and payload["symbols_in"] is not None:
         payload["symbols_with_bars"] = payload["symbols_in"]
+    if payload["symbols_with_bars_raw"] is None:
+        payload["symbols_with_bars_raw"] = payload["symbols_with_bars"]
 
     if payload["bars_rows_total"] is None:
         payload["bars_rows_total"] = payload["rows"]
 
-    for key in ("symbols_in", "symbols_with_bars", "bars_rows_total"):
+    for key in ("symbols_in", "symbols_with_bars", "symbols_with_bars_raw", "bars_rows_total"):
         if payload[key] is None:
             payload[key] = 0
+
+    payload["symbols_with_bars"] = int(payload.get("symbols_with_bars_raw", 0))
 
     metrics_path = data_dir / "screener_metrics.json"
     if metrics_path.exists():
@@ -1185,11 +1205,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         summary_source = latest_source
         if screener_rc not in (0, None) and (summary_rows or 0) > 0:
             summary_source = "fallback"
+        candidates_final = int(summary_rows or 0)
+        bars_rows_total_int = int(bars_rows_total or 0)
+        symbols_with_bars_raw = int(symbols_with_bars or 0)
         summary = SimpleNamespace(
             symbols_in=symbols_in,
-            with_bars=symbols_with_bars,
-            rows=summary_rows,
-            bars_rows_total=bars_rows_total,
+            with_bars=symbols_with_bars_raw,
+            rows=candidates_final,
+            bars_rows_total=bars_rows_total_int,
             source=summary_source,
         )
         t = SimpleNamespace(
@@ -1208,6 +1231,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             trading_status=trading_status,
             data_status=data_status,
         )
+        metrics_path = base_dir / "data" / "screener_metrics.json"
+        metrics_payload = {
+            "last_run_utc": _now_iso(),
+            "symbols_in": int(symbols_in or 0),
+            "symbols_with_bars": symbols_with_bars_raw,
+            "symbols_with_bars_raw": symbols_with_bars_raw,
+            "bars_rows_total": bars_rows_total_int,
+            "rows": candidates_final,
+        }
+        _write_json(metrics_path, metrics_payload)
+        metrics = dict(metrics or {})
+        metrics.update(metrics_payload)
         summary_parts = [
             "[INFO] PIPELINE_SUMMARY",
             f"symbols_in={summary.symbols_in}",
@@ -1223,14 +1258,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if isinstance(summary.source, str) and summary.source:
             summary_parts.append(f"source={summary.source}")
         LOG.info(" ".join(summary_parts))
-        metrics_path = base_dir / "data" / "screener_metrics.json"
         metrics = _backfill_metrics_from_summary(metrics_path, metrics, summary)
         today = datetime.now(timezone.utc).date()
         todays_summary = _latest_summary_for_date(base_dir, today)
         if todays_summary is None:
             LOG.warning("[WARN] SUMMARY_TODAY_MISSING date=%s", today.isoformat())
         try:
-            kpis = write_complete_screener_metrics(base_dir)
+            if rc != 0:
+                kpis = write_complete_screener_metrics(base_dir)
+            else:
+                kpis = metrics_payload
             LOG.info(
                 "SCREENER_METRICS_SYNC symbols_in=%s with_bars=%s rows=%s bars_rows_total=%s",
                 kpis.get("symbols_in"),
@@ -1276,6 +1313,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if error_info:
             status_payload["error"] = dict(error_info)
         _write_status_json(base_dir, status_payload)
+        conn_payload = {
+            "trading_ok": trading_ok,
+            "data_ok": data_ok,
+            "trading_status": int(trading_status),
+            "data_status": int(data_status),
+            "timestamp": _now_iso(),
+        }
+        _write_json(base_dir / "data" / "connection_health.json", conn_payload)
         logger.info(
             "[INFO] HEALTH trading_ok=%s data_ok=%s stage=end trading_status=%s data_status=%s",
             health.trading_ok,

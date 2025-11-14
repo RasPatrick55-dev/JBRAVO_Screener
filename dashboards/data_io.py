@@ -43,6 +43,62 @@ def _mtime_iso(path: Path) -> Optional[str]:
     )
 
 
+def _read_health_json() -> Dict[str, Any]:
+    return _read_json_safe(DATA_DIR / "connection_health.json")
+
+
+def _freshness(last_run_utc: Optional[str]) -> Dict[str, Any]:
+    age_seconds: Optional[int] = None
+    level = "gray"
+    if last_run_utc:
+        try:
+            parsed = dt.datetime.fromisoformat(last_run_utc.replace("Z", "+00:00"))
+            delta = dt.datetime.now(dt.timezone.utc) - parsed
+            age_seconds = int(delta.total_seconds())
+            if age_seconds < 2 * 3600:
+                level = "green"
+            elif age_seconds < 12 * 3600:
+                level = "amber"
+            else:
+                level = "gray"
+        except Exception:
+            age_seconds = None
+    return {"age_seconds": age_seconds, "freshness_level": level}
+
+
+def _run_type_hint() -> str:
+    marker = DATA_DIR / "last_premarket_run.json"
+    try:
+        mtime = marker.stat().st_mtime
+    except (FileNotFoundError, OSError):
+        return "nightly"
+    marker_dt = dt.datetime.fromtimestamp(mtime, tz=dt.timezone.utc)
+    age_seconds = (dt.datetime.now(dt.timezone.utc) - marker_dt).total_seconds()
+    return "pre-market" if age_seconds <= 12 * 3600 else "nightly"
+
+
+def _parse_health_from_logs(log_path: Path) -> Dict[str, Any]:
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return {}
+    pattern = re.compile(
+        r"trading_ok=(True|False).*data_ok=(True|False).*trading_status=(\d+).*data_status=(\d+)"
+    )
+    for raw in reversed(tail.splitlines()[-800:]):
+        if "HEALTH" not in raw:
+            continue
+        match = pattern.search(raw)
+        if match:
+            return {
+                "trading_ok": match.group(1) == "True",
+                "data_ok": match.group(2) == "True",
+                "trading_status": int(match.group(3)),
+                "data_status": int(match.group(4)),
+            }
+    return {}
+
+
 def _parse_latest_pipeline_end_rc(log_path: Path) -> Optional[int]:
     try:
         lines = log_path.read_text(encoding="utf-8").splitlines()
@@ -82,7 +138,11 @@ def screener_health() -> Dict[str, Any]:
 
     metrics = _read_json_safe(DATA_DIR / "screener_metrics.json")
     symbols_in = int(metrics.get("symbols_in") or 0)
-    symbols_with_bars = int(metrics.get("symbols_with_bars") or 0)
+    symbols_with_bars = int(
+        metrics.get("symbols_with_bars")
+        or metrics.get("symbols_with_bars_raw")
+        or 0
+    )
     bars_rows_total = int(metrics.get("bars_rows_total") or 0)
     rows_premetrics = int(metrics.get("rows") or 0)
     last_run_utc = metrics.get("last_run_utc")
@@ -90,7 +150,10 @@ def screener_health() -> Dict[str, Any]:
     top_path = DATA_DIR / "top_candidates.csv"
     latest_path = DATA_DIR / "latest_candidates.csv"
     top_df = _read_csv_safe(top_path)
-    rows_final = int(top_df.shape[0]) if not top_df.empty else int(_read_csv_safe(latest_path).shape[0])
+    if not top_df.empty:
+        rows_final = int(top_df.shape[0])
+    else:
+        rows_final = int(_read_csv_safe(latest_path).shape[0])
 
     if not last_run_utc:
         last_run_utc = _mtime_iso(top_path) or _mtime_iso(latest_path)
@@ -98,6 +161,11 @@ def screener_health() -> Dict[str, Any]:
     log_path = LOGS_DIR / "pipeline.log"
     source = _parse_latest_source(log_path)
     pipeline_rc = _parse_latest_pipeline_end_rc(log_path)
+    conn = _read_health_json()
+    if not conn:
+        conn = _parse_health_from_logs(log_path)
+    freshness = _freshness(last_run_utc)
+    run_type = _run_type_hint()
 
     return {
         "symbols_in": symbols_in,
@@ -108,6 +176,12 @@ def screener_health() -> Dict[str, Any]:
         "last_run_utc": last_run_utc,
         "source": source,
         "pipeline_rc": pipeline_rc,
+        "trading_ok": bool(conn.get("trading_ok")),
+        "data_ok": bool(conn.get("data_ok")),
+        "trading_status": conn.get("trading_status"),
+        "data_status": conn.get("data_status"),
+        "freshness": freshness,
+        "run_type": run_type,
     }
 
 
