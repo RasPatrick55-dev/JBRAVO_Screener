@@ -17,10 +17,12 @@ from typing import Any, Optional, Sequence
 from types import SimpleNamespace
 
 import pandas as pd
+import requests
 
 from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
-from scripts.utils.env import load_env
+from scripts.utils.env import load_env, market_data_base_url, trading_base_url
 from utils import write_csv_atomic, atomic_write_bytes
+from utils.env import get_alpaca_creds
 from utils.telemetry import emit_event
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -116,6 +118,94 @@ def _write_json(path: Path | str, payload: Mapping[str, Any]) -> None:
         atomic_write_bytes(target, serialised)
     except Exception:
         LOG.exception("PIPELINE_JSON_WRITE_FAILED path=%s", target)
+
+
+_PROBE_SYMBOLS = ("SPY", "AAPL")
+
+
+def _alpaca_headers() -> dict[str, str]:
+    key, secret, _, _ = get_alpaca_creds()
+    headers: dict[str, str] = {}
+    if key:
+        headers["APCA-API-KEY-ID"] = key.strip()
+    if secret:
+        headers["APCA-API-SECRET-KEY"] = secret.strip()
+    return headers
+
+
+def _probe_trading_endpoint(session: requests.Session, headers: Mapping[str, str]) -> dict[str, Any]:
+    url = f"{trading_base_url().rstrip('/')}/v2/account"
+    if "APCA-API-KEY-ID" not in headers or "APCA-API-SECRET-KEY" not in headers:
+        LOG.warning("CONNECTION_PROBE trading skipped reason=missing_credentials")
+        return {"ok": False, "status": 0}
+    try:
+        response = session.get(url, headers=headers, timeout=10)
+    except Exception as exc:  # pragma: no cover - network failures
+        LOG.warning("CONNECTION_PROBE trading error=%s", exc)
+        return {"ok": False, "status": 0}
+    ok = response.status_code == 200
+    if ok:
+        try:
+            payload = response.json()
+        except Exception:  # pragma: no cover - defensive parse
+            payload = None
+        if isinstance(payload, Mapping):
+            if payload.get("trading_blocked"):
+                ok = False
+    return {"ok": ok, "status": int(response.status_code)}
+
+
+def _probe_data_endpoint(
+    session: requests.Session, headers: Mapping[str, str], feed: str
+) -> dict[str, Any]:
+    url = f"{market_data_base_url().rstrip('/')}/v2/stocks/bars"
+    params = {
+        "symbols": ",".join(_PROBE_SYMBOLS),
+        "timeframe": "1Day",
+        "limit": 1,
+        "feed": feed or "iex",
+    }
+    try:
+        response = session.get(url, headers=headers, params=params, timeout=10)
+    except Exception as exc:  # pragma: no cover - network failures
+        LOG.warning("CONNECTION_PROBE data error=%s", exc)
+        return {"ok": False, "status": 0}
+    ok = response.status_code == 200
+    return {"ok": ok, "status": int(response.status_code)}
+
+
+def _collect_connection_health_snapshot(
+    *, fallback_trading_ok: bool, fallback_data_ok: bool
+) -> dict[str, Any]:
+    feed = (os.getenv("ALPACA_DATA_FEED") or "iex").lower()
+    payload = {
+        "trading_ok": bool(fallback_trading_ok),
+        "data_ok": bool(fallback_data_ok),
+        "trading_status": 200 if fallback_trading_ok else 503,
+        "data_status": 200 if fallback_data_ok else 204,
+        "feed": feed,
+        "timestamp": _now_iso(),
+    }
+    headers = _alpaca_headers()
+    session = requests.Session()
+    try:
+        trading = _probe_trading_endpoint(session, headers)
+        data = _probe_data_endpoint(session, headers, feed)
+    except Exception:  # pragma: no cover - unexpected
+        LOG.exception("CONNECTION_PROBE_FAILED")
+    else:
+        payload.update(
+            {
+                "trading_ok": bool(trading.get("ok")),
+                "trading_status": int(trading.get("status", payload["trading_status"])),
+                "data_ok": bool(data.get("ok")),
+                "data_status": int(data.get("status", payload["data_status"])),
+                "timestamp": _now_iso(),
+            }
+        )
+    finally:
+        session.close()
+    return payload
 
 
 def _parse_summary_line(line: str) -> Optional[SimpleNamespace]:
@@ -1276,10 +1366,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             rank=rank_secs,
             gates=gate_secs,
         )
-        data_ok = bool(candidates_final > 0)
-        trading_ok = rc == 0
-        trading_status = 200 if trading_ok else 503
-        data_status = 200 if data_ok else 204
+        conn_payload = _collect_connection_health_snapshot(
+            fallback_trading_ok=rc == 0,
+            fallback_data_ok=bool(candidates_final > 0),
+        )
+        trading_ok = bool(conn_payload.get("trading_ok"))
+        data_ok = bool(conn_payload.get("data_ok"))
+        trading_status = int(conn_payload.get("trading_status", 0))
+        data_status = int(conn_payload.get("data_status", 0))
         health = SimpleNamespace(
             trading_ok=trading_ok,
             data_ok=data_ok,
@@ -1356,14 +1450,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if error_info:
             status_payload["error"] = dict(error_info)
         _write_status_json(base_dir, status_payload)
-        conn_payload = {
-            "trading_ok": trading_ok,
-            "data_ok": data_ok,
-            "trading_status": int(trading_status),
-            "data_status": int(data_status),
-            "feed": (os.getenv("ALPACA_DATA_FEED") or "").lower(),
-            "timestamp": _now_iso(),
-        }
         _write_json(base_dir / "data" / "connection_health.json", conn_payload)
         logger.info(
             "[INFO] HEALTH trading_ok=%s data_ok=%s stage=end trading_status=%s data_status=%s",
