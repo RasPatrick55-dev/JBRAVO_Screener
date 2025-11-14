@@ -28,6 +28,7 @@ os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 
 from dashboards.screener_health import build_layout as build_screener_health
 from dashboards.screener_health import register_callbacks as register_screener_health
+from dashboards.data_io import screener_health as load_screener_health, screener_table
 from scripts.run_pipeline import write_complete_screener_metrics
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
 
@@ -41,7 +42,6 @@ trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
 trades_log_real_path = os.path.join(BASE_DIR, "data", "trades_log_real.csv")
 open_positions_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
-scored_candidates_path = os.path.join(BASE_DIR, "data", "scored_candidates.csv")
 screener_metrics_path = os.path.join(BASE_DIR, "data", "screener_metrics.json")
 predictions_dir_path = os.path.join(BASE_DIR, "data", "predictions")
 ranker_eval_dir_path = os.path.join(BASE_DIR, "data", "ranker_eval")
@@ -359,42 +359,31 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
 
 
 def load_top_or_latest_candidates(required_columns: Optional[set[str] | list[str]] = None):
-    """Prefer latest_candidates.csv, fallback to top_candidates.csv if needed."""
+    """Prefer post-metrics top_candidates.csv with graceful fallback."""
 
     if required_columns is None:
         req = {"symbol", "score"}
     else:
         req = set(required_columns)
-    req_list = sorted(req)
 
-    latest_df: pd.DataFrame | None = None
-    latest_alert = None
-    if LATEST_CANDIDATES.exists():
-        latest_df, latest_alert = load_csv(
-            str(LATEST_CANDIDATES),
-            required_columns=req_list,
-            alert_prefix="Candidates (latest)",
+    df, updated, source_file = screener_table()
+    if df is None or df.empty:
+        return None, dbc.Alert(
+            "No candidates available yet (top or latest).",
+            color="info",
         )
-        if latest_alert is None and latest_df is not None and not latest_df.empty:
-            work = latest_df.copy()
-            work["__source"] = "latest_candidates.csv"
-            return work, None
 
-    top_df, top_alert = load_csv(
-        str(TOP_CANDIDATES),
-        required_columns=req_list,
-        alert_prefix="Top candidates",
-    )
-    if top_alert is None and top_df is not None and not top_df.empty:
-        work = top_df.copy()
-        work["__source"] = "top_candidates.csv"
-        return work, None
+    missing = [col for col in sorted(req) if col not in df.columns]
+    if missing:
+        return None, dbc.Alert(
+            f"Missing required columns: {missing}",
+            color="danger",
+        )
 
-    if top_alert:
-        return None, top_alert
-    if latest_alert:
-        return None, latest_alert
-    return top_df, None
+    work = df.copy()
+    work["__source"] = source_file
+    work["__updated"] = updated
+    return work, None
 
 
 def load_symbol_perf_df() -> pd.DataFrame | dbc.Alert:
@@ -1286,6 +1275,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
     elif tab == "tab-screener":
         metrics_data: dict = {}
+        health_snapshot = load_screener_health()
         metrics_alert = None
         backfill_banner = None
         metrics_freshness_chip = None
@@ -1334,6 +1324,23 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                         className="mb-3",
                     )
 
+        metrics_data = metrics_data or {}
+        if health_snapshot:
+            for field, source_key in (
+                ("symbols_in", "symbols_in"),
+                ("symbols_with_bars", "symbols_with_bars"),
+                ("bars_rows_total", "bars_rows_total"),
+            ):
+                value = health_snapshot.get(source_key)
+                if value not in (None, ""):
+                    metrics_data[field] = value
+            rows_pre = health_snapshot.get("rows_premetrics")
+            if rows_pre not in (None, ""):
+                metrics_data["rows"] = rows_pre
+            metrics_data["rows_final"] = health_snapshot.get("rows_final")
+            if not metrics_data.get("last_run_utc"):
+                metrics_data["last_run_utc"] = health_snapshot.get("last_run_utc")
+
         execute_metrics: dict = {}
         execute_alert = None
         if os.path.exists(execute_metrics_path):
@@ -1353,20 +1360,32 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     color="danger",
                 )
 
-        df, alert = load_top_or_latest_candidates()
+        candidates_df, candidates_alert = load_top_or_latest_candidates()
         fallback_count = 0
-        if df is not None and not df.empty:
-            source_column = None
-            for column in df.columns:
-                if str(column).strip().lower() == "source":
-                    source_column = column
-                    break
-            if source_column:
-                source_series = df[source_column].astype("string")
-                fallback_count = int(
-                    source_series.str.contains("fallback", case=False, na=False).sum()
-                )
-        scored_df, scored_alert = load_csv(scored_candidates_path)
+        table_updated = None
+        table_source_file = None
+        table_df = None
+        if candidates_df is not None and not candidates_df.empty:
+            table_source_file = (
+                candidates_df["__source"].iloc[0]
+                if "__source" in candidates_df.columns
+                else None
+            )
+            table_updated = (
+                candidates_df["__updated"].iloc[0]
+                if "__updated" in candidates_df.columns
+                else None
+            )
+            work_df = candidates_df.drop(columns=["__source", "__updated"], errors="ignore")
+            for column in ("source", "origin"):
+                if column in work_df.columns:
+                    source_series = work_df[column].astype("string")
+                    fallback_count = int(
+                        source_series.str.contains("fallback", case=False, na=False).sum()
+                    )
+                    if fallback_count:
+                        break
+            table_df = work_df
 
         latest_notice = None
         if os.path.exists(latest_candidates_path):
@@ -1388,7 +1407,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     className="mb-3",
                 )
 
-        alerts = [a for a in (metrics_alert, alert, scored_alert, execute_alert) if a]
+        alerts = [a for a in (metrics_alert, candidates_alert, execute_alert) if a]
 
         def _safe_int(value) -> int:
             try:
@@ -1430,12 +1449,14 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         last_run_display = _format_iso_display(metrics_data.get("last_run_utc"))
 
+        pre_candidates = metrics_data.get("rows") or metrics_data.get("candidates_out")
         health_items = [
             ("Last Run (UTC)", last_run_display),
             ("Symbols In", metrics_data.get("symbols_in")),
             ("Symbols With Bars", metrics_data.get("symbols_with_bars")),
             ("Bars Rows", metrics_data.get("bars_rows_total")),
-            ("Candidates", metrics_data.get("candidates_out")),
+            ("Candidates (pre-metrics)", pre_candidates),
+            ("Candidates (final)", metrics_data.get("rows_final")),
         ]
         health_columns = []
         for idx, (label, value) in enumerate(health_items):
@@ -1618,62 +1639,45 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         top_table_component = dbc.Alert(
-            "No scored candidates available.", color="warning", className="m-2"
+            "No candidates available yet.", color="warning", className="m-2"
         )
-        if scored_df is not None and not scored_df.empty:
-            scored_work = scored_df.copy()
-            scored_work["Score"] = pd.to_numeric(scored_work.get("Score"), errors="coerce")
-            scored_work["symbol"] = scored_work.get("symbol", "").astype(str)
-            scored_work["close"] = pd.to_numeric(scored_work.get("close"), errors="coerce")
-            scored_work["ADV20"] = pd.to_numeric(scored_work.get("ADV20"), errors="coerce")
-            scored_work["ATR14"] = pd.to_numeric(scored_work.get("ATR14"), errors="coerce")
-            scored_work.sort_values("Score", ascending=False, inplace=True)
-            atr_pct = (scored_work["ATR14"] / scored_work["close"]) * 100.0
-            atr_pct = atr_pct.replace([np.inf, -np.inf], np.nan)
-            breakdown_series = None
-            if "score_breakdown" in scored_work.columns:
-                breakdown_series = scored_work["score_breakdown"]
-            elif "score_breakdown_json" in scored_work.columns:
-                breakdown_series = scored_work["score_breakdown_json"]
-            if breakdown_series is None:
-                breakdown_series = pd.Series([None] * len(scored_work))
-            scored_work["Why"] = breakdown_series.fillna("").apply(explain_breakdown)
-            scored_work["ATR%"] = atr_pct
-            table_df = scored_work.loc[
-                :, ["symbol", "Score", "close", "ADV20", "ATR%", "Why"]
-            ].head(15)
-            table_df.rename(
-                columns={"symbol": "Symbol", "close": "Close", "ADV20": "ADV20"}, inplace=True
-            )
-            table_df["Score"] = table_df["Score"].round(3)
-            table_df["Close"] = table_df["Close"].round(2)
-            table_df["ADV20"] = table_df["ADV20"].round(0)
-            table_df["ATR%"] = table_df["ATR%"].round(1)
-            table_df.replace({np.nan: None}, inplace=True)
+        if table_df is not None and not table_df.empty:
+            display_df = table_df.copy()
+            display_df.columns = [str(col) for col in display_df.columns]
             columns = [
-                {"name": "Symbol", "id": "Symbol"},
-                {"name": "Score", "id": "Score"},
-                {"name": "Close", "id": "Close"},
-                {"name": "ADV20", "id": "ADV20"},
-                {"name": "ATR %", "id": "ATR%"},
-                {"name": "Why", "id": "Why"},
+                {"name": col.replace("_", " ").title(), "id": col}
+                for col in display_df.columns
             ]
+            style_data_conditional: list[dict[str, Any]] = []
+            for column in ("source", "origin"):
+                if column in display_df.columns:
+                    style_data_conditional.append(
+                        {
+                            "if": {
+                                "column_id": column,
+                                "filter_query": "{" + column + "} contains 'fallback'",
+                            },
+                            "backgroundColor": "#2b223a",
+                            "color": "#f4d9ff",
+                            "fontWeight": "600",
+                        }
+                    )
             top_table_component = dash_table.DataTable(
                 id="screener-top-table",
-                data=table_df.to_dict("records"),
+                data=display_df.to_dict("records"),
                 columns=columns,
-                page_size=15,
+                page_size=20,
                 sort_action="native",
+                filter_action="native",
                 style_table={"overflowX": "auto"},
                 style_header={"backgroundColor": "#1b1e21", "fontWeight": "600"},
-                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-                style_data_conditional=[
-                    {
-                        "if": {"column_id": "Score"},
-                        "color": "#4DB6AC",
-                        "fontWeight": "600",
-                    }
-                ],
+                style_cell={
+                    "backgroundColor": "#212529",
+                    "color": "#E0E0E0",
+                    "fontSize": "0.9rem",
+                    "textAlign": "left",
+                },
+                style_data_conditional=style_data_conditional,
             )
 
         feature_summary = metrics_data.get("feature_summary") or {}
@@ -1831,6 +1835,39 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         if backfill_banner:
             components.append(backfill_banner)
         components.extend(alerts)
+
+        source_label = str((health_snapshot or {}).get("source") or "unknown")
+        source_color = (
+            "success"
+            if source_label == "screener"
+            else ("warning" if source_label == "fallback" else "secondary")
+        )
+        source_badge = dbc.Badge(
+            f"Source: {source_label}",
+            color=source_color,
+            className="me-2",
+        )
+        pipeline_rc = (health_snapshot or {}).get("pipeline_rc")
+        rc_text = f"rc={pipeline_rc}" if pipeline_rc is not None else "rc=n/a"
+        rc_color = "success" if pipeline_rc == 0 else ("danger" if pipeline_rc else "secondary")
+        rc_badge = dbc.Badge(rc_text, color=rc_color, className="me-2")
+        table_updated_display = (
+            _format_iso_display(table_updated) if table_updated else "unknown"
+        )
+        table_source_note = html.Span(
+            f"Candidates file: {table_source_file or 'unknown'}",
+            className="text-muted me-3",
+        )
+        table_updated_note = html.Span(
+            f"Updated: {table_updated_display}",
+            className="text-muted",
+        )
+        components.append(
+            html.Div(
+                [source_badge, rc_badge, table_source_note, table_updated_note],
+                className="mb-3",
+            )
+        )
 
         metrics_sections = []
         if metrics_data:
@@ -3049,7 +3086,7 @@ def update_screener_table(n):
     source_note = (
         df["__source"].iloc[0] if "__source" in df.columns else "unknown"
     )
-    payload = df.drop(columns=["__source"], errors="ignore")
+    payload = df.drop(columns=["__source", "__updated"], errors="ignore")
     logger.info(
         "Screener table updated successfully with %d records (source=%s).",
         len(payload),
