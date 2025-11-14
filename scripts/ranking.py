@@ -372,6 +372,7 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     trend_52w = pd.Series(0.0, index=latest.index, dtype="float64")
     trend_52w += wk52_f.ge(0.90).fillna(False).astype("float64") * 0.35
     trend_52w += wk52_f.ge(0.96).fillna(False).astype("float64") * 0.15
+    wk52_bonus = wk52_f.ge(0.90).fillna(False).astype("float64") * 0.5
 
     rsi_mask = rsi.astype("float64").gt(50).fillna(False)
     mom_rsi = rsi_mask.astype("float64") * 0.5
@@ -387,6 +388,7 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     rs20_slope = _num("RS20_SLOPE")
     rs_slope_mask = rs20_slope.astype("float64").gt(0).fillna(False)
     mom_rs_slope = rs_slope_mask.astype("float64") * 0.5
+    rs_bonus = rs_slope_mask.astype("float64") * 0.5
 
     rel_vol_mask = rel_vol.astype("float64").ge(rel_vol_min).fillna(False)
     vol_rel = rel_vol_mask.astype("float64") * 0.5
@@ -459,6 +461,8 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
             "risk_atr_penalty": risk_atr_penalty,
             "aroon_cross": aroon_cross,
             "adx_trend": adx_trend,
+            "wk52_bonus": wk52_bonus,
+            "rs_bonus": rs_bonus,
         }
     ).fillna(0.0)
 
@@ -486,6 +490,8 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
         name: category_scores[name] * weights.get(name, 0.0)
         for name in category_scores
     }
+    contributions["wk52_bonus"] = wk52_bonus
+    contributions["rs_bonus"] = rs_bonus
     contributions_df = pd.DataFrame(contributions).fillna(0.0)
     score_series = contributions_df.sum(axis=1).fillna(0.0)
 
@@ -494,6 +500,8 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
         latest[f"{name}_score"] = series.round(4)
     for name, series in contributions.items():
         latest[f"{name}_contribution"] = series.round(4)
+        if name in ("wk52_bonus", "rs_bonus"):
+            latest[name] = series.round(4)
 
     latest["score_breakdown"] = contributions_df.apply(
         lambda row: json.dumps({k: round(float(v), 4) for k, v in row.items()}), axis=1
