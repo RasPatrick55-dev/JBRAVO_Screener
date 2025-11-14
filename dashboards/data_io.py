@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -29,6 +30,28 @@ def _read_csv_safe(path: Path) -> pd.DataFrame:
         return pd.read_csv(path)
     except Exception:
         return pd.DataFrame()
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            return None
+    return None
 
 
 def _safe_csv_rows(path: Path) -> int:
@@ -147,41 +170,54 @@ def screener_health() -> Dict[str, Any]:
     """Return a resilient snapshot for the Screener Health view."""
 
     metrics = _read_json_safe(DATA_DIR / "screener_metrics.json")
-    symbols_in = int(metrics.get("symbols_in") or 0)
-    with_bars_fetch = (
-        metrics.get("symbols_with_bars_fetch")
-        or metrics.get("symbols_with_bars_raw")
-        or metrics.get("symbols_with_bars")
-        or 0
-    )
-    bars_rows_fetch = (
-        metrics.get("bars_rows_total_fetch")
-        or metrics.get("bars_rows_total")
-        or 0
-    )
     top_path = DATA_DIR / "top_candidates.csv"
-    top_rows = _safe_csv_rows(top_path)
-    rows_final = top_rows
-    if rows_final == 0 and not top_path.exists():
-        rows_final = int(metrics.get("rows") or 0)
-    rows_premetrics = rows_final or int(metrics.get("rows") or 0)
-    last_run_utc = metrics.get("last_run_utc") or _mtime_iso(top_path)
-
     log_path = LOGS_DIR / "pipeline.log"
-    source = metrics.get("latest_source") or _parse_latest_source(log_path)
+
+    symbols_in = _coerce_int(metrics.get("symbols_in")) or 0
+    with_bars_fetch = (
+        _coerce_int(metrics.get("symbols_with_bars_fetch"))
+        or _coerce_int(metrics.get("symbols_with_bars_raw"))
+        or _coerce_int(metrics.get("symbols_with_bars"))
+        or 0
+    )
+    with_bars_post = _coerce_int(metrics.get("symbols_with_bars_post"))
+    bars_rows_fetch = (
+        _coerce_int(metrics.get("bars_rows_total_fetch"))
+        or _coerce_int(metrics.get("bars_rows_total"))
+        or 0
+    )
+    bars_rows_post = _coerce_int(metrics.get("bars_rows_total_post"))
+    rows_metric = _coerce_int(metrics.get("rows")) or 0
+    top_rows = _safe_csv_rows(top_path)
+    rows_final = top_rows or rows_metric
+    rows_premetrics = rows_metric or rows_final
+    last_run_utc = metrics.get("last_run_utc") or _mtime_iso(top_path)
+    if not last_run_utc:
+        last_run_utc = metrics.get("last_run")
+
+    source = (
+        metrics.get("latest_source")
+        or metrics.get("source")
+        or _parse_latest_source(log_path)
+    )
     pipeline_rc = _parse_latest_pipeline_end_rc(log_path)
+    if pipeline_rc is None:
+        pipeline_rc = _coerce_int(metrics.get("pipeline_rc") or metrics.get("rc"))
     conn = _read_health_json()
     if not conn:
         conn = _parse_health_from_logs(log_path)
     freshness = _freshness(last_run_utc)
     run_type = _run_type_hint()
+    feed = (conn.get("feed") or os.getenv("ALPACA_DATA_FEED") or "iex").lower()
 
-    return {
+    snapshot = {
         "symbols_in": symbols_in,
-        "symbols_with_bars": int(with_bars_fetch),
-        "bars_rows_total": int(bars_rows_fetch),
+        "symbols_with_bars_fetch": int(with_bars_fetch),
+        "symbols_with_bars_post": int(with_bars_post) if with_bars_post is not None else None,
+        "bars_rows_total_fetch": int(bars_rows_fetch),
+        "bars_rows_total_post": int(bars_rows_post) if bars_rows_post is not None else None,
         "rows_premetrics": int(rows_premetrics),
-        "rows_final": rows_final,
+        "rows_final": int(rows_final),
         "last_run_utc": last_run_utc,
         "source": source,
         "pipeline_rc": pipeline_rc,
@@ -189,9 +225,15 @@ def screener_health() -> Dict[str, Any]:
         "data_ok": bool(conn.get("data_ok")),
         "trading_status": conn.get("trading_status"),
         "data_status": conn.get("data_status"),
+        "feed": feed,
         "freshness": freshness,
         "run_type": run_type,
     }
+    # Legacy aliases for existing callers
+    snapshot["symbols_with_bars"] = snapshot["symbols_with_bars_fetch"]
+    snapshot["bars_rows_total"] = snapshot["bars_rows_total_fetch"]
+    snapshot["rows"] = snapshot["rows_premetrics"]
+    return snapshot
 
 
 def screener_table() -> Tuple[pd.DataFrame, str, str]:
@@ -221,15 +263,52 @@ def screener_table() -> Tuple[pd.DataFrame, str, str]:
     return df, (updated or ""), source_file
 
 
+def metrics_summary_snapshot() -> Dict[str, Any]:
+    """Return the latest metrics summary row from ``data/metrics_summary.csv``."""
+
+    path = DATA_DIR / "metrics_summary.csv"
+    try:
+        df = pd.read_csv(path)
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    if df.empty:
+        return {}
+    row = df.tail(1).to_dict("records")[0]
+    fields = [
+        "profit_factor",
+        "expectancy",
+        "win_rate",
+        "net_pnl",
+        "max_drawdown",
+        "sharpe",
+        "sortino",
+        "last_run_utc",
+    ]
+    return {field: row.get(field) for field in fields}
+
+
 def diagnostics() -> Dict[str, Any]:
     """Return a simple diagnostic payload used in dashboards."""
 
     health = screener_health()
     table_df, updated, source_file = screener_table()
-    return {
+    diagnostics_payload = {
         "health": health,
         "table_rows": int(table_df.shape[0]),
         "table_cols": list(table_df.columns),
         "table_updated": updated,
         "table_source": source_file,
     }
+    diagnostics_payload.update(
+        {
+            "symbols_in": health.get("symbols_in"),
+            "symbols_with_bars_fetch": health.get("symbols_with_bars_fetch"),
+            "bars_rows_total_fetch": health.get("bars_rows_total_fetch"),
+            "rows_final": health.get("rows_final"),
+            "trading_ok": health.get("trading_ok"),
+            "data_ok": health.get("data_ok"),
+        }
+    )
+    return diagnostics_payload

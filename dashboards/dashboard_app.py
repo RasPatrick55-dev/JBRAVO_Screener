@@ -28,7 +28,11 @@ os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 
 from dashboards.screener_health import build_layout as build_screener_health
 from dashboards.screener_health import register_callbacks as register_screener_health
-from dashboards.data_io import screener_health as load_screener_health, screener_table
+from dashboards.data_io import (
+    screener_health as load_screener_health,
+    screener_table,
+    metrics_summary_snapshot,
+)
 from scripts.run_pipeline import write_complete_screener_metrics
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
 
@@ -57,7 +61,6 @@ executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
 historical_candidates_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
 execute_metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
 account_equity_path = os.path.join(BASE_DIR, "data", "account_equity.csv")
-health_connectivity_path = os.path.join(BASE_DIR, "data", "health", "connectivity.json")
 
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
@@ -863,17 +866,32 @@ def health_overview():
     return jsonify({"ok": True, **summary})
 
 
-@server.route("/api/health")
+@app.server.route("/api/health")
 def api_health():
     snapshot = load_screener_health()
-    return jsonify(snapshot)
+    return app.response_class(
+        response=json.dumps(snapshot, default=str),
+        status=200,
+        mimetype="application/json",
+    )
 
 
-@server.route("/api/candidates")
+@app.server.route("/api/candidates")
 def api_candidates():
-    df, updated, source_file = screener_table()
-    records = df.to_dict("records") if not df.empty else []
-    return jsonify({"rows": records, "updated": updated, "source": source_file})
+    candidates_path = Path(BASE_DIR) / "data" / "top_candidates.csv"
+    if candidates_path.exists():
+        try:
+            df = pd.read_csv(candidates_path)
+        except Exception:
+            records_json = "[]"
+        else:
+            records_json = df.to_json(orient="records") if not df.empty else "[]"
+        return app.response_class(
+            response=records_json,
+            status=200,
+            mimetype="application/json",
+        )
+    return app.response_class(response="[]", status=200, mimetype="application/json")
 
 # Layout with Tabs and Modals
 app.layout = dbc.Container(
@@ -1290,6 +1308,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         metrics_data: dict = {}
         health_snapshot = load_screener_health()
         health_data = health_snapshot or {}
+        metrics_summary_row = metrics_summary_snapshot()
         metrics_alert = None
         backfill_banner = None
         metrics_freshness_chip = None
@@ -1339,20 +1358,23 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         metrics_data = metrics_data or {}
         if health_snapshot:
-            for field, source_key in (
-                ("symbols_in", "symbols_in"),
-                ("symbols_with_bars", "symbols_with_bars"),
-                ("bars_rows_total", "bars_rows_total"),
-            ):
-                value = health_snapshot.get(source_key)
-                if value not in (None, ""):
-                    metrics_data[field] = value
-            rows_pre = health_snapshot.get("rows_premetrics")
+            if health_data.get("symbols_in") not in (None, ""):
+                metrics_data["symbols_in"] = health_data.get("symbols_in")
+            bars_fetch = health_data.get("bars_rows_total_fetch")
+            if bars_fetch not in (None, ""):
+                metrics_data["bars_rows_total_fetch"] = bars_fetch
+                metrics_data["bars_rows_total"] = bars_fetch
+            with_bars_fetch = health_data.get("symbols_with_bars_fetch")
+            if with_bars_fetch not in (None, ""):
+                metrics_data["symbols_with_bars_fetch"] = with_bars_fetch
+                metrics_data["symbols_with_bars"] = with_bars_fetch
+            rows_pre = health_data.get("rows_premetrics")
             if rows_pre not in (None, ""):
                 metrics_data["rows"] = rows_pre
-            metrics_data["rows_final"] = health_snapshot.get("rows_final")
-            if not metrics_data.get("last_run_utc"):
-                metrics_data["last_run_utc"] = health_snapshot.get("last_run_utc")
+            if health_data.get("rows_final") not in (None, ""):
+                metrics_data["rows_final"] = health_data.get("rows_final")
+            if not metrics_data.get("last_run_utc") and health_data.get("last_run_utc"):
+                metrics_data["last_run_utc"] = health_data.get("last_run_utc")
 
         run_type_label = health_data.get("run_type") or "nightly"
 
@@ -1481,6 +1503,42 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     return value
             return value
 
+        def _format_kpi_tile_value(value: Any, *, fmt: str = "{:.2f}", prefix: str = "", suffix: str = "") -> str:
+            if value in (None, "", [], {}):
+                return "—"
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return str(value)
+            if math.isnan(numeric):
+                return "—"
+            return f"{prefix}{fmt.format(numeric)}{suffix}"
+
+
+        def _build_metrics_summary_tiles(summary_values: dict[str, Any]) -> dbc.Row:
+            specs = [
+                ("Profit Factor", "profit_factor", "{:.2f}", "", ""),
+                ("Expectancy", "expectancy", "{:.2f}", "$", ""),
+                ("Win-rate", "win_rate", "{:.2f}", "", "%"),
+                ("Net PnL", "net_pnl", "{:,.2f}", "$", ""),
+                ("Max DD", "max_drawdown", "{:,.2f}", "$", ""),
+                ("Sharpe", "sharpe", "{:.2f}", "", ""),
+                ("Sortino", "sortino", "{:.2f}", "", ""),
+            ]
+            columns: list[Any] = []
+            for label, key, fmt_pattern, prefix, suffix in specs:
+                value = summary_values.get(key)
+                rendered = _format_kpi_tile_value(value, fmt=fmt_pattern, prefix=prefix, suffix=suffix)
+                card = dbc.Card(
+                    [
+                        dbc.CardHeader(label),
+                        dbc.CardBody(html.H4(rendered, className="mb-0")),
+                    ],
+                    className="bg-dark text-light h-100",
+                )
+                columns.append(dbc.Col(card, lg=2, md=4, sm=6, className="mb-3"))
+            return dbc.Row(columns, className="g-3 mb-4")
+
         last_run_display = _format_iso_display(metrics_data.get("last_run_utc"))
 
         pre_candidates = (
@@ -1490,34 +1548,62 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             or metrics_data.get("candidates_out")
         )
         final_candidates = health_data.get("rows_final") or metrics_data.get("rows_final")
-        health_items = [
-            ("Last Run (UTC)", last_run_display),
-            ("Symbols In", health_data.get("symbols_in") or metrics_data.get("symbols_in")),
-            ("With Bars (fetch)", health_data.get("symbols_with_bars") or metrics_data.get("symbols_with_bars")),
-            ("Bars Rows (total)", health_data.get("bars_rows_total") or metrics_data.get("bars_rows_total")),
-            ("Candidates (pre-metrics)", pre_candidates),
-            ("Candidates (final)", final_candidates),
-        ]
+        with_bars_value = (
+            health_data.get("symbols_with_bars_fetch")
+            or metrics_data.get("symbols_with_bars_fetch")
+            or metrics_data.get("symbols_with_bars")
+        )
+        with_bars_post = health_data.get("symbols_with_bars_post")
+        bars_rows_value = (
+            health_data.get("bars_rows_total_fetch")
+            or metrics_data.get("bars_rows_total_fetch")
+            or metrics_data.get("bars_rows_total")
+        )
+        bars_rows_post = health_data.get("bars_rows_total_post")
+        final_candidates_value = final_candidates or health_data.get("rows_final")
         health_columns = []
-        for idx, (label, value) in enumerate(health_items):
+        first_card_body = [
+            html.Div("Last Run (UTC)", className="card-metric-label"),
+            html.Div(_format_value(last_run_display), className="card-metric-value"),
+            html.Div(f"Run type: {run_type_label}", className="small text-muted mt-1"),
+        ]
+        first_card = dbc.Card(
+            dbc.CardBody(first_card_body),
+            className="bg-dark text-light h-100",
+        )
+        health_columns.append(dbc.Col(first_card, md=4, sm=6))
+        counter_items = [
+            ("Symbols In", health_data.get("symbols_in") or metrics_data.get("symbols_in"), None),
+            (
+                "With Bars (fetch)",
+                with_bars_value,
+                f"post-filter: {_format_value(with_bars_post)}" if with_bars_post not in (None, "") else None,
+            ),
+            (
+                "Bars Rows (total)",
+                bars_rows_value,
+                f"post-filter: {_format_value(bars_rows_post)}" if bars_rows_post not in (None, "") else None,
+            ),
+            (
+                "Candidates (final)",
+                final_candidates_value,
+                f"pre-metrics: {_format_value(pre_candidates)}" if pre_candidates not in (None, "") else None,
+            ),
+        ]
+        for label, value, sub_text in counter_items:
             card_body = [
                 html.Div(label, className="card-metric-label"),
                 html.Div(_format_value(value), className="card-metric-value"),
             ]
-            if idx == 0:
-                card_body.append(
-                    html.Div(f"Run: {run_type_label}", className="small text-muted mt-1")
-                )
-                inline_chip = _build_freshness_chip()
-                if inline_chip:
-                    card_body.append(html.Div(inline_chip, className="mt-1"))
+            if sub_text:
+                card_body.append(html.Div(sub_text, className="small text-muted mt-1"))
             card = dbc.Card(
                 dbc.CardBody(card_body),
                 className="bg-dark text-light h-100",
             )
-            width = 4 if idx == 0 else 2
-            health_columns.append(dbc.Col(card, md=width, sm=6))
+            health_columns.append(dbc.Col(card, md=2, sm=6))
         health_cards = dbc.Row(health_columns, className="g-3 mb-4")
+        kpi_tiles = _build_metrics_summary_tiles(metrics_summary_row or {})
 
         timings = metrics_data.get("timings", {}) or {}
 
@@ -1849,69 +1935,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="g-3 mb-4",
         )
 
-        connectivity_chip = None
-        snapshot_conn = health_snapshot or {}
-        trading_ok = snapshot_conn.get("trading_ok")
-        data_ok = snapshot_conn.get("data_ok")
-        if trading_ok is not None or data_ok is not None:
-            trading_ok_bool = bool(trading_ok)
-            data_ok_bool = bool(data_ok)
-            status_color = (
-                "success"
-                if trading_ok_bool and data_ok_bool
-                else ("warning" if trading_ok_bool or data_ok_bool else "danger")
-            )
-            trading_status = snapshot_conn.get("trading_status")
-            data_status = snapshot_conn.get("data_status")
-            chip_children = [html.Span("Alpaca Connectivity", className="me-2")]
-            trade_label = f"Trading {'✅' if trading_ok_bool else '❌'}"
-            if trading_status:
-                trade_label = f"{trade_label} ({trading_status})"
-            data_label = f"Data {'✅' if data_ok_bool else '❌'}"
-            if data_status:
-                data_label = f"{data_label} ({data_status})"
-            chip_children.extend([html.Span(trade_label, className="me-2"), html.Span(data_label)])
-            connectivity_chip = dbc.Badge(chip_children, color=status_color, className="me-2")
-        elif os.path.exists(health_connectivity_path):
-            try:
-                with open(health_connectivity_path, "r", encoding="utf-8") as handle:
-                    connectivity_payload = json.load(handle) or {}
-                trading = (
-                    connectivity_payload.get("trading", {})
-                    if isinstance(connectivity_payload, dict)
-                    else {}
-                )
-                data_status = (
-                    connectivity_payload.get("data", {})
-                    if isinstance(connectivity_payload, dict)
-                    else {}
-                )
-                trading_ok_bool = bool(trading.get("ok"))
-                data_ok_bool = bool(data_status.get("ok"))
-                status_color = (
-                    "success"
-                    if trading_ok_bool and data_ok_bool
-                    else ("warning" if trading_ok_bool or data_ok_bool else "danger")
-                )
-                connectivity_chip = dbc.Badge(
-                    [
-                        html.Span("Alpaca Connectivity", className="me-2"),
-                        html.Span(f"Trading {'✅' if trading_ok_bool else '❌'}", className="me-2"),
-                        html.Span(f"Data {'✅' if data_ok_bool else '❌'}"),
-                    ],
-                    color=status_color,
-                    className="me-2",
-                )
-            except Exception:
-                connectivity_chip = None
-
         components = [html.Div(_paper_badge_component(), className="mb-2")]
-        if connectivity_chip:
-            components.append(html.Div(connectivity_chip, className="mb-3"))
         if latest_notice:
             components.append(latest_notice)
-        if metrics_freshness_chip:
-            components.append(html.Div(metrics_freshness_chip, className="mb-3"))
         if backfill_banner:
             components.append(backfill_banner)
         components.extend(alerts)
@@ -1931,6 +1957,47 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         rc_text = f"rc={pipeline_rc}" if pipeline_rc is not None else "rc=n/a"
         rc_color = "success" if pipeline_rc == 0 else ("danger" if pipeline_rc else "secondary")
         rc_badge = dbc.Badge(rc_text, color=rc_color, className="me-2")
+        run_type_badge = dbc.Badge(
+            f"Run: {run_type_label}",
+            color="info",
+            className="me-2",
+        )
+        trading_ok = health_data.get("trading_ok")
+        data_ok = health_data.get("data_ok")
+        alpaca_badge = None
+        if trading_ok is not None or data_ok is not None:
+            trading_ok_bool = bool(trading_ok)
+            data_ok_bool = bool(data_ok)
+            alpaca_color = "success" if trading_ok_bool and data_ok_bool else "danger"
+            trading_status = health_data.get("trading_status")
+            data_status = health_data.get("data_status")
+            feed_label = str(health_data.get("feed") or "").upper()
+            badge_children = [html.Span("Alpaca", className="me-2")]
+            trade_label = f"Trading {'✅' if trading_ok_bool else '❌'}"
+            if trading_status:
+                trade_label = f"{trade_label} ({trading_status})"
+            data_label = f"Data {'✅' if data_ok_bool else '❌'}"
+            if data_status:
+                data_label = f"{data_label} ({data_status})"
+            if feed_label:
+                badge_children.append(html.Span(feed_label, className="me-2 text-uppercase"))
+            badge_children.extend(
+                [html.Span(trade_label, className="me-2"), html.Span(data_label)]
+            )
+            alpaca_badge = dbc.Badge(badge_children, color=alpaca_color, className="me-2")
+        status_badges = [source_badge, rc_badge, run_type_badge]
+        if alpaca_badge:
+            status_badges.append(alpaca_badge)
+        if metrics_freshness_chip:
+            status_badges.append(metrics_freshness_chip)
+        status_badges = [badge for badge in status_badges if badge]
+        if status_badges:
+            components.append(
+                html.Div(
+                    status_badges,
+                    className="mb-3 d-flex flex-wrap align-items-center gap-2",
+                )
+            )
         table_updated_display = (
             _format_iso_display(table_updated) if table_updated else "unknown"
         )
@@ -1944,14 +2011,15 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
         components.append(
             html.Div(
-                [source_badge, rc_badge, table_source_note, table_updated_note],
-                className="mb-3",
+                [table_source_note, table_updated_note],
+                className="mb-3 text-muted small d-flex flex-wrap gap-3",
             )
         )
 
-        metrics_sections = []
+        metrics_sections: list[Any] = []
         if health_data or metrics_data:
             metrics_sections.append(health_cards)
+        metrics_sections.append(kpi_tiles)
         if execution_card is not None:
             metrics_sections.append(
                 dbc.Row([dbc.Col(execution_card, md=4, sm=6)], className="g-3 mb-4")

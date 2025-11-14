@@ -1,18 +1,10 @@
-import importlib
-import json
-import importlib
 import json
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-
-def _reload_data_io(monkeypatch: pytest.MonkeyPatch, base_dir: Path):
-    monkeypatch.setenv("JBRAVO_HOME", str(base_dir))
-    import dashboards.data_io as data_io  # local import for reload
-
-    return importlib.reload(data_io)
+from tests._data_io_helpers import reload_data_io
 
 
 def test_screener_health_prefers_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -48,10 +40,12 @@ def test_screener_health_prefers_artifacts(tmp_path: Path, monkeypatch: pytest.M
 
     (logs_dir / "pipeline.log").write_text("2024-01-01 pipeline - [INFO] PIPELINE_END rc=0\n")
 
-    data_io = _reload_data_io(monkeypatch, tmp_path)
+    data_io = reload_data_io(monkeypatch, tmp_path)
     snapshot = data_io.screener_health()
 
     assert snapshot["symbols_in"] == 25
+    assert snapshot["symbols_with_bars_fetch"] == 20
+    assert snapshot["bars_rows_total_fetch"] == 400
     assert snapshot["symbols_with_bars"] == 20
     assert snapshot["bars_rows_total"] == 400
     assert snapshot["rows_final"] == 3
@@ -88,7 +82,7 @@ def test_screener_health_fallbacks_when_files_missing(tmp_path: Path, monkeypatc
     ]
     (logs_dir / "pipeline.log").write_text("\n".join(log_lines))
 
-    data_io = _reload_data_io(monkeypatch, tmp_path)
+    data_io = reload_data_io(monkeypatch, tmp_path)
     snapshot = data_io.screener_health()
 
     assert snapshot["rows_final"] == 2
@@ -96,4 +90,4 @@ def test_screener_health_fallbacks_when_files_missing(tmp_path: Path, monkeypatc
     assert snapshot["pipeline_rc"] == 2
     assert snapshot["trading_ok"] is False
     assert snapshot["data_ok"] is False
-    assert snapshot["symbols_with_bars"] == 9
+    assert snapshot["symbols_with_bars_fetch"] == 9
