@@ -36,7 +36,8 @@ def test_write_complete_screener_metrics_backfills_from_log(tmp_path):
 
     assert result["symbols_in"] == 25
     assert result["symbols_with_bars"] == 20
-    assert result["rows"] == 9
+    assert result["symbols_with_bars_raw"] == 20
+    assert result["rows"] == 2
     assert result["bars_rows_total"] == 450
     assert result["last_run_utc"] == "2024-05-20T12:00:00Z"
 

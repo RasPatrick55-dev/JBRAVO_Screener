@@ -1295,7 +1295,6 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             )
 
         if metrics_data:
-            metrics_freshness_chip = _freshness_badge(screener_metrics_path)
 
             def _needs_backfill(payload: dict[str, Any]) -> bool:
                 for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "candidates_out"):
@@ -1340,6 +1339,27 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             metrics_data["rows_final"] = health_snapshot.get("rows_final")
             if not metrics_data.get("last_run_utc"):
                 metrics_data["last_run_utc"] = health_snapshot.get("last_run_utc")
+
+        run_type_label = (health_snapshot or {}).get("run_type") or "nightly"
+
+        def _build_freshness_chip() -> Optional[dbc.Badge]:
+            freshness_info = (health_snapshot or {}).get("freshness") or {}
+            level = freshness_info.get("freshness_level")
+            age_seconds = freshness_info.get("age_seconds")
+            if not level:
+                return None
+            color_map = {"green": "success", "amber": "warning", "gray": "secondary"}
+            if isinstance(age_seconds, (int, float)) and age_seconds >= 0:
+                if age_seconds < 3600:
+                    label = f"Freshness: {int(age_seconds // 60)}m ago"
+                else:
+                    hours = age_seconds / 3600
+                    label = f"Freshness: {hours:.1f}h ago"
+            else:
+                label = "Freshness: unknown"
+            return dbc.Badge(label, color=color_map.get(level, "secondary"), className="badge-small")
+
+        metrics_freshness_chip = _build_freshness_chip()
 
         execute_metrics: dict = {}
         execute_alert = None
@@ -1449,24 +1469,35 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         last_run_display = _format_iso_display(metrics_data.get("last_run_utc"))
 
-        pre_candidates = metrics_data.get("rows") or metrics_data.get("candidates_out")
+        pre_candidates = (
+            (health_snapshot or {}).get("rows_premetrics")
+            or metrics_data.get("rows")
+            or metrics_data.get("candidates_out")
+        )
+        final_candidates = (health_snapshot or {}).get("rows_final") or metrics_data.get("rows_final")
         health_items = [
             ("Last Run (UTC)", last_run_display),
             ("Symbols In", metrics_data.get("symbols_in")),
-            ("Symbols With Bars", metrics_data.get("symbols_with_bars")),
+            ("With Bars (raw)", metrics_data.get("symbols_with_bars")),
             ("Bars Rows", metrics_data.get("bars_rows_total")),
             ("Candidates (pre-metrics)", pre_candidates),
-            ("Candidates (final)", metrics_data.get("rows_final")),
+            ("Candidates (final)", final_candidates),
         ]
         health_columns = []
         for idx, (label, value) in enumerate(health_items):
+            card_body = [
+                html.Div(label, className="card-metric-label"),
+                html.Div(_format_value(value), className="card-metric-value"),
+            ]
+            if idx == 0:
+                card_body.append(
+                    html.Div(f"Run: {run_type_label}", className="small text-muted mt-1")
+                )
+                inline_chip = _build_freshness_chip()
+                if inline_chip:
+                    card_body.append(html.Div(inline_chip, className="mt-1"))
             card = dbc.Card(
-                dbc.CardBody(
-                    [
-                        html.Div(label, className="card-metric-label"),
-                        html.Div(_format_value(value), className="card-metric-value"),
-                    ]
-                ),
+                dbc.CardBody(card_body),
                 className="bg-dark text-light h-100",
             )
             width = 4 if idx == 0 else 2
@@ -1804,20 +1835,54 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         connectivity_chip = None
-        if os.path.exists(health_connectivity_path):
+        snapshot_conn = health_snapshot or {}
+        trading_ok = snapshot_conn.get("trading_ok")
+        data_ok = snapshot_conn.get("data_ok")
+        if trading_ok is not None or data_ok is not None:
+            trading_ok_bool = bool(trading_ok)
+            data_ok_bool = bool(data_ok)
+            status_color = (
+                "success"
+                if trading_ok_bool and data_ok_bool
+                else ("warning" if trading_ok_bool or data_ok_bool else "danger")
+            )
+            trading_status = snapshot_conn.get("trading_status")
+            data_status = snapshot_conn.get("data_status")
+            chip_children = [html.Span("Alpaca Connectivity", className="me-2")]
+            trade_label = f"Trading {'✅' if trading_ok_bool else '❌'}"
+            if trading_status:
+                trade_label = f"{trade_label} ({trading_status})"
+            data_label = f"Data {'✅' if data_ok_bool else '❌'}"
+            if data_status:
+                data_label = f"{data_label} ({data_status})"
+            chip_children.extend([html.Span(trade_label, className="me-2"), html.Span(data_label)])
+            connectivity_chip = dbc.Badge(chip_children, color=status_color, className="me-2")
+        elif os.path.exists(health_connectivity_path):
             try:
                 with open(health_connectivity_path, "r", encoding="utf-8") as handle:
                     connectivity_payload = json.load(handle) or {}
-                trading = connectivity_payload.get("trading", {}) if isinstance(connectivity_payload, dict) else {}
-                data_status = connectivity_payload.get("data", {}) if isinstance(connectivity_payload, dict) else {}
-                trading_ok = bool(trading.get("ok"))
-                data_ok = bool(data_status.get("ok"))
-                status_color = "success" if trading_ok and data_ok else ("warning" if trading_ok or data_ok else "danger")
+                trading = (
+                    connectivity_payload.get("trading", {})
+                    if isinstance(connectivity_payload, dict)
+                    else {}
+                )
+                data_status = (
+                    connectivity_payload.get("data", {})
+                    if isinstance(connectivity_payload, dict)
+                    else {}
+                )
+                trading_ok_bool = bool(trading.get("ok"))
+                data_ok_bool = bool(data_status.get("ok"))
+                status_color = (
+                    "success"
+                    if trading_ok_bool and data_ok_bool
+                    else ("warning" if trading_ok_bool or data_ok_bool else "danger")
+                )
                 connectivity_chip = dbc.Badge(
                     [
                         html.Span("Alpaca Connectivity", className="me-2"),
-                        html.Span(f"Trading {'✅' if trading_ok else '❌'}", className="me-2"),
-                        html.Span(f"Data {'✅' if data_ok else '❌'}"),
+                        html.Span(f"Trading {'✅' if trading_ok_bool else '❌'}", className="me-2"),
+                        html.Span(f"Data {'✅' if data_ok_bool else '❌'}"),
                     ],
                     color=status_color,
                     className="me-2",
