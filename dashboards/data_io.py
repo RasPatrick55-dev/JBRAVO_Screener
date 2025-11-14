@@ -15,6 +15,7 @@ BASE_DIR = Path(
 ).expanduser()
 DATA_DIR = BASE_DIR / "data"
 LOGS_DIR = BASE_DIR / "logs"
+REPORTS_DIR = BASE_DIR / "reports"
 
 
 def _read_json_safe(path: Path) -> Dict[str, Any]:
@@ -80,6 +81,71 @@ def _read_health_json() -> Dict[str, Any]:
     return _read_json_safe(DATA_DIR / "connection_health.json")
 
 
+def _health_history_path() -> Path:
+    return REPORTS_DIR / "health_history.json"
+
+
+def _load_health_history() -> list[dict[str, Any]]:
+    path = _health_history_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return []
+    if isinstance(data, list):
+        return [entry for entry in data if isinstance(entry, dict)]
+    return []
+
+
+def _update_coverage_history(snapshot: Dict[str, Any]) -> Dict[str, Optional[int]]:
+    history = _load_health_history()
+    latest_entry = history[-1] if history else None
+
+    coverage_value = _coerce_int(snapshot.get("symbols_with_bars_fetch"))
+    timestamp = snapshot.get("last_run_utc")
+    if not timestamp:
+        timestamp = _mtime_iso(DATA_DIR / "top_candidates.csv")
+    if not timestamp:
+        timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+
+    if latest_entry and latest_entry.get("timestamp") == timestamp:
+        latest_cov = latest_entry.get("symbols_with_bars_fetch")
+        if latest_cov == coverage_value:
+            return {"coverage_drift": latest_entry.get("coverage_drift")}
+
+    previous_value: Optional[int] = None
+    if latest_entry is not None:
+        prev_cov = latest_entry.get("symbols_with_bars_fetch")
+        if isinstance(prev_cov, int):
+            previous_value = prev_cov
+
+    drift: Optional[int] = None
+    if coverage_value is not None and previous_value is not None:
+        drift = coverage_value - previous_value
+
+    entry = {
+        "timestamp": timestamp,
+        "symbols_with_bars_fetch": coverage_value,
+        "coverage_drift": drift,
+    }
+    history.append(entry)
+    history = history[-7:]
+
+    path = _health_history_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return {"coverage_drift": drift}
+
+
 def _freshness(last_run_utc: Optional[str]) -> Dict[str, Any]:
     age_seconds: Optional[int] = None
     level = "gray"
@@ -108,28 +174,6 @@ def _run_type_hint() -> str:
     marker_dt = dt.datetime.fromtimestamp(mtime, tz=dt.timezone.utc)
     age_seconds = (dt.datetime.now(dt.timezone.utc) - marker_dt).total_seconds()
     return "pre-market" if age_seconds <= 12 * 3600 else "nightly"
-
-
-def _parse_health_from_logs(log_path: Path) -> Dict[str, Any]:
-    try:
-        tail = log_path.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return {}
-    pattern = re.compile(
-        r"trading_ok=(True|False).*data_ok=(True|False).*trading_status=(\d+).*data_status=(\d+)"
-    )
-    for raw in reversed(tail.splitlines()[-800:]):
-        if "HEALTH" not in raw:
-            continue
-        match = pattern.search(raw)
-        if match:
-            return {
-                "trading_ok": match.group(1) == "True",
-                "data_ok": match.group(2) == "True",
-                "trading_status": int(match.group(3)),
-                "data_status": int(match.group(4)),
-            }
-    return {}
 
 
 def _parse_latest_pipeline_end_rc(log_path: Path) -> Optional[int]:
@@ -188,9 +232,12 @@ def screener_health() -> Dict[str, Any]:
     )
     bars_rows_post = _coerce_int(metrics.get("bars_rows_total_post"))
     rows_metric = _coerce_int(metrics.get("rows")) or 0
+    rows_premetrics_metric = _coerce_int(metrics.get("rows_premetrics"))
     top_rows = _safe_csv_rows(top_path)
-    rows_final = top_rows or rows_metric
-    rows_premetrics = rows_metric or rows_final
+    rows_final = top_rows or rows_metric or (rows_premetrics_metric or 0)
+    rows_premetrics = rows_premetrics_metric or rows_metric or rows_final
+    if rows_premetrics < rows_final:
+        rows_premetrics = rows_final
     last_run_utc = metrics.get("last_run_utc") or _mtime_iso(top_path)
     if not last_run_utc:
         last_run_utc = metrics.get("last_run")
@@ -204,11 +251,13 @@ def screener_health() -> Dict[str, Any]:
     if pipeline_rc is None:
         pipeline_rc = _coerce_int(metrics.get("pipeline_rc") or metrics.get("rc"))
     conn = _read_health_json()
-    if not conn:
-        conn = _parse_health_from_logs(log_path)
     freshness = _freshness(last_run_utc)
     run_type = _run_type_hint()
     feed = (conn.get("feed") or os.getenv("ALPACA_DATA_FEED") or "iex").lower()
+    trading_ok_raw = conn.get("trading_ok")
+    data_ok_raw = conn.get("data_ok")
+    trading_ok: Optional[bool] = None if trading_ok_raw is None else bool(trading_ok_raw)
+    data_ok: Optional[bool] = None if data_ok_raw is None else bool(data_ok_raw)
 
     snapshot = {
         "symbols_in": symbols_in,
@@ -221,8 +270,8 @@ def screener_health() -> Dict[str, Any]:
         "last_run_utc": last_run_utc,
         "source": source,
         "pipeline_rc": pipeline_rc,
-        "trading_ok": bool(conn.get("trading_ok")),
-        "data_ok": bool(conn.get("data_ok")),
+        "trading_ok": trading_ok,
+        "data_ok": data_ok,
         "trading_status": conn.get("trading_status"),
         "data_status": conn.get("data_status"),
         "feed": feed,
@@ -233,6 +282,7 @@ def screener_health() -> Dict[str, Any]:
     snapshot["symbols_with_bars"] = snapshot["symbols_with_bars_fetch"]
     snapshot["bars_rows_total"] = snapshot["bars_rows_total_fetch"]
     snapshot["rows"] = snapshot["rows_premetrics"]
+    snapshot.update(_update_coverage_history(snapshot))
     return snapshot
 
 
@@ -312,3 +362,9 @@ def diagnostics() -> Dict[str, Any]:
         }
     )
     return diagnostics_payload
+
+
+def health_payload_for_api() -> Dict[str, Any]:
+    """Return the canonical health payload used by ``/api/health``."""
+
+    return screener_health()
