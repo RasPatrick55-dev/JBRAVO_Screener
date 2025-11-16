@@ -222,8 +222,9 @@ def _format_probe_timestamp(raw: Any) -> str:
 
 def _status_row(label: str, payload: Mapping[str, Any]) -> html.Div:
     info = payload if isinstance(payload, Mapping) else {}
-    ok = bool(info.get("ok"))
-    icon = "✅" if ok else "❌"
+    ok_raw = info.get("ok") if isinstance(info, Mapping) else None
+    failing = ok_raw is False
+    icon = "❌" if failing else "✅"
     status = info.get("status")
     status_text = "n/a" if status in (None, "") else str(status)
     message = str(info.get("message") or "").strip()
@@ -237,7 +238,7 @@ def _status_row(label: str, payload: Mapping[str, Any]) -> html.Div:
                 message or "(no details)",
                 style={
                     "fontSize": "12px",
-                    "color": "#bfc3d9" if ok else "#ffd7d5",
+                    "color": "#bfc3d9" if not failing else "#ffd7d5",
                     "whiteSpace": "pre-wrap",
                     "wordBreak": "break-word",
                 },
@@ -274,10 +275,10 @@ def _health_elements(health: Mapping[str, Any] | None) -> tuple[html.Div, html.D
 
     banner = None
     issues: list[str] = []
-    if not trading.get("ok", False):
+    if trading.get("ok") is False:
         trading_msg = str(trading.get("message") or "no response").strip()
         issues.append(f"Trading ({trading.get('status', 'n/a')}): {trading_msg}")
-    if not data.get("ok", False):
+    if data.get("ok") is False:
         data_msg = str(data.get("message") or "no response").strip()
         issues.append(f"Data ({data.get('status', 'n/a')}): {data_msg}")
 
