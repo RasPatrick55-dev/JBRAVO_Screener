@@ -106,7 +106,7 @@ def _resolve_repo_root() -> pathlib.Path:
 REPO_ROOT = _resolve_repo_root()
 DATA_DIR = REPO_ROOT / "data"
 LOG_DIR = REPO_ROOT / "logs"
-HEALTH_JSON = DATA_DIR / "health" / "connectivity.json"
+CONNECTION_HEALTH_JSON = DATA_DIR / "connection_health.json"
 
 METRICS_JSON = DATA_DIR / "screener_metrics.json"
 TOP_CSV = DATA_DIR / "top_candidates.csv"
@@ -663,6 +663,7 @@ def build_layout():
     return html.Div(
         [
             dcc.Interval(id="sh-interval", interval=60*1000, n_intervals=0),  # auto-refresh each 60s
+            dcc.Interval(id="health-refresh", interval=60_000, n_intervals=0),
             dcc.Store(id="sh-metrics-store"),
             dcc.Store(id="sh-top-store"),
             dcc.Store(id="sh-hist-store"),
@@ -812,7 +813,6 @@ def register_callbacks(app):
         Output("sh-top-store","data"),
         Output("sh-hist-store","data"),
         Output("sh-eval-store","data"),
-        Output("sh-health-store","data"),
         Output("sh-summary-store","data"),
         Output("sh-premarket-store","data"),
         Input("sh-interval","n_intervals")
@@ -886,7 +886,6 @@ def register_callbacks(app):
 
         hist = _safe_csv(HIST_CSV)
         ev = _safe_json(RANKER_EVAL_LATEST)
-        health = _safe_json(HEALTH_JSON)
         summary_df = _safe_csv(METRICS_SUMMARY_CSV, nrows=1)
         summary = summary_df.iloc[0].to_dict() if not summary_df.empty else {}
         premarket = _safe_json(PREMARKET_JSON)
@@ -896,10 +895,19 @@ def register_callbacks(app):
             (top.to_dict("records") if not top.empty else []),
             (hist.to_dict("records") if not hist.empty else []),
             ev,
-            health,
             summary,
             premarket,
         )
+
+    @app.callback(
+        Output("sh-health-store", "data"),
+        Input("health-refresh", "n_intervals"),
+    )
+    def _refresh_connection_health(_n):
+        payload = _safe_json(CONNECTION_HEALTH_JSON)
+        if payload:
+            return payload
+        return {"trading_ok": None, "data_ok": None}
 
     @app.callback(
         Output("sh-health-banner","children"),
