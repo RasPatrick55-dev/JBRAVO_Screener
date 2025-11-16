@@ -29,7 +29,6 @@ os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 from dashboards.screener_health import build_layout as build_screener_health
 from dashboards.screener_health import register_callbacks as register_screener_health
 from dashboards.data_io import (
-    health_payload_for_api,
     screener_health as load_screener_health,
     screener_table,
     metrics_summary_snapshot,
@@ -881,31 +880,30 @@ def health_overview():
 
 @app.server.route("/api/health")
 def api_health():
-    snapshot = health_payload_for_api()
-    response_class = app.server.response_class
-    return response_class(
-        response=json.dumps(snapshot, default=str),
-        status=200,
-        mimetype="application/json",
-    )
+    payload = load_screener_health()
+    return jsonify(payload)
 
 
 @app.server.route("/api/candidates")
 def api_candidates():
     candidates_path = Path(BASE_DIR) / "data" / "top_candidates.csv"
-    if candidates_path.exists():
-        try:
-            df = pd.read_csv(candidates_path)
-        except Exception:
-            records_json = "[]"
-        else:
-            records_json = df.to_json(orient="records") if not df.empty else "[]"
-        return app.response_class(
-            response=records_json,
-            status=200,
-            mimetype="application/json",
+    if not candidates_path.exists():
+        return jsonify({"columns": [], "rows": [], "rows_final": 0})
+    try:
+        df = pd.read_csv(candidates_path)
+    except Exception as exc:  # pragma: no cover - defensive read
+        return (
+            jsonify({"columns": [], "rows": [], "rows_final": 0, "error": str(exc)}),
+            500,
         )
-    return app.response_class(response="[]", status=200, mimetype="application/json")
+    rows_final = int(df.shape[0])
+    return jsonify(
+        {
+            "columns": [str(col) for col in df.columns],
+            "rows": df.to_dict(orient="records"),
+            "rows_final": rows_final,
+        }
+    )
 
 # Layout with Tabs and Modals
 app.layout = dbc.Container(

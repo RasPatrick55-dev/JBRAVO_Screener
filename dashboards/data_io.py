@@ -4,7 +4,6 @@ import datetime as dt
 import json
 import math
 import os
-import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -14,7 +13,6 @@ BASE_DIR = Path(
     os.environ.get("JBRAVO_HOME", Path(__file__).resolve().parents[1])
 ).expanduser()
 DATA_DIR = BASE_DIR / "data"
-LOGS_DIR = BASE_DIR / "logs"
 REPORTS_DIR = BASE_DIR / "reports"
 
 
@@ -55,14 +53,55 @@ def _coerce_int(value: Any) -> Optional[int]:
     return None
 
 
-def _safe_csv_rows(path: Path) -> int:
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return None
+        if text in {"1", "true", "yes", "y", "ok", "up", "healthy"}:
+            return True
+        if text in {"0", "false", "no", "n", "fail", "down", "bad"}:
+            return False
+    return None
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _count_csv_rows(path: Path) -> int:
     try:
-        if not path.exists():
-            return 0
-        df = pd.read_csv(path)
+        with path.open("r", encoding="utf-8") as handle:
+            first = next(handle, None)
+            if first is None:
+                return 0
+            return max(0, sum(1 for _ in handle))
+    except FileNotFoundError:
+        return 0
     except Exception:
         return 0
-    return int(df.shape[0])
 
 
 def _mtime_iso(path: Path) -> Optional[str]:
@@ -75,10 +114,6 @@ def _mtime_iso(path: Path) -> Optional[str]:
         .replace(tzinfo=dt.timezone.utc)
         .isoformat()
     )
-
-
-def _read_health_json() -> Dict[str, Any]:
-    return _read_json_safe(DATA_DIR / "connection_health.json")
 
 
 def _health_history_path() -> Path:
@@ -176,112 +211,135 @@ def _run_type_hint() -> str:
     return "pre-market" if age_seconds <= 12 * 3600 else "nightly"
 
 
-def _parse_latest_pipeline_end_rc(log_path: Path) -> Optional[int]:
-    try:
-        lines = log_path.read_text(encoding="utf-8").splitlines()
-    except Exception:
+def load_connection_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
+    base = Path(base_dir) if base_dir else DATA_DIR
+    primary = base / "connection_health.json"
+    fallback = base / "connectivity.json"
+
+    payload = _read_json_safe(primary)
+    if not payload:
+        payload = _read_json_safe(fallback)
+
+    timestamp = payload.get("timestamp") or payload.get("last_run_utc") or payload.get("last_run")
+    if timestamp is not None:
+        timestamp = str(timestamp)
+
+    normalized = {
+        "trading_ok": _coerce_bool(payload.get("trading_ok")),
+        "trading_status": _coerce_int(payload.get("trading_status")),
+        "data_ok": _coerce_bool(payload.get("data_ok")),
+        "data_status": _coerce_int(payload.get("data_status")),
+        "feed": _normalize_feed(payload.get("feed")),
+        "timestamp": timestamp,
+        "buying_power": _coerce_float(payload.get("buying_power")),
+    }
+
+    for key in (
+        "trading_ok",
+        "trading_status",
+        "data_ok",
+        "data_status",
+        "feed",
+        "timestamp",
+        "buying_power",
+    ):
+        normalized.setdefault(key, None)
+
+    return normalized
+
+
+def load_screener_metrics(base_dir: Optional[Path] = None) -> Dict[str, Any]:
+    base = Path(base_dir) if base_dir else DATA_DIR
+    metrics_path = base / "screener_metrics.json"
+    payload = _read_json_safe(metrics_path)
+
+    symbols_with_bars_fetch = _coerce_int(
+        payload.get("symbols_with_bars_fetch")
+    ) or _coerce_int(payload.get("symbols_with_bars"))
+    bars_rows_total_fetch = _coerce_int(
+        payload.get("bars_rows_total_fetch")
+    ) or _coerce_int(payload.get("bars_rows_total"))
+
+    rows_final = _coerce_int(payload.get("rows_final"))
+    if rows_final is None:
+        rows_final = _count_csv_rows(base / "top_candidates.csv")
+    else:
+        rows_final = max(0, rows_final)
+
+    latest_source = payload.get("latest_source") or payload.get("source")
+
+    normalized: Dict[str, Any] = {
+        "last_run_utc": payload.get("last_run_utc") or payload.get("last_run"),
+        "symbols_in": _coerce_int(payload.get("symbols_in")),
+        "symbols_with_bars_fetch": symbols_with_bars_fetch,
+        "symbols_with_bars_post": _coerce_int(payload.get("symbols_with_bars_post")),
+        "bars_rows_total_fetch": bars_rows_total_fetch,
+        "bars_rows_total_post": _coerce_int(payload.get("bars_rows_total_post")),
+        "rows_premetrics": _coerce_int(payload.get("rows_premetrics"))
+        or _coerce_int(payload.get("rows")),
+        "rows_final": rows_final,
+        "latest_source": latest_source,
+        "pipeline_rc": _coerce_int(payload.get("pipeline_rc") or payload.get("rc")),
+    }
+
+    return normalized
+
+
+def _normalize_feed(value: Any) -> Optional[str]:
+    if not value:
         return None
-    for line in reversed(lines[-400:]):
-        if "PIPELINE_END" not in line:
-            continue
-        match = re.search(r"PIPELINE_END rc=(\d+)", line)
-        if match:
-            return int(match.group(1))
-        break
+    text = str(value).strip().lower()
+    if text in {"iex", "sip"}:
+        return text
     return None
 
 
-def _parse_latest_source(log_path: Path) -> str:
-    """Return 'screener', 'fallback', or 'unknown' based on log hints."""
-
-    try:
-        lines = log_path.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return "unknown"
-
-    for line in reversed(lines[-800:]):
-        if "PIPELINE_SUMMARY" in line and "source=" in line:
-            match = re.search(r"source=([a-zA-Z0-9_]+)", line)
-            if match:
-                return match.group(1)
-    for line in reversed(lines[-800:]):
-        if "FALLBACK_CHECK" in line:
-            return "fallback"
-    return "screener"
-
-
-def screener_health() -> Dict[str, Any]:
+def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     """Return a resilient snapshot for the Screener Health view."""
 
-    metrics = _read_json_safe(DATA_DIR / "screener_metrics.json")
-    top_path = DATA_DIR / "top_candidates.csv"
-    log_path = LOGS_DIR / "pipeline.log"
+    base = Path(base_dir) if base_dir else DATA_DIR
+    metrics = load_screener_metrics(base)
+    connection = load_connection_health(base)
 
-    symbols_in = _coerce_int(metrics.get("symbols_in")) or 0
-    with_bars_fetch = (
-        _coerce_int(metrics.get("symbols_with_bars_fetch"))
-        or _coerce_int(metrics.get("symbols_with_bars_raw"))
-        or _coerce_int(metrics.get("symbols_with_bars"))
-        or 0
-    )
-    with_bars_post = _coerce_int(metrics.get("symbols_with_bars_post"))
-    bars_rows_fetch = (
-        _coerce_int(metrics.get("bars_rows_total_fetch"))
-        or _coerce_int(metrics.get("bars_rows_total"))
-        or 0
-    )
-    bars_rows_post = _coerce_int(metrics.get("bars_rows_total_post"))
-    rows_metric = _coerce_int(metrics.get("rows")) or 0
-    rows_premetrics_metric = _coerce_int(metrics.get("rows_premetrics"))
-    top_rows = _safe_csv_rows(top_path)
-    rows_final = top_rows or rows_metric or (rows_premetrics_metric or 0)
-    rows_premetrics = rows_premetrics_metric or rows_metric or rows_final
+    # Prefer artifact timestamps; fall back to file mtime for awareness
+    last_run_utc = metrics.get("last_run_utc") or _mtime_iso(base / "top_candidates.csv")
+
+    feed = connection.get("feed") or _normalize_feed(os.getenv("ALPACA_DATA_FEED"))
+
+    rows_premetrics = metrics.get("rows_premetrics") or metrics.get("rows_final")
+    if rows_premetrics is None:
+        rows_premetrics = 0
+    rows_final = metrics.get("rows_final") or 0
     if rows_premetrics < rows_final:
         rows_premetrics = rows_final
-    last_run_utc = metrics.get("last_run_utc") or _mtime_iso(top_path)
-    if not last_run_utc:
-        last_run_utc = metrics.get("last_run")
 
-    source = (
-        metrics.get("latest_source")
-        or metrics.get("source")
-        or _parse_latest_source(log_path)
-    )
-    pipeline_rc = _parse_latest_pipeline_end_rc(log_path)
-    if pipeline_rc is None:
-        pipeline_rc = _coerce_int(metrics.get("pipeline_rc") or metrics.get("rc"))
-    conn = _read_health_json()
-    freshness = _freshness(last_run_utc)
-    run_type = _run_type_hint()
-    feed = (conn.get("feed") or os.getenv("ALPACA_DATA_FEED") or "iex").lower()
-    trading_ok_raw = conn.get("trading_ok")
-    data_ok_raw = conn.get("data_ok")
-    trading_ok: Optional[bool] = None if trading_ok_raw is None else bool(trading_ok_raw)
-    data_ok: Optional[bool] = None if data_ok_raw is None else bool(data_ok_raw)
-
-    snapshot = {
-        "symbols_in": symbols_in,
-        "symbols_with_bars_fetch": int(with_bars_fetch),
-        "symbols_with_bars_post": int(with_bars_post) if with_bars_post is not None else None,
-        "bars_rows_total_fetch": int(bars_rows_fetch),
-        "bars_rows_total_post": int(bars_rows_post) if bars_rows_post is not None else None,
-        "rows_premetrics": int(rows_premetrics),
-        "rows_final": int(rows_final),
+    snapshot: Dict[str, Any] = {
         "last_run_utc": last_run_utc,
-        "source": source,
-        "pipeline_rc": pipeline_rc,
-        "trading_ok": trading_ok,
-        "data_ok": data_ok,
-        "trading_status": conn.get("trading_status"),
-        "data_status": conn.get("data_status"),
+        "symbols_in": metrics.get("symbols_in"),
+        "symbols_with_bars_fetch": metrics.get("symbols_with_bars_fetch"),
+        "bars_rows_total_fetch": metrics.get("bars_rows_total_fetch"),
+        "symbols_with_bars_post": metrics.get("symbols_with_bars_post"),
+        "bars_rows_total_post": metrics.get("bars_rows_total_post"),
+        "rows_final": rows_final,
+        "rows_premetrics": rows_premetrics,
+        "trading_ok": connection.get("trading_ok"),
+        "trading_status": connection.get("trading_status"),
+        "data_ok": connection.get("data_ok"),
+        "data_status": connection.get("data_status"),
         "feed": feed,
-        "freshness": freshness,
-        "run_type": run_type,
+        "latest_source": metrics.get("latest_source"),
+        "pipeline_rc": metrics.get("pipeline_rc"),
+        "freshness": _freshness(last_run_utc),
+        "run_type": _run_type_hint(),
+        "buying_power": connection.get("buying_power"),
     }
+
     # Legacy aliases for existing callers
     snapshot["symbols_with_bars"] = snapshot["symbols_with_bars_fetch"]
     snapshot["bars_rows_total"] = snapshot["bars_rows_total_fetch"]
     snapshot["rows"] = snapshot["rows_premetrics"]
+    snapshot["source"] = snapshot.get("latest_source")
+
     snapshot.update(_update_coverage_history(snapshot))
     return snapshot
 
