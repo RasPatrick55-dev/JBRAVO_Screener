@@ -2088,6 +2088,44 @@ class TradeExecutor:
         existing_positions = self.fetch_existing_positions()
         open_order_symbols = self.fetch_open_order_symbols()
         account_buying_power = self.fetch_buying_power()
+        try:
+            max_positions = int(self.config.max_positions)
+        except (TypeError, ValueError):
+            max_positions = 0
+        max_positions = max(1, max_positions)
+        if len(existing_positions) >= max_positions:
+            LOGGER.info(
+                "MAX_POSITIONS prefilter: holdings=%d >= max=%d; no submissions.",
+                len(existing_positions),
+                max_positions,
+            )
+            self.record_skip_reason("MAX_POSITIONS", count=max(1, len(candidates)))
+            self.persist_metrics()
+            self.log_summary()
+            return 0
+        queue: list[dict[str, Any]] = []
+        for record in candidates:
+            symbol = str(record.get("symbol", "")).upper()
+            if not symbol:
+                continue
+            if symbol in existing_positions:
+                self.record_skip_reason("EXISTING_POSITION", symbol=symbol)
+                continue
+            queue.append(record)
+        available_slots = max(0, max_positions - len(existing_positions))
+        if not queue or available_slots <= 0:
+            LOGGER.info(
+                "No available slots after filtering existing positions (holdings=%d max=%d)",
+                len(existing_positions),
+                max_positions,
+            )
+            self.persist_metrics()
+            self.log_summary()
+            return 0
+        if len(queue) > available_slots:
+            queue = queue[:available_slots]
+        slot_hint = max(1, min(available_slots, len(queue)))
+        candidates = queue
         bp_raw = self._last_buying_power_raw
         if bp_raw is None:
             bp_raw = account_buying_power
@@ -2106,8 +2144,6 @@ class TradeExecutor:
             self.persist_metrics()
             self.log_summary()
             return 0
-
-        slots = max(1, min(self.config.max_positions, len(candidates)))
         try:
             allocation_pct = float(self.config.allocation_pct)
         except (TypeError, ValueError):
@@ -2121,9 +2157,6 @@ class TradeExecutor:
         for record in candidates:
             symbol = record.get("symbol", "").upper()
             if not symbol:
-                continue
-            if symbol in existing_positions:
-                self.record_skip_reason("EXISTING_POSITION", symbol=symbol)
                 continue
             if symbol in open_order_symbols:
                 self.record_skip_reason("OPEN_ORDER", symbol=symbol)
@@ -2273,7 +2306,7 @@ class TradeExecutor:
                 price_f,
                 account_buying_power,
                 allocation_pct,
-                slots,
+                slot_hint,
                 target_notional,
                 limit_px,
                 qty,

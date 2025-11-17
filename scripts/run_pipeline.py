@@ -15,6 +15,7 @@ from datetime import datetime, timezone, date
 from pathlib import Path
 from typing import Any, Optional, Sequence
 from types import SimpleNamespace
+import zoneinfo
 
 import pandas as pd
 import requests
@@ -1400,11 +1401,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         todays_summary = _latest_summary_for_date(base_dir, today)
         if todays_summary is None:
             LOG.warning("[WARN] SUMMARY_TODAY_MISSING date=%s", today.isoformat())
+        rows_for_stamp = 0
         try:
             if rc != 0:
                 kpis = write_complete_screener_metrics(base_dir)
             else:
                 kpis = metrics_payload
+            rows_for_stamp = int(kpis.get("rows") or 0)
             LOG.info(
                 "SCREENER_METRICS_SYNC symbols_in=%s with_bars=%s rows=%s bars_rows_total=%s",
                 kpis.get("symbols_in"),
@@ -1414,6 +1417,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         except Exception:
             LOG.exception("Failed to backfill screener_metrics.json")
+        if rc == 0:
+            try:
+                ny = zoneinfo.ZoneInfo("America/New_York")
+                now_ny = datetime.now(ny)
+                fresh_payload = {
+                    "ny_date": now_ny.strftime("%Y-%m-%d"),
+                    "end_ny": now_ny.isoformat(),
+                    "end_utc": datetime.utcnow().isoformat() + "Z",
+                    "rc": 0,
+                    "rows": rows_for_stamp,
+                }
+                fresh_path = base_dir / "data" / "pipeline_fresh.json"
+                fresh_path.parent.mkdir(parents=True, exist_ok=True)
+                fresh_path.write_text(json.dumps(fresh_payload, indent=2))
+            except Exception:
+                logger.exception("FRESH_STAMP_WRITE_FAILED")
         try:
             annotated = _annotate_screener_metrics(
                 base_dir,
