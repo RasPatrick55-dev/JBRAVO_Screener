@@ -741,6 +741,42 @@ def _resolve_time_window(requested: str):
     return "closed", False, now
 
 
+def _wait_until_submit_at(target: Optional[str]) -> None:
+    value = (target or "").strip()
+    if not value:
+        return
+    try:
+        hour_str, minute_str = value.split(":", 1)
+        hour = int(hour_str)
+        minute = int(minute_str)
+    except ValueError:
+        LOGGER.warning("[WARN] submit_at_ny invalid value=%s -> skipping wait", value)
+        return
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        LOGGER.warning("[WARN] submit_at_ny out of range value=%s -> skipping wait", value)
+        return
+    ny = ZoneInfo("America/New_York")
+    target_dt = datetime.now(ny).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    now_ny = datetime.now(ny)
+    if now_ny >= target_dt:
+        LOGGER.info(
+            "[INFO] SUBMIT_AT passed target -> proceeding ny_now=%s target=%s",
+            now_ny.isoformat(),
+            target_dt.isoformat(),
+        )
+        return
+    while now_ny < target_dt:
+        remaining = (target_dt - now_ny).total_seconds()
+        LOGGER.info(
+            "[INFO] WAIT_UNTIL submit_at_ny=%s remaining=%ds",
+            value,
+            int(max(1, math.ceil(remaining))),
+        )
+        sleep_for = min(60, max(5, remaining / 4))
+        time.sleep(sleep_for)
+        now_ny = datetime.now(ny)
+
+
 def _record_auth_error(
     reason: str,
     sanitized: Mapping[str, object],
@@ -809,6 +845,57 @@ def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _fetch_prev_close_from_alpaca(symbol: str) -> Optional[float]:
+    api_key, api_secret, _, feed = get_alpaca_creds()
+    if not api_key or not api_secret:
+        return None
+    base_url = None
+    for env_name in DATA_URL_ENV_VARS:
+        candidate = os.getenv(env_name)
+        if candidate:
+            base_url = candidate
+            break
+    base_url = base_url or DEFAULT_DATA_BASE_URL
+    url = f"{base_url.rstrip('/')}/v2/stocks/{symbol}/bars"
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+    params: Dict[str, str] = {"timeframe": "1Day", "limit": "2"}
+    if feed:
+        params["feed"] = str(feed)
+    log_info("alpaca.prevclose", symbol=symbol)
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+    except Exception as exc:
+        _warn_context("alpaca.prevclose", f"{symbol}: {exc}")
+        return None
+    if response.status_code in (401, 403):
+        _warn_context("alpaca.prevclose", f"{symbol} unauthorized status={response.status_code}")
+        return None
+    if response.status_code != 200:
+        _warn_context("alpaca.prevclose", f"{symbol} status={response.status_code}")
+        return None
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        _warn_context("alpaca.prevclose", f"{symbol} decode_failed: {exc}")
+        return None
+    bars = payload.get("bars") if isinstance(payload, Mapping) else None
+    if not isinstance(bars, list) or len(bars) < 2:
+        return None
+    prior = bars[-2]
+    if not isinstance(prior, Mapping):
+        return None
+    close_value = prior.get("c") if "c" in prior else prior.get("close")
+    if close_value is None:
+        return None
+    try:
+        return float(close_value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _fetch_latest_quote_from_alpaca(
@@ -1151,9 +1238,9 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
 class ExecutorConfig:
     source: Path = Path("data/latest_candidates.csv")
     allocation_pct: float = 0.05
-    max_positions: int = 4
+    max_positions: int = 7
     entry_buffer_bps: int = 75
-    limit_buffer_pct: float = 1.0
+    limit_buffer_pct: float = 0.0
     trailing_percent: float = 3.0
     cancel_after_min: int = 35
     extended_hours: bool = True
@@ -1170,6 +1257,10 @@ class ExecutorConfig:
     allow_fractional: bool = False
     position_sizer: str = "notional"
     atr_target_pct: float = 0.02
+    submit_at_ny: str = "07:00"
+    price_source: str = "prevclose"
+    price_band_pct: float = 10.0
+    price_band_action: str = "clamp"
 
 
 @dataclass
@@ -1722,6 +1813,7 @@ class TradeExecutor:
         self.account_snapshot: Optional[Mapping[str, Any]] = account_snapshot
         self.clock_snapshot: Optional[Mapping[str, Any]] = clock_snapshot
         self._last_buying_power_raw: Any = None
+        self._prev_close_cache: Dict[str, Optional[float]] = {}
 
     def log_info(self, event: str, **payload: Any) -> None:
         log_info(event, **payload)
@@ -1774,6 +1866,97 @@ class TradeExecutor:
         if count > 1:
             payload["count"] = count
         self.log_info("SKIP", **payload)
+
+    def _get_prev_close(self, symbol: str) -> Optional[float]:
+        key = symbol.upper()
+        if not key:
+            return None
+        if key in self._prev_close_cache:
+            return self._prev_close_cache[key]
+        price = _fetch_prev_close_from_alpaca(key)
+        self._prev_close_cache[key] = price
+        return price
+
+    def _apply_price_band(
+        self,
+        symbol: str,
+        anchor_price: float,
+        price_ref: float,
+        quote_snapshot: Mapping[str, Any] | None,
+        trade_snapshot: Mapping[str, Any] | None,
+    ) -> tuple[Optional[float], bool]:
+        if anchor_price is None or anchor_price <= 0:
+            return price_ref, False
+        band_pct = max(0.0, float(self.config.price_band_pct)) / 100.0
+        if band_pct <= 0:
+            return price_ref, False
+        action = (self.config.price_band_action or "clamp").lower()
+        floor = anchor_price * (1 - band_pct)
+        ceiling = anchor_price * (1 + band_pct)
+        live_points: list[tuple[str, float]] = []
+        if isinstance(quote_snapshot, Mapping):
+            bid = quote_snapshot.get("bid")
+            ask = quote_snapshot.get("ask")
+            try:
+                bid_f = float(bid) if bid not in (None, "") else 0.0
+                ask_f = float(ask) if ask not in (None, "") else 0.0
+            except (TypeError, ValueError):
+                bid_f = 0.0
+                ask_f = 0.0
+            if bid_f > 0 and ask_f > 0 and not math.isnan(bid_f) and not math.isnan(ask_f):
+                mid = (bid_f + ask_f) / 2
+                if mid > 0 and not math.isnan(mid):
+                    live_points.append(("mid", mid))
+        if isinstance(trade_snapshot, Mapping):
+            trade_price = trade_snapshot.get("price")
+            try:
+                trade_f = float(trade_price) if trade_price not in (None, "") else 0.0
+            except (TypeError, ValueError):
+                trade_f = 0.0
+            if trade_f > 0 and not math.isnan(trade_f):
+                live_points.append(("trade", trade_f))
+        if not live_points:
+            return price_ref, False
+        for label, live in live_points:
+            if live > ceiling:
+                if action == "skip":
+                    self.record_skip_reason(
+                        "PRICE_BOUNDS",
+                        symbol=symbol,
+                        detail=f"{label}_gt_band",
+                    )
+                    return None, True
+                new_ref = min(max(price_ref, floor), ceiling)
+                LOGGER.info(
+                    "[INFO] PRICE_BAND_CLAMP symbol=%s anchor=%.4f live_src=%s live=%.4f limit=%.4f pct=%.2f",
+                    symbol,
+                    anchor_price,
+                    label,
+                    live,
+                    new_ref,
+                    band_pct * 100,
+                )
+                return new_ref, False
+            if live < floor:
+                if action == "skip":
+                    self.record_skip_reason(
+                        "PRICE_BOUNDS",
+                        symbol=symbol,
+                        detail=f"{label}_lt_band",
+                    )
+                    return None, True
+                new_ref = min(max(price_ref, floor), ceiling)
+                LOGGER.info(
+                    "[INFO] PRICE_BAND_CLAMP symbol=%s anchor=%.4f live_src=%s live=%.4f limit=%.4f pct=%.2f",
+                    symbol,
+                    anchor_price,
+                    label,
+                    live,
+                    new_ref,
+                    band_pct * 100,
+                )
+                return new_ref, False
+        return price_ref, False
 
     def _resolve_market_timezone(self) -> ZoneInfo:
         tz_name = self.config.market_timezone or "America/New_York"
@@ -2093,12 +2276,15 @@ class TradeExecutor:
         except (TypeError, ValueError):
             max_positions = 0
         max_positions = max(1, max_positions)
-        if len(existing_positions) >= max_positions:
-            LOGGER.info(
-                "MAX_POSITIONS prefilter: holdings=%d >= max=%d; no submissions.",
-                len(existing_positions),
-                max_positions,
-            )
+        open_count = len(existing_positions)
+        available_slots = max(0, max_positions - open_count)
+        LOGGER.info(
+            "[INFO] MAX_POSITIONS cap=%d open=%d slots=%d",
+            max_positions,
+            open_count,
+            available_slots,
+        )
+        if available_slots <= 0:
             self.record_skip_reason("MAX_POSITIONS", count=max(1, len(candidates)))
             self.persist_metrics()
             self.log_summary()
@@ -2112,11 +2298,10 @@ class TradeExecutor:
                 self.record_skip_reason("EXISTING_POSITION", symbol=symbol)
                 continue
             queue.append(record)
-        available_slots = max(0, max_positions - len(existing_positions))
-        if not queue or available_slots <= 0:
+        if not queue:
             LOGGER.info(
                 "No available slots after filtering existing positions (holdings=%d max=%d)",
-                len(existing_positions),
+                open_count,
                 max_positions,
             )
             self.persist_metrics()
@@ -2154,6 +2339,9 @@ class TradeExecutor:
             os.getenv("LIMIT_PRICE_FEED") or os.getenv("ALPACA_DATA_FEED") or None
         )
 
+        price_mode = (self.config.price_source or "entry").lower()
+        min_prevclose = max(1.0, float(self.config.min_price or 0.0))
+
         for record in candidates:
             symbol = record.get("symbol", "").upper()
             if not symbol:
@@ -2165,22 +2353,59 @@ class TradeExecutor:
                 self.record_skip_reason("MAX_POSITIONS", symbol=symbol)
                 break
 
-            price_value = record.get("entry_price")
-            if price_value in (None, "") or (isinstance(price_value, float) and math.isnan(price_value)):
-                price_value = record.get("close")
-            price_series = pd.to_numeric(pd.Series([price_value]), errors="coerce").fillna(0.0)
-            price_f = float(price_series.iloc[0])
-            if price_f <= 0:
-                self.record_skip_reason(
-                    "ZERO_QTY",
-                    symbol=symbol,
-                    detail="invalid_price",
-                    aliases=("DATA_MISSING",),
-                )
-                continue
-
-            price_ref = price_f
+            anchor_label = "entry"
+            anchor_price: Optional[float] = None
+            price_f = 0.0
+            price_ref = 0.0
             price_src = "entry"
+            price_ref_src = "entry"
+            mode = price_mode if price_mode in {"prevclose", "entry", "close"} else "entry"
+            if mode == "prevclose":
+                anchor_price = self._get_prev_close(symbol)
+                if anchor_price is None or anchor_price <= 0:
+                    self.record_skip_reason(
+                        "PRICE_BOUNDS",
+                        symbol=symbol,
+                        detail="prevclose_missing",
+                    )
+                    continue
+                if anchor_price < min_prevclose:
+                    self.record_skip_reason(
+                        "PRICE_BOUNDS",
+                        symbol=symbol,
+                        detail=f"prevclose_lt_min({anchor_price:.2f})",
+                    )
+                    continue
+                price_f = anchor_price
+                price_ref = anchor_price
+                anchor_label = "prevclose"
+            else:
+                if mode == "close":
+                    price_value = record.get("close")
+                    fallback_value = record.get("entry_price")
+                    anchor_label = "close"
+                else:
+                    price_value = record.get("entry_price")
+                    fallback_value = record.get("close")
+                    anchor_label = "entry"
+                if price_value in (None, "") or (isinstance(price_value, float) and math.isnan(price_value)):
+                    price_value = fallback_value
+                    anchor_label = "entry" if mode == "close" else "close"
+                price_series = pd.to_numeric(pd.Series([price_value]), errors="coerce").fillna(0.0)
+                price_f = float(price_series.iloc[0])
+                if price_f <= 0:
+                    self.record_skip_reason(
+                        "ZERO_QTY",
+                        symbol=symbol,
+                        detail="invalid_price",
+                        aliases=("DATA_MISSING",),
+                    )
+                    continue
+                price_ref = price_f
+                anchor_price = price_f
+            price_src = anchor_label
+            price_ref_src = anchor_label
+
             quote_snapshot: Dict[str, Optional[float | str]] = {}
             trade_snapshot: Dict[str, Optional[float | str]] = {}
             if premarket_active:
@@ -2188,11 +2413,10 @@ class TradeExecutor:
                 ask_price: Optional[float] = None
                 if isinstance(quote_snapshot, Mapping):
                     raw_ask = quote_snapshot.get("ask")
-                    if raw_ask is not None:
-                        try:
-                            ask_price = float(raw_ask)
-                        except (TypeError, ValueError):
-                            ask_price = None
+                    try:
+                        ask_price = float(raw_ask) if raw_ask is not None else None
+                    except (TypeError, ValueError):
+                        ask_price = None
                 ask_display = "nan"
                 if ask_price is not None:
                     ask_display = "nan" if math.isnan(ask_price) else f"{ask_price:.4f}"
@@ -2202,9 +2426,8 @@ class TradeExecutor:
                         quote_snapshot.get("feed") if isinstance(quote_snapshot, Mapping) else None
                     )
                     feed_label = str(quote_feed).strip() or "default"
-                    price_src = f"ask[{feed_label}]"
-                else:
-                    trade_snapshot = _fetch_latest_trade_from_alpaca(symbol, feed=preferred_feed)
+                    price_ref_src = f"ask[{feed_label}]"
+                trade_snapshot = _fetch_latest_trade_from_alpaca(symbol, feed=preferred_feed)
                 trade_price: Optional[float] = None
                 if isinstance(trade_snapshot, Mapping):
                     raw_trade = trade_snapshot.get("price")
@@ -2216,13 +2439,13 @@ class TradeExecutor:
                 trade_display = "nan"
                 if trade_price is not None:
                     trade_display = "nan" if math.isnan(trade_price) else f"{trade_price:.4f}"
-                if (trade_price is not None and not math.isnan(trade_price) and trade_price > 0):
+                if trade_price is not None and not math.isnan(trade_price) and trade_price > 0:
                     price_ref = max(price_ref, trade_price)
                     trade_feed = (
                         trade_snapshot.get("feed") if isinstance(trade_snapshot, Mapping) else None
                     )
                     feed_label = str(trade_feed).strip() or "default"
-                    price_src = f"trade[{feed_label}]"
+                    price_ref_src = f"trade[{feed_label}]"
                 quote_feed = (
                     quote_snapshot.get("feed") if isinstance(quote_snapshot, Mapping) else None
                 )
@@ -2240,17 +2463,30 @@ class TradeExecutor:
                     else None
                 )
                 LOGGER.info(
-                    "PRICE_REF symbol=%s entry=%.4f ask=%s trade=%s ref=%.4f src=%s feed=%s q_ts=%s t_ts=%s",
+                    "PRICE_REF symbol=%s anchor=%.4f ask=%s trade=%s ref=%.4f src=%s feed=%s q_ts=%s t_ts=%s",
                     symbol,
                     price_f,
                     ask_display,
                     trade_display,
                     price_ref,
-                    price_src,
+                    price_ref_src,
                     str(quote_feed or trade_feed or preferred_feed or ""),
                     str(quote_ts or ""),
                     str(trade_ts or ""),
                 )
+
+            if mode == "prevclose":
+                adjusted_ref, skip_due_band = self._apply_price_band(
+                    symbol,
+                    float(anchor_price or price_ref),
+                    price_ref,
+                    quote_snapshot,
+                    trade_snapshot,
+                )
+                if skip_due_band:
+                    continue
+                if adjusted_ref is not None:
+                    price_ref = adjusted_ref
 
             base_notional = max(0.0, allocation_pct * max(account_buying_power, 0.0))
             atr_pct = _sanitize_atr_pct(record.get("atrp"))
@@ -2315,7 +2551,10 @@ class TradeExecutor:
                 atr_scale,
             )
 
-            limit_price_raw = compute_limit_price(record, self.config.entry_buffer_bps)
+            if mode == "prevclose":
+                limit_price_raw = float(anchor_price or price_ref)
+            else:
+                limit_price_raw = compute_limit_price(record, self.config.entry_buffer_bps)
             limit_price = max(limit_price_raw, limit_px)
             normalized_limit = normalize_price_for_alpaca(limit_price, "buy")
             rounded_limit = _round_limit_price(normalized_limit)
@@ -2335,7 +2574,13 @@ class TradeExecutor:
                 )
                 continue
 
-            outcome = self.execute_order(symbol, qty, rounded_limit, raw_limit=limit_price)
+            outcome = self.execute_order(
+                symbol,
+                qty,
+                rounded_limit,
+                raw_limit=limit_price,
+                price_src=price_src,
+            )
             if outcome.get("filled_qty", 0) > 0:
                 existing_positions.add(symbol)
                 account_buying_power = max(0.0, account_buying_power - notional)
@@ -2496,6 +2741,7 @@ class TradeExecutor:
         limit_price: float,
         *,
         raw_limit: Optional[float] = None,
+        price_src: str = "",
     ) -> Dict[str, Any]:
         outcome: Dict[str, Any] = {"submitted": False, "filled_qty": 0.0}
         raw_limit_price = float(raw_limit if raw_limit is not None else limit_price)
@@ -2529,6 +2775,7 @@ class TradeExecutor:
             limit_raw=f"{raw_limit_price:.8f}",
             extended_hours=extended_hours_flag,
             order_id=order_id or "",
+            price_src=str(price_src or ""),
         )
 
         fill_deadline = datetime.now(timezone.utc) + timedelta(minutes=self.config.cancel_after_min)
@@ -2985,7 +3232,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--limit-buffer-pct",
         type=float,
         default=ExecutorConfig.limit_buffer_pct,
-        help="Percent tolerance applied to price guards (default 1.0)",
+        help="Percent tolerance added to entry/anchor prices (default 0.0)",
     )
     parser.add_argument(
         "--trailing-percent",
@@ -3004,6 +3251,30 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         type=lambda s: s.lower() in {"1", "true", "yes", "y"},
         default=ExecutorConfig.extended_hours,
         help="Whether to submit orders eligible for extended hours",
+    )
+    parser.add_argument(
+        "--submit-at-ny",
+        type=str,
+        default=ExecutorConfig.submit_at_ny,
+        help="Target HH:MM in America/New_York to start submitting (premarket)",
+    )
+    parser.add_argument(
+        "--price-source",
+        choices=("prevclose", "entry", "close"),
+        default=ExecutorConfig.price_source,
+        help="Anchor price source for limit orders (default prevclose)",
+    )
+    parser.add_argument(
+        "--price-band-pct",
+        type=float,
+        default=ExecutorConfig.price_band_pct,
+        help="Safety band percent for prevclose anchoring (default 10.0)",
+    )
+    parser.add_argument(
+        "--price-band-action",
+        choices=("clamp", "skip"),
+        default=ExecutorConfig.price_band_action,
+        help="Action when live prices deviate outside the band",
     )
     parser.add_argument(
         "--dry-run",
@@ -3098,6 +3369,10 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         log_json=args.log_json,
         time_window=args.time_window,
         market_timezone=market_timezone,
+        submit_at_ny=args.submit_at_ny,
+        price_source=args.price_source,
+        price_band_pct=args.price_band_pct,
+        price_band_action=args.price_band_action,
     )
 
 
@@ -3132,6 +3407,8 @@ def run_executor(
         return 1
 
     candidates_df = frame
+
+    _wait_until_submit_at(config.submit_at_ny)
     configured_window = config.time_window or "auto"
     win, in_window, now_ny = _resolve_time_window(configured_window)
     trading_probe = client if client is not None else None
@@ -3171,6 +3448,7 @@ def run_executor(
         hhmm=clock_hhmm,
         in_window=bool(in_window),
         candidates=len(candidates_df),
+        submit_at_ny=str(config.submit_at_ny or ""),
     )
     probe_auth_ok, probe_bp_display = _log_account_probe(creds_snapshot)
     acc = None
