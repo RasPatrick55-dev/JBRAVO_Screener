@@ -47,13 +47,10 @@ trades_log_real_path = os.path.join(BASE_DIR, "data", "trades_log_real.csv")
 open_positions_path = os.path.join(BASE_DIR, "data", "open_positions.csv")
 top_candidates_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
 screener_metrics_path = os.path.join(BASE_DIR, "data", "screener_metrics.json")
-predictions_dir_path = os.path.join(BASE_DIR, "data", "predictions")
-ranker_eval_dir_path = os.path.join(BASE_DIR, "data", "ranker_eval")
 latest_candidates_path = os.path.join(BASE_DIR, "data", "latest_candidates.csv")
 
 TOP_CANDIDATES = Path(top_candidates_path)
 LATEST_CANDIDATES = Path(latest_candidates_path)
-RANKER_EVAL_DIR = Path(ranker_eval_dir_path)
 
 # Additional datasets introduced for monitoring
 metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
@@ -460,51 +457,6 @@ def load_prediction_history(limit: int = 7) -> list[tuple[str, pd.DataFrame]]:
             df = df.rename(columns=rename_map)
         frames.append((path.stem, df))
     return frames[-limit:]
-
-
-def _latest_prediction_snapshot() -> tuple[Path, pd.DataFrame] | None:
-    directory = Path(predictions_dir_path)
-    if not directory.exists():
-        return None
-    candidates: list[tuple[datetime, Path]] = []
-    for path in directory.glob("*.csv"):
-        if path.name == "latest.csv":
-            continue
-        try:
-            snapshot_date = datetime.strptime(path.stem, "%Y-%m-%d")
-        except ValueError:
-            snapshot_date = datetime.utcfromtimestamp(path.stat().st_mtime)
-        candidates.append((snapshot_date, path))
-    if not candidates:
-        return None
-    _, latest_path = max(candidates, key=lambda item: item[0])
-    try:
-        df = pd.read_csv(latest_path)
-    except Exception:
-        return None
-    return latest_path, df
-
-
-def _read_ranker_eval_summary() -> tuple[Path, dict] | None:
-    summary_path = RANKER_EVAL_DIR / "summary.json"
-    if not summary_path.exists():
-        return None
-    try:
-        with open(summary_path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except Exception:
-        return None
-    return summary_path, payload
-
-
-def _load_deciles(as_of: str) -> pd.DataFrame | None:
-    decile_path = RANKER_EVAL_DIR / f"deciles_{as_of}.csv"
-    if not decile_path.exists():
-        return None
-    try:
-        return pd.read_csv(decile_path)
-    except Exception:
-        return None
 
 
 def read_recent_lines(filepath, num_lines=50, since_days=None):
@@ -918,51 +870,9 @@ app.layout = dbc.Container(
         ),
         html.Div(
             [
-                html.Div("Ops", className="text-uppercase small text-muted mb-2 fw-bold"),
-                dbc.Button(
-                    "Pipeline Log",
-                    id="ops-btn-pipeline",
-                    color="secondary",
-                    size="sm",
-                    className="mb-2",
-                ),
-                dbc.Button(
-                    "Execute Log",
-                    id="ops-btn-exec",
-                    color="secondary",
-                    size="sm",
-                    className="mb-2",
-                ),
-                dbc.Button(
-                    "Latest Candidates",
-                    id="ops-btn-candidates",
-                    color="secondary",
-                    size="sm",
-                    className="mb-2",
-                ),
-                dbc.Button(
-                    "Screener Metrics",
-                    id="ops-btn-metrics",
-                    color="secondary",
-                    size="sm",
-                ),
-            ],
-            id="ops-sidebar",
-            className="p-3 bg-dark rounded d-none d-md-block",
-            style={
-                "position": "fixed",
-                "top": "120px",
-                "left": "20px",
-                "width": "180px",
-                "zIndex": 1050,
-                "boxShadow": "0 0 10px rgba(0,0,0,0.4)",
-            },
-        ),
-        html.Div(
-            [
                 dbc.Tabs(
                     id="tabs",
-                    active_tab="tab-overview",
+                    active_tab="tab-screener-health",
                     class_name="mb-3",
                     children=[
                         dbc.Tab(
@@ -973,29 +883,8 @@ app.layout = dbc.Container(
                             className="custom-tab",
                         ),
                         dbc.Tab(
-                            label="Overview",
-                            tab_id="tab-overview",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
                             label="Screener",
                             tab_id="tab-screener",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Predictions",
-                            tab_id="tab-predictions",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Ranker Eval",
-                            tab_id="tab-ranker-eval",
                             tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                             active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                             className="custom-tab",
@@ -1041,7 +930,6 @@ app.layout = dbc.Container(
                     type="default",
                 ),
             ],
-            style={"marginLeft": "220px"},
         ),
         # Refresh dashboards roughly every 15 seconds to reflect new logs
         dcc.Interval(id="interval-update", interval=15000, n_intervals=0),
@@ -1059,18 +947,6 @@ app.layout = dbc.Container(
                 ),
             ],
         ),
-        dbc.Modal(
-            id="ops-modal",
-            is_open=False,
-            size="lg",
-            children=[
-                dbc.ModalHeader(dbc.ModalTitle("Operations Snapshot")),
-                dbc.ModalBody(id="ops-modal-body"),
-                dbc.ModalFooter(
-                    dbc.Button("Close", id="ops-modal-close", className="ms-auto")
-                ),
-            ],
-        ),
         html.Div(get_version_string(), id="version-banner", className="text-muted mt-2"),
     ],
     fluid=True,
@@ -1084,239 +960,7 @@ register_screener_health(app)
 # Callbacks for tabs content
 def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     app.logger.info("Rendering tab %s", tab)
-    if tab == "tab-overview":
-        overview_sources: list[tuple[str, str]] = []
-        if not _is_paper_mode():
-            overview_sources.append(("Real trades", trades_log_real_path))
-        overview_sources.append(("Trades log", trades_log_path))
-        overview_sources.append(("Executed trades", executed_trades_path))
-        alerts = []
-        trades_df = None
-        source_label = ""
-        source_path = ""
-
-        for label, path in overview_sources:
-            df, df_alert = load_csv(
-                path,
-                ["net_pnl", "entry_time"],
-                alert_prefix=label,
-            )
-            if df_alert:
-                alerts.append(df_alert)
-                continue
-            trades_df = df
-            source_label = label
-            source_path = path
-            break
-
-        if trades_df is None:
-            info_alert = dbc.Alert(
-                "No trade history available yet. Run the execution or monitoring jobs to populate trade logs.",
-                color="info",
-                className="m-3",
-            )
-            return dbc.Container([info_alert, *alerts], fluid=True)
-
-        freshness = data_freshness_alert(source_path, f"{source_label} log")
-        app.logger.info(
-            "Loaded %d trades for overview from %s",
-            len(trades_df),
-            source_label,
-        )
-
-        trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"])
-        trades_df["pnl"] = trades_df["net_pnl"]
-        trades_df["cumulative_pnl"] = trades_df["pnl"].cumsum()
-        trades_df["cummax"] = trades_df["cumulative_pnl"].cummax()
-        trades_df["drawdown"] = trades_df["cumulative_pnl"] - trades_df["cummax"]
-
-        equity_fig = px.line(
-            trades_df,
-            x="entry_time",
-            y="cumulative_pnl",
-            template="plotly_dark",
-            title="Equity Curve",
-        )
-        hist_fig = px.histogram(
-            trades_df,
-            x="pnl",
-            nbins=20,
-            template="plotly_dark",
-            title="Distribution of Trade PnL",
-        )
-        pie_fig = px.pie(
-            trades_df,
-            names=trades_df["pnl"] > 0,
-            title="Win vs Loss",
-            template="plotly_dark",
-        )
-
-        daily = (
-            trades_df.groupby(trades_df["entry_time"].dt.date)["pnl"]
-            .sum()
-            .reset_index()
-        )
-        daily_fig = px.bar(
-            daily, x="entry_time", y="pnl", template="plotly_dark", title="Daily PnL"
-        )
-        monthly = (
-            trades_df.groupby(trades_df["entry_time"].dt.to_period("M"))["pnl"]
-            .sum()
-            .reset_index()
-        )
-        monthly["entry_time"] = monthly["entry_time"].astype(str)
-        monthly_fig = px.bar(
-            monthly,
-            x="entry_time",
-            y="pnl",
-            template="plotly_dark",
-            title="Monthly PnL",
-        )
-        dd_fig = px.area(
-            trades_df,
-            x="entry_time",
-            y="drawdown",
-            template="plotly_dark",
-            title="Drawdown Over Time",
-        )
-
-        try:
-            metrics_df, alert_metrics = load_csv(
-                metrics_summary_path,
-                required_columns=[
-                    "total_trades",
-                    "net_pnl",
-                    "win_rate",
-                    "expectancy",
-                    "profit_factor",
-                    "max_drawdown",
-                ],
-                alert_prefix="Metrics",
-            )
-            if alert_metrics:
-                return alert_metrics
-        except Exception as e:
-            return dbc.Alert(f"Metrics Load Error: {str(e)}", color="danger", className="mt-3")
-
-        if metrics_df is not None and not metrics_df.empty:
-            latest_metrics = metrics_df.iloc[-1]
-            total_trades = latest_metrics.get("total_trades", len(trades_df))
-            total_pnl = latest_metrics.get("net_pnl", trades_df["pnl"].sum())
-            win_rate_val = latest_metrics.get("win_rate", (trades_df["pnl"] > 0).mean() * 100)
-            expectancy = latest_metrics.get("expectancy", trades_df["pnl"].mean())
-            profit_factor_val = latest_metrics.get("profit_factor")
-            max_drawdown_val = latest_metrics.get("max_drawdown")
-            sharpe_val = latest_metrics.get("sharpe")
-        else:
-            total_trades = len(trades_df)
-            total_pnl = trades_df["pnl"].sum()
-            win_rate_val = (trades_df["pnl"] > 0).mean() * 100
-            expectancy = trades_df["pnl"].mean()
-            wins = trades_df[trades_df["pnl"] > 0]["pnl"].sum()
-            losses = trades_df[trades_df["pnl"] < 0]["pnl"].sum()
-            profit_factor_val = wins / abs(losses) if losses else float("nan")
-            max_drawdown_val = trades_df["drawdown"].min() if "drawdown" in trades_df.columns else float("nan")
-            pnl_std = trades_df["pnl"].std(ddof=0)
-            sharpe_val = (expectancy / pnl_std) if pnl_std else float("nan")
-
-        def _overview_card(label: str, value: Any, fmt: str = "{}", tooltip: str | None = None, prefix: str = "") -> dbc.Col:
-            card_id = f"overview-{label.lower().replace(' ', '-')}-card"
-            try:
-                if value in (None, ""):
-                    rendered = "n/a"
-                elif isinstance(value, float) and math.isnan(value):
-                    rendered = "n/a"
-                else:
-                    rendered = fmt.format(value)
-            except Exception:
-                rendered = str(value)
-            card = dbc.Card(
-                [
-                    dbc.CardHeader(label, id=f"{card_id}-header"),
-                    dbc.CardBody(html.H4(f"{prefix}{rendered}", className="mb-0")),
-                ],
-                className="h-100",
-            )
-            if tooltip:
-                tooltip_component = dbc.Tooltip(tooltip, target=f"{card_id}-header", placement="top")
-                return dbc.Col(html.Div([card, tooltip_component]), md=2, className="mb-3")
-            return dbc.Col(card, md=2, className="mb-3")
-
-        kpis = dbc.Row(
-            [
-                _overview_card("Total Trades", total_trades, "{:.0f}"),
-                _overview_card("Total Net PnL", total_pnl, "{:.2f}", prefix="$"),
-                _overview_card("Win Rate", win_rate_val, "{:.2f}%"),
-                _overview_card(
-                    "Expectancy",
-                    expectancy,
-                    "{:.2f}",
-                    tooltip="Average per-trade profit after costs.",
-                    prefix="$",
-                ),
-                _overview_card(
-                    "Profit Factor",
-                    profit_factor_val,
-                    "{:.2f}",
-                    tooltip="Gross profits divided by gross losses.",
-                ),
-                _overview_card(
-                    "Max Drawdown",
-                    max_drawdown_val,
-                    "{:.2f}",
-                    tooltip="Largest peak-to-trough equity decline.",
-                    prefix="$",
-                ),
-                _overview_card(
-                    "Sharpe",
-                    sharpe_val,
-                    "{:.2f}",
-                    tooltip="Per-trade Sharpe ratio (mean divided by volatility).",
-                ),
-            ],
-            className="mb-4",
-        )
-
-        graphs = dbc.Row(
-            [
-                dbc.Col(dcc.Graph(figure=equity_fig), md=6),
-                dbc.Col(dcc.Graph(figure=hist_fig), md=6),
-                dbc.Col(dcc.Graph(figure=pie_fig), md=4),
-                dbc.Col(dcc.Graph(figure=daily_fig), md=4),
-                dbc.Col(dcc.Graph(figure=monthly_fig), md=4),
-                dbc.Col(dcc.Graph(figure=dd_fig), md=12),
-            ]
-        )
-        latest_file = source_path
-        latest_mtime = get_file_mtime(latest_file)
-        for contender in {trades_log_real_path, executed_trades_path}:
-            contender_mtime = get_file_mtime(contender)
-            if contender_mtime and (
-                latest_mtime is None or contender_mtime > latest_mtime
-            ):
-                latest_file = contender
-                latest_mtime = contender_mtime
-
-        last_updated = format_time(latest_mtime)
-        timestamp = html.Div(
-            f"Last Updated: {last_updated}",
-            className="text-muted mb-2",
-        )
-
-        source_note = html.Div(
-            f"Overview metrics use {source_label.lower()} data.",
-            className="text-muted small mb-2",
-        )
-
-        components = [timestamp, source_note]
-        if freshness:
-            components.append(freshness)
-        components.extend(alerts)
-        components.extend([kpis, graphs])
-        return dbc.Container(components, fluid=True)
-
-
-    elif tab == "tab-screener":
+    if tab == "tab-screener":
         metrics_data: dict = {}
         health_snapshot = load_screener_health()
         health_data = health_snapshot or {}
@@ -2607,10 +2251,6 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         return dbc.Alert("Unknown tab requested.", color="danger")
 
 
-def overview_layout():
-    return _render_tab("tab-overview", 0, 0, None)
-
-
 def account_layout():
     return _render_tab("tab-account", 0, 0, None)
 
@@ -2631,315 +2271,11 @@ def screener_layout():
     return _render_tab("tab-screener", 0, 0, None)
 
 
-def predictions_layout():
-    snapshot = _latest_prediction_snapshot()
-    if snapshot is None:
-        return dbc.Alert("Prediction snapshot not available yet.", color="secondary")
-
-    path, df = snapshot
-    if df.empty:
-        return dbc.Alert(
-            f"{path.name} does not contain any rows yet.",
-            color="secondary",
-        )
-
-    display_df = df.copy()
-    display_df.columns = [str(col) for col in display_df.columns]
-
-    def _find_column(candidates: set[str]) -> Optional[str]:
-        for col in display_df.columns:
-            if str(col).strip().lower() in candidates:
-                return col
-        return None
-
-    score_col = _find_column({"score", "total_score"})
-    relvol_col = _find_column({"rel_volume", "relvol", "rel_vol"})
-    atr_col = _find_column({"atr_percent", "atrp", "atr_pct"})
-    breakdown_col = _find_column({"score_breakdown", "score_breakdown_json", "breakdown"})
-
-    work = pd.DataFrame()
-    work["symbol"] = display_df.get("symbol", pd.Series(dtype="string"))
-    if score_col:
-        work["score"] = pd.to_numeric(display_df[score_col], errors="coerce")
-    else:
-        work["score"] = pd.Series(dtype="float64")
-    if relvol_col:
-        work["rel_volume"] = pd.to_numeric(display_df[relvol_col], errors="coerce")
-    else:
-        work["rel_volume"] = pd.Series(dtype="float64")
-    if atr_col:
-        work["atr_percent"] = pd.to_numeric(display_df[atr_col], errors="coerce")
-    else:
-        work["atr_percent"] = pd.Series(dtype="float64")
-    if breakdown_col:
-        work["breakdown_raw"] = display_df[breakdown_col]
-    else:
-        work["breakdown_raw"] = "{}"
-
-    work.fillna({"rel_volume": 0.0, "atr_percent": 0.0}, inplace=True)
-    work["breakdown_html"] = work["breakdown_raw"].apply(_score_breakdown_badges)
-
-    store_payload = work.to_dict("records")
-
-    updated = format_time(get_file_mtime(str(path)))
-    meta = dbc.Row(
-        [
-            dbc.Col(html.Div(f"Snapshot: {path.name}"), md=6),
-            dbc.Col(html.Div(f"Last updated: {updated}"), md=6),
-        ],
-        className="mb-3 text-light",
-    )
-
-    controls = dbc.Row(
-        [
-            dbc.Col(
-                dbc.Input(
-                    id="predictions-search",
-                    placeholder="Search symbol",
-                    type="text",
-                ),
-                md=3,
-            ),
-            dbc.Col(
-                dbc.Input(
-                    id="predictions-min-score",
-                    placeholder="Min score",
-                    type="number",
-                    step="0.05",
-                ),
-                md=3,
-            ),
-            dbc.Col(
-                dbc.Input(
-                    id="predictions-min-relvol",
-                    placeholder="Min rel-vol",
-                    type="number",
-                    step="0.1",
-                ),
-                md=3,
-            ),
-            dbc.Col(
-                dbc.Input(
-                    id="predictions-max-atrp",
-                    placeholder="Max ATR %",
-                    type="number",
-                    step="0.1",
-                ),
-                md=3,
-            ),
-        ],
-        className="g-2 mb-3",
-    )
-
-    table = dash_table.DataTable(
-        id="predictions-table",
-        columns=[
-            {"name": "Symbol", "id": "symbol"},
-            {"name": "Score", "id": "score", "type": "numeric", "format": {"specifier": ".4f"}},
-            {"name": "Rel Vol", "id": "rel_volume", "type": "numeric", "format": {"specifier": ".2f"}},
-            {"name": "ATR %", "id": "atr_percent", "type": "numeric", "format": {"specifier": ".2f"}},
-            {"name": "Score Breakdown", "id": "breakdown_html"},
-        ],
-        data=[],
-        sort_action="native",
-        page_size=25,
-        style_table={"overflowX": "auto", "maxHeight": "520px", "overflowY": "auto"},
-        style_cell={"backgroundColor": "#212529", "color": "#E0E0E0", "fontSize": "0.85rem"},
-        style_header={"backgroundColor": "#343a40", "color": "#FFFFFF", "fontWeight": "bold"},
-        style_data_conditional=[
-            {"if": {"column_id": "score"}, "fontWeight": "bold"},
-        ],
-        dangerously_allow_html=True,
-    )
-
-    return html.Div(
-        [
-            meta,
-            controls,
-            dcc.Store(id="predictions-store", data=store_payload),
-            table,
-        ]
-    )
-
-
-def ranker_eval_layout():
-    summary_payload = _read_ranker_eval_summary()
-    if summary_payload is None:
-        return dbc.Alert("Ranker evaluation artefacts are not available yet.", color="secondary")
-
-    summary_path, summary = summary_payload
-    metrics = summary.get("metrics", {}) or {}
-    as_of = summary.get("as_of", "?")
-
-    def _ensure_numeric(value: Any) -> float:
-        if isinstance(value, (int, float)) and not pd.isna(value):
-            return float(value)
-        if isinstance(value, (int, float)) and math.isinf(value):
-            return float(value)
-        return float("nan")
-
-    def _format_value(value: float, fmt: str, *, infinite_label: str = "∞") -> str:
-        if math.isnan(value):
-            return "n/a"
-        if math.isinf(value):
-            return infinite_label if value > 0 else f"-{infinite_label}"
-        return fmt.format(value)
-
-    def _normalise_columns(frame: pd.DataFrame) -> pd.DataFrame:
-        renamed = {col: str(col).strip().lower() for col in frame.columns}
-        return frame.rename(columns=renamed)
-
-    deciles_df = _load_deciles(as_of)
-    if deciles_df is None:
-        latest_deciles = RANKER_EVAL_DIR / "latest_deciles.csv"
-        if latest_deciles.exists():
-            try:
-                deciles_df = pd.read_csv(latest_deciles)
-            except Exception:
-                deciles_df = None
-    decile_chart = None
-    if deciles_df is not None and not deciles_df.empty:
-        deciles_df = _normalise_columns(deciles_df)
-        if "decile" in deciles_df.columns:
-            working = deciles_df.copy()
-            working.sort_values("decile", inplace=True)
-            if "avg_return" in working.columns:
-                working["avg_return"] = working["avg_return"].astype(float)
-            decile_chart = px.bar(
-                working,
-                x=working["decile"].astype(str),
-                y="avg_return",
-                title="Decile Next-Day Returns",
-                template="plotly_dark",
-            )
-            decile_chart.update_yaxes(tickformat=".2%")
-            decile_chart.update_layout(margin=dict(l=20, r=20, t=40, b=20))
-
-    calibration_records = summary.get("calibration", []) or []
-    calibration_chart = None
-    if calibration_records:
-        calibration_df = _normalise_columns(pd.DataFrame(calibration_records))
-        if {"avg_score", "hit_rate"}.issubset(calibration_df.columns):
-            calibration_df.sort_values("avg_score", inplace=True)
-            calibration_chart = px.line(
-                calibration_df,
-                x="avg_score",
-                y="hit_rate",
-                markers=True,
-                title="Score Calibration",
-                template="plotly_dark",
-            )
-            calibration_chart.update_yaxes(tickformat=".2%")
-
-    history_records = summary.get("history") or summary.get("sessions") or []
-    if isinstance(history_records, dict):
-        history_records = history_records.get("data") or list(history_records.values())
-    history_df = pd.DataFrame(history_records)
-    if history_df.empty:
-        candidate_row = {k: metrics.get(k) for k in ("expectancy", "profit_factor", "sharpe")}
-        candidate_row["as_of"] = as_of
-        history_df = pd.DataFrame([candidate_row])
-    history_chart = None
-    if not history_df.empty:
-        history_df = _normalise_columns(history_df)
-        if "as_of" in history_df.columns:
-            history_df["as_of"] = pd.to_datetime(history_df["as_of"], errors="coerce")
-            history_df = history_df.dropna(subset=["as_of"])
-        history_df = history_df.tail(20)
-        value_columns = [col for col in ("expectancy", "profit_factor", "sharpe") if col in history_df.columns]
-        if value_columns and not history_df.empty:
-            melted = history_df.melt(id_vars=[col for col in ("as_of", "session") if col in history_df.columns], value_vars=value_columns, var_name="metric", value_name="value")
-            x_axis = "as_of" if "as_of" in history_df.columns else "session"
-            history_chart = px.line(
-                melted,
-                x=x_axis,
-                y="value",
-                color="metric",
-                title="Trailing KPI Trend (last 20 sessions)",
-                template="plotly_dark",
-            )
-
-    def _metric_card(title: str, value: Any, tooltip: str, fmt: str = "{}") -> dbc.Col:
-        number = _ensure_numeric(value)
-        rendered = _format_value(number, fmt)
-        card_id = f"ranker-kpi-{title.lower().replace(' ', '-') }"
-        card = dbc.Card(
-            [
-                dbc.CardHeader(title, id=f"{card_id}-header"),
-                dbc.CardBody(html.H4(rendered, className="mb-0")),
-            ]
-        )
-        tooltip_component = dbc.Tooltip(tooltip, target=f"{card_id}-header", placement="top")
-        return dbc.Col(html.Div([card, tooltip_component]), md=3, className="mb-3")
-
-    cards = dbc.Row(
-        [
-            _metric_card("Expectancy", metrics.get("expectancy"), "Average next-day return per trade.", fmt="{:.4f}"),
-            _metric_card("Profit Factor", metrics.get("profit_factor"), "Gross wins divided by gross losses.", fmt="{:.2f}"),
-            _metric_card("Sharpe", metrics.get("sharpe"), "Annualised Sharpe ratio over the evaluation window.", fmt="{:.2f}"),
-            _metric_card("Hit Rate", metrics.get("hit_rate"), "Share of trades ending positive.", fmt="{:.2%}"),
-        ]
-    )
-
-    secondary_cards = dbc.Row(
-        [
-            _metric_card("Max Drawdown", metrics.get("max_drawdown"), "Worst peak-to-trough decline during the window.", fmt="{:.2%}"),
-            _metric_card("Return Volatility", metrics.get("expectancy_std"), "Standard deviation of realised returns.", fmt="{:.4f}"),
-        ]
-    )
-
-    updated = format_time(get_file_mtime(str(summary_path)))
-
-    components: list[Any] = [
-        html.Div(f"Evaluation as of {as_of}", className="text-light"),
-        html.Div(f"Summary generated: {updated}", className="text-light mb-3"),
-        cards,
-        secondary_cards,
-    ]
-
-    if decile_chart is not None:
-        components.extend(
-            [
-                html.H4("Decile Performance", className="text-light"),
-                dcc.Graph(figure=decile_chart),
-            ]
-        )
-    else:
-        components.append(dbc.Alert("Decile breakdown not available.", color="secondary"))
-
-    if calibration_chart is not None:
-        components.extend(
-            [
-                html.Hr(),
-                html.H4("Calibration", className="text-light"),
-                dcc.Graph(figure=calibration_chart),
-            ]
-        )
-    else:
-        components.append(dbc.Alert("Calibration data not available.", color="secondary"))
-
-    if history_chart is not None:
-        components.extend(
-            [
-                html.Hr(),
-                html.H4("Summary KPIs (20 sessions)", className="text-light"),
-                dcc.Graph(figure=history_chart),
-            ]
-        )
-    else:
-        components.append(dbc.Alert("Historical KPI trend not available yet.", color="secondary"))
-
-    return html.Div(components)
-
-
 @app.callback(Output("tabs-content", "children"), [Input("tabs", "active_tab")])
 def render_tab(tab):
     if tab == "tab-screener-health":
         logger.info("Rendering content for tab: %s", tab)
         return build_screener_health()
-    if tab == "tab-overview":
-        logger.info("Rendering content for tab: %s", tab)
-        return overview_layout()
     elif tab == "tab-account":
         logger.info("Rendering content for tab: %s", tab)
         return account_layout()
@@ -2949,12 +2285,6 @@ def render_tab(tab):
     elif tab == "tab-monitor":
         logger.info("Rendering content for tab: %s", tab)
         return monitor_positions_layout()
-    elif tab == "tab-predictions":
-        logger.info("Rendering content for tab: %s", tab)
-        return predictions_layout()
-    elif tab == "tab-ranker-eval":
-        logger.info("Rendering content for tab: %s", tab)
-        return ranker_eval_layout()
     elif tab == "tab-execute":
         logger.info("Rendering content for tab: %s", tab)
         return execute_trades_layout()
@@ -3133,112 +2463,6 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
     return is_open, ""
 
 
-@app.callback(
-    [Output("ops-modal", "is_open"), Output("ops-modal-body", "children")],
-    [
-        Input("ops-btn-pipeline", "n_clicks"),
-        Input("ops-btn-exec", "n_clicks"),
-        Input("ops-btn-candidates", "n_clicks"),
-        Input("ops-btn-metrics", "n_clicks"),
-        Input("ops-modal-close", "n_clicks"),
-    ],
-    State("ops-modal", "is_open"),
-)
-def toggle_ops_modal(pipeline_click, exec_click, candidates_click, metrics_click, close_click, is_open):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        raise PreventUpdate
-    trigger = ctx.triggered[0]["prop_id"].split(".")[0]
-    if trigger == "ops-modal-close":
-        return False, dash.no_update
-
-    def _log_content(path: str, label: str) -> Any:
-        lines = tail_log(path, limit=40)
-        if not lines:
-            return dbc.Alert(f"No recent entries for {label}.", color="warning")
-        return html.Pre(
-            format_log_lines(lines),
-            style={
-                "maxHeight": "400px",
-                "overflowY": "auto",
-                "backgroundColor": "#272B30",
-                "color": "#E0E0E0",
-                "padding": "0.75rem",
-            },
-        )
-
-    if trigger == "ops-btn-pipeline":
-        content = _log_content(pipeline_log_path, "pipeline.log")
-    elif trigger == "ops-btn-exec":
-        content = _log_content(execute_trades_log_path, "execute_trades.log")
-    elif trigger == "ops-btn-candidates":
-        if not os.path.exists(latest_candidates_path):
-            content = dbc.Alert("latest_candidates.csv not found.", color="warning")
-        else:
-            try:
-                preview = pd.read_csv(latest_candidates_path, nrows=2)
-            except Exception as exc:
-                content = dbc.Alert(f"Failed to read latest candidates: {exc}", color="danger")
-            else:
-                if preview.empty:
-                    content = dbc.Alert("File exists but no rows are available yet.", color="info")
-                else:
-                    preview.columns = [str(c) for c in preview.columns]
-                    content = dash_table.DataTable(
-                        data=preview.to_dict("records"),
-                        columns=[{"name": c, "id": c} for c in preview.columns],
-                        style_cell={
-                            "backgroundColor": "#212529",
-                            "color": "#E0E0E0",
-                            "fontSize": "0.85rem",
-                        },
-                        style_header={"backgroundColor": "#343a40", "color": "#FFFFFF"},
-                        page_size=2,
-                    )
-    elif trigger == "ops-btn-metrics":
-        if not os.path.exists(screener_metrics_path):
-            content = dbc.Alert("screener_metrics.json not found.", color="warning")
-        else:
-            try:
-                with open(screener_metrics_path, "r", encoding="utf-8") as handle:
-                    payload = json.load(handle) or {}
-            except Exception as exc:
-                content = dbc.Alert(f"Failed to load screener metrics: {exc}", color="danger")
-            else:
-                rows: list[dict[str, Any]] = []
-                for key, value in sorted(payload.items()):
-                    if isinstance(value, dict):
-                        for sub_key, sub_value in sorted(value.items()):
-                            rows.append({"Key": f"{key}.{sub_key}", "Value": sub_value})
-                    else:
-                        rows.append({"Key": key, "Value": value})
-                metrics_table = dash_table.DataTable(
-                    data=rows,
-                    columns=[{"name": c, "id": c} for c in ("Key", "Value")],
-                    style_cell={
-                        "backgroundColor": "#212529",
-                        "color": "#E0E0E0",
-                        "fontSize": "0.85rem",
-                        "textAlign": "left",
-                        "whiteSpace": "normal",
-                        "height": "auto",
-                    },
-                    page_size=10,
-                )
-                freshness = _freshness_badge(screener_metrics_path)
-                content = html.Div(
-                    [
-                        html.Div(f"Metrics entries: {len(rows)}", className="text-light mb-2"),
-                        html.Div(freshness) if freshness else html.Div(),
-                        metrics_table,
-                    ]
-                )
-    else:
-        content = dbc.Alert("No content available.", color="warning")
-
-    return True, content
-
-
 # Periodically refresh screener table
 @app.callback(Output("screener-table", "data"), Input("interval-update", "n_intervals"))
 def update_screener_table(n):
@@ -3274,40 +2498,6 @@ def update_metrics_logs(n):
         return "".join(recent_log_lines)
     except FileNotFoundError:
         return "Metrics log file not found."
-
-
-# Update predictions table based on filters
-@app.callback(
-    Output("predictions-table", "data"),
-    [
-        Input("predictions-store", "data"),
-        Input("predictions-search", "value"),
-        Input("predictions-min-score", "value"),
-        Input("predictions-min-relvol", "value"),
-        Input("predictions-max-atrp", "value"),
-    ],
-)
-def filter_predictions_table(store, search, min_score, min_relvol, max_atrp):
-    if not store:
-        return []
-    frame = pd.DataFrame(store)
-    if frame.empty:
-        return []
-    work = frame.copy()
-    if search:
-        mask = work.get("symbol", pd.Series(dtype="string")).astype(str).str.contains(
-            str(search), case=False, na=False
-        )
-        work = work[mask]
-    if min_score is not None and "score" in work.columns:
-        work = work[pd.to_numeric(work["score"], errors="coerce") >= float(min_score)]
-    if min_relvol is not None and "rel_volume" in work.columns:
-        work = work[pd.to_numeric(work["rel_volume"], errors="coerce") >= float(min_relvol)]
-    if max_atrp is not None and "atr_percent" in work.columns:
-        work = work[pd.to_numeric(work["atr_percent"], errors="coerce") <= float(max_atrp)]
-    if "score" in work.columns:
-        work = work.sort_values("score", ascending=False)
-    return work.to_dict("records")
 
 
 # Periodically refresh executed trades table
