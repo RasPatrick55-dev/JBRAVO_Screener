@@ -847,6 +847,63 @@ def _fetch_latest_close_from_alpaca(symbol: str) -> Optional[float]:
     return None
 
 
+def _fetch_prevclose_snapshot(symbol: str) -> Optional[float]:
+    api_key, api_secret, _, feed = get_alpaca_creds()
+    if not api_key or not api_secret:
+        return None
+    base_url = None
+    for env_name in DATA_URL_ENV_VARS:
+        candidate = os.getenv(env_name)
+        if candidate:
+            base_url = candidate
+            break
+    base_url = base_url or DEFAULT_DATA_BASE_URL
+    url = f"{base_url.rstrip('/')}/v2/stocks/{symbol}/snapshot"
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+    params: Dict[str, str] = {}
+    if feed:
+        params["feed"] = str(feed)
+    log_info("alpaca.snapshot_prevclose", symbol=symbol, feed=params.get("feed"))
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+    except Exception as exc:
+        _warn_context("alpaca.snapshot_prevclose", f"{symbol}: {exc}")
+        return None
+    if response.status_code in (401, 403):
+        _warn_context(
+            "alpaca.snapshot_prevclose", f"{symbol} unauthorized status={response.status_code}"
+        )
+        return None
+    if response.status_code != 200:
+        _warn_context(
+            "alpaca.snapshot_prevclose", f"{symbol} status={response.status_code}"
+        )
+        return None
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        _warn_context("alpaca.snapshot_prevclose", f"{symbol} decode_failed: {exc}")
+        return None
+    snapshot = None
+    if isinstance(payload, Mapping):
+        snapshot = payload.get("snapshot", payload)
+    if not isinstance(snapshot, Mapping):
+        return None
+    previous = snapshot.get("previousDailyBar") or snapshot.get("prevDailyBar")
+    if not isinstance(previous, Mapping):
+        return None
+    close_value = previous.get("c") if "c" in previous else previous.get("close")
+    if close_value is None:
+        return None
+    try:
+        return float(close_value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _fetch_prev_close_from_alpaca(symbol: str) -> Optional[float]:
     api_key, api_secret, _, feed = get_alpaca_creds()
     if not api_key or not api_secret:
@@ -863,7 +920,7 @@ def _fetch_prev_close_from_alpaca(symbol: str) -> Optional[float]:
         "APCA-API-KEY-ID": api_key,
         "APCA-API-SECRET-KEY": api_secret,
     }
-    params: Dict[str, str] = {"timeframe": "1Day", "limit": "2"}
+    params: Dict[str, str] = {"timeframe": "1Day", "limit": "2", "feed": "iex"}
     if feed:
         params["feed"] = str(feed)
     log_info("alpaca.prevclose", symbol=symbol)
@@ -1240,7 +1297,7 @@ class ExecutorConfig:
     allocation_pct: float = 0.05
     max_positions: int = 7
     entry_buffer_bps: int = 75
-    limit_buffer_pct: float = 0.0
+    limit_buffer_pct: float = 0.5
     trailing_percent: float = 3.0
     cancel_after_min: int = 35
     extended_hours: bool = True
@@ -1867,15 +1924,51 @@ class TradeExecutor:
             payload["count"] = count
         self.log_info("SKIP", **payload)
 
-    def _get_prev_close(self, symbol: str) -> Optional[float]:
+    def resolve_limit_price(self, symbol: str, row: Mapping[str, Any]) -> Optional[float]:
         key = symbol.upper()
         if not key:
             return None
         if key in self._prev_close_cache:
             return self._prev_close_cache[key]
-        price = _fetch_prev_close_from_alpaca(key)
-        self._prev_close_cache[key] = price
-        return price
+
+        snapshot_price = _fetch_prevclose_snapshot(key)
+        if snapshot_price is not None and snapshot_price > 0:
+            LOGGER.info(
+                "[INFO] LIMIT_SRC snapshot symbol=%s prevclose=%.4f",
+                key,
+                snapshot_price,
+            )
+            self._prev_close_cache[key] = snapshot_price
+            return snapshot_price
+
+        bar_price = _fetch_prev_close_from_alpaca(key)
+        if bar_price is not None and bar_price > 0:
+            LOGGER.info(
+                "[INFO] LIMIT_SRC bars symbol=%s prevclose=%.4f",
+                key,
+                bar_price,
+            )
+            self._prev_close_cache[key] = bar_price
+            return bar_price
+
+        try:
+            entry_candidate = float(row.get("entry_price"))
+            if math.isnan(entry_candidate):
+                entry_candidate = None
+        except Exception:
+            entry_candidate = None
+
+        if entry_candidate is not None and entry_candidate > 0:
+            LOGGER.info(
+                "[INFO] LIMIT_SRC entry symbol=%s prevclose=%.4f",
+                key,
+                entry_candidate,
+            )
+            self._prev_close_cache[key] = entry_candidate
+            return entry_candidate
+
+        self._prev_close_cache[key] = None
+        return None
 
     def _apply_price_band(
         self,
@@ -2361,12 +2454,12 @@ class TradeExecutor:
             price_ref_src = "entry"
             mode = price_mode if price_mode in {"prevclose", "entry", "close"} else "entry"
             if mode == "prevclose":
-                anchor_price = self._get_prev_close(symbol)
+                anchor_price = self.resolve_limit_price(symbol, record)
                 if anchor_price is None or anchor_price <= 0:
                     self.record_skip_reason(
                         "PRICE_BOUNDS",
                         symbol=symbol,
-                        detail="prevclose_missing",
+                        detail="prevclose_unavailable",
                     )
                     continue
                 if anchor_price < min_prevclose:
@@ -2499,7 +2592,9 @@ class TradeExecutor:
                     target_notional = base_notional * atr_scale
             min_order = max(0.0, float(self.config.min_order_usd))
             target_notional = max(target_notional, min_order)
-            if premarket_active:
+            if mode == "prevclose":
+                limit_px = max(0.0, float(anchor_price or 0.0)) * (1 + limit_buffer_ratio)
+            elif premarket_active:
                 limit_px = price_ref * (1 + limit_buffer_ratio)
             else:
                 limit_px = price_f * (1 + limit_buffer_ratio)
@@ -2552,7 +2647,9 @@ class TradeExecutor:
             )
 
             if mode == "prevclose":
-                limit_price_raw = float(anchor_price or price_ref)
+                limit_price_raw = max(0.0, float(anchor_price or 0.0)) * (
+                    1 + limit_buffer_ratio
+                )
             else:
                 limit_price_raw = compute_limit_price(record, self.config.entry_buffer_bps)
             limit_price = max(limit_price_raw, limit_px)
@@ -3232,7 +3329,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--limit-buffer-pct",
         type=float,
         default=ExecutorConfig.limit_buffer_pct,
-        help="Percent tolerance added to entry/anchor prices (default 0.0)",
+        help="Percent tolerance added to entry/anchor prices (default 0.5)",
     )
     parser.add_argument(
         "--trailing-percent",
@@ -3262,7 +3359,9 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--price-source",
         choices=("prevclose", "entry", "close"),
         default=ExecutorConfig.price_source,
-        help="Anchor price source for limit orders (default prevclose)",
+        help=(
+            "Anchor price source for limit orders (prevclose falls back to snapshot/bars/entry)"
+        ),
     )
     parser.add_argument(
         "--price-band-pct",
