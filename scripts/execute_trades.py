@@ -2468,8 +2468,12 @@ class TradeExecutor:
             price_ref_src = "entry"
             reference_price: Optional[float] = None
             limit_source = "prev_close_only"
-            mode = price_mode if price_mode in {"prevclose", "entry", "close"} else "entry"
-            if mode == "prevclose":
+            mode = (
+                price_mode
+                if price_mode in {"prevclose", "entry", "close", "blended"}
+                else "entry"
+            )
+            if mode in {"prevclose", "blended"}:
                 anchor_price = self.resolve_limit_price(symbol, record)
                 if anchor_price is None or anchor_price <= 0:
                     self.record_skip_reason(
@@ -2489,6 +2493,8 @@ class TradeExecutor:
                 price_ref = anchor_price
                 reference_price = anchor_price
                 anchor_label = "prevclose"
+                price_src = anchor_label
+                price_ref_src = anchor_label
             else:
                 if mode == "close":
                     price_value = record.get("close")
@@ -2518,7 +2524,8 @@ class TradeExecutor:
 
             quote_snapshot: Dict[str, Optional[float | str]] = {}
             trade_snapshot: Dict[str, Optional[float | str]] = {}
-            if premarket_active and mode == "prevclose":
+            live_reference_needed = premarket_active and mode == "prevclose"
+            if mode == "blended" or live_reference_needed:
                 trade_snapshot = _fetch_latest_trade_from_alpaca(symbol, feed=preferred_feed)
                 trade_price: Optional[float] = None
                 trade_feed = None
@@ -2553,6 +2560,8 @@ class TradeExecutor:
                     reference_price = anchor_price
                     price_ref_src = anchor_label
                     limit_source = "prev_close_only"
+                else:
+                    limit_source = "blended" if mode == "blended" else "ref_price"
                 price_ref = reference_price or 0.0
                 quote_feed = (
                     quote_snapshot.get("feed") if isinstance(quote_snapshot, Mapping) else None
@@ -2581,7 +2590,7 @@ class TradeExecutor:
                     str(trade_ts or ""),
                 )
 
-            if mode == "prevclose":
+            if mode in {"prevclose", "blended"}:
                 adjusted_ref, skip_due_band = self._apply_price_band(
                     symbol,
                     float(anchor_price or price_ref),
@@ -2605,7 +2614,7 @@ class TradeExecutor:
                     target_notional = base_notional * atr_scale
             min_order = max(0.0, float(self.config.min_order_usd))
             target_notional = max(target_notional, min_order)
-            if mode == "prevclose":
+            if mode in {"prevclose", "blended"}:
                 anchor_val = max(0.0, float(anchor_price or 0.0))
                 reference_val = price_ref if price_ref > 0 else anchor_val
                 limit_cap = anchor_val * (1 + max_gap_ratio)
@@ -2688,7 +2697,7 @@ class TradeExecutor:
                 atr_scale,
             )
 
-            if mode == "prevclose":
+            if mode in {"prevclose", "blended"}:
                 limit_price_raw = limit_px
             else:
                 limit_price_raw = compute_limit_price(record, self.config.entry_buffer_bps)
@@ -3413,10 +3422,10 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--price-source",
-        choices=("prevclose", "entry", "close"),
+        choices=("prevclose", "entry", "close", "blended"),
         default=ExecutorConfig.price_source,
         help=(
-            "Anchor price source for limit orders (prevclose falls back to snapshot/bars/entry)"
+            "Anchor price source for limit orders (prevclose falls back to snapshot/bars/entry, blended uses prevclose and live reference prices)"
         ),
     )
     parser.add_argument(
