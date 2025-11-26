@@ -528,6 +528,16 @@ REQUIRED_ENV_KEYS = (
 _ENV_FILES_LOADED: list[str] = []
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _mask_key_hint(raw: Optional[str]) -> str:
     if not raw:
         return "missing"
@@ -1298,6 +1308,8 @@ class ExecutorConfig:
     max_positions: int = 7
     entry_buffer_bps: int = 75
     limit_buffer_pct: float = 0.5
+    max_gap_pct: float = _env_float("MAX_GAP_PCT", 3.0)
+    ref_buffer_pct: float = _env_float("REF_BUFFER_PCT", 0.5)
     trailing_percent: float = 3.0
     cancel_after_min: int = 35
     extended_hours: bool = True
@@ -2427,6 +2439,8 @@ class TradeExecutor:
         except (TypeError, ValueError):
             allocation_pct = 0.0
         limit_buffer_ratio = max(0.0, float(self.config.limit_buffer_pct)) / 100.0
+        max_gap_ratio = max(0.0, float(self.config.max_gap_pct)) / 100.0
+        ref_buffer_ratio = max(0.0, float(self.config.ref_buffer_pct)) / 100.0
         premarket_active = resolved_window == "premarket" and self.config.extended_hours
         preferred_feed = (
             os.getenv("LIMIT_PRICE_FEED") or os.getenv("ALPACA_DATA_FEED") or None
@@ -2452,6 +2466,8 @@ class TradeExecutor:
             price_ref = 0.0
             price_src = "entry"
             price_ref_src = "entry"
+            reference_price: Optional[float] = None
+            limit_source = "prev_close_only"
             mode = price_mode if price_mode in {"prevclose", "entry", "close"} else "entry"
             if mode == "prevclose":
                 anchor_price = self.resolve_limit_price(symbol, record)
@@ -2471,6 +2487,7 @@ class TradeExecutor:
                     continue
                 price_f = anchor_price
                 price_ref = anchor_price
+                reference_price = anchor_price
                 anchor_label = "prevclose"
             else:
                 if mode == "close":
@@ -2501,27 +2518,10 @@ class TradeExecutor:
 
             quote_snapshot: Dict[str, Optional[float | str]] = {}
             trade_snapshot: Dict[str, Optional[float | str]] = {}
-            if premarket_active:
-                quote_snapshot = _fetch_latest_quote_from_alpaca(symbol, feed=preferred_feed)
-                ask_price: Optional[float] = None
-                if isinstance(quote_snapshot, Mapping):
-                    raw_ask = quote_snapshot.get("ask")
-                    try:
-                        ask_price = float(raw_ask) if raw_ask is not None else None
-                    except (TypeError, ValueError):
-                        ask_price = None
-                ask_display = "nan"
-                if ask_price is not None:
-                    ask_display = "nan" if math.isnan(ask_price) else f"{ask_price:.4f}"
-                if ask_price is not None and not math.isnan(ask_price) and ask_price > 0:
-                    price_ref = max(price_ref, ask_price)
-                    quote_feed = (
-                        quote_snapshot.get("feed") if isinstance(quote_snapshot, Mapping) else None
-                    )
-                    feed_label = str(quote_feed).strip() or "default"
-                    price_ref_src = f"ask[{feed_label}]"
+            if premarket_active and mode == "prevclose":
                 trade_snapshot = _fetch_latest_trade_from_alpaca(symbol, feed=preferred_feed)
                 trade_price: Optional[float] = None
+                trade_feed = None
                 if isinstance(trade_snapshot, Mapping):
                     raw_trade = trade_snapshot.get("price")
                     if raw_trade is not None:
@@ -2529,16 +2529,31 @@ class TradeExecutor:
                             trade_price = float(raw_trade)
                         except (TypeError, ValueError):
                             trade_price = None
-                trade_display = "nan"
-                if trade_price is not None:
-                    trade_display = "nan" if math.isnan(trade_price) else f"{trade_price:.4f}"
+                    trade_feed = trade_snapshot.get("feed")
                 if trade_price is not None and not math.isnan(trade_price) and trade_price > 0:
-                    price_ref = max(price_ref, trade_price)
-                    trade_feed = (
-                        trade_snapshot.get("feed") if isinstance(trade_snapshot, Mapping) else None
-                    )
-                    feed_label = str(trade_feed).strip() or "default"
-                    price_ref_src = f"trade[{feed_label}]"
+                    reference_price = trade_price
+                    price_ref_src = f"trade[{str(trade_feed or 'default').strip()}]"
+                    limit_source = "ref_price"
+                else:
+                    quote_snapshot = _fetch_latest_quote_from_alpaca(symbol, feed=preferred_feed)
+                    quote_feed = None
+                    ask_price: Optional[float] = None
+                    if isinstance(quote_snapshot, Mapping):
+                        quote_feed = quote_snapshot.get("feed")
+                        raw_ask = quote_snapshot.get("ask")
+                        try:
+                            ask_price = float(raw_ask) if raw_ask is not None else None
+                        except (TypeError, ValueError):
+                            ask_price = None
+                    if ask_price is not None and not math.isnan(ask_price) and ask_price > 0:
+                        reference_price = ask_price
+                        price_ref_src = f"ask[{str(quote_feed or 'default').strip()}]"
+                        limit_source = "ref_price"
+                if reference_price is None or reference_price <= 0 or math.isnan(reference_price):
+                    reference_price = anchor_price
+                    price_ref_src = anchor_label
+                    limit_source = "prev_close_only"
+                price_ref = reference_price or 0.0
                 quote_feed = (
                     quote_snapshot.get("feed") if isinstance(quote_snapshot, Mapping) else None
                 )
@@ -2556,11 +2571,9 @@ class TradeExecutor:
                     else None
                 )
                 LOGGER.info(
-                    "PRICE_REF symbol=%s anchor=%.4f ask=%s trade=%s ref=%.4f src=%s feed=%s q_ts=%s t_ts=%s",
+                    "PRICE_REF symbol=%s anchor=%.4f ref=%.4f src=%s feed=%s q_ts=%s t_ts=%s",
                     symbol,
                     price_f,
-                    ask_display,
-                    trade_display,
                     price_ref,
                     price_ref_src,
                     str(quote_feed or trade_feed or preferred_feed or ""),
@@ -2593,7 +2606,36 @@ class TradeExecutor:
             min_order = max(0.0, float(self.config.min_order_usd))
             target_notional = max(target_notional, min_order)
             if mode == "prevclose":
-                limit_px = max(0.0, float(anchor_price or 0.0)) * (1 + limit_buffer_ratio)
+                anchor_val = max(0.0, float(anchor_price or 0.0))
+                reference_val = price_ref if price_ref > 0 else anchor_val
+                limit_cap = anchor_val * (1 + max_gap_ratio)
+                ref_buffered = reference_val * (1 + ref_buffer_ratio)
+                limit_px = min(limit_cap, ref_buffered)
+                if limit_px > anchor_val * 1.5:
+                    self.record_skip_reason(
+                        "PRICE_BOUNDS",
+                        symbol=symbol,
+                        detail=f"limit_gt_cap({limit_px:.2f}>{anchor_val * 1.5:.2f})",
+                    )
+                    continue
+                if limit_px < 1.0:
+                    self.record_skip_reason(
+                        "PRICE_BOUNDS",
+                        symbol=symbol,
+                        detail=f"limit_lt_floor({limit_px:.2f})",
+                    )
+                    continue
+                LOGGER.info(
+                    "[INFO] LIMIT_SRC %s symbol=%s anchor=%.4f ref=%.4f limit=%.4f gap_pct=%.2f ref_pct=%.2f src=%s",
+                    limit_source,
+                    symbol,
+                    anchor_val,
+                    reference_val,
+                    limit_px,
+                    max_gap_ratio * 100,
+                    ref_buffer_ratio * 100,
+                    price_ref_src,
+                )
             elif premarket_active:
                 limit_px = price_ref * (1 + limit_buffer_ratio)
             else:
@@ -2647,9 +2689,7 @@ class TradeExecutor:
             )
 
             if mode == "prevclose":
-                limit_price_raw = max(0.0, float(anchor_price or 0.0)) * (
-                    1 + limit_buffer_ratio
-                )
+                limit_price_raw = limit_px
             else:
                 limit_price_raw = compute_limit_price(record, self.config.entry_buffer_bps)
             limit_price = max(limit_price_raw, limit_px)
@@ -3332,6 +3372,22 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Percent tolerance added to entry/anchor prices (default 0.5)",
     )
     parser.add_argument(
+        "--max-gap-pct",
+        type=float,
+        default=ExecutorConfig.max_gap_pct,
+        help=(
+            "Max percent above previous close allowed for prevclose anchoring (env: MAX_GAP_PCT)"
+        ),
+    )
+    parser.add_argument(
+        "--ref-buffer-pct",
+        type=float,
+        default=ExecutorConfig.ref_buffer_pct,
+        help=(
+            "Percent buffer added to live reference prices (env: REF_BUFFER_PCT, default 0.5)"
+        ),
+    )
+    parser.add_argument(
         "--trailing-percent",
         type=float,
         default=ExecutorConfig.trailing_percent,
@@ -3454,6 +3510,8 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         entry_buffer_bps=args.entry_buffer_bps,
         trailing_percent=args.trailing_percent,
         limit_buffer_pct=args.limit_buffer_pct,
+        max_gap_pct=args.max_gap_pct,
+        ref_buffer_pct=args.ref_buffer_pct,
         cancel_after_min=args.cancel_after_min,
         extended_hours=args.extended_hours,
         dry_run=args.dry_run,
