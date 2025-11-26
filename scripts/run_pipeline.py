@@ -846,18 +846,21 @@ def _count_csv_lines(path: Path) -> int:
 
 def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
     """
-    Fallback: derive universe_prefix_counts from CSV artifacts.
+    Fallback for metrics['universe_prefix_counts'].
+
+    Derives prefix counts from CSV artifacts produced by the pipeline.
     Preference order:
       1) data/scored_candidates.csv  (full scored universe)
       2) data/latest_candidates.csv  (latest filtered candidates)
-    Prefix is the first character of the 'symbol' column, uppercased.
-    Returns {} if nothing usable is found or on error.
+
+    A "prefix" is the first character of the 'symbol' column, upper-cased.
+    Returns {} on error or when no usable data is found.
     """
     logger = logging.getLogger(__name__)
-    data_dir = base_dir / "data"
+
     candidates = [
-        data_dir / "scored_candidates.csv",
-        data_dir / "latest_candidates.csv",
+        base_dir / "data" / "scored_candidates.csv",
+        base_dir / "data" / "latest_candidates.csv",
     ]
     for path in candidates:
         if not path.exists():
@@ -887,10 +890,10 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
                     len(counts),
                     sum(counts.values()),
                 )
-                # Stable JSON ordering
+                # Stable order for JSON
                 return {k: int(counts[k]) for k in sorted(counts)}
 
-        except Exception as exc:  # defensive; do not break the pipeline
+        except Exception as exc:  # defensive; never break the pipeline
             logger.warning(
                 "prefix_counts: failed to derive from %s (%s)",
                 path,
@@ -980,7 +983,7 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
         logger.warning("Unable to compute universe_prefix_counts: %s", exc)
     # Ensure universe_prefix_counts is populated when possible.
     upc = metrics.get("universe_prefix_counts")
-    needs_prefix_counts = not isinstance(upc, dict) or not upc  # covers None, {}, missing
+    needs_prefix_counts = not isinstance(upc, dict) or not upc  # None, {}, or missing
 
     if needs_prefix_counts:
         derived = _derive_universe_prefix_counts(base_dir)
@@ -989,7 +992,8 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
 
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_path.write_text(
-        json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(metrics, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
     logger.info(
         "Wrote screener_metrics.json: symbols_in=%s symbols_with_bars=%s rows=%s bars_rows_total=%s",
