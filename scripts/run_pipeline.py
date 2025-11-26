@@ -10,10 +10,11 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone, date
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 from types import SimpleNamespace
 import zoneinfo
 
@@ -843,6 +844,70 @@ def _count_csv_lines(path: Path) -> int:
     return max(total - 1, 0)
 
 
+def _derive_universe_prefix_counts_from_scored(base_dir: Path) -> Dict[str, int]:
+    """
+    Fallback: derive universe_prefix_counts from data/scored_candidates.csv.
+
+    Preference order for the "prefix" field:
+      1) 'prefix'
+      2) 'symbol_prefix'
+      3) 'exchange'
+      4) heuristic from 'symbol' (first token, up to 3 chars)
+
+    Returns {} if the file is missing, empty, or unusable.
+    """
+    scored_path = base_dir / "data" / "scored_candidates.csv"
+    if not scored_path.exists():
+        logger.info("No scored_candidates.csv found; cannot derive prefix counts.")
+        return {}
+
+    try:
+        with scored_path.open(newline="") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                logger.info("scored_candidates.csv has no header; cannot derive prefix counts.")
+                return {}
+
+            headers = [h.lower() for h in reader.fieldnames]
+            has_prefix = "prefix" in headers
+            has_symbol_prefix = "symbol_prefix" in headers
+            has_exchange = "exchange" in headers
+            has_symbol = "symbol" in headers
+
+            counts: Counter[str] = Counter()
+
+            for row in reader:
+                if not row:
+                    continue
+                lower = {k.lower(): (v or "").strip() for k, v in row.items()}
+
+                prefix = ""
+                if has_prefix:
+                    prefix = lower.get("prefix", "")
+                elif has_symbol_prefix:
+                    prefix = lower.get("symbol_prefix", "")
+                elif has_exchange:
+                    prefix = lower.get("exchange", "")
+                elif has_symbol:
+                    sym = lower.get("symbol", "")
+                    if not sym:
+                        continue
+                    # Heuristic: take leading segment before '.' or ':', then clip to 3 chars.
+                    token = sym.split(".")[0].split(":")[0]
+                    prefix = token[:3]
+
+                if prefix:
+                    counts[prefix] += 1
+
+    except Exception as exc:
+        logger.warning(
+            "Error while deriving universe_prefix_counts from scored_candidates.csv: %s", exc
+        )
+        return {}
+
+    return dict(counts)
+
+
 def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
     """Ensure ``screener_metrics.json`` contains integer KPIs even on fallback nights."""
 
@@ -915,12 +980,22 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
         fallback_bars_rows_total=fallback_hint.get("bars_rows_total"),
         latest_source=fallback_hint.get("latest_source"),
     )
-    metrics_payload.setdefault("universe_prefix_counts", {})
     try:
         metrics_payload = write_universe_prefix_counts(base_dir, metrics_payload)
     except Exception as exc:  # pragma: no cover - defensive guard
         logger = logging.getLogger("run_pipeline")
         logger.warning("Unable to compute universe_prefix_counts: %s", exc)
+    # NEW: universe_prefix_counts fallback
+    upc = metrics_payload.get("universe_prefix_counts")
+    needs_prefix = not isinstance(upc, dict) or not upc  # covers None, null, {}, []
+
+    if needs_prefix:
+        prefix_counts = _derive_universe_prefix_counts_from_scored(base_dir)
+        if prefix_counts:
+            metrics_payload["universe_prefix_counts"] = prefix_counts
+        else:
+            # keep it as an empty dict so the schema is predictable
+            metrics_payload["universe_prefix_counts"] = {}
     metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
     logger.info(
         "Wrote screener_metrics.json: symbols_in=%s symbols_with_bars=%s rows=%s bars_rows_total=%s",
