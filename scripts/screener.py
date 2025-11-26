@@ -665,6 +665,40 @@ def _write_universe_prefix_metrics(
     return prefix_counts
 
 
+def _load_symbol_stats_universe(base_dir: Path) -> pd.DataFrame:
+    """Load the persisted symbol stats universe for prefix-count metrics."""
+
+    stats_path = Path(base_dir) / "data" / "registry" / "symbol_stats.csv"
+    if not stats_path.exists():
+        return pd.DataFrame(columns=["symbol"])
+    try:
+        frame = pd.read_csv(stats_path)
+    except Exception as exc:
+        LOGGER.warning("Failed to read symbol stats at %s: %s", stats_path, exc)
+        return pd.DataFrame(columns=["symbol"])
+    if "symbol" not in frame.columns:
+        return pd.DataFrame(columns=["symbol"])
+    frame = frame.copy()
+    frame["symbol"] = frame["symbol"].astype("string").str.upper()
+    return frame[["symbol"]]
+
+
+def write_universe_prefix_counts(
+    base_dir: Path, metrics: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Ensure metrics['universe_prefix_counts'] is populated based on the full universe.
+
+    This wraps the existing _write_universe_prefix_metrics used by the
+    build-symbol-stats mode, so run_pipeline can reuse the same logic
+    without having to know how to load the universe.
+    """
+
+    universe = _load_symbol_stats_universe(base_dir)
+    _write_universe_prefix_metrics(universe, metrics)
+    return metrics
+
+
 def make_verify_hook(enabled: bool):
     if not enabled:
         return None
