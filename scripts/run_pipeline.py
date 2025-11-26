@@ -846,41 +846,28 @@ def _count_csv_lines(path: Path) -> int:
 
 def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
     """
-    Lightweight fallback for metrics['universe_prefix_counts'].
-
-    We try to infer prefix counts from CSV artifacts that already exist
-    after a screener run:
-
-      1) data/scored_candidates.csv  (preferred: full scored universe)
-      2) data/latest_candidates.csv  (fallback: latest candidates only)
-
-    A "prefix" here is just the first character of the symbol, upper-cased.
-    This is enough to keep the Screener Health 'Universe Prefix Counts'
-    widget out of the '(no data)' state when metrics didn't compute it.
+    Fallback: derive universe_prefix_counts from CSV artifacts.
+    Preference order:
+      1) data/scored_candidates.csv  (full scored universe)
+      2) data/latest_candidates.csv  (latest filtered candidates)
+    Prefix is the first character of the 'symbol' column, uppercased.
+    Returns {} on any error or if no usable data is found.
     """
     logger = logging.getLogger(__name__)
-    candidates_rel_paths = (
-        Path("data") / "scored_candidates.csv",
-        Path("data") / "latest_candidates.csv",
-    )
-
-    for rel_path in candidates_rel_paths:
-        csv_path = base_dir / rel_path
-        if not csv_path.exists():
+    data_dir = base_dir / "data"
+    candidates = [
+        data_dir / "scored_candidates.csv",
+        data_dir / "latest_candidates.csv",
+    ]
+    for path in candidates:
+        if not path.exists():
             continue
-
         try:
-            with csv_path.open(newline="", encoding="utf-8") as f:
+            with path.open(newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
-                fieldnames = reader.fieldnames or []
-                if "symbol" not in fieldnames:
-                    logger.info(
-                        "prefix_counts: no 'symbol' column in %s (fields=%s)",
-                        csv_path,
-                        fieldnames,
-                    )
+                if not reader.fieldnames or "symbol" not in reader.fieldnames:
+                    logger.info("prefix_counts: no 'symbol' column in %s (fields=%s)", path, reader.fieldnames)
                     continue
-
                 counts: Counter[str] = Counter()
                 for row in reader:
                     sym = (row.get("symbol") or "").strip()
@@ -888,26 +875,21 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
                         continue
                     prefix = sym[0].upper()
                     counts[prefix] += 1
-
             if counts:
                 logger.info(
                     "prefix_counts: derived from %s prefixes=%d symbols=%d",
-                    csv_path,
+                    path,
                     len(counts),
                     sum(counts.values()),
                 )
-                # Convert Counter -> plain dict with sorted keys for stable JSON
                 return {k: int(counts[k]) for k in sorted(counts)}
-
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             logger.warning(
-                "prefix_counts: failed to read %s (%s)",
-                csv_path,
+                "prefix_counts: failed to derive from %s (%s)",
+                path,
                 exc,
                 exc_info=True,
             )
-
-    # Nothing usable found; caller can decide to leave metrics field as-is.
     return {}
 
 
@@ -988,11 +970,10 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - defensive guard
         logger = logging.getLogger("run_pipeline")
         logger.warning("Unable to compute universe_prefix_counts: %s", exc)
-    # --- ensure universe_prefix_counts is populated when possible ---
+    # Ensure universe_prefix_counts is populated when possible.
     upc = metrics_payload.get("universe_prefix_counts")
-    needs_prefix_counts = not isinstance(upc, dict) or not upc
-
-    if needs_prefix_counts:
+    needs_prefix = not isinstance(upc, dict) or not upc  # covers None, {}, missing
+    if needs_prefix:
         derived = _derive_universe_prefix_counts(base_dir)
         if derived:
             metrics_payload["universe_prefix_counts"] = derived
