@@ -848,33 +848,33 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
     """
     Fallback for metrics['universe_prefix_counts'].
 
-    We infer prefix counts from CSV artifacts that already exist after a screener run:
+    Derives prefix counts from CSV artifacts produced by the pipeline.
+    Preference order:
+      1) data/scored_candidates.csv  (full scored universe)
+      2) data/latest_candidates.csv  (latest filtered candidates)
 
-      1) data/scored_candidates.csv  (preferred: full scored universe)
-      2) data/latest_candidates.csv  (fallback: latest filtered candidates)
-
-    A "prefix" is the first character of the 'symbol' column, uppercased.
-    Returns {} if nothing usable is found or if any error occurs.
+    A "prefix" is the first character of the 'symbol' column, upper-cased.
+    Returns {} on error or when no usable data is found.
     """
     logger = logging.getLogger(__name__)
-    data_dir = base_dir / "data"
-    candidates_paths = [
-        data_dir / "scored_candidates.csv",
-        data_dir / "latest_candidates.csv",
+
+    candidates = [
+        base_dir / "data" / "scored_candidates.csv",
+        base_dir / "data" / "latest_candidates.csv",
     ]
 
-    for csv_path in candidates_paths:
-        if not csv_path.exists():
+    for path in candidates:
+        if not path.exists():
             continue
 
         try:
-            with csv_path.open(newline="", encoding="utf-8") as f:
+            with path.open(newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames or []
                 if "symbol" not in fieldnames:
                     logger.info(
                         "prefix_counts: no 'symbol' column in %s (fields=%s)",
-                        csv_path,
+                        path,
                         fieldnames,
                     )
                     continue
@@ -890,22 +890,21 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
             if counts:
                 logger.info(
                     "prefix_counts: derived from %s prefixes=%d symbols=%d",
-                    csv_path,
+                    path,
                     len(counts),
                     sum(counts.values()),
                 )
-                # Stable ordering for JSON
+                # Stable order for JSON
                 return {k: int(counts[k]) for k in sorted(counts)}
 
         except Exception as exc:  # defensive; never break the pipeline
             logger.warning(
                 "prefix_counts: failed to derive from %s (%s)",
-                csv_path,
+                path,
                 exc,
                 exc_info=True,
             )
 
-    # Nothing usable found
     return {}
 
 
