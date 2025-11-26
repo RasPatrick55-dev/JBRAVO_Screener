@@ -844,68 +844,71 @@ def _count_csv_lines(path: Path) -> int:
     return max(total - 1, 0)
 
 
-def _derive_universe_prefix_counts_from_scored(base_dir: Path) -> Dict[str, int]:
+def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
     """
-    Fallback: derive universe_prefix_counts from data/scored_candidates.csv.
+    Lightweight fallback for metrics['universe_prefix_counts'].
 
-    Preference order for the "prefix" field:
-      1) 'prefix'
-      2) 'symbol_prefix'
-      3) 'exchange'
-      4) heuristic from 'symbol' (first token, up to 3 chars)
+    We try to infer prefix counts from CSV artifacts that already exist
+    after a screener run:
 
-    Returns {} if the file is missing, empty, or unusable.
+      1) data/scored_candidates.csv  (preferred: full scored universe)
+      2) data/latest_candidates.csv  (fallback: latest candidates only)
+
+    A "prefix" here is just the first character of the symbol, upper-cased.
+    This is enough to keep the Screener Health 'Universe Prefix Counts'
+    widget out of the '(no data)' state when metrics didn't compute it.
     """
-    scored_path = base_dir / "data" / "scored_candidates.csv"
-    if not scored_path.exists():
-        logger.info("No scored_candidates.csv found; cannot derive prefix counts.")
-        return {}
+    logger = logging.getLogger(__name__)
+    candidates_rel_paths = (
+        Path("data") / "scored_candidates.csv",
+        Path("data") / "latest_candidates.csv",
+    )
 
-    try:
-        with scored_path.open(newline="") as f:
-            reader = csv.DictReader(f)
-            if not reader.fieldnames:
-                logger.info("scored_candidates.csv has no header; cannot derive prefix counts.")
-                return {}
+    for rel_path in candidates_rel_paths:
+        csv_path = base_dir / rel_path
+        if not csv_path.exists():
+            continue
 
-            headers = [h.lower() for h in reader.fieldnames]
-            has_prefix = "prefix" in headers
-            has_symbol_prefix = "symbol_prefix" in headers
-            has_exchange = "exchange" in headers
-            has_symbol = "symbol" in headers
-
-            counts: Counter[str] = Counter()
-
-            for row in reader:
-                if not row:
+        try:
+            with csv_path.open(newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                fieldnames = reader.fieldnames or []
+                if "symbol" not in fieldnames:
+                    logger.info(
+                        "prefix_counts: no 'symbol' column in %s (fields=%s)",
+                        csv_path,
+                        fieldnames,
+                    )
                     continue
-                lower = {k.lower(): (v or "").strip() for k, v in row.items()}
 
-                prefix = ""
-                if has_prefix:
-                    prefix = lower.get("prefix", "")
-                elif has_symbol_prefix:
-                    prefix = lower.get("symbol_prefix", "")
-                elif has_exchange:
-                    prefix = lower.get("exchange", "")
-                elif has_symbol:
-                    sym = lower.get("symbol", "")
+                counts: Counter[str] = Counter()
+                for row in reader:
+                    sym = (row.get("symbol") or "").strip()
                     if not sym:
                         continue
-                    # Heuristic: take leading segment before '.' or ':', then clip to 3 chars.
-                    token = sym.split(".")[0].split(":")[0]
-                    prefix = token[:3]
-
-                if prefix:
+                    prefix = sym[0].upper()
                     counts[prefix] += 1
 
-    except Exception as exc:
-        logger.warning(
-            "Error while deriving universe_prefix_counts from scored_candidates.csv: %s", exc
-        )
-        return {}
+            if counts:
+                logger.info(
+                    "prefix_counts: derived from %s prefixes=%d symbols=%d",
+                    csv_path,
+                    len(counts),
+                    sum(counts.values()),
+                )
+                # Convert Counter -> plain dict with sorted keys for stable JSON
+                return {k: int(counts[k]) for k in sorted(counts)}
 
-    return dict(counts)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "prefix_counts: failed to read %s (%s)",
+                csv_path,
+                exc,
+                exc_info=True,
+            )
+
+    # Nothing usable found; caller can decide to leave metrics field as-is.
+    return {}
 
 
 def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
@@ -985,18 +988,19 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - defensive guard
         logger = logging.getLogger("run_pipeline")
         logger.warning("Unable to compute universe_prefix_counts: %s", exc)
-    # NEW: universe_prefix_counts fallback
+    # --- ensure universe_prefix_counts is populated when possible ---
     upc = metrics_payload.get("universe_prefix_counts")
-    needs_prefix = not isinstance(upc, dict) or not upc  # covers None, null, {}, []
+    needs_prefix_counts = not isinstance(upc, dict) or not upc
 
-    if needs_prefix:
-        prefix_counts = _derive_universe_prefix_counts_from_scored(base_dir)
-        if prefix_counts:
-            metrics_payload["universe_prefix_counts"] = prefix_counts
-        else:
-            # keep it as an empty dict so the schema is predictable
-            metrics_payload["universe_prefix_counts"] = {}
-    metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+    if needs_prefix_counts:
+        derived = _derive_universe_prefix_counts(base_dir)
+        if derived:
+            metrics_payload["universe_prefix_counts"] = derived
+
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text(
+        json.dumps(metrics_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     logger.info(
         "Wrote screener_metrics.json: symbols_in=%s symbols_with_bars=%s rows=%s bars_rows_total=%s",
         metrics_payload.get("symbols_in"),
