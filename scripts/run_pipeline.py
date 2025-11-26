@@ -21,6 +21,7 @@ import pandas as pd
 import requests
 
 from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
+from scripts.screener import write_universe_prefix_counts
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
 from utils import write_csv_atomic, atomic_write_bytes
 from utils.env import get_alpaca_creds
@@ -914,6 +915,12 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
         fallback_bars_rows_total=fallback_hint.get("bars_rows_total"),
         latest_source=fallback_hint.get("latest_source"),
     )
+    metrics_payload.setdefault("universe_prefix_counts", {})
+    try:
+        metrics_payload = write_universe_prefix_counts(base_dir, metrics_payload)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger = logging.getLogger("run_pipeline")
+        logger.warning("Unable to compute universe_prefix_counts: %s", exc)
     metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
     logger.info(
         "Wrote screener_metrics.json: symbols_in=%s symbols_with_bars=%s rows=%s bars_rows_total=%s",
