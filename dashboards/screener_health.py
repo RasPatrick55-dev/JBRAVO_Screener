@@ -224,10 +224,17 @@ def _status_row(label: str, payload: Mapping[str, Any]) -> html.Div:
     info = payload if isinstance(payload, Mapping) else {}
     ok_raw = info.get("ok") if isinstance(info, Mapping) else None
     failing = ok_raw is False
-    icon = "❌" if failing else "✅"
+    if ok_raw is True:
+        icon = "✅"
+    elif ok_raw is False:
+        icon = "❌"
+    else:
+        icon = "⏸️"
     status = info.get("status")
     status_text = "n/a" if status in (None, "") else str(status)
     message = str(info.get("message") or "").strip()
+    if not message and ok_raw is None:
+        message = "Awaiting first probe"
     return html.Div(
         [
             html.Div(
@@ -255,7 +262,15 @@ def _health_elements(health: Mapping[str, Any] | None) -> tuple[html.Div, html.D
     trading = trading if isinstance(trading, Mapping) else {}
     data = data if isinstance(data, Mapping) else {}
 
+    trading_ok = health.get("trading_ok") if isinstance(health, Mapping) else None
+    data_ok = health.get("data_ok") if isinstance(health, Mapping) else None
+
     ts = _format_probe_timestamp(health.get("ts_utc") if isinstance(health, Mapping) else None)
+
+    if trading_ok is None and data_ok is None:
+        status_label = "Not probed yet"
+    else:
+        status_label = f"Last probe: {ts}"
 
     health_card = html.Div(
         [
@@ -267,7 +282,7 @@ def _health_elements(health: Mapping[str, Any] | None) -> tuple[html.Div, html.D
                 ],
                 style={"display": "grid", "gap": "6px"},
             ),
-            html.Div(f"Last probe: {ts}", className="sh-kpi-sub"),
+            html.Div(status_label, className="sh-kpi-sub"),
         ],
         className="sh-kpi sh-health-card",
         style={"gridColumn": "1 / span 2", "background": "#1e2235"},

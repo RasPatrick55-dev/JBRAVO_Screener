@@ -19,6 +19,11 @@ print(json.dumps({"status":"OK" if ok else "FAIL","buying_power":bp,"auth_ok":ok
 raise SystemExit(0 if ok else 2)
 PY
 
+echo "[WRAPPER] Alpaca account probe OK"
+
+# Run Alpaca connectivity probe for Screener Health tab
+python -m scripts.check_connection || echo "[WARN] connection probe failed (non-fatal)"
+
 python - <<'PY'
 import json, os, pathlib, sys, time
 root=pathlib.Path('.')
