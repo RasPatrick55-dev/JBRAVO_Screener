@@ -1,6 +1,8 @@
 # metrics.py (enhanced with comprehensive metrics)
 import sys
 import os
+import json
+import csv
 
 # Ensure project root is on ``sys.path`` before third-party imports
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -9,6 +11,7 @@ sys.path.insert(0, BASE_DIR)
 import logging
 from datetime import datetime
 from pathlib import Path
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -25,6 +28,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.info("Metrics script started")
+
+
+def derive_prefix_counts_from_scored_candidates(base_dir: Path) -> dict:
+    path = base_dir / "data" / "scored_candidates.csv"
+    counts: Counter[str] = Counter()
+    if not path.exists():
+        logging.warning("Prefix count skipped: %s not found", path)
+        return {}
+
+    try:
+        with path.open(newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                symbol = (row.get("symbol") or "").strip()
+                if symbol and symbol[0].isalpha():
+                    prefix = symbol[0].upper()
+                    counts[prefix] += 1
+    except Exception as exc:
+        logging.warning("Error reading %s for prefix counts: %s", path, exc)
+        return {}
+
+    return dict(sorted(counts.items()))
 
 start_time = datetime.utcnow()
 
@@ -362,6 +387,36 @@ def main():
     except Exception as e:
         logger.error(f"Failed to write metrics_summary.csv: {e}")
         return 1
+
+    metrics_path = Path(BASE_DIR) / "data" / "screener_metrics.json"
+    metrics: dict = {}
+    if metrics_path.exists():
+        try:
+            candidate = json.loads(metrics_path.read_text(encoding="utf-8"))
+            if isinstance(candidate, dict):
+                metrics.update(candidate)
+            else:
+                logger.warning(
+                    "Existing screener_metrics.json is not a dict; resetting prefix counts context."
+                )
+        except Exception as exc:  # pragma: no cover - defensive I/O guard
+            logger.warning("Failed to read %s: %s", metrics_path, exc)
+
+    if not metrics.get("universe_prefix_counts"):
+        metrics["universe_prefix_counts"] = derive_prefix_counts_from_scored_candidates(
+            Path(BASE_DIR)
+        )
+
+    if "universe_prefix_counts" not in metrics:
+        metrics["universe_prefix_counts"] = {}
+
+    try:
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_path.write_text(
+            json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8"
+        )
+    except Exception as exc:  # pragma: no cover - defensive I/O guard
+        logger.warning("Failed to update %s: %s", metrics_path, exc)
 
     return 0
 
