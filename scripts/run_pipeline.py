@@ -851,7 +851,7 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
       1) data/scored_candidates.csv  (full scored universe)
       2) data/latest_candidates.csv  (latest filtered candidates)
     Prefix is the first character of the 'symbol' column, uppercased.
-    Returns {} on any error or if no usable data is found.
+    Returns {} if nothing usable is found or on error.
     """
     logger = logging.getLogger(__name__)
     data_dir = base_dir / "data"
@@ -865,8 +865,13 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
         try:
             with path.open(newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
-                if not reader.fieldnames or "symbol" not in reader.fieldnames:
-                    logger.info("prefix_counts: no 'symbol' column in %s (fields=%s)", path, reader.fieldnames)
+                fieldnames = reader.fieldnames or []
+                if "symbol" not in fieldnames:
+                    logger.info(
+                        "prefix_counts: no 'symbol' column in %s (fields=%s)",
+                        path,
+                        fieldnames,
+                    )
                     continue
                 counts: Counter[str] = Counter()
                 for row in reader:
@@ -882,14 +887,17 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
                     len(counts),
                     sum(counts.values()),
                 )
+                # Stable JSON ordering
                 return {k: int(counts[k]) for k in sorted(counts)}
-        except Exception as exc:
+
+        except Exception as exc:  # defensive; do not break the pipeline
             logger.warning(
                 "prefix_counts: failed to derive from %s (%s)",
                 path,
                 exc,
                 exc_info=True,
             )
+    # Nothing usable found
     return {}
 
 
@@ -958,7 +966,7 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
     fallback_hint["symbols_with_bars"] = int(fallback_hint.get("symbols_with_bars_raw", 0))
 
     metrics_path = data_dir / "screener_metrics.json"
-    metrics_payload = compose_metrics_from_artifacts(
+    metrics = compose_metrics_from_artifacts(
         base_dir,
         symbols_in=fallback_hint.get("symbols_in"),
         fallback_symbols_with_bars=fallback_hint.get("symbols_with_bars"),
@@ -966,30 +974,31 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
         latest_source=fallback_hint.get("latest_source"),
     )
     try:
-        metrics_payload = write_universe_prefix_counts(base_dir, metrics_payload)
+        metrics = write_universe_prefix_counts(base_dir, metrics)
     except Exception as exc:  # pragma: no cover - defensive guard
         logger = logging.getLogger("run_pipeline")
         logger.warning("Unable to compute universe_prefix_counts: %s", exc)
     # Ensure universe_prefix_counts is populated when possible.
-    upc = metrics_payload.get("universe_prefix_counts")
-    needs_prefix = not isinstance(upc, dict) or not upc  # covers None, {}, missing
-    if needs_prefix:
+    upc = metrics.get("universe_prefix_counts")
+    needs_prefix_counts = not isinstance(upc, dict) or not upc  # covers None, {}, missing
+
+    if needs_prefix_counts:
         derived = _derive_universe_prefix_counts(base_dir)
         if derived:
-            metrics_payload["universe_prefix_counts"] = derived
+            metrics["universe_prefix_counts"] = derived
 
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_path.write_text(
-        json.dumps(metrics_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     logger.info(
         "Wrote screener_metrics.json: symbols_in=%s symbols_with_bars=%s rows=%s bars_rows_total=%s",
-        metrics_payload.get("symbols_in"),
-        metrics_payload.get("symbols_with_bars"),
-        metrics_payload.get("rows"),
-        metrics_payload.get("bars_rows_total"),
+        metrics.get("symbols_in"),
+        metrics.get("symbols_with_bars"),
+        metrics.get("rows"),
+        metrics.get("bars_rows_total"),
     )
-    return metrics_payload
+    return metrics
 
 
 def _annotate_screener_metrics(
