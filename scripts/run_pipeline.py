@@ -848,34 +848,37 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
     """
     Fallback for metrics['universe_prefix_counts'].
 
-    Derives prefix counts from CSV artifacts produced by the pipeline.
-    Preference order:
-      1) data/scored_candidates.csv  (full scored universe)
-      2) data/latest_candidates.csv  (latest filtered candidates)
+    We infer prefix counts from CSV artifacts that already exist after a screener run:
 
-    A "prefix" is the first character of the 'symbol' column, upper-cased.
-    Returns {} on error or when no usable data is found.
+      1) data/scored_candidates.csv  (preferred: full scored universe)
+      2) data/latest_candidates.csv  (fallback: latest filtered candidates)
+
+    A "prefix" is the first character of the 'symbol' column, uppercased.
+    Returns {} if nothing usable is found or if any error occurs.
     """
     logger = logging.getLogger(__name__)
-
-    candidates = [
-        base_dir / "data" / "scored_candidates.csv",
-        base_dir / "data" / "latest_candidates.csv",
+    data_dir = base_dir / "data"
+    candidates_paths = [
+        data_dir / "scored_candidates.csv",
+        data_dir / "latest_candidates.csv",
     ]
-    for path in candidates:
-        if not path.exists():
+
+    for csv_path in candidates_paths:
+        if not csv_path.exists():
             continue
+
         try:
-            with path.open(newline="", encoding="utf-8") as f:
+            with csv_path.open(newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames or []
                 if "symbol" not in fieldnames:
                     logger.info(
                         "prefix_counts: no 'symbol' column in %s (fields=%s)",
-                        path,
+                        csv_path,
                         fieldnames,
                     )
                     continue
+
                 counts: Counter[str] = Counter()
                 for row in reader:
                     sym = (row.get("symbol") or "").strip()
@@ -883,23 +886,25 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
                         continue
                     prefix = sym[0].upper()
                     counts[prefix] += 1
+
             if counts:
                 logger.info(
                     "prefix_counts: derived from %s prefixes=%d symbols=%d",
-                    path,
+                    csv_path,
                     len(counts),
                     sum(counts.values()),
                 )
-                # Stable order for JSON
+                # Stable ordering for JSON
                 return {k: int(counts[k]) for k in sorted(counts)}
 
         except Exception as exc:  # defensive; never break the pipeline
             logger.warning(
                 "prefix_counts: failed to derive from %s (%s)",
-                path,
+                csv_path,
                 exc,
                 exc_info=True,
             )
+
     # Nothing usable found
     return {}
 
