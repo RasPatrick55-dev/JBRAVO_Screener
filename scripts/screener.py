@@ -32,6 +32,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from scripts import logger_utils
+
 
 def _to_symbol_list(obj: Iterable[object] | pd.Series | pd.DataFrame | None) -> list[str]:
     """Normalize a container of symbols into a de-duplicated uppercase list."""
@@ -5081,6 +5083,12 @@ def main(
 ) -> int:
     _bootstrap_env()
     _ensure_logger()
+    screener_handler: logging.Handler | None = None
+    try:
+        screener_handler = logger_utils.make_screener_file_handler()
+        LOGGER.addHandler(screener_handler)
+    except Exception:
+        LOGGER.exception("Failed to attach screener file handler")
     arg_list: Optional[List[str]]
     if argv is None:
         arg_list = None
@@ -5280,15 +5288,20 @@ def main(
         return 0
 
     try:
-        return _run()
-    except AlpacaUnauthorizedError as exc:
-        LOGGER.error(
-            '[ERROR] ALPACA_UNAUTHORIZED endpoint=%s feed=%s hint="check keys/base urls"',
-            exc.endpoint or "",
-            exc.feed or "",
-        )
-        _persist_auth_error("unauthorized", base_dir=base_dir)
-        return 2
+        try:
+            return _run()
+        except AlpacaUnauthorizedError as exc:
+            LOGGER.error(
+                '[ERROR] ALPACA_UNAUTHORIZED endpoint=%s feed=%s hint="check keys/base urls"',
+                exc.endpoint or "",
+                exc.feed or "",
+            )
+            _persist_auth_error("unauthorized", base_dir=base_dir)
+            return 2
+    finally:
+        if screener_handler is not None:
+            LOGGER.removeHandler(screener_handler)
+            screener_handler.close()
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
