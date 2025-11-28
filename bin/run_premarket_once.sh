@@ -9,7 +9,7 @@ source "$VENV/bin/activate"
 set -a; . ~/.config/jbravo/.env; set +a
 
 echo "[WRAPPER] probing Alpaca credentials"
-python - <<'PY'
+ALPACA_PROBE=$(python - <<'PY'
 import os, requests, json
 base=os.environ["APCA_API_BASE_URL"].rstrip("/")
 headers={"APCA-API-KEY-ID":os.environ["APCA_API_KEY_ID"],"APCA-API-SECRET-KEY":os.environ["APCA_API_SECRET_KEY"]}
@@ -18,6 +18,12 @@ ok=r.status_code==200; bp=(r.json().get("buying_power") if ok else "0")
 print(json.dumps({"status":"OK" if ok else "FAIL","buying_power":bp,"auth_ok":ok}))
 raise SystemExit(0 if ok else 2)
 PY
+probe_rc=$?
+echo "$ALPACA_PROBE"
+if [ "$probe_rc" -ne 0 ]; then
+  exit "$probe_rc"
+fi
+export ALPACA_PROBE
 
 echo "[WRAPPER] Alpaca account probe OK"
 
@@ -70,11 +76,43 @@ elif [ "$rc" -ne 0 ]; then
   exit "$rc"
 fi
 
+PREMARKET_STARTED_UTC=$(python - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).isoformat())
+PY
+)
+
 python -m scripts.execute_trades \
   --source data/latest_candidates.csv \
   --allocation-pct 0.06 --min-order-usd 300 --max-positions 7 \
   --trailing-percent 3 --time-window premarket --extended-hours true \
   --submit-at-ny "07:00" --price-source prevclose \
   --cancel-after-min 35 --limit-buffer-pct 0.0
+
+PREMARKET_FINISHED_UTC=$(python - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).isoformat())
+PY
+)
+
+python - <<'PY'
+import json, os, pathlib
+from scripts.execute_trades import write_premarket_snapshot
+
+probe_env = os.environ.get("ALPACA_PROBE", "{}")
+try:
+    probe_payload = json.loads(probe_env)
+except Exception:
+    probe_payload = {}
+
+started = os.environ.get("PREMARKET_STARTED_UTC")
+finished = os.environ.get("PREMARKET_FINISHED_UTC")
+
+try:
+    path = write_premarket_snapshot(pathlib.Path("."), probe_payload=probe_payload, started_utc=started, finished_utc=finished)
+    print(f"[WRAPPER] premarket snapshot updated: {path}")
+except Exception as exc:  # pragma: no cover - defensive wrapper guard
+    print(f"[WRAPPER] failed to write premarket snapshot: {exc}")
+PY
 
 touch /var/www/raspatrick_pythonanywhere_com_wsgi.py || true

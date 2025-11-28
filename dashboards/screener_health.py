@@ -419,7 +419,9 @@ def _premarket_pill(payload: Mapping[str, Any] | None) -> html.Div:
 
     ny_now = datetime.now(ZoneInfo("America/New_York"))
     ny_label = ny_now.strftime("%Y-%m-%d %H:%M:%S %Z")
-    started = _format_probe_timestamp(info.get("started_utc"))
+    started = _format_probe_timestamp(
+        info.get("finished_utc") or info.get("started_utc")
+    )
     if started and started != "n/a":
         sub_text = f"Pre-market run: {started} • Now (NY): {ny_label}"
     else:
