@@ -5,6 +5,7 @@ import logging
 import os
 import pathlib
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import requests
 from typing import Any, Mapping
 
@@ -221,6 +222,47 @@ def _format_probe_timestamp(raw: Any) -> str:
         return raw
 
 
+def load_premarket_status(base_dir: pathlib.Path = REPO_ROOT) -> dict[str, Any] | None:
+    """Load the last pre-market wrapper run status.
+
+    Returns a normalized dict or ``None`` when the artifact is missing/invalid.
+    """
+
+    path = base_dir / "data" / "last_premarket_run.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except Exception:
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+
+    candidates_keys = ["candidates_in", "candidates", "candidates_total"]
+    candidates_in = None
+    for key in candidates_keys:
+        if key in raw:
+            try:
+                candidates_in = int(raw.get(key) or 0)
+            except (TypeError, ValueError):
+                candidates_in = 0
+            break
+
+    payload: dict[str, Any] = {
+        "in_window": bool(raw.get("in_window")),
+        "auth_ok": bool(raw.get("auth_ok")),
+        "candidates_in": candidates_in if candidates_in is not None else 0,
+        "window_label": raw.get("window_label") or raw.get("window") or raw.get("mode"),
+        "started_utc": raw.get("started_utc") or raw.get("start_utc"),
+        "finished_utc": raw.get("finished_utc") or raw.get("end_utc"),
+    }
+    if "skip_counts" in raw and isinstance(raw.get("skip_counts"), Mapping):
+        payload["skip_counts"] = dict(raw.get("skip_counts") or {})
+    if "buying_power" in raw:
+        payload["buying_power"] = raw.get("buying_power")
+    if "orders_submitted" in raw:
+        payload["orders_submitted"] = raw.get("orders_submitted")
+    return payload
+
+
 def _status_row(label: str, payload: Mapping[str, Any]) -> html.Div:
     info = payload if isinstance(payload, Mapping) else {}
     ok_raw = info.get("ok") if isinstance(info, Mapping) else None
@@ -323,15 +365,37 @@ def _health_elements(health: Mapping[str, Any] | None) -> tuple[html.Div, html.D
 
 def _premarket_pill(payload: Mapping[str, Any] | None) -> html.Div:
     info = payload if isinstance(payload, Mapping) else {}
+    if not info:
+        return html.Div(
+            [
+                html.Div("Pre-market readiness", className="sh-kpi-title"),
+                html.Div(
+                    "Pre-market run status: (no run recorded yet)",
+                    className="sh-kpi-sub",
+                    style={"color": "#cbd5f5"},
+                ),
+            ],
+            className="sh-kpi sh-premarket-pill",
+            style={
+                "background": "#1e2734",
+                "borderRadius": "8px",
+                "padding": "10px 12px",
+                "display": "grid",
+                "gap": "6px",
+            },
+        )
+
     in_window = bool(info.get("in_window"))
     auth_ok = bool(info.get("auth_ok"))
-    candidates_raw = info.get("candidates_in", 0)
+    candidates_raw = info.get("candidates_in")
     try:
-        candidates = int(candidates_raw)
+        candidates = int(candidates_raw) if candidates_raw is not None else None
     except (TypeError, ValueError):
-        candidates = 0
-    started = _format_probe_timestamp(info.get("started_utc"))
-    ny_now = _format_probe_timestamp(info.get("ny_now"))
+        candidates = None
+    window_label = str(info.get("window_label") or "").strip()
+    window_text = "Window"
+    if window_label:
+        window_text = f"Within {window_label}"
 
     chip_style = {
         "background": "#2a3145",
@@ -340,7 +404,7 @@ def _premarket_pill(payload: Mapping[str, Any] | None) -> html.Div:
     }
     chips = [
         html.Span(
-            f"Window {'✅' if in_window else '❌'}",
+            f"{window_text} {'✅' if in_window else '❌'}",
             style=chip_style,
         ),
         html.Span(
@@ -348,17 +412,18 @@ def _premarket_pill(payload: Mapping[str, Any] | None) -> html.Div:
             style=chip_style,
         ),
         html.Span(
-            f"Candidates {candidates:,}",
+            f"Candidates {candidates:,}" if candidates is not None else "Candidates —",
             style=chip_style,
         ),
     ]
 
-    sub_parts: list[str] = []
+    ny_now = datetime.now(ZoneInfo("America/New_York"))
+    ny_label = ny_now.strftime("%Y-%m-%d %H:%M:%S %Z")
+    started = _format_probe_timestamp(info.get("started_utc"))
     if started and started != "n/a":
-        sub_parts.append(f"Started {started}")
-    if ny_now and ny_now != "n/a":
-        sub_parts.append(f"NY {ny_now}")
-    sub_text = " • ".join(sub_parts) if sub_parts else "Awaiting latest run"
+        sub_text = f"Pre-market run: {started} • Now (NY): {ny_label}"
+    else:
+        sub_text = f"Pre-market run status: awaiting latest run • Now (NY): {ny_label}"
 
     return html.Div(
         [
@@ -415,6 +480,29 @@ def _safe_csv(path: pathlib.Path, nrows: int | None = None) -> pd.DataFrame:
     except Exception as exc:  # pragma: no cover - defensive
         _warn_once("csv_error", path, "Failed to read CSV artifact %s: %s", path, exc)
     return pd.DataFrame()
+
+
+def load_screener_history(base_dir: pathlib.Path = REPO_ROOT) -> pd.DataFrame | None:
+    """Load screener history; return None when missing or too short."""
+
+    path = base_dir / "data" / "screener_metrics_history.csv"
+    df = _safe_csv(path)
+    if df.empty:
+        return None
+    expected_cols = {"run_utc", "symbols_in", "symbols_with_bars", "rows"}
+    if not expected_cols.issubset(df.columns):
+        return None
+    if len(df) < 3:
+        return None
+    return df
+
+
+def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | None:
+    """Load latest ranker evaluation metrics, if present."""
+
+    path = base_dir / "data" / "ranker_eval" / "latest.json"
+    payload = _safe_json(path)
+    return payload if payload else None
 
 
 def _extract_last_line(text: str, token: str) -> str:
@@ -904,26 +992,26 @@ def register_callbacks(app):
             else:
                 top["origin"] = "—"
 
-        hist = _safe_csv(HIST_CSV)
-        ev = _safe_json(RANKER_EVAL_LATEST)
+        hist = load_screener_history(REPO_ROOT)
+        ev = load_ranker_eval(REPO_ROOT)
         summary_df = _safe_csv(METRICS_SUMMARY_CSV, nrows=1)
         summary = summary_df.iloc[0].to_dict() if not summary_df.empty else {}
-        premarket = _safe_json(PREMARKET_JSON)
+        premarket = load_premarket_status(REPO_ROOT)
 
         return (
             m,
             (top.to_dict("records") if not top.empty else []),
-            (hist.to_dict("records") if not hist.empty else []),
-            ev,
+            (hist.to_dict("records") if isinstance(hist, pd.DataFrame) and not hist.empty else []),
+            (ev or {}),
             summary,
-            premarket,
+            (premarket or {}),
         )
 
     @app.callback(
         Output("sh-health-store", "data"),
         Input("health-refresh", "n_intervals"),
     )
-def _refresh_connection_health(_n):
+    def _refresh_connection_health(_n):
         payload = _safe_json(CONNECTION_HEALTH_JSON)
         if payload:
             return payload
@@ -1234,22 +1322,39 @@ def _refresh_connection_health(_n):
             # accept run_utc either ISO or naive
             hist["run_utc"] = pd.to_datetime(hist["run_utc"], errors="coerce", utc=True)
             hist = hist.sort_values("run_utc").tail(14)
-            hist["with_bars_pct"] = (hist["symbols_with_bars"] / hist["symbols_in"].replace(0, pd.NA)).astype(float)
+            hist["with_bars_pct"] = (
+                hist["symbols_with_bars"] / hist["symbols_in"].replace(0, pd.NA)
+            ).astype(float)
             # Build a tidy frame for two series
-            tidy = pd.DataFrame({
-                "run_utc": pd.concat([hist["run_utc"], hist["run_utc"]], ignore_index=True),
-                "value":   pd.concat([hist["rows"], hist["with_bars_pct"]], ignore_index=True),
-                "series":  ["Rows"]*len(hist) + ["With Bars %"]*len(hist)
-            })
-            fig_trend = px.line(tidy, x="run_utc", y="value", color="series",
-                                markers=True, title="14‑Day Trend: Candidates & With‑Bars %")
+            tidy = pd.DataFrame(
+                {
+                    "run_utc": pd.concat([hist["run_utc"], hist["run_utc"]], ignore_index=True),
+                    "value": pd.concat([hist["rows"], hist["with_bars_pct"]], ignore_index=True),
+                    "series": ["Rows"] * len(hist) + ["With Bars %"] * len(hist),
+                }
+            )
+            fig_trend = px.line(
+                tidy,
+                x="run_utc",
+                y="value",
+                color="series",
+                markers=True,
+                title="14‑Day Trend: Candidates & With‑Bars %",
+            )
             # nicer y-axis for percent series (auto is fine, we keep simple)
         else:
-            fig_trend = px.line(title="14‑Day Trend: (insufficient history)")
+            fig_trend = _placeholder_figure(
+                "14‑Day Trend: Candidates & With‑Bars %",
+                "Not enough history yet",
+            )
 
         # ---------------- Deciles (Hit‑rate & Avg Return) ----------------
-        hit_fig = _placeholder_figure("Decile Hit‑Rate")
-        ret_fig = _placeholder_figure("Decile Avg Return")
+        hit_fig = _placeholder_figure(
+            "Decile Hit‑Rate", "Not computed yet (no ranker_eval data)."
+        )
+        ret_fig = _placeholder_figure(
+            "Decile Avg Return", "Not computed yet (no ranker_eval data)."
+        )
         if ev and isinstance(ev, dict):
             dec = ev.get("deciles") or {}
             # expected: {"rank_decile":[1..10], "hit_rate":[...], "avg_return":[...], "count":[...]}
@@ -1409,6 +1514,7 @@ def _refresh_connection_health(_n):
                 className="sh-health-alert",
             )
 
+        # universe_prefix_counts expected shape: {"NY": 2000, "CX": 500, ...}
         prefix_raw = m.get("universe_prefix_counts") if isinstance(m, dict) else {}
         prefix_counts = (
             json.dumps(prefix_raw, indent=2, sort_keys=True)
@@ -1416,11 +1522,13 @@ def _refresh_connection_health(_n):
             else "(no data)"
         )
 
+        # http stats expected shape: {"200": 7400, "429": 100, ...}
         http_view = m.get("http") if isinstance(m, dict) else {}
         if not isinstance(http_view, dict):
             http_view = {}
         http_json = json.dumps(http_view, indent=2, sort_keys=True) if http_view else "(no data)"
 
+        # cache stats expected shape: {"cache_hits": 1234, ...}
         cache_view = m.get("cache") if isinstance(m, dict) else {}
         if not isinstance(cache_view, dict):
             cache_view = {}

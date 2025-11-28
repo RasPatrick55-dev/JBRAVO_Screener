@@ -231,7 +231,11 @@ def _utcnow():
 
 
 def is_log_stale(path, max_age_hours: int = 24) -> bool:
-    """Return True if the most recent INFO/ERROR entry is older than ``max_age_hours``."""
+    """Return True if the latest log activity is older than ``max_age_hours``.
+
+    Matches logger_utils format (" - INFO - " / " - ERROR - ") and falls back to
+    file modification time when timestamps are not present.
+    """
 
     try:
         log_path = Path(path)
@@ -239,20 +243,28 @@ def is_log_stale(path, max_age_hours: int = 24) -> bool:
         return True
 
     try:
+        if not log_path.exists():
+            return True
+
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            lines = []
+
         last_ts = None
-        with open(log_path, "r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                if not _line_contains_level(line):
-                    continue
-                candidate = _parse_log_timestamp(line)
-                if candidate:
-                    last_ts = candidate
-        if not last_ts:
+        for line in reversed(lines):
+            if not _line_contains_level(line):
+                continue
+            candidate = _parse_log_timestamp(line)
+            if candidate:
+                last_ts = candidate
+                break
+
+        if last_ts is None:
             mtime = datetime.utcfromtimestamp(os.path.getmtime(log_path))
-            return (_utcnow() - mtime).total_seconds() > max_age_hours * 3600
+            last_ts = mtime
+
         return (_utcnow() - last_ts).total_seconds() > max_age_hours * 3600
-    except FileNotFoundError:
-        return True
     except Exception:
         return True
 
