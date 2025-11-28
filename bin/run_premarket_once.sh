@@ -28,6 +28,37 @@ export ALPACA_PROBE
 
 echo "[WRAPPER] Alpaca account probe OK"
 
+# Timestamp the wrapper run for snapshotting
+PREMARKET_STARTED_UTC=$(python - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).isoformat())
+PY
+)
+export PREMARKET_STARTED_UTC
+
+# Helper to persist the latest premarket snapshot without failing the wrapper
+write_premarket_snapshot() {
+python - <<'PY'
+import json, os, pathlib
+from scripts.execute_trades import write_premarket_snapshot
+
+probe_env = os.environ.get("ALPACA_PROBE", "{}")
+try:
+    probe_payload = json.loads(probe_env)
+except Exception:
+    probe_payload = {}
+
+started = os.environ.get("PREMARKET_STARTED_UTC")
+finished = os.environ.get("PREMARKET_FINISHED_UTC")
+
+try:
+    path = write_premarket_snapshot(pathlib.Path("."), probe_payload=probe_payload, started_utc=started, finished_utc=finished)
+    print(f"[WRAPPER] premarket snapshot updated: {path}")
+except Exception as exc:  # pragma: no cover - defensive wrapper guard
+    print(f"[WRAPPER] failed to write premarket snapshot: {exc}")
+PY
+}
+
 # Run Alpaca connectivity probe for Screener Health tab
 python -m scripts.check_connection || echo "[WARN] connection probe failed (non-fatal)"
 
@@ -72,16 +103,17 @@ print("[WRAPPER] artifacts OK; proceeding to execution")
 PY
 rc=$?
 if [ "$rc" -eq 10 ]; then
+  PREMARKET_FINISHED_UTC=$(python - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).isoformat())
+PY
+  )
+  export PREMARKET_FINISHED_UTC
+  write_premarket_snapshot
   exit 0
 elif [ "$rc" -ne 0 ]; then
   exit "$rc"
 fi
-
-PREMARKET_STARTED_UTC=$(python - <<'PY'
-from datetime import datetime, timezone
-print(datetime.now(timezone.utc).isoformat())
-PY
-)
 
 python -m scripts.execute_trades \
   --source data/latest_candidates.csv \
@@ -95,25 +127,8 @@ from datetime import datetime, timezone
 print(datetime.now(timezone.utc).isoformat())
 PY
 )
+export PREMARKET_FINISHED_UTC
 
-python - <<'PY'
-import json, os, pathlib
-from scripts.execute_trades import write_premarket_snapshot
-
-probe_env = os.environ.get("ALPACA_PROBE", "{}")
-try:
-    probe_payload = json.loads(probe_env)
-except Exception:
-    probe_payload = {}
-
-started = os.environ.get("PREMARKET_STARTED_UTC")
-finished = os.environ.get("PREMARKET_FINISHED_UTC")
-
-try:
-    path = write_premarket_snapshot(pathlib.Path("."), probe_payload=probe_payload, started_utc=started, finished_utc=finished)
-    print(f"[WRAPPER] premarket snapshot updated: {path}")
-except Exception as exc:  # pragma: no cover - defensive wrapper guard
-    print(f"[WRAPPER] failed to write premarket snapshot: {exc}")
-PY
+write_premarket_snapshot
 
 touch /var/www/raspatrick_pythonanywhere_com_wsgi.py || true
