@@ -28,11 +28,13 @@ os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 
 from dashboards.screener_health import build_layout as build_screener_health
 from dashboards.screener_health import register_callbacks as register_screener_health
+from dashboards.screener_health import load_kpis as _load_screener_health_kpis
 from dashboards.data_io import (
     screener_health as load_screener_health,
     screener_table,
     metrics_summary_snapshot,
 )
+from dashboards.utils import coerce_kpi_types, parse_pipeline_summary
 from scripts.run_pipeline import write_complete_screener_metrics
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
 
@@ -94,6 +96,17 @@ def _normalize_pnl(df: pd.DataFrame | None) -> pd.DataFrame | None:
                 df = df.rename(columns={candidate: "net_pnl"})
             break
     return df
+
+
+def _coerce_int_value(value: Any) -> int:
+    try:
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return 0
+        if isinstance(value, bool):
+            return int(value)
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _is_paper_mode() -> bool:
@@ -370,6 +383,53 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
     return df, None
 
 
+def load_screener_kpis() -> tuple[dict[str, Any], dbc.Alert | None]:
+    """Load screener KPIs with a pipeline.log fallback.
+
+    The function never raises; on failure it returns default KPI values with a
+    human-friendly alert component describing the issue.
+    """
+
+    defaults = {
+        "last_run_utc": None,
+        "symbols_in": None,
+        "symbols_with_bars": None,
+        "bars_rows_total": None,
+        "rows": None,
+    }
+    alert: dbc.Alert | None = None
+
+    try:
+        kpis = dict(_load_screener_health_kpis())
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to load screener KPIs directly: %s", exc)
+        kpis = {}
+
+    payload = defaults | kpis
+
+    missing = [
+        key for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows")
+        if not isinstance(payload.get(key), int)
+    ]
+    if missing:
+        pipeline_fallback = coerce_kpi_types(parse_pipeline_summary(Path(pipeline_log_path)))
+        for key, value in pipeline_fallback.items():
+            if key in defaults and payload.get(key) is None and value is not None:
+                payload[key] = value
+        still_missing = [
+            key for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows")
+            if not isinstance(payload.get(key), int)
+        ]
+        if still_missing:
+            alert = dbc.Alert(
+                "Screener metrics unavailable; showing defaults. Check logs/pipeline.log.",
+                color="warning",
+                className="mb-2",
+            )
+
+    return payload, alert
+
+
 def load_latest_candidates():
     """Load canonical latest_candidates.csv with header validation."""
 
@@ -398,17 +458,149 @@ def load_latest_candidates():
         return None, dbc.Alert(
             f"Unable to read latest_candidates.csv: {exc}", color="danger"
         )
-    if list(df.columns) != canonical_header:
+
+    header = list(df.columns)
+    if header != canonical_header:
         return None, dbc.Alert(
-            "latest_candidates.csv header mismatch; expected canonical columns.",
+            [
+                html.Div("latest_candidates.csv header mismatch."),
+                html.Div(f"Expected: {', '.join(canonical_header)}"),
+                html.Div(f"Found: {', '.join(header)}"),
+            ],
             color="warning",
         )
+
     if df.empty:
         return None, dbc.Alert(
-            "No candidates today. Fallback will backfill after pipeline run.",
-            color="info",
+            "No candidates today (fallback may populate).", color="info"
         )
     return df, None
+
+
+def _safe_csv_with_message(path: Path, *, required: Optional[list[str]] = None):
+    required = required or []
+    if not path.exists():
+        return pd.DataFrame(), dbc.Alert(
+            f"No data available yet: {path.name} is missing.", color="info", className="mb-2"
+        )
+    try:
+        df = pd.read_csv(path)
+    except Exception as exc:
+        return pd.DataFrame(), dbc.Alert(
+            f"Unable to read {path.name}: {exc}", color="danger", className="mb-2"
+        )
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        return pd.DataFrame(), dbc.Alert(
+            f"Missing required columns in {path.name}: {', '.join(missing)}",
+            color="warning",
+            className="mb-2",
+        )
+    return df, None
+
+
+def load_execute_metrics() -> tuple[dict[str, Any], dbc.Alert | None, list[dict[str, Any]]]:
+    """Load executor metrics with skip-reason normalization."""
+
+    defaults: dict[str, Any] = {
+        "last_run_utc": None,
+        "orders_submitted": 0,
+        "orders_filled": 0,
+        "orders_canceled": 0,
+        "trailing_attached": 0,
+        "api_retries": 0,
+        "api_failures": 0,
+        "latency_secs": {"p50": 0.0, "p95": 0.0},
+        "skip_reasons": {},
+    }
+    alert: dbc.Alert | None = None
+    skip_rows: list[dict[str, Any]] = []
+
+    if not os.path.exists(execute_metrics_path):
+        return defaults, dbc.Alert(
+            "Execution has not produced metrics yet (execute_metrics.json missing).",
+            color="info",
+            className="mb-2",
+        ), skip_rows
+
+    try:
+        with open(execute_metrics_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        return defaults, dbc.Alert(
+            f"Unable to read execute_metrics.json: {exc}", color="danger", className="mb-2"
+        ), skip_rows
+
+    if isinstance(payload, dict):
+        metrics = defaults | payload
+    else:
+        metrics = defaults
+        alert = dbc.Alert(
+            "execute_metrics.json contained an unexpected format.",
+            color="warning",
+            className="mb-2",
+        )
+
+    latency = metrics.get("latency_secs") or {}
+    metrics["latency_secs"] = {
+        "p50": (latency.get("p50") or 0),
+        "p95": (latency.get("p95") or 0),
+    }
+
+    raw_skip = (
+        metrics.get("skip_reasons")
+        or metrics.get("skip_reason_counts")
+        or metrics.get("skip_reason")
+        or {}
+    )
+    if isinstance(raw_skip, list):
+        skip_dict = {str(entry): 1 for entry in raw_skip}
+    elif isinstance(raw_skip, dict):
+        skip_dict = {str(k): _coerce_int_value(v) for k, v in raw_skip.items()}
+    else:
+        skip_dict = {}
+    skip_rows = [
+        {"reason": reason, "count": count} for reason, count in sorted(skip_dict.items())
+    ]
+    metrics["skip_reasons"] = skip_dict
+
+    return metrics, alert, skip_rows
+
+
+def load_open_positions() -> tuple[pd.DataFrame, dbc.Alert | None]:
+    return _safe_csv_with_message(Path(open_positions_path), required=["symbol", "qty"])
+
+
+def load_executed_trades() -> tuple[pd.DataFrame, dbc.Alert | None]:
+    return _safe_csv_with_message(Path(executed_trades_path))
+
+
+def load_account_equity() -> tuple[pd.DataFrame, dbc.Alert | None]:
+    df, alert = _safe_csv_with_message(Path(account_equity_path), required=["timestamp", "equity"])
+    if alert is None and not df.empty and "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+        df = df.dropna(subset=["timestamp"])
+    return df, alert
+
+
+def load_last_premarket_run() -> tuple[dict[str, Any], dbc.Alert | None]:
+    marker = Path(BASE_DIR) / "data" / "last_premarket_run.json"
+    if not marker.exists():
+        return {}, dbc.Alert(
+            "No pre-market marker found yet (last_premarket_run.json).", color="info"
+        )
+    try:
+        with marker.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+            if isinstance(payload, dict):
+                return payload, None
+    except Exception as exc:
+        return {}, dbc.Alert(
+            f"Unable to read last_premarket_run.json: {exc}", color="danger"
+        )
+    return {}, dbc.Alert("Malformed last_premarket_run.json payload.", color="warning")
+
+
 
 
 def load_top_or_latest_candidates(required_columns: Optional[set[str] | list[str]] = None):
@@ -1807,35 +1999,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             )
             table = html.Div([hint, *trade_alerts]) if trade_alerts else hint
 
-        metrics_defaults = {
-            "last_run_utc": "",
-            "symbols_in": 0,
-            "orders_submitted": 0,
-            "orders_filled": 0,
-            "orders_canceled": 0,
-            "trailing_attached": 0,
-            "api_retries": 0,
-            "api_failures": 0,
-            "latency_secs": {"p50": 0.0, "p95": 0.0},
-        }
-        metrics_data = metrics_defaults.copy()
+        metrics_data, metrics_alert, skip_rows = load_execute_metrics()
         metrics_file_exists = os.path.exists(execute_metrics_path)
-        if metrics_file_exists:
-            try:
-                with open(execute_metrics_path, encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    for key, default_value in metrics_defaults.items():
-                        if key == "latency_secs":
-                            latency = loaded.get("latency_secs", {}) or {}
-                            metrics_data["latency_secs"] = {
-                                "p50": latency.get("p50", 0.0),
-                                "p95": latency.get("p95", 0.0),
-                            }
-                        else:
-                            metrics_data[key] = loaded.get(key, default_value)
-            except Exception as exc:  # pragma: no cover - log file errors
-                logger.error("Failed to load execution metrics: %s", exc)
 
         api_error_alert = (
             html.Div(
@@ -1845,6 +2010,15 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             if metrics_data["api_failures"] > 0
             else None
         )
+
+        skip_table = None
+        if skip_rows:
+            skip_table = dash_table.DataTable(
+                data=skip_rows,
+                columns=[{"name": "Reason", "id": "reason"}, {"name": "Count", "id": "count"}],
+                style_table={"overflowX": "auto"},
+                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+            )
 
         positions_df, _ = load_csv(open_positions_path)
         position_count = len(positions_df) if positions_df is not None else 0
@@ -1858,6 +2032,15 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         skipped_warning = None
+        if metrics_data.get("skip_reasons"):
+            summary_parts = [
+                f"{reason}={count}" for reason, count in metrics_data["skip_reasons"].items()
+            ]
+            skipped_warning = dbc.Alert(
+                "Skips: " + ", ".join(summary_parts),
+                color="warning",
+                className="mb-3",
+            )
 
         orders_fig = go.Figure(
             data=[
@@ -1986,6 +2169,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         components: list[Any] = [header]
+        if metrics_alert:
+            components.append(metrics_alert)
         if download is not None:
             components.append(download)
         components.append(table)
@@ -2005,6 +2190,13 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             components.append(skipped_warning)
         if api_error_alert:
             components.append(api_error_alert)
+        if skip_table is not None:
+            components.append(
+                html.Div(
+                    [html.H6("Skip reasons"), skip_table],
+                    className="mb-4",
+                )
+            )
         components.append(metrics_view)
         return dbc.Container(components, fluid=True)
 
@@ -2129,11 +2321,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             if trade_alert:
                 alerts.append(trade_alert)
 
-        equity_df, equity_alert = load_csv(
-            account_equity_path,
-            ["timestamp", "equity"],
-            alert_prefix="Account equity",
-        )
+        equity_df, equity_alert = load_account_equity()
         if equity_alert:
             alerts.append(equity_alert)
 
@@ -2142,13 +2330,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
         latest_cash = None
         latest_bp = None
-        if equity_df is not None:
+        if equity_df is not None and not equity_df.empty:
             if "timestamp" not in equity_df.columns and "date" in equity_df.columns:
                 equity_df["timestamp"] = equity_df["date"]
-            equity_df["timestamp"] = pd.to_datetime(
-                equity_df["timestamp"], utc=True, errors="coerce"
-            )
-            equity_df = equity_df.dropna(subset=["timestamp"])
             if "cash" in equity_df.columns:
                 latest_cash = pd.to_numeric(equity_df["cash"], errors="coerce").dropna()
                 latest_cash = latest_cash.iloc[-1] if not latest_cash.empty else None
