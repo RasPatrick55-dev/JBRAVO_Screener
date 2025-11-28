@@ -370,6 +370,47 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
     return df, None
 
 
+def load_latest_candidates():
+    """Load canonical latest_candidates.csv with header validation."""
+
+    canonical_header = [
+        "timestamp",
+        "symbol",
+        "score",
+        "exchange",
+        "close",
+        "volume",
+        "universe_count",
+        "score_breakdown",
+        "entry_price",
+        "adv20",
+        "atrp",
+        "source",
+    ]
+    path = latest_candidates_path
+    if not os.path.exists(path):
+        return None, dbc.Alert(
+            "No candidates yet. latest_candidates.csv not found.", color="info"
+        )
+    try:
+        df = pd.read_csv(path)
+    except Exception as exc:
+        return None, dbc.Alert(
+            f"Unable to read latest_candidates.csv: {exc}", color="danger"
+        )
+    if list(df.columns) != canonical_header:
+        return None, dbc.Alert(
+            "latest_candidates.csv header mismatch; expected canonical columns.",
+            color="warning",
+        )
+    if df.empty:
+        return None, dbc.Alert(
+            "No candidates today. Fallback will backfill after pipeline run.",
+            color="info",
+        )
+    return df, None
+
+
 def load_top_or_latest_candidates(required_columns: Optional[set[str] | list[str]] = None):
     """Prefer post-metrics top_candidates.csv with graceful fallback."""
 
@@ -931,10 +972,16 @@ app.layout = dbc.Container(
                 ),
             ],
         ),
-        # Refresh dashboards roughly every 15 seconds to reflect new logs
-        dcc.Interval(id="interval-update", interval=15000, n_intervals=0),
-        dcc.Interval(id="log-interval", interval=10000, n_intervals=0),
-        dcc.Interval(id="interval-trades", interval=30 * 1000, n_intervals=0),
+        # Refresh dashboards once per day; the app is reloaded by the wrapper after runs
+        dcc.Interval(
+            id="interval-update", interval=24 * 60 * 60 * 1000, n_intervals=0
+        ),
+        dcc.Interval(
+            id="log-interval", interval=24 * 60 * 60 * 1000, n_intervals=0
+        ),
+        dcc.Interval(
+            id="interval-trades", interval=24 * 60 * 60 * 1000, n_intervals=0
+        ),
         dbc.Modal(
             id="detail-modal",
             is_open=False,
@@ -2093,6 +2140,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         if alerts:
             components.extend(alerts)
 
+        latest_cash = None
+        latest_bp = None
         if equity_df is not None:
             if "timestamp" not in equity_df.columns and "date" in equity_df.columns:
                 equity_df["timestamp"] = equity_df["date"]
@@ -2100,6 +2149,14 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 equity_df["timestamp"], utc=True, errors="coerce"
             )
             equity_df = equity_df.dropna(subset=["timestamp"])
+            if "cash" in equity_df.columns:
+                latest_cash = pd.to_numeric(equity_df["cash"], errors="coerce").dropna()
+                latest_cash = latest_cash.iloc[-1] if not latest_cash.empty else None
+            if "buying_power" in equity_df.columns:
+                latest_bp = pd.to_numeric(
+                    equity_df["buying_power"], errors="coerce"
+                ).dropna()
+                latest_bp = latest_bp.iloc[-1] if not latest_bp.empty else None
             equity_fig = px.line(
                 equity_df,
                 x="timestamp",
@@ -2112,6 +2169,30 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         else:
             graphs = []
             last_updated = None
+
+        if latest_cash is not None or latest_bp is not None:
+            kpi_cards = []
+            if latest_cash is not None:
+                kpi_cards.append(
+                    dbc.Card(
+                        [
+                            dbc.CardHeader("Cash"),
+                            dbc.CardBody(f"${latest_cash:,.2f}"),
+                        ],
+                        className="mb-3",
+                    )
+                )
+            if latest_bp is not None:
+                kpi_cards.append(
+                    dbc.Card(
+                        [
+                            dbc.CardHeader("Buying Power"),
+                            dbc.CardBody(f"${latest_bp:,.2f}"),
+                        ],
+                        className="mb-3",
+                    )
+                )
+            graphs.insert(0, dbc.Col(kpi_cards, md=3))
 
         monthly_fig = None
         top_trades_table = None
@@ -2466,22 +2547,19 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
 # Periodically refresh screener table
 @app.callback(Output("screener-table", "data"), Input("interval-update", "n_intervals"))
 def update_screener_table(n):
-    df, alert = load_top_or_latest_candidates()
+    df, alert = load_latest_candidates()
     if alert:
         return []
     if df is None or df.empty:
         logger.info("Screener table update skipped; no rows available.")
         return []
-    source_note = (
-        df["__source"].iloc[0] if "__source" in df.columns else "unknown"
-    )
-    payload = df.drop(columns=["__source", "__updated"], errors="ignore")
+    df = df.sort_values("score", ascending=False)
+    payload = df.to_dict("records")
     logger.info(
-        "Screener table updated successfully with %d records (source=%s).",
+        "Screener table updated successfully with %d records (source=latest_candidates).",
         len(payload),
-        source_note,
     )
-    return payload.to_dict("records")
+    return payload
 
 
 # Periodically refresh metrics log display

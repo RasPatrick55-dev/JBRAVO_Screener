@@ -5,6 +5,7 @@ import logging
 import os
 import pathlib
 from datetime import datetime, timezone
+import requests
 from typing import Any, Mapping
 
 import numpy as np
@@ -677,8 +678,12 @@ def _mk_why_tooltip(row: dict) -> dict:
 def build_layout():
     return html.Div(
         [
-            dcc.Interval(id="sh-interval", interval=60*1000, n_intervals=0),  # auto-refresh each 60s
-            dcc.Interval(id="health-refresh", interval=60_000, n_intervals=0),
+            dcc.Interval(
+                id="sh-interval", interval=24 * 60 * 60 * 1000, n_intervals=0
+            ),
+            dcc.Interval(
+                id="health-refresh", interval=24 * 60 * 60 * 1000, n_intervals=0
+            ),
             dcc.Store(id="sh-metrics-store"),
             dcc.Store(id="sh-top-store"),
             dcc.Store(id="sh-hist-store"),
@@ -918,11 +923,41 @@ def register_callbacks(app):
         Output("sh-health-store", "data"),
         Input("health-refresh", "n_intervals"),
     )
-    def _refresh_connection_health(_n):
+def _refresh_connection_health(_n):
         payload = _safe_json(CONNECTION_HEALTH_JSON)
         if payload:
             return payload
-        return {"trading_ok": None, "data_ok": None}
+
+        def _probe(url: str) -> dict[str, Any]:
+            if not url:
+                return {"ok": False, "status": "n/a", "message": "missing url"}
+            headers = {
+                "APCA-API-KEY-ID": os.getenv("APCA_API_KEY_ID", ""),
+                "APCA-API-SECRET-KEY": os.getenv("APCA_API_SECRET_KEY", ""),
+            }
+            try:
+                resp = requests.get(url, headers=headers, timeout=5)
+                ok = resp.ok
+                status = resp.status_code
+                text = resp.text[:160]
+                return {"ok": ok, "status": status, "message": text}
+            except Exception as exc:  # pragma: no cover - network guard
+                return {"ok": False, "status": "error", "message": str(exc)}
+
+        trading_url = os.getenv("APCA_API_BASE_URL", "")
+        trading_probe = _probe(trading_url.rstrip("/") + "/v2/account")
+        data_base = os.getenv("APCA_DATA_API_BASE_URL", "") or os.getenv(
+            "APCA_API_DATA_URL", ""
+        )
+        data_probe = _probe(data_base.rstrip("/") + "/v2/stocks/AAPL/quotes/latest")
+
+        return {
+            "trading": trading_probe,
+            "data": data_probe,
+            "trading_ok": trading_probe.get("ok"),
+            "data_ok": data_probe.get("ok"),
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+        }
 
     @app.callback(
         Output("sh-health-banner","children"),
