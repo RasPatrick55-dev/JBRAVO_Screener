@@ -736,6 +736,23 @@ def read_recent_lines(filepath, num_lines=50, since_days=None):
         return [f"Error reading {filename}: {e}\n"]
 
 
+def _tail_with_timestamp(path: str, limit: int = 100) -> tuple[list[str], str]:
+    lines = read_recent_lines(path, num_lines=limit)
+    last_ts: Optional[datetime] = None
+    for line in reversed(lines):
+        ts = _parse_log_timestamp(line)
+        if ts:
+            last_ts = ts
+            break
+    if last_ts is None and os.path.exists(path):
+        try:
+            last_ts = datetime.utcfromtimestamp(os.path.getmtime(path))
+        except OSError:
+            last_ts = None
+    label = last_ts.strftime("Last log line at: %Y-%m-%d %H:%M UTC") if last_ts else "Last log line: n/a"
+    return lines, label
+
+
 def read_error_log(path: str = error_log_path) -> pd.DataFrame:
     """Return a DataFrame of error log entries from the last day."""
     if not os.path.exists(path):
@@ -874,9 +891,17 @@ def _styled_table(df: pd.DataFrame, table_id: str | None = None, page_size: int 
     )
 
 
-def log_box(title: str, lines: list[str], element_id: str, log_path: str | None = None) -> html.Div:
+def log_box(
+    title: str,
+    lines: list[str],
+    element_id: str,
+    log_path: str | None = None,
+    subtitle: str | None = None,
+) -> html.Div:
     """Return a styled log display box."""
     header_children: list[Any] = [html.Span(title, className="text-light")]
+    if subtitle:
+        header_children.append(html.Span(subtitle, className="text-muted small"))
     badge = _log_activity_badge(lines, path=log_path)
     if badge:
         header_children.append(badge)
@@ -900,6 +925,29 @@ def log_box(title: str, lines: list[str], element_id: str, log_path: str | None 
         ],
         className="mb-3",
     )
+
+
+def _render_pipeline_summary_panel(summary: Mapping[str, Any] | None) -> html.Div:
+    if not summary:
+        return dbc.Alert(
+            "No PIPELINE_SUMMARY found in logs yet.",
+            color="secondary",
+            className="mb-2",
+        )
+    fields = [
+        ("Symbols In", "symbols_in"),
+        ("With Bars", "with_bars"),
+        ("Rows", "rows"),
+        ("Fetch secs", "fetch_secs"),
+        ("Feature secs", "feature_secs"),
+        ("Rank secs", "rank_secs"),
+        ("Gate secs", "gate_secs"),
+    ]
+    rows = []
+    for label, key in fields:
+        value = summary.get(key, "n/a") if isinstance(summary, Mapping) else "n/a"
+        rows.append(html.Tr([html.Th(label, className="text-muted"), html.Td(value)]))
+    return dbc.Table(rows, bordered=True, size="sm", className="mb-3")
 
 
 def stale_warning(paths: list[str], threshold_minutes: int = 30) -> html.Div:
@@ -1724,6 +1772,48 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 style_data_conditional=style_data_conditional,
             )
 
+        raw_candidates_component: Any = dbc.Alert(
+            "Raw screener candidates are not available yet.",
+            color="secondary",
+            className="m-2",
+        )
+        latest_df, latest_alert = load_latest_candidates()
+        if latest_alert:
+            raw_candidates_component = latest_alert
+        if latest_df is not None and not latest_df.empty:
+            raw_display = latest_df.copy()
+            if "score" in raw_display.columns:
+                raw_display = raw_display.sort_values("score", ascending=False)
+            raw_columns = [
+                {"name": "Timestamp", "id": "timestamp"},
+                {"name": "Symbol", "id": "symbol"},
+                {"name": "Score", "id": "score", "type": "numeric", "format": {"specifier": ".3f"}},
+                {"name": "Exchange", "id": "exchange"},
+                {"name": "Close", "id": "close", "type": "numeric", "format": {"specifier": ".2f"}},
+                {"name": "Volume", "id": "volume", "type": "numeric", "format": {"specifier": ".0f"}},
+                {"name": "Universe Count", "id": "universe_count"},
+                {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": {"specifier": ".2f"}},
+                {"name": "ADV20", "id": "adv20", "type": "numeric", "format": {"specifier": ".0f"}},
+                {"name": "ATR%", "id": "atrp", "type": "numeric", "format": {"specifier": ".2%"}},
+                {"name": "Source", "id": "source"},
+            ]
+            raw_candidates_component = dash_table.DataTable(
+                id="screener-latest-table",
+                data=raw_display.to_dict("records"),
+                columns=raw_columns,
+                page_size=15,
+                sort_action="native",
+                filter_action="native",
+                style_table={"overflowX": "auto"},
+                style_header={"backgroundColor": "#1b1e21", "fontWeight": "600"},
+                style_cell={
+                    "backgroundColor": "#212529",
+                    "color": "#E0E0E0",
+                    "fontSize": "0.9rem",
+                    "textAlign": "left",
+                },
+            )
+
         feature_summary = metrics_data.get("feature_summary") or {}
         history_frames = load_prediction_history(limit=7)
 
@@ -1810,9 +1900,14 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             )
         )
 
-        pipeline_lines = read_recent_lines(pipeline_log_path)[::-1]
-        screener_lines = read_recent_lines(screener_log_path, num_lines=20)[::-1]
+        pipeline_lines, pipeline_label = _tail_with_timestamp(pipeline_log_path, limit=120)
+        screener_lines, screener_label = _tail_with_timestamp(
+            screener_log_path, limit=120
+        )
         backtest_lines = read_recent_lines(backtest_log_path)[::-1]
+        pipeline_summary_panel = _render_pipeline_summary_panel(
+            parse_pipeline_summary(Path(pipeline_log_path))
+        )
 
         logs_row = dbc.Row(
             [
@@ -1822,6 +1917,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                         pipeline_lines,
                         "pipeline-log",
                         log_path=pipeline_log_path,
+                        subtitle=pipeline_label,
                     ),
                     md=4,
                 ),
@@ -1831,6 +1927,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                         screener_lines,
                         "screener-log",
                         log_path=screener_log_path,
+                        subtitle=screener_label,
                     ),
                     md=4,
                 ),
@@ -1846,6 +1943,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             ],
             className="g-3 mb-4",
         )
+        logs_stack = html.Div([logs_row, pipeline_summary_panel], className="mb-3")
 
         components = [html.Div(_paper_badge_component(), className="mb-2")]
         if latest_notice:
@@ -1970,9 +2068,18 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             )
         )
         components.append(top_table_component)
+        components.append(html.Hr())
+        components.append(
+            html.H4(
+                "Today's Candidates (raw)",
+                className="text-light",
+                style={"display": "flex", "alignItems": "center", "gap": "8px"},
+            )
+        )
+        components.append(raw_candidates_component)
         if metrics_data:
             components.extend([html.Hr(), html.H4("Diagnostics", className="text-light"), feature_section])
-        components.extend([html.Hr(), logs_row])
+        components.extend([html.Hr(), logs_stack])
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-execute":

@@ -498,6 +498,47 @@ def _safe_csv(path: pathlib.Path, nrows: int | None = None) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _discover_predictions_csv(metrics: Mapping[str, Any] | None = None) -> pathlib.Path | None:
+    """Return the best-effort predictions CSV path.
+
+    Order of preference:
+    1. ``data/predictions/latest.csv``
+    2. Any explicit path in metrics payload under common keys
+    3. Most recent CSV in ``data/predictions``
+    """
+
+    if PRED_LATEST.exists():
+        return PRED_LATEST
+
+    candidates: list[pathlib.Path] = []
+    if isinstance(metrics, Mapping):
+        for key in ("predictions_path", "predictions_latest", "predictions_file"):
+            raw = metrics.get(key)
+            if not raw:
+                continue
+            try:
+                path = pathlib.Path(raw)
+                if not path.is_absolute():
+                    path = REPO_ROOT / path
+                candidates.append(path)
+            except Exception:
+                continue
+    predictions_dir = DATA_DIR / "predictions"
+    if predictions_dir.exists():
+        try:
+            discovered = sorted(
+                predictions_dir.glob("*.csv"), key=lambda p: p.stat().st_mtime
+            )
+            candidates.extend(discovered[::-1])
+        except Exception:
+            pass
+
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return path
+    return None
+
+
 def load_screener_history(base_dir: pathlib.Path = REPO_ROOT) -> pd.DataFrame | None:
     """Load screener history; return None when missing or too short."""
 
@@ -845,7 +886,7 @@ def build_layout():
             html.Div(id="sh-top-empty", className="mb-2", style={"color": "#bfc3d9", "fontSize": "13px"}),
             DataTable(
                 id="sh-top-table",
-                page_size=15,
+                page_size=10,
                 sort_action="native",
                 filter_action="native",
                 style_table={"overflowX":"auto"},
@@ -854,22 +895,23 @@ def build_layout():
                 tooltip_data=[],
                 tooltip_duration=None,
                 columns=[
-                    {"name":"symbol","id":"symbol"},
-                    {"name":"Origin","id":"origin","presentation":"markdown"},
-                    {"name":"Score","id":"Score","type":"numeric","format":{"specifier":".3f"}},
-                    {"name":"close","id":"close","type":"numeric","format":{"specifier":".2f"}},
-                    {"name":"ADV20","id":"ADV20","type":"numeric","format":{"specifier":".0f"}},
-                    {"name":"ATR%","id":"ATR_pct","type":"numeric","format":{"specifier":".2%"}},
-                    {"name":"Why (top contributors)","id":"Why"},
+                    {"name":"Symbol","id":"symbol"},
+                    {"name":"Score","id":"score","type":"numeric","format":{"specifier":".3f"}},
+                    {"name":"Exchange","id":"exchange"},
+                    {"name":"Close","id":"close","type":"numeric","format":{"specifier":".2f"}},
+                    {"name":"Volume","id":"volume","type":"numeric","format":{"specifier":".0f"}},
+                    {"name":"ATR%","id":"atrp","type":"numeric","format":{"specifier":".2%"}},
+                    {"name":"Source","id":"source"},
+                    {"name":"Score breakdown","id":"score_breakdown"},
                 ],
                 style_data_conditional=[
                     {
-                        "if": {"column_id": "Score"},
+                        "if": {"column_id": "score"},
                         "color": "#4DB6AC",
                         "fontWeight": "600",
                     },
                     {
-                        "if": {"column_id": "origin", "filter_query": "{origin} contains 'fallback'"},
+                        "if": {"column_id": "source", "filter_query": "{source} contains 'fallback'"},
                         "backgroundColor": "#2b223a",
                         "color": "#f4d9ff",
                         "fontSize": "11px",
@@ -880,7 +922,7 @@ def build_layout():
                         "padding": "0 10px",
                     },
                     {
-                        "if": {"column_id": "origin"},
+                        "if": {"column_id": "source"},
                         "color": "#8f9bb3",
                         "fontSize": "11px",
                         "textAlign": "center",
@@ -943,7 +985,7 @@ def register_callbacks(app):
     )
     def _load_artifacts(_n):
         m = dict(load_kpis())
-        latest = _safe_csv(LATEST_CSV, nrows=1)
+        latest = _safe_csv(LATEST_CSV)
         fallback_active = False
         if not latest.empty:
             source_raw = str(latest.iloc[0].get("source") or "").strip().lower()
@@ -951,62 +993,29 @@ def register_callbacks(app):
         m["_fallback_active"] = fallback_active
         m["_latest_zero_rows"] = LATEST_CSV.exists() and latest.empty
         m["_kpi_inferred_from_log"] = m.get("source") == "pipeline.log (inferred)"
+        top_source: str | None = None
+        top_df = latest.copy()
+        if not top_df.empty:
+            top_source = "latest_candidates.csv"
+        else:
+            legacy_top = _safe_csv(TOP_CSV)
+            if not legacy_top.empty:
+                top_df = legacy_top
+                top_source = "top_candidates.csv"
 
-        top = _safe_csv(TOP_CSV)
-        # augment top with ATR% and Why using scored CSV if ATR14/ADV20 missing
-        if not top.empty:
-            needed_cols = [
-                "ATR14",
-                "ADV20",
-                "RSI14",
-                "MACD_HIST",
-                "AROON_UP",
-                "AROON_DN",
-                "ADX",
-            ]
-            missing = [c for c in needed_cols if c not in top.columns]
-            if missing:
-                scored = _safe_csv(SCORED_CSV)
-                if not scored.empty:
-                    join_keys = [
-                        c
-                        for c in ["symbol", "timestamp"]
-                        if c in top.columns and c in scored.columns
-                    ]
-                    if not join_keys:
-                        join_keys = [
-                            c for c in ["symbol"] if c in top.columns and c in scored.columns
-                        ]
-                    indicator_cols = [c for c in needed_cols if c in scored.columns]
-                    select_cols = list(dict.fromkeys(join_keys + indicator_cols))
-                    if join_keys and select_cols:
-                        use = scored.loc[:, select_cols].drop_duplicates(subset=join_keys)
-                        if not use.empty:
-                            top = top.merge(use, on=join_keys, how="left")
-            if "ATR14" in top.columns and "close" in top.columns:
-                atr_num = pd.to_numeric(top["ATR14"], errors="coerce")
-                close_num = pd.to_numeric(top["close"], errors="coerce")
-                atr_pct = atr_num / close_num
-                atr_pct = atr_pct.replace([np.inf, -np.inf], pd.NA)
-                top["ATR_pct"] = atr_pct.clip(lower=0)
-            else:
-                top["ATR_pct"] = pd.NA
-            if "score_breakdown" in top.columns:
-                top["Why"] = top.get("score_breakdown", "").apply(_why_from_breakdown)
-            else:
-                top["Why"] = "n/a"
-            if "Why" in top.columns:
-                top["Why"] = top["Why"].fillna("n/a")
-            badge_markup = "<span class='sh-badge sh-badge-fallback'>fallback</span>"
-            top["origin"] = "—"
-            if "source" in top.columns:
-                source_series = top["source"].astype("string").fillna("")
-                mask = source_series.str.contains("fallback", case=False, na=False)
-                top.loc[mask, "origin"] = badge_markup
-            elif fallback_active:
-                top["origin"] = badge_markup
-            else:
-                top["origin"] = "—"
+        if not top_df.empty:
+            rename_map = {
+                "Score": "score",
+                "ATR_pct": "atrp",
+                "ATR%": "atrp",
+            }
+            top_df = top_df.rename(columns=rename_map)
+            for col in ["score", "exchange", "close", "volume", "atrp", "source", "score_breakdown"]:
+                if col not in top_df.columns:
+                    top_df[col] = np.nan if col in {"score", "close", "volume", "atrp"} else ""
+            top_df = top_df.sort_values("score", ascending=False, na_position="last").head(10)
+
+        m["_top_source"] = top_source
 
         hist = load_screener_history(REPO_ROOT)
         ev = load_ranker_eval(REPO_ROOT)
@@ -1016,7 +1025,7 @@ def register_callbacks(app):
 
         return (
             m,
-            (top.to_dict("records") if not top.empty else []),
+            (top_df.to_dict("records") if not top_df.empty else []),
             (hist.to_dict("records") if isinstance(hist, pd.DataFrame) and not hist.empty else []),
             (ev or {}),
             summary,
@@ -1117,14 +1126,7 @@ def register_callbacks(app):
         top_empty_message: Any = ""
         if latest_zero:
             top_empty_message = html.Span(
-                [
-                    "No candidates today; fallback may populate shortly. ",
-                    html.A(
-                        "View pipeline panel",
-                        href="#sh-pipeline-panel",
-                        style={"color": "#63b3ed"},
-                    ),
-                ]
+                "No candidates today. Check Screener tab and Screener Health KPIs for more detail."
             )
         exec_metrics = _safe_json(EXECUTE_METRICS_JSON)
         if not isinstance(exec_metrics, Mapping):
@@ -1312,25 +1314,47 @@ def register_callbacks(app):
 
         # ---------------- Timings ----------------
         t = m.get("timings", {}) or {}
-        tm_df = pd.DataFrame({"stage":["fetch","features","rank","gates"],
-                              "secs":[t.get("fetch_secs",0), t.get("feature_secs",0),
-                                      t.get("rank_secs",0), t.get("gates_secs",0)]})
-        fig_tm = px.bar(tm_df, x="stage", y="secs", title="Stage Timings (sec)")
+        timing_specs = [
+            ("fetch", "fetch_secs"),
+            ("features", "feature_secs"),
+            ("rank", "rank_secs"),
+            ("gates", "gates_secs"),
+        ]
+
+        def _safe_timing(key: str) -> float | None:
+            value = t.get(key)
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        timing_rows = [
+            {"stage": label, "secs": _safe_timing(field)} for label, field in timing_specs
+        ]
+        timing_rows_numeric = [row for row in timing_rows if row["secs"] is not None]
+        if timing_rows_numeric:
+            tm_df = pd.DataFrame(timing_rows_numeric)
+            fig_tm = px.bar(tm_df, x="stage", y="secs", title="Stage Timings (sec)")
+        else:
+            fig_tm = px.bar(title="Stage Timings (no data)")
 
         # ---------------- Top table ----------------
         top_data = top_rows or []
-        for entry in top_data:
-            origin_val = entry.get("origin")
-            if origin_val in (None, ""):
-                entry["origin"] = "—"
-        # Build tooltip_data aligned with top_data rows
         tooltips = []
-        for r in (top_data or []):
-            try:
-                tooltips.append(_mk_why_tooltip(r or {}))
-            except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning("Failed to build tooltip markdown: %s", exc)
-                tooltips.append({})
+        if top_data:
+            top_df = pd.DataFrame(top_data)
+            if "score_breakdown" in top_df.columns:
+                top_df["score_breakdown"] = (
+                    top_df["score_breakdown"].astype("string").fillna("").str.slice(0, 180)
+                )
+            top_df = top_df.sort_values("score", ascending=False, na_position="last")
+            top_data = top_df.to_dict("records")
+            for row in top_data:
+                breakdown = str(row.get("score_breakdown") or "").strip()
+                if breakdown:
+                    tooltips.append({"score_breakdown": {"value": breakdown, "type": "markdown"}})
+                else:
+                    tooltips.append({})
 
         # ---------------- Trend (Rows & With-Bars %) ----------------
         if hist_rows:
@@ -1388,8 +1412,20 @@ def register_callbacks(app):
                 pass
 
         # ---------------- Predictions head & logs ----------------
-        preds = _safe_csv(PRED_LATEST, nrows=8)
-        preds_head = preds.to_csv(index=False) if not preds.empty else "(Not computed yet)"
+        pred_path = _discover_predictions_csv(m)
+        preds_head = "No predictions file available yet"
+        if pred_path:
+            preds = _safe_csv(pred_path, nrows=10)
+            if not preds.empty:
+                keep_cols = [
+                    c
+                    for c in preds.columns
+                    if str(c).lower()
+                    in {"symbol", "score", "timestamp", "close", "gap_pen", "liq_pen"}
+                ]
+                if keep_cols:
+                    preds = preds.loc[:, keep_cols]
+                preds_head = preds.to_csv(index=False)
         s_tail = _tail(LOG_DIR / "screener.log", 180)
         p_tail = _tail(LOG_DIR / "pipeline.log", 180)
         pipeline_summary = _parse_pipeline_summary(p_tail)
@@ -1539,21 +1575,23 @@ def register_callbacks(app):
         )
 
         # http stats expected shape: {"200": 7400, "429": 100, ...}
-        http_view = m.get("http") if isinstance(m, dict) else {}
-        if not isinstance(http_view, dict):
-            http_view = {}
-        http_json = json.dumps(http_view, indent=2, sort_keys=True) if http_view else "(no data)"
+        http_view = m.get("http_stats") if isinstance(m, dict) else {}
+        if not isinstance(http_view, dict) or not http_view:
+            http_json = "(no data)\nHTTP metrics not yet instrumented."
+        else:
+            http_json = json.dumps(http_view, indent=2, sort_keys=True)
 
         # cache stats expected shape: {"cache_hits": 1234, ...}
-        cache_view = m.get("cache") if isinstance(m, dict) else {}
-        if not isinstance(cache_view, dict):
-            cache_view = {}
-        cache_json = json.dumps(cache_view, indent=2, sort_keys=True) if cache_view else "(no data)"
+        cache_view = m.get("cache_stats") if isinstance(m, dict) else {}
+        if not isinstance(cache_view, dict) or not cache_view:
+            cache_json = "(no data)\nCache metrics not yet instrumented."
+        else:
+            cache_json = json.dumps(cache_view, indent=2, sort_keys=True)
 
         timings_dict = m.get("timings") if isinstance(m, dict) else {}
         if not isinstance(timings_dict, dict):
             timings_dict = {}
-        base_timings = {"fetch_secs": 0, "feature_secs": 0, "rank_secs": 0, "gates_secs": 0}
+        base_timings = {"fetch_secs": "n/a", "feature_secs": "n/a", "rank_secs": "n/a", "gates_secs": "n/a"}
         timings_view = {**base_timings, **timings_dict}
         timings_json = json.dumps({k: timings_view.get(k) for k in sorted(timings_view)}, indent=2)
 
