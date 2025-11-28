@@ -297,19 +297,51 @@ def compose_metrics_from_artifacts(
     fetch_stats = _read_json(data_dir / "screener_stage_fetch.json")
     post_stats = _read_json(data_dir / "screener_stage_post.json")
     rows_final = _count_rows(data_dir / "top_candidates.csv")
+    latest_rows = _count_rows(data_dir / "latest_candidates.csv")
+    if latest_rows:
+        rows_final = max(rows_final, latest_rows)
     if rows_final == 0 and post_stats:
         hinted = _coerce_optional_int(post_stats.get("candidates_final"))
         if hinted:
             rows_final = hinted
+    scored_candidates = data_dir / "scored_candidates.csv"
+    scored_rows = _count_csv_lines(scored_candidates)
+    if scored_rows <= 0 and scored_candidates.exists():
+        scored_rows = 0
+    symbols_in_hints = [
+        _coerce_optional_int(symbols_in),
+        _coerce_optional_int(fetch_stats.get("symbols_in")) if fetch_stats else None,
+        _coerce_optional_int(post_stats.get("symbols_in")) if post_stats else None,
+        scored_rows if scored_rows else None,
+    ]
+    symbols_in_effective = 0
+    for hint in symbols_in_hints:
+        if isinstance(hint, int) and hint > 0:
+            symbols_in_effective = hint
+            break
     fetch_symbols = _coerce_optional_int(fetch_stats.get("symbols_with_bars_fetch")) if fetch_stats else None
     fallback_symbols = _coerce_optional_int(fallback_symbols_with_bars)
     with_bars_effective = fetch_symbols or fallback_symbols or 0
     bars_fetch = _coerce_optional_int(fetch_stats.get("bars_rows_total_fetch")) if fetch_stats else None
     fallback_bars = _coerce_optional_int(fallback_bars_rows_total)
     bars_effective = bars_fetch or fallback_bars or rows_final
+    if symbols_in_effective <= 0 and with_bars_effective > 0:
+        LOG.warning(
+            "[WARN] METRICS_SYMBOLS_IN_RECOVERED from_with_bars=%s",
+            with_bars_effective,
+        )
+        symbols_in_effective = with_bars_effective
+    if with_bars_effective > symbols_in_effective:
+        LOG.warning(
+            "[WARN] METRICS_WITH_BARS_CLAMP with_bars=%s symbols_in=%s",
+            with_bars_effective,
+            symbols_in_effective,
+        )
+        with_bars_effective = symbols_in_effective
+    bars_effective = max(int(bars_effective or 0), int(rows_final))
     payload = {
         "last_run_utc": _now_iso(),
-        "symbols_in": int(_coerce_optional_int(symbols_in) or 0),
+        "symbols_in": int(symbols_in_effective or 0),
         "symbols_with_bars": int(with_bars_effective),
         "symbols_with_bars_raw": int(with_bars_effective),
         "symbols_with_bars_fetch": fetch_symbols,
@@ -914,8 +946,14 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
     """Ensure ``screener_metrics.json`` contains integer KPIs even on fallback nights."""
 
     base_dir = Path(base_dir)
+    logger = LOG
     data_dir = base_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = data_dir / "screener_metrics.json"
+    existing_metrics = _read_json(metrics_path)
+    existing_last_run = None
+    if isinstance(existing_metrics, Mapping):
+        existing_last_run = existing_metrics.get("last_run_utc")
     fallback_hint: dict[str, Any] = {
         "symbols_in": None,
         "symbols_with_bars": None,
@@ -974,7 +1012,6 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
 
     fallback_hint["symbols_with_bars"] = int(fallback_hint.get("symbols_with_bars_raw", 0))
 
-    metrics_path = data_dir / "screener_metrics.json"
     metrics = compose_metrics_from_artifacts(
         base_dir,
         symbols_in=fallback_hint.get("symbols_in"),
@@ -982,6 +1019,8 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
         fallback_bars_rows_total=fallback_hint.get("bars_rows_total"),
         latest_source=fallback_hint.get("latest_source"),
     )
+    if existing_last_run:
+        metrics["last_run_utc"] = existing_last_run
     try:
         metrics = write_universe_prefix_counts(base_dir, metrics)
     except Exception as exc:  # pragma: no cover - defensive guard

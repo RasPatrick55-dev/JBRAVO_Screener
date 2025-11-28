@@ -646,6 +646,19 @@ def _load_execute_metrics() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _count_csv_rows(path: Path) -> int:
+    """Return the number of data rows in a CSV (excluding the header)."""
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            total = sum(1 for _ in handle)
+    except FileNotFoundError:
+        return 0
+    except Exception:
+        return 0
+    return max(total - 1, 0)
+
+
 _HHMM_RE = re.compile(r"^\d{4}$")
 
 
@@ -687,6 +700,73 @@ def _premarket_bounds_tz() -> tuple[dtime, dtime]:
 def _premarket_bounds_strings() -> tuple[str, str]:
     start, end = _premarket_bounds_naive()
     return start.strftime("%H:%M"), end.strftime("%H:%M")
+
+
+def write_premarket_snapshot(
+    base_dir: Path | str = Path("."),
+    *,
+    probe_payload: Mapping[str, Any] | None = None,
+    started_utc: str | None = None,
+    finished_utc: str | None = None,
+) -> Path:
+    """Persist a lightweight snapshot of the latest wrapper run."""
+
+    base_path = Path(base_dir)
+    data_dir = base_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    metrics = _load_execute_metrics() or {}
+
+    def _as_int(value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    skip_block = metrics.get("skips") if isinstance(metrics.get("skips"), Mapping) else {}
+    skip_counts = {str(k): _as_int(v) for k, v in (skip_block or {}).items()}
+    in_window = skip_counts.get("TIME_WINDOW", 0) == 0
+
+    auth_ok = metrics.get("status") != "auth_error"
+    buying_power = metrics.get("buying_power")
+    if isinstance(probe_payload, Mapping):
+        auth_ok = bool(probe_payload.get("auth_ok", auth_ok))
+        buying_power = probe_payload.get("buying_power", buying_power)
+
+    try:
+        buying_power = float(str(buying_power).replace(",", "")) if buying_power not in (None, "") else None
+    except Exception:
+        buying_power = None
+
+    candidates_in = _count_csv_rows(data_dir / "latest_candidates.csv")
+    start_str, end_str = _premarket_bounds_strings()
+    timestamp_started = (
+        started_utc
+        or metrics.get("start_utc")
+        or metrics.get("started_utc")
+        or metrics.get("last_run_utc")
+    )
+    timestamp_finished = finished_utc or datetime.now(timezone.utc).isoformat()
+    snapshot = {
+        "in_window": bool(in_window),
+        "auth_ok": bool(auth_ok),
+        "candidates_in": int(candidates_in),
+        "skip_counts": skip_counts,
+        "window_label": f"{start_str}-{end_str} ET",
+        "started_utc": timestamp_started,
+        "finished_utc": timestamp_finished,
+    }
+    if buying_power is not None:
+        snapshot["buying_power"] = buying_power
+    for key in ("orders_submitted", "orders_filled", "orders_canceled", "trailing_attached"):
+        if key in metrics:
+            snapshot[key] = _as_int(metrics.get(key))
+
+    target = data_dir / "last_premarket_run.json"
+    try:
+        target.write_text(json.dumps(snapshot, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        LOGGER.warning("[WARN] PREMARKET_SNAPSHOT_WRITE_FAILED path=%s", target, exc_info=True)
+    return target
 
 
 def _clock_is_in_window(client: Any, window: str) -> tuple[bool, str]:
