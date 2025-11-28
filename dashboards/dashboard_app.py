@@ -26,6 +26,8 @@ from plotly.subplots import make_subplots
 
 os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 
+logger = logging.getLogger(__name__)
+
 from dashboards.screener_health import build_layout as build_screener_health
 from dashboards.screener_health import register_callbacks as register_screener_health
 from dashboards.screener_health import load_kpis as _load_screener_health_kpis
