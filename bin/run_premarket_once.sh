@@ -18,6 +18,7 @@ ok=r.status_code==200; bp=(r.json().get("buying_power") if ok else "0")
 print(json.dumps({"status":"OK" if ok else "FAIL","buying_power":bp,"auth_ok":ok}))
 raise SystemExit(0 if ok else 2)
 PY
+)
 probe_rc=$?
 echo "$ALPACA_PROBE"
 if [ "$probe_rc" -ne 0 ]; then

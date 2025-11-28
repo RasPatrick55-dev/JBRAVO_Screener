@@ -1249,10 +1249,13 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 try:
                     recovered = write_complete_screener_metrics(Path(BASE_DIR))
                 except Exception as exc:
+                    logger.error(
+                        "Unable to backfill screener metrics", exc_info=True
+                    )
                     if metrics_alert is None:
                         metrics_alert = dbc.Alert(
-                            f"Unable to backfill screener metrics: {exc}",
-                            color="danger",
+                            "Unable to backfill screener metrics. Using last known metrics.",
+                            color="warning",
                         )
                 else:
                     if isinstance(recovered, dict):
