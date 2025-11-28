@@ -222,10 +222,10 @@ def _format_probe_timestamp(raw: Any) -> str:
         return raw
 
 
-def load_premarket_status(base_dir: pathlib.Path = REPO_ROOT) -> dict[str, Any] | None:
-    """Load the last pre-market wrapper run status.
+def load_premarket_readiness(base_dir: pathlib.Path = REPO_ROOT) -> dict[str, Any] | None:
+    """Load the most recent pre-market readiness snapshot.
 
-    Returns a normalized dict or ``None`` when the artifact is missing/invalid.
+    Returns ``None`` when the artifact is missing or malformed.
     """
 
     path = base_dir / "data" / "last_premarket_run.json"
@@ -236,21 +236,26 @@ def load_premarket_status(base_dir: pathlib.Path = REPO_ROOT) -> dict[str, Any] 
     if not isinstance(raw, Mapping):
         return None
 
-    candidates_keys = ["candidates_in", "candidates", "candidates_total"]
-    candidates_in = None
-    for key in candidates_keys:
-        if key in raw:
-            try:
-                candidates_in = int(raw.get(key) or 0)
-            except (TypeError, ValueError):
-                candidates_in = 0
-            break
+    def _parse_int_from_keys(payload: Mapping[str, Any], keys: list[str]) -> int | None:
+        for key in keys:
+            if key in payload:
+                try:
+                    return int(payload.get(key) or 0)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    candidates_in = _parse_int_from_keys(
+        raw, ["candidates_in", "candidates", "candidates_total"]
+    )
 
     payload: dict[str, Any] = {
         "in_window": bool(raw.get("in_window")),
         "auth_ok": bool(raw.get("auth_ok")),
-        "candidates_in": candidates_in if candidates_in is not None else 0,
-        "window_label": raw.get("window_label") or raw.get("window") or raw.get("mode"),
+        "candidates_in": candidates_in,
+        "window_label": raw.get("window_label")
+        or raw.get("window")
+        or raw.get("mode"),
         "started_utc": raw.get("started_utc") or raw.get("start_utc"),
         "finished_utc": raw.get("finished_utc") or raw.get("end_utc"),
     }
@@ -261,6 +266,11 @@ def load_premarket_status(base_dir: pathlib.Path = REPO_ROOT) -> dict[str, Any] 
     if "orders_submitted" in raw:
         payload["orders_submitted"] = raw.get("orders_submitted")
     return payload
+
+
+# Backwards compatibility alias
+def load_premarket_status(base_dir: pathlib.Path = REPO_ROOT) -> dict[str, Any] | None:
+    return load_premarket_readiness(base_dir)
 
 
 def _status_row(label: str, payload: Mapping[str, Any]) -> html.Div:
@@ -364,16 +374,18 @@ def _health_elements(health: Mapping[str, Any] | None) -> tuple[html.Div, html.D
 
 
 def _premarket_pill(payload: Mapping[str, Any] | None) -> html.Div:
-    info = payload if isinstance(payload, Mapping) else {}
-    if not info:
+    if not isinstance(payload, Mapping) or not payload:
+        ny_now = datetime.now(ZoneInfo("America/New_York"))
+        ny_label = ny_now.strftime("%Y-%m-%d %H:%M:%S %Z")
         return html.Div(
             [
                 html.Div("Pre-market readiness", className="sh-kpi-title"),
                 html.Div(
-                    "Pre-market run status: (no run recorded yet)",
+                    "No pre-market snapshot available.",
                     className="sh-kpi-sub",
                     style={"color": "#cbd5f5"},
                 ),
+                html.Div(f"Now (NY): {ny_label}", className="sh-kpi-sub"),
             ],
             className="sh-kpi sh-premarket-pill",
             style={
@@ -385,6 +397,7 @@ def _premarket_pill(payload: Mapping[str, Any] | None) -> html.Div:
             },
         )
 
+    info = dict(payload)
     in_window = bool(info.get("in_window"))
     auth_ok = bool(info.get("auth_ok"))
     candidates_raw = info.get("candidates_in")
@@ -419,11 +432,12 @@ def _premarket_pill(payload: Mapping[str, Any] | None) -> html.Div:
 
     ny_now = datetime.now(ZoneInfo("America/New_York"))
     ny_label = ny_now.strftime("%Y-%m-%d %H:%M:%S %Z")
-    started = _format_probe_timestamp(
-        info.get("finished_utc") or info.get("started_utc")
-    )
-    if started and started != "n/a":
-        sub_text = f"Pre-market run: {started} • Now (NY): {ny_label}"
+    started = _format_probe_timestamp(info.get("started_utc"))
+    finished = _format_probe_timestamp(info.get("finished_utc"))
+    if finished and finished != "n/a":
+        sub_text = f"Started: {started} • Finished: {finished} • Now (NY): {ny_label}"
+    elif started and started != "n/a":
+        sub_text = f"Started: {started} • Now (NY): {ny_label}"
     else:
         sub_text = f"Pre-market run status: awaiting latest run • Now (NY): {ny_label}"
 
@@ -998,7 +1012,7 @@ def register_callbacks(app):
         ev = load_ranker_eval(REPO_ROOT)
         summary_df = _safe_csv(METRICS_SUMMARY_CSV, nrows=1)
         summary = summary_df.iloc[0].to_dict() if not summary_df.empty else {}
-        premarket = load_premarket_status(REPO_ROOT)
+        premarket = load_premarket_readiness(REPO_ROOT)
 
         return (
             m,
@@ -1006,7 +1020,7 @@ def register_callbacks(app):
             (hist.to_dict("records") if isinstance(hist, pd.DataFrame) and not hist.empty else []),
             (ev or {}),
             summary,
-            (premarket or {}),
+            premarket,
         )
 
     @app.callback(
@@ -1094,7 +1108,7 @@ def register_callbacks(app):
         if not isinstance(summary, Mapping):
             summary = {}
         if not isinstance(premarket, Mapping):
-            premarket = {}
+            premarket = None
 
         fallback_active = bool(m.get("_fallback_active"))
         env_paper, env_feed = _environment_state()
