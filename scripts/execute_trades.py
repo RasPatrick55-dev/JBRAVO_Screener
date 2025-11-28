@@ -1330,6 +1330,10 @@ class ExecutorConfig:
     price_source: str = "prevclose"
     price_band_pct: float = 10.0
     price_band_action: str = "clamp"
+    chase_interval_minutes: int = 5
+    max_chase_count: int = 6
+    max_chase_gap_pct: float = 5.0
+    chase_enabled: bool = False
 
 
 @dataclass
@@ -2726,6 +2730,8 @@ class TradeExecutor:
                 rounded_limit,
                 raw_limit=limit_price,
                 price_src=price_src,
+                anchor_price=anchor_price,
+                preferred_feed=preferred_feed,
             )
             if outcome.get("filled_qty", 0) > 0:
                 existing_positions.add(symbol)
@@ -2880,6 +2886,66 @@ class TradeExecutor:
         except Exception:
             LOGGER.exception("Failed to record trailing stop submit for %s", symbol)
 
+    def _parse_snapshot_time(self, timestamp: Any) -> Optional[datetime]:
+        if timestamp in (None, ""):
+            return None
+        try:
+            parsed = pd.to_datetime(timestamp, utc=True, errors="coerce")
+        except Exception:
+            return None
+        if pd.isna(parsed):
+            return None
+        return parsed.to_pydatetime()
+
+    def _fetch_reference_price(
+        self, symbol: str, preferred_feed: str | None
+    ) -> tuple[Optional[float], Optional[datetime], str]:
+        trade_snapshot = _fetch_latest_trade_from_alpaca(symbol, feed=preferred_feed)
+        trade_price: Optional[float] = None
+        trade_feed = None
+        if isinstance(trade_snapshot, Mapping):
+            try:
+                raw_trade = trade_snapshot.get("price")
+                trade_price = float(raw_trade) if raw_trade is not None else None
+            except (TypeError, ValueError):
+                trade_price = None
+            trade_feed = trade_snapshot.get("feed")
+
+        quote_snapshot: Dict[str, Optional[float | str]] = {}
+        if trade_price is None or math.isnan(trade_price) or trade_price <= 0:
+            quote_snapshot = _fetch_latest_quote_from_alpaca(symbol, feed=preferred_feed)
+            quote_feed = None
+            ask_price: Optional[float] = None
+            if isinstance(quote_snapshot, Mapping):
+                quote_feed = quote_snapshot.get("feed")
+                raw_ask = quote_snapshot.get("ask")
+                try:
+                    ask_price = float(raw_ask) if raw_ask is not None else None
+                except (TypeError, ValueError):
+                    ask_price = None
+            else:
+                quote_feed = None
+            if ask_price is not None and not math.isnan(ask_price) and ask_price > 0:
+                ts = quote_snapshot.get("timestamp") if isinstance(quote_snapshot, Mapping) else None
+                return ask_price, self._parse_snapshot_time(ts), f"ask[{str(quote_feed or 'default').strip()}]"
+
+        if trade_price is None or math.isnan(trade_price) or trade_price <= 0:
+            return None, None, ""
+        trade_ts = trade_snapshot.get("timestamp") if isinstance(trade_snapshot, Mapping) else None
+        return trade_price, self._parse_snapshot_time(trade_ts), f"trade[{str(trade_feed or 'default').strip()}]"
+
+    def _has_capacity_for_symbol(self, symbol: str) -> bool:
+        try:
+            max_positions = int(self.config.max_positions)
+        except (TypeError, ValueError):
+            return True
+        if max_positions <= 0:
+            return True
+        positions = self.fetch_existing_positions()
+        if symbol.upper() in positions:
+            return True
+        return len(positions) < max_positions
+
     def execute_order(
         self,
         symbol: str,
@@ -2888,6 +2954,8 @@ class TradeExecutor:
         *,
         raw_limit: Optional[float] = None,
         price_src: str = "",
+        anchor_price: Optional[float] = None,
+        preferred_feed: str | None = None,
     ) -> Dict[str, Any]:
         outcome: Dict[str, Any] = {"submitted": False, "filled_qty": 0.0}
         raw_limit_price = float(raw_limit if raw_limit is not None else limit_price)
@@ -2905,6 +2973,14 @@ class TradeExecutor:
         # Alpaca rejects sub-penny increments (Rule 612); keep limit/stop/take-profit fields compliant.
         _enforce_order_price_ticks(order_request)
         setattr(order_request, "_normalized_limit", True)
+        self.log_info(
+            "BUY_INIT",
+            symbol=symbol,
+            qty=str(qty),
+            limit=f"{limit_price:.4f}",
+            limit_raw=f"{raw_limit_price:.8f}",
+            price_src=str(price_src or ""),
+        )
         submitted_order = self.submit_with_retries(order_request)
         if submitted_order is None:
             self.record_skip_reason("API_FAIL", symbol=symbol, detail="submit_failed")
@@ -2926,11 +3002,88 @@ class TradeExecutor:
 
         fill_deadline = datetime.now(timezone.utc) + timedelta(minutes=self.config.cancel_after_min)
         submit_ts = time.time()
+        current_limit = limit_price
 
         filled_qty = 0.0
         filled_avg_price = None
         status = "open"
         last_order_snapshot: Any | None = None
+
+        chase_enabled = bool(self.config.chase_enabled)
+        chase_interval = max(1, int(self.config.chase_interval_minutes)) * 60
+        max_chase_count = max(0, int(self.config.max_chase_count))
+        chase_gap_ratio = max(0.0, float(self.config.max_chase_gap_pct)) / 100.0
+        chase_buffer_ratio = max(0.0, float(self.config.ref_buffer_pct)) / 100.0
+        chase_attempts = 0
+        chase_halted = False
+        next_chase_ts: Optional[float] = (
+            submit_ts + chase_interval if chase_enabled else None
+        )
+
+        def _chase_order(current_id: str) -> tuple[str, float, float] | None:
+            nonlocal chase_attempts, chase_halted
+            if anchor_price is None or anchor_price <= 0:
+                self.log_info("SKIP_CHASE", symbol=symbol, reason="no_anchor")
+                chase_halted = True
+                return None
+            if not self._has_capacity_for_symbol(symbol):
+                self.log_info("SKIP_CHASE", symbol=symbol, reason="max_positions")
+                chase_halted = True
+                return None
+            ref_price, ref_ts, ref_src = self._fetch_reference_price(symbol, preferred_feed)
+            if ref_price is None or ref_price <= 0:
+                self.log_info("SKIP_CHASE", symbol=symbol, reason="no_reference")
+                chase_halted = True
+                return None
+            if ref_ts is None:
+                self.log_info("SKIP_CHASE", symbol=symbol, reason="stale_reference")
+                chase_halted = True
+                return None
+            if datetime.now(timezone.utc) - ref_ts > timedelta(
+                minutes=max(5, self.config.chase_interval_minutes * 2)
+            ):
+                self.log_info("SKIP_CHASE", symbol=symbol, reason="stale_reference")
+                chase_halted = True
+                return None
+            candidate_limit = min(
+                ref_price * (1 + chase_buffer_ratio),
+                anchor_price * (1 + chase_gap_ratio),
+            )
+            normalized_candidate = normalize_price_for_alpaca(candidate_limit, "buy")
+            candidate_limit = _round_limit_price(normalized_candidate)
+            if candidate_limit <= current_limit:
+                self.log_info("SKIP_CHASE", symbol=symbol, reason="no_improvement")
+                return None
+
+            self.cancel_order(current_id, symbol)
+            self.metrics.orders_canceled += 1
+            chase_attempts += 1
+            request = LimitOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=OrderSide.BUY,
+                type="limit",
+                limit_price=candidate_limit,
+                time_in_force=TimeInForce.DAY,
+                extended_hours=self.config.extended_hours,
+            )
+            _enforce_order_price_ticks(request)
+            setattr(request, "_normalized_limit", True)
+            chased_order = self.submit_with_retries(request)
+            if chased_order is None:
+                self.log_info("SKIP_CHASE", symbol=symbol, reason="submit_failed")
+                return None
+            chase_order_id = str(getattr(chased_order, "id", current_id))
+            self.metrics.orders_submitted += 1
+            self.log_info(
+                "CHASE_SUBMIT",
+                symbol=symbol,
+                limit=f"{candidate_limit:.4f}",
+                attempt=str(chase_attempts),
+                source=ref_src or "",
+                order_id=chase_order_id,
+            )
+            return chase_order_id, time.time(), candidate_limit
 
         while datetime.now(timezone.utc) < fill_deadline:
             try:
@@ -2992,6 +3145,19 @@ class TradeExecutor:
                 self.attach_trailing_stop(symbol, filled_qty, filled_avg_price)
                 outcome["filled_qty"] = filled_qty
                 return outcome
+            now_ts = time.time()
+            if (
+                chase_enabled
+                and next_chase_ts is not None
+                and now_ts >= next_chase_ts
+                and chase_attempts < max_chase_count
+            ):
+                chased = _chase_order(order_id)
+                if chased is not None:
+                    order_id, submit_ts, current_limit = chased
+                    next_chase_ts = submit_ts + chase_interval
+                    continue
+                next_chase_ts = None if chase_halted else now_ts + chase_interval
             self.sleep(5)
 
         # Deadline reached or not fully filled
@@ -3441,6 +3607,30 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Action when live prices deviate outside the band",
     )
     parser.add_argument(
+        "--chase-interval-minutes",
+        type=int,
+        default=ExecutorConfig.chase_interval_minutes,
+        help="Minutes to wait between chase attempts",
+    )
+    parser.add_argument(
+        "--max-chase-count",
+        type=int,
+        default=ExecutorConfig.max_chase_count,
+        help="Maximum number of chase attempts to reprice open orders",
+    )
+    parser.add_argument(
+        "--max-chase-gap-pct",
+        type=float,
+        default=ExecutorConfig.max_chase_gap_pct,
+        help="Max percent above anchor/prevclose allowed during chase repricing",
+    )
+    parser.add_argument(
+        "--chase-enabled",
+        action="store_true",
+        default=ExecutorConfig.chase_enabled,
+        help="Enable periodic chasing of unfilled limit orders",
+    )
+    parser.add_argument(
         "--dry-run",
         type=lambda s: s.lower() in {"1", "true", "yes", "y"},
         default=ExecutorConfig.dry_run,
@@ -3539,6 +3729,10 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         price_source=args.price_source,
         price_band_pct=args.price_band_pct,
         price_band_action=args.price_band_action,
+        chase_interval_minutes=args.chase_interval_minutes,
+        max_chase_count=args.max_chase_count,
+        max_chase_gap_pct=args.max_chase_gap_pct,
+        chase_enabled=args.chase_enabled,
     )
 
 
