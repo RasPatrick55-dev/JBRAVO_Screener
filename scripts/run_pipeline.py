@@ -41,6 +41,7 @@ _SPLIT_FLAG_MAP = {
     "--backtest-args-split": "backtest_args_split",
     "--metrics-args-split": "metrics_args_split",
     "--exec-args-split": "exec_args_split",
+    "--ranker-eval-args-split": "ranker_eval_args_split",
 }
 
 _SUMMARY_RE = re.compile(
@@ -730,7 +731,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--steps",
         default=None,
-        help="Comma-separated list of steps to run (default: screener,backtest,metrics)",
+        help="Comma-separated list of steps to run (default: screener,backtest,metrics,ranker_eval)",
     )
     parser.add_argument(
         "--reload-web",
@@ -782,6 +783,17 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default=None,
         help="Extra CLI arguments for scripts.metrics provided as separate tokens",
     )
+    parser.add_argument(
+        "--ranker-eval-args",
+        default=os.getenv("JBR_RANKER_EVAL_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.ranker_eval",
+    )
+    parser.add_argument(
+        "--ranker-eval-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.ranker_eval provided as separate tokens",
+    )
     raw_args = list(argv) if argv is not None else sys.argv[1:]
     option_strings = set(parser._option_string_actions.keys())
     filtered_args, collected = _extract_split_tokens(raw_args, option_strings)
@@ -793,7 +805,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 
 
 def determine_steps(raw: Optional[str]) -> list[str]:
-    default = "screener,backtest,metrics"
+    default = "screener,backtest,metrics,ranker_eval"
     target = raw or os.environ.get("PIPE_STEPS", default)
     steps = [part.strip().lower() for part in target.split(",") if part.strip()]
     normalized: list[str] = []
@@ -1239,16 +1251,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         "execute": _split_or_string(args.exec_args, args.exec_args_split),
         "backtest": _merge_split_args(args.backtest_args, args.backtest_args_split),
         "metrics": _merge_split_args(args.metrics_args, args.metrics_args_split),
+        "ranker_eval": _merge_split_args(
+            getattr(args, "ranker_eval_args", ""), getattr(args, "ranker_eval_args_split", None)
+        ),
     }
 
     step_rcs: dict[str, int] = {step: 0 for step in steps}
 
     LOG.info(
-        "[INFO] PIPELINE_ARGS screener=%s execute=%s backtest=%s metrics=%s",
+        "[INFO] PIPELINE_ARGS screener=%s execute=%s backtest=%s metrics=%s ranker_eval=%s",
         extras["screener"],
         extras["execute"],
         extras["backtest"],
         extras["metrics"],
+        extras["ranker_eval"],
     )
 
     started = time.time()
@@ -1388,6 +1404,28 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if rc_metrics:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
             _sync_top_candidates_to_latest(base_dir)
+        if "ranker_eval" in steps:
+            cmd = [sys.executable, "-m", "scripts.ranker_eval"]
+            if extras["ranker_eval"]:
+                cmd.extend(extras["ranker_eval"])
+            rc_eval = 0
+            secs = 0.0
+            try:
+                rc_eval, secs = run_step("ranker_eval", cmd, timeout=60 * 3)
+            except Exception as exc:  # pragma: no cover - defensive continue
+                LOG.warning("RANKER_EVAL error (continuing): %s", exc)
+                rc_eval, secs = 1, 0.0
+            stage_times["ranker_eval"] = secs
+            step_rcs["ranker_eval"] = rc_eval
+            if rc_eval:
+                LOG.warning("[WARN] RANKER_EVAL_FAILED rc=%s (continuing)", rc_eval)
+            else:
+                payload = _read_json(DATA_DIR / "ranker_eval" / "latest.json")
+                LOG.info(
+                    "[INFO] RANKER_EVAL sample_size=%s deciles=%s",
+                    int(payload.get("sample_size", 0) or 0),
+                    len(payload.get("deciles") or []),
+                )
         if "execute" in steps:
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)

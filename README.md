@@ -83,6 +83,7 @@ Pipeline options worth knowing:
 * `--reload-web true` triggers a PythonAnywhere reload when the pipeline finishes. If the `pa_reload_webapp` CLI is not available the runner falls back to touching `/var/www/raspatrick_pythonanywhere_com_wsgi.py` so the dashboard still refreshes automatically.
 * When the screener emits zero rows the pipeline now logs `FALLBACK_CHECK …` and invokes `scripts.fallback_candidates` to guarantee at least one canonical candidate row (columns: `timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entry_price,adv20,atrp,source`). Both `data/top_candidates.csv` and `data/latest_candidates.csv` are rewritten with these safe defaults.
 * `scripts.metrics` tolerates a missing or empty `data/trades_log.csv`, allowing fresh installs (before the first live trade) to produce `data/metrics_summary.csv` without manual scaffolding.
+* Nightly ranker evaluation runs by default via the `ranker_eval` pipeline step, writing `data/ranker_eval/latest.json` for the Screener Health decile charts. Temporarily skip it with `--steps screener,backtest,metrics` if needed.
 
 The Bollinger-band squeeze component now applies a shape-safe mask so the ranking pass no longer crashes with NumPy shape mismatch errors.
 
