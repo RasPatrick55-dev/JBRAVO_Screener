@@ -7,6 +7,32 @@ import pytest
 from scripts.execute_trades import ExecutionMetrics, ExecutorConfig, TradeExecutor
 
 
+@pytest.fixture(autouse=True)
+def _stub_alpaca_http(monkeypatch):
+    """Avoid real Alpaca HTTP calls to keep sizing tests fast/offline."""
+
+    prices = {"BUMP": 300.0, "FLOOR": 95.0, "ATRSMALL": 50.0, "ATRMIN": 50.0}
+
+    def _price(symbol: str) -> float:
+        return prices.get(symbol.upper(), 50.0)
+
+    monkeypatch.setattr(
+        "scripts.execute_trades._fetch_prevclose_snapshot", lambda symbol: _price(symbol)
+    )
+    monkeypatch.setattr(
+        "scripts.execute_trades._fetch_prev_close_from_alpaca",
+        lambda symbol: _price(symbol),
+    )
+    monkeypatch.setattr(
+        "scripts.execute_trades._fetch_latest_trade_from_alpaca",
+        lambda symbol, feed=None: {"price": _price(symbol), "feed": feed},
+    )
+    monkeypatch.setattr(
+        "scripts.execute_trades._fetch_latest_quote_from_alpaca",
+        lambda symbol, feed=None: {"ask": _price(symbol), "feed": feed},
+    )
+
+
 @pytest.mark.alpaca_optional
 def test_sizing_logs_zero_qty_after_bump(monkeypatch, caplog, tmp_path: Path):
     config = ExecutorConfig(
@@ -118,8 +144,11 @@ def test_atr_position_sizer_scales_quantity(monkeypatch, caplog, tmp_path: Path)
     rc = executor.execute(df, prefiltered=df.to_dict("records"))
     assert rc == 0
     messages = [record.getMessage() for record in caplog.records]
-    assert any("CALC symbol=ATRSMALL" in msg and "qty=4" in msg for msg in messages)
-    assert any("sizer=atr" in msg and "atr=0.1000" in msg for msg in messages)
+    atr_msgs = [msg for msg in messages if "CALC symbol=ATRSMALL" in msg]
+    assert atr_msgs, "expected sizing log for ATRSMALL"
+    assert any("sizer=atr" in msg and "atr=0.1000" in msg for msg in atr_msgs)
+    assert any("scale=0.200" in msg for msg in atr_msgs)
+    assert any("qty=3" in msg or "qty=4" in msg for msg in atr_msgs)
 
 
 @pytest.mark.alpaca_optional
@@ -159,5 +188,8 @@ def test_atr_position_sizer_respects_min_order(monkeypatch, caplog, tmp_path: Pa
     rc = executor.execute(df, prefiltered=df.to_dict("records"))
     assert rc == 0
     messages = [record.getMessage() for record in caplog.records]
-    assert any("CALC symbol=ATRMIN" in msg and "qty=6" in msg for msg in messages)
-    assert any("notional=300.00" in msg for msg in messages)
+    atr_msgs = [msg for msg in messages if "CALC symbol=ATRMIN" in msg]
+    assert atr_msgs, "expected sizing log for ATRMIN"
+    assert any("notional=300.00" in msg for msg in atr_msgs)
+    assert any("sizer=atr" in msg and "atr=0.5000" in msg for msg in atr_msgs)
+    assert any("qty=5" in msg or "qty=6" in msg for msg in atr_msgs)

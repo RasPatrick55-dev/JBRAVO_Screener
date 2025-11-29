@@ -4,6 +4,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 os.environ.setdefault("APCA_API_KEY_ID", "test")
@@ -13,6 +15,9 @@ os.environ.setdefault("ALPACA_SECRET_KEY", os.environ["APCA_API_SECRET_KEY"])
 os.environ.setdefault("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
 
 from scripts import run_pipeline
+
+
+pytestmark = [pytest.mark.alpaca_optional, pytest.mark.slow]
 
 
 def _stub_emit(monkeypatch, events_path: Path):

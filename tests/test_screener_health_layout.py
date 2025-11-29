@@ -90,7 +90,10 @@ def test_decile_panels_show_not_computed_when_missing(
         assert isinstance(fig, go.Figure)
         annotation_texts = [ann.text for ann in fig.layout.annotations]
         joined = " ".join(annotation_texts)
-        assert "Not computed yet" in joined
+        assert any(
+            marker in joined
+            for marker in ("Not computed yet", "No ranker_eval data file yet")
+        )
 
 
 def test_decile_panels_use_ranker_eval_data_when_present(

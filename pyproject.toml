@@ -17,4 +17,5 @@ dependencies = [
 pythonpath = ["."]
 markers = [
     "alpaca_optional: tests that can run without Alpaca credentials",
+    "slow: slow/integration tests that are not run by default",
 ]

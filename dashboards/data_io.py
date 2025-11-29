@@ -104,6 +104,33 @@ def _count_csv_rows(path: Path) -> int:
         return 0
 
 
+def _parse_pipeline_log(base_dir: Path) -> Dict[str, Any]:
+    log_path = Path(base_dir) / "logs" / "pipeline.log"
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+    result: Dict[str, Any] = {}
+    for line in reversed(lines):
+        if "PIPELINE_END" in line and "rc=" in line and "pipeline_rc" not in result:
+            for part in line.split():
+                if part.startswith("rc="):
+                    result["pipeline_rc"] = _coerce_int(part.split("=", 1)[1])
+                    break
+        if "PIPELINE_SUMMARY" in line and "source=" in line and "latest_source" not in result:
+            for part in line.split():
+                if part.startswith("source="):
+                    result["latest_source"] = part.split("=", 1)[1]
+                    break
+        if "latest_source" in result and "pipeline_rc" in result:
+            break
+
+    return result
+
+
 def _mtime_iso(path: Path) -> Optional[str]:
     try:
         ts = path.stat().st_mtime
@@ -268,6 +295,10 @@ def load_screener_metrics(base_dir: Optional[Path] = None) -> Dict[str, Any]:
 
     latest_source = payload.get("latest_source") or payload.get("source")
 
+    pipeline_rc_value = payload.get("pipeline_rc")
+    if pipeline_rc_value is None and "pipeline_rc" not in payload:
+        pipeline_rc_value = payload.get("rc")
+
     normalized: Dict[str, Any] = {
         "last_run_utc": payload.get("last_run_utc") or payload.get("last_run"),
         "symbols_in": _coerce_int(payload.get("symbols_in")),
@@ -279,8 +310,13 @@ def load_screener_metrics(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         or _coerce_int(payload.get("rows")),
         "rows_final": rows_final,
         "latest_source": latest_source,
-        "pipeline_rc": _coerce_int(payload.get("pipeline_rc") or payload.get("rc")),
+        "pipeline_rc": _coerce_int(pipeline_rc_value),
     }
+
+    inferred = _parse_pipeline_log(base.parent)
+    for key in ("latest_source", "pipeline_rc"):
+        if normalized.get(key) in (None, "") and key in inferred:
+            normalized[key] = inferred[key]
 
     return normalized
 
