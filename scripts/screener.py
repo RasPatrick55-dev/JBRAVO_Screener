@@ -4189,7 +4189,7 @@ def run_screener(
         for sym, reason in (prefiltered_skips or {}).items()
     }
 
-    if not prefiltered_map and not prepared.empty:
+    if not prepared.empty:
         allowed_exchanges = set(ALLOWED_EQUITY_EXCHANGES)
         auto_prefilter: dict[str, str] = {}
         for sym_raw, exch_raw in prepared[["symbol", "exchange"]].itertuples(index=False):
@@ -4213,7 +4213,8 @@ def run_screener(
             if reason:
                 auto_prefilter.setdefault(sym, reason)
         if auto_prefilter:
-            prefiltered_map.update(auto_prefilter)
+            for sym, reason in auto_prefilter.items():
+                prefiltered_map.setdefault(sym, reason)
 
     initial_rejects: list[dict[str, str]] = []
     for sym, reason in prefiltered_map.items():
