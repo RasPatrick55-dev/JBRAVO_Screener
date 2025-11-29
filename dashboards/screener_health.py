@@ -569,6 +569,8 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
     return {
         "run_utc": payload.get("run_utc"),
         "label_horizon_days": payload.get("label_horizon_days"),
+        "sample_size": payload.get("sample_size"),
+        "reason": payload.get("reason"),
         "deciles": deciles,
     }
 
@@ -1400,14 +1402,9 @@ def register_callbacks(app):
             )
 
         # ---------------- Deciles (Hit‑rate & Avg Return) ----------------
-        hit_fig = _placeholder_figure(
-            "Decile Hit‑Rate",
-            "Not computed yet (no ranker_eval data or insufficient trades).",
-        )
-        ret_fig = _placeholder_figure(
-            "Decile Avg Return",
-            "Not computed yet (no ranker_eval data or insufficient trades).",
-        )
+        default_ranking_message = "No ranker_eval data file yet"
+        hit_fig = _placeholder_figure("Decile Hit‑Rate", default_ranking_message)
+        ret_fig = _placeholder_figure("Decile Avg Return", default_ranking_message)
         if ev and isinstance(ev, dict):
             dec = ev.get("deciles") or []
             subtitle_bits: list[str] = []
@@ -1439,6 +1436,21 @@ def register_callbacks(app):
                             )
                     hit_fig.update_yaxes(tickformat=".0%")
                     ret_fig.update_yaxes(tickformat=".2%")
+                else:
+                    reason = ev.get("reason") or "no_deciles"
+                    try:
+                        sample_size = int(ev.get("sample_size"))
+                    except (TypeError, ValueError):
+                        sample_size = "unknown"
+                    horizon_label = (
+                        f"{int(horizon)}" if isinstance(horizon, (int, float)) else "unknown"
+                    )
+                    message = (
+                        "Ranker evaluation not computed yet: "
+                        f"{reason} (sample_size = {sample_size}, horizon = {horizon_label} days)."
+                    )
+                    hit_fig = _placeholder_figure("Decile Hit‑Rate", message)
+                    ret_fig = _placeholder_figure("Decile Avg Return", message)
             except Exception:  # pragma: no cover - defensive dashboard guard
                 pass
 
