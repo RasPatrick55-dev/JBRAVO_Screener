@@ -296,7 +296,12 @@ try:  # pragma: no cover - preferred module execution path
     from .utils.calendar import calc_daily_window
     from .utils.http_alpaca import fetch_bars_http
     from .utils.rate import TokenBucket
-    from .utils.models import BarData, classify_exchange, KNOWN_EQUITY
+    from .utils.models import (
+        ALLOWED_EQUITY_EXCHANGES,
+        BarData,
+        classify_exchange,
+        KNOWN_EQUITY,
+    )
     from .utils.env import trading_base_url
     from .utils.frame_guards import ensure_symbol_column
     from .features import (
@@ -321,7 +326,12 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.utils.calendar import calc_daily_window  # type: ignore
     from scripts.utils.http_alpaca import fetch_bars_http  # type: ignore
     from scripts.utils.rate import TokenBucket  # type: ignore
-    from scripts.utils.models import BarData, classify_exchange, KNOWN_EQUITY  # type: ignore
+    from scripts.utils.models import (  # type: ignore
+        ALLOWED_EQUITY_EXCHANGES,
+        BarData,
+        classify_exchange,
+        KNOWN_EQUITY,
+    )
     from scripts.utils.env import trading_base_url  # type: ignore
     from scripts.utils.frame_guards import ensure_symbol_column  # type: ignore
     from scripts.features import (  # type: ignore
@@ -4180,7 +4190,7 @@ def run_screener(
     }
 
     if not prefiltered_map and not prepared.empty:
-        allowed_exchanges = {"NASDAQ", "NYSE", "ARCA", "AMEX", "BATS", "IEX"}
+        allowed_exchanges = set(ALLOWED_EQUITY_EXCHANGES)
         auto_prefilter: dict[str, str] = {}
         for sym_raw, exch_raw in prepared[["symbol", "exchange"]].itertuples(index=False):
             sym = str(sym_raw or "").strip().upper()
