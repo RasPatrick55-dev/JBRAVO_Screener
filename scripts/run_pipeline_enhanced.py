@@ -15,8 +15,9 @@ import logging
 import shutil
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
-import requests
 import pandas as pd
+
+from utils.alerts import send_alert
 
 from utils import write_csv_atomic, logger_utils
 
@@ -30,18 +31,6 @@ logger = logger_utils.init_logging(__name__, 'pipeline_enhanced.log')
 error_handler = RotatingFileHandler(error_log_path, maxBytes=2_000_000, backupCount=5)
 error_handler.setLevel(logging.ERROR)
 logger.addHandler(error_handler)
-
-ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
-
-
-def send_alert(msg: str) -> None:
-    if not ALERT_WEBHOOK_URL:
-        return
-    try:
-        requests.post(ALERT_WEBHOOK_URL, json={"text": msg}, timeout=5)
-    except Exception as exc:
-        logger.error("Failed to send alert: %s", exc)
-
 
 def run_step(step_name, command):
     start_time = datetime.utcnow()

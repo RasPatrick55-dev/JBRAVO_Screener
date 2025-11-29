@@ -8,6 +8,82 @@ cd "$PROJECT"
 source "$VENV/bin/activate"
 set -a; . ~/.config/jbravo/.env; set +a
 
+echo "[WRAPPER] checking pipeline freshness"
+set +e
+PIPELINE_INFO=$(python - <<'PY'
+import json
+import pathlib
+from datetime import datetime
+import zoneinfo
+
+base = pathlib.Path('.')
+summary = base / 'reports' / 'pipeline_summary.json'
+ny = zoneinfo.ZoneInfo('America/New_York')
+today = datetime.now(ny).date()
+
+fresh = False
+reason = 'missing_summary'
+
+try:
+    data = json.loads(summary.read_text())
+    rc = int(data.get('rc', 1))
+    ts = data.get('timestamp')
+    ts_date = None
+    if isinstance(ts, str) and ts:
+        try:
+            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            ts_date = dt.astimezone(ny).date()
+        except Exception:
+            ts_date = None
+    fresh = rc == 0 and ts_date == today
+    if not fresh:
+        reason = f"rc={rc} ts_date={ts_date}"
+except FileNotFoundError:
+    reason = 'missing_summary'
+except Exception as exc:
+    reason = f"read_error:{exc}"
+
+print(json.dumps({'fresh': fresh, 'reason': reason}))
+raise SystemExit(0 if fresh else 1)
+PY
+)
+PIPELINE_READY=$?
+set -e
+PIPELINE_REASON=$(PIPELINE_INFO="$PIPELINE_INFO" python - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ.get('PIPELINE_INFO', '{}') or '{}')
+print(payload.get('reason', ''))
+PY
+)
+
+if [ "$PIPELINE_READY" -ne 0 ]; then
+  echo "[WRAPPER] pipeline stale -> re-running (reason: $PIPELINE_REASON)"
+  if ! python -m scripts.run_pipeline; then
+    echo "[WRAPPER] pipeline rerun failed"
+    exit 1
+  fi
+  PIPELINE_RERUN_TS=$(python - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).isoformat())
+PY
+  )
+  export PIPELINE_REASON PIPELINE_RERUN_TS
+  python - <<'PY'
+import os
+from utils.alerts import send_alert
+
+send_alert(
+    "JBRAVO wrapper auto-ran pipeline",
+    {
+        "reason": os.environ.get("PIPELINE_REASON", "unknown"),
+        "run_utc": os.environ.get("PIPELINE_RERUN_TS"),
+    },
+)
+PY
+fi
+
 echo "[WRAPPER] probing Alpaca credentials"
 ALPACA_PROBE=$(python - <<'PY'
 import os, requests, json
