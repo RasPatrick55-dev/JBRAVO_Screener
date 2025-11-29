@@ -12,7 +12,7 @@ from typing import Any, Mapping, Optional
 
 import requests
 
-LOGGER = logging.getLogger("alerts")
+logger = logging.getLogger(__name__)
 
 
 def _is_enabled() -> bool:
@@ -47,12 +47,14 @@ def send_alert(message: str, context: Optional[Mapping[str, Any]] = None) -> Non
     """
 
     if not _is_enabled():
-        LOGGER.debug("Alerts disabled via ALERTS_ENABLED")
+        logger.info(
+            "Alerts disabled via ALERTS_ENABLED; skipping alert: %s", message
+        )
         return
 
     webhook = _webhook_url()
     if not webhook:
-        LOGGER.warning("ALERT_WEBHOOK not configured; skipping alert: %s", message)
+        logger.info("ALERT_WEBHOOK not set; would send alert: %s", message)
         return
 
     context_payload = _coerce_context(context)
@@ -63,7 +65,11 @@ def send_alert(message: str, context: Optional[Mapping[str, Any]] = None) -> Non
         payload["context"] = context_payload
 
     try:
-        requests.post(webhook, json=payload, timeout=5)
+        response = requests.post(webhook, json=payload, timeout=5)
+        if not response.ok:
+            logger.warning(
+                "Failed to send alert (status %s): %s", response.status_code, message
+            )
     except Exception as exc:  # pragma: no cover - defensive network guard
-        LOGGER.warning("Failed to send alert: %s", exc)
+        logger.warning("Failed to send alert: %s", exc)
 
