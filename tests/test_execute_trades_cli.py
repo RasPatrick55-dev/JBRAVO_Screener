@@ -6,7 +6,7 @@ import pytest
 from scripts import execute_trades
 
 
-pytestmark = pytest.mark.alpaca_optional
+pytestmark = [pytest.mark.alpaca_optional, pytest.mark.slow]
 
 
 @pytest.fixture(autouse=True)

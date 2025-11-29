@@ -1,6 +1,4 @@
 import pandas as pd
-import pytest
-
 import pandas as pd
 import pytest
 
@@ -8,6 +6,30 @@ from scripts import execute_trades
 
 
 pytestmark = pytest.mark.alpaca_optional
+
+
+@pytest.fixture(autouse=True)
+def _stub_alpaca_http(monkeypatch):
+    prices = {"AAA": 250.0, "BBB": 50.0, "CCC": 12.5}
+
+    def _price(symbol: str) -> float:
+        return prices.get(symbol.upper(), 50.0)
+
+    monkeypatch.setattr(
+        "scripts.execute_trades._fetch_prevclose_snapshot", lambda symbol: _price(symbol)
+    )
+    monkeypatch.setattr(
+        "scripts.execute_trades._fetch_prev_close_from_alpaca",
+        lambda symbol: _price(symbol),
+    )
+    monkeypatch.setattr(
+        "scripts.execute_trades._fetch_latest_trade_from_alpaca",
+        lambda symbol, feed=None: {"price": _price(symbol), "feed": feed},
+    )
+    monkeypatch.setattr(
+        "scripts.execute_trades._fetch_latest_quote_from_alpaca",
+        lambda symbol, feed=None: {"ask": _price(symbol), "feed": feed},
+    )
 
 
 def test_sizing_produces_positive_quantities(monkeypatch):

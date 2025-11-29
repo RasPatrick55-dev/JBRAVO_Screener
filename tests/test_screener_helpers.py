@@ -1,5 +1,6 @@
 import os
 import types
+import importlib.util
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -149,7 +150,9 @@ def test_gate_presets_parsing():
 
 
 @pytest.mark.skipif(
-    not os.getenv("APCA_API_KEY_ID"), reason="Alpaca credentials not configured"
+    not os.getenv("APCA_API_KEY_ID")
+    or importlib.util.find_spec("alpaca_trade_api") is None,
+    reason="Alpaca credentials or alpaca_trade_api not available",
 )
 def test_fetch_symbols_not_empty():
     df = screener.fetch_symbols()

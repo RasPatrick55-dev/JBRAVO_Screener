@@ -8,7 +8,9 @@ import pytest
 from scripts import run_pipeline
 
 
-@pytest.mark.alpaca_optional
+pytestmark = [pytest.mark.alpaca_optional, pytest.mark.slow]
+
+
 def test_pipeline_logs_summary_and_end(tmp_path: Path, monkeypatch, caplog):
     data_dir = tmp_path / "data"
     logs_dir = tmp_path / "logs"

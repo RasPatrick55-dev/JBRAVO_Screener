@@ -11,6 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import run_pipeline
 
 
+pytestmark = [pytest.mark.alpaca_optional, pytest.mark.slow]
+
+
 @pytest.fixture(autouse=True)
 def _set_creds(monkeypatch):
     monkeypatch.setenv("APCA_API_KEY_ID", "test")
