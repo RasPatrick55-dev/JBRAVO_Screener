@@ -1,0 +1,7 @@
+{
+  "trading": {"ok": true, "status": 200, "message": ""},
+  "data": {"ok": true, "status": 200, "message": ""},
+  "trading_ok": true,
+  "data_ok": true,
+  "ts_utc": "2024-07-01T12:00:00Z"
+}

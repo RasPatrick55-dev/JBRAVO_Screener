@@ -1,0 +1,11 @@
+{
+  "in_window": true,
+  "auth_ok": true,
+  "candidates_in": 15,
+  "window_label": "pre-market",
+  "started_utc": "2024-07-01T11:00:00Z",
+  "finished_utc": "2024-07-01T11:15:00Z",
+  "skip_counts": {"TIME_WINDOW": 1},
+  "buying_power": 150000,
+  "orders_submitted": 0
+}

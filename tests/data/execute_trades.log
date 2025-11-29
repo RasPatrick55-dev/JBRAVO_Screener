@@ -1,0 +1,3 @@
+2024-07-01 12:00:25 [INFO] BUY_SUBMIT symbol=AAPL qty=10 limit=195.10
+2024-07-01 12:00:26 [INFO] BUY_FILL symbol=AAPL filled_qty=10 avg_price=195.00
+2024-07-01 12:00:27 [INFO] TIME_WINDOW reason=outside_window
