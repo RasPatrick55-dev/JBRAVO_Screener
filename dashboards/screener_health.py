@@ -559,7 +559,18 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
 
     path = base_dir / "data" / "ranker_eval" / "latest.json"
     payload = _safe_json(path)
-    return payload if payload else None
+    if not payload:
+        return None
+
+    deciles = payload.get("deciles")
+    if not isinstance(deciles, list):
+        deciles = []
+
+    return {
+        "run_utc": payload.get("run_utc"),
+        "label_horizon_days": payload.get("label_horizon_days"),
+        "deciles": deciles,
+    }
 
 
 def _extract_last_line(text: str, token: str) -> str:
@@ -1390,25 +1401,45 @@ def register_callbacks(app):
 
         # ---------------- Deciles (Hit‑rate & Avg Return) ----------------
         hit_fig = _placeholder_figure(
-            "Decile Hit‑Rate", "Not computed yet (no ranker_eval data)."
+            "Decile Hit‑Rate",
+            "Not computed yet (no ranker_eval data or insufficient trades).",
         )
         ret_fig = _placeholder_figure(
-            "Decile Avg Return", "Not computed yet (no ranker_eval data)."
+            "Decile Avg Return",
+            "Not computed yet (no ranker_eval data or insufficient trades).",
         )
         if ev and isinstance(ev, dict):
-            dec = ev.get("deciles") or {}
-            # expected: {"rank_decile":[1..10], "hit_rate":[...], "avg_return":[...], "count":[...]}
+            dec = ev.get("deciles") or []
+            subtitle_bits: list[str] = []
+            horizon = ev.get("label_horizon_days")
+            if isinstance(horizon, (int, float)):
+                subtitle_bits.append(f"{int(horizon)}-day fwd return")
+            run_utc = ev.get("run_utc")
+            if isinstance(run_utc, str) and run_utc:
+                subtitle_bits.append(f"evaluated {run_utc} UTC")
+            subtitle = " · ".join(subtitle_bits)
             try:
                 df_dec = pd.DataFrame(dec)
-                if not df_dec.empty and set(["rank_decile","hit_rate","avg_return"]).issubset(df_dec.columns):
-                    df_dec = df_dec.sort_values("rank_decile")
-                    hit_fig = px.bar(df_dec, x="rank_decile", y="hit_rate",
-                                     title=f"Decile Hit‑Rate (k={int(ev.get('population',0))})")
-                    ret_fig = px.bar(df_dec, x="rank_decile", y="avg_return",
-                                     title="Decile Avg Return")
+                required_cols = {"decile", "hit_rate", "avg_return"}
+                if not df_dec.empty and required_cols.issubset(df_dec.columns):
+                    df_dec = df_dec.sort_values("decile")
+                    hit_fig = px.bar(df_dec, x="decile", y="hit_rate", title="Decile Hit‑Rate")
+                    ret_fig = px.bar(df_dec, x="decile", y="avg_return", title="Decile Avg Return")
                     for fig in (hit_fig, ret_fig):
-                        fig.update_layout(template="plotly_dark", margin=dict(l=20, r=20, t=60, b=20))
-            except Exception:
+                        fig.update_layout(
+                            template="plotly_dark",
+                            margin=dict(l=20, r=20, t=60, b=20),
+                        )
+                        if subtitle:
+                            fig.update_layout(
+                                title={
+                                    "text": f"{fig.layout.title.text}<br><sup>{subtitle}</sup>",
+                                    "x": 0.5,
+                                }
+                            )
+                    hit_fig.update_yaxes(tickformat=".0%")
+                    ret_fig.update_yaxes(tickformat=".2%")
+            except Exception:  # pragma: no cover - defensive dashboard guard
                 pass
 
         # ---------------- Predictions head & logs ----------------
