@@ -24,6 +24,11 @@ KNOWN_EQUITY = {
     "NYSEARCA",
 }
 
+# Exchanges we consider valid for the equity screener universe. This set is
+# intentionally aligned with ``KNOWN_EQUITY`` with IEX added explicitly to
+# allow its symbols while still filtering out unknown/OTC venues.
+ALLOWED_EQUITY_EXCHANGES = KNOWN_EQUITY | {"IEX"}
+
 
 def classify_exchange(raw: Any) -> str:
     """Classify an arbitrary exchange code into EQUITY/CRYPTO/OTHER."""

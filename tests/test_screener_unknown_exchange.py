@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from scripts import screener
+from scripts.utils.models import ALLOWED_EQUITY_EXCHANGES
 
 
 def _sample_universe() -> pd.DataFrame:
@@ -89,10 +90,26 @@ def test_screener_skips_unknown_exchanges(tmp_path):
     )
 
     assert stats["symbols_in"] == 4
+
+    expected_allowed = set()
+    expected_unknown_exchange = set()
+    expected_non_equity = set()
+    for sym_raw, exch_raw in zip(
+        df["symbol"].astype(str).str.upper(),
+        df["exchange"].astype(str).str.upper(),
+    ):
+        if exch_raw in ALLOWED_EQUITY_EXCHANGES:
+            expected_allowed.add(sym_raw)
+        elif exch_raw.startswith("CRYPTO"):
+            expected_non_equity.add(sym_raw)
+        elif not exch_raw:
+            expected_unknown_exchange.add(sym_raw)
+        else:
+            expected_unknown_exchange.add(sym_raw)
+    assert set(scored_df["symbol"].tolist()) == expected_allowed
+    assert skips["UNKNOWN_EXCHANGE"] == len(expected_unknown_exchange)
+    assert skips["NON_EQUITY"] == len(expected_non_equity)
     assert stats["shortlist_candidates"] >= 1
-    assert skips["UNKNOWN_EXCHANGE"] >= 1
-    assert skips["NON_EQUITY"] >= 1
-    assert "EQ1" in scored_df["symbol"].tolist()
 
     metrics_path = screener.write_outputs(
         tmp_path,
@@ -121,7 +138,7 @@ def test_screener_skips_unknown_exchanges(tmp_path):
 
     metrics = json.loads(metrics_path.read_text())
     assert metrics["rows"] == top_df.shape[0]
-    assert metrics["skips"]["UNKNOWN_EXCHANGE"] >= 1
+    assert metrics["skips"]["UNKNOWN_EXCHANGE"] == skips["UNKNOWN_EXCHANGE"]
     assert metrics["status"] == "ok"
     assert "reject_samples" in metrics
     assert "gate_fail_counts" in metrics

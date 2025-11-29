@@ -566,10 +566,20 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
     if not isinstance(deciles, list):
         deciles = []
 
+    try:
+        sample_size = int(payload.get("sample_size", 0))
+    except (TypeError, ValueError):
+        sample_size = 0
+
+    try:
+        horizon = int(payload.get("label_horizon_days", 0))
+    except (TypeError, ValueError):
+        horizon = 0
+
     return {
         "run_utc": payload.get("run_utc"),
-        "label_horizon_days": payload.get("label_horizon_days"),
-        "sample_size": payload.get("sample_size"),
+        "label_horizon_days": horizon,
+        "sample_size": sample_size,
         "reason": payload.get("reason"),
         "deciles": deciles,
     }
@@ -1040,7 +1050,7 @@ def register_callbacks(app):
             m,
             (top_df.to_dict("records") if not top_df.empty else []),
             (hist.to_dict("records") if isinstance(hist, pd.DataFrame) and not hist.empty else []),
-            (ev or {}),
+            ev,
             summary,
             premarket,
         )
@@ -1124,7 +1134,7 @@ def register_callbacks(app):
         if not isinstance(hist_rows, list):
             hist_rows = []
         if not isinstance(ev, dict):
-            ev = {}
+            ev = None
         if not isinstance(health, dict):
             health = {}
         if not isinstance(summary, Mapping):
@@ -1402,13 +1412,19 @@ def register_callbacks(app):
             )
 
         # ---------------- Deciles (Hit‑rate & Avg Return) ----------------
-        default_ranking_message = "No ranker_eval data file yet"
+        default_ranking_message = "Not computed yet (no ranker_eval file present)"
         hit_fig = _placeholder_figure("Decile Hit‑Rate", default_ranking_message)
         ret_fig = _placeholder_figure("Decile Avg Return", default_ranking_message)
-        if ev and isinstance(ev, dict):
+        if isinstance(ev, dict):
             dec = ev.get("deciles") or []
-            subtitle_bits: list[str] = []
+            reason = ev.get("reason") or "no_deciles"
+            sample_size_raw = ev.get("sample_size", 0)
+            try:
+                sample_size = int(sample_size_raw)
+            except (TypeError, ValueError):
+                sample_size = 0
             horizon = ev.get("label_horizon_days")
+            subtitle_bits: list[str] = []
             if isinstance(horizon, (int, float)):
                 subtitle_bits.append(f"{int(horizon)}-day fwd return")
             run_utc = ev.get("run_utc")
@@ -1437,17 +1453,12 @@ def register_callbacks(app):
                     hit_fig.update_yaxes(tickformat=".0%")
                     ret_fig.update_yaxes(tickformat=".2%")
                 else:
-                    reason = ev.get("reason") or "no_deciles"
-                    try:
-                        sample_size = int(ev.get("sample_size"))
-                    except (TypeError, ValueError):
-                        sample_size = "unknown"
                     horizon_label = (
                         f"{int(horizon)}" if isinstance(horizon, (int, float)) else "unknown"
                     )
                     message = (
-                        "Ranker evaluation not computed yet: "
-                        f"{reason} (sample_size = {sample_size}, horizon = {horizon_label} days)."
+                        "Ranker evaluation not computed yet."
+                        f"\nreason={reason}, sample_size={sample_size}, horizon={horizon_label}d"
                     )
                     hit_fig = _placeholder_figure("Decile Hit‑Rate", message)
                     ret_fig = _placeholder_figure("Decile Avg Return", message)
