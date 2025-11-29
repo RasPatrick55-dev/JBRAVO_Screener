@@ -1,0 +1,10 @@
+{
+  "orders_submitted": 0,
+  "orders_filled": 0,
+  "skips": {
+    "TIME_WINDOW": 6,
+    "CASH": 0,
+    "ZERO_QTY": 0,
+    "PRICE_BOUNDS": 0
+  }
+}

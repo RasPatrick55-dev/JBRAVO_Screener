@@ -1,0 +1,9 @@
+{
+  "run_utc": "2024-07-01T12:00:00Z",
+  "label_horizon_days": 5,
+  "deciles": [
+    {"decile": 1, "hit_rate": 0.1, "avg_return": 0.02},
+    {"decile": 2, "hit_rate": 0.15, "avg_return": 0.03},
+    {"decile": 3, "hit_rate": 0.2, "avg_return": 0.04}
+  ]
+}
