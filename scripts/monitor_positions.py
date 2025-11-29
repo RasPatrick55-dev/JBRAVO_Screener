@@ -27,12 +27,10 @@ from tempfile import NamedTemporaryFile
 
 from dotenv import load_dotenv
 import pytz
-import requests
+from utils.alerts import send_alert
 
 dotenv_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(dotenv_path)
-
-ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
 
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
@@ -80,16 +78,6 @@ def log_exit_final(status: str, latency_ms: int) -> None:
         "latency_ms": latency_ms,
     }
     logger.info("EXIT_FINAL %s", payload)
-
-
-def send_alert(message: str):
-    """Send alert message to webhook if configured."""
-    if not ALERT_WEBHOOK_URL:
-        return
-    try:
-        requests.post(ALERT_WEBHOOK_URL, json={"text": message}, timeout=5)
-    except Exception as exc:
-        logger.error("Failed to send alert: %s", exc)
 
 
 def log_if_stale(file_path: str, name: str, threshold_minutes: int = 15):

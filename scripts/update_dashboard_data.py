@@ -10,7 +10,7 @@ import pandas as pd
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest, GetPortfolioHistoryRequest
 from dotenv import load_dotenv
-import requests
+from utils.alerts import send_alert
 from typing import Optional
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,8 +20,6 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
-
-ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
 
 logger = logging.getLogger("update_dashboard_data")
 logger.setLevel(logging.INFO)
@@ -57,16 +55,6 @@ def load_csv_with_pnl(path: str, fallback_col: Optional[str] = None) -> pd.DataF
         else:
             df["pnl"] = 0.0
     return df
-
-
-def send_alert(message: str):
-    """Send alert via webhook if configured."""
-    if not ALERT_WEBHOOK_URL:
-        return
-    try:
-        requests.post(ALERT_WEBHOOK_URL, json={"text": message}, timeout=5)
-    except Exception as exc:
-        logger.error("Failed to send alert: %s", exc)
 
 
 def log_if_stale(file_path: str, name: str, threshold_minutes: int = 15):

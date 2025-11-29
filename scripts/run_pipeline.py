@@ -25,6 +25,7 @@ from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidat
 from scripts.screener import write_universe_prefix_counts
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
 from utils import write_csv_atomic, atomic_write_bytes
+from utils.alerts import send_alert
 from utils.env import get_alpaca_creds
 from utils.telemetry import emit_event
 
@@ -1274,13 +1275,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     rows = 0
     stage_times: dict[str, float] = {}
     rc = 0
+    current_step: str | None = None
 
     metrics_rows: int | None = None
     latest_source: str | None = "unknown"
     error_info: dict[str, Any] | None = None
     degraded = False
+    zero_candidates_alerted = False
     try:
         if "screener" in steps:
+            current_step = "screener"
             cmd = [sys.executable, "-m", "scripts.screener", "--mode", "screener"]
             if extras["screener"]:
                 cmd.extend(extras["screener"])
@@ -1347,6 +1351,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 latest_source,
             )
             _sync_top_candidates_to_latest(base_dir)
+            if (metrics_rows or 0) == 0 and (latest_rows or 0) == 0 and not zero_candidates_alerted:
+                zero_candidates_alerted = True
+                LOG.warning("[WARN] ZERO_CANDIDATES_AFTER_FALLBACK symbols_in=%s", symbols_in)
+                send_alert(
+                    "JBRAVO pipeline: 0 candidates after fallback",
+                    {
+                        "symbols_in": symbols_in,
+                        "with_bars": symbols_with_bars,
+                        "rows": int(rows or 0),
+                        "source": latest_source,
+                        "run_utc": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
         else:
             LOG.info("[INFO] FALLBACK_CHECK start origin=latest")
             metrics = _read_json(SCREENER_METRICS_PATH)
@@ -1370,6 +1387,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             LOG.info("[INFO] FALLBACK_CHECK rows_out=%d source=%s", rows, latest_source)
 
         if "backtest" in steps:
+            current_step = "backtest"
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
             cmd = [sys.executable, "-m", "scripts.backtest"]
@@ -1384,6 +1402,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     error_info = {"step": "backtest", "rc": int(rc_bt), "message": "step_failed"}
 
         if "metrics" in steps:
+            current_step = "metrics"
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
             cmd = [sys.executable, "-m", "scripts.metrics"]
@@ -1405,6 +1424,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
             _sync_top_candidates_to_latest(base_dir)
         if "ranker_eval" in steps:
+            current_step = "ranker_eval"
             cmd = [sys.executable, "-m", "scripts.ranker_eval"]
             if extras["ranker_eval"]:
                 cmd.extend(extras["ranker_eval"])
@@ -1427,6 +1447,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     len(payload.get("deciles") or []),
                 )
         if "execute" in steps:
+            current_step = "execute"
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
             rows = ensure_candidates(min_rows)
             cmd = [sys.executable, "-m", "scripts.execute_trades"]
@@ -1457,6 +1478,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "message": str(exc),
             "exception": exc.__class__.__name__,
         }
+        try:
+            send_alert(
+                "JBRAVO pipeline FAILED",
+                {
+                    "step": current_step or "pipeline",
+                    "exception": repr(exc),
+                    "run_utc": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception:
+            LOG.debug("ALERT_PIPELINE_FAILED", exc_info=True)
         write_error_report(step="pipeline", detail=str(exc))
     finally:
         rows_out = metrics_rows if metrics_rows is not None else rows

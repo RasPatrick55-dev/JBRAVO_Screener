@@ -29,6 +29,7 @@ import requests
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.utils.env import load_env
 from utils import write_csv_atomic
+from utils.alerts import send_alert
 from utils.env import (
     AlpacaCredentialsError,
     AlpacaUnauthorizedError,
@@ -4085,6 +4086,30 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 _as_int(metrics_payload.get("trailing_attached")),
                 metrics_payload.get("skips", {}),
             )
+            try:
+                skip_block = metrics_payload.get("skips") if isinstance(metrics_payload.get("skips"), Mapping) else {}
+                if not skip_block and isinstance(metrics_payload.get("skip_reasons"), Mapping):
+                    skip_block = metrics_payload.get("skip_reasons")
+                skip_counts = {str(k): _as_int(v) for k, v in (skip_block or {}).items()}
+                candidates_in = _as_int(metrics_payload.get("symbols_in"))
+                if candidates_in <= 0:
+                    candidates_in = _count_csv_rows(Path("data") / "latest_candidates.csv")
+                orders_submitted = _as_int(metrics_payload.get("orders_submitted"))
+                non_time_skips = sum(count for reason, count in skip_counts.items() if reason != "TIME_WINDOW")
+                time_only = non_time_skips == 0 and skip_counts.get("TIME_WINDOW", 0) > 0
+                if orders_submitted == 0 and candidates_in > 0 and not time_only:
+                    send_alert(
+                        "JBRAVO pre-market: 0 orders submitted for non-TIME_WINDOW reasons",
+                        {
+                            "skips": skip_counts,
+                            "buying_power": metrics_payload.get("buying_power"),
+                            "status": metrics_payload.get("status"),
+                            "candidates_in": candidates_in,
+                            "run_utc": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+            except Exception:
+                LOGGER.debug("ALERT_EXECUTE_SKIPS_FAILED", exc_info=True)
         return rc
     except AlpacaUnauthorizedError as exc:
         LOGGER.error(
@@ -4109,6 +4134,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             exception=exc.__class__.__name__,
             detail=str(exc),
         )
+        try:
+            send_alert(
+                "JBRAVO execute_trades FAILED",
+                {
+                    "exception": repr(exc),
+                    "run_utc": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception:
+            LOGGER.debug("ALERT_EXECUTE_FATAL_FAILED", exc_info=True)
         return 1
 
 

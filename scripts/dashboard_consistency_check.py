@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping
 import pandas as pd
 
 from scripts.fallback_candidates import CANON, CANONICAL_COLUMNS
+from utils.alerts import send_alert
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 
@@ -920,6 +921,41 @@ def main(argv: Iterable[str] | None = None) -> int:
         evidence_path = collect_evidence(report, base_dir=base, evidence_dir=evidence_target)
         LOGGER.info("Dashboard evidence bundle written to %s", evidence_path)
     failures = run_assertions(base)
+    critical_issues = list(failures)
+
+    tokens = (report.get("checks", {}) or {}).get("pipeline_tokens", {})
+    pipeline_end = tokens.get("PIPELINE_END", {})
+    end_data = pipeline_end.get("data", {}) if isinstance(pipeline_end, Mapping) else {}
+    if not pipeline_end.get("present"):
+        critical_issues.append("PIPELINE_END missing")
+    else:
+        rc_value = end_data.get("rc")
+        try:
+            rc_int = int(rc_value)
+        except Exception:
+            rc_int = None
+        if rc_int not in (0, None):
+            critical_issues.append(f"PIPELINE_END rc={rc_value}")
+
+    executor_checks = (report.get("checks", {}) or {}).get("executor", {})
+    if not executor_checks.get("metrics_present"):
+        critical_issues.append("execute_metrics.json missing or unreadable")
+
+    conn_info = (report.get("inputs", {}) or {}).get("connection_health", {})
+    if not conn_info.get("present"):
+        critical_issues.append("connection_health.json missing")
+
+    if critical_issues:
+        try:
+            send_alert(
+                "JBRAVO dashboard consistency FAIL",
+                {
+                    "issues": critical_issues,
+                    "generated_at": report.get("generated_at_utc"),
+                },
+            )
+        except Exception:
+            LOGGER.debug("DASHBOARD_ALERT_FAILED", exc_info=True)
     if failures:
         for failure in failures:
             LOGGER.error(failure)

@@ -46,6 +46,7 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 import requests
+from utils.alerts import send_alert
 
 from .indicators import adx, aroon, macd, obv, rsi
 from utils import write_csv_atomic, cache_bars
@@ -76,27 +77,9 @@ logging.basicConfig(
 dotenv_path = os.path.join(BASE_DIR, '.env')
 logging.info("Loading environment variables from %s", dotenv_path)
 load_dotenv(dotenv_path)
-
-ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")
 DATA_CACHE_DIR = os.path.join(BASE_DIR, 'data', 'history_cache')
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 DB_PATH = os.path.join(BASE_DIR, 'data', 'pipeline.db')
-
-
-def send_alert(message: str) -> None:
-    """Send a simple JSON message to the configured webhook.
-
-    This function is used to surface failures in the screener via
-    Slack/Discord/Teams.  It is intentionally resilient: on any
-    exception it simply logs the error and returns.  See
-    ``ALERT_WEBHOOK_URL`` in the environment.
-    """
-    if not ALERT_WEBHOOK_URL:
-        return
-    try:
-        requests.post(ALERT_WEBHOOK_URL, json={"text": message}, timeout=5)
-    except Exception as exc:
-        logging.error("Failed to send alert: %s", exc)
 
 
 from .ensure_db_indicators import ensure_columns, REQUIRED_COLUMNS
