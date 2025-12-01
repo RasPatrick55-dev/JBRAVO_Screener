@@ -17,7 +17,14 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
 )
 
-from .utils import fetch_bars_with_cutoff
+# Support both ``python -m scripts.monitor_positions`` (preferred) and direct invocation.
+if __package__ in {None, ""}:
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if PROJECT_ROOT not in sys.path:
+        sys.path.append(PROJECT_ROOT)
+    from scripts.utils import fetch_bars_with_cutoff
+else:
+    from .utils import fetch_bars_with_cutoff
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import logging
