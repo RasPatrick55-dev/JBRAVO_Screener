@@ -56,6 +56,7 @@ latest_candidates_path = os.path.join(BASE_DIR, "data", "latest_candidates.csv")
 
 TOP_CANDIDATES = Path(top_candidates_path)
 LATEST_CANDIDATES = Path(latest_candidates_path)
+TRADES_LOG_PATH = Path(trades_log_path)
 
 # Additional datasets introduced for monitoring
 metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
@@ -667,6 +668,136 @@ def load_symbol_perf_df() -> pd.DataFrame | dbc.Alert:
     return df
 
 
+def load_trades_for_exits() -> pd.DataFrame | dbc.Alert:
+    """Load trades for exit analytics with graceful fallback."""
+
+    df, alert = load_csv(
+        str(TRADES_LOG_PATH),
+        required_columns=["symbol", "entry_time", "exit_time", "pnl"],
+        alert_prefix="Trades log",
+    )
+    if alert:
+        return alert
+
+    if not isinstance(df, pd.DataFrame):
+        return dbc.Alert("Trades log is unavailable.", color="warning")
+
+    for col in ("entry_time", "exit_time"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    if "exit_time" in df.columns:
+        df = df.sort_values(by="exit_time", ascending=False, na_position="last")
+
+    return df
+
+
+def make_trades_exits_layout():
+    """Build the Trades / Exits analytics layout."""
+
+    df_trades = load_trades_for_exits()
+
+    if not isinstance(df_trades, pd.DataFrame):
+        return html.Div([df_trades])
+
+    has_exit_reason = "exit_reason" in df_trades.columns
+    has_exit_eff = "exit_efficiency" in df_trades.columns
+
+    table_columns = [
+        {"name": "Symbol", "id": "symbol"},
+        {"name": "Entry Time", "id": "entry_time"},
+        {"name": "Exit Time", "id": "exit_time"},
+        {"name": "Exit %", "id": "exit_pct"}
+        if "exit_pct" in df_trades.columns
+        else None,
+        {"name": "Net PnL", "id": "net_pnl"}
+        if "net_pnl" in df_trades.columns
+        else None,
+    ]
+    if has_exit_reason:
+        table_columns.append({"name": "Exit Reason", "id": "exit_reason"})
+    if has_exit_eff:
+        table_columns.append({"name": "Exit Efficiency", "id": "exit_efficiency"})
+
+    table_columns = [column for column in table_columns if column is not None]
+
+    trades_table = dash_table.DataTable(
+        id="trades-exits-table",
+        columns=table_columns,
+        data=df_trades.to_dict("records"),
+        page_size=20,
+        sort_action="native",
+        filter_action="native",
+        style_table={"overflowX": "auto"},
+    )
+
+    if has_exit_reason:
+        exit_counts = df_trades["exit_reason"].value_counts().reset_index()
+        exit_counts.columns = ["exit_reason", "count"]
+        counts_bar = dcc.Graph(
+            id="exit-reason-counts",
+            figure={
+                "data": [
+                    {
+                        "type": "bar",
+                        "x": exit_counts["exit_reason"],
+                        "y": exit_counts["count"],
+                    }
+                ],
+                "layout": {
+                    "title": "Exit count by reason",
+                    "margin": {"l": 40, "r": 10, "t": 40, "b": 80},
+                },
+            },
+        )
+    else:
+        counts_bar = html.Div("No exit_reason column available yet.")
+
+    if has_exit_reason and has_exit_eff:
+        eff_by_reason = (
+            df_trades.groupby("exit_reason")["exit_efficiency"]
+            .mean()
+            .sort_values(ascending=False)
+            .reset_index()
+        )
+        eff_bar = dcc.Graph(
+            id="exit-efficiency-by-reason",
+            figure={
+                "data": [
+                    {
+                        "type": "bar",
+                        "x": eff_by_reason["exit_reason"],
+                        "y": eff_by_reason["exit_efficiency"],
+                    }
+                ],
+                "layout": {
+                    "title": "Avg exit efficiency by reason",
+                    "margin": {"l": 40, "r": 10, "t": 40, "b": 80},
+                    "yaxis": {"range": [0.9, 1.0]},
+                },
+            },
+        )
+    else:
+        eff_bar = html.Div("No exit_efficiency data available yet.")
+
+    return html.Div(
+        [
+            html.H3("Trades & Exit Analytics"),
+            html.P(
+                "Review how well each exit rule captures profit, using exit_reason and exit_efficiency from trades_log.csv."
+            ),
+            html.Div(trades_table, style={"marginBottom": "2rem"}),
+            html.Div(
+                [
+                    html.Div(counts_bar, style={"flex": 1, "minWidth": "300px"}),
+                    html.Div(eff_bar, style={"flex": 1, "minWidth": "300px"}),
+                ],
+                style={"display": "flex", "flexWrap": "wrap", "gap": "1rem"},
+            ),
+        ]
+    )
+
+
 def _resolve_trades_dataframe() -> tuple[pd.DataFrame | None, str, str, list[Any]]:
     """Return the most suitable trades dataframe and metadata."""
 
@@ -1217,6 +1348,13 @@ app.layout = dbc.Container(
                         dbc.Tab(
                             label="Monitoring Positions",
                             tab_id="tab-monitor",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Trades / Exits",
+                            tab_id="tab-trades",
                             tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                             active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                             className="custom-tab",
@@ -2458,6 +2596,10 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         return dbc.Container(components, fluid=True)
 
 
+    elif tab == "tab-trades":
+        return make_trades_exits_layout()
+
+
     elif tab == "tab-symbol-performance":
         paper_mode = _is_paper_mode()
         symbol_source_path = TRADES_LOG_FOR_SYMBOLS
@@ -2810,6 +2952,9 @@ def render_tab(tab):
     elif tab == "tab-execute":
         logger.info("Rendering content for tab: %s", tab)
         return execute_trades_layout()
+    elif tab == "tab-trades":
+        logger.info("Rendering content for tab: %s", tab)
+        return make_trades_exits_layout()
     elif tab == "tab-screener":
         logger.info("Rendering content for tab: %s", tab)
         return screener_layout()
