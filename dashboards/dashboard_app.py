@@ -5,7 +5,7 @@ from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
-from dash.dash_table import Format, Scheme
+from dash.dash_table import Format
 from datetime import datetime, timezone, timedelta
 import subprocess
 import json
@@ -275,8 +275,10 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 if not API_KEY or not API_SECRET:
-    raise ValueError("Missing Alpaca credentials")
-trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
+    trading_client = None
+    logger.warning("Missing Alpaca credentials; Alpaca API features disabled")
+else:
+    trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 logger = logging.getLogger(__name__)
 
 
@@ -345,6 +347,12 @@ def connection_badge_color(health_data: Mapping[str, Any]) -> Optional[str]:
 
 def fetch_positions_api():
     """Fetch open positions from Alpaca for fallback."""
+    if trading_client is None:
+        logger.warning(
+            "Alpaca credentials missing; skipping API position fallback",
+        )
+        return pd.DataFrame()
+
     try:
         positions = trading_client.get_all_positions()
         return pd.DataFrame(
@@ -2143,7 +2151,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                                 "name": "Avg Exit Efficiency",
                                 "id": "avg_exit_efficiency",
                                 "type": "numeric",
-                                "format": Format(precision=2, scheme=Scheme.percentage),
+                                "format": Format(precision=2, scheme=Format.Scheme.percentage),
                             },
                         ],
                         style_table={"overflowX": "auto"},
@@ -2193,7 +2201,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 col_def: dict[str, Any] = {"name": col.replace("_", " ").title(), "id": col}
                 if col in {"exit_efficiency", "exit_pct", "mfe_pct"}:
                     col_def["type"] = "numeric"
-                    col_def["format"] = Format(precision=2, scheme=Scheme.percentage)
+                    col_def["format"] = Format(
+                        precision=2, scheme=Format.Scheme.percentage
+                    )
                 column_defs.append(col_def)
 
             table = dash_table.DataTable(
