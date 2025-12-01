@@ -1,5 +1,6 @@
 # monitor_positions.py
 
+import json
 import os
 import sys
 import time
@@ -196,6 +197,7 @@ def get_original_entry_time(existing_df: pd.DataFrame, symbol: str, default_time
 executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
 trades_log_real_path = os.path.join(BASE_DIR, "data", "trades_log_real.csv")
+partial_exit_state_path = os.path.join(BASE_DIR, "data", "partial_exit_state.json")
 
 REAL_TRADE_COLUMNS = [
     "symbol",
@@ -233,6 +235,31 @@ for path in (executed_trades_path, trades_log_path):
 if not os.path.exists(trades_log_real_path):
     pd.DataFrame(columns=REAL_TRADE_COLUMNS).to_csv(trades_log_real_path, index=False)
 
+
+def _load_partial_state() -> dict:
+    if not os.path.exists(partial_exit_state_path):
+        return {}
+    try:
+        with open(partial_exit_state_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+            if isinstance(payload, dict):
+                return payload
+    except Exception:
+        logger.warning("Failed to read partial exit state; starting fresh.")
+    return {}
+
+
+def _save_partial_state(state: dict) -> None:
+    try:
+        with open(partial_exit_state_path, "w", encoding="utf-8") as handle:
+            json.dump(state, handle)
+    except Exception as exc:
+        logger.error("Unable to persist partial exit state: %s", exc)
+
+
+PARTIAL_EXIT_TAKEN = _load_partial_state()
+RSI_HIGH_MEMORY: dict[str, dict[str, float]] = {}
+
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
@@ -252,9 +279,11 @@ TRADING_END_HOUR = int(os.getenv("TRADING_END_HOUR", "20"))
 EASTERN_TZ = pytz.timezone("US/Eastern")
 
 # Trailing stop and position exit configuration
-TRAIL_START_PERCENT = float(os.getenv("TRAIL_START_PERCENT", "5"))
-TRAIL_TIGHT_PERCENT = float(os.getenv("TRAIL_TIGHT_PERCENT", "3"))
+TRAIL_START_PERCENT = float(os.getenv("TRAIL_START_PERCENT", "3"))
+TRAIL_TIGHT_PERCENT = float(os.getenv("TRAIL_TIGHT_PERCENT", "2"))
+TRAIL_TIGHTEST_PERCENT = float(os.getenv("TRAIL_TIGHTEST_PERCENT", "1"))
 GAIN_THRESHOLD_ADJUST = float(os.getenv("GAIN_THRESHOLD_ADJUST", "10"))
+PARTIAL_GAIN_THRESHOLD = float(os.getenv("PARTIAL_GAIN_THRESHOLD", "5"))
 MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "7"))
 
 # Minimum number of historical bars required for indicator calculation
@@ -377,17 +406,45 @@ def fetch_indicators(symbol):
     bars["MACD_signal"] = macd.ewm(span=9, adjust=False).mean()
 
     last = bars.iloc[-1]
+    prev = bars.iloc[-2] if len(bars) >= 2 else last
     return {
         "close": float(last["close"]),
+        "open": float(last["open"]),
+        "high": float(last["high"]),
+        "low": float(last["low"]),
         "SMA9": float(last["SMA9"]),
         "EMA20": float(last["EMA20"]),
         "RSI": float(last["RSI"]),
         "MACD": float(last["MACD"]),
         "MACD_signal": float(last["MACD_signal"]),
+        "MACD_prev": float(prev["MACD"]),
+        "MACD_signal_prev": float(prev["MACD_signal"]),
     }
 
 
-def check_sell_signal(indicators) -> list:
+def is_shooting_star(indicators: dict) -> bool:
+    open_price = indicators.get("open")
+    close_price = indicators.get("close")
+    high_price = indicators.get("high")
+    low_price = indicators.get("low")
+
+    if None in {open_price, close_price, high_price, low_price}:
+        return False
+
+    real_body = abs(close_price - open_price)
+    if real_body == 0:
+        return False
+
+    upper_shadow = high_price - max(open_price, close_price)
+    lower_shadow = min(open_price, close_price) - low_price
+
+    is_red = close_price < open_price
+    long_upper = upper_shadow > 2 * real_body
+    tiny_lower = lower_shadow <= 0.2 * real_body
+    return is_red and long_upper and tiny_lower
+
+
+def check_sell_signal(symbol: str, indicators: dict) -> list:
     """Return list of exit reasons triggered by indicators."""
     price = indicators["close"]
     ema20 = indicators["EMA20"]
@@ -400,6 +457,26 @@ def check_sell_signal(indicators) -> list:
     if rsi > 70:
         logger.info("RSI %.2f above 70", rsi)
         reasons.append("RSI > 70")
+
+    if indicators.get("MACD") is not None and indicators.get("MACD_signal") is not None:
+        macd = indicators["MACD"]
+        signal = indicators["MACD_signal"]
+        prev_macd = indicators.get("MACD_prev", macd)
+        prev_signal = indicators.get("MACD_signal_prev", signal)
+        if macd < signal and prev_macd >= prev_signal:
+            reasons.append("MACD cross")
+
+    if is_shooting_star(indicators):
+        reasons.append("Shooting star")
+
+    state = RSI_HIGH_MEMORY.get(symbol, {"price": price, "rsi": rsi})
+    if rsi > 70 and price > state.get("price", price) and rsi < state.get("rsi", rsi):
+        reasons.append("RSI divergence")
+    if price > state.get("price", price) and rsi >= state.get("rsi", rsi):
+        RSI_HIGH_MEMORY[symbol] = {"price": price, "rsi": rsi}
+    elif symbol not in RSI_HIGH_MEMORY:
+        RSI_HIGH_MEMORY[symbol] = state
+
     return reasons
 
 
@@ -504,6 +581,9 @@ def log_closed_positions(trading_client, closed_symbols, existing_positions_df):
             "Position closed outside monitor",
             "sell",
         )
+        if symbol in PARTIAL_EXIT_TAKEN:
+            PARTIAL_EXIT_TAKEN.pop(symbol, None)
+            _save_partial_state(PARTIAL_EXIT_TAKEN)
 
 
 def has_pending_sell_order(symbol):
@@ -620,40 +700,63 @@ def manage_trailing_stop(position):
         getattr(trailing_order, "trail_percent", "n/a"),
     )
 
-    if gain_pct > GAIN_THRESHOLD_ADJUST:
-        new_trail = str(TRAIL_TIGHT_PERCENT)
-        try:
-            cancel_order_safe(trailing_order.id, symbol)
-            logger.info(
-                f"Placing trailing stop for {symbol}: qty={qty}, side=SELL, trail_pct={new_trail}"
-            )
-            request = TrailingStopOrderRequest(
-                symbol=symbol,
-                qty=use_qty,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.GTC,
-                trail_percent=new_trail,
-            )
-            trading_client.submit_order(order_data=request)
-            logger.info(
-                "Adjusted trailing stop for %s from %s%% to %s%% (gain: %.2f%%).",
-                symbol,
-                TRAIL_START_PERCENT,
-                TRAIL_TIGHT_PERCENT,
-                gain_pct,
-            )
-        except Exception as e:
-            logger.error("Failed to adjust trailing stop for %s: %s", symbol, e)
-            try:
-                trading_client.close_position(symbol)
-            except Exception as exc:  # pragma: no cover - API errors
-                logger.error("Failed to close position %s: %s", symbol, exc)
-    else:
+    def desired_trail_pct(gain: float) -> float:
+        if gain >= 10:
+            return TRAIL_TIGHTEST_PERCENT
+        if gain >= 5:
+            return TRAIL_TIGHT_PERCENT
+        return TRAIL_START_PERCENT
+
+    current_trail_pct = float(
+        getattr(trailing_order, "trail_percent", TRAIL_START_PERCENT) or TRAIL_START_PERCENT
+    )
+    target_trail_pct = desired_trail_pct(gain_pct)
+    effective_target = min(current_trail_pct, target_trail_pct)
+
+    if abs(current_trail_pct - effective_target) < 1e-6:
         logger.info(
             "No trailing stop adjustment needed for %s (gain: %.2f%%)",
             symbol,
             gain_pct,
         )
+        return
+
+    try:
+        cancel_order_safe(trailing_order.id, symbol)
+        reason_detail = (
+            "+10% gain" if effective_target == TRAIL_TIGHTEST_PERCENT else "+5% gain"
+            if effective_target == TRAIL_TIGHT_PERCENT
+            else "default"
+        )
+        logger.info(
+            "Tightening trailing stop for %s from %.2f%% to %.2f%% due to %s",
+            symbol,
+            current_trail_pct,
+            effective_target,
+            reason_detail,
+        )
+        request = TrailingStopOrderRequest(
+            symbol=symbol,
+            qty=use_qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+            trail_percent=str(effective_target),
+        )
+        trading_client.submit_order(order_data=request)
+        logger.info(
+            "Adjusted trailing stop for %s from %.2f%% to %.2f%% (gain: %.2f%%).",
+            symbol,
+            current_trail_pct,
+            effective_target,
+            gain_pct,
+        )
+        log_trailing_stop_event(symbol, effective_target, None, "adjusted")
+    except Exception as e:
+        logger.error("Failed to adjust trailing stop for %s: %s", symbol, e)
+        try:
+            trading_client.close_position(symbol)
+        except Exception as exc:  # pragma: no cover - API errors
+            logger.error("Failed to close position %s: %s", symbol, exc)
 
 
 def check_pending_orders():
@@ -702,7 +805,7 @@ def check_pending_orders():
 # Execute sell orders
 
 
-def submit_sell_market_order(position, reason: str, reason_code: str):
+def submit_sell_market_order(position, reason: str, reason_code: str, qty_override: Optional[int] = None):
     """Submit a limit sell order compatible with extended hours."""
     symbol = position.symbol
     qty = position.qty
@@ -711,7 +814,7 @@ def submit_sell_market_order(position, reason: str, reason_code: str):
     entry_time = getattr(position, "created_at", datetime.utcnow()).isoformat()
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
 
-    desired_qty = int(qty)
+    desired_qty = int(qty_override) if qty_override is not None else int(qty)
     if getattr(position, "qty_available", None) and int(position.qty_available) >= desired_qty:
         use_qty = int(position.qty_available)
     else:
@@ -836,6 +939,9 @@ def process_positions_cycle():
                     )
 
             submit_sell_market_order(position, reason=f"Max Hold {days_held}d", reason_code="max_hold")
+            if symbol in PARTIAL_EXIT_TAKEN:
+                PARTIAL_EXIT_TAKEN.pop(symbol, None)
+                _save_partial_state(PARTIAL_EXIT_TAKEN)
             continue
 
         indicators = fetch_indicators(symbol)
@@ -854,7 +960,30 @@ def process_positions_cycle():
             indicators["RSI"],
         )
 
-        reasons = check_sell_signal(indicators)
+        entry_price = float(position.avg_entry_price)
+        gain_pct = (indicators["close"] - entry_price) / entry_price * 100 if entry_price else 0
+
+        if (
+            gain_pct >= PARTIAL_GAIN_THRESHOLD
+            and not PARTIAL_EXIT_TAKEN.get(symbol)
+            and not has_pending_sell_order(symbol)
+        ):
+            trailing_order = get_trailing_stop_order(symbol)
+            if trailing_order:
+                cancel_order_safe(trailing_order.id, symbol)
+            half_qty = max(1, int(float(position.qty) / 2))
+            submit_sell_market_order(
+                position,
+                reason=f"Partial exit at +{PARTIAL_GAIN_THRESHOLD:.0f}% gain",
+                reason_code="partial_gain",
+                qty_override=half_qty,
+            )
+            PARTIAL_EXIT_TAKEN[symbol] = True
+            _save_partial_state(PARTIAL_EXIT_TAKEN)
+            logger.info("Partial exit recorded for %s; awaiting trailing re-attachment.", symbol)
+            continue
+
+        reasons = check_sell_signal(symbol, indicators)
         if reasons:
             if has_pending_sell_order(symbol):
                 logger.info("Sell order already pending for %s", symbol)
@@ -870,6 +999,9 @@ def process_positions_cycle():
                     )
             reason_text = "; ".join(reasons)
             submit_sell_market_order(position, reason=reason_text, reason_code="monitor")
+            if symbol in PARTIAL_EXIT_TAKEN:
+                PARTIAL_EXIT_TAKEN.pop(symbol, None)
+                _save_partial_state(PARTIAL_EXIT_TAKEN)
         else:
             logger.info(f"No sell signal for {symbol}; managing trailing stop.")
             manage_trailing_stop(position)

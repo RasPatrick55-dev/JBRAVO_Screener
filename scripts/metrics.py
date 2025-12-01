@@ -379,6 +379,17 @@ def main():
             summary_metrics.get("sortino", 0.0),
         )
 
+        if "exit_reason" in trades_df.columns:
+            pnl_column = "net_pnl" if "net_pnl" in trades_df.columns else "pnl"
+            breakdown = trades_df.groupby("exit_reason")[pnl_column].agg(
+                trades="count", total_pnl="sum", avg_pnl="mean"
+            )
+            breakdown_path = Path(BASE_DIR) / "data" / "exit_reason_summary.csv"
+            write_csv_atomic(str(breakdown_path), breakdown.reset_index())
+            logger.info(
+                "Exit reason breakdown saved to %s", breakdown_path
+            )
+
     try:
         write_csv_atomic(str(metrics_summary_file), metrics_summary)
         logger.info(

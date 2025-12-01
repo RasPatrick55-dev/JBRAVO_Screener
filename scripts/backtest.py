@@ -241,6 +241,7 @@ class Position:
     highest_close: float
     trailing_stop: Optional[float] = None
     atr_stop: Optional[float] = None
+    partial_taken: bool = False
 
 
 @dataclass
@@ -270,6 +271,10 @@ class PortfolioBacktester:
         trade_cost: float = 0.0,
         slippage: float = 0.0,
         atr_multiple: float = 1.0,
+        enable_macd_exit: bool = True,
+        enable_partial_exit: bool = True,
+        enable_rsi_divergence: bool = False,
+        enable_candlestick_exit: bool = True,
     ) -> None:
         self.data = data
         self.initial_cash = initial_cash
@@ -283,6 +288,10 @@ class PortfolioBacktester:
         self.slippage = slippage
         self.atr_multiple = max(float(atr_multiple), 0.0)
         self.use_trailing = self.trail_pct is not None
+        self.enable_macd_exit = enable_macd_exit
+        self.enable_partial_exit = enable_partial_exit
+        self.enable_rsi_divergence = enable_rsi_divergence
+        self.enable_candlestick_exit = enable_candlestick_exit
 
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
@@ -291,6 +300,7 @@ class PortfolioBacktester:
         # Build a unified date index
         indices = [df.index for df in self.data.values()]
         self.dates = sorted(set().union(*indices))
+        self.rsi_high_memory: Dict[str, dict] = {}
 
     def _open_position(
         self, symbol: str, row: pd.Series, date: pd.Timestamp
@@ -322,6 +332,70 @@ class PortfolioBacktester:
             atr_stop=atr_stop,
         )
         logger.info("Opened %s @ %.2f (%d shares)", symbol, price, qty)
+
+    @staticmethod
+    def _desired_trail_pct(gain: float) -> float:
+        if gain >= 10:
+            return 0.01
+        if gain >= 5:
+            return 0.02
+        return 0.03
+
+    @staticmethod
+    def _is_shooting_star(row: pd.Series) -> bool:
+        open_price = float(row.get("open", np.nan))
+        close_price = float(row.get("close", np.nan))
+        high_price = float(row.get("high", np.nan))
+        low_price = float(row.get("low", np.nan))
+
+        if any(math.isnan(v) for v in (open_price, close_price, high_price, low_price)):
+            return False
+
+        real_body = abs(close_price - open_price)
+        if real_body == 0:
+            return False
+        upper_shadow = high_price - max(open_price, close_price)
+        lower_shadow = min(open_price, close_price) - low_price
+        return close_price < open_price and upper_shadow > 2 * real_body and lower_shadow <= 0.2 * real_body
+
+    def _record_rsi_high(self, symbol: str, price: float, rsi_value: float) -> None:
+        existing = self.rsi_high_memory.get(symbol)
+        if existing is None or (price > existing.get("price", 0) and rsi_value >= existing.get("rsi", 0)):
+            self.rsi_high_memory[symbol] = {"price": price, "rsi": rsi_value}
+
+    def _check_rsi_divergence(self, symbol: str, price: float, rsi_value: float) -> bool:
+        state = self.rsi_high_memory.get(symbol, {"price": price, "rsi": rsi_value})
+        triggered = rsi_value > 70 and price > state.get("price", price) and rsi_value < state.get("rsi", rsi_value)
+        if price > state.get("price", price) and rsi_value >= state.get("rsi", rsi_value):
+            self._record_rsi_high(symbol, price, rsi_value)
+        elif symbol not in self.rsi_high_memory:
+            self._record_rsi_high(symbol, price, rsi_value)
+        return triggered
+
+    def _scale_out_position(self, symbol: str, price: float, date: pd.Timestamp, reason: str) -> None:
+        pos = self.positions.get(symbol)
+        if pos is None or pos.qty <= 1:
+            return
+        sell_qty = max(1, pos.qty // 2)
+        proceeds = sell_qty * price * (1 - self.slippage) - self.trade_cost
+        self.cash += proceeds
+        pnl = (price - pos.entry_price) * sell_qty
+        self.trades.append(
+            Trade(
+                symbol=symbol,
+                entry_time=pos.entry_time,
+                exit_time=date,
+                entry_price=pos.entry_price,
+                exit_price=price,
+                qty=sell_qty,
+                pnl=pnl,
+                exit_reason=reason,
+            )
+        )
+        pos.qty -= sell_qty
+        pos.partial_taken = True
+        pos.trailing_stop = None
+        logger.info("Scaled out %s: sold %d @ %.2f reason=%s", symbol, sell_qty, price, reason)
 
     def _close_position(
         self, symbol: str, price: float, date: pd.Timestamp, reason: str
@@ -356,9 +430,12 @@ class PortfolioBacktester:
                 close = float(row["close"])
                 low = float(row.get("low", close))
 
+                gain_pct = (close - pos.entry_price) / pos.entry_price * 100 if pos.entry_price else 0
+                desired_pct = self._desired_trail_pct(gain_pct)
+
                 if self.use_trailing:
                     pos.highest_close = max(pos.highest_close, close)
-                    trailing_candidate = pos.highest_close * (1 - float(self.trail_pct))
+                    trailing_candidate = pos.highest_close * (1 - desired_pct)
                     if pos.trailing_stop is None:
                         pos.trailing_stop = trailing_candidate
                     else:
@@ -377,6 +454,11 @@ class PortfolioBacktester:
 
                 exit_price: Optional[float] = None
                 reason: Optional[str] = None
+
+                if self.enable_partial_exit and not pos.partial_taken and gain_pct >= 5:
+                    self._scale_out_position(symbol, close, date, "Partial 5% Gain")
+                    continue
+
                 if pos.atr_stop is not None and low <= pos.atr_stop:
                     exit_price = pos.atr_stop
                     reason = "ATR Stop"
@@ -386,6 +468,29 @@ class PortfolioBacktester:
                 elif hold_days >= self.max_hold_days:
                     exit_price = close
                     reason = "Time Stop"
+                elif self.enable_macd_exit and "macd" in row and "macd_signal" in row:
+                    prev_idx = df.index.get_loc(date) - 1
+                    if prev_idx >= 0:
+                        prev_row = df.iloc[prev_idx]
+                        if (
+                            float(row["macd"]) < float(row["macd_signal"])
+                            and float(prev_row.get("macd", row["macd"]))
+                            >= float(prev_row.get("macd_signal", row["macd_signal"]))
+                        ):
+                            exit_price = close
+                            reason = "MACD cross"
+                if (
+                    reason is None
+                    and self.enable_rsi_divergence
+                    and "rsi" in row
+                    and self._check_rsi_divergence(symbol, close, float(row["rsi"]))
+                ):
+                    exit_price = close
+                    reason = "RSI divergence"
+
+                if reason is None and self.enable_candlestick_exit and self._is_shooting_star(row):
+                    exit_price = close
+                    reason = "Shooting star"
 
                 if reason:
                     self._close_position(symbol, float(exit_price), date, reason)
