@@ -53,6 +53,95 @@ logger.info("Monitoring service active.")
 def is_debug_mode() -> bool:
     return os.getenv("JBRAVO_MONITOR_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
+
+def evaluate_exit_signals_for_debug(position: dict, indicators: dict) -> list[str]:
+    """Thin wrapper around real exit-evaluation logic without side effects."""
+
+    def _desired_trail_pct(gain: float) -> float:
+        if gain >= 10:
+            return TRAIL_TIGHTEST_PERCENT
+        if gain >= 5:
+            return TRAIL_TIGHT_PERCENT
+        return TRAIL_START_PERCENT
+
+    normalized = dict(indicators)
+    case_map = {
+        "ema20": "EMA20",
+        "rsi": "RSI",
+        "macd": "MACD",
+        "macd_signal": "MACD_signal",
+        "macd_prev": "MACD_prev",
+        "macd_signal_prev": "MACD_signal_prev",
+    }
+    for lower_key, upper_key in case_map.items():
+        if lower_key in normalized and upper_key not in normalized:
+            normalized[upper_key] = normalized[lower_key]
+
+    entry_price = float(position.get("entry_price") or position.get("avg_entry_price") or 0)
+    close_price = float(normalized.get("close", entry_price))
+    gain_pct = (close_price - entry_price) / entry_price * 100 if entry_price else 0
+
+    reasons = []
+    if gain_pct >= PARTIAL_GAIN_THRESHOLD:
+        reasons.append(f"Partial exit at +{PARTIAL_GAIN_THRESHOLD:.0f}% gain")
+
+    reasons.extend(check_sell_signal(position.get("symbol", ""), normalized))
+
+    trail_pct = _desired_trail_pct(gain_pct)
+    reasons.append(f"Trailing stop target {trail_pct:.2f}% (gain {gain_pct:.2f}%)")
+
+    return reasons
+
+
+def run_debug_smoke_test():
+    if not is_debug_mode():
+        return
+
+    logger.info("[DEBUG] Running monitor_positions debug smoke test")
+
+    fake_position = {
+        "symbol": "DEBUG",
+        "qty": 100,
+        "entry_price": 100.0,
+        "days_held": 3,
+    }
+
+    indicators_partial = {
+        "close": 106.0,
+        "ema20": 100.0,
+        "rsi": 65.0,
+        "macd": 1.0,
+        "macd_signal": 0.5,
+    }
+
+    indicators_macd = {
+        "close": 110.0,
+        "ema20": 105.0,
+        "rsi": 60.0,
+        "macd": -0.5,
+        "macd_signal": 0.5,
+    }
+
+    indicators_pattern = {
+        "open": 100.0,
+        "high": 110.0,
+        "low": 99.5,
+        "close": 100.5,
+    }
+
+    try:
+        reasons_partial = evaluate_exit_signals_for_debug(fake_position, indicators_partial)
+        logger.info("[DEBUG] Smoke partial/tiered exit reasons: %s", reasons_partial)
+
+        reasons_macd = evaluate_exit_signals_for_debug(fake_position, indicators_macd)
+        logger.info("[DEBUG] Smoke MACD exit reasons: %s", reasons_macd)
+
+        reasons_pattern = evaluate_exit_signals_for_debug(fake_position, indicators_pattern)
+        logger.info("[DEBUG] Smoke pattern exit reasons: %s", reasons_pattern)
+
+    except Exception:
+        logger.exception("[DEBUG] Smoke test raised unexpectedly")
+
 REQUIRED_ALPACA_ENV = [
     "APCA_API_KEY_ID",
     "APCA_API_SECRET_KEY",
@@ -1158,6 +1247,7 @@ def monitor_positions():
 if __name__ == "__main__":
     logger.info("Starting monitor_positions.py")
     print("Starting monitor_positions.py")
+    run_debug_smoke_test()
     while True:
         try:
             monitor_positions()
