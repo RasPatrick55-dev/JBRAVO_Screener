@@ -260,12 +260,14 @@ def _save_partial_state(state: dict) -> None:
 PARTIAL_EXIT_TAKEN = _load_partial_state()
 RSI_HIGH_MEMORY: dict[str, dict[str, float]] = {}
 
+missing = [k for k in ["APCA_API_KEY_ID", "APCA_API_SECRET_KEY"] if not os.getenv(k)]
+if missing:
+    print(f"[FATAL]: Missing required env vars: {missing}. Did you load .env?")
+    raise SystemExit(1)
+
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 BASE_URL = os.getenv("APCA_API_BASE_URL")
-
-if not API_KEY or not API_SECRET:
-    raise ValueError("Missing Alpaca credentials")
 
 # Initialize Alpaca clients
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
