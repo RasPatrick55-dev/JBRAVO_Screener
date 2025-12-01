@@ -97,50 +97,101 @@ def run_debug_smoke_test():
     if not is_debug_mode():
         return
 
-    logger.info("[DEBUG] Running monitor_positions debug smoke test")
+    def simulate_debug_scenario(
+        *,
+        tag: str,
+        symbol: str,
+        entry_price: float,
+        current_price: float,
+        ema20: float,
+        rsi: float,
+        macd_cross: bool = False,
+        pattern: Optional[str] = None,
+    ) -> None:
+        position = {
+            "symbol": symbol,
+            "qty": 100,
+            "entry_price": entry_price,
+            "days_held": 3,
+        }
 
-    fake_position = {
-        "symbol": "DEBUG",
-        "qty": 100,
-        "entry_price": 100.0,
-        "days_held": 3,
-    }
+        indicators = {
+            "close": current_price,
+            "EMA20": ema20,
+            "RSI": rsi,
+            "MACD": 0.5,
+            "MACD_signal": 0.0,
+            "MACD_prev": 0.5,
+            "MACD_signal_prev": 0.4,
+        }
 
-    indicators_partial = {
-        "close": 106.0,
-        "ema20": 100.0,
-        "rsi": 65.0,
-        "macd": 1.0,
-        "macd_signal": 0.5,
-    }
+        if macd_cross:
+            indicators.update({
+                "MACD": -0.5,
+                "MACD_signal": 0.5,
+                "MACD_prev": 0.5,
+                "MACD_signal_prev": -0.2,
+            })
 
-    indicators_macd = {
-        "close": 110.0,
-        "ema20": 105.0,
-        "rsi": 60.0,
-        "macd": -0.5,
-        "macd_signal": 0.5,
-    }
+        if pattern == "shooting_star":
+            open_price = max(current_price, entry_price * 1.05)
+            close_price = open_price - 1.0
+            indicators.update(
+                {
+                    "open": open_price,
+                    "close": close_price,
+                    "high": open_price + 4.0,
+                    "low": close_price - 0.1,
+                }
+            )
+        else:
+            indicators.setdefault("open", current_price)
+            indicators.setdefault("high", current_price)
+            indicators.setdefault("low", current_price)
 
-    indicators_pattern = {
-        "open": 100.0,
-        "high": 110.0,
-        "low": 99.5,
-        "close": 100.5,
-    }
+        reasons = evaluate_exit_signals_for_debug(position, indicators)
+        logger.info(
+            "[DEBUG_SMOKE] Scenario %s (%s): exit reasons=%s",
+            tag,
+            symbol,
+            ";".join(reasons) if reasons else "NO_EXIT",
+        )
+
+    logger.info("[DEBUG_SMOKE] Starting monitor_positions smoke test")
 
     try:
-        reasons_partial = evaluate_exit_signals_for_debug(fake_position, indicators_partial)
-        logger.info("[DEBUG] Smoke partial/tiered exit reasons: %s", reasons_partial)
+        simulate_debug_scenario(
+            tag="PARTIAL_OR_TIERED",
+            symbol="DBGGAIN",
+            entry_price=100.0,
+            current_price=106.0,
+            ema20=98.0,
+            rsi=65.0,
+        )
 
-        reasons_macd = evaluate_exit_signals_for_debug(fake_position, indicators_macd)
-        logger.info("[DEBUG] Smoke MACD exit reasons: %s", reasons_macd)
+        simulate_debug_scenario(
+            tag="MACD",
+            symbol="DBGMACD",
+            entry_price=50.0,
+            current_price=55.0,
+            ema20=52.0,
+            rsi=60.0,
+            macd_cross=True,
+        )
 
-        reasons_pattern = evaluate_exit_signals_for_debug(fake_position, indicators_pattern)
-        logger.info("[DEBUG] Smoke pattern exit reasons: %s", reasons_pattern)
+        simulate_debug_scenario(
+            tag="PATTERN",
+            symbol="DBGPAT",
+            entry_price=20.0,
+            current_price=21.0,
+            ema20=21.5,
+            rsi=65.0,
+            pattern="shooting_star",
+        )
 
+        logger.info("[DEBUG_SMOKE] Completed monitor_positions smoke test")
     except Exception:
-        logger.exception("[DEBUG] Smoke test raised unexpectedly")
+        logger.exception("[DEBUG_SMOKE] Smoke test raised unexpectedly")
 
 REQUIRED_ALPACA_ENV = [
     "APCA_API_KEY_ID",
@@ -666,7 +717,7 @@ def apply_debug_overrides(symbol: str, indicators: dict, position, state: dict) 
     if not flags.get("partial") and entry_price > 0:
         indicators["close"] = round_price(entry_price * 1.06)
         indicators["RSI"] = max(indicators.get("RSI", 0), 72)
-        logger.info("[DEBUG] Forcing partial exit for %s", symbol)
+        logger.info("[DEBUG_SMOKE] Forcing partial exit for %s", symbol)
         flags["partial"] = True
         return
 
@@ -676,7 +727,7 @@ def apply_debug_overrides(symbol: str, indicators: dict, position, state: dict) 
         indicators["MACD"] = signal - 1
         indicators["MACD_prev"] = signal + 1
         indicators["MACD_signal_prev"] = signal
-        logger.info("[DEBUG] Forcing MACD cross-down exit for %s", symbol)
+        logger.info("[DEBUG_SMOKE] Forcing MACD cross-down exit for %s", symbol)
         flags["macd"] = True
         return
 
@@ -686,7 +737,7 @@ def apply_debug_overrides(symbol: str, indicators: dict, position, state: dict) 
         indicators["close"] = open_price - 1
         indicators["high"] = open_price + 3
         indicators["low"] = indicators["close"] - 0.1
-        logger.info("[DEBUG] Forcing shooting-star exit for %s", symbol)
+        logger.info("[DEBUG_SMOKE] Forcing shooting-star exit for %s", symbol)
         flags["pattern"] = True
 
 
@@ -1246,8 +1297,8 @@ def monitor_positions():
 
 if __name__ == "__main__":
     logger.info("Starting monitor_positions.py")
-    print("Starting monitor_positions.py")
-    run_debug_smoke_test()
+    if is_debug_mode():
+        run_debug_smoke_test()
     while True:
         try:
             monitor_positions()
