@@ -21,7 +21,7 @@ from alpaca.trading.requests import (
 if __package__ in {None, ""}:
     PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if PROJECT_ROOT not in sys.path:
-        sys.path.append(PROJECT_ROOT)
+        sys.path.insert(0, PROJECT_ROOT)
     from scripts.utils import fetch_bars_with_cutoff
 else:
     from .utils import fetch_bars_with_cutoff
