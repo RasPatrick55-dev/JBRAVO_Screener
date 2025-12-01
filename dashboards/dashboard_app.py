@@ -5,6 +5,7 @@ from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
+from dash.dash_table import Format, Scheme
 from datetime import datetime, timezone, timedelta
 import subprocess
 import json
@@ -2085,18 +2086,120 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     elif tab == "tab-execute":
         trades_df, trade_source_path, trade_source_label, trade_alerts = _resolve_trades_dataframe()
         executed_exists = os.path.exists(executed_trades_path)
+        summary_section = None
 
         if trades_df is not None:
             sort_column = "entry_time" if "entry_time" in trades_df.columns else None
             if sort_column:
                 trades_df.sort_values(sort_column, ascending=False, inplace=True)
+
+            exit_reason_cards: list[dbc.Col] = []
+            if "exit_reason" in trades_df.columns:
+                exit_reason_counts = trades_df["exit_reason"].value_counts()
+                if not exit_reason_counts.empty:
+                    counts_df = exit_reason_counts.reset_index()
+                    counts_df.columns = ["exit_reason", "trades"]
+                    counts_table = dash_table.DataTable(
+                        data=counts_df.to_dict("records"),
+                        columns=[
+                            {"name": "Exit Reason", "id": "exit_reason"},
+                            {"name": "Trades", "id": "trades", "type": "numeric"},
+                        ],
+                        style_table={"overflowX": "auto"},
+                        style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+                        page_size=10,
+                    )
+                    exit_reason_cards.append(
+                        dbc.Col(
+                            dbc.Card(
+                                [
+                                    dbc.CardHeader("Trades by exit_reason"),
+                                    dbc.CardBody(counts_table),
+                                ],
+                                className="h-100",
+                            ),
+                            md=6,
+                        )
+                    )
+
+            efficiency_fig = None
+            if {"exit_reason", "exit_efficiency"}.issubset(trades_df.columns):
+                efficiency_df = trades_df.copy()
+                efficiency_df["exit_efficiency"] = pd.to_numeric(
+                    efficiency_df["exit_efficiency"], errors="coerce"
+                )
+                efficiency_df.dropna(subset=["exit_reason", "exit_efficiency"], inplace=True)
+                if not efficiency_df.empty:
+                    avg_efficiency = (
+                        efficiency_df.groupby("exit_reason")["exit_efficiency"].mean()
+                    )
+                    avg_efficiency_df = avg_efficiency.reset_index()
+                    avg_efficiency_df.columns = ["exit_reason", "avg_exit_efficiency"]
+                    efficiency_table = dash_table.DataTable(
+                        data=avg_efficiency_df.to_dict("records"),
+                        columns=[
+                            {"name": "Exit Reason", "id": "exit_reason"},
+                            {
+                                "name": "Avg Exit Efficiency",
+                                "id": "avg_exit_efficiency",
+                                "type": "numeric",
+                                "format": Format(precision=2, scheme=Scheme.percentage),
+                            },
+                        ],
+                        style_table={"overflowX": "auto"},
+                        style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+                        page_size=10,
+                    )
+                    exit_reason_cards.append(
+                        dbc.Col(
+                            dbc.Card(
+                                [
+                                    dbc.CardHeader("Avg exit_efficiency by exit_reason"),
+                                    dbc.CardBody(efficiency_table),
+                                ],
+                                className="h-100",
+                            ),
+                            md=6,
+                        )
+                    )
+
+                    efficiency_fig = px.bar(
+                        avg_efficiency_df,
+                        x="exit_reason",
+                        y="avg_exit_efficiency",
+                        template="plotly_dark",
+                        title="Average Exit Efficiency",
+                    )
+                    efficiency_fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+
+            preferred_columns = [
+                "symbol",
+                "entry_time",
+                "exit_time",
+                "side",
+                "qty",
+                "entry_price",
+                "exit_price",
+                "exit_pct",
+                "exit_reason",
+                "exit_efficiency",
+                "mfe_pct",
+                "net_pnl",
+            ]
+            columns_order = [col for col in preferred_columns if col in trades_df.columns]
+            columns_order.extend([col for col in trades_df.columns if col not in columns_order])
+            column_defs: list[dict[str, Any]] = []
+            for col in columns_order:
+                col_def: dict[str, Any] = {"name": col.replace("_", " ").title(), "id": col}
+                if col in {"exit_efficiency", "exit_pct", "mfe_pct"}:
+                    col_def["type"] = "numeric"
+                    col_def["format"] = Format(precision=2, scheme=Scheme.percentage)
+                column_defs.append(col_def)
+
             table = dash_table.DataTable(
                 id="executed-trades-table",
-                columns=[
-                    {"name": col.replace("_", " ").title(), "id": col}
-                    for col in trades_df.columns
-                ],
-                data=trades_df.to_dict("records"),
+                columns=column_defs,
+                data=trades_df[columns_order].to_dict("records"),
                 page_size=15,
                 style_table={"overflowX": "auto"},
                 style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
@@ -2115,6 +2218,24 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     else []
                 ),
             )
+
+            summary_children: list[Any] = []
+            if exit_reason_cards:
+                summary_children.append(
+                    dbc.Row(exit_reason_cards, className="g-3 mb-3")
+                )
+            if efficiency_fig is not None:
+                summary_children.append(
+                    dbc.Card(
+                        dcc.Graph(figure=efficiency_fig, style={"height": "320px"}),
+                        className="mb-4",
+                    )
+                )
+            if summary_children:
+                summary_section = html.Div(
+                    [html.H5("Trade Exit Summary", className="text-light"), *summary_children],
+                    className="mb-3",
+                )
         else:
             hint = dbc.Alert(
                 "No trades yet (paper).",
@@ -2297,6 +2418,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             components.append(metrics_alert)
         if download is not None:
             components.append(download)
+        if summary_section is not None:
+            components.append(summary_section)
         components.append(table)
         components.append(html.Hr())
         paper_notice = None
