@@ -239,6 +239,7 @@ class Position:
     entry_price: float
     entry_time: pd.Timestamp
     highest_close: float
+    max_price: float
     trailing_stop: Optional[float] = None
     atr_stop: Optional[float] = None
     partial_taken: bool = False
@@ -254,6 +255,82 @@ class Trade:
     qty: int
     pnl: float
     exit_reason: str
+    mfe_pct: float = 0.0
+    exit_pct: float = 0.0
+    exit_efficiency: float = 0.0
+
+
+def evaluate_exit_signals(position_state, indicators, trail_state, debug_flags=None) -> list[str]:
+    """
+    Returns a list of exit reasons similar to the monitor logic.
+
+    Parameters
+    ----------
+    position_state:
+        Mapping with keys like ``entry_price``, ``partial_taken``, ``hold_days``.
+    indicators:
+        Mapping containing at least ``current`` (pd.Series). ``previous`` is
+        optional for cross-based exits.
+    trail_state:
+        Mapping with trailing/ATR stops and feature flags.
+    debug_flags:
+        Unused placeholder to mirror monitor signature.
+    """
+
+    reasons: list[str] = []
+    current = indicators.get("current")
+    previous = indicators.get("previous")
+
+    if current is None or current.empty:
+        return reasons
+
+    close_price = float(current.get("close", np.nan))
+    low_price = float(current.get("low", close_price))
+    entry_price = position_state.get("entry_price")
+
+    if trail_state.get("enable_ema_exit", True):
+        ema_value = pd.to_numeric(current.get("ema20"), errors="coerce")
+        if pd.notna(ema_value) and close_price < float(ema_value):
+            reasons.append("EMA20_BREAK")
+
+    atr_stop = trail_state.get("atr_stop")
+    if atr_stop is not None and low_price <= atr_stop:
+        reasons.append("ATR_STOP")
+
+    trailing_stop = trail_state.get("trailing_stop")
+    if trail_state.get("enable_trailing_exit", True) and trailing_stop is not None and low_price <= trailing_stop:
+        reasons.append("TRAIL_STOP")
+
+    max_hold_days = trail_state.get("max_hold_days")
+    hold_days = position_state.get("hold_days")
+    if max_hold_days is not None and hold_days is not None and hold_days >= max_hold_days:
+        reasons.append("MAX_HOLD")
+
+    if trail_state.get("enable_macd_exit", True) and previous is not None:
+        macd_val = pd.to_numeric(current.get("macd"), errors="coerce")
+        macd_signal_val = pd.to_numeric(current.get("macd_signal"), errors="coerce")
+        prev_macd = pd.to_numeric(previous.get("macd"), errors="coerce")
+        prev_signal = pd.to_numeric(previous.get("macd_signal"), errors="coerce")
+        if all(pd.notna(v) for v in (macd_val, macd_signal_val, prev_macd, prev_signal)):
+            if float(macd_val) < float(macd_signal_val) and float(prev_macd) >= float(prev_signal):
+                reasons.append("MACD_CROSS")
+
+    if trail_state.get("enable_rsi_divergence", False) and indicators.get("rsi_divergence", False):
+        reasons.append("RSI_DIVERGENCE")
+
+    if trail_state.get("enable_candlestick_exit", True) and indicators.get("is_shooting_star", False):
+        reasons.append("PATTERN_SHOOTING_STAR")
+
+    if (
+        trail_state.get("enable_partial_exit", True)
+        and not position_state.get("partial_taken")
+        and entry_price
+    ):
+        gain_pct = (close_price - entry_price) / entry_price * 100
+        if gain_pct >= 5:
+            reasons.append("PARTIAL_5PCT")
+
+    return reasons
 
 
 class PortfolioBacktester:
@@ -275,6 +352,8 @@ class PortfolioBacktester:
         enable_partial_exit: bool = True,
         enable_rsi_divergence: bool = False,
         enable_candlestick_exit: bool = True,
+        enable_ema_exit: bool = True,
+        enable_trailing_exit: bool = True,
     ) -> None:
         self.data = data
         self.initial_cash = initial_cash
@@ -292,6 +371,8 @@ class PortfolioBacktester:
         self.enable_partial_exit = enable_partial_exit
         self.enable_rsi_divergence = enable_rsi_divergence
         self.enable_candlestick_exit = enable_candlestick_exit
+        self.enable_ema_exit = enable_ema_exit
+        self.enable_trailing_exit = enable_trailing_exit
 
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
@@ -322,12 +403,14 @@ class PortfolioBacktester:
         atr_value = pd.to_numeric(row.get("ATR14"), errors="coerce")
         if pd.notna(atr_value) and atr_value > 0 and self.atr_multiple > 0:
             atr_stop = max(0.0, price - self.atr_multiple * float(atr_value))
+        high_price = float(row.get("high", price))
         self.positions[symbol] = Position(
             symbol=symbol,
             qty=qty,
             entry_price=price,
             entry_time=date,
             highest_close=price,
+            max_price=max(price, high_price),
             trailing_stop=trailing,
             atr_stop=atr_stop,
         )
@@ -380,6 +463,7 @@ class PortfolioBacktester:
         proceeds = sell_qty * price * (1 - self.slippage) - self.trade_cost
         self.cash += proceeds
         pnl = (price - pos.entry_price) * sell_qty
+        metrics = self._compute_trade_metrics(pos, price)
         self.trades.append(
             Trade(
                 symbol=symbol,
@@ -390,6 +474,9 @@ class PortfolioBacktester:
                 qty=sell_qty,
                 pnl=pnl,
                 exit_reason=reason,
+                mfe_pct=metrics["mfe_pct"],
+                exit_pct=metrics["exit_pct"],
+                exit_efficiency=metrics["exit_efficiency"],
             )
         )
         pos.qty -= sell_qty
@@ -397,6 +484,7 @@ class PortfolioBacktester:
         gain_pct = (price - pos.entry_price) / pos.entry_price * 100 if pos.entry_price else 0
         desired_pct = self._desired_trail_pct(gain_pct)
         pos.highest_close = max(pos.highest_close, price)
+        pos.max_price = max(pos.max_price, price)
         pos.trailing_stop = pos.highest_close * (1 - desired_pct)
         logger.info("Scaled out %s: sold %d @ %.2f reason=%s", symbol, sell_qty, price, reason)
 
@@ -407,6 +495,7 @@ class PortfolioBacktester:
         proceeds = pos.qty * price * (1 - self.slippage) - self.trade_cost
         self.cash += proceeds
         pnl = (price - pos.entry_price) * pos.qty
+        metrics = self._compute_trade_metrics(pos, price)
         self.trades.append(
             Trade(
                 symbol=symbol,
@@ -417,9 +506,25 @@ class PortfolioBacktester:
                 qty=pos.qty,
                 pnl=pnl,
                 exit_reason=reason,
+                mfe_pct=metrics["mfe_pct"],
+                exit_pct=metrics["exit_pct"],
+                exit_efficiency=metrics["exit_efficiency"],
             )
         )
         logger.info("Closed %s @ %.2f reason=%s", symbol, price, reason)
+
+    @staticmethod
+    def _compute_trade_metrics(pos: Position, exit_price: float) -> dict:
+        entry_price = pos.entry_price
+        max_price = pos.max_price if pos.max_price else entry_price
+        mfe_pct = ((max_price - entry_price) / entry_price * 100) if entry_price else 0
+        exit_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price else 0
+        exit_efficiency = (exit_price / max_price) if max_price else 0
+        return {
+            "mfe_pct": mfe_pct,
+            "exit_pct": exit_pct,
+            "exit_efficiency": exit_efficiency,
+        }
 
     def run(self) -> None:
         for date in self.dates:
@@ -432,13 +537,16 @@ class PortfolioBacktester:
                 pos = self.positions[symbol]
                 close = float(row["close"])
                 low = float(row.get("low", close))
+                high = float(row.get("high", close))
 
-                gain_pct = (close - pos.entry_price) / pos.entry_price * 100 if pos.entry_price else 0
+                pos.max_price = max(pos.max_price, high, close)
+                pos.highest_close = max(pos.highest_close, close)
+
+                gain_pct = (pos.max_price - pos.entry_price) / pos.entry_price * 100 if pos.entry_price else 0
                 desired_pct = self._desired_trail_pct(gain_pct)
 
-                if self.use_trailing:
-                    pos.highest_close = max(pos.highest_close, close)
-                    trailing_candidate = pos.highest_close * (1 - desired_pct)
+                if self.use_trailing and self.enable_trailing_exit:
+                    trailing_candidate = pos.max_price * (1 - desired_pct)
                     if pos.trailing_stop is None:
                         pos.trailing_stop = trailing_candidate
                     else:
@@ -455,53 +563,56 @@ class PortfolioBacktester:
 
                 hold_days = (date - pos.entry_time).days
 
-                exit_price: Optional[float] = None
-                reason: Optional[str] = None
-
-                if self.enable_partial_exit and not pos.partial_taken and gain_pct >= 5:
-                    self._scale_out_position(symbol, close, date, "Partial 5% Gain")
-                    continue
-
-                if pos.atr_stop is not None and low <= pos.atr_stop:
-                    exit_price = pos.atr_stop
-                    reason = "ATR Stop"
-                elif self.use_trailing and pos.trailing_stop is not None and low <= pos.trailing_stop:
-                    exit_price = pos.trailing_stop
-                    reason = "Trailing Stop"
-                elif hold_days >= self.max_hold_days:
-                    exit_price = close
-                    reason = "Time Stop"
-                elif self.enable_macd_exit and "macd" in row and "macd_signal" in row:
-                    prev_idx = df.index.get_loc(date) - 1
-                    macd_val = float(row["macd"])
-                    macd_signal_val = float(row["macd_signal"])
-                    if macd_val < macd_signal_val:
-                        if prev_idx >= 0:
-                            prev_row = df.iloc[prev_idx]
-                            prev_macd = float(prev_row.get("macd", macd_val))
-                            prev_signal = float(prev_row.get("macd_signal", macd_signal_val))
-                            if prev_macd >= prev_signal:
-                                reason = "MACD cross"
-                            else:
-                                reason = "MACD below signal"
-                        else:
-                            reason = "MACD cross"
-                        exit_price = close
-                if (
-                    reason is None
-                    and self.enable_rsi_divergence
+                prev_idx = df.index.get_loc(date) - 1
+                prev_row = df.iloc[prev_idx] if prev_idx >= 0 else None
+                rsi_divergence = (
+                    self.enable_rsi_divergence
                     and "rsi" in row
                     and self._check_rsi_divergence(symbol, close, float(row["rsi"]))
-                ):
-                    exit_price = close
-                    reason = "RSI divergence"
+                )
 
-                if reason is None and self.enable_candlestick_exit and self._is_shooting_star(row):
-                    exit_price = close
-                    reason = "Shooting star"
+                reasons = evaluate_exit_signals(
+                    position_state={
+                        "entry_price": pos.entry_price,
+                        "partial_taken": pos.partial_taken,
+                        "hold_days": hold_days,
+                    },
+                    indicators={
+                        "current": row,
+                        "previous": prev_row,
+                        "rsi_divergence": rsi_divergence,
+                        "is_shooting_star": self._is_shooting_star(row),
+                    },
+                    trail_state={
+                        "atr_stop": pos.atr_stop,
+                        "trailing_stop": pos.trailing_stop,
+                        "enable_trailing_exit": self.enable_trailing_exit,
+                        "enable_macd_exit": self.enable_macd_exit,
+                        "enable_partial_exit": self.enable_partial_exit,
+                        "enable_rsi_divergence": self.enable_rsi_divergence,
+                        "enable_candlestick_exit": self.enable_candlestick_exit,
+                        "enable_ema_exit": self.enable_ema_exit,
+                        "max_hold_days": self.max_hold_days,
+                    },
+                )
 
-                if reason:
-                    self._close_position(symbol, float(exit_price), date, reason)
+                if "PARTIAL_5PCT" in reasons and self.enable_partial_exit and not pos.partial_taken:
+                    self._scale_out_position(symbol, close, date, "PARTIAL_5PCT")
+                    reasons = [r for r in reasons if r != "PARTIAL_5PCT"]
+                    if not reasons:
+                        continue
+
+                exit_price: Optional[float] = None
+                if "ATR_STOP" in reasons and pos.atr_stop is not None and low <= pos.atr_stop:
+                    exit_price = pos.atr_stop
+                elif "TRAIL_STOP" in reasons and pos.trailing_stop is not None and low <= pos.trailing_stop:
+                    exit_price = pos.trailing_stop
+                else:
+                    exit_price = close
+
+                if reasons:
+                    reason_text = ";".join(dict.fromkeys(reasons))
+                    self._close_position(symbol, float(exit_price), date, reason_text)
 
             # Determine today's top candidates
             scores = []
@@ -623,6 +734,8 @@ def run_backtest(symbols: List[str]) -> dict:
         enable_partial_exit=CONFIG.get('enable_partial_exit', True),
         enable_rsi_divergence=CONFIG.get('enable_rsi_divergence', False),
         enable_candlestick_exit=CONFIG.get('enable_candlestick_exit', True),
+        enable_ema_exit=CONFIG.get('enable_ema_exit', True),
+        enable_trailing_exit=CONFIG.get('enable_trailing_exit', True),
     )
 
     trades_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
