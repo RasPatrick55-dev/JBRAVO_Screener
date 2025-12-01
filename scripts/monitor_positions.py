@@ -463,8 +463,13 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
         signal = indicators["MACD_signal"]
         prev_macd = indicators.get("MACD_prev", macd)
         prev_signal = indicators.get("MACD_signal_prev", signal)
-        if macd < signal and prev_macd >= prev_signal:
+        if macd < signal:
+            cross_new = prev_macd >= prev_signal
             reasons.append("MACD cross")
+            if cross_new:
+                logger.info("MACD crossed below signal for %s", symbol)
+            else:
+                logger.info("MACD remains below signal for %s", symbol)
 
     if is_shooting_star(indicators):
         reasons.append("Shooting star")
@@ -715,9 +720,10 @@ def manage_trailing_stop(position):
 
     if abs(current_trail_pct - effective_target) < 1e-6:
         logger.info(
-            "No trailing stop adjustment needed for %s (gain: %.2f%%)",
+            "No trailing stop adjustment needed for %s (gain: %.2f%%; trail %.2f%%)",
             symbol,
             gain_pct,
+            current_trail_pct,
         )
         return
 

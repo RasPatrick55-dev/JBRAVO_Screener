@@ -394,7 +394,10 @@ class PortfolioBacktester:
         )
         pos.qty -= sell_qty
         pos.partial_taken = True
-        pos.trailing_stop = None
+        gain_pct = (price - pos.entry_price) / pos.entry_price * 100 if pos.entry_price else 0
+        desired_pct = self._desired_trail_pct(gain_pct)
+        pos.highest_close = max(pos.highest_close, price)
+        pos.trailing_stop = pos.highest_close * (1 - desired_pct)
         logger.info("Scaled out %s: sold %d @ %.2f reason=%s", symbol, sell_qty, price, reason)
 
     def _close_position(
@@ -470,15 +473,20 @@ class PortfolioBacktester:
                     reason = "Time Stop"
                 elif self.enable_macd_exit and "macd" in row and "macd_signal" in row:
                     prev_idx = df.index.get_loc(date) - 1
-                    if prev_idx >= 0:
-                        prev_row = df.iloc[prev_idx]
-                        if (
-                            float(row["macd"]) < float(row["macd_signal"])
-                            and float(prev_row.get("macd", row["macd"]))
-                            >= float(prev_row.get("macd_signal", row["macd_signal"]))
-                        ):
-                            exit_price = close
+                    macd_val = float(row["macd"])
+                    macd_signal_val = float(row["macd_signal"])
+                    if macd_val < macd_signal_val:
+                        if prev_idx >= 0:
+                            prev_row = df.iloc[prev_idx]
+                            prev_macd = float(prev_row.get("macd", macd_val))
+                            prev_signal = float(prev_row.get("macd_signal", macd_signal_val))
+                            if prev_macd >= prev_signal:
+                                reason = "MACD cross"
+                            else:
+                                reason = "MACD below signal"
+                        else:
                             reason = "MACD cross"
+                        exit_price = close
                 if (
                     reason is None
                     and self.enable_rsi_divergence
@@ -611,6 +619,10 @@ def run_backtest(symbols: List[str]) -> dict:
         trail_pct=trail_pct,
         max_hold_days=CONFIG.get('max_hold_days', 7),
         atr_multiple=CONFIG.get('atr_multiple', 1.0),
+        enable_macd_exit=CONFIG.get('enable_macd_exit', True),
+        enable_partial_exit=CONFIG.get('enable_partial_exit', True),
+        enable_rsi_divergence=CONFIG.get('enable_rsi_divergence', False),
+        enable_candlestick_exit=CONFIG.get('enable_candlestick_exit', True),
     )
 
     trades_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
@@ -642,6 +654,26 @@ def run_backtest(symbols: List[str]) -> dict:
             raise ValueError(f"Missing required columns: {missing_columns}")
 
         equity_df = bt.equity()
+
+        if "exit_reason" in trades_df.columns and not trades_df.empty:
+            grouped = trades_df.copy()
+            grouped["win"] = grouped["pnl"] > 0
+            reason_stats = (
+                grouped
+                .groupby("exit_reason")
+                .agg(
+                    trades=("pnl", "size"),
+                    win_rate=("win", "mean"),
+                    avg_pnl=("pnl", "mean"),
+                    total_pnl=("pnl", "sum"),
+                )
+                .reset_index()
+            )
+            reason_stats["win_rate"] = reason_stats["win_rate"] * 100
+            write_csv_atomic(
+                os.path.join(BASE_DIR, "data", "exit_reason_metrics.csv"),
+                reason_stats,
+            )
 
         # Aggregate per-symbol metrics from the trades log
         if not trades_df.empty:
