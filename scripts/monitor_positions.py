@@ -49,6 +49,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info("Monitoring service active.")
 
+
+def is_debug_mode() -> bool:
+    return os.getenv("JBRAVO_MONITOR_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+
 REQUIRED_ALPACA_ENV = [
     "APCA_API_KEY_ID",
     "APCA_API_SECRET_KEY",
@@ -323,6 +327,10 @@ def _save_partial_state(state: dict) -> None:
 
 PARTIAL_EXIT_TAKEN = _load_partial_state()
 RSI_HIGH_MEMORY: dict[str, dict[str, float]] = {}
+DEBUG_STATE: dict[str, object] = {
+    "symbol": None,
+    "flags": {"partial": False, "macd": False, "pattern": False},
+}
 
 _load_env_if_needed()
 
@@ -546,6 +554,51 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
         RSI_HIGH_MEMORY[symbol] = state
 
     return reasons
+
+
+def apply_debug_overrides(symbol: str, indicators: dict, position, state: dict) -> None:
+    """Mutate ``indicators`` to force exit paths once per run when debug is enabled."""
+
+    if not is_debug_mode():
+        return
+
+    target_symbol = state.get("symbol") or os.getenv("JBRAVO_MONITOR_DEBUG_SYMBOL", symbol)
+    state.setdefault("flags", {"partial": False, "macd": False, "pattern": False})
+
+    if state.get("symbol") is None:
+        state["symbol"] = target_symbol
+
+    if symbol != state.get("symbol"):
+        return
+
+    flags: dict = state["flags"]
+
+    entry_price = float(getattr(position, "avg_entry_price", 0) or 0)
+    if not flags.get("partial") and entry_price > 0:
+        indicators["close"] = round_price(entry_price * 1.06)
+        indicators["RSI"] = max(indicators.get("RSI", 0), 72)
+        logger.info("[DEBUG] Forcing partial exit for %s", symbol)
+        flags["partial"] = True
+        return
+
+    if not flags.get("macd"):
+        signal = indicators.get("MACD_signal", 0)
+        indicators["MACD_signal"] = signal
+        indicators["MACD"] = signal - 1
+        indicators["MACD_prev"] = signal + 1
+        indicators["MACD_signal_prev"] = signal
+        logger.info("[DEBUG] Forcing MACD cross-down exit for %s", symbol)
+        flags["macd"] = True
+        return
+
+    if not flags.get("pattern"):
+        open_price = indicators.get("open", 100)
+        indicators["open"] = open_price
+        indicators["close"] = open_price - 1
+        indicators["high"] = open_price + 3
+        indicators["low"] = indicators["close"] - 0.1
+        logger.info("[DEBUG] Forcing shooting-star exit for %s", symbol)
+        flags["pattern"] = True
 
 
 def get_open_orders(symbol):
@@ -1020,6 +1073,8 @@ def process_positions_cycle():
                 symbol,
             )
             continue
+
+        apply_debug_overrides(symbol, indicators, position, DEBUG_STATE)
 
         logger.info(
             "Evaluating sell conditions for %s - price: %.2f, EMA20: %.2f, RSI: %.2f",
