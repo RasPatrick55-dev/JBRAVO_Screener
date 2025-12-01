@@ -694,7 +694,26 @@ class PortfolioBacktester:
         }
 
 
-def run_backtest(symbols: List[str]) -> dict:
+def run_backtest(
+    symbols: List[str],
+    *,
+    max_symbols: Optional[int] = None,
+    max_days: Optional[int] = None,
+    quick: bool = False,
+) -> dict:
+    QUICK_MAX_SYMBOLS = 20
+    QUICK_MAX_DAYS = 120
+
+    quick_mode = quick or max_symbols is not None or max_days is not None
+    if quick_mode:
+        max_symbols = max_symbols if max_symbols is not None else QUICK_MAX_SYMBOLS
+        max_days = max_days if max_days is not None else QUICK_MAX_DAYS
+        logger.info(
+            "Quick backtest mode enabled: max_symbols=%s max_days=%s",
+            max_symbols,
+            max_days,
+        )
+
     valid_symbols: List[str] = []
     for symbol in symbols:
         if re.match(r'^[A-Z]{1,5}$', symbol):
@@ -702,15 +721,22 @@ def run_backtest(symbols: List[str]) -> dict:
         else:
             logger.warning("Invalid symbol skipped: %s", symbol)
 
+    if quick_mode and max_symbols:
+        valid_symbols = sorted(valid_symbols)[:max_symbols]
+        logger.info("Universe limited to first %d symbols", len(valid_symbols))
+
     data = {}
+    lookback_days = max_days if max_days else 800
     for sym in valid_symbols:
         logger.info("Fetching data for %s", sym)
-        df = get_data(sym)
+        df = get_data(sym, days=lookback_days)
         if df.empty or len(df) < 250:
             logger.warning("Skipping %s: insufficient data", sym)
             continue
         df = compute_indicators(df)
         df["score"] = composite_score(df)
+        if max_days:
+            df = df.tail(max_days)
         df = prepare_series(df)
         if df.empty:
             logger.warning("Skipping %s: insufficient aligned data", sym)
@@ -921,6 +947,23 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=os.path.join(BASE_DIR, "data", "top_candidates.csv"),
         help="CSV file containing candidate symbols (default: data/top_candidates.csv)",
     )
+    parser.add_argument(
+        "--quick",
+        action="store_true",
+        help="Enable quick smoke-test mode (limits symbols and lookback)",
+    )
+    parser.add_argument(
+        "--max-symbols",
+        type=int,
+        default=None,
+        help="Limit number of symbols to backtest (defaults to 20 in quick mode)",
+    )
+    parser.add_argument(
+        "--max-days",
+        type=int,
+        default=None,
+        help="Limit number of most recent trading days to use (defaults to 120 in quick mode)",
+    )
     return parser.parse_args(argv if argv is not None else None)
 
 
@@ -958,7 +1001,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         logger.info("Loaded %d symbols from %s", len(symbols), source_csv)
-        run_backtest(symbols)
+        run_backtest(
+            symbols,
+            max_symbols=args.max_symbols,
+            max_days=args.max_days,
+            quick=args.quick,
+        )
         logger.info("Backtest script finished")
     except Exception as exc:
         logger.error("Backtest failed: %s", exc)

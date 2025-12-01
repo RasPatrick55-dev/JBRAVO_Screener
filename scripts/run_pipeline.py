@@ -774,6 +774,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Extra CLI arguments for scripts.backtest provided as separate tokens",
     )
     parser.add_argument(
+        "--backtest-quick",
+        choices=("true", "false"),
+        default=None,
+        help="Enable quick backtest mode by forwarding --quick to scripts.backtest",
+    )
+    parser.add_argument(
         "--metrics-args",
         default=os.getenv("JBR_METRICS_ARGS", ""),
         help="Extra CLI arguments forwarded to scripts.metrics",
@@ -1256,6 +1262,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             getattr(args, "ranker_eval_args", ""), getattr(args, "ranker_eval_args_split", None)
         ),
     }
+
+    if getattr(args, "backtest_quick", None) == "true":
+        extras["backtest"].append("--quick")
 
     step_rcs: dict[str, int] = {step: 0 for step in steps}
 
