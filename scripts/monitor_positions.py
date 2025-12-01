@@ -5,6 +5,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone, time as dt_time
+from pathlib import Path
 import pandas as pd
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
@@ -33,12 +34,8 @@ import shutil
 from tempfile import NamedTemporaryFile
 
 
-from dotenv import load_dotenv
 import pytz
 from utils.alerts import send_alert
-
-dotenv_path = os.path.join(BASE_DIR, ".env")
-load_dotenv(dotenv_path)
 
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
@@ -51,6 +48,61 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.info("Monitoring service active.")
+
+REQUIRED_ENV_VARS = [
+    "APCA_API_KEY_ID",
+    "APCA_API_SECRET_KEY",
+    "APCA_API_BASE_URL",
+]
+
+
+def _load_env_from_file(path: Path) -> bool:
+    if not path.exists():
+        return False
+    loaded_any = False
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if key and value and key not in os.environ:
+            os.environ[key] = value
+            loaded_any = True
+    return loaded_any
+
+
+def ensure_env_loaded() -> None:
+    missing_before = [k for k in REQUIRED_ENV_VARS if not os.getenv(k)]
+    if missing_before:
+        cfg_path = Path.home() / ".config" / "jbravo" / ".env"
+        loaded = _load_env_from_file(cfg_path)
+        logger.info(
+            "[STARTUP] monitor_positions: .env load attempted from %s (loaded=%s, missing_before=%s)",
+            cfg_path,
+            loaded,
+            missing_before,
+        )
+    else:
+        logger.info(
+            "[STARTUP] monitor_positions: Alpaca env already set; skipping .env load"
+        )
+
+
+def validate_alpaca_env_or_die() -> None:
+    missing = [k for k in REQUIRED_ENV_VARS if not os.getenv(k)]
+    if missing:
+        logger.error(
+            "[FATAL] monitor_positions: Missing required Alpaca env vars: %s. "
+            "Ensure ~/.config/jbravo/.env is loaded (set -a; . ~/.config/jbravo/.env; set +a).",
+            ", ".join(missing),
+        )
+        raise SystemExit(1)
+    logger.info(
+        "[STARTUP] monitor_positions: Alpaca env OK (key_id=%s, base_url=%s)",
+        os.getenv("APCA_API_KEY_ID")[:4] + "…" if os.getenv("APCA_API_KEY_ID") else "None",
+        os.getenv("APCA_API_BASE_URL"),
+    )
 
 
 def log_trailing_stop_event(symbol: str, trail_percent: float, order_id: Optional[str], status: str) -> None:
@@ -260,10 +312,8 @@ def _save_partial_state(state: dict) -> None:
 PARTIAL_EXIT_TAKEN = _load_partial_state()
 RSI_HIGH_MEMORY: dict[str, dict[str, float]] = {}
 
-missing = [k for k in ["APCA_API_KEY_ID", "APCA_API_SECRET_KEY"] if not os.getenv(k)]
-if missing:
-    print(f"[FATAL]: Missing required env vars: {missing}. Did you load .env?")
-    raise SystemExit(1)
+ensure_env_loaded()
+validate_alpaca_env_or_die()
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
