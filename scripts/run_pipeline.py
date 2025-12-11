@@ -691,11 +691,7 @@ def run_cmd(cmd: Sequence[str], name: str) -> int:
 
 
 def _should_enrich_candidates(args: argparse.Namespace, steps: Sequence[str]) -> bool:
-    return bool(
-        getattr(args, "enrich_candidates_with_ranker", False)
-        or "ranker_eval" in steps
-        or "predict" in steps
-    )
+    return bool(getattr(args, "enrich_candidates_with_ranker", False))
 
 
 def _find_latest_predictions_path(base_dir: Path) -> Path | None:
@@ -777,6 +773,88 @@ def enrich_candidates_with_predictions(
         len(merged.index),
         matched,
         predictions_path.name,
+    )
+
+
+def _enrich_candidates_with_ranker(
+    base_dir: Path | None = None,
+    *,
+    score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
+    target_column: str = DEFAULT_RANKER_TARGET_COLUMN,
+) -> None:
+    base = _resolve_base_dir(base_dir)
+    candidates_path = base / "data" / "latest_candidates.csv"
+    predictions_path = _find_latest_predictions_path(base)
+
+    if not candidates_path.exists() or predictions_path is None:
+        LOG.warning(
+            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=missing_file candidates_path=%s predictions_path=%s",
+            candidates_path,
+            predictions_path,
+        )
+        return
+
+    try:
+        candidates = pd.read_csv(candidates_path)
+    except Exception:
+        LOG.warning(
+            "[WARN] CANDIDATES_ENRICH_FAILED reason=candidates_read_error candidates_path=%s",
+            candidates_path,
+            exc_info=True,
+        )
+        return
+
+    if candidates.empty:
+        LOG.warning(
+            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=candidates_empty candidates_path=%s predictions_path=%s",
+            candidates_path,
+            predictions_path,
+        )
+        return
+
+    predictions = _prepare_predictions_frame(predictions_path, score_column)
+    if predictions.empty:
+        LOG.warning(
+            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=predictions_empty candidates_path=%s predictions_path=%s",
+            candidates_path,
+            predictions_path,
+        )
+        return
+
+    try:
+        renamed = predictions.rename(columns={score_column: target_column})
+        merged = candidates.merge(renamed[["symbol", target_column]], on="symbol", how="left")
+        matched = int(merged[target_column].notna().sum()) if target_column in merged.columns else 0
+        ordered: list[str] = list(CANONICAL_COLUMNS)
+        ordered.extend(col for col in candidates.columns if col not in ordered)
+        ordered = [col for col in ordered if col in merged.columns and col != target_column]
+        ordered.append(target_column)
+        merged = merged[ordered]
+    except Exception:
+        LOG.warning(
+            "[WARN] CANDIDATES_ENRICH_FAILED reason=merge_error candidates_path=%s predictions_path=%s",
+            candidates_path,
+            predictions_path,
+            exc_info=True,
+        )
+        return
+
+    try:
+        write_csv_atomic(str(candidates_path), merged)
+    except Exception:
+        LOG.warning(
+            "[WARN] CANDIDATES_ENRICH_FAILED reason=write_error candidates_path=%s predictions_path=%s",
+            candidates_path,
+            predictions_path,
+            exc_info=True,
+        )
+        return
+
+    LOG.info(
+        "[INFO] CANDIDATES_ENRICHED model_score_column=%s rows=%s matched=%s",
+        target_column,
+        len(merged.index),
+        matched,
     )
     return len(merged.index), matched
 
@@ -1601,15 +1679,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if rc_metrics:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
             _sync_top_candidates_to_latest(base_dir)
-            if _should_enrich_candidates(args, steps):
-                try:
-                    enrich_candidates_with_predictions(
-                        base_dir,
-                        score_column=DEFAULT_RANKER_SCORE_COLUMN,
-                        target_column=DEFAULT_RANKER_TARGET_COLUMN,
-                    )
-                except Exception:
-                    LOG.exception("CANDIDATE_ENRICHMENT_FAILED (continuing)")
         if "labels" in steps:
             current_step = "labels"
             bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
@@ -1678,6 +1747,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     int(payload.get("sample_size", 0) or 0),
                     len(payload.get("deciles") or []),
                 )
+
+        if getattr(args, "enrich_candidates_with_ranker", False):
+            _enrich_candidates_with_ranker(
+                base_dir=base_dir,
+                score_column=DEFAULT_RANKER_SCORE_COLUMN,
+                target_column=DEFAULT_RANKER_TARGET_COLUMN,
+            )
         if "execute" in steps:
             current_step = "execute"
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
