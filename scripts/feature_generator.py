@@ -14,12 +14,12 @@ from typing import Iterable
 import pandas as pd
 
 BAR_COLUMNS = {"symbol", "timestamp", "open", "high", "low", "close", "volume"}
-LABEL_COLUMNS = {
+LABEL_COLUMNS = [
     "symbol",
     "timestamp",
     "label_5d_pos_300bp",
     "label_10d_pos_300bp",
-}
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,9 +95,11 @@ def _prepare_bars(bars_path: Path) -> pd.DataFrame:
     return bars
 
 
-def _prepare_labels(labels_path: Path) -> pd.DataFrame:
+def _load_labels(labels_path: Path) -> pd.DataFrame:
     labels = _load_csv(labels_path)
     _require_columns(labels, LABEL_COLUMNS)
+
+    labels = labels[LABEL_COLUMNS].copy()
     return labels.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
 
 
@@ -136,7 +138,7 @@ def _compute_features(bars: pd.DataFrame) -> pd.DataFrame:
 
 def build_feature_set(bars_path: Path, labels_path: Path, keep_na: bool) -> pd.DataFrame:
     bars = _prepare_bars(bars_path)
-    labels = _prepare_labels(labels_path)
+    labels = _load_labels(labels_path)
 
     features = _compute_features(bars)
     merged = features.merge(labels, on=["symbol", "timestamp"], how="inner")
