@@ -46,6 +46,9 @@ FEATURE_COLUMNS = [
     "vol_rvol_10d",
 ]
 
+MAX_TRAIN_ROWS = 50_000
+SAMPLE_RANDOM_STATE = 42
+
 
 @dataclass
 class TrainArgs:
@@ -131,14 +134,14 @@ def _choose_model():
     _ensure_sklearn_available()
 
     if LogisticRegression is not None:
-        LOG.info("Using LogisticRegression (lbfgs, max_iter=200)")
-        return LogisticRegression(max_iter=200, solver="lbfgs")
+        LOG.info("Using LogisticRegression (lbfgs, max_iter=50)")
+        return LogisticRegression(max_iter=50, solver="lbfgs")
 
     if RandomForestClassifier is not None:
-        LOG.info("Using RandomForestClassifier (n_estimators=100, max_depth=5)")
+        LOG.info("Using RandomForestClassifier (n_estimators=50, max_depth=4)")
         return RandomForestClassifier(
-            n_estimators=100,
-            max_depth=5,
+            n_estimators=50,
+            max_depth=4,
             n_jobs=-1,
             random_state=42,
         )
@@ -149,6 +152,16 @@ def _choose_model():
 def _train_model(df: pd.DataFrame, label_column: str):
     if df.empty:
         raise RuntimeError("No data available to train the model.")
+
+    if len(df) > MAX_TRAIN_ROWS:
+        LOG.info(
+            "Downsampling training set from %s to %s rows for faster execution",
+            len(df),
+            MAX_TRAIN_ROWS,
+        )
+        df = df.sample(n=MAX_TRAIN_ROWS, random_state=SAMPLE_RANDOM_STATE).sort_values(
+            "timestamp"
+        )
 
     split_idx = max(1, int(len(df) * 0.8))
     if split_idx >= len(df):
