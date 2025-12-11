@@ -859,6 +859,39 @@ def _enrich_candidates_with_ranker(
     return len(merged.index), matched
 
 
+def _rerank_candidates_with_model_score(path: Path) -> None:
+    candidates_path = Path(path)
+    try:
+        frame = pd.read_csv(candidates_path)
+    except Exception as exc:  # pragma: no cover - defensive read
+        LOG.warning("[WARN] CANDIDATES_RERANK_FAILED error=%s", exc, exc_info=True)
+        return
+
+    if "model_score_5d" not in frame.columns:
+        LOG.warning(
+            "[WARN] CANDIDATES_RERANK_SKIPPED reason=missing_model_score candidates_path=%s",
+            candidates_path,
+        )
+        return
+
+    try:
+        ordered: list[str] = list(CANONICAL_COLUMNS)
+        ordered.extend(col for col in frame.columns if col not in ordered)
+        frame = frame[ordered]
+        sorted_frame = frame.sort_values(
+            by=["model_score_5d", "score"], ascending=[False, False], kind="mergesort"
+        )
+        write_csv_atomic(str(candidates_path), sorted_frame)
+    except Exception as exc:  # pragma: no cover - defensive sort/write
+        LOG.warning("[WARN] CANDIDATES_RERANK_FAILED error=%s", exc, exc_info=True)
+        return
+
+    LOG.info(
+        "[INFO] CANDIDATES_RERANKED primary=model_score_5d secondary=score rows=%s",
+        len(sorted_frame.index),
+    )
+
+
 def emit_metric(*args: Any, **kwargs: Any) -> None:  # pragma: no cover - legacy hook
     return None
 
@@ -1754,6 +1787,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 score_column=DEFAULT_RANKER_SCORE_COLUMN,
                 target_column=DEFAULT_RANKER_TARGET_COLUMN,
             )
+            _rerank_candidates_with_model_score(base_dir / "data" / "latest_candidates.csv")
         if "execute" in steps:
             current_step = "execute"
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
