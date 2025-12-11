@@ -12,6 +12,9 @@ per run. For cron-style deployments use the UTC equivalents:
 | Task | Eastern (local) | UTC |
 | ---- | ---------------- | --- |
 | `scripts/run_pipeline.py` | 05:20 | 09:20 UTC (EST) / 09:20 UTC (EDT) |
+| ML Stage 0: bars export (`run_pipeline --export-daily-bars-path`) | 05:50 | 10:50 UTC (EST) / 10:50 UTC (EDT) |
+| ML Stage 1: labels (`label_generator --threshold-percent 3.0`) | 05:58 | 10:58 UTC (EST) / 10:58 UTC (EDT) |
+| ML Stage 2: features (`feature_generator`) | 06:05 | 11:05 UTC (EST) / 11:05 UTC (EDT) |
 | `scripts/execute_trades.py` | 07:05 | 12:05 UTC (EST) / 11:05 UTC (EDT) |
 | `scripts/metrics.py` | 16:30 | 21:30 UTC (EST) / 20:30 UTC (EDT) |
 
@@ -41,6 +44,12 @@ running on cron-like systems.
   `[ERROR] TRADING_AUTH_FAILED … tip="Reload ~/.config/jbravo/.env"` and exit
   with status `2`. Trailing stops log `TRAIL_SUBMIT … route=trailing_stop` and
   `TRAIL_CONFIRMED …` so the dashboard keeps consistent tokens.
+
+## ML data pipeline (Stage 0–2)
+
+* Stage 0 (bars) runs `python -m scripts.run_pipeline --steps screener,backtest,metrics --export-daily-bars-path data/daily_bars.csv` to emit `data/daily_bars.csv`.
+* Stage 1 (labels) runs `python -m scripts.label_generator --bars-path data/daily_bars.csv --output-dir data/labels --horizons 5 10 --threshold-percent 3.0` to write `data/labels/labels_<date>.csv`.
+* Stage 2 (features) runs `python -m scripts.feature_generator --bars-path data/daily_bars.csv` to write `data/features/features_<date>.csv` and should follow the labels job closely so both stages share the same bars snapshot.
 
 ## Environment Expectations
 
