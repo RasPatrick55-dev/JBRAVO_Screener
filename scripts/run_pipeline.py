@@ -622,6 +622,17 @@ def _count_csv_rows(path: Path) -> int:
         return 0
 
 
+def _count_csv_lines(path: Path | None) -> int:
+    """
+    Safe wrapper used by the labels step:
+    - returns 0 on missing file or None
+    - counts data rows (excluding header) otherwise.
+    """
+    if path is None:
+        return 0
+    return _count_csv_rows(path)
+
+
 def _sync_top_candidates_to_latest(base_dir: Path | None = None) -> None:
     base = _resolve_base_dir(base_dir)
     data_dir = base / "data"
