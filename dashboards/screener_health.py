@@ -559,12 +559,33 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
 
     path = base_dir / "data" / "ranker_eval" / "latest.json"
     payload = _safe_json(path)
-    if not payload:
+    if not payload or not isinstance(payload, Mapping):
         return None
 
-    deciles = payload.get("deciles")
-    if not isinstance(deciles, list):
-        deciles = []
+    deciles_raw = payload.get("deciles")
+    deciles: list[dict[str, Any]] = []
+    if isinstance(deciles_raw, list):
+        for idx, row in enumerate(deciles_raw, start=1):
+            if not isinstance(row, Mapping):
+                continue
+            try:
+                decile_value = int(row.get("decile", idx))
+            except (TypeError, ValueError):
+                decile_value = idx
+
+            def _maybe_float(key: str) -> float | None:
+                try:
+                    return float(row.get(key))
+                except (TypeError, ValueError):
+                    return None
+
+            deciles.append(
+                {
+                    "decile": decile_value,
+                    "avg_label": _maybe_float("avg_label"),
+                    "avg_score": _maybe_float("avg_score"),
+                }
+            )
 
     try:
         sample_size = int(payload.get("sample_size", 0))
@@ -576,12 +597,19 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
     except (TypeError, ValueError):
         horizon = 0
 
+    label_column = payload.get("label_column")
+    if isinstance(label_column, str):
+        label_column = label_column.strip()
+    else:
+        label_column = None
+
     return {
         "run_utc": payload.get("run_utc"),
         "label_horizon_days": horizon,
         "sample_size": sample_size,
         "reason": payload.get("reason"),
         "deciles": deciles,
+        "label_column": label_column,
     }
 
 
@@ -957,10 +985,30 @@ def build_layout():
             html.Div(
                 [
                     dcc.Graph(id="sh-trend-rows", style={"height":"280px"}),
-                    dcc.Graph(id="sh-deciles-hit", style={"height":"280px"}),
-                    dcc.Graph(id="sh-deciles-ret", style={"height":"280px"}),
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.H4("Ranker Health", className="mb-1"),
+                                    html.Div(
+                                        id="sh-ranker-summary",
+                                        className="text-muted",
+                                        style={"fontSize": "13px"},
+                                    ),
+                                ]
+                            ),
+                            html.Div(
+                                id="sh-ranker-warning",
+                                className="text-warning mb-2",
+                                style={"fontSize": "12px"},
+                            ),
+                            dcc.Graph(id="sh-ranker-deciles", style={"height": "260px"}),
+                        ],
+                        className="sh-metric-card",
+                        style={"padding": "10px"},
+                    ),
                 ],
-                style={"display":"grid","gridTemplateColumns":"2fr 1fr 1fr","gap":"14px"},
+                style={"display":"grid","gridTemplateColumns":"2fr 1fr","gap":"14px"},
             ),
             html.Hr(),
             html.Details([
@@ -1110,8 +1158,9 @@ def register_callbacks(app):
         Output("sh-top-empty","children"),
         Output("sh-top-table","tooltip_data"),
         Output("sh-trend-rows","figure"),
-        Output("sh-deciles-hit","figure"),
-        Output("sh-deciles-ret","figure"),
+        Output("sh-ranker-summary","children"),
+        Output("sh-ranker-deciles","figure"),
+        Output("sh-ranker-warning","children"),
         Output("sh-preds-head","children"),
         Output("sh-screener-log","children"),
         Output("sh-pipeline-log","children"),
@@ -1411,59 +1460,69 @@ def register_callbacks(app):
                 "Not enough history yet",
             )
 
-        # ---------------- Deciles (Hit‑rate & Avg Return) ----------------
-        default_ranking_message = "Not computed yet (no ranker_eval file present)"
-        hit_fig = _placeholder_figure("Decile Hit‑Rate", default_ranking_message)
-        ret_fig = _placeholder_figure("Decile Avg Return", default_ranking_message)
-        if isinstance(ev, dict):
+        # ---------------- Ranker evaluation (avg label & score) ----------------
+        ranker_warning: str | None = None
+        ranker_summary = "Ranker evaluation not available"
+        ranker_fig = _placeholder_figure(
+            "Ranker deciles",
+            "Ranker evaluation not available (data/ranker_eval/latest.json missing)",
+        )
+        if isinstance(ev, Mapping):
             dec = ev.get("deciles") or []
-            reason = ev.get("reason") or "no_deciles"
             sample_size_raw = ev.get("sample_size", 0)
+            label_col = ev.get("label_column") or "unknown"
             try:
                 sample_size = int(sample_size_raw)
             except (TypeError, ValueError):
                 sample_size = 0
+            run_utc = ev.get("run_utc")
             horizon = ev.get("label_horizon_days")
             subtitle_bits: list[str] = []
             if isinstance(horizon, (int, float)):
-                subtitle_bits.append(f"{int(horizon)}-day fwd return")
-            run_utc = ev.get("run_utc")
+                subtitle_bits.append(f"{int(horizon)}-day horizon")
             if isinstance(run_utc, str) and run_utc:
                 subtitle_bits.append(f"evaluated {run_utc} UTC")
-            subtitle = " · ".join(subtitle_bits)
+            summary_bits = [f"Ranker sample size: {sample_size:,}", f"Label: {label_col}"]
+            if subtitle_bits:
+                summary_bits.append(" ".join(subtitle_bits))
+            ranker_summary = " • ".join(summary_bits)
             try:
                 df_dec = pd.DataFrame(dec)
-                required_cols = {"decile", "hit_rate", "avg_return"}
+                required_cols = {"decile", "avg_label", "avg_score"}
                 if not df_dec.empty and required_cols.issubset(df_dec.columns):
                     df_dec = df_dec.sort_values("decile")
-                    hit_fig = px.bar(df_dec, x="decile", y="hit_rate", title="Decile Hit‑Rate")
-                    ret_fig = px.bar(df_dec, x="decile", y="avg_return", title="Decile Avg Return")
-                    for fig in (hit_fig, ret_fig):
-                        fig.update_layout(
-                            template="plotly_dark",
-                            margin=dict(l=20, r=20, t=60, b=20),
+                    tidy = df_dec.melt(
+                        id_vars=["decile"],
+                        value_vars=["avg_label", "avg_score"],
+                        var_name="metric",
+                        value_name="value",
+                    )
+                    ranker_fig = px.bar(
+                        tidy,
+                        x="decile",
+                        y="value",
+                        color="metric",
+                        barmode="group",
+                        title="Decile averages: label vs score",
+                    )
+                    ranker_fig.update_layout(
+                        template="plotly_dark",
+                        margin=dict(l=20, r=20, t=60, b=20),
+                        legend_title="Metric",
+                    )
+                    if subtitle_bits:
+                        ranker_fig.update_layout(
+                            title={
+                                "text": f"{ranker_fig.layout.title.text}<br><sup>{' · '.join(subtitle_bits)}</sup>",
+                                "x": 0.5,
+                            }
                         )
-                        if subtitle:
-                            fig.update_layout(
-                                title={
-                                    "text": f"{fig.layout.title.text}<br><sup>{subtitle}</sup>",
-                                    "x": 0.5,
-                                }
-                            )
-                    hit_fig.update_yaxes(tickformat=".0%")
-                    ret_fig.update_yaxes(tickformat=".2%")
                 else:
-                    horizon_label = (
-                        f"{int(horizon)}" if isinstance(horizon, (int, float)) else "unknown"
-                    )
-                    message = (
-                        "Ranker evaluation not computed yet."
-                        f"\nreason={reason}, sample_size={sample_size}, horizon={horizon_label}d"
-                    )
-                    hit_fig = _placeholder_figure("Decile Hit‑Rate", message)
-                    ret_fig = _placeholder_figure("Decile Avg Return", message)
+                    ranker_warning = "Ranker evaluation not available (missing decile metrics)."
             except Exception:  # pragma: no cover - defensive dashboard guard
-                pass
+                ranker_warning = "Ranker evaluation could not be rendered."
+        else:
+            ranker_warning = "Ranker evaluation not available."
 
         # ---------------- Predictions head & logs ----------------
         pred_path = _discover_predictions_csv(m)
@@ -1670,8 +1729,9 @@ def register_callbacks(app):
             top_empty_message,
             tooltips,
             fig_trend,
-            hit_fig,
-            ret_fig,
+            ranker_summary,
+            ranker_fig,
+            ranker_warning,
             preds_head,
             s_tail,
             p_tail,
