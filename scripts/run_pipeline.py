@@ -574,6 +574,38 @@ def _resolve_labels_bars_path(raw_path: str | Path | None, base_dir: Path) -> Pa
     return path
 
 
+def _snapshot_label_files(output_dir: Path) -> dict[Path, int]:
+    if not output_dir.exists():
+        return {}
+    snapshot: dict[Path, int] = {}
+    for path in output_dir.glob("labels_*.csv"):
+        try:
+            snapshot[path] = path.stat().st_mtime_ns
+        except FileNotFoundError:
+            continue
+    return snapshot
+
+
+def _detect_new_labels_file(
+    output_dir: Path, before: Mapping[Path, int]
+) -> Path | None:
+    if not output_dir.exists():
+        return None
+    updated: list[tuple[int, Path]] = []
+    for path in output_dir.glob("labels_*.csv"):
+        try:
+            current_mtime = path.stat().st_mtime_ns
+        except FileNotFoundError:
+            continue
+        previous_mtime = before.get(path)
+        if previous_mtime is None or current_mtime > previous_mtime:
+            updated.append((current_mtime, path))
+    if not updated:
+        return None
+    updated.sort()
+    return updated[-1][1]
+
+
 def _count_csv_rows(path: Path) -> int:
     try:
         with path.open(newline="") as handle:
@@ -1454,23 +1486,32 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if "labels" in steps:
             current_step = "labels"
             bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
-            if not bars_path.exists():
-                LOG.warning("[WARN] LABELS_SKIPPED missing_bars=%s", bars_path)
+            bars_rows = _count_csv_lines(bars_path)
+            if bars_rows <= 0:
+                LOG.warning("[WARN] LABELS_SKIPPED reason=missing_or_empty path=%s", bars_path)
                 stage_times["labels"] = 0.0
                 step_rcs["labels"] = 0
-            elif rc != 0:
-                LOG.warning("[WARN] LABELS_SKIPPED reason=prior_failure bars_path=%s", bars_path)
-                stage_times["labels"] = 0.0
-                step_rcs["labels"] = rc
             else:
-                cmd = [sys.executable, "-m", "scripts.label_generator", "--bars-path", str(bars_path)]
-                LOG.info("[INFO] LABELS_START path=%s", bars_path)
+                labels_output_dir = base_dir / "data" / "labels"
+                labels_before = _snapshot_label_files(labels_output_dir)
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "scripts.label_generator",
+                    "--bars-path",
+                    str(bars_path),
+                    "--output-dir",
+                    str(labels_output_dir),
+                ]
+                LOG.info("[INFO] START labels bars_path=%s", bars_path)
+                LOG.info("[INFO] LABELS_START bars_path=%s", bars_path)
                 rc_labels, secs = run_step("labels", cmd, timeout=60 * 5)
+                labels_path = _detect_new_labels_file(labels_output_dir, labels_before)
+                labels_rows = _count_csv_lines(labels_path) if labels_path else 0
                 LOG.info(
-                    "[INFO] LABELS_END path=%s rc=%s secs=%.2f",
-                    bars_path,
-                    rc_labels,
-                    secs,
+                    "[INFO] LABELS_END labels_path=%s rows=%s",
+                    labels_path or "unknown",
+                    labels_rows,
                 )
                 stage_times["labels"] = secs
                 step_rcs["labels"] = rc_labels
