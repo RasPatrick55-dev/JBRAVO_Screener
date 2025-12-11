@@ -8,3 +8,17 @@
 * `scripts.metrics` can be scheduled before the first trade executes; both the pipeline and the metrics script tolerate a missing `data/trades_log.csv`, creating an empty header stub and still writing `data/metrics_summary.csv` with zeroed metrics.
 * The Screener Health dashboard surfaces the latest pipeline tokens (`PIPELINE_START`, `PIPELINE_SUMMARY`, `FALLBACK_CHECK`, `PIPELINE_END`) even on zero-candidate days. When fallback data is active the Top Candidates table displays a subtle `fallback` badge sourced from the `latest_candidates.csv` `source` column.
 * The backtester exits cleanly with `Backtest: no candidates today — skipping.` when `data/top_candidates.csv` has no rows, so nightly automation does not fail on quiet days.
+
+### Stage 2 ML: feature generator
+
+* Runs after the nightly pipeline and labels tasks to populate the features stage of ML.
+* Inputs: `data/daily_bars.csv`, `data/labels/labels_*.csv`.
+* Output: `data/features/features_<date>.csv`.
+* Manual run from repo root:
+
+```
+cd /home/RasPatrick/jbravo_screener
+source /home/RasPatrick/.virtualenvs/jbravo-env/bin/activate
+set -a; . ~/.config/jbravo/.env; set +a
+python -m scripts.feature_generator
+```
