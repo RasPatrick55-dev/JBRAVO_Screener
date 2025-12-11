@@ -623,11 +623,8 @@ def _count_csv_rows(path: Path) -> int:
 
 
 def _count_csv_lines(path: Path | None) -> int:
-    """
-    Safe wrapper used by the labels step:
-    - returns 0 on missing file or None
-    - counts data rows (excluding header) otherwise.
-    """
+    """Return the number of data rows in a CSV, tolerating ``None`` or missing files."""
+
     if path is None:
         return 0
     return _count_csv_rows(path)
@@ -741,6 +738,24 @@ def _merge_split_args(raw: str, split: Optional[Sequence[str]]) -> list[str]:
     if split:
         merged.extend(token for token in split if token != "--")
     return merged
+
+
+def _strip_labels_args(tokens: Sequence[str]) -> list[str]:
+    """Remove any ``--labels-bars-path`` arguments from a token list."""
+
+    cleaned: list[str] = []
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if token == "--labels-bars-path":
+            skip_next = True
+            continue
+        if token.startswith("--labels-bars-path="):
+            continue
+        cleaned.append(token)
+    return cleaned
 
 
 def _extract_split_tokens(
@@ -944,17 +959,6 @@ def _count_rows(path: Path) -> int:
         LOG.warning("PIPELINE_COUNT_FAILED path=%s error=%s", path, exc)
         return 0
     return int(len(df.index))
-
-
-def _count_csv_lines(path: Path) -> int:
-    if not path.exists():
-        return 0
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            total = sum(1 for _ in handle)
-    except Exception:
-        return 0
-    return max(total - 1, 0)
 
 
 def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
@@ -1316,7 +1320,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     base_dir = _resolve_base_dir()
 
     extras = {
-        "screener": _merge_split_args(args.screener_args, args.screener_args_split),
+        "screener": _strip_labels_args(
+            _merge_split_args(args.screener_args, args.screener_args_split)
+        ),
         "execute": _split_or_string(args.exec_args, args.exec_args_split),
         "backtest": _merge_split_args(args.backtest_args, args.backtest_args_split),
         "metrics": _merge_split_args(args.metrics_args, args.metrics_args_split),
