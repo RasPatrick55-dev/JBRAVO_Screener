@@ -1,9 +1,9 @@
-"""Evaluate ranker decile performance from historical predictions and trades.
+"""Evaluate ranker predictions via decile analysis for the Screener dashboard.
 
-This module ingests prediction snapshots and realised trade outcomes to
-compute forward returns by decile. The resulting summary is written to
-``data/ranker_eval/latest.json`` for dashboard consumption, with an optional
-append-only history CSV for longitudinal tracking.
+This script joins nightly feature labels with predicted scores, splits the
+sample into deciles, and writes a compact JSON summary for the Screener
+"Health" tab. It is intended as a manual/experimental utility and does not
+modify existing automated tasks.
 """
 
 from __future__ import annotations
@@ -11,22 +11,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
-from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 
-from utils import write_csv_atomic  # noqa: E402
 from utils.env import load_env  # noqa: E402
-
 
 load_env()
 
@@ -37,309 +32,222 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
+DEFAULT_LABEL = "label_5d_pos_300bp"
+
 
 @dataclass
-class EvalConfig:
-    label_horizon: int = 5
-    predictions_dir: Path = BASE_DIR / "data" / "predictions"
-    executed_trades: Path = BASE_DIR / "data" / "executed_trades.csv"
-    output_json: Path = BASE_DIR / "data" / "ranker_eval" / "latest.json"
-    output_history: Path | None = BASE_DIR / "data" / "ranker_eval" / "history.csv"
-    min_samples: int = 50
-    min_per_decile: int = 5
+class EvalArgs:
+    features_path: Path
+    predictions_path: Path
+    label_column: str
+    output_dir: Path
 
 
-def _coerce_datetime(series: pd.Series) -> pd.Series:
-    return pd.to_datetime(series, errors="coerce", utc=True)
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-def _load_predictions(predictions_dir: Path) -> pd.DataFrame:
-    frames: list[pd.DataFrame] = []
-    if not predictions_dir.exists():
-        LOG.warning("Predictions directory missing at %s", predictions_dir)
-        return pd.DataFrame()
-    for path in sorted(predictions_dir.glob("*.csv")):
-        try:
-            df = pd.read_csv(path)
-        except Exception as exc:  # pragma: no cover - defensive I/O
-            LOG.warning("Failed to read predictions %s: %s", path, exc)
-            continue
-        if df.empty:
-            continue
-        rename_map = {}
-        if "as_of" in df.columns and "run_date" not in df.columns:
-            rename_map["as_of"] = "run_date"
-        if "Score" in df.columns and "score" not in df.columns:
-            rename_map["Score"] = "score"
-        if rename_map:
-            df = df.rename(columns=rename_map)
-        required = {"symbol", "score", "run_date"}
-        if not required.issubset(df.columns):
-            missing = required - set(df.columns)
-            LOG.warning("Predictions %s missing columns: %s", path, sorted(missing))
-            continue
-        df = df.loc[:, ["symbol", "score", "run_date"]].copy()
-        df["score"] = pd.to_numeric(df["score"], errors="coerce")
-        df["run_date"] = _coerce_datetime(df["run_date"])
-        df = df.dropna(subset=["symbol", "score", "run_date"])
-        if not df.empty:
-            frames.append(df)
-    if not frames:
-        return pd.DataFrame(columns=["symbol", "score", "run_date"])
-    combined = pd.concat(frames, ignore_index=True)
-    combined = combined.sort_values("run_date")
-    return combined.reset_index(drop=True)
+def _find_latest(directory: Path, pattern: str) -> Path | None:
+    candidates = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime)
+    if not candidates:
+        return None
+    return candidates[-1]
 
 
-def _load_trades(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        LOG.warning("Executed trades file missing at %s", path)
-        return pd.DataFrame()
+def _load_features(path: Path, label_column: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(path)
-    except Exception as exc:  # pragma: no cover - defensive I/O
-        LOG.warning("Failed to read executed trades %s: %s", path, exc)
-        return pd.DataFrame()
-    if df.empty:
-        return df
-    rename_map = {}
-    if "filled_qty" in df.columns and "qty" not in df.columns:
-        rename_map["filled_qty"] = "qty"
-    df = df.rename(columns=rename_map)
-    for col in ("qty", "entry_price", "exit_price", "pnl"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    for col in ("entry_time", "exit_time"):
-        if col in df.columns:
-            df[col] = _coerce_datetime(df[col])
-    if "symbol" in df.columns:
-        df["symbol"] = df["symbol"].astype(str).str.upper()
-    return df
+    except FileNotFoundError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        raise RuntimeError(f"Failed to read features from {path}: {exc}") from exc
+
+    required = {"symbol", "timestamp", label_column}
+    missing = required - set(df.columns)
+    if missing:
+        raise RuntimeError(f"Features file {path} missing columns: {sorted(missing)}")
+
+    df = df.dropna(subset=list(required))
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+    return df.reset_index(drop=True)
 
 
-def _compute_forward_return(row: Mapping[str, Any]) -> float | None:
-    qty = abs(float(row.get("qty") or 0))
-    entry_price = float(row.get("entry_price") or 0)
-    pnl = row.get("pnl")
-    side = str(row.get("side") or "").lower()
-    exit_price = row.get("exit_price")
-    if entry_price <= 0 or qty <= 0:
-        return None
-    if pd.notna(pnl):
-        return float(pnl) / (entry_price * qty) if entry_price else None
-    if pd.notna(exit_price):
-        sign = 1 if side != "sell" else -1
-        try:
-            return sign * (float(exit_price) - entry_price) / entry_price
-        except Exception:
-            return None
-    return None
+def _load_predictions(path: Path) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(path)
+    except FileNotFoundError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        raise RuntimeError(f"Failed to read predictions from {path}: {exc}") from exc
+
+    required = {"symbol", "timestamp", "score_5d"}
+    missing = required - set(df.columns)
+    if missing:
+        raise RuntimeError(f"Predictions file {path} missing columns: {sorted(missing)}")
+
+    df = df.dropna(subset=list(required))
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+    return df.reset_index(drop=True)
 
 
-def _attach_labels(preds: pd.DataFrame, trades: pd.DataFrame, horizon_days: int) -> pd.DataFrame:
-    if preds.empty or trades.empty:
-        return pd.DataFrame(columns=["symbol", "score", "run_date", "forward_return"])
-
-    trades = trades.dropna(subset=["symbol", "entry_time"])
-    if trades.empty:
-        return pd.DataFrame(columns=["symbol", "score", "run_date", "forward_return"])
-    trades = trades.sort_values("entry_time")
-
-    preds = preds.copy()
-    preds["symbol"] = preds["symbol"].astype(str).str.upper()
-    preds = preds.sort_values("run_date")
-
-    joined = pd.merge_asof(
-        preds,
-        trades,
-        left_on="run_date",
-        right_on="entry_time",
-        by="symbol",
-        direction="forward",
-        allow_exact_matches=True,
+def _merge(features: pd.DataFrame, preds: pd.DataFrame, label_column: str) -> pd.DataFrame:
+    merged = pd.merge(
+        preds.loc[:, ["symbol", "timestamp", "score_5d"]],
+        features.loc[:, ["symbol", "timestamp", label_column]],
+        on=["symbol", "timestamp"],
+        how="inner",
     )
-
-    cutoff = joined["run_date"] + pd.to_timedelta(horizon_days, unit="D")
-    joined = joined.loc[(joined["entry_time"] <= cutoff)]
-
-    joined["forward_return"] = joined.apply(_compute_forward_return, axis=1)
-    joined = joined.dropna(subset=["forward_return", "score", "run_date"])
-    return joined.loc[:, ["symbol", "score", "run_date", "forward_return"]]
+    merged = merged.dropna(subset=[label_column, "score_5d"])
+    merged[label_column] = pd.to_numeric(merged[label_column], errors="coerce")
+    merged["score_5d"] = pd.to_numeric(merged["score_5d"], errors="coerce")
+    merged = merged.dropna(subset=[label_column, "score_5d"])
+    return merged.reset_index(drop=True)
 
 
-def _compute_deciles(labeled: pd.DataFrame, cfg: EvalConfig) -> tuple[list[dict[str, Any]], str | None]:
-    if labeled.empty:
-        return [], "no labeled samples"
-
-    labeled = labeled.sort_values("score", ascending=False)
-    if len(labeled) < cfg.min_samples:
-        return [], f"insufficient samples (<{cfg.min_samples})"
+def _compute_deciles(df: pd.DataFrame, label_column: str) -> list[dict[str, Any]]:
+    if df.empty:
+        return []
 
     try:
-        bins = pd.qcut(labeled["score"], 10, labels=False, duplicates="drop")
-    except ValueError as exc:
-        return [], f"decile split failed: {exc}"
+        bins = pd.qcut(df["score_5d"], 10, labels=False, duplicates="drop")
+    except ValueError:
+        return []
 
-    if bins.isna().all():
-        return [], "decile split failed: insufficient unique scores"
-
-    max_bin = bins.max()
-    labeled["decile"] = (max_bin - bins) + 1
-    labeled["decile"] = labeled["decile"].astype(int)
+    df = df.copy()
+    df["decile"] = bins.fillna(-1).astype(int)
 
     results: list[dict[str, Any]] = []
-    for decile in range(1, 11):
-        subset = labeled.loc[labeled["decile"] == decile]
-        if subset.empty or len(subset) < cfg.min_per_decile:
-            results.append(
-                {
-                    "decile": decile,
-                    "count": int(len(subset)),
-                    "avg_return": None,
-                    "median_return": None,
-                    "hit_rate": None,
-                }
-            )
+    for decile, group in df.groupby("decile"):
+        if decile < 0:
             continue
-        returns = subset["forward_return"].astype(float)
-        hit_rate = float((returns > 0).mean())
         results.append(
             {
-                "decile": decile,
-                "count": int(len(subset)),
-                "avg_return": float(returns.mean()),
-                "median_return": float(returns.median()),
-                "hit_rate": hit_rate,
+                "decile": int(decile + 1),
+                "count": int(len(group)),
+                "avg_label": float(group[label_column].mean()),
+                "avg_score": float(group["score_5d"].mean()),
             }
         )
-    return results, None
+
+    results.sort(key=lambda x: x["decile"], reverse=True)
+    return results
 
 
-def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serialised = json.dumps(payload, indent=2, sort_keys=True)
-    path.write_text(serialised, encoding="utf-8")
+# ---------------------------------------------------------------------------
+# Core
+# ---------------------------------------------------------------------------
 
 
-def _append_history(path: Path, run_date: datetime, cfg: EvalConfig, deciles: Iterable[Mapping[str, Any]]) -> None:
-    if path is None:
-        return
-    rows = []
-    for dec in deciles:
-        rows.append(
-            {
-                "run_date": run_date.date().isoformat(),
-                "label_horizon_days": cfg.label_horizon,
-                "decile": dec.get("decile"),
-                "count": dec.get("count"),
-                "avg_return": dec.get("avg_return"),
-                "median_return": dec.get("median_return"),
-                "hit_rate": dec.get("hit_rate"),
-            }
-        )
-    if not rows:
-        return
-    frame = pd.DataFrame(rows)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        try:
-            existing = pd.read_csv(path)
-        except Exception:  # pragma: no cover - defensive read
-            existing = pd.DataFrame()
-        if not existing.empty:
-            frame = pd.concat([existing, frame], ignore_index=True)
-    write_csv_atomic(str(path), frame)
+def evaluate(args: EvalArgs) -> dict[str, Any]:
+    features = _load_features(args.features_path, args.label_column)
+    preds = _load_predictions(args.predictions_path)
+    merged = _merge(features, preds, args.label_column)
 
-
-def evaluate(cfg: EvalConfig) -> dict[str, Any]:
-    preds = _load_predictions(cfg.predictions_dir)
-    trades = _load_trades(cfg.executed_trades)
-    labeled = _attach_labels(preds, trades, cfg.label_horizon)
-    deciles, reason = _compute_deciles(labeled, cfg)
-
+    deciles = _compute_deciles(merged, args.label_column)
     payload: dict[str, Any] = {
-        "run_utc": datetime.now(timezone.utc).isoformat(),
-        "label_horizon_days": cfg.label_horizon,
-        "sample_size": int(len(labeled)),
+        "sample_size": int(len(merged)),
+        "label_column": args.label_column,
         "deciles": deciles,
     }
-    if reason:
-        payload["reason"] = reason
     return payload
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate ranker decile performance")
-    parser.add_argument("--label-horizon", type=int, default=5, help="Forward return horizon in days")
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def parse_args(argv: list[str] | None = None) -> EvalArgs:
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--predictions-dir",
+        "--features-path",
         type=Path,
-        default=BASE_DIR / "data" / "predictions",
-        help="Directory containing prediction CSV snapshots",
+        default=None,
+        help="Path to features CSV. Defaults to latest data/features/features_*.csv",
     )
     parser.add_argument(
-        "--executed-trades",
+        "--predictions-path",
         type=Path,
-        default=BASE_DIR / "data" / "executed_trades.csv",
-        help="CSV of executed trades with entry/exit info",
+        default=None,
+        help="Path to predictions CSV. Defaults to latest data/predictions/predictions_*.csv",
     )
     parser.add_argument(
-        "--output-json",
+        "--label-column",
+        type=str,
+        default=DEFAULT_LABEL,
+        help="Binary label column to evaluate",
+    )
+    parser.add_argument(
+        "--output-dir",
         type=Path,
-        default=BASE_DIR / "data" / "ranker_eval" / "latest.json",
-        help="Path to write JSON summary",
+        default=BASE_DIR / "data" / "ranker_eval",
+        help="Directory to write evaluation JSON",
     )
-    parser.add_argument(
-        "--output-history",
-        type=Path,
-        default=BASE_DIR / "data" / "ranker_eval" / "history.csv",
-        help="Path to append decile history (CSV)",
+    parsed = parser.parse_args(argv)
+
+    features_path = parsed.features_path
+    if features_path is None:
+        features_path = _find_latest(BASE_DIR / "data" / "features", "features_*.csv")
+        if features_path is None:
+            raise FileNotFoundError("No features files found in data/features")
+
+    predictions_path = parsed.predictions_path
+    if predictions_path is None:
+        predictions_path = _find_latest(BASE_DIR / "data" / "predictions", "predictions_*.csv")
+        if predictions_path is None:
+            raise FileNotFoundError("No predictions files found in data/predictions")
+
+    return EvalArgs(
+        features_path=features_path,
+        predictions_path=predictions_path,
+        label_column=parsed.label_column,
+        output_dir=parsed.output_dir,
     )
-    parser.add_argument("--min-samples", type=int, default=50, help="Minimum rows required to compute deciles")
-    parser.add_argument(
-        "--min-per-decile",
-        type=int,
-        default=5,
-        help="Minimum rows required per decile; deciles below this threshold emit nulls",
-    )
-    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv or sys.argv[1:])
-    cfg = EvalConfig(
-        label_horizon=int(args.label_horizon),
-        predictions_dir=Path(args.predictions_dir),
-        executed_trades=Path(args.executed_trades),
-        output_json=Path(args.output_json),
-        output_history=Path(args.output_history) if args.output_history else None,
-        min_samples=int(args.min_samples),
-        min_per_decile=int(args.min_per_decile),
-    )
-
-    LOG.info(
-        "[INFO] RANKER_EVAL start horizon=%s preds=%s trades=%s",
-        cfg.label_horizon,
-        cfg.predictions_dir,
-        cfg.executed_trades,
-    )
-    payload = evaluate(cfg)
     try:
-        _write_json(cfg.output_json, payload)
-        LOG.info(
-            "[INFO] RANKER_EVAL samples=%d deciles=%d output=%s",
-            payload.get("sample_size", 0),
-            len(payload.get("deciles") or []),
-            cfg.output_json,
-        )
-    except Exception as exc:  # pragma: no cover - defensive write
-        LOG.exception("Failed to write ranker_eval JSON: %s", exc)
+        args = parse_args(argv or sys.argv[1:])
+    except FileNotFoundError as exc:
+        LOG.error("%s", exc)
         return 1
 
+    LOG.info("Loading features from %s", args.features_path)
+    LOG.info("Loading predictions from %s", args.predictions_path)
+
     try:
-        _append_history(cfg.output_history, datetime.now(timezone.utc), cfg, payload.get("deciles") or [])
-    except Exception:  # pragma: no cover - defensive history write
-        LOG.warning("Failed to append ranker_eval history at %s", cfg.output_history, exc_info=True)
+        payload = evaluate(args)
+    except FileNotFoundError as exc:
+        LOG.error("%s", exc)
+        return 1
+    except Exception as exc:  # pragma: no cover - defensive
+        LOG.error("Evaluation failed: %s", exc)
+        return 1
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "latest.json"
+    with output_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+
+    LOG.info(
+        "Evaluation complete: samples=%d deciles=%d output=%s",
+        payload.get("sample_size", 0),
+        len(payload.get("deciles") or []),
+        output_path,
+    )
+
+    for dec in payload.get("deciles") or []:
+        LOG.info(
+            "Decile %d: count=%d avg_label=%.4f avg_score=%.4f",
+            dec["decile"],
+            dec["count"],
+            dec["avg_label"],
+            dec["avg_score"],
+        )
 
     return 0
 
