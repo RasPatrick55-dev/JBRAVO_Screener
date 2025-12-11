@@ -105,6 +105,7 @@ copyfile = shutil.copyfile
 emit = emit_event
 LATEST_COLUMNS = list(CANONICAL_COLUMNS)
 LATEST_HEADER = ",".join(LATEST_COLUMNS) + "\n"
+DEFAULT_LABELS_BARS_PATH = Path("data") / "daily_bars.csv"
 
 
 def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy hook
@@ -566,6 +567,13 @@ def _resolve_base_dir(base_dir: Path | None = None) -> Path:
     return BASE_DIR
 
 
+def _resolve_labels_bars_path(raw_path: str | Path, base_dir: Path) -> Path:
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = base_dir / path
+    return path
+
+
 def _count_csv_rows(path: Path) -> int:
     try:
         with path.open(newline="") as handle:
@@ -732,7 +740,10 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--steps",
         default=None,
-        help="Comma-separated list of steps to run (default: screener,backtest,metrics,ranker_eval)",
+        help=(
+            "Comma-separated list of steps to run (default: screener,backtest,metrics,ranker_eval). "
+            "Include 'labels' to generate label CSVs."
+        ),
     )
     parser.add_argument(
         "--reload-web",
@@ -789,6 +800,14 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         nargs="*",
         default=None,
         help="Extra CLI arguments for scripts.metrics provided as separate tokens",
+    )
+    parser.add_argument(
+        "--labels-bars-path",
+        default=str(DEFAULT_LABELS_BARS_PATH),
+        help=(
+            "Path to a daily bars CSV used by the optional labels step "
+            "(default: data/daily_bars.csv)"
+        ),
     )
     parser.add_argument(
         "--ranker-eval-args",
@@ -1432,6 +1451,24 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if rc_metrics:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
             _sync_top_candidates_to_latest(base_dir)
+        if "labels" in steps:
+            current_step = "labels"
+            bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
+            if not bars_path.exists():
+                LOG.warning("[WARN] LABELS_SKIPPED missing_bars=%s", bars_path)
+                stage_times["labels"] = 0.0
+                step_rcs["labels"] = 0
+            elif rc != 0:
+                LOG.warning("[WARN] LABELS_SKIPPED reason=prior_failure bars_path=%s", bars_path)
+                stage_times["labels"] = 0.0
+                step_rcs["labels"] = rc
+            else:
+                cmd = [sys.executable, "-m", "scripts.label_generator", "--bars-path", str(bars_path)]
+                rc_labels, secs = run_step("labels", cmd, timeout=60 * 5)
+                stage_times["labels"] = secs
+                step_rcs["labels"] = rc_labels
+                if rc_labels:
+                    LOG.warning("[WARN] LABELS_STEP rc=%s (continuing)", rc_labels)
         if "ranker_eval" in steps:
             current_step = "ranker_eval"
             cmd = [sys.executable, "-m", "scripts.ranker_eval"]
