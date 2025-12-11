@@ -567,8 +567,8 @@ def _resolve_base_dir(base_dir: Path | None = None) -> Path:
     return BASE_DIR
 
 
-def _resolve_labels_bars_path(raw_path: str | Path, base_dir: Path) -> Path:
-    path = Path(raw_path)
+def _resolve_labels_bars_path(raw_path: str | Path | None, base_dir: Path) -> Path:
+    path = Path(raw_path or DEFAULT_LABELS_BARS_PATH)
     if not path.is_absolute():
         path = base_dir / path
     return path
@@ -803,7 +803,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--labels-bars-path",
-        default=str(DEFAULT_LABELS_BARS_PATH),
+        default=None,
         help=(
             "Path to a daily bars CSV used by the optional labels step "
             "(default: data/daily_bars.csv)"
@@ -1464,7 +1464,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 step_rcs["labels"] = rc
             else:
                 cmd = [sys.executable, "-m", "scripts.label_generator", "--bars-path", str(bars_path)]
+                LOG.info("[INFO] LABELS_START path=%s", bars_path)
                 rc_labels, secs = run_step("labels", cmd, timeout=60 * 5)
+                LOG.info(
+                    "[INFO] LABELS_END path=%s rc=%s secs=%.2f",
+                    bars_path,
+                    rc_labels,
+                    secs,
+                )
                 stage_times["labels"] = secs
                 step_rcs["labels"] = rc_labels
                 if rc_labels:

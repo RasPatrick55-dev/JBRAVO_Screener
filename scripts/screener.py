@@ -582,6 +582,43 @@ def _symbol_count(frame: Optional[pd.DataFrame]) -> int:
         return int(frame["symbol"].nunique())
 
 
+def _export_daily_bars_csv(
+    frame: Optional[pd.DataFrame], export_path: Path, base_dir: Path
+) -> Optional[Path]:
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return None
+
+    required_cols = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+    missing = [col for col in required_cols if col not in frame.columns]
+    if missing:
+        LOGGER.warning(
+            "[WARN] DAILY_BARS_EXPORT_SKIPPED missing_columns=%s", ",".join(missing)
+        )
+        return None
+
+    target = export_path
+    if not target.is_absolute():
+        target = base_dir / target
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        bars_frame = frame.copy()
+        bars_frame = bars_frame[required_cols].copy()
+        bars_frame["symbol"] = bars_frame["symbol"].astype("string").str.upper()
+        bars_frame.sort_values(["symbol", "timestamp"], inplace=True)
+        _write_csv_atomic(target, bars_frame)
+        LOGGER.info(
+            "[INFO] DAILY_BARS_EXPORTED path=%s rows=%d symbols=%d",
+            target,
+            int(bars_frame.shape[0]),
+            _symbol_count(bars_frame),
+        )
+        return target
+    except Exception:
+        LOGGER.exception("DAILY_BARS_EXPORT_FAILED path=%s", target)
+        return None
+
+
 def _write_stage_snapshot(
     filename: str,
     payload: Mapping[str, object],
@@ -5048,6 +5085,10 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Skip remote bars fetch and reuse cached data (default: false)",
     )
     parser.add_argument(
+        "--export-daily-bars-path",
+        help="Optional path to write fetched daily bars as CSV (default: disabled)",
+    )
+    parser.add_argument(
         "--refresh-latest",
         choices=["true", "false"],
         default="true",
@@ -5250,6 +5291,9 @@ def main(
             },
             base_dir=base_dir,
         )
+        export_target = getattr(args, "export_daily_bars_path", None)
+        if export_target:
+            _export_daily_bars_csv(frame, Path(export_target), base_dir)
         ranker_path = getattr(args, "ranker_config", RANKER_CONFIG_PATH)
         base_ranker_cfg = _load_ranker_config(ranker_path)
 
