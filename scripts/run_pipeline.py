@@ -14,7 +14,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone, date
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Tuple
 from types import SimpleNamespace
 import zoneinfo
 
@@ -106,6 +106,8 @@ emit = emit_event
 LATEST_COLUMNS = list(CANONICAL_COLUMNS)
 LATEST_HEADER = ",".join(LATEST_COLUMNS) + "\n"
 DEFAULT_LABELS_BARS_PATH = Path("data") / "daily_bars.csv"
+DEFAULT_RANKER_SCORE_COLUMN = "score_5d"
+DEFAULT_RANKER_TARGET_COLUMN = "model_score_5d"
 
 
 def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy hook
@@ -688,6 +690,97 @@ def run_cmd(cmd: Sequence[str], name: str) -> int:
         return exc.returncode
 
 
+def _should_enrich_candidates(args: argparse.Namespace, steps: Sequence[str]) -> bool:
+    return bool(
+        getattr(args, "enrich_candidates_with_ranker", False)
+        or "ranker_eval" in steps
+        or "predict" in steps
+    )
+
+
+def _find_latest_predictions_path(base_dir: Path) -> Path | None:
+    predictions_dir = base_dir / "data" / "predictions"
+    if not predictions_dir.exists():
+        return None
+    try:
+        candidates = sorted(predictions_dir.glob("predictions_*.csv"))
+    except Exception:
+        LOG.exception("PREDICTIONS_GLOB_FAILED dir=%s", predictions_dir)
+        return None
+    if not candidates:
+        return None
+    try:
+        return max(candidates, key=lambda path: path.stat().st_mtime)
+    except Exception:
+        LOG.exception("PREDICTIONS_STAT_FAILED dir=%s", predictions_dir)
+        return None
+
+
+def _prepare_predictions_frame(
+    predictions_path: Path, score_column: str = DEFAULT_RANKER_SCORE_COLUMN
+) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(predictions_path)
+    except Exception:
+        LOG.exception("PREDICTIONS_READ_FAILED path=%s", predictions_path)
+        return pd.DataFrame(columns=["symbol", score_column])
+    if df.empty or "symbol" not in df.columns or score_column not in df.columns:
+        return pd.DataFrame(columns=["symbol", score_column])
+    working = df.copy()
+    if "timestamp" in working.columns:
+        working["__pred_ts__"] = pd.to_datetime(working["timestamp"], errors="coerce")
+        working.sort_values(by="__pred_ts__", inplace=True)
+    working.drop(columns=["__pred_ts__"], errors="ignore", inplace=True)
+    working = working.drop_duplicates(subset=["symbol"], keep="last")
+    return working[["symbol", score_column]]
+
+
+def enrich_candidates_with_predictions(
+    base_dir: Path | None = None,
+    *,
+    score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
+    target_column: str = DEFAULT_RANKER_TARGET_COLUMN,
+) -> Tuple[int, int] | None:
+    base = _resolve_base_dir(base_dir)
+    latest_path = base / "data" / "latest_candidates.csv"
+    if not latest_path.exists() or latest_path.stat().st_size <= 0:
+        LOG.warning("[WARN] CANDIDATE_ENRICHMENT_SKIPPED reason=no_candidates")
+        return None
+    predictions_path = _find_latest_predictions_path(base)
+    if predictions_path is None:
+        LOG.warning("[WARN] CANDIDATE_ENRICHMENT_SKIPPED reason=predictions_missing")
+        return None
+    predictions = _prepare_predictions_frame(predictions_path, score_column)
+    if predictions.empty:
+        LOG.warning("[WARN] CANDIDATE_ENRICHMENT_SKIPPED reason=predictions_empty")
+        return None
+    try:
+        candidates = pd.read_csv(latest_path)
+    except Exception:
+        LOG.exception("CANDIDATES_READ_FAILED path=%s", latest_path)
+        return None
+    if candidates.empty:
+        LOG.warning("[WARN] CANDIDATE_ENRICHMENT_SKIPPED reason=candidates_empty")
+        return None
+    renamed = predictions.rename(columns={score_column: target_column})
+    merged = candidates.merge(renamed[["symbol", target_column]], on="symbol", how="left")
+    matched = int(merged[target_column].notna().sum()) if target_column in merged.columns else 0
+    ordered: list[str] = list(CANONICAL_COLUMNS)
+    ordered.extend(col for col in candidates.columns if col not in ordered)
+    ordered = [col for col in ordered if col in merged.columns and col != target_column]
+    ordered.append(target_column)
+    merged = merged[ordered]
+    write_csv_atomic(str(latest_path), merged)
+    LOG.info(
+        "[INFO] CANDIDATES_ENRICHED model_score_column=%s rows=%s matched=%s predictions_path=%s",
+        target_column,
+        len(merged.index),
+        matched,
+        predictions_path.name,
+    )
+    return len(merged.index), matched
+
+
 def emit_metric(*args: Any, **kwargs: Any) -> None:  # pragma: no cover - legacy hook
     return None
 
@@ -877,6 +970,14 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         nargs="*",
         default=None,
         help="Extra CLI arguments for scripts.ranker_eval provided as separate tokens",
+    )
+    parser.add_argument(
+        "--enrich-candidates-with-ranker",
+        action="store_true",
+        help=(
+            "Append model scores from the latest predictions file onto latest_candidates.csv. "
+            "Runs automatically when ranker_eval is in --steps."
+        ),
     )
     raw_args = list(argv) if argv is not None else sys.argv[1:]
     option_strings = set(parser._option_string_actions.keys())
@@ -1500,6 +1601,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if rc_metrics:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
             _sync_top_candidates_to_latest(base_dir)
+            if _should_enrich_candidates(args, steps):
+                try:
+                    enrich_candidates_with_predictions(
+                        base_dir,
+                        score_column=DEFAULT_RANKER_SCORE_COLUMN,
+                        target_column=DEFAULT_RANKER_TARGET_COLUMN,
+                    )
+                except Exception:
+                    LOG.exception("CANDIDATE_ENRICHMENT_FAILED (continuing)")
         if "labels" in steps:
             current_step = "labels"
             bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
