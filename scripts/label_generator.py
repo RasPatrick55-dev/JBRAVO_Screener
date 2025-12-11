@@ -49,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--threshold-percent",
+        dest="threshold_pct",
         type=float,
         default=3.0,
         help=(
@@ -139,7 +140,7 @@ def main() -> None:
     bars_df = bars_df.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
 
     with_returns = compute_forward_returns(bars_df, args.horizons)
-    labeled = add_labels(with_returns, args.horizons, args.threshold_percent)
+    labeled = add_labels(with_returns, args.horizons, args.threshold_pct)
 
     as_of_date = determine_as_of_date(labeled)
     output_dir: Path = args.output_dir
