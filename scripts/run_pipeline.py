@@ -1313,7 +1313,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         LOG.error("[ERROR] ENV_MISSING_KEYS=%s", f"[{', '.join(missing_keys)}]")
         raise SystemExit(2)
     args = parse_args(argv)
-    steps = determine_steps(args.steps)
+    steps = tuple(determine_steps(args.steps))
     LOG.info("[INFO] PIPELINE_START steps=%s", ",".join(steps))
 
     _ensure_latest_headers()
@@ -1520,16 +1520,27 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     "--output-dir",
                     str(labels_output_dir),
                 ]
+                labels_path: Path | None = None
+                labels_rows = 0
+                rc_labels = 0
+                secs = 0.0
                 LOG.info("[INFO] START labels bars_path=%s", bars_path)
                 LOG.info("[INFO] LABELS_START bars_path=%s", bars_path)
-                rc_labels, secs = run_step("labels", cmd, timeout=60 * 5)
-                labels_path = _detect_new_labels_file(labels_output_dir, labels_before)
-                labels_rows = _count_csv_lines(labels_path) if labels_path else 0
-                LOG.info(
-                    "[INFO] LABELS_END labels_path=%s rows=%s",
-                    labels_path or "unknown",
-                    labels_rows,
-                )
+                try:
+                    rc_labels, secs = run_step("labels", cmd, timeout=60 * 5)
+                    try:
+                        labels_path = _detect_new_labels_file(labels_output_dir, labels_before)
+                        labels_rows = _count_csv_lines(labels_path) if labels_path else 0
+                    except Exception:
+                        LOG.exception(
+                            "LABELS_DETECT_FAILED output_dir=%s", labels_output_dir
+                        )
+                finally:
+                    LOG.info(
+                        "[INFO] LABELS_END labels_path=%s rows=%s",
+                        labels_path or "unknown",
+                        labels_rows,
+                    )
                 stage_times["labels"] = secs
                 step_rcs["labels"] = rc_labels
                 if rc_labels:
