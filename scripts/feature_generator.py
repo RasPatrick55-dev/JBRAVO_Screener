@@ -99,7 +99,8 @@ def _load_labels(labels_path: Path) -> pd.DataFrame:
     labels = _load_csv(labels_path)
     _require_columns(labels, LABEL_COLUMNS)
 
-    labels = labels[LABEL_COLUMNS].copy()
+    labels = labels.copy()
+    labels["timestamp"] = pd.to_datetime(labels["timestamp"], utc=True)
     return labels.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
 
 
@@ -140,8 +141,9 @@ def build_feature_set(bars_path: Path, labels_path: Path, keep_na: bool) -> pd.D
     bars = _prepare_bars(bars_path)
     labels = _load_labels(labels_path)
 
+    label_subset = labels[LABEL_COLUMNS].copy()
     features = _compute_features(bars)
-    merged = features.merge(labels, on=["symbol", "timestamp"], how="inner")
+    merged = features.merge(label_subset, on=["symbol", "timestamp"], how="inner")
 
     if merged.empty:
         raise ValueError(
