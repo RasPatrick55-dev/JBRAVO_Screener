@@ -65,21 +65,29 @@ class ModelUnavailableError(RuntimeError):
     """Raised when no supported model implementation is available."""
 
 
+def _ensure_sklearn_available():
+    if not SKLEARN_AVAILABLE:
+        raise ModelUnavailableError(MISSING_SKLEARN_ERR)
+
+
 # Lazy imports to allow graceful degradation if sklearn is not installed
 try:  # pragma: no cover - environment-dependent
-    from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+    from sklearn.ensemble import RandomForestClassifier
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import accuracy_score, roc_auc_score
     from sklearn.preprocessing import StandardScaler
     import joblib
+    SKLEARN_AVAILABLE = True
 except Exception:  # pragma: no cover - environment-dependent
-    GradientBoostingClassifier = None
     RandomForestClassifier = None
     LogisticRegression = None
     accuracy_score = None
     roc_auc_score = None
     StandardScaler = None
     joblib = None
+    SKLEARN_AVAILABLE = False
+
+MISSING_SKLEARN_ERR = "RANKER_TRAIN: scikit-learn not available; install requirements.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -120,16 +128,22 @@ def _load_features(path: Path, label_column: str) -> pd.DataFrame:
 
 
 def _choose_model():
-    if GradientBoostingClassifier is not None:
-        LOG.info("Using GradientBoostingClassifier")
-        return GradientBoostingClassifier(random_state=42)
-    if RandomForestClassifier is not None:
-        LOG.info("Using RandomForestClassifier")
-        return RandomForestClassifier(n_estimators=200, random_state=42)
+    _ensure_sklearn_available()
+
     if LogisticRegression is not None:
-        LOG.info("Using LogisticRegression as fallback")
-        return LogisticRegression(max_iter=500)
-    raise ModelUnavailableError("No supported model classes available; please install scikit-learn.")
+        LOG.info("Using LogisticRegression (lbfgs, max_iter=200)")
+        return LogisticRegression(max_iter=200, solver="lbfgs")
+
+    if RandomForestClassifier is not None:
+        LOG.info("Using RandomForestClassifier (n_estimators=100, max_depth=5)")
+        return RandomForestClassifier(
+            n_estimators=100,
+            max_depth=5,
+            n_jobs=-1,
+            random_state=42,
+        )
+
+    raise ModelUnavailableError(MISSING_SKLEARN_ERR)
 
 
 def _train_model(df: pd.DataFrame, label_column: str):
@@ -332,6 +346,17 @@ def main(argv: list[str] | None = None) -> int:
     metrics = _compute_metrics(val_probs, y_val)
     metrics["train_size"] = train_size
     metrics["val_size"] = val_size
+
+    accuracy_display = metrics.get("accuracy")
+    auc_display = metrics.get("auc")
+    LOG.info(
+        "Features=%s | Train=%s | Val=%s | Accuracy=%s | AUC=%s",
+        args.features_path,
+        train_size,
+        val_size,
+        f"{accuracy_display:.4f}" if accuracy_display is not None else "n/a",
+        f"{auc_display:.4f}" if auc_display not in (None, "nan") else "n/a",
+    )
 
     snapshot_date = _extract_features_date(args.features_path)
     try:
