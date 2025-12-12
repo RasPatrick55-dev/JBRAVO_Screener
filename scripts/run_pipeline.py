@@ -859,37 +859,57 @@ def _enrich_candidates_with_ranker(
     return len(merged.index), matched
 
 
-def _rerank_candidates_with_model_score(path: Path) -> None:
-    candidates_path = Path(path)
+def _rerank_latest_candidates(
+    base_dir: Path, *, primary: str = "model_score_5d", secondary: str = "score"
+) -> bool:
+    """
+    Load data/latest_candidates.csv, verify primary column exists,
+    sort descending by primary then secondary, write back safely.
+    Returns True if reranked, False if skipped.
+    """
+
+    candidates_path = Path(base_dir) / "data" / "latest_candidates.csv"
     try:
         frame = pd.read_csv(candidates_path)
     except Exception as exc:  # pragma: no cover - defensive read
-        LOG.warning("[WARN] CANDIDATES_RERANK_FAILED error=%s", exc, exc_info=True)
-        return
+        LOG.warning(
+            "[WARN] CANDIDATES_RERANK_FAILED error=%s candidates_path=%s",
+            exc,
+            candidates_path,
+            exc_info=True,
+        )
+        return False
 
-    if "model_score_5d" not in frame.columns:
+    if primary not in frame.columns:
         LOG.warning(
             "[WARN] CANDIDATES_RERANK_SKIPPED reason=missing_model_score candidates_path=%s",
             candidates_path,
         )
-        return
+        return False
 
     try:
-        ordered: list[str] = list(CANONICAL_COLUMNS)
-        ordered.extend(col for col in frame.columns if col not in ordered)
-        frame = frame[ordered]
         sorted_frame = frame.sort_values(
-            by=["model_score_5d", "score"], ascending=[False, False], kind="mergesort"
+            by=[primary, secondary],
+            ascending=[False, False],
+            kind="mergesort",
         )
         write_csv_atomic(str(candidates_path), sorted_frame)
     except Exception as exc:  # pragma: no cover - defensive sort/write
-        LOG.warning("[WARN] CANDIDATES_RERANK_FAILED error=%s", exc, exc_info=True)
-        return
+        LOG.warning(
+            "[WARN] CANDIDATES_RERANK_FAILED error=%s candidates_path=%s",
+            exc,
+            candidates_path,
+            exc_info=True,
+        )
+        return False
 
     LOG.info(
-        "[INFO] CANDIDATES_RERANKED primary=model_score_5d secondary=score rows=%s",
+        "[INFO] CANDIDATES_RERANKED primary=%s secondary=%s rows=%s",
+        primary,
+        secondary,
         len(sorted_frame.index),
     )
+    return True
 
 
 def emit_metric(*args: Any, **kwargs: Any) -> None:  # pragma: no cover - legacy hook
@@ -1787,7 +1807,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 score_column=DEFAULT_RANKER_SCORE_COLUMN,
                 target_column=DEFAULT_RANKER_TARGET_COLUMN,
             )
-            _rerank_candidates_with_model_score(base_dir / "data" / "latest_candidates.csv")
+            _rerank_latest_candidates(base_dir)
         if "execute" in steps:
             current_step = "execute"
             min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
