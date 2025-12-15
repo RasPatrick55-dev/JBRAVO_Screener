@@ -47,9 +47,10 @@ running on cron-like systems.
 
 ## ML data pipeline (Stage 0–2)
 
-* Stage 0 (bars) runs `python -m scripts.run_pipeline --steps screener,backtest,metrics --export-daily-bars-path data/daily_bars.csv` to emit `data/daily_bars.csv`.
-* Stage 1 (labels) runs `python -m scripts.label_generator --bars-path data/daily_bars.csv --output-dir data/labels --horizons 5 10 --threshold-percent 3.0` to write `data/labels/labels_<date>.csv`.
-* Stage 2 (features) runs `python -m scripts.feature_generator --bars-path data/daily_bars.csv` to write `data/features/features_<date>.csv` and should follow the labels job closely so both stages share the same bars snapshot.
+* Stage 0 (bars) runs `python -m scripts.run_pipeline --steps screener,backtest,metrics --export-daily-bars-path data/daily_bars.csv` to emit `data/daily_bars.csv`. The export always writes atomically and logs `[INFO] DAILY_BARS_EXPORTED path=<...> rows=<...> symbols=<...>` when the flag is provided.
+* Stage 1 (labels) runs `python -m scripts.label_generator --bars-path data/daily_bars.csv --output-dir data/labels --horizons 5 10 --threshold-percent 3.0` to write `data/labels/labels_<RUNDATE>.csv` using the current America/New_York date instead of the max bar date (stale bars warn via `[WARN] LABELS_INPUT_STALE …`).
+* Stage 2 (features) runs `python -m scripts.feature_generator --bars-path data/daily_bars.csv` to write `data/features/features_<RUNDATE>.csv` on the same run date and surfaces `[WARN] FEATURES_*_STALE …` if the inputs lag the run day.
+* The nightly rerank step writes `data/nightly_ml_status.json` to snapshot the freshest bars/labels/features/model/predictions/eval artifacts.
 
 ## Environment Expectations
 

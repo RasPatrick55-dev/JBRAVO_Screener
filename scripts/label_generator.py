@@ -16,13 +16,17 @@ Another example with custom thresholds and horizons:
 from __future__ import annotations
 
 import argparse
+import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 
 REQUIRED_COLUMNS = {"symbol", "timestamp", "close"}
+RUN_TZ = ZoneInfo("America/New_York")
 
 
 def parse_args() -> argparse.Namespace:
@@ -119,18 +123,33 @@ def load_bars(path: Path) -> pd.DataFrame:
 
     df = pd.read_csv(path)
     if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     return df
 
 
-def determine_as_of_date(df: pd.DataFrame) -> str:
-    latest_timestamp = df["timestamp"].max()
+def _current_run_date() -> datetime.date:
+    try:
+        return datetime.now(RUN_TZ).date()
+    except Exception:
+        return datetime.now(timezone.utc).date()
+
+
+def _latest_timestamp_date(df: pd.DataFrame) -> datetime.date | None:
+    if "timestamp" not in df.columns or df.empty:
+        return None
+
+    latest_timestamp = pd.to_datetime(df["timestamp"], utc=True, errors="coerce").max()
     if pd.isna(latest_timestamp):
-        raise ValueError("Unable to determine as-of date because timestamp column is empty or invalid.")
-    return latest_timestamp.date().strftime("%Y%m%d")
+        return None
+
+    try:
+        return latest_timestamp.tz_convert(RUN_TZ).date()
+    except Exception:
+        return latest_timestamp.date()
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
     args = parse_args()
 
     bars_df = load_bars(args.bars_path)
@@ -142,13 +161,22 @@ def main() -> None:
     with_returns = compute_forward_returns(bars_df, args.horizons)
     labeled = add_labels(with_returns, args.horizons, args.threshold_pct)
 
-    as_of_date = determine_as_of_date(labeled)
+    run_date = _current_run_date()
+    latest_bar_date = _latest_timestamp_date(labeled)
+    if latest_bar_date and latest_bar_date < run_date:
+        logging.warning(
+            "[WARN] LABELS_INPUT_STALE latest_bar_date=%s run_date=%s bars_path=%s",
+            latest_bar_date,
+            run_date,
+            args.bars_path,
+        )
+
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"labels_{as_of_date}.csv"
+    output_path = output_dir / f"labels_{run_date.strftime('%Y%m%d')}.csv"
 
     labeled.to_csv(output_path, index=False)
-    print(f"Labels written to {output_path}")
+    logging.info("[INFO] LABELS_WRITTEN path=%s rows=%d", output_path, int(labeled.shape[0]))
 
 
 if __name__ == "__main__":

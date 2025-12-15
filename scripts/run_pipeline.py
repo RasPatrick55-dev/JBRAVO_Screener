@@ -128,6 +128,66 @@ def _write_json(path: Path | str, payload: Mapping[str, Any]) -> None:
         LOG.exception("PIPELINE_JSON_WRITE_FAILED path=%s", target)
 
 
+def _latest_by_glob(directory: Path, pattern: str) -> Path | None:
+    try:
+        candidates = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        LOG.exception("ARTIFACT_GLOB_FAILED dir=%s pattern=%s", directory, pattern)
+        return None
+    return candidates[-1] if candidates else None
+
+
+def _artifact_payload(path: Path | None) -> dict[str, object]:
+    payload: dict[str, object] = {"path": None, "modified": None}
+    if path is None:
+        return payload
+
+    payload["path"] = str(path)
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return payload
+    except Exception:
+        LOG.exception("ARTIFACT_STAT_FAILED path=%s", path)
+        return payload
+
+    payload["modified"] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+    return payload
+
+
+def _write_nightly_ml_status(base_dir: Path) -> None:
+    data_dir = Path(base_dir) / "data"
+    payload = {
+        "written_at": datetime.now(timezone.utc).isoformat(),
+        "bars": _artifact_payload(data_dir / "daily_bars.csv"),
+        "labels": _artifact_payload(
+            _latest_by_glob(data_dir / "labels", "labels_*.csv")
+        ),
+        "features": _artifact_payload(
+            _latest_by_glob(data_dir / "features", "features_*.csv")
+        ),
+        "model": _artifact_payload(
+            _latest_by_glob(data_dir / "models", "ranker_*.pkl")
+        ),
+        "predictions": _artifact_payload(
+            _latest_by_glob(data_dir / "predictions", "predictions_*.csv")
+        ),
+        "eval": _artifact_payload(
+            _latest_by_glob(data_dir / "ranker_eval", "*.json")
+        ),
+    }
+
+    try:
+        _write_json(data_dir / "nightly_ml_status.json", payload)
+        LOG.info(
+            "[INFO] NIGHTLY_ML_STATUS_WRITTEN path=%s", data_dir / "nightly_ml_status.json"
+        )
+    except Exception:
+        LOG.exception("NIGHTLY_ML_STATUS_WRITE_FAILED")
+
+
 _PROBE_SYMBOLS = ("SPY", "AAPL")
 
 
@@ -871,6 +931,36 @@ def _rerank_latest_candidates(
     candidates_path = Path(base_dir) / "data" / "latest_candidates.csv"
     try:
         frame = pd.read_csv(candidates_path)
+        if primary not in frame.columns:
+            LOG.warning(
+                "[WARN] CANDIDATES_RERANK_SKIPPED reason=missing_model_score candidates_path=%s",
+                candidates_path,
+            )
+            return False
+
+        try:
+            sorted_frame = frame.sort_values(
+                by=[primary, secondary],
+                ascending=[False, False],
+                kind="mergesort",
+            )
+            write_csv_atomic(str(candidates_path), sorted_frame)
+        except Exception as exc:  # pragma: no cover - defensive sort/write
+            LOG.warning(
+                "[WARN] CANDIDATES_RERANK_FAILED error=%s candidates_path=%s",
+                exc,
+                candidates_path,
+                exc_info=True,
+            )
+            return False
+
+        LOG.info(
+            "[INFO] CANDIDATES_RERANKED primary=%s secondary=%s rows=%s",
+            primary,
+            secondary,
+            len(sorted_frame.index),
+        )
+        return True
     except Exception as exc:  # pragma: no cover - defensive read
         LOG.warning(
             "[WARN] CANDIDATES_RERANK_FAILED error=%s candidates_path=%s",
@@ -879,37 +969,11 @@ def _rerank_latest_candidates(
             exc_info=True,
         )
         return False
-
-    if primary not in frame.columns:
-        LOG.warning(
-            "[WARN] CANDIDATES_RERANK_SKIPPED reason=missing_model_score candidates_path=%s",
-            candidates_path,
-        )
-        return False
-
-    try:
-        sorted_frame = frame.sort_values(
-            by=[primary, secondary],
-            ascending=[False, False],
-            kind="mergesort",
-        )
-        write_csv_atomic(str(candidates_path), sorted_frame)
-    except Exception as exc:  # pragma: no cover - defensive sort/write
-        LOG.warning(
-            "[WARN] CANDIDATES_RERANK_FAILED error=%s candidates_path=%s",
-            exc,
-            candidates_path,
-            exc_info=True,
-        )
-        return False
-
-    LOG.info(
-        "[INFO] CANDIDATES_RERANKED primary=%s secondary=%s rows=%s",
-        primary,
-        secondary,
-        len(sorted_frame.index),
-    )
-    return True
+    finally:
+        try:
+            _write_nightly_ml_status(base_dir)
+        except Exception:
+            LOG.exception("NIGHTLY_ML_STATUS_SNAPSHOT_FAILED base_dir=%s", base_dir)
 
 
 def emit_metric(*args: Any, **kwargs: Any) -> None:  # pragma: no cover - legacy hook

@@ -11,10 +11,10 @@
 
 ### Nightly ML data pipeline (Stage 0–2)
 
-* Stage 0 (bars) runs at **10:50 UTC**: `python -m scripts.run_pipeline --steps screener,backtest,metrics --export-daily-bars-path data/daily_bars.csv` to emit `data/daily_bars.csv` for downstream ML.
-* Stage 1 (labels) runs at **10:58 UTC**: `python -m scripts.label_generator --bars-path data/daily_bars.csv --output-dir data/labels --horizons 5 10 --threshold-percent 3.0` writes `data/labels/labels_<date>.csv`.
-* Stage 2 (features) runs at **11:05 UTC**: `python -m scripts.feature_generator --bars-path data/daily_bars.csv` produces `data/features/features_<date>.csv`.
-* The three stages form the ML data pipeline (Stage 0: bars, Stage 1: labels, Stage 2: features) and must run in order because labels and features depend on the exported daily bars.
+* Stage 0 (bars) runs at **10:50 UTC**: `python -m scripts.run_pipeline --steps screener,backtest,metrics --export-daily-bars-path data/daily_bars.csv` to emit `data/daily_bars.csv` for downstream ML. The export always writes atomically and logs `[INFO] DAILY_BARS_EXPORTED path=<...> rows=<...> symbols=<...>` when the flag is provided (even if the frame is empty).
+* Stage 1 (labels) runs at **10:58 UTC**: `python -m scripts.label_generator --bars-path data/daily_bars.csv --output-dir data/labels --horizons 5 10 --threshold-percent 3.0` writes `data/labels/labels_<RUNDATE>.csv` where `RUNDATE` is the current America/New_York date (stale bars trigger a `[WARN] LABELS_INPUT_STALE …` log rather than shifting the filename to the bars’ max date).
+* Stage 2 (features) runs at **11:05 UTC**: `python -m scripts.feature_generator --bars-path data/daily_bars.csv` produces `data/features/features_<RUNDATE>.csv` using the same run date and logs `[WARN] FEATURES_*_STALE …` if either bars or labels lag behind the run day.
+* The three stages form the ML data pipeline (Stage 0: bars, Stage 1: labels, Stage 2: features) and must run in order because labels and features depend on the exported daily bars. The nightly rerank step also writes `data/nightly_ml_status.json` summarizing the freshest bars/labels/features/model/predictions/eval artifacts.
 
 ### Stage 2 ML: feature generator
 
