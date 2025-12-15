@@ -938,10 +938,15 @@ def _rerank_latest_candidates(
             )
             return False
 
+        primary_numeric = pd.to_numeric(frame[primary], errors="coerce")
+        nan_scores = int(primary_numeric.isna().sum())
+        frame[primary] = primary_numeric
+
         try:
             sorted_frame = frame.sort_values(
                 by=[primary, secondary],
                 ascending=[False, False],
+                na_position="last",
                 kind="mergesort",
             )
             write_csv_atomic(str(candidates_path), sorted_frame)
@@ -955,9 +960,10 @@ def _rerank_latest_candidates(
             return False
 
         LOG.info(
-            "[INFO] CANDIDATES_RERANKED primary=%s secondary=%s rows=%s",
+            "[INFO] CANDIDATES_RERANKED primary=%s secondary=%s nan_scores=%s rows=%s",
             primary,
             secondary,
+            nan_scores,
             len(sorted_frame.index),
         )
         return True
