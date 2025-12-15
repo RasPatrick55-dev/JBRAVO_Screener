@@ -585,16 +585,7 @@ def _symbol_count(frame: Optional[pd.DataFrame]) -> int:
 def _export_daily_bars_csv(
     frame: Optional[pd.DataFrame], export_path: Path, base_dir: Path
 ) -> Optional[Path]:
-    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
-        return None
-
     required_cols = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
-    missing = [col for col in required_cols if col not in frame.columns]
-    if missing:
-        LOGGER.warning(
-            "[WARN] DAILY_BARS_EXPORT_SKIPPED missing_columns=%s", ",".join(missing)
-        )
-        return None
 
     target = export_path
     if not target.is_absolute():
@@ -602,10 +593,21 @@ def _export_daily_bars_csv(
     target.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        bars_frame = frame.copy()
-        bars_frame = bars_frame[required_cols].copy()
-        bars_frame["symbol"] = bars_frame["symbol"].astype("string").str.upper()
-        bars_frame.sort_values(["symbol", "timestamp"], inplace=True)
+        if frame is None or not isinstance(frame, pd.DataFrame):
+            bars_frame = pd.DataFrame(columns=required_cols)
+            LOGGER.warning("[WARN] DAILY_BARS_EXPORT_EMPTY reason=no_frame path=%s", target)
+        else:
+            bars_frame = frame.copy()
+            missing = [col for col in required_cols if col not in bars_frame.columns]
+            if missing:
+                LOGGER.warning(
+                    "[WARN] DAILY_BARS_EXPORT_MISSING_COLUMNS missing=%s path=%s",
+                    ",".join(missing),
+                    target,
+                )
+            bars_frame = bars_frame.reindex(columns=required_cols)
+            bars_frame["symbol"] = bars_frame["symbol"].astype("string").str.upper()
+            bars_frame.sort_values(["symbol", "timestamp"], inplace=True)
         _write_csv_atomic(target, bars_frame)
         LOGGER.info(
             "[INFO] DAILY_BARS_EXPORTED path=%s rows=%d symbols=%d",

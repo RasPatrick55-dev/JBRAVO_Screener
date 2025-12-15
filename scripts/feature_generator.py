@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Tuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -20,6 +22,7 @@ LABEL_COLUMNS = [
     "label_5d_pos_300bp",
     "label_10d_pos_300bp",
 ]
+RUN_TZ = ZoneInfo("America/New_York")
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,6 +59,27 @@ def parse_args() -> argparse.Namespace:
         help="Keep rows with NaNs in the output instead of dropping them.",
     )
     return parser.parse_args()
+
+
+def _current_run_date() -> datetime.date:
+    try:
+        return datetime.now(RUN_TZ).date()
+    except Exception:
+        return datetime.now(timezone.utc).date()
+
+
+def _latest_timestamp_date(df: pd.DataFrame) -> datetime.date | None:
+    if "timestamp" not in df.columns or df.empty:
+        return None
+
+    latest_timestamp = pd.to_datetime(df["timestamp"], utc=True, errors="coerce").max()
+    if pd.isna(latest_timestamp):
+        return None
+
+    try:
+        return latest_timestamp.tz_convert(RUN_TZ).date()
+    except Exception:
+        return latest_timestamp.date()
 
 
 def _require_columns(df: pd.DataFrame, required: Iterable[str]) -> None:
@@ -137,9 +161,14 @@ def _compute_features(bars: pd.DataFrame) -> pd.DataFrame:
     return features[selected]
 
 
-def build_feature_set(bars_path: Path, labels_path: Path, keep_na: bool) -> pd.DataFrame:
+def build_feature_set(
+    bars_path: Path, labels_path: Path, keep_na: bool
+) -> Tuple[pd.DataFrame, datetime.date | None, datetime.date | None]:
     bars = _prepare_bars(bars_path)
     labels = _load_labels(labels_path)
+
+    latest_bars_date = _latest_timestamp_date(bars)
+    latest_labels_date = _latest_timestamp_date(labels)
 
     label_subset = labels[LABEL_COLUMNS].copy()
     features = _compute_features(bars)
@@ -167,14 +196,7 @@ def build_feature_set(bars_path: Path, labels_path: Path, keep_na: bool) -> pd.D
     if not keep_na:
         merged = merged.dropna(subset=columns)
 
-    return merged[columns]
-
-
-def _determine_as_of_date(df: pd.DataFrame) -> str:
-    latest_timestamp = df["timestamp"].max()
-    if pd.isna(latest_timestamp):
-        raise ValueError("Unable to derive as-of date because timestamp column is empty.")
-    return latest_timestamp.date().strftime("%Y-%m-%d")
+    return merged[columns], latest_bars_date, latest_labels_date
 
 
 def main() -> None:
@@ -187,9 +209,27 @@ def main() -> None:
             labels_path = _latest_labels_path(Path("data/labels"))
             logging.info("Using latest labels file: %s", labels_path)
 
-        merged = build_feature_set(args.bars_path, labels_path, keep_na=args.keep_na)
+        merged, latest_bars_date, latest_labels_date = build_feature_set(
+            args.bars_path, labels_path, keep_na=args.keep_na
+        )
 
-        as_of = _determine_as_of_date(merged)
+        run_date = _current_run_date()
+        if latest_bars_date and latest_bars_date < run_date:
+            logging.warning(
+                "[WARN] FEATURES_BARS_STALE latest_bar_date=%s run_date=%s bars_path=%s",
+                latest_bars_date,
+                run_date,
+                args.bars_path,
+            )
+        if latest_labels_date and latest_labels_date < run_date:
+            logging.warning(
+                "[WARN] FEATURES_LABELS_STALE latest_label_date=%s run_date=%s labels_path=%s",
+                latest_labels_date,
+                run_date,
+                labels_path,
+            )
+
+        as_of = run_date.strftime("%Y-%m-%d")
         output_dir: Path = args.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"features_{as_of}.csv"
