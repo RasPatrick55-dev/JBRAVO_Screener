@@ -1180,6 +1180,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
             "Runs automatically when ranker_eval is in --steps."
         ),
     )
+    parser.add_argument(
+        "--export-daily-bars-path",
+        default=str(DEFAULT_LABELS_BARS_PATH),
+        help="Optional path to write fetched daily bars as CSV (default: data/daily_bars.csv)",
+    )
     raw_args = list(argv) if argv is not None else sys.argv[1:]
     option_strings = set(parser._option_string_actions.keys())
     filtered_args, collected = _extract_split_tokens(raw_args, option_strings)
@@ -1512,6 +1517,21 @@ def _write_latest_from_frame(frame: pd.DataFrame, *, source: str = "screener") -
     return int(len(normalized.index))
 
 
+def _inject_export_daily_bars_arg(args: list[str], export_path: str | Path | None) -> list[str]:
+    if not export_path:
+        return args
+
+    flag = "--export-daily-bars-path"
+    for token in args:
+        if token == flag:
+            return args
+        if token.startswith(f"{flag}="):
+            return args
+    args = list(args)
+    args.extend([flag, str(export_path)])
+    return args
+
+
 def _write_refresh_metrics(metrics_path: Path) -> None:
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
@@ -1635,6 +1655,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     if getattr(args, "backtest_quick", None) == "true":
         extras["backtest"].append("--quick")
+
+    export_bars_path = args.export_daily_bars_path
+    if "screener" in steps:
+        extras["screener"] = _inject_export_daily_bars_arg(
+            extras["screener"], export_bars_path
+        )
+    elif export_bars_path:
+        LOG.warning(
+            "[WARN] DAILY_BARS_EXPORT_FAILED path=%s error=%s",
+            export_bars_path,
+            "screener_step_disabled",
+        )
 
     step_rcs: dict[str, int] = {step: 0 for step in steps}
 
