@@ -2387,30 +2387,35 @@ class TradeExecutor:
         key_label = "score"
         ranking_series = score_series
         non_null = score_non_null
-        reason = "missing_model_score_column"
+        reason = None
 
         ms_col = "model_score_5d"
-        if ms_col in normalized_columns:
-            series = df[ms_col]
+        ms_col_actual = next(
+            (column for column in df.columns if str(column).strip() == ms_col), None
+        )
+        if ms_col_actual is not None:
+            series = df[ms_col_actual]
             series_numeric = pd.to_numeric(series, errors="coerce")
-            df[ms_col] = series_numeric
+            df[ms_col_actual] = series_numeric
             non_null_model = int(series_numeric.notna().sum())
             total = len(df)
             logger.info(
                 "MODEL_SCORE_DIAG col=%s dtype=%s non_null=%d total=%d sample=%s",
-                ms_col,
+                ms_col_actual,
                 str(getattr(series, "dtype", "unknown")),
                 non_null_model,
                 total,
                 series.head(3).tolist(),
             )
             if non_null_model > 0:
-                key_label = ms_col
+                key_label = ms_col_actual
                 ranking_series = series_numeric
                 non_null = non_null_model
                 reason = None
             else:
                 reason = "all_nan_model_score"
+        else:
+            reason = "missing_model_score_column"
 
         self._ranking_key = key_label
         if reason:
