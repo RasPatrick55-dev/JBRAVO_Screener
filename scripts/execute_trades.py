@@ -2530,25 +2530,24 @@ class TradeExecutor:
     def _log_top_candidates(self, records: Sequence[Mapping[str, Any]]) -> None:
         if not records:
             return
-        limit = len(records)
+        rank_key = self._ranking_key or "score"
+        frame = pd.DataFrame.from_records(records)
+        if "_rank_val" in frame.columns:
+            rank_series = pd.to_numeric(frame["_rank_val"], errors="coerce")
+        else:
+            rank_series = pd.to_numeric(frame.get(rank_key, pd.Series(dtype="float")), errors="coerce")
+        symbols = frame.get("symbol", pd.Series(dtype="string"))
         picks: list[tuple[str, Any]] = []
-        for record in records[:limit]:
-            symbol = str(record.get("symbol", "")).upper()
-            value = record.get(self._ranking_key)
-            rank_value: Any
-            if value in (None, ""):
-                rank_value = None
+        for idx in range(len(frame)):
+            symbol_raw = symbols.iloc[idx] if idx < len(symbols) else ""
+            symbol = str(symbol_raw).upper()
+            raw_value = rank_series.iloc[idx] if idx < len(rank_series) else None
+            if pd.isna(raw_value):
+                rank_value: Any = None
             else:
-                try:
-                    rank_value = float(value)
-                    if math.isnan(rank_value):
-                        rank_value = None
-                except (TypeError, ValueError):
-                    rank_value = None
-            if isinstance(rank_value, float):
-                rank_value = round(rank_value, 4)
+                rank_value = round(float(raw_value), 6)
             picks.append((symbol, rank_value))
-        LOGGER.info("[INFO] CANDIDATE_PICK top=%s", picks)
+        LOGGER.info("[INFO] CANDIDATE_PICK key=%s top=%s", rank_key, picks)
 
     def execute(
         self,
