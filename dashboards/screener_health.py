@@ -633,6 +633,19 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
     except (TypeError, ValueError):
         bottom_decile_index = 1
 
+    def _maybe_float(key: str) -> float | None:
+        try:
+            value = payload.get(key)
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    signal_quality = payload.get("signal_quality")
+    if not isinstance(signal_quality, str):
+        signal_quality = None
+    else:
+        signal_quality = signal_quality.strip() or None
+
     return {
         "run_utc": payload.get("run_utc"),
         "label_horizon_days": horizon,
@@ -644,6 +657,10 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
         "decile_convention": decile_convention,
         "top_decile_index": top_decile_index,
         "bottom_decile_index": bottom_decile_index,
+        "top_avg_label": _maybe_float("top_avg_label"),
+        "bottom_avg_label": _maybe_float("bottom_avg_label"),
+        "decile_lift": _maybe_float("decile_lift"),
+        "signal_quality": signal_quality,
     }
 
 
@@ -1521,6 +1538,33 @@ def register_callbacks(app):
                 sample_size = 0
             run_utc = ev.get("run_utc")
             horizon = ev.get("label_horizon_days")
+            top_avg_label = ev.get("top_avg_label")
+            bottom_avg_label = ev.get("bottom_avg_label")
+            decile_lift = ev.get("decile_lift")
+            if decile_lift is None and isinstance(top_avg_label, (int, float)) and isinstance(
+                bottom_avg_label, (int, float)
+            ):
+                decile_lift = float(top_avg_label) - float(bottom_avg_label)
+
+            signal_quality = ev.get("signal_quality")
+            if not isinstance(signal_quality, str) or not signal_quality:
+                if isinstance(decile_lift, (int, float)):
+                    if decile_lift >= 0.05:
+                        signal_quality = "HIGH"
+                    elif decile_lift >= 0.02:
+                        signal_quality = "MEDIUM"
+                    else:
+                        signal_quality = "LOW"
+                else:
+                    signal_quality = "unknown"
+            signal_quality = (signal_quality or "unknown").upper()
+
+            def _fmt_float(val: Any) -> str:
+                try:
+                    return f"{float(val):.4f}"
+                except (TypeError, ValueError):
+                    return "n/a"
+
             subtitle_bits: list[str] = []
             if isinstance(horizon, (int, float)):
                 subtitle_bits.append(f"{int(horizon)}-day horizon")
@@ -1532,6 +1576,7 @@ def register_callbacks(app):
                 f"Score column: {score_col}",
                 f"Top decile = {top_decile_index} (highest score bucket)",
                 f"Bottom decile = {bottom_decile_index} (lowest score bucket)",
+                f"Decile lift: {_fmt_float(decile_lift)} ({signal_quality})",
             ]
             if subtitle_bits:
                 summary_bits.append(" ".join(subtitle_bits))
