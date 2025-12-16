@@ -2360,11 +2360,14 @@ class TradeExecutor:
         return self._rank_candidates(df)
 
     def _rank_candidates(self, df: pd.DataFrame) -> pd.DataFrame:
+        def _as_numeric(series: pd.Series | None) -> pd.Series:
+            return pd.to_numeric(series, errors="coerce") if series is not None else pd.Series()
+
         key = "score"
-        series = pd.to_numeric(df.get(key), errors="coerce")
+        series = _as_numeric(df.get(key))
         non_null = int(series.notna().sum())
         if "model_score_5d" in df.columns:
-            model_series = pd.to_numeric(df.get("model_score_5d"), errors="coerce")
+            model_series = _as_numeric(df.get("model_score_5d"))
             model_non_null = int(model_series.notna().sum())
             if model_non_null > 0:
                 key = "model_score_5d"
