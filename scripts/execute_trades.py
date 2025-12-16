@@ -2328,6 +2328,7 @@ class TradeExecutor:
         if not path.exists():
             raise CandidateLoadError(f"Candidate file not found: {path}")
         df = pd.read_csv(path, dtype={"symbol": "string"})
+        df.columns = [str(column).strip().lower() for column in df.columns]
         if "symbol" in df.columns:
             df["symbol"] = df["symbol"].astype("string").str.upper()
         if df.empty:
@@ -2361,26 +2362,55 @@ class TradeExecutor:
 
     def _rank_candidates(self, df: pd.DataFrame) -> pd.DataFrame:
         def _as_numeric(series: pd.Series | None) -> pd.Series:
-            return pd.to_numeric(series, errors="coerce") if series is not None else pd.Series()
+            return (
+                pd.to_numeric(series, errors="coerce")
+                if series is not None
+                else pd.Series(dtype="float")
+            )
 
-        key = "score"
-        series = _as_numeric(df.get(key))
-        non_null = int(series.notna().sum())
-        if "model_score_5d" in df.columns:
-            model_series = _as_numeric(df.get("model_score_5d"))
+        normalized_columns = {str(col).strip().lower(): col for col in df.columns}
+
+        score_column = normalized_columns.get("score", "score")
+        score_series = _as_numeric(df.get(score_column))
+        score_non_null = int(score_series.notna().sum())
+
+        key_label = "score"
+        key_column = score_column
+        ranking_series = score_series
+        non_null = score_non_null
+        reason = "missing"
+
+        model_column = normalized_columns.get("model_score_5d")
+        if model_column is not None:
+            model_series_raw = df.get(model_column)
+            model_series = _as_numeric(model_series_raw)
             model_non_null = int(model_series.notna().sum())
             if model_non_null > 0:
-                key = "model_score_5d"
-                series = model_series
+                key_label = "model_score_5d"
+                key_column = model_column
+                ranking_series = model_series
                 non_null = model_non_null
-        self._ranking_key = key
-        LOGGER.info(
-            "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d",
-            key,
-            len(df),
-            non_null,
-        )
-        ranked = df.assign(_rank_key=series)
+                reason = None
+            else:
+                original_non_null = int(model_series_raw.notna().sum()) if model_series_raw is not None else 0
+                reason = "all_nan" if original_non_null == 0 else "non_numeric"
+
+        self._ranking_key = key_column
+        if key_label == "model_score_5d":
+            LOGGER.info(
+                "[INFO] CANDIDATE_RANKING key=model_score_5d rows=%d non_null=%d",
+                len(df),
+                non_null,
+            )
+        else:
+            LOGGER.info(
+                "[INFO] CANDIDATE_RANKING key=score rows=%d non_null=%d reason=%s",
+                len(df),
+                non_null,
+                reason,
+            )
+
+        ranked = df.assign(_rank_key=ranking_series)
         ranked = ranked.sort_values(by="_rank_key", ascending=False, na_position="last")
         ranked = ranked.drop(columns=["_rank_key"]).reset_index(drop=True)
         return ranked
