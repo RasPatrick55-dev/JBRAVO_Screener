@@ -191,9 +191,58 @@ elif [ "$rc" -ne 0 ]; then
   exit "$rc"
 fi
 
+BASE_ALLOCATION_PCT=0.06
+RISK_OUTPUT=$(BASE_ALLOCATION_PCT="$BASE_ALLOCATION_PCT" python - <<'PY'
+import json
+import os
+import pathlib
+
+base_alloc = float(os.environ.get("BASE_ALLOCATION_PCT", "0"))
+
+try:
+    ranker_eval = pathlib.Path("data/ranker_eval/latest.json")
+
+    if not ranker_eval.exists():
+        print("[WARN] RISK_SCALING_SKIPPED reason=missing_ranker_eval")
+        print(f"{base_alloc:.4f}")
+        raise SystemExit(0)
+
+    try:
+        payload = json.loads(ranker_eval.read_text())
+    except Exception:
+        print("[WARN] RISK_SCALING_SKIPPED reason=invalid_signal_quality value=read_error")
+        print(f"{base_alloc:.4f}")
+        raise SystemExit(0)
+
+    signal_quality = payload.get("signal_quality")
+    decile_lift = payload.get("decile_lift")
+
+    multipliers = {"HIGH": 1.0, "MEDIUM": 1.0, "LOW": 0.5}
+    multiplier = multipliers.get(signal_quality)
+
+    if multiplier is None:
+        print(f"[WARN] RISK_SCALING_SKIPPED reason=invalid_signal_quality value={signal_quality}")
+        print(f"{base_alloc:.4f}")
+        raise SystemExit(0)
+
+    final_alloc = round(base_alloc * multiplier, 4)
+    print(
+        f"[INFO] RISK_SCALING signal_quality={signal_quality} decile_lift={decile_lift} "
+        f"base_alloc={base_alloc} final_alloc={final_alloc}"
+    )
+    print(f"{final_alloc:.4f}")
+except Exception as exc:  # pragma: no cover - defensive fallback
+    print(f"[WARN] RISK_SCALING_SKIPPED reason=unexpected_error value={exc}")
+    print(f"{base_alloc:.4f}")
+PY
+)
+RISK_LOG_LINE=$(printf "%s\n" "$RISK_OUTPUT" | head -n1)
+FINAL_ALLOCATION_PCT=$(printf "%s\n" "$RISK_OUTPUT" | tail -n1)
+echo "$RISK_LOG_LINE"
+
 python -m scripts.execute_trades \
   --source data/latest_candidates.csv \
-  --allocation-pct 0.06 --min-order-usd 300 --max-positions 7 \
+  --allocation-pct "$FINAL_ALLOCATION_PCT" --min-order-usd 300 --max-positions 7 \
   --trailing-percent 3 --time-window premarket --extended-hours true \
   --submit-at-ny "07:00" --price-source prevclose \
   --cancel-after-min 35 --limit-buffer-pct 0.0
