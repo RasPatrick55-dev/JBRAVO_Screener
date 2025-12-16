@@ -238,6 +238,14 @@ PY
 )
 RISK_LOG_LINE=$(printf "%s\n" "$RISK_OUTPUT" | head -n1)
 FINAL_ALLOCATION_PCT=$(printf "%s\n" "$RISK_OUTPUT" | tail -n1)
+
+LOG_TIMESTAMP=$(PYTHONPATH="" python - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S,%f")[:23])
+PY
+)
+mkdir -p logs
+printf '%s - wrapper - %s\n' "$LOG_TIMESTAMP" "$RISK_LOG_LINE" >> logs/execute_trades.log
 echo "$RISK_LOG_LINE"
 
 python -m scripts.execute_trades \
