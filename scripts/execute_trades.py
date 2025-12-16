@@ -2393,16 +2393,33 @@ class TradeExecutor:
         ]
         model_key = next((name for name in model_candidates if name in normalized_columns), None)
 
+        if "model_score_5d" in normalized_columns:
+            diag_series = df["model_score_5d"]
+            diag_numeric = pd.to_numeric(diag_series, errors="coerce")
+            diag_non_null = int(diag_numeric.notna().sum())
+            log_sample = list(diag_series.head(3))
+            LOGGER.info(
+                "[INFO] MODEL_SCORE_DIAG col=%s dtype=%s non_null=%d total=%d sample=%s",
+                model_key or "model_score_5d",
+                getattr(diag_series, "dtype", "unknown"),
+                diag_non_null,
+                len(df),
+                log_sample,
+            )
+
         if model_key:
-            model_series = _as_numeric(df.get(model_key))
-            df[model_key] = model_series
-            model_non_null = int(model_series.notna().sum())
+            series = df[model_key]
+            ms_num = pd.to_numeric(series, errors="coerce")
+            df[model_key] = ms_num
+            model_non_null = int(ms_num.notna().sum())
             if model_non_null > 0:
                 key_label = model_key
-                ranking_series = model_series
+                ranking_series = ms_num
                 non_null = model_non_null
                 reason = None
             else:
+                ranking_series = score_series
+                non_null = score_non_null
                 reason = "all_nan_model_score"
 
         self._ranking_key = key_label
@@ -2430,13 +2447,13 @@ class TradeExecutor:
                 non_null,
             )
 
-        ranked = df.assign(_rank_key=ranking_series, _score_sort=score_series)
+        ranked = df.assign(_rank_val=ranking_series, _score_sort=score_series)
         ranked = ranked.sort_values(
-            by=["_rank_key", "_score_sort"],
+            by=["_rank_val", "_score_sort"],
             ascending=[False, False],
             na_position="last",
         )
-        ranked = ranked.drop(columns=["_rank_key", "_score_sort"]).reset_index(drop=True)
+        ranked = ranked.drop(columns=["_rank_val", "_score_sort"]).reset_index(drop=True)
         return ranked
 
     def hydrate_candidates(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
