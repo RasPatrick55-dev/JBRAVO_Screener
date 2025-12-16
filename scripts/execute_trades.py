@@ -1968,6 +1968,7 @@ class TradeExecutor:
         self.clock_snapshot: Optional[Mapping[str, Any]] = clock_snapshot
         self._last_buying_power_raw: Any = None
         self._prev_close_cache: Dict[str, Optional[float]] = {}
+        self._ranking_key: str = "score"
 
     def log_info(self, event: str, **payload: Any) -> None:
         log_info(event, **payload)
@@ -2356,7 +2357,30 @@ class TradeExecutor:
         df, warnings = _apply_candidate_defaults(normalized)
         for message in warnings:
             LOGGER.warning(message)
-        return df
+        return self._rank_candidates(df)
+
+    def _rank_candidates(self, df: pd.DataFrame) -> pd.DataFrame:
+        key = "score"
+        series = pd.to_numeric(df.get(key), errors="coerce")
+        non_null = int(series.notna().sum())
+        if "model_score_5d" in df.columns:
+            model_series = pd.to_numeric(df.get("model_score_5d"), errors="coerce")
+            model_non_null = int(model_series.notna().sum())
+            if model_non_null > 0:
+                key = "model_score_5d"
+                series = model_series
+                non_null = model_non_null
+        self._ranking_key = key
+        LOGGER.info(
+            "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d",
+            key,
+            len(df),
+            non_null,
+        )
+        ranked = df.assign(_rank_key=series)
+        ranked = ranked.sort_values(by="_rank_key", ascending=False, na_position="last")
+        ranked = ranked.drop(columns=["_rank_key"]).reset_index(drop=True)
+        return ranked
 
     def hydrate_candidates(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         records = df.to_dict(orient="records")
@@ -2426,6 +2450,29 @@ class TradeExecutor:
                     continue
             filtered.append(record)
         return filtered
+
+    def _log_top_candidates(self, records: Sequence[Mapping[str, Any]]) -> None:
+        if not records:
+            return
+        limit = len(records)
+        picks: list[tuple[str, Any]] = []
+        for record in records[:limit]:
+            symbol = str(record.get("symbol", "")).upper()
+            value = record.get(self._ranking_key)
+            rank_value: Any
+            if value in (None, ""):
+                rank_value = None
+            else:
+                try:
+                    rank_value = float(value)
+                    if math.isnan(rank_value):
+                        rank_value = None
+                except (TypeError, ValueError):
+                    rank_value = None
+            if isinstance(rank_value, float):
+                rank_value = round(rank_value, 4)
+            picks.append((symbol, rank_value))
+        LOGGER.info("[INFO] CANDIDATE_PICK top=%s", picks)
 
     def execute(
         self,
@@ -2501,6 +2548,7 @@ class TradeExecutor:
             queue = queue[:available_slots]
         slot_hint = max(1, min(available_slots, len(queue)))
         candidates = queue
+        self._log_top_candidates(candidates)
         bp_raw = self._last_buying_power_raw
         if bp_raw is None:
             bp_raw = account_buying_power
