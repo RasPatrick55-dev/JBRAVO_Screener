@@ -3,5 +3,14 @@
   "label_horizon_days": 5,
   "reason": "no labeled samples",
   "run_utc": "2025-11-29T00:10:19.795253+00:00",
-  "sample_size": 0
+  "sample_size": 0,
+  "label_column": "label_5d_pos_300bp",
+  "score_column": "score_5d",
+  "decile_convention": "10=top",
+  "top_decile_index": 10,
+  "bottom_decile_index": 1,
+  "top_avg_label": null,
+  "bottom_avg_label": null,
+  "decile_lift": null,
+  "signal_quality": null
 }

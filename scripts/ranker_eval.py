@@ -139,6 +139,47 @@ def _compute_deciles(df: pd.DataFrame, label_column: str) -> list[dict[str, Any]
     return results
 
 
+def _compute_decile_lift(
+    deciles: list[dict[str, Any]], top_decile: int, bottom_decile: int
+) -> tuple[float | None, float | None, float | None]:
+    """Return top/bottom average labels and their lift.
+
+    The function is defensive: it tolerates missing deciles or malformed
+    values and returns ``None`` for any missing piece.
+    """
+
+    def _avg_label_for(decile_index: int) -> float | None:
+        for row in deciles:
+            try:
+                if int(row.get("decile")) != decile_index:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            try:
+                return float(row.get("avg_label"))
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    top_avg = _avg_label_for(top_decile)
+    bottom_avg = _avg_label_for(bottom_decile)
+
+    if top_avg is None or bottom_avg is None:
+        return top_avg, bottom_avg, None
+
+    return top_avg, bottom_avg, top_avg - bottom_avg
+
+
+def _signal_quality(lift: float | None) -> str | None:
+    if lift is None:
+        return None
+    if lift >= 0.05:
+        return "HIGH"
+    if lift >= 0.02:
+        return "MEDIUM"
+    return "LOW"
+
+
 # ---------------------------------------------------------------------------
 # Core
 # ---------------------------------------------------------------------------
@@ -150,14 +191,23 @@ def evaluate(args: EvalArgs) -> dict[str, Any]:
     merged = _merge(features, preds, args.label_column)
 
     deciles = _compute_deciles(merged, args.label_column)
+    top_decile_index = 10
+    bottom_decile_index = 1
+    top_avg_label, bottom_avg_label, decile_lift = _compute_decile_lift(
+        deciles, top_decile_index, bottom_decile_index
+    )
     payload: dict[str, Any] = {
         "sample_size": int(len(merged)),
         "label_column": args.label_column,
         "score_column": SCORE_COLUMN,
         "decile_convention": "10=top",
-        "top_decile_index": 10,
-        "bottom_decile_index": 1,
+        "top_decile_index": top_decile_index,
+        "bottom_decile_index": bottom_decile_index,
         "deciles": deciles,
+        "top_avg_label": top_avg_label,
+        "bottom_avg_label": bottom_avg_label,
+        "decile_lift": decile_lift,
+        "signal_quality": _signal_quality(decile_lift),
     }
     return payload
 
