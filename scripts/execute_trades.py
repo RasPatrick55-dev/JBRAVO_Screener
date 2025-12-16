@@ -2343,6 +2343,12 @@ class TradeExecutor:
         except Exception:
             base_dir = Path.cwd()
         df = _canonicalize_candidate_header(df, base_dir)
+        preserved_score_cols = [
+            column
+            for column in df.columns
+            if re.match(r"model_score", str(column), flags=re.IGNORECASE)
+        ]
+        preserved_scores = df[preserved_score_cols].copy() if preserved_score_cols else None
         if df.empty:
             LOGGER.info("[INFO] NO_CANONICAL_CANDIDATES")
             return df
@@ -2355,6 +2361,15 @@ class TradeExecutor:
             joined = ", ".join(sorted(missing))
             raise CandidateLoadError(f"Missing required columns: {joined}")
         normalized = normalize_candidate_df(df, now_ts=None)
+        if preserved_scores is not None:
+            preserved_scores = preserved_scores.reset_index(drop=True)
+            for column in preserved_score_cols:
+                if column in normalized.columns:
+                    continue
+                try:
+                    normalized[column] = preserved_scores[column]
+                except Exception:
+                    normalized[column] = pd.NA
         missing_required = [column for column in REQUIRED_COLUMNS if column not in normalized.columns]
         if missing_required:
             joined = ", ".join(sorted(missing_required))
