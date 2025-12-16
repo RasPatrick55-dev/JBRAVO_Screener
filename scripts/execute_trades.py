@@ -2328,7 +2328,11 @@ class TradeExecutor:
         if not path.exists():
             raise CandidateLoadError(f"Candidate file not found: {path}")
         df = pd.read_csv(path, dtype={"symbol": "string"})
-        df.columns = [str(column).strip() for column in df.columns]
+        raw_columns = list(df.columns)
+        LOGGER.info("[INFO] CANDIDATE_COLUMNS raw=%s", raw_columns)
+        normalized_columns = [str(column).strip() for column in raw_columns]
+        LOGGER.info("[INFO] CANDIDATE_COLUMNS normalized=%s", normalized_columns)
+        df.columns = normalized_columns
         if "symbol" in df.columns:
             df["symbol"] = df["symbol"].astype("string").str.upper()
         if df.empty:
@@ -2369,7 +2373,8 @@ class TradeExecutor:
             )
 
         df = df.copy()
-        df.columns = [str(column).strip() for column in df.columns]
+        normalized_columns = [str(column).strip() for column in df.columns]
+        df.columns = normalized_columns
 
         score_series = _as_numeric(df.get("score"))
         df["score"] = score_series
@@ -2380,26 +2385,50 @@ class TradeExecutor:
         non_null = score_non_null
         reason = "missing_model_score"
 
-        if "model_score_5d" in df.columns:
-            model_series = _as_numeric(df.get("model_score_5d"))
-            df["model_score_5d"] = model_series
+        model_candidates = [
+            "model_score_5d",
+            "model_score",
+            "score_5d",
+            "model_score5d",
+        ]
+        model_key = next((name for name in model_candidates if name in normalized_columns), None)
+
+        if model_key:
+            model_series = _as_numeric(df.get(model_key))
+            df[model_key] = model_series
             model_non_null = int(model_series.notna().sum())
             if model_non_null > 0:
-                key_label = "model_score_5d"
+                key_label = model_key
                 ranking_series = model_series
                 non_null = model_non_null
-                reason = "using_model_score"
+                reason = None
             else:
                 reason = "all_nan_model_score"
 
         self._ranking_key = key_label
-        LOGGER.info(
-            "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d reason=%s",
-            key_label,
-            len(df),
-            non_null,
-            reason,
-        )
+        if reason == "missing_model_score":
+            LOGGER.info(
+                "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d reason=%s",
+                key_label,
+                len(df),
+                non_null,
+                reason,
+            )
+        elif reason == "all_nan_model_score":
+            LOGGER.info(
+                "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d reason=%s",
+                key_label,
+                len(df),
+                non_null,
+                reason,
+            )
+        else:
+            LOGGER.info(
+                "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d",
+                key_label,
+                len(df),
+                non_null,
+            )
 
         ranked = df.assign(_rank_key=ranking_series, _score_sort=score_series)
         ranked = ranked.sort_values(
