@@ -2323,7 +2323,7 @@ class TradeExecutor:
             log_info("TIME_WINDOW", message=message)
         return allowed, message, resolved_window
 
-    def load_candidates(self) -> pd.DataFrame:
+    def load_candidates(self, *, rank: bool = True) -> pd.DataFrame:
         path = self.config.source
         if not path.exists():
             raise CandidateLoadError(f"Candidate file not found: {path}")
@@ -2362,9 +2362,13 @@ class TradeExecutor:
         df, warnings = _apply_candidate_defaults(normalized)
         for message in warnings:
             LOGGER.warning(message)
-        return self._rank_candidates(df)
+        if rank:
+            return self._rank_candidates(df)
+        return df
 
     def _rank_candidates(self, df: pd.DataFrame) -> pd.DataFrame:
+        logger.info("RANK_CANDIDATES_ENTER rows=%d cols=%d", len(df), len(df.columns))
+
         def _as_numeric(series: pd.Series | None) -> pd.Series:
             return (
                 pd.to_numeric(series, errors="coerce")
@@ -2383,55 +2387,33 @@ class TradeExecutor:
         key_label = "score"
         ranking_series = score_series
         non_null = score_non_null
-        reason = "missing_model_score"
+        reason = "missing_model_score_column"
 
-        model_candidates = [
-            "model_score_5d",
-            "model_score",
-            "score_5d",
-            "model_score5d",
-        ]
-        model_key = next((name for name in model_candidates if name in normalized_columns), None)
-
-        if "model_score_5d" in normalized_columns:
-            diag_series = df["model_score_5d"]
-            diag_numeric = pd.to_numeric(diag_series, errors="coerce")
-            diag_non_null = int(diag_numeric.notna().sum())
-            log_sample = list(diag_series.head(3))
-            LOGGER.info(
-                "[INFO] MODEL_SCORE_DIAG col=%s dtype=%s non_null=%d total=%d sample=%s",
-                model_key or "model_score_5d",
-                getattr(diag_series, "dtype", "unknown"),
-                diag_non_null,
-                len(df),
-                log_sample,
+        ms_col = "model_score_5d"
+        if ms_col in normalized_columns:
+            series = df[ms_col]
+            series_numeric = pd.to_numeric(series, errors="coerce")
+            df[ms_col] = series_numeric
+            non_null_model = int(series_numeric.notna().sum())
+            total = len(df)
+            logger.info(
+                "MODEL_SCORE_DIAG col=%s dtype=%s non_null=%d total=%d sample=%s",
+                ms_col,
+                str(getattr(series, "dtype", "unknown")),
+                non_null_model,
+                total,
+                series.head(3).tolist(),
             )
-
-        if model_key:
-            series = df[model_key]
-            ms_num = pd.to_numeric(series, errors="coerce")
-            df[model_key] = ms_num
-            model_non_null = int(ms_num.notna().sum())
-            if model_non_null > 0:
-                key_label = model_key
-                ranking_series = ms_num
-                non_null = model_non_null
+            if non_null_model > 0:
+                key_label = ms_col
+                ranking_series = series_numeric
+                non_null = non_null_model
                 reason = None
             else:
-                ranking_series = score_series
-                non_null = score_non_null
                 reason = "all_nan_model_score"
 
         self._ranking_key = key_label
-        if reason == "missing_model_score":
-            LOGGER.info(
-                "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d reason=%s",
-                key_label,
-                len(df),
-                non_null,
-                reason,
-            )
-        elif reason == "all_nan_model_score":
+        if reason:
             LOGGER.info(
                 "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d reason=%s",
                 key_label,
@@ -3958,7 +3940,7 @@ def run_executor(
         )
         LOGGER.info(banner)
     try:
-        frame = loader.load_candidates()
+        frame = loader.load_candidates(rank=False)
     except CandidateLoadError as exc:
         LOGGER.error("%s", exc)
         metrics.api_failures += 1
@@ -3971,7 +3953,8 @@ def run_executor(
         loader.persist_metrics()
         return 1
 
-    candidates_df = frame
+    candidates_df = loader._rank_candidates(frame)
+    loader._log_top_candidates(candidates_df.to_dict(orient="records"))
 
     _wait_until_submit_at(config.submit_at_ny)
     configured_window = config.time_window or "auto"
@@ -4115,6 +4098,7 @@ def run_executor(
         account_snapshot=account_payload,
         clock_snapshot=clock_payload,
     )
+    executor._ranking_key = loader._ranking_key
     return executor.execute(candidates_df, prefiltered=filtered)
 
 
