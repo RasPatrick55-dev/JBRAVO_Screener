@@ -2328,7 +2328,7 @@ class TradeExecutor:
         if not path.exists():
             raise CandidateLoadError(f"Candidate file not found: {path}")
         df = pd.read_csv(path, dtype={"symbol": "string"})
-        df.columns = [str(column).strip().lower() for column in df.columns]
+        df.columns = [str(column).strip() for column in df.columns]
         if "symbol" in df.columns:
             df["symbol"] = df["symbol"].astype("string").str.upper()
         if df.empty:
@@ -2368,51 +2368,46 @@ class TradeExecutor:
                 else pd.Series(dtype="float")
             )
 
-        normalized_columns = {str(col).strip().lower(): col for col in df.columns}
+        df = df.copy()
+        df.columns = [str(column).strip() for column in df.columns]
 
-        score_column = normalized_columns.get("score", "score")
-        score_series = _as_numeric(df.get(score_column))
+        score_series = _as_numeric(df.get("score"))
+        df["score"] = score_series
         score_non_null = int(score_series.notna().sum())
 
         key_label = "score"
-        key_column = score_column
         ranking_series = score_series
         non_null = score_non_null
-        reason = "missing"
+        reason = "missing_model_score"
 
-        model_column = normalized_columns.get("model_score_5d")
-        if model_column is not None:
-            model_series_raw = df.get(model_column)
-            model_series = _as_numeric(model_series_raw)
+        if "model_score_5d" in df.columns:
+            model_series = _as_numeric(df.get("model_score_5d"))
+            df["model_score_5d"] = model_series
             model_non_null = int(model_series.notna().sum())
             if model_non_null > 0:
                 key_label = "model_score_5d"
-                key_column = model_column
                 ranking_series = model_series
                 non_null = model_non_null
-                reason = None
+                reason = "using_model_score"
             else:
-                original_non_null = int(model_series_raw.notna().sum()) if model_series_raw is not None else 0
-                reason = "all_nan" if original_non_null == 0 else "non_numeric"
+                reason = "all_nan_model_score"
 
-        self._ranking_key = key_column
-        if key_label == "model_score_5d":
-            LOGGER.info(
-                "[INFO] CANDIDATE_RANKING key=model_score_5d rows=%d non_null=%d",
-                len(df),
-                non_null,
-            )
-        else:
-            LOGGER.info(
-                "[INFO] CANDIDATE_RANKING key=score rows=%d non_null=%d reason=%s",
-                len(df),
-                non_null,
-                reason,
-            )
+        self._ranking_key = key_label
+        LOGGER.info(
+            "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d reason=%s",
+            key_label,
+            len(df),
+            non_null,
+            reason,
+        )
 
-        ranked = df.assign(_rank_key=ranking_series)
-        ranked = ranked.sort_values(by="_rank_key", ascending=False, na_position="last")
-        ranked = ranked.drop(columns=["_rank_key"]).reset_index(drop=True)
+        ranked = df.assign(_rank_key=ranking_series, _score_sort=score_series)
+        ranked = ranked.sort_values(
+            by=["_rank_key", "_score_sort"],
+            ascending=[False, False],
+            na_position="last",
+        )
+        ranked = ranked.drop(columns=["_rank_key", "_score_sort"]).reset_index(drop=True)
         return ranked
 
     def hydrate_candidates(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -2526,17 +2521,19 @@ class TradeExecutor:
             self.log_summary()
             return 0
 
+        if self.config.dry_run:
+            LOGGER.info(
+                "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
+            )
+
+        self._log_top_candidates(candidates)
+
         allowed, status, resolved_window = self.evaluate_time_window()
         if not allowed:
             self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
             self.persist_metrics()
             self.log_summary()
             return 0
-
-        if self.config.dry_run:
-            LOGGER.info(
-                "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
-            )
 
         existing_positions = self.fetch_existing_positions()
         open_order_symbols = self.fetch_open_order_symbols()
