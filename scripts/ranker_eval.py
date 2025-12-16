@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -33,6 +34,7 @@ logging.basicConfig(
 )
 
 DEFAULT_LABEL = "label_5d_pos_300bp"
+SCORE_COLUMN = "score_5d"
 
 
 @dataclass
@@ -82,7 +84,7 @@ def _load_predictions(path: Path) -> pd.DataFrame:
     except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError(f"Failed to read predictions from {path}: {exc}") from exc
 
-    required = {"symbol", "timestamp", "score_5d"}
+    required = {"symbol", "timestamp", SCORE_COLUMN}
     missing = required - set(df.columns)
     if missing:
         raise RuntimeError(f"Predictions file {path} missing columns: {sorted(missing)}")
@@ -95,15 +97,15 @@ def _load_predictions(path: Path) -> pd.DataFrame:
 
 def _merge(features: pd.DataFrame, preds: pd.DataFrame, label_column: str) -> pd.DataFrame:
     merged = pd.merge(
-        preds.loc[:, ["symbol", "timestamp", "score_5d"]],
+        preds.loc[:, ["symbol", "timestamp", SCORE_COLUMN]],
         features.loc[:, ["symbol", "timestamp", label_column]],
         on=["symbol", "timestamp"],
         how="inner",
     )
-    merged = merged.dropna(subset=[label_column, "score_5d"])
+    merged = merged.dropna(subset=[label_column, SCORE_COLUMN])
     merged[label_column] = pd.to_numeric(merged[label_column], errors="coerce")
-    merged["score_5d"] = pd.to_numeric(merged["score_5d"], errors="coerce")
-    merged = merged.dropna(subset=[label_column, "score_5d"])
+    merged[SCORE_COLUMN] = pd.to_numeric(merged[SCORE_COLUMN], errors="coerce")
+    merged = merged.dropna(subset=[label_column, SCORE_COLUMN])
     return merged.reset_index(drop=True)
 
 
@@ -111,28 +113,29 @@ def _compute_deciles(df: pd.DataFrame, label_column: str) -> list[dict[str, Any]
     if df.empty:
         return []
 
-    try:
-        bins = pd.qcut(df["score_5d"], 10, labels=False, duplicates="drop")
-    except ValueError:
+    scores = pd.to_numeric(df[SCORE_COLUMN], errors="coerce").dropna()
+    if scores.empty:
         return []
 
-    df = df.copy()
-    df["decile"] = bins.fillna(-1).astype(int)
+    df = df.loc[scores.index].copy()
+    # Higher scores map to higher deciles; 10 is the top bucket.
+    rank_pct = scores.rank(method="first", pct=True)
+    df["decile"] = np.ceil(rank_pct * 10).clip(1, 10).astype(int)
 
     results: list[dict[str, Any]] = []
     for decile, group in df.groupby("decile"):
-        if decile < 0:
-            continue
         results.append(
             {
-                "decile": int(decile + 1),
+                "decile": int(decile),
                 "count": int(len(group)),
                 "avg_label": float(group[label_column].mean()),
-                "avg_score": float(group["score_5d"].mean()),
+                "avg_score": float(group[SCORE_COLUMN].mean()),
+                "score_min": float(group[SCORE_COLUMN].min()),
+                "score_max": float(group[SCORE_COLUMN].max()),
             }
         )
 
-    results.sort(key=lambda x: x["decile"], reverse=True)
+    results.sort(key=lambda x: x["decile"])
     return results
 
 
@@ -150,6 +153,10 @@ def evaluate(args: EvalArgs) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "sample_size": int(len(merged)),
         "label_column": args.label_column,
+        "score_column": SCORE_COLUMN,
+        "decile_convention": "10=top",
+        "top_decile_index": 10,
+        "bottom_decile_index": 1,
         "deciles": deciles,
     }
     return payload

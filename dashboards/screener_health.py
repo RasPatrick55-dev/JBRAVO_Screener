@@ -579,11 +579,21 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
                 except (TypeError, ValueError):
                     return None
 
+            def _maybe_int(key: str, fallback: int | None = None) -> int | None:
+                try:
+                    value = row.get(key, fallback)
+                    return int(value) if value is not None else fallback
+                except (TypeError, ValueError):
+                    return fallback
+
             deciles.append(
                 {
                     "decile": decile_value,
                     "avg_label": _maybe_float("avg_label"),
                     "avg_score": _maybe_float("avg_score"),
+                    "score_min": _maybe_float("score_min"),
+                    "score_max": _maybe_float("score_max"),
+                    "count": _maybe_int("count"),
                 }
             )
 
@@ -603,6 +613,26 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
     else:
         label_column = None
 
+    score_column = payload.get("score_column")
+    if isinstance(score_column, str):
+        score_column = score_column.strip()
+    else:
+        score_column = None
+
+    decile_convention = payload.get("decile_convention")
+    if not isinstance(decile_convention, str):
+        decile_convention = None
+
+    try:
+        top_decile_index = int(payload.get("top_decile_index", 10))
+    except (TypeError, ValueError):
+        top_decile_index = 10
+
+    try:
+        bottom_decile_index = int(payload.get("bottom_decile_index", 1))
+    except (TypeError, ValueError):
+        bottom_decile_index = 1
+
     return {
         "run_utc": payload.get("run_utc"),
         "label_horizon_days": horizon,
@@ -610,6 +640,10 @@ def load_ranker_eval(base_dir: pathlib.Path = REPO_ROOT) -> Mapping[str, Any] | 
         "reason": payload.get("reason"),
         "deciles": deciles,
         "label_column": label_column,
+        "score_column": score_column,
+        "decile_convention": decile_convention,
+        "top_decile_index": top_decile_index,
+        "bottom_decile_index": bottom_decile_index,
     }
 
 
@@ -1471,6 +1505,16 @@ def register_callbacks(app):
             dec = ev.get("deciles") or []
             sample_size_raw = ev.get("sample_size", 0)
             label_col = ev.get("label_column") or "unknown"
+            score_col = ev.get("score_column") or "score_5d"
+            decile_convention = ev.get("decile_convention") or ""
+            try:
+                top_decile_index = int(ev.get("top_decile_index", 10))
+            except (TypeError, ValueError):
+                top_decile_index = 10
+            try:
+                bottom_decile_index = int(ev.get("bottom_decile_index", 1))
+            except (TypeError, ValueError):
+                bottom_decile_index = 1
             try:
                 sample_size = int(sample_size_raw)
             except (TypeError, ValueError):
@@ -1482,9 +1526,17 @@ def register_callbacks(app):
                 subtitle_bits.append(f"{int(horizon)}-day horizon")
             if isinstance(run_utc, str) and run_utc:
                 subtitle_bits.append(f"evaluated {run_utc} UTC")
-            summary_bits = [f"Ranker sample size: {sample_size:,}", f"Label: {label_col}"]
+            summary_bits = [
+                f"Ranker sample size: {sample_size:,}",
+                f"Label: {label_col}",
+                f"Score column: {score_col}",
+                f"Top decile = {top_decile_index} (highest score bucket)",
+                f"Bottom decile = {bottom_decile_index} (lowest score bucket)",
+            ]
             if subtitle_bits:
                 summary_bits.append(" ".join(subtitle_bits))
+            if decile_convention:
+                summary_bits.append(f"Convention: {decile_convention}")
             ranker_summary = " • ".join(summary_bits)
             try:
                 df_dec = pd.DataFrame(dec)
