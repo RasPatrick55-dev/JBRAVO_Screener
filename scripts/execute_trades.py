@@ -2629,19 +2629,8 @@ class TradeExecutor:
         allocation_pct = max(0.0, allocation_pct)
 
         top_n = min(max_positions, len(candidates))
-        weight_series = pd.Series(dtype="float")
-        weight_active = False
         weight_frame = pd.DataFrame.from_records(candidates) if candidates else pd.DataFrame()
         picked_df = weight_frame.head(top_n) if top_n > 0 else pd.DataFrame()
-        if not weight_frame.empty and "alloc_weight" in weight_frame.columns:
-            weight_series = pd.to_numeric(
-                weight_frame.get("alloc_weight", pd.Series(dtype="float")),
-                errors="coerce",
-            )
-            weight_series = weight_series.apply(
-                lambda x: x if isinstance(x, (int, float)) and math.isfinite(x) else math.nan
-            )
-            weight_active = weight_series.notna().any()
 
         weight_map: dict[str, float] = {}
         weight_mode = False
@@ -2662,28 +2651,17 @@ class TradeExecutor:
                 weight_mode = True
                 weight_map = {k: v / total_weight for k, v in raw_weights.items()}
 
-        if weight_active:
-            LOGGER.info(
-                "%s mode=weighted base_alloc_pct=%.6f weights_col=alloc_weight",
-                ALLOCATION_MODE_TAG,
-                allocation_pct,
-            )
-        else:
-            LOGGER.info(
-                "%s mode=flat base_alloc_pct=%.6f",
-                ALLOCATION_MODE_TAG,
-                allocation_pct,
-            )
-
-        alloc_logged = False
+        picked_has_weights = False
+        split: list[tuple[str, float, float]] = []
+        picked_weights = pd.Series(dtype="float")
         if not picked_df.empty and "alloc_weight" in picked_df.columns:
             picked_weights = pd.to_numeric(picked_df["alloc_weight"], errors="coerce")
             picked_weights = picked_weights.apply(
                 lambda x: x if isinstance(x, (int, float)) and math.isfinite(x) else math.nan
             )
             valid_mask = picked_weights.notna()
-            if valid_mask.any():
-                split = []
+            picked_has_weights = bool(valid_mask.any())
+            if picked_has_weights:
                 for symbol, weight_val in zip(picked_df.get("symbol", []), picked_weights):
                     if weight_val is None or not isinstance(weight_val, (int, float)):
                         continue
@@ -2697,9 +2675,26 @@ class TradeExecutor:
                             round(allocation_pct * float(weight_val), 6),
                         )
                     )
-                LOGGER.info("%s top=%s", ALLOC_SPLIT_TAG, split)
-                alloc_logged = True
-        if not alloc_logged:
+
+        LOGGER.info(
+            "[INFO] ALLOC_BLOCK_ENTER rows=%d top_n=%d base_alloc_pct=%.6f",
+            len(candidates),
+            top_n,
+            allocation_pct,
+        )
+        if picked_has_weights:
+            LOGGER.info(
+                "%s mode=weighted base_alloc_pct=%.6f weights_col=alloc_weight",
+                ALLOCATION_MODE_TAG,
+                allocation_pct,
+            )
+            LOGGER.info("%s top=%s", ALLOC_SPLIT_TAG, split)
+        else:
+            LOGGER.info(
+                "%s mode=flat base_alloc_pct=%.6f",
+                ALLOCATION_MODE_TAG,
+                allocation_pct,
+            )
             LOGGER.warning(
                 "%s reason=missing_or_invalid_alloc_weight",
                 ALLOC_SPLIT_SKIPPED_TAG,
