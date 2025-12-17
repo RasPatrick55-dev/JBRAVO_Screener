@@ -2573,15 +2573,6 @@ class TradeExecutor:
                 "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
             )
 
-        self._log_top_candidates(candidates)
-
-        allowed, status, resolved_window = self.evaluate_time_window()
-        if not allowed:
-            self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
-            self.persist_metrics()
-            self.log_summary()
-            return 0
-
         existing_positions = self.fetch_existing_positions()
         open_order_symbols = self.fetch_open_order_symbols()
         account_buying_power = self.fetch_buying_power()
@@ -2626,6 +2617,62 @@ class TradeExecutor:
         slot_hint = max(1, min(available_slots, len(queue)))
         candidates = queue
         self._log_top_candidates(candidates)
+
+        try:
+            allocation_pct = float(self.config.allocation_pct)
+        except (TypeError, ValueError):
+            allocation_pct = 0.0
+        allocation_pct = max(0.0, allocation_pct)
+
+        weight_map: dict[str, float] = {}
+        weight_mode = False
+        if candidates and all("alloc_weight" in record for record in candidates):
+            raw_weights: dict[str, float] = {}
+            for record in candidates:
+                symbol = str(record.get("symbol", "")).upper()
+                try:
+                    weight_val = float(record.get("alloc_weight"))
+                except (TypeError, ValueError):
+                    weight_val = math.nan
+                if not symbol or math.isnan(weight_val) or weight_val < 0:
+                    raw_weights = {}
+                    break
+                raw_weights[symbol] = weight_val
+            total_weight = sum(raw_weights.values()) if raw_weights else 0.0
+            if total_weight > 0:
+                weight_mode = True
+                weight_map = {k: v / total_weight for k, v in raw_weights.items()}
+
+        if weight_mode:
+            split = []
+            for record in candidates:
+                symbol = str(record.get("symbol", "")).upper()
+                if symbol in weight_map:
+                    weight_val = weight_map[symbol]
+                    split.append(
+                        (
+                            symbol,
+                            round(weight_val, 4),
+                            round(allocation_pct * weight_val, 4),
+                        )
+                    )
+            LOGGER.info(
+                "[INFO] ALLOCATION_MODE mode=weighted base_alloc_pct=%.4f",
+                allocation_pct,
+            )
+            LOGGER.info("[INFO] ALLOC_SPLIT top=%s", split)
+        else:
+            LOGGER.info(
+                "[INFO] ALLOCATION_MODE mode=equal base_alloc_pct=%.4f",
+                allocation_pct,
+            )
+
+        allowed, status, resolved_window = self.evaluate_time_window()
+        if not allowed:
+            self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
+            self.persist_metrics()
+            self.log_summary()
+            return 0
         bp_raw = self._last_buying_power_raw
         if bp_raw is None:
             bp_raw = account_buying_power
@@ -2644,10 +2691,6 @@ class TradeExecutor:
             self.persist_metrics()
             self.log_summary()
             return 0
-        try:
-            allocation_pct = float(self.config.allocation_pct)
-        except (TypeError, ValueError):
-            allocation_pct = 0.0
         limit_buffer_ratio = max(0.0, float(self.config.limit_buffer_pct)) / 100.0
         max_gap_ratio = max(0.0, float(self.config.max_gap_pct)) / 100.0
         ref_buffer_ratio = max(0.0, float(self.config.ref_buffer_pct)) / 100.0
@@ -2732,6 +2775,10 @@ class TradeExecutor:
             price_src = anchor_label
             price_ref_src = anchor_label
 
+            atr_pct = _sanitize_atr_pct(record.get("atrp"))
+            atr_scale = 1.0
+            min_order = max(0.0, float(self.config.min_order_usd))
+
             quote_snapshot: Dict[str, Optional[float | str]] = {}
             trade_snapshot: Dict[str, Optional[float | str]] = {}
             live_reference_needed = premarket_active and mode == "prevclose"
@@ -2813,17 +2860,6 @@ class TradeExecutor:
                 if adjusted_ref is not None:
                     price_ref = adjusted_ref
 
-            base_notional = max(0.0, allocation_pct * max(account_buying_power, 0.0))
-            atr_pct = _sanitize_atr_pct(record.get("atrp"))
-            atr_scale = 1.0
-            target_notional = base_notional
-            if (self.config.position_sizer or "").lower() == "atr":
-                target_pct = max(0.0, float(self.config.atr_target_pct))
-                if target_pct > 0 and atr_pct > 0:
-                    atr_scale = min(1.0, target_pct / atr_pct)
-                    target_notional = base_notional * atr_scale
-            min_order = max(0.0, float(self.config.min_order_usd))
-            target_notional = max(target_notional, min_order)
             if mode in {"prevclose", "blended"}:
                 anchor_val = max(0.0, float(anchor_price or 0.0))
                 reference_val = price_ref if price_ref > 0 else anchor_val
@@ -2862,10 +2898,21 @@ class TradeExecutor:
             # Guard against Alpaca 422 errors (Rule 612 minimum increments).
             limit_px = round_to_tick(limit_px)
             limit_px = max(limit_px, 0.01)
+            effective_alloc_pct = allocation_pct
+            if weight_mode:
+                effective_alloc_pct = allocation_pct * weight_map.get(symbol, 0.0)
+            base_notional = max(0.0, effective_alloc_pct * max(account_buying_power, 0.0))
+            target_notional = base_notional
+            if (self.config.position_sizer or "").lower() == "atr":
+                target_pct = max(0.0, float(self.config.atr_target_pct))
+                if target_pct > 0 and atr_pct > 0:
+                    atr_scale = min(1.0, target_pct / atr_pct)
+                    target_notional = base_notional * atr_scale
+            target_notional = max(target_notional, min_order)
             qty = _compute_qty(
                 account_buying_power,
                 limit_px,
-                allocation_pct,
+                effective_alloc_pct,
                 min_order,
                 target_notional=target_notional,
             )
@@ -2897,7 +2944,7 @@ class TradeExecutor:
                 symbol,
                 price_f,
                 account_buying_power,
-                allocation_pct,
+                effective_alloc_pct,
                 slot_hint,
                 target_notional,
                 limit_px,

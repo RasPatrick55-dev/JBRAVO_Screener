@@ -108,6 +108,7 @@ LATEST_HEADER = ",".join(LATEST_COLUMNS) + "\n"
 DEFAULT_LABELS_BARS_PATH = Path("data") / "daily_bars.csv"
 DEFAULT_RANKER_SCORE_COLUMN = "score_5d"
 DEFAULT_RANKER_TARGET_COLUMN = "model_score_5d"
+DEFAULT_ALLOC_WEIGHT_TOP_K = 4
 
 
 def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy hook
@@ -919,6 +920,58 @@ def _enrich_candidates_with_ranker(
     return len(merged.index), matched
 
 
+def _apply_allocation_weights(
+    frame: pd.DataFrame,
+    *,
+    key: str = "model_score_5d",
+    top_k: int = DEFAULT_ALLOC_WEIGHT_TOP_K,
+    weight_column: str = "alloc_weight",
+) -> pd.DataFrame:
+    """
+    Append per-candidate allocation weights that sum to 1 across the top N rows.
+
+    Existing weight columns are dropped to avoid stale values. Returns the updated
+    frame regardless of whether weighting was possible.
+    """
+
+    working = frame.copy()
+    working = working.drop(columns=[weight_column], errors="ignore")
+
+    if key not in working.columns:
+        LOG.warning(
+            "[WARN] CANDIDATES_WEIGHTED_SKIPPED reason=missing_key key=%s", key
+        )
+        return working
+
+    scores = pd.to_numeric(working[key], errors="coerce")
+    working[key] = scores
+
+    if working.empty:
+        LOG.warning("[WARN] CANDIDATES_WEIGHTED_SKIPPED reason=empty_frame")
+        return working
+
+    top_scores = scores.head(max(0, int(top_k))).clip(lower=0.0)
+    total = float(top_scores.sum())
+    if not math.isfinite(total) or total <= 0:
+        LOG.warning(
+            "[WARN] CANDIDATES_WEIGHTED_SKIPPED reason=zero_total key=%s top_k=%s",
+            key,
+            top_k,
+        )
+        return working
+
+    weights = pd.Series(0.0, index=working.index, dtype="float64")
+    weights.iloc[: len(top_scores)] = (top_scores / total).fillna(0.0)
+    working[weight_column] = weights
+    LOG.info(
+        "[INFO] CANDIDATES_WEIGHTED key=%s top_k=%s sum_weights=%.4f",
+        key,
+        top_k,
+        float(weights.sum()),
+    )
+    return working
+
+
 def _rerank_latest_candidates(
     base_dir: Path, *, primary: str = "model_score_5d", secondary: str = "score"
 ) -> bool:
@@ -949,7 +1002,12 @@ def _rerank_latest_candidates(
                 na_position="last",
                 kind="mergesort",
             )
-            write_csv_atomic(str(candidates_path), sorted_frame)
+            weighted_frame = _apply_allocation_weights(
+                sorted_frame,
+                key=primary,
+                top_k=DEFAULT_ALLOC_WEIGHT_TOP_K,
+            )
+            write_csv_atomic(str(candidates_path), weighted_frame)
         except Exception as exc:  # pragma: no cover - defensive sort/write
             LOG.warning(
                 "[WARN] CANDIDATES_RERANK_FAILED error=%s candidates_path=%s",
