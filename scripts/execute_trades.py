@@ -2644,26 +2644,27 @@ class TradeExecutor:
                 weight_map = {k: v / total_weight for k, v in raw_weights.items()}
 
         if weight_mode:
+            LOGGER.info(
+                "[INFO] ALLOCATION_MODE mode=weighted base_alloc_pct=%.6f weights_col=alloc_weight",
+                allocation_pct,
+            )
             split = []
-            for record in candidates:
+            top_count = min(max_positions, len(candidates))
+            for record in candidates[:top_count]:
                 symbol = str(record.get("symbol", "")).upper()
                 if symbol in weight_map:
                     weight_val = weight_map[symbol]
                     split.append(
                         (
                             symbol,
-                            round(weight_val, 4),
-                            round(allocation_pct * weight_val, 4),
+                            round(weight_val, 6),
+                            round(allocation_pct * weight_val, 6),
                         )
                     )
-            LOGGER.info(
-                "[INFO] ALLOCATION_MODE mode=weighted base_alloc_pct=%.4f",
-                allocation_pct,
-            )
             LOGGER.info("[INFO] ALLOC_SPLIT top=%s", split)
         else:
             LOGGER.info(
-                "[INFO] ALLOCATION_MODE mode=equal base_alloc_pct=%.4f",
+                "[INFO] ALLOCATION_MODE mode=flat base_alloc_pct=%.6f",
                 allocation_pct,
             )
 
