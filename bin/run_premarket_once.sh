@@ -8,6 +8,21 @@ cd "$PROJECT"
 source "$VENV/bin/activate"
 set -a; . ~/.config/jbravo/.env; set +a
 
+DRY_RUN="${JBRAVO_DRY_RUN:-false}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN="${2:-true}"
+      shift 2
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 echo "[WRAPPER] checking pipeline freshness"
 set +e
 PIPELINE_INFO=$(python - <<'PY'
@@ -273,6 +288,28 @@ PY
 )
 printf '%s - wrapper - %s\n' "$LOG_TIMESTAMP" "$EXEC_SOURCE_LOG_LINE" >> logs/execute_trades.log
 echo "$EXEC_SOURCE_LOG_LINE"
+
+DRY_RUN_NORMALIZED=$(printf '%s' "$DRY_RUN" | tr '[:upper:]' '[:lower:]')
+if [[ "$DRY_RUN_NORMALIZED" == "1" || "$DRY_RUN_NORMALIZED" == "true" || "$DRY_RUN_NORMALIZED" == "yes" || "$DRY_RUN_NORMALIZED" == "on" ]]; then
+  LOG_TIMESTAMP=$(PYTHONPATH="" python - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S,%f")[:23])
+PY
+  )
+  DRY_RUN_LOG_LINE="[WARN] DRY_RUN_ENABLED skipping execute_trades"
+  printf '%s - wrapper - %s\n' "$LOG_TIMESTAMP" "$DRY_RUN_LOG_LINE" >> logs/execute_trades.log
+  echo "$DRY_RUN_LOG_LINE"
+
+  PREMARKET_FINISHED_UTC=$(python - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).isoformat())
+PY
+  )
+  export PREMARKET_FINISHED_UTC
+
+  write_premarket_snapshot
+  exit 0
+fi
 
 python -m scripts.execute_trades \
   --source "$EXEC_SOURCE" \
