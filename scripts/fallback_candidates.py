@@ -295,7 +295,20 @@ def _canonical_frame(df: Optional[pd.DataFrame], now_ts: Optional[str] = None) -
 
     mask_symbol = out["symbol"].astype("string").str.len() > 0
     out = out.loc[mask_symbol]
+    source_frame = source_frame.loc[mask_symbol] if not source_frame.empty else source_frame
+
     out = out.reset_index(drop=True)
+    source_frame = source_frame.reset_index(drop=True)
+
+    out = out[list(CANONICAL_COLUMNS)]
+
+    extra_columns = [column for column in source_frame.columns if column not in out.columns]
+    for column in extra_columns:
+        try:
+            out[column] = source_frame[column]
+        except Exception:
+            out[column] = source_frame.get(column)
+
     return out
 
 
