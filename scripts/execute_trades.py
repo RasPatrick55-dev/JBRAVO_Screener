@@ -90,6 +90,10 @@ except Exception:  # pragma: no cover - lightweight fallback for tests
 logger = logging.getLogger("execute_trades")
 LOGGER = logger
 
+ALLOCATION_MODE_TAG = "[INFO] ALLOCATION_MODE"
+ALLOC_SPLIT_TAG = "[INFO] ALLOC_SPLIT"
+ALLOC_SPLIT_SKIPPED_TAG = "[WARN] ALLOC_SPLIT_SKIPPED"
+
 REQUIRED = list(CANONICAL_COLUMNS)
 
 
@@ -2660,12 +2664,14 @@ class TradeExecutor:
 
         if weight_active:
             LOGGER.info(
-                "[INFO] ALLOCATION_MODE mode=weighted base_alloc_pct=%.6f weights_col=alloc_weight",
+                "%s mode=weighted base_alloc_pct=%.6f weights_col=alloc_weight",
+                ALLOCATION_MODE_TAG,
                 allocation_pct,
             )
         else:
             LOGGER.info(
-                "[INFO] ALLOCATION_MODE mode=flat base_alloc_pct=%.6f",
+                "%s mode=flat base_alloc_pct=%.6f",
+                ALLOCATION_MODE_TAG,
                 allocation_pct,
             )
 
@@ -2691,11 +2697,12 @@ class TradeExecutor:
                             round(allocation_pct * float(weight_val), 6),
                         )
                     )
-                LOGGER.info("[INFO] ALLOC_SPLIT top=%s", split)
+                LOGGER.info("%s top=%s", ALLOC_SPLIT_TAG, split)
                 alloc_logged = True
         if not alloc_logged:
             LOGGER.warning(
-                "[WARN] ALLOC_SPLIT_SKIPPED reason=missing_or_invalid_alloc_weight"
+                "%s reason=missing_or_invalid_alloc_weight",
+                ALLOC_SPLIT_SKIPPED_TAG,
             )
 
         allowed, status, resolved_window = self.evaluate_time_window()
