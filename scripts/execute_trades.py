@@ -2531,7 +2531,13 @@ class TradeExecutor:
             filtered.append(record)
         return filtered
 
-    def _log_top_candidates(self, records: Sequence[Mapping[str, Any]]) -> None:
+    def _log_top_candidates(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        max_positions: int,
+        base_alloc_pct: float,
+    ) -> None:
         if not records:
             return
         rank_key = self._ranking_key or "score"
@@ -2552,6 +2558,42 @@ class TradeExecutor:
                 rank_value = round(float(raw_value), 6)
             picks.append((symbol, rank_value))
         LOGGER.info("[INFO] CANDIDATE_PICK key=%s top=%s", rank_key, picks)
+
+        top_n = min(max_positions, len(picks))
+        picked_df = frame.head(top_n) if top_n > 0 else pd.DataFrame()
+        picked_weights = pd.to_numeric(
+            picked_df.get("alloc_weight", pd.Series(dtype="float")), errors="coerce"
+        )
+        picked_weights = picked_weights.apply(
+            lambda x: x if isinstance(x, (int, float)) and math.isfinite(x) else math.nan
+        )
+        valid_mask = picked_weights.notna()
+        picked_has_weights = bool(valid_mask.any())
+
+        LOGGER.info(
+            "ALLOC_BLOCK_ENTER rows=%d top_n=%d base_alloc_pct=%s",
+            len(frame),
+            top_n,
+            base_alloc_pct,
+        )
+        if picked_has_weights:
+            split: list[tuple[str, float, float]] = []
+            for symbol, weight_val in zip(picked_df.get("symbol", []), picked_weights):
+                if pd.isna(weight_val):
+                    continue
+                weight_float = float(weight_val)
+                symbol_str = str(symbol).upper()
+                split.append(
+                    (symbol_str, round(weight_float, 6), round(base_alloc_pct * weight_float, 6))
+                )
+            LOGGER.info(
+                "ALLOCATION_MODE mode=weighted base_alloc_pct=%s weights_col=alloc_weight",
+                base_alloc_pct,
+            )
+            LOGGER.info("ALLOC_SPLIT top=%s", split)
+        else:
+            LOGGER.info("ALLOCATION_MODE mode=flat base_alloc_pct=%s", base_alloc_pct)
+            LOGGER.warning("ALLOC_SPLIT_SKIPPED reason=missing_or_invalid_alloc_weight")
 
     def execute(
         self,
@@ -2620,17 +2662,17 @@ class TradeExecutor:
             queue = queue[:available_slots]
         slot_hint = max(1, min(available_slots, len(queue)))
         candidates = queue
-        self._log_top_candidates(candidates)
-
         try:
             allocation_pct = float(self.config.allocation_pct)
         except (TypeError, ValueError):
             allocation_pct = 0.0
         allocation_pct = max(0.0, allocation_pct)
 
-        top_n = min(max_positions, len(candidates))
-        weight_frame = pd.DataFrame.from_records(candidates) if candidates else pd.DataFrame()
-        picked_df = weight_frame.head(top_n) if top_n > 0 else pd.DataFrame()
+        self._log_top_candidates(
+            candidates,
+            max_positions=max_positions,
+            base_alloc_pct=allocation_pct,
+        )
 
         weight_map: dict[str, float] = {}
         weight_mode = False
@@ -2650,55 +2692,6 @@ class TradeExecutor:
             if total_weight > 0:
                 weight_mode = True
                 weight_map = {k: v / total_weight for k, v in raw_weights.items()}
-
-        picked_has_weights = False
-        split: list[tuple[str, float, float]] = []
-        picked_weights = pd.Series(dtype="float")
-        if not picked_df.empty and "alloc_weight" in picked_df.columns:
-            picked_weights = pd.to_numeric(picked_df["alloc_weight"], errors="coerce")
-            picked_weights = picked_weights.apply(
-                lambda x: x if isinstance(x, (int, float)) and math.isfinite(x) else math.nan
-            )
-            valid_mask = picked_weights.notna()
-            picked_has_weights = bool(valid_mask.any())
-            if picked_has_weights:
-                for symbol, weight_val in zip(picked_df.get("symbol", []), picked_weights):
-                    if weight_val is None or not isinstance(weight_val, (int, float)):
-                        continue
-                    if not math.isfinite(weight_val):
-                        continue
-                    symbol_str = str(symbol).upper()
-                    split.append(
-                        (
-                            symbol_str,
-                            round(float(weight_val), 6),
-                            round(allocation_pct * float(weight_val), 6),
-                        )
-                    )
-
-        LOGGER.info(
-            "[INFO] ALLOC_BLOCK_ENTER rows=%d top_n=%d base_alloc_pct=%.6f",
-            len(candidates),
-            top_n,
-            allocation_pct,
-        )
-        if picked_has_weights:
-            LOGGER.info(
-                "%s mode=weighted base_alloc_pct=%.6f weights_col=alloc_weight",
-                ALLOCATION_MODE_TAG,
-                allocation_pct,
-            )
-            LOGGER.info("%s top=%s", ALLOC_SPLIT_TAG, split)
-        else:
-            LOGGER.info(
-                "%s mode=flat base_alloc_pct=%.6f",
-                ALLOCATION_MODE_TAG,
-                allocation_pct,
-            )
-            LOGGER.warning(
-                "%s reason=missing_or_invalid_alloc_weight",
-                ALLOC_SPLIT_SKIPPED_TAG,
-            )
 
         allowed, status, resolved_window = self.evaluate_time_window()
         if not allowed:
@@ -4053,7 +4046,23 @@ def run_executor(
         return 1
 
     candidates_df = loader._rank_candidates(frame)
-    loader._log_top_candidates(candidates_df.to_dict(orient="records"))
+
+    try:
+        base_alloc_pct = float(config.allocation_pct)
+    except (TypeError, ValueError):
+        base_alloc_pct = 0.0
+    base_alloc_pct = max(0.0, base_alloc_pct)
+    try:
+        configured_max_positions = int(config.max_positions)
+    except (TypeError, ValueError):
+        configured_max_positions = 0
+    configured_max_positions = max(1, configured_max_positions)
+
+    loader._log_top_candidates(
+        candidates_df.to_dict(orient="records"),
+        max_positions=configured_max_positions,
+        base_alloc_pct=base_alloc_pct,
+    )
 
     _wait_until_submit_at(config.submit_at_ny)
     configured_window = config.time_window or "auto"
