@@ -2624,6 +2624,17 @@ class TradeExecutor:
             allocation_pct = 0.0
         allocation_pct = max(0.0, allocation_pct)
 
+        weight_series = pd.Series(dtype="float")
+        weight_active = False
+        if candidates:
+            weight_frame = pd.DataFrame.from_records(candidates)
+            if "alloc_weight" in weight_frame.columns:
+                weight_series = pd.to_numeric(
+                    weight_frame.get("alloc_weight", pd.Series(dtype="float")),
+                    errors="coerce",
+                )
+                weight_active = weight_series.notna().any()
+
         weight_map: dict[str, float] = {}
         weight_mode = False
         if candidates and all("alloc_weight" in record for record in candidates):
@@ -2643,7 +2654,7 @@ class TradeExecutor:
                 weight_mode = True
                 weight_map = {k: v / total_weight for k, v in raw_weights.items()}
 
-        if weight_mode:
+        if weight_active:
             LOGGER.info(
                 "[INFO] ALLOCATION_MODE mode=weighted base_alloc_pct=%.6f weights_col=alloc_weight",
                 allocation_pct,
@@ -2652,8 +2663,25 @@ class TradeExecutor:
             top_count = min(max_positions, len(candidates))
             for record in candidates[:top_count]:
                 symbol = str(record.get("symbol", "")).upper()
-                if symbol in weight_map:
+                weight_val = None
+                if weight_mode and symbol in weight_map:
                     weight_val = weight_map[symbol]
+                elif weight_active and not weight_series.empty:
+                    try:
+                        weight_val = float(
+                            pd.to_numeric(pd.Series([record.get("alloc_weight")]), errors="coerce")
+                            .fillna(math.nan)
+                            .iloc[0]
+                        )
+                    except Exception:
+                        weight_val = None
+                    if weight_val is not None and not math.isnan(weight_val):
+                        total_weight = weight_series.fillna(0.0).clip(lower=0.0).sum()
+                        if total_weight > 0:
+                            weight_val = weight_val / total_weight
+                        else:
+                            weight_val = None
+                if weight_val is not None and not math.isnan(weight_val):
                     split.append(
                         (
                             symbol,
