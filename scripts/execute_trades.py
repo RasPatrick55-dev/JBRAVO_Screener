@@ -2624,16 +2624,20 @@ class TradeExecutor:
             allocation_pct = 0.0
         allocation_pct = max(0.0, allocation_pct)
 
+        top_n = min(max_positions, len(candidates))
         weight_series = pd.Series(dtype="float")
         weight_active = False
-        if candidates:
-            weight_frame = pd.DataFrame.from_records(candidates)
-            if "alloc_weight" in weight_frame.columns:
-                weight_series = pd.to_numeric(
-                    weight_frame.get("alloc_weight", pd.Series(dtype="float")),
-                    errors="coerce",
-                )
-                weight_active = weight_series.notna().any()
+        weight_frame = pd.DataFrame.from_records(candidates) if candidates else pd.DataFrame()
+        picked_df = weight_frame.head(top_n) if top_n > 0 else pd.DataFrame()
+        if not weight_frame.empty and "alloc_weight" in weight_frame.columns:
+            weight_series = pd.to_numeric(
+                weight_frame.get("alloc_weight", pd.Series(dtype="float")),
+                errors="coerce",
+            )
+            weight_series = weight_series.apply(
+                lambda x: x if isinstance(x, (int, float)) and math.isfinite(x) else math.nan
+            )
+            weight_active = weight_series.notna().any()
 
         weight_map: dict[str, float] = {}
         weight_mode = False
@@ -2659,41 +2663,39 @@ class TradeExecutor:
                 "[INFO] ALLOCATION_MODE mode=weighted base_alloc_pct=%.6f weights_col=alloc_weight",
                 allocation_pct,
             )
-            split = []
-            top_count = min(max_positions, len(candidates))
-            for record in candidates[:top_count]:
-                symbol = str(record.get("symbol", "")).upper()
-                weight_val = None
-                if weight_mode and symbol in weight_map:
-                    weight_val = weight_map[symbol]
-                elif weight_active and not weight_series.empty:
-                    try:
-                        weight_val = float(
-                            pd.to_numeric(pd.Series([record.get("alloc_weight")]), errors="coerce")
-                            .fillna(math.nan)
-                            .iloc[0]
-                        )
-                    except Exception:
-                        weight_val = None
-                    if weight_val is not None and not math.isnan(weight_val):
-                        total_weight = weight_series.fillna(0.0).clip(lower=0.0).sum()
-                        if total_weight > 0:
-                            weight_val = weight_val / total_weight
-                        else:
-                            weight_val = None
-                if weight_val is not None and not math.isnan(weight_val):
-                    split.append(
-                        (
-                            symbol,
-                            round(weight_val, 6),
-                            round(allocation_pct * weight_val, 6),
-                        )
-                    )
-            LOGGER.info("[INFO] ALLOC_SPLIT top=%s", split)
         else:
             LOGGER.info(
                 "[INFO] ALLOCATION_MODE mode=flat base_alloc_pct=%.6f",
                 allocation_pct,
+            )
+
+        alloc_logged = False
+        if not picked_df.empty and "alloc_weight" in picked_df.columns:
+            picked_weights = pd.to_numeric(picked_df["alloc_weight"], errors="coerce")
+            picked_weights = picked_weights.apply(
+                lambda x: x if isinstance(x, (int, float)) and math.isfinite(x) else math.nan
+            )
+            valid_mask = picked_weights.notna()
+            if valid_mask.any():
+                split = []
+                for symbol, weight_val in zip(picked_df.get("symbol", []), picked_weights):
+                    if weight_val is None or not isinstance(weight_val, (int, float)):
+                        continue
+                    if not math.isfinite(weight_val):
+                        continue
+                    symbol_str = str(symbol).upper()
+                    split.append(
+                        (
+                            symbol_str,
+                            round(float(weight_val), 6),
+                            round(allocation_pct * float(weight_val), 6),
+                        )
+                    )
+                LOGGER.info("[INFO] ALLOC_SPLIT top=%s", split)
+                alloc_logged = True
+        if not alloc_logged:
+            LOGGER.warning(
+                "[WARN] ALLOC_SPLIT_SKIPPED reason=missing_or_invalid_alloc_weight"
             )
 
         allowed, status, resolved_window = self.evaluate_time_window()
