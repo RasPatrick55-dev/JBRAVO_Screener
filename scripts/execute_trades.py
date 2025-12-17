@@ -2543,7 +2543,6 @@ class TradeExecutor:
             return
         rank_key = self._ranking_key or "score"
         frame = pd.DataFrame.from_records(records)
-        weight_source = source_df if source_df is not None else frame
         if "_rank_val" in frame.columns:
             rank_series = pd.to_numeric(frame["_rank_val"], errors="coerce")
         else:
@@ -2563,9 +2562,11 @@ class TradeExecutor:
 
         top_n = min(max_positions, len(picks))
         picked_df = frame.head(top_n) if top_n > 0 else pd.DataFrame()
-        weight_symbols = weight_source.get("symbol", pd.Series(dtype="string"))
+        weight_frame = source_df if source_df is not None else frame
+        weight_frame = weight_frame.head(top_n) if top_n > 0 else weight_frame.iloc[0:0]
+        weight_symbols = weight_frame.get("symbol", pd.Series(dtype="string"))
         weight_series = pd.to_numeric(
-            weight_source.get("alloc_weight", pd.Series(dtype="float")), errors="coerce"
+            weight_frame.get("alloc_weight", pd.Series(dtype="float")), errors="coerce"
         )
         weights: dict[str, float] = {}
         for sym_raw, weight_val in zip(weight_symbols, weight_series):
@@ -2582,9 +2583,16 @@ class TradeExecutor:
         picked_symbols: list[str] = [str(sym).upper() for sym in picked_df.get("symbol", [])]
         picked_weights_found = sum(1 for sym in picked_symbols if sym in weights)
 
+        weight_columns = list(weight_frame.columns)[:15]
+        LOGGER.info(
+            "[INFO] ALLOC_WEIGHT_COLUMNS present=%s columns=%s",
+            "alloc_weight" in weight_frame.columns,
+            weight_columns,
+        )
+
         LOGGER.info(
             "ALLOC_WEIGHT_DIAG total_rows=%d weights_non_null=%d picked=%d picked_weights_found=%d sample=%s",
-            len(weight_source),
+            len(weight_frame),
             int(pd.notna(weight_series).sum()),
             top_n,
             picked_weights_found,
