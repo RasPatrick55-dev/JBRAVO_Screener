@@ -86,6 +86,40 @@ def _load_metrics() -> dict:
 MONITOR_METRICS = _load_metrics()
 
 
+RANKER_EVAL_PATH = Path(BASE_DIR) / "data" / "ranker_eval" / "latest.json"
+
+
+def _load_ranker_eval() -> dict:
+    default_state = {"signal_quality": "MEDIUM", "decile_lift": None}
+    try:
+        payload = json.loads(RANKER_EVAL_PATH.read_text())
+    except Exception as exc:
+        logger.warning("[MONITOR] Unable to load ranker eval: %s", exc)
+        return default_state
+
+    quality = (payload.get("signal_quality") or "MEDIUM").upper()
+    if quality not in {"LOW", "MEDIUM", "HIGH"}:
+        quality = "MEDIUM"
+    decile_lift = payload.get("decile_lift")
+    try:
+        decile_lift = float(decile_lift) if decile_lift is not None else None
+    except Exception:
+        decile_lift = None
+    return {"signal_quality": quality, "decile_lift": decile_lift}
+
+
+def _sanitize_ranker_eval_state(state: dict) -> dict:
+    """Return a sanitized ML risk state."""
+
+    return {
+        "signal_quality": (state.get("signal_quality") or "MEDIUM").upper(),
+        "decile_lift": state.get("decile_lift"),
+    }
+
+
+ML_RISK_STATE = _sanitize_ranker_eval_state(_load_ranker_eval())
+
+
 def _persist_metrics() -> None:
     payload = dict(MONITOR_METRICS)
     payload["last_updated_utc"] = datetime.now(timezone.utc).isoformat()
@@ -558,6 +592,25 @@ DEBUG_STATE: dict[str, object] = {
     "flags": {"partial": False, "macd": False, "pattern": False},
 }
 
+LOW_SIGNAL_STOP_COOLDOWN_PATH = Path(BASE_DIR) / "data" / "monitor_stop_cooldowns.json"
+
+
+def _load_stop_cooldowns() -> dict[str, str]:
+    try:
+        return json.loads(LOW_SIGNAL_STOP_COOLDOWN_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_stop_cooldowns(state: dict[str, str]) -> None:
+    try:
+        LOW_SIGNAL_STOP_COOLDOWN_PATH.write_text(json.dumps(state, indent=2))
+    except Exception as exc:
+        logger.error("Unable to persist stop cooldowns: %s", exc)
+
+
+LOW_SIGNAL_STOP_COOLDOWNS = _load_stop_cooldowns()
+
 _load_env_if_needed()
 
 API_KEY = os.getenv("APCA_API_KEY_ID")
@@ -582,9 +635,41 @@ TRAIL_TIGHTEST_PERCENT = float(os.getenv("TRAIL_TIGHTEST_PERCENT", "1"))
 GAIN_THRESHOLD_ADJUST = float(os.getenv("GAIN_THRESHOLD_ADJUST", "10"))
 PARTIAL_GAIN_THRESHOLD = float(os.getenv("PARTIAL_GAIN_THRESHOLD", "5"))
 MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "7"))
+LOW_SIGNAL_GAIN_THRESHOLD = float(os.getenv("LOW_SIGNAL_GAIN_THRESHOLD", "4"))
+LOW_SIGNAL_TIGHTEN_DELTA = float(os.getenv("LOW_SIGNAL_TIGHTEN_DELTA", "0.75"))
+LOW_SIGNAL_TIGHTEN_MIN = float(os.getenv("LOW_SIGNAL_TIGHTEN_MIN", "0.5"))
+LOW_SIGNAL_TIGHTEN_MAX = float(os.getenv("LOW_SIGNAL_TIGHTEN_MAX", "1.0"))
+LOW_SIGNAL_TRAIL_FLOOR = float(os.getenv("LOW_SIGNAL_TRAIL_FLOOR", "1.5"))
+LOW_SIGNAL_TIGHTEN_COOLDOWN_HOURS = int(
+    os.getenv("LOW_SIGNAL_TIGHTEN_COOLDOWN_HOURS", "24")
+)
 
 # Minimum number of historical bars required for indicator calculation
 required_bars = 200
+
+
+def refresh_ml_risk_state() -> dict:
+    """Reload the ML signal quality file and store a sanitized version."""
+
+    global ML_RISK_STATE
+    ML_RISK_STATE = _sanitize_ranker_eval_state(_load_ranker_eval())
+    return ML_RISK_STATE
+
+
+def _is_low_signal_cooldown(symbol: str, now: datetime) -> bool:
+    last_ts = LOW_SIGNAL_STOP_COOLDOWNS.get(symbol)
+    if not last_ts:
+        return False
+    try:
+        last_dt = datetime.fromisoformat(last_ts)
+    except Exception:
+        return False
+    return now - last_dt < timedelta(hours=LOW_SIGNAL_TIGHTEN_COOLDOWN_HOURS)
+
+
+def _mark_low_signal_cooldown(symbol: str, now: datetime) -> None:
+    LOW_SIGNAL_STOP_COOLDOWNS[symbol] = now.isoformat()
+    _save_stop_cooldowns(LOW_SIGNAL_STOP_COOLDOWNS)
 
 
 def is_extended_hours(now_et: dt_time) -> bool:
@@ -997,6 +1082,7 @@ def manage_trailing_stop(position):
     entry = float(position.avg_entry_price)
     current = float(position.current_price)
     gain_pct = (current - entry) / entry * 100 if entry else 0
+    ml_signal_quality = ML_RISK_STATE.get("signal_quality", "MEDIUM")
     if not qty or float(qty) <= 0:
         logger.info(
             f"Skipping trailing stop for {symbol} due to non-positive quantity: {qty}."
@@ -1081,6 +1167,30 @@ def manage_trailing_stop(position):
     target_trail_pct = desired_trail_pct(gain_pct)
     effective_target = min(current_trail_pct, target_trail_pct)
 
+    now_utc = datetime.utcnow()
+    low_signal_tighten = False
+    if (
+        ml_signal_quality == "LOW"
+        and gain_pct >= LOW_SIGNAL_GAIN_THRESHOLD
+        and not _is_low_signal_cooldown(symbol, now_utc)
+    ):
+        tighten_delta = min(
+            LOW_SIGNAL_TIGHTEN_MAX,
+            max(LOW_SIGNAL_TIGHTEN_MIN, LOW_SIGNAL_TIGHTEN_DELTA),
+        )
+        proposed_low_signal_target = max(
+            LOW_SIGNAL_TRAIL_FLOOR, current_trail_pct - tighten_delta
+        )
+        if proposed_low_signal_target + 1e-6 < effective_target:
+            effective_target = proposed_low_signal_target
+            low_signal_tighten = True
+    elif ml_signal_quality == "LOW" and gain_pct >= LOW_SIGNAL_GAIN_THRESHOLD:
+        logger.info(
+            "[INFO] STOP_TIGHTEN_COOLDOWN signal_quality=LOW symbol=%s last=%s",
+            symbol,
+            LOW_SIGNAL_STOP_COOLDOWNS.get(symbol),
+        )
+
     if abs(current_trail_pct - effective_target) < 1e-6:
         logger.info(
             "No trailing stop adjustment needed for %s (gain: %.2f%%; trail %.2f%%)",
@@ -1093,10 +1203,21 @@ def manage_trailing_stop(position):
     try:
         cancel_order_safe(trailing_order.id, symbol)
         reason_detail = (
-            "+10% gain" if effective_target == TRAIL_TIGHTEST_PERCENT else "+5% gain"
+            "low_signal_profit_lock"
+            if low_signal_tighten
+            else "+10% gain"
+            if effective_target == TRAIL_TIGHTEST_PERCENT
+            else "+5% gain"
             if effective_target == TRAIL_TIGHT_PERCENT
             else "default"
         )
+        if low_signal_tighten:
+            logger.info(
+                "[INFO] STOP_TIGHTEN signal_quality=LOW symbol=%s old_trail=%.2f new_trail=%.2f reason=low_signal_profit_lock",
+                symbol,
+                current_trail_pct,
+                effective_target,
+            )
         logger.info(
             "Tightening trailing stop for %s from %.2f%% to %.2f%% due to %s",
             symbol,
@@ -1121,6 +1242,8 @@ def manage_trailing_stop(position):
             gain_pct,
         )
         log_trailing_stop_event(symbol, effective_target, None, "adjusted")
+        if low_signal_tighten:
+            _mark_low_signal_cooldown(symbol, now_utc)
     except Exception as e:
         logger.error("Failed to adjust trailing stop for %s: %s", symbol, e)
         try:
@@ -1274,6 +1397,13 @@ def process_positions_cycle():
         existing_positions_df = pd.read_csv(csv_path)
     else:
         existing_positions_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
+
+    ml_state = refresh_ml_risk_state()
+    logger.info(
+        "[MONITOR] ML risk state: signal_quality=%s decile_lift=%s",
+        ml_state.get("signal_quality"),
+        ml_state.get("decile_lift"),
+    )
 
     positions = get_open_positions()
     save_positions_csv(positions, csv_path)
