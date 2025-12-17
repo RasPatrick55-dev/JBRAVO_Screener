@@ -17,6 +17,7 @@ from alpaca.trading.requests import (
     GetOrdersRequest,
     TrailingStopOrderRequest,
     LimitOrderRequest,
+    StopOrderRequest,
 )
 
 # Support both ``python -m scripts.monitor_positions`` (preferred) and direct invocation.
@@ -58,6 +59,8 @@ METRIC_KEYS = [
     "exits_max_hold",
     "exits_signal",
     "api_errors",
+    "stop_attach_failed",
+    "stop_coverage_pct",
 ]
 
 
@@ -138,7 +141,12 @@ def increment_metric(name: str, delta: int = 1) -> None:
 
 
 def write_status(
-    *, status: str = "running", positions_count: int = 0, trailing_count: int = 0
+    *,
+    status: str = "running",
+    positions_count: int = 0,
+    trailing_count: int = 0,
+    protective_orders_count: int = 0,
+    stop_coverage_pct: float | None = None,
 ) -> None:
     payload = {
         "pid": os.getpid(),
@@ -147,15 +155,25 @@ def write_status(
         "last_heartbeat_utc": datetime.now(timezone.utc).isoformat(),
         "positions_count": int(positions_count),
         "open_trailing_stops_count": int(trailing_count),
+        "protective_orders_count": int(protective_orders_count),
+        "stop_coverage_pct": float(stop_coverage_pct) if stop_coverage_pct is not None else None,
     }
     STATUS_PATH.write_text(json.dumps(payload, indent=2))
 
 
-def record_heartbeat(positions_count: int, trailing_count: int, status: str = "running") -> None:
+def record_heartbeat(
+    positions_count: int,
+    trailing_count: int,
+    protective_orders_count: int = 0,
+    stop_coverage_pct: float | None = None,
+    status: str = "running",
+) -> None:
     logger.info(
-        "[MONITOR_HEARTBEAT] positions=%s trailing_stops=%s status=%s",
+        "[MONITOR_HEARTBEAT] positions=%s trailing_stops=%s protective_orders=%s coverage=%.3f status=%s",
         positions_count,
         trailing_count,
+        protective_orders_count,
+        float(stop_coverage_pct or 0.0),
         status,
     )
     today = datetime.utcnow().date().isoformat()
@@ -166,6 +184,8 @@ def record_heartbeat(positions_count: int, trailing_count: int, status: str = "r
         status=status,
         positions_count=positions_count,
         trailing_count=trailing_count,
+        protective_orders_count=protective_orders_count,
+        stop_coverage_pct=stop_coverage_pct,
     )
     _persist_metrics()
 
@@ -936,6 +956,20 @@ def get_trailing_stop_order(symbol):
     return None
 
 
+def _normalize_order_side(order) -> str:
+    side_value = getattr(order, "side", "")
+    if hasattr(side_value, "value"):
+        side_value = side_value.value
+    return str(side_value).lower()
+
+
+def _is_protective_order(order, expected_side: str) -> bool:
+    order_type = str(getattr(order, "order_type", "")).lower()
+    if order_type not in {"trailing_stop", "stop"}:
+        return False
+    return _normalize_order_side(order) == expected_side
+
+
 def last_filled_trailing_stop(symbol):
     request = GetOrdersRequest(symbols=[symbol], limit=10)
     try:
@@ -965,6 +999,10 @@ def count_open_trailing_stops() -> int:
         logger.error("Failed to count trailing stops: %s", exc)
         increment_metric("api_errors")
         return 0
+
+
+def _compute_stop_price_from_trail(current_price: float, trail_percent: float) -> float:
+    return round_price(current_price * (1 + float(trail_percent) / 100))
 
 
 def log_trade_exit(
@@ -1034,6 +1072,191 @@ def log_closed_positions(trading_client, closed_symbols, existing_positions_df):
         if symbol in PARTIAL_EXIT_TAKEN:
             PARTIAL_EXIT_TAKEN.pop(symbol, None)
             _save_partial_state(PARTIAL_EXIT_TAKEN)
+
+
+def _determine_position_side(position) -> str:
+    side_val = str(getattr(position, "side", "")).lower()
+    if side_val in {"long", "short"}:
+        return side_val
+    try:
+        qty_val = float(getattr(position, "qty", 0))
+        return "short" if qty_val < 0 else "long"
+    except Exception:
+        return "long"
+
+
+def _get_available_qty(position) -> int:
+    try:
+        qty_available = float(getattr(position, "qty_available", position.qty))
+    except Exception:
+        qty_available = float(getattr(position, "qty", 0))
+    return abs(int(qty_available))
+
+
+def _attach_long_protective_stop(position, trail_percent: float) -> bool:
+    symbol = position.symbol
+    qty = _get_available_qty(position)
+    logger.info(
+        "[INFO] STOP_ATTACH_ATTEMPT symbol=%s side=long type=trailing_sell trail_pct=%s",
+        symbol,
+        trail_percent,
+    )
+    if qty <= 0:
+        logger.warning(
+            "[WARN] STOP_ATTACH_FAILED symbol=%s side=long type=trailing_sell error=no_available_qty",
+            symbol,
+        )
+        increment_metric("stop_attach_failed")
+        return False
+    try:
+        request = TrailingStopOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+            trail_percent=str(trail_percent),
+        )
+        order = trading_client.submit_order(order_data=request)
+        logger.info(
+            "[INFO] STOP_ATTACH_OK symbol=%s side=long type=trailing_sell order_id=%s",
+            symbol,
+            getattr(order, "id", None),
+        )
+        increment_metric("stops_attached")
+        return True
+    except Exception as exc:
+        logger.warning(
+            "[WARN] STOP_ATTACH_FAILED symbol=%s side=long type=trailing_sell error=%s",
+            symbol,
+            exc,
+        )
+        increment_metric("stop_attach_failed")
+        increment_metric("api_errors")
+        return False
+
+
+def _attach_short_protective_stop(position, trail_percent: float) -> bool:
+    symbol = position.symbol
+    qty = _get_available_qty(position)
+    logger.info(
+        "[INFO] STOP_ATTACH_ATTEMPT symbol=%s side=short type=trailing_buy trail_pct=%s",
+        symbol,
+        trail_percent,
+    )
+    if qty <= 0:
+        logger.warning(
+            "[WARN] STOP_ATTACH_FAILED symbol=%s side=short type=trailing_buy error=no_available_qty",
+            symbol,
+        )
+        increment_metric("stop_attach_failed")
+        return False
+    try:
+        request = TrailingStopOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.BUY,
+            time_in_force=TimeInForce.GTC,
+            trail_percent=str(trail_percent),
+        )
+        order = trading_client.submit_order(order_data=request)
+        logger.info(
+            "[INFO] STOP_ATTACH_OK symbol=%s side=short type=trailing_buy order_id=%s",
+            symbol,
+            getattr(order, "id", None),
+        )
+        increment_metric("stops_attached")
+        return True
+    except Exception as exc:
+        logger.warning(
+            "[WARN] STOP_ATTACH_FAILED symbol=%s side=short type=trailing_buy error=%s",
+            symbol,
+            exc,
+        )
+        increment_metric("stop_attach_failed")
+        increment_metric("api_errors")
+
+    stop_price = _compute_stop_price_from_trail(
+        float(getattr(position, "current_price", position.avg_entry_price)), trail_percent
+    )
+    logger.info(
+        "[INFO] STOP_ATTACH_ATTEMPT symbol=%s side=short type=stop_buy trail_pct=%s stop_price=%.2f",
+        symbol,
+        trail_percent,
+        stop_price,
+    )
+    try:
+        request = StopOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.BUY,
+            stop_price=stop_price,
+            time_in_force=TimeInForce.GTC,
+        )
+        order = trading_client.submit_order(order_data=request)
+        logger.info(
+            "[INFO] STOP_ATTACH_OK symbol=%s side=short type=stop_buy order_id=%s",
+            symbol,
+            getattr(order, "id", None),
+        )
+        increment_metric("stops_attached")
+        return True
+    except Exception as exc:
+        logger.warning(
+            "[WARN] STOP_ATTACH_FAILED symbol=%s side=short type=stop_buy error=%s",
+            symbol,
+            exc,
+        )
+        increment_metric("stop_attach_failed")
+        increment_metric("api_errors")
+        return False
+
+
+def enforce_stop_coverage(positions: list) -> tuple[int, float]:
+    if not positions:
+        MONITOR_METRICS["stop_coverage_pct"] = 1.0
+        _persist_metrics()
+        return 0, 1.0
+
+    try:
+        open_orders = trading_client.get_orders(
+            GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        )
+    except Exception as exc:
+        logger.error("Failed to fetch open orders for stop coverage: %s", exc)
+        increment_metric("api_errors")
+        MONITOR_METRICS["stop_coverage_pct"] = 0.0
+        _persist_metrics()
+        return 0, 0.0
+
+    orders_by_symbol: dict[str, list] = {}
+    for order in open_orders:
+        orders_by_symbol.setdefault(getattr(order, "symbol", ""), []).append(order)
+
+    protective_covers = 0
+    for position in positions:
+        symbol = position.symbol
+        side = _determine_position_side(position)
+        expected_side = "sell" if side == "long" else "buy"
+        symbol_orders = orders_by_symbol.get(symbol, [])
+        if any(_is_protective_order(order, expected_side) for order in symbol_orders):
+            protective_covers += 1
+            continue
+
+        logger.warning("[WARN] STOP_MISSING symbol=%s side=%s", symbol, side)
+        increment_metric("stops_missing")
+
+        attached = (
+            _attach_long_protective_stop(position, TRAIL_START_PERCENT)
+            if side == "long"
+            else _attach_short_protective_stop(position, TRAIL_START_PERCENT)
+        )
+        if attached:
+            protective_covers += 1
+
+    coverage_pct = protective_covers / len(positions)
+    MONITOR_METRICS["stop_coverage_pct"] = float(coverage_pct)
+    _persist_metrics()
+    return protective_covers, coverage_pct
 
 
 def has_pending_sell_order(symbol):
@@ -1515,10 +1738,18 @@ def process_positions_cycle():
 
 def monitor_positions():
     logger.info("[MONITOR_START] Starting real-time position monitoring (pid=%s)", os.getpid())
-    write_status(status="starting", positions_count=0, trailing_count=0)
+    write_status(
+        status="starting",
+        positions_count=0,
+        trailing_count=0,
+        protective_orders_count=0,
+        stop_coverage_pct=0.0,
+    )
     while True:
         positions: list = []
         trailing_stops_count = 0
+        protective_orders_count = 0
+        stop_coverage_pct = 0.0
         loop_status = "running"
         market_hours = True
         try:
@@ -1532,6 +1763,8 @@ def monitor_positions():
             else:
                 positions = update_open_positions() or []
 
+            protective_orders_count, stop_coverage_pct = enforce_stop_coverage(positions)
+
             check_pending_orders()
 
             trailing_stops_count = count_open_trailing_stops()
@@ -1542,7 +1775,13 @@ def monitor_positions():
             increment_metric("api_errors")
             loop_status = "error"
 
-        record_heartbeat(len(positions or []), trailing_stops_count, status=loop_status)
+        record_heartbeat(
+            len(positions or []),
+            trailing_stops_count,
+            protective_orders_count,
+            stop_coverage_pct,
+            status=loop_status,
+        )
 
         sleep_time = SLEEP_INTERVAL if market_hours else OFF_HOUR_SLEEP_INTERVAL
         time.sleep(sleep_time)
