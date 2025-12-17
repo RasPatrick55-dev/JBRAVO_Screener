@@ -49,6 +49,92 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info("Monitoring service active.")
 
+STATUS_PATH = Path(BASE_DIR) / "data" / "monitor_status.json"
+METRICS_PATH = Path(BASE_DIR) / "data" / "monitor_metrics.json"
+METRIC_KEYS = [
+    "stops_attached",
+    "stops_missing",
+    "stops_tightened",
+    "exits_max_hold",
+    "exits_signal",
+    "api_errors",
+]
+
+
+def _default_metrics(date_str: str | None = None) -> dict:
+    payload = {key: 0 for key in METRIC_KEYS}
+    payload["date"] = date_str or datetime.utcnow().date().isoformat()
+    return payload
+
+
+def _load_metrics() -> dict:
+    today = datetime.utcnow().date().isoformat()
+    if METRICS_PATH.exists():
+        try:
+            data = json.loads(METRICS_PATH.read_text())
+            if isinstance(data, dict):
+                if data.get("date") != today:
+                    data = _default_metrics(today)
+                for key in METRIC_KEYS:
+                    data.setdefault(key, 0)
+                return data
+        except Exception:
+            logger.warning("[MONITOR] Unable to read monitor metrics; resetting state")
+    return _default_metrics(today)
+
+
+MONITOR_METRICS = _load_metrics()
+
+
+def _persist_metrics() -> None:
+    payload = dict(MONITOR_METRICS)
+    payload["last_updated_utc"] = datetime.now(timezone.utc).isoformat()
+    METRICS_PATH.write_text(json.dumps(payload, indent=2))
+
+
+def increment_metric(name: str, delta: int = 1) -> None:
+    today = datetime.utcnow().date().isoformat()
+    if MONITOR_METRICS.get("date") != today:
+        MONITOR_METRICS.clear()
+        MONITOR_METRICS.update(_default_metrics(today))
+    if name not in METRIC_KEYS:
+        return
+    MONITOR_METRICS[name] = int(MONITOR_METRICS.get(name, 0)) + int(delta)
+    _persist_metrics()
+
+
+def write_status(
+    *, status: str = "running", positions_count: int = 0, trailing_count: int = 0
+) -> None:
+    payload = {
+        "pid": os.getpid(),
+        "status": status,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "last_heartbeat_utc": datetime.now(timezone.utc).isoformat(),
+        "positions_count": int(positions_count),
+        "open_trailing_stops_count": int(trailing_count),
+    }
+    STATUS_PATH.write_text(json.dumps(payload, indent=2))
+
+
+def record_heartbeat(positions_count: int, trailing_count: int, status: str = "running") -> None:
+    logger.info(
+        "[MONITOR_HEARTBEAT] positions=%s trailing_stops=%s status=%s",
+        positions_count,
+        trailing_count,
+        status,
+    )
+    today = datetime.utcnow().date().isoformat()
+    if MONITOR_METRICS.get("date") != today:
+        MONITOR_METRICS.clear()
+        MONITOR_METRICS.update(_default_metrics(today))
+    write_status(
+        status=status,
+        positions_count=positions_count,
+        trailing_count=trailing_count,
+    )
+    _persist_metrics()
+
 
 def is_debug_mode() -> bool:
     return os.getenv("JBRAVO_MONITOR_DEBUG", "").lower() in {"1", "true", "yes", "on"}
@@ -526,6 +612,7 @@ def get_open_positions():
         return positions
     except Exception as e:
         logger.error("Failed to fetch open positions: %s", e)
+        increment_metric("api_errors")
         return []
 
 
@@ -575,6 +662,8 @@ def update_open_positions():
     closed_symbols = existing_symbols - current_symbols
 
     log_closed_positions(trading_client, closed_symbols, existing_positions_df)
+
+    return positions
 
 
 def fetch_indicators(symbol):
@@ -750,6 +839,7 @@ def get_open_orders(symbol):
         return list(open_orders)
     except Exception as e:
         logger.error("Failed to fetch open orders for %s: %s", symbol, e)
+        increment_metric("api_errors")
         return []
 
 
@@ -775,7 +865,21 @@ def last_filled_trailing_stop(symbol):
                 return o
     except Exception as e:
         logger.error("Failed to fetch order history for %s: %s", symbol, e)
+        increment_metric("api_errors")
     return None
+
+
+def count_open_trailing_stops() -> int:
+    request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+    try:
+        orders = trading_client.get_orders(request)
+        count = sum(1 for order in orders if getattr(order, "order_type", "") == "trailing_stop")
+        logger.info("[MONITOR] Open trailing stops: %s", count)
+        return int(count)
+    except Exception as exc:
+        logger.error("Failed to count trailing stops: %s", exc)
+        increment_metric("api_errors")
+        return 0
 
 
 def log_trade_exit(
@@ -875,9 +979,11 @@ def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> Non
             str(getattr(order, "id", None)),
             "submitted",
         )
+        increment_metric("stops_attached")
     except Exception as exc:
         logger.error("Failed to submit trailing stop for %s: %s", symbol, exc)
         log_trailing_stop_event(symbol, float(trail_percent), None, "error")
+        increment_metric("api_errors")
 
 
 def manage_trailing_stop(position):
@@ -932,6 +1038,7 @@ def manage_trailing_stop(position):
         else:
             logger.warning(f"No available quantity for trailing stop on {symbol}.")
             log_trailing_stop_event(symbol, TRAIL_START_PERCENT, None, "skipped")
+            increment_metric("stops_missing")
         return
 
     trailing_order = trailing_stops[0]
@@ -997,6 +1104,7 @@ def manage_trailing_stop(position):
             effective_target,
             reason_detail,
         )
+        increment_metric("stops_tightened")
         request = TrailingStopOrderRequest(
             symbol=symbol,
             qty=use_qty,
@@ -1153,6 +1261,7 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
         )
     except Exception as e:
         logger.error("Error submitting sell order for %s: %s", symbol, e)
+        increment_metric("api_errors")
         try:
             trading_client.close_position(symbol)
         except Exception as exc:  # pragma: no cover - API errors
@@ -1177,7 +1286,7 @@ def process_positions_cycle():
 
     if not positions:
         logger.info("No open positions found.")
-        return
+        return positions
     for position in positions:
         symbol = position.symbol
         days_held = calculate_days_held(position)
@@ -1199,7 +1308,7 @@ def process_positions_cycle():
                     logger.error(
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
-
+            increment_metric("exits_max_hold")
             submit_sell_market_order(position, reason=f"Max Hold {days_held}d", reason_code="max_hold")
             if symbol in PARTIAL_EXIT_TAKEN:
                 PARTIAL_EXIT_TAKEN.pop(symbol, None)
@@ -1262,6 +1371,7 @@ def process_positions_cycle():
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
             reason_text = "; ".join(reasons)
+            increment_metric("exits_signal")
             submit_sell_market_order(position, reason=reason_text, reason_code="monitor")
             if symbol in PARTIAL_EXIT_TAKEN:
                 PARTIAL_EXIT_TAKEN.pop(symbol, None)
@@ -1270,10 +1380,17 @@ def process_positions_cycle():
             logger.info(f"No sell signal for {symbol}; managing trailing stop.")
             manage_trailing_stop(position)
 
+    return positions
+
 
 def monitor_positions():
-    logger.info("Starting real-time position monitoring...")
+    logger.info("[MONITOR_START] Starting real-time position monitoring (pid=%s)", os.getpid())
+    write_status(status="starting", positions_count=0, trailing_count=0)
     while True:
+        positions: list = []
+        trailing_stops_count = 0
+        loop_status = "running"
+        market_hours = True
         try:
             now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ)
             market_hours = TRADING_START_HOUR <= now_et.hour < TRADING_END_HOUR
@@ -1281,15 +1398,21 @@ def monitor_positions():
             log_if_stale(open_pos_path, "open_positions.csv", threshold_minutes=10)
 
             if market_hours:
-                process_positions_cycle()
+                positions = process_positions_cycle() or []
             else:
-                update_open_positions()
+                positions = update_open_positions() or []
 
             check_pending_orders()
+
+            trailing_stops_count = count_open_trailing_stops()
 
             logger.info("Updated open_positions.csv successfully.")
         except Exception as e:
             logger.exception("Monitoring loop error")
+            increment_metric("api_errors")
+            loop_status = "error"
+
+        record_heartbeat(len(positions or []), trailing_stops_count, status=loop_status)
 
         sleep_time = SLEEP_INTERVAL if market_hours else OFF_HOUR_SLEEP_INTERVAL
         time.sleep(sleep_time)
