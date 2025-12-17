@@ -52,6 +52,7 @@ logger.info("Monitoring service active.")
 
 STATUS_PATH = Path(BASE_DIR) / "data" / "monitor_status.json"
 METRICS_PATH = Path(BASE_DIR) / "data" / "monitor_metrics.json"
+MONITOR_STATE_PATH = Path(BASE_DIR) / "data" / "monitor_state.json"
 METRIC_KEYS = [
     "stops_attached",
     "stops_missing",
@@ -87,6 +88,27 @@ def _load_metrics() -> dict:
 
 
 MONITOR_METRICS = _load_metrics()
+
+
+def _load_monitor_state() -> dict:
+    try:
+        data = json.loads(MONITOR_STATE_PATH.read_text())
+        if isinstance(data, dict):
+            data.setdefault("stop_attach", {})
+            return data
+    except Exception:
+        pass
+    return {"stop_attach": {}}
+
+
+def _save_monitor_state(state: dict) -> None:
+    try:
+        MONITOR_STATE_PATH.write_text(json.dumps(state, indent=2))
+    except Exception as exc:
+        logger.error("Unable to persist monitor state: %s", exc)
+
+
+MONITOR_STATE = _load_monitor_state()
 
 
 RANKER_EVAL_PATH = Path(BASE_DIR) / "data" / "ranker_eval" / "latest.json"
@@ -630,6 +652,66 @@ def _save_stop_cooldowns(state: dict[str, str]) -> None:
 
 
 LOW_SIGNAL_STOP_COOLDOWNS = _load_stop_cooldowns()
+STOP_ATTACH_COOLDOWN_HOURS = int(os.getenv("STOP_ATTACH_COOLDOWN_HOURS", "24"))
+
+
+def _parse_iso_datetime(value: str | None) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _mark_symbol_protected(symbol: str, order_ids: list[str]) -> None:
+    state = MONITOR_STATE.setdefault("stop_attach", {})
+    state[symbol] = {
+        "last_state": "protected",
+        "last_missing_date": None,
+        "last_attempt_utc": None,
+        "last_seen_order_ids": order_ids,
+    }
+    _save_monitor_state(MONITOR_STATE)
+
+
+def _record_stop_missing(symbol: str, today: str) -> bool:
+    state = MONITOR_STATE.setdefault("stop_attach", {})
+    current = state.get(symbol) or {}
+    first_missing_today = current.get("last_missing_date") != today
+    state[symbol] = {
+        "last_state": "missing",
+        "last_missing_date": today,
+        "last_attempt_utc": current.get("last_attempt_utc"),
+        "last_seen_order_ids": [],
+    }
+    _save_monitor_state(MONITOR_STATE)
+    return first_missing_today
+
+
+def _can_attempt_stop_attach(symbol: str, now: datetime) -> bool:
+    state = MONITOR_STATE.setdefault("stop_attach", {}).get(symbol) or {}
+    previous_state = state.get("last_state")
+    last_attempt = _parse_iso_datetime(state.get("last_attempt_utc"))
+
+    if previous_state == "protected":
+        return True
+
+    if not last_attempt:
+        return True
+
+    return now - last_attempt >= timedelta(hours=STOP_ATTACH_COOLDOWN_HOURS)
+
+
+def _mark_stop_attach_attempt(symbol: str, now: datetime) -> None:
+    state = MONITOR_STATE.setdefault("stop_attach", {})
+    current = state.get(symbol) or {}
+    current.update({
+        "last_state": current.get("last_state", "missing"),
+        "last_attempt_utc": now.isoformat(),
+    })
+    state[symbol] = current
+    _save_monitor_state(MONITOR_STATE)
 
 _load_env_if_needed()
 
@@ -1097,13 +1179,13 @@ def _attach_long_protective_stop(position, trail_percent: float) -> bool:
     symbol = position.symbol
     qty = _get_available_qty(position)
     logger.info(
-        "[INFO] STOP_ATTACH_ATTEMPT symbol=%s side=long type=trailing_sell trail_pct=%s",
+        "STOP_ATTACH_ATTEMPT symbol=%s side=long type=trailing_sell trail_pct=%s",
         symbol,
         trail_percent,
     )
     if qty <= 0:
         logger.warning(
-            "[WARN] STOP_ATTACH_FAILED symbol=%s side=long type=trailing_sell error=no_available_qty",
+            "STOP_ATTACH_FAILED symbol=%s side=long type=trailing_sell error=no_available_qty",
             symbol,
         )
         increment_metric("stop_attach_failed")
@@ -1118,7 +1200,7 @@ def _attach_long_protective_stop(position, trail_percent: float) -> bool:
         )
         order = trading_client.submit_order(order_data=request)
         logger.info(
-            "[INFO] STOP_ATTACH_OK symbol=%s side=long type=trailing_sell order_id=%s",
+            "STOP_ATTACH_OK symbol=%s side=long type=trailing_sell order_id=%s",
             symbol,
             getattr(order, "id", None),
         )
@@ -1126,7 +1208,7 @@ def _attach_long_protective_stop(position, trail_percent: float) -> bool:
         return True
     except Exception as exc:
         logger.warning(
-            "[WARN] STOP_ATTACH_FAILED symbol=%s side=long type=trailing_sell error=%s",
+            "STOP_ATTACH_FAILED symbol=%s side=long type=trailing_sell error=%s",
             symbol,
             exc,
         )
@@ -1139,13 +1221,13 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
     symbol = position.symbol
     qty = _get_available_qty(position)
     logger.info(
-        "[INFO] STOP_ATTACH_ATTEMPT symbol=%s side=short type=trailing_buy trail_pct=%s",
+        "STOP_ATTACH_ATTEMPT symbol=%s side=short type=trailing_buy trail_pct=%s",
         symbol,
         trail_percent,
     )
     if qty <= 0:
         logger.warning(
-            "[WARN] STOP_ATTACH_FAILED symbol=%s side=short type=trailing_buy error=no_available_qty",
+            "STOP_ATTACH_FAILED symbol=%s side=short type=trailing_buy error=no_available_qty",
             symbol,
         )
         increment_metric("stop_attach_failed")
@@ -1160,7 +1242,7 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
         )
         order = trading_client.submit_order(order_data=request)
         logger.info(
-            "[INFO] STOP_ATTACH_OK symbol=%s side=short type=trailing_buy order_id=%s",
+            "STOP_ATTACH_OK symbol=%s side=short type=trailing_buy order_id=%s",
             symbol,
             getattr(order, "id", None),
         )
@@ -1168,7 +1250,7 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
         return True
     except Exception as exc:
         logger.warning(
-            "[WARN] STOP_ATTACH_FAILED symbol=%s side=short type=trailing_buy error=%s",
+            "STOP_ATTACH_FAILED symbol=%s side=short type=trailing_buy error=%s",
             symbol,
             exc,
         )
@@ -1179,7 +1261,7 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
         float(getattr(position, "current_price", position.avg_entry_price)), trail_percent
     )
     logger.info(
-        "[INFO] STOP_ATTACH_ATTEMPT symbol=%s side=short type=stop_buy trail_pct=%s stop_price=%.2f",
+        "STOP_ATTACH_ATTEMPT symbol=%s side=short type=stop_buy trail_pct=%s stop_price=%.2f",
         symbol,
         trail_percent,
         stop_price,
@@ -1194,7 +1276,7 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
         )
         order = trading_client.submit_order(order_data=request)
         logger.info(
-            "[INFO] STOP_ATTACH_OK symbol=%s side=short type=stop_buy order_id=%s",
+            "STOP_ATTACH_OK symbol=%s side=short type=stop_buy order_id=%s",
             symbol,
             getattr(order, "id", None),
         )
@@ -1202,7 +1284,7 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
         return True
     except Exception as exc:
         logger.warning(
-            "[WARN] STOP_ATTACH_FAILED symbol=%s side=short type=stop_buy error=%s",
+            "STOP_ATTACH_FAILED symbol=%s side=short type=stop_buy error=%s",
             symbol,
             exc,
         )
@@ -1211,11 +1293,11 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
         return False
 
 
-def enforce_stop_coverage(positions: list) -> tuple[int, float]:
+def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
     if not positions:
-        MONITOR_METRICS["stop_coverage_pct"] = 1.0
+        MONITOR_METRICS["stop_coverage_pct"] = 0.0
         _persist_metrics()
-        return 0, 1.0
+        return 0, 0.0, 0
 
     try:
         open_orders = trading_client.get_orders(
@@ -1226,37 +1308,60 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float]:
         increment_metric("api_errors")
         MONITOR_METRICS["stop_coverage_pct"] = 0.0
         _persist_metrics()
-        return 0, 0.0
+        return 0, 0.0, 0
+
+    trailing_stops_count = sum(
+        1 for order in open_orders if getattr(order, "order_type", "") == "trailing_stop"
+    )
 
     orders_by_symbol: dict[str, list] = {}
     for order in open_orders:
         orders_by_symbol.setdefault(getattr(order, "symbol", ""), []).append(order)
 
-    protective_covers = 0
+    protected_symbols: set[str] = set()
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+
     for position in positions:
         symbol = position.symbol
         side = _determine_position_side(position)
         expected_side = "sell" if side == "long" else "buy"
         symbol_orders = orders_by_symbol.get(symbol, [])
-        if any(_is_protective_order(order, expected_side) for order in symbol_orders):
-            protective_covers += 1
+        protective_orders = [
+            order for order in symbol_orders if _is_protective_order(order, expected_side)
+        ]
+
+        if protective_orders:
+            _mark_symbol_protected(
+                symbol, [str(getattr(order, "id", "")) for order in protective_orders]
+            )
+            protected_symbols.add(symbol)
             continue
 
-        logger.warning("[WARN] STOP_MISSING symbol=%s side=%s", symbol, side)
-        increment_metric("stops_missing")
+        if _record_stop_missing(symbol, today):
+            logger.warning("[WARN] STOP_MISSING symbol=%s side=%s", symbol, side)
+            increment_metric("stops_missing")
 
+        if not _can_attempt_stop_attach(symbol, now):
+            continue
+
+        _mark_stop_attach_attempt(symbol, now)
         attached = (
             _attach_long_protective_stop(position, TRAIL_START_PERCENT)
             if side == "long"
             else _attach_short_protective_stop(position, TRAIL_START_PERCENT)
         )
         if attached:
-            protective_covers += 1
+            protected_symbols.add(symbol)
+            _mark_symbol_protected(symbol, [])
 
-    coverage_pct = protective_covers / len(positions)
+    protective_orders_count = len(protected_symbols)
+    coverage_pct = (
+        protective_orders_count / len(positions) if positions else 0.0
+    )
     MONITOR_METRICS["stop_coverage_pct"] = float(coverage_pct)
     _persist_metrics()
-    return protective_covers, coverage_pct
+    return protective_orders_count, float(coverage_pct), trailing_stops_count
 
 
 def has_pending_sell_order(symbol):
@@ -1763,11 +1868,9 @@ def monitor_positions():
             else:
                 positions = update_open_positions() or []
 
-            protective_orders_count, stop_coverage_pct = enforce_stop_coverage(positions)
+            protective_orders_count, stop_coverage_pct, trailing_stops_count = enforce_stop_coverage(positions)
 
             check_pending_orders()
-
-            trailing_stops_count = count_open_trailing_stops()
 
             logger.info("Updated open_positions.csv successfully.")
         except Exception as e:
