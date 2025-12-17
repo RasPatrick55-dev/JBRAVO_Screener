@@ -2537,11 +2537,13 @@ class TradeExecutor:
         *,
         max_positions: int,
         base_alloc_pct: float,
+        source_df: pd.DataFrame | None = None,
     ) -> None:
         if not records:
             return
         rank_key = self._ranking_key or "score"
         frame = pd.DataFrame.from_records(records)
+        weight_source = source_df if source_df is not None else frame
         if "_rank_val" in frame.columns:
             rank_series = pd.to_numeric(frame["_rank_val"], errors="coerce")
         else:
@@ -2561,14 +2563,33 @@ class TradeExecutor:
 
         top_n = min(max_positions, len(picks))
         picked_df = frame.head(top_n) if top_n > 0 else pd.DataFrame()
-        picked_weights = pd.to_numeric(
-            picked_df.get("alloc_weight", pd.Series(dtype="float")), errors="coerce"
+        weight_symbols = weight_source.get("symbol", pd.Series(dtype="string"))
+        weight_series = pd.to_numeric(
+            weight_source.get("alloc_weight", pd.Series(dtype="float")), errors="coerce"
         )
-        picked_weights = picked_weights.apply(
-            lambda x: x if isinstance(x, (int, float)) and math.isfinite(x) else math.nan
+        weights: dict[str, float] = {}
+        for sym_raw, weight_val in zip(weight_symbols, weight_series):
+            sym = str(sym_raw).upper()
+            if not sym or pd.isna(weight_val):
+                continue
+            try:
+                weight_float = float(weight_val)
+            except Exception:
+                continue
+            if not math.isfinite(weight_float):
+                continue
+            weights[sym] = weight_float
+        picked_symbols: list[str] = [str(sym).upper() for sym in picked_df.get("symbol", [])]
+        picked_weights_found = sum(1 for sym in picked_symbols if sym in weights)
+
+        LOGGER.info(
+            "ALLOC_WEIGHT_DIAG total_rows=%d weights_non_null=%d picked=%d picked_weights_found=%d sample=%s",
+            len(weight_source),
+            int(pd.notna(weight_series).sum()),
+            top_n,
+            picked_weights_found,
+            list(weights.items())[:3],
         )
-        valid_mask = picked_weights.notna()
-        picked_has_weights = bool(valid_mask.any())
 
         LOGGER.info(
             "ALLOC_BLOCK_ENTER rows=%d top_n=%d base_alloc_pct=%s",
@@ -2576,15 +2597,14 @@ class TradeExecutor:
             top_n,
             base_alloc_pct,
         )
-        if picked_has_weights:
+        if picked_weights_found > 0:
             split: list[tuple[str, float, float]] = []
-            for symbol, weight_val in zip(picked_df.get("symbol", []), picked_weights):
-                if pd.isna(weight_val):
+            for symbol in picked_symbols:
+                if symbol not in weights:
                     continue
-                weight_float = float(weight_val)
-                symbol_str = str(symbol).upper()
+                weight_float = float(weights[symbol])
                 split.append(
-                    (symbol_str, round(weight_float, 6), round(base_alloc_pct * weight_float, 6))
+                    (symbol, round(weight_float, 6), round(base_alloc_pct * weight_float, 6))
                 )
             LOGGER.info(
                 "ALLOCATION_MODE mode=weighted base_alloc_pct=%s weights_col=alloc_weight",
@@ -2672,6 +2692,7 @@ class TradeExecutor:
             candidates,
             max_positions=max_positions,
             base_alloc_pct=allocation_pct,
+            source_df=df,
         )
 
         weight_map: dict[str, float] = {}
@@ -4062,6 +4083,7 @@ def run_executor(
         candidates_df.to_dict(orient="records"),
         max_positions=configured_max_positions,
         base_alloc_pct=base_alloc_pct,
+        source_df=candidates_df,
     )
 
     _wait_until_submit_at(config.submit_at_ny)
