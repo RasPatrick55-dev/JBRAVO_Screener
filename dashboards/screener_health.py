@@ -546,8 +546,15 @@ def load_screener_history(base_dir: pathlib.Path = REPO_ROOT) -> pd.DataFrame | 
     df = _safe_csv(path)
     if df.empty:
         return None
-    expected_cols = {"run_utc", "symbols_in", "symbols_with_bars", "rows"}
+    expected_cols = {"run_utc", "symbols_in"}
     if not expected_cols.issubset(df.columns):
+        return None
+
+    if "symbols_with_bars" not in df.columns and "with_bars" in df.columns:
+        df["symbols_with_bars"] = df["with_bars"]
+    if "rows" not in df.columns and "rows_out" in df.columns:
+        df["rows"] = df["rows_out"]
+    if not {"symbols_with_bars", "rows"}.issubset(df.columns):
         return None
     if len(df) < 3:
         return None
@@ -1294,7 +1301,9 @@ def register_callbacks(app):
         else:
             hint_data = {}
         creds_alert = None
-        last_run_raw = str(m.get("last_run_utc") or "").strip()
+        last_run_raw = str(
+            m.get("last_run_utc") or m.get("timestamp") or ""
+        ).strip()
         if not last_run_raw:
             try:
                 if METRICS_JSON.exists():
@@ -1322,9 +1331,15 @@ def register_callbacks(app):
                 sym_in_exec = 0
             if sym_in_exec:
                 sym_in = sym_in_exec
-        sym_bars = int(m.get("symbols_with_bars", 0) or 0)
+        sym_bars_raw = m.get("symbols_with_bars")
+        if sym_bars_raw in (None, ""):
+            sym_bars_raw = m.get("with_bars")
+        sym_bars = int(sym_bars_raw or 0)
         bars_tot = int(m.get("bars_rows_total", 0) or 0)
-        rows     = int(m.get("rows", 0) or 0)
+        rows_raw = m.get("rows")
+        if rows_raw in (None, ""):
+            rows_raw = m.get("rows_out")
+        rows = int(rows_raw or 0)
         candidate_reason = str(
             (m.get("candidate_reason") or m.get("status") or "")
         ).strip().upper()

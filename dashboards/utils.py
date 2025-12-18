@@ -70,19 +70,31 @@ def parse_pipeline_summary(path: Path) -> Dict[str, Any]:
 
 
 def coerce_kpi_types(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    def _raw_value(*keys: str) -> Any:
+        for key in keys:
+            if key in metrics:
+                return metrics.get(key)
+        return None
+
     result: Dict[str, Any] = {}
-    for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows"):
-        value = metrics.get(key)
+    int_fields = {
+        "symbols_in": ("symbols_in",),
+        "symbols_with_bars": ("symbols_with_bars", "with_bars"),
+        "bars_rows_total": ("bars_rows_total",),
+        "rows": ("rows", "rows_out"),
+    }
+
+    for canonical, aliases in int_fields.items():
+        value = _raw_value(*aliases)
         if value in ("", None):
-            result[key] = None
+            result[canonical] = None
             continue
         try:
-            result[key] = int(value)
+            result[canonical] = int(value)
         except (TypeError, ValueError):
-            result[key] = None
+            result[canonical] = None
+
     result["last_run_utc"] = (
-        metrics.get("last_run_utc")
-        or metrics.get("last_run")
-        or None
+        _raw_value("last_run_utc", "timestamp", "last_run") or None
     )
     return result
