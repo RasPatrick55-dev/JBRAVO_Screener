@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-import re
-from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, List
+from zoneinfo import ZoneInfo
 
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -14,7 +13,7 @@ from dashboards.utils import (
     safe_read_json,
     parse_pipeline_summary,
     safe_tail_text,
-    tail_lines,
+    parse_timed_events_from_logs,
 )
 
 
@@ -130,110 +129,37 @@ def _compute_alerts(metrics: Dict[str, Any], exec_metrics: Dict[str, Any], candi
     return alerts
 
 
-def _resolve_timezone() -> tuple[timezone, str]:
-    try:
-        tz = ZoneInfo("America/New_York")
-        return tz, "America/New_York"
-    except Exception:
-        return timezone.utc, "UTC (tzdata unavailable)"
-
-
-_TS_RE = re.compile(r"(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(?:,(?P<ms>\d{3}))?")
-
-
-def _extract_timestamp(line: str) -> datetime | None:
-    match = _TS_RE.search(line)
-    if not match:
-        return None
-    ts_text = match.group("ts").replace(" ", "T")
-    ms = match.group("ms")
-    if ms:
-        ts_text = f"{ts_text}.{ms}"
-    try:
-        dt = datetime.fromisoformat(ts_text)
-    except Exception:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
-def _match_event(line: str, source: str) -> tuple[str, str] | None:
-    pipeline_events = [
-        "PIPELINE START",
-        "PIPELINE SUMMARY",
-        "PIPELINE END",
-        "FALLBACK_CHECK",
-        "DASH RELOAD",
-    ]
-    execute_events = [
-        "EXEC_START",
-        "EXECUTE SUMMARY",
-        "EXECUTE_SKIP",
-        "SKIP reason=",
-        "BUY_SUBMIT",
-        "BUY_FILL",
-        "BUY_CANCELLED",
-        "TRAIL_SUBMIT",
-        "TRAIL_CONFIRMED",
-    ]
-    events = pipeline_events if source == "pipeline" else execute_events
-    for token in events:
-        if token in line:
-            details = line.split(token, 1)[1].strip()
-            return token, details
-    return None
-
-
-def _parse_log_events(path: Path, source: str, max_lines: int, tz_display: timezone) -> list[Dict[str, Any]]:
-    events: list[Dict[str, Any]] = []
-    for raw in tail_lines(path, max_lines):
-        line = raw.strip()
-        dt_utc = _extract_timestamp(line)
-        if not dt_utc:
-            continue
-        matched = _match_event(line, source)
-        if not matched:
-            continue
-        event, details = matched
-        dt_local = dt_utc.astimezone(tz_display)
-        events.append(
-            {
-                "dt_local": dt_local,
-                "source": source,
-                "event": event,
-                "details": details or "-",
-            }
-        )
-    return events
-
-
 def _build_today_timeline():
     try:
-        tz_display, tz_label = _resolve_timezone()
-        today = datetime.now(tz_display).date()
-        entries = _parse_log_events(LOG_DIR / "pipeline.log", "pipeline", 2000, tz_display)
-        entries += _parse_log_events(LOG_DIR / "execute_trades.log", "execute", 5000, tz_display)
-        today_events = [e for e in entries if e["dt_local"].date() == today]
-        today_events.sort(key=lambda e: e["dt_local"], reverse=True)
+        ZoneInfo("America/New_York")
+        tz_label = "America/New_York"
+    except Exception:
+        tz_label = "UTC (tzdata unavailable)"
+    try:
+        today_events = parse_timed_events_from_logs(
+            LOG_DIR / "pipeline.log", LOG_DIR / "execute_trades.log"
+        )
     except Exception as exc:  # pragma: no cover - defensive display
         return dbc.Alert(f"Timeline unavailable: {exc}", color="warning", className="mb-3")
 
+    if today_events and today_events[0].get("tz_label"):
+        tz_label = today_events[0]["tz_label"]
     time_label = f"Time ({'NY' if 'New_York' in tz_label else tz_label})"
 
     if not today_events:
         body = html.Div("No events found for today.")
     else:
+        display_events = today_events[:100]
         rows = [
             html.Tr(
                 [
-                    html.Td(event["dt_local"].strftime("%H:%M:%S")),
+                    html.Td(event["time_str"]),
                     html.Td(event["source"]),
                     html.Td(event["event"]),
                     html.Td(event["details"]),
                 ]
             )
-            for event in today_events
+            for event in display_events
         ]
         table = html.Table(
             [
