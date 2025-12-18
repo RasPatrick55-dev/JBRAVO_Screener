@@ -33,11 +33,13 @@ def ensure_canonical_metrics(payload: Mapping[str, Any] | None) -> dict[str, Any
     metrics = dict(payload) if isinstance(payload, Mapping) else {}
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    last_run = metrics.get("last_run_utc")
-    metrics["timestamp"] = last_run if isinstance(last_run, str) and last_run else now_iso
+    timestamp = metrics.get("timestamp") or metrics.get("last_run_utc")
+    metrics["timestamp"] = timestamp if isinstance(timestamp, str) and timestamp else now_iso
 
-    metrics["rows_out"] = _coerce_int(metrics.get("rows", 0))
-    metrics["with_bars"] = _coerce_int(metrics.get("symbols_with_bars", 0))
+    metrics["rows_out"] = _coerce_int(metrics.get("rows_out") or metrics.get("rows", 0))
+    metrics["with_bars"] = _coerce_int(
+        metrics.get("with_bars") or metrics.get("symbols_with_bars", 0)
+    )
 
     universe_count = metrics.get("universe_count")
     if universe_count is None:
