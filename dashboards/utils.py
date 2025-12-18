@@ -5,8 +5,10 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
+from zoneinfo import ZoneInfo
 
 
 def safe_tail_text(path: Path, max_lines: int = 200) -> str:
@@ -58,6 +60,123 @@ def tail_lines(path: Path, max_lines: int) -> list[str]:
         return []
 
     return text.splitlines()[-max_lines:]
+
+
+def safe_tail_lines(path: Path, max_lines: int = 2000) -> list[str]:
+    """Return up to ``max_lines`` lines from the end of ``path``.
+
+    Falls back to an empty list on any exception while logging the
+    failure for observability.
+    """
+
+    try:
+        return tail_lines(path, max_lines)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("TAIL_FAIL path=%s err=%s", path, exc)
+        return []
+
+
+_LOG_TS_RE = re.compile(
+    r"(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(?:,(?P<ms>\d{3}))?"
+)
+
+
+def _parse_timestamp_to_tz(line: str, tz: timezone) -> datetime | None:
+    match = _LOG_TS_RE.search(line)
+    if not match:
+        return None
+    ts_text = match.group("ts").replace(" ", "T")
+    ms = match.group("ms")
+    if ms:
+        ts_text = f"{ts_text}.{ms}"
+    try:
+        dt = datetime.fromisoformat(ts_text)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    try:
+        return dt.astimezone(tz)
+    except Exception:
+        return None
+
+
+def _event_label(token: str) -> str:
+    if token.startswith("SKIP"):
+        return "SKIP"
+    if token.startswith("EXECUTE_SKIP"):
+        return "EXECUTE_SKIP"
+    return token.replace(" ", "_")
+
+
+def parse_timed_events_from_logs(
+    pipeline_path: Path, execute_path: Path, ny_tz: str = "America/New_York"
+) -> list[dict]:
+    """Parse key timed events from pipeline and execute logs for the current day.
+
+    The function reads bounded tails of both logs to avoid loading large files into
+    memory and returns a list of dictionaries sorted by timestamp (descending)
+    containing normalized timeline entries.
+    """
+
+    try:
+        tz = ZoneInfo(ny_tz)
+        tz_label = ny_tz
+    except Exception:
+        tz = timezone.utc
+        tz_label = "UTC (tzdata unavailable)"
+
+    today = datetime.now(tz).date()
+
+    pipeline_tokens = [
+        "PIPELINE START",
+        "PIPELINE SUMMARY",
+        "PIPELINE END",
+        "FALLBACK_CHECK",
+        "DASH RELOAD",
+    ]
+    execute_tokens = [
+        "EXEC_START",
+        "EXECUTE SUMMARY",
+        "EXECUTE_SKIP",
+        "SKIP reason=",
+        "BUY_SUBMIT",
+        "BUY_FILL",
+        "BUY_CANCELLED",
+        "TRAIL_SUBMIT",
+        "TRAIL_CONFIRMED",
+    ]
+
+    events: list[dict] = []
+
+    def _process_lines(lines: list[str], tokens: list[str], source: str) -> None:
+        for raw in lines:
+            line = raw.strip()
+            dt_local = _parse_timestamp_to_tz(line, tz)
+            if not dt_local:
+                continue
+            for token in tokens:
+                if token in line:
+                    details = line.split(token, 1)[1].strip()
+                    label = _event_label(token)
+                    events.append(
+                        {
+                            "dt": dt_local,
+                            "time_str": dt_local.strftime("%H:%M:%S"),
+                            "source": source,
+                            "event": label,
+                            "details": details or "-",
+                            "tz_label": tz_label,
+                        }
+                    )
+                    break
+
+    _process_lines(safe_tail_lines(pipeline_path, 2000), pipeline_tokens, "pipeline")
+    _process_lines(safe_tail_lines(execute_path, 5000), execute_tokens, "execute")
+
+    today_events = [entry for entry in events if entry["dt"].date() == today]
+    today_events.sort(key=lambda e: e["dt"], reverse=True)
+    return today_events
 
 
 def file_stat(path: Path) -> Dict[str, Any]:
