@@ -1339,20 +1339,25 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
         _persist_metrics()
         return 0, 0.0, 0
 
-    open_orders = [order for order in open_orders if _is_open_protective_order(order)]
-
+    orders_by_symbol: dict[str, list] = {}
     trailing_stops_count = 0
+    protective_open_orders = []
+
     for order in open_orders:
+        if not _is_open_protective_order(order):
+            continue
+
+        protective_open_orders.append(order)
+
         otype = str(getattr(order, "order_type", "")).lower()
         if "trailing" in otype:
             trailing_stops_count += 1
 
-    orders_by_symbol: dict[str, list] = {}
-    for order in open_orders:
         symbol = getattr(order, "symbol", "")
-        if not symbol:
-            continue
-        orders_by_symbol.setdefault(symbol, []).append(order)
+        if symbol:
+            orders_by_symbol.setdefault(symbol, []).append(order)
+
+    open_orders = protective_open_orders
 
     now = datetime.now(timezone.utc)
     today = now.date().isoformat()
