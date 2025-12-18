@@ -1047,9 +1047,28 @@ def _normalize_order_side(order) -> str:
 
 def _is_protective_order(order, expected_side: str) -> bool:
     order_type = str(getattr(order, "order_type", "")).lower()
-    if order_type not in {"trailing_stop", "stop"}:
+    if "stop" not in order_type and "trailing" not in order_type:
         return False
     return _normalize_order_side(order) == expected_side
+
+
+def _normalize_order_status(order) -> str:
+    status_value = getattr(order, "status", "")
+    if hasattr(status_value, "value"):
+        status_value = status_value.value
+    return str(status_value).lower()
+
+
+def _is_open_protective_order(order) -> bool:
+    order_type = str(getattr(order, "order_type", "")).lower()
+    if "stop" not in order_type and "trailing" not in order_type:
+        return False
+
+    status = _normalize_order_status(order)
+    if status not in {"new", "accepted", "partially_filled"}:
+        return False
+
+    return _normalize_order_side(order) in {"buy", "sell"}
 
 
 def last_filled_trailing_stop(symbol):
@@ -1294,10 +1313,8 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
 
 
 def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
-    if not positions:
-        MONITOR_METRICS["stop_coverage_pct"] = 0.0
-        _persist_metrics()
-        return 0, 0.0, 0
+    positions = positions or []
+    positions_count = len(positions)
 
     try:
         open_orders = trading_client.get_orders(
@@ -1310,25 +1327,34 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
         _persist_metrics()
         return 0, 0.0, 0
 
+    open_orders = [order for order in open_orders if _is_open_protective_order(order)]
+
     trailing_stops_count = sum(
-        1 for order in open_orders if getattr(order, "order_type", "") == "trailing_stop"
+        1
+        for order in open_orders
+        if "trailing" in str(getattr(order, "order_type", "")).lower()
     )
 
     orders_by_symbol: dict[str, list] = {}
     for order in open_orders:
-        orders_by_symbol.setdefault(getattr(order, "symbol", ""), []).append(order)
+        symbol = getattr(order, "symbol", "")
+        if not symbol:
+            continue
+        orders_by_symbol.setdefault(symbol, []).append(order)
 
-    protected_symbols: set[str] = set()
     now = datetime.now(timezone.utc)
     today = now.date().isoformat()
 
+    protected_symbols: set[str] = set()
     for position in positions:
         symbol = position.symbol
         side = _determine_position_side(position)
         expected_side = "sell" if side == "long" else "buy"
         symbol_orders = orders_by_symbol.get(symbol, [])
         protective_orders = [
-            order for order in symbol_orders if _is_protective_order(order, expected_side)
+            order
+            for order in symbol_orders
+            if _is_protective_order(order, expected_side)
         ]
 
         if protective_orders:
@@ -1339,7 +1365,7 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
             continue
 
         if _record_stop_missing(symbol, today):
-            logger.warning("[WARN] STOP_MISSING symbol=%s side=%s", symbol, side)
+            logger.warning("STOP_MISSING symbol=%s side=%s", symbol, side)
             increment_metric("stops_missing")
 
         if not _can_attempt_stop_attach(symbol, now):
@@ -1357,7 +1383,7 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
 
     protective_orders_count = len(protected_symbols)
     coverage_pct = (
-        protective_orders_count / len(positions) if positions else 0.0
+        protective_orders_count / positions_count if positions_count else 1.0
     )
     MONITOR_METRICS["stop_coverage_pct"] = float(coverage_pct)
     _persist_metrics()
@@ -1404,7 +1430,7 @@ def manage_trailing_stop(position):
     logger.info(f"Evaluating trailing stop for {symbol}")
     if symbol.upper() == "ARQQ":
         # Explicit log entry requested to verify ARQQ trailing stop evaluation
-        logger.info("[INFO] Evaluating trailing stop for ARQQ")
+        logger.info("Evaluating trailing stop for ARQQ")
     qty = position.qty
     logger.info(f"Evaluating trailing stop for {symbol} – qty: {qty}")
     entry = float(position.avg_entry_price)
@@ -1514,7 +1540,7 @@ def manage_trailing_stop(position):
             low_signal_tighten = True
     elif ml_signal_quality == "LOW" and gain_pct >= LOW_SIGNAL_GAIN_THRESHOLD:
         logger.info(
-            "[INFO] STOP_TIGHTEN_COOLDOWN signal_quality=LOW symbol=%s last=%s",
+            "STOP_TIGHTEN_COOLDOWN signal_quality=LOW symbol=%s last=%s",
             symbol,
             LOW_SIGNAL_STOP_COOLDOWNS.get(symbol),
         )
@@ -1541,7 +1567,7 @@ def manage_trailing_stop(position):
         )
         if low_signal_tighten:
             logger.info(
-                "[INFO] STOP_TIGHTEN signal_quality=LOW symbol=%s old_trail=%.2f new_trail=%.2f reason=low_signal_profit_lock",
+                "STOP_TIGHTEN signal_quality=LOW symbol=%s old_trail=%.2f new_trail=%.2f reason=low_signal_profit_lock",
                 symbol,
                 current_trail_pct,
                 effective_target,
