@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict
@@ -20,6 +21,43 @@ def safe_tail_text(path: Path, max_lines: int = 200) -> str:
         return ""
     trimmed = [line.rstrip("\n") for line in lines[-max_lines:]]
     return "\n".join(trimmed)
+
+
+def tail_lines(path: Path, max_lines: int) -> list[str]:
+    """Return up to ``max_lines`` from the end of the file efficiently.
+
+    The implementation avoids reading the entire file into memory by
+    iteratively seeking from the end in fixed-size blocks until enough
+    lines are collected or the start of the file is reached.
+    """
+
+    if max_lines <= 0:
+        return []
+
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            position = handle.tell()
+            buffer = bytearray()
+            lines_found = 0
+            block_size = 8192
+
+            while position > 0 and lines_found <= max_lines:
+                read_size = min(block_size, position)
+                position -= read_size
+                handle.seek(position)
+                buffer[:0] = handle.read(read_size)
+                lines_found = buffer.count(b"\n")
+
+            text = buffer.decode("utf-8", errors="ignore")
+    except FileNotFoundError:
+        logger.warning("TAIL_FAIL path=%s err=missing", path)
+        return []
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("TAIL_FAIL path=%s err=%s", path, exc)
+        return []
+
+    return text.splitlines()[-max_lines:]
 
 
 def file_stat(path: Path) -> Dict[str, Any]:
