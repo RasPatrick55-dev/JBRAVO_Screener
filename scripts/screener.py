@@ -357,6 +357,7 @@ from utils.env import (
     write_auth_error_artifacts,
 )
 from utils.io_utils import atomic_write_bytes
+from utils.screener_metrics import ensure_canonical_metrics
 
 DEFAULT_FEED = (os.getenv("ALPACA_DATA_FEED") or "iex").strip().lower() or "iex"
 
@@ -3131,8 +3132,10 @@ def _write_shortlist_csv(path: Path, shortlist: Optional[pd.DataFrame]) -> Path:
 
 
 def _write_json_atomic(path: Path, payload: dict) -> None:
-    data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
-    atomic_write_bytes(path, data)
+    target = Path(path)
+    enriched = ensure_canonical_metrics(payload) if target.name == "screener_metrics.json" else payload
+    data = json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8")
+    atomic_write_bytes(target, data)
 
 
 def _load_coverage_table(path: Path) -> dict[str, dict[str, object]]:
