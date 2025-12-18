@@ -1046,10 +1046,16 @@ def _normalize_order_side(order) -> str:
 
 
 def _is_protective_order(order, expected_side: str) -> bool:
+    side = str(getattr(order, "side", "")).lower()
     order_type = str(getattr(order, "order_type", "")).lower()
-    if "stop" not in order_type and "trailing" not in order_type:
-        return False
-    return _normalize_order_side(order) == expected_side
+    status = str(getattr(order, "status", "")).lower()
+
+    stop_like = "trailing" in order_type or "stop" in order_type
+    is_open = any(state in status for state in ["open", "new", "accepted", "held", "partially_filled"])
+
+    normalized_side = "sell" if "sell" in side else "buy" if "buy" in side else ""
+
+    return stop_like and is_open and normalized_side == expected_side
 
 
 def _normalize_order_status(order) -> str:
@@ -1065,7 +1071,7 @@ def _is_open_protective_order(order) -> bool:
         return False
 
     status = _normalize_order_status(order)
-    if status not in {"new", "accepted", "partially_filled"}:
+    if status not in {"open", "new", "accepted", "held", "partially_filled"}:
         return False
 
     return _normalize_order_side(order) in {"buy", "sell"}
@@ -1329,11 +1335,11 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
 
     open_orders = [order for order in open_orders if _is_open_protective_order(order)]
 
-    trailing_stops_count = sum(
-        1
-        for order in open_orders
-        if "trailing" in str(getattr(order, "order_type", "")).lower()
-    )
+    trailing_stops_count = 0
+    for order in open_orders:
+        otype = str(getattr(order, "order_type", "")).lower()
+        if "trailing" in otype:
+            trailing_stops_count += 1
 
     orders_by_symbol: dict[str, list] = {}
     for order in open_orders:
@@ -1380,6 +1386,13 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
         if attached:
             protected_symbols.add(symbol)
             _mark_symbol_protected(symbol, [])
+
+    logger.info(
+        "[INFO] COVERAGE_DEBUG open_orders=%s trailing_stops=%s protected=%s",
+        len(open_orders),
+        trailing_stops_count,
+        sorted(protected_symbols),
+    )
 
     protective_orders_count = len(protected_symbols)
     coverage_pct = (
