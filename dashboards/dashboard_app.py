@@ -40,7 +40,7 @@ from dashboards.data_io import (
 from dashboards.utils import coerce_kpi_types, parse_pipeline_summary
 from dashboards.overview import overview_layout, render_timeline_table
 from dashboards.pipeline_tab import pipeline_layout
-from dashboards.ml_tab import ml_layout
+from dashboards.ml_tab import build_predictions_table, ml_layout
 from scripts.run_pipeline import write_complete_screener_metrics
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
 
@@ -2970,10 +2970,18 @@ def _refresh_ts(n_clicks):
 
 
 @app.callback(
-    Output("tabs-content", "children"),
-    [Input("tabs", "active_tab"), Input("refresh-ts", "data"), Input("predictions-dropdown", "value")],
+    Output("ml-predictions-table", "children"),
+    [Input("predictions-dropdown", "value"), Input("refresh-ts", "data")],
 )
-def render_tab(tab, refresh_ts=None, prediction_path=None):
+def update_ml_predictions_table(prediction_path, refresh_ts=None):
+    return build_predictions_table(prediction_path)
+
+
+@app.callback(
+    Output("tabs-content", "children"),
+    [Input("tabs", "active_tab"), Input("refresh-ts", "data")],
+)
+def render_tab(tab, refresh_ts=None):
     if tab == "tab-overview":
         logger.info("Rendering content for tab: %s", tab)
         return overview_layout()
@@ -2982,7 +2990,7 @@ def render_tab(tab, refresh_ts=None, prediction_path=None):
         return pipeline_layout()
     if tab == "tab-ml":
         logger.info("Rendering content for tab: %s", tab)
-        return ml_layout(prediction_path)
+        return ml_layout()
     if tab == "tab-screener-health":
         logger.info("Rendering content for tab: %s", tab)
         return build_screener_health()
