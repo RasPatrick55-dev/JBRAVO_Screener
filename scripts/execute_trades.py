@@ -430,6 +430,7 @@ LOG_PATH = Path("logs") / "execute_trades.log"
 METRICS_PATH = Path("data") / "execute_metrics.json"
 EXECUTED_TRADES_PATH = Path("data") / "executed_trades.csv"
 _EXECUTE_START_UTC: datetime | None = None
+_EXECUTE_FINISH_UTC: datetime | None = None
 
 
 def write_execute_metrics(
@@ -734,9 +735,10 @@ def _canonicalize_execute_metrics(
             end_iso = value
             break
 
-    start_iso = start_iso or start_dt.isoformat()
-    end_iso = end_iso or end_dt.isoformat()
+    start_iso = start_dt.isoformat() if start_dt is not None else start_iso or end_dt.isoformat()
+    end_iso = end_dt.isoformat() if end_dt is not None else end_iso or start_iso
     enriched["timestamp"] = timestamp or end_iso
+    enriched["last_run_utc"] = enriched.get("last_run_utc") or enriched["timestamp"]
     enriched["run_started_utc"] = start_iso
     enriched["run_finished_utc"] = end_iso
 
@@ -747,18 +749,36 @@ def _canonicalize_execute_metrics(
             _has_auth_missing(auth_missing)
             or str(enriched.get("status", "")).lower() == "auth_error"
         )
+    auth_reason = enriched.get("auth_reason")
+    if not auth_ok:
+        if not auth_reason:
+            error_block = enriched.get("error")
+            if isinstance(error_block, Mapping):
+                auth_reason = error_block.get("reason") or error_block.get("message")
+        auth_reason = auth_reason or "auth_failed"
+        status_value = str(enriched.get("status", "")).strip().lower()
+        if status_value in ("", "ok"):
+            enriched["status"] = "error"
+    else:
+        auth_reason = None
     enriched["auth_ok"] = bool(auth_ok)
+    enriched["auth_reason"] = auth_reason
 
     fills_value = enriched.get("orders_filled", enriched.get("fills", 0))
     trails_value = enriched.get("trailing_attached", enriched.get("trails", 0))
     try:
-        enriched["fills"] = int(fills_value)
+        fills = int(fills_value)
     except Exception:
-        enriched["fills"] = 0
+        fills = 0
     try:
-        enriched["trails"] = int(trails_value)
+        trails = int(trails_value)
     except Exception:
-        enriched["trails"] = 0
+        trails = 0
+
+    enriched["fills"] = fills
+    enriched["trails"] = trails
+    enriched["orders_filled"] = enriched.get("orders_filled", fills)
+    enriched["trailing_attached"] = enriched.get("trailing_attached", trails)
 
     if start_dt is not None:
         try:
@@ -767,6 +787,21 @@ def _canonicalize_execute_metrics(
             enriched["duration_sec"] = 0.0
     else:
         enriched.setdefault("duration_sec", 0.0)
+
+    step_signals = [
+        enriched.get("orders_submitted", 0),
+        enriched.get("orders_filled", 0),
+        enriched.get("trailing_attached", 0),
+        enriched.get("orders_canceled", 0),
+    ]
+    skips_block = enriched.get("skips") if isinstance(enriched.get("skips"), Mapping) else {}
+    try:
+        step_signals.append(sum(int(v) for v in skips_block.values()))
+    except Exception:
+        step_signals.append(0)
+    if any(value not in (None, "", 0, 0.0) for value in step_signals):
+        if enriched.get("duration_sec", 0.0) < 1.0:
+            enriched["duration_sec"] = 1.0
 
     enriched.setdefault("status", "ok")
 
@@ -1552,6 +1587,8 @@ class ExecutionMetrics:
     trailing_attached: int = 0
     api_retries: int = 0
     api_failures: int = 0
+    auth_ok: bool = False
+    auth_reason: str | None = None
     latency_samples: List[float] = field(default_factory=list)
     skipped_reasons: Counter = field(default_factory=Counter)
     status: str = "ok"
@@ -1618,6 +1655,8 @@ class ExecutionMetrics:
             "trailing_attached": self.trailing_attached,
             "api_retries": self.api_retries,
             "api_failures": self.api_failures,
+            "auth_ok": bool(self.auth_ok),
+            "auth_reason": self.auth_reason,
             "latency_secs": {
                 "p50": self.percentile(0.5),
                 "p95": self.percentile(0.95),
@@ -4293,6 +4332,13 @@ def run_executor(
         buying_power=f"{buying_power:.2f}",
     )
 
+    metrics.auth_ok = bool(auth_ok)
+    metrics.auth_reason = None
+    if not auth_ok:
+        metrics.auth_reason = str(probe_bp_display or "auth_probe_failed")
+        metrics.status = "auth_error"
+        metrics.record_error("auth_check_failed", detail=metrics.auth_reason)
+
     if not in_window:
         start_str, end_str = _premarket_bounds_strings()
         loader.record_skip_reason(
@@ -4405,9 +4451,10 @@ def _bootstrap_env() -> list[str]:
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
-    global _EXECUTE_START_UTC
+    global _EXECUTE_START_UTC, _EXECUTE_FINISH_UTC
     if _EXECUTE_START_UTC is None:
         _EXECUTE_START_UTC = datetime.now(timezone.utc)
+    _EXECUTE_FINISH_UTC = None
     _bootstrap_env()
     rc = 1
     metrics_payload: Dict[str, Any] | None = None
@@ -4540,6 +4587,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         rc = 1
         return rc
     finally:
+        _EXECUTE_FINISH_UTC = datetime.now(timezone.utc)
         final_status = status or (metrics_payload.get("status") if isinstance(metrics_payload, Mapping) else None)
         if final_status is None:
             final_status = "ok" if rc == 0 else "error"
@@ -4548,7 +4596,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 metrics_payload,
                 status=final_status,
                 start_dt=_EXECUTE_START_UTC,
-                end_dt=datetime.now(timezone.utc),
+                end_dt=_EXECUTE_FINISH_UTC,
             )
         except Exception:
             LOGGER.debug("METRICS_WRITE_FAILED", exc_info=True)
