@@ -1244,13 +1244,19 @@ def _attach_long_protective_stop(position, trail_percent: float) -> bool:
 
 def _attach_short_protective_stop(position, trail_percent: float) -> bool:
     symbol = position.symbol
-    qty = _get_available_qty(position)
+    qty_abs = abs(int(float(getattr(position, "qty", 0))))
+    logger.info(
+        "[INFO] SHORT_STOP_QTY symbol=%s position_qty=%s qty_abs=%s",
+        symbol,
+        getattr(position, "qty", None),
+        qty_abs,
+    )
     logger.info(
         "STOP_ATTACH_ATTEMPT symbol=%s side=short type=trailing_buy trail_pct=%s",
         symbol,
         trail_percent,
     )
-    if qty <= 0:
+    if qty_abs <= 0:
         logger.warning(
             "STOP_ATTACH_FAILED symbol=%s side=short type=trailing_buy error=no_available_qty",
             symbol,
@@ -1260,7 +1266,7 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
     try:
         request = TrailingStopOrderRequest(
             symbol=symbol,
-            qty=qty,
+            qty=qty_abs,
             side=OrderSide.BUY,
             time_in_force=TimeInForce.GTC,
             trail_percent=str(trail_percent),
@@ -1294,7 +1300,7 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
     try:
         request = StopOrderRequest(
             symbol=symbol,
-            qty=qty,
+            qty=qty_abs,
             side=OrderSide.BUY,
             stop_price=stop_price,
             time_in_force=TimeInForce.GTC,
