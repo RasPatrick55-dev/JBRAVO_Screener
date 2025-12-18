@@ -38,7 +38,7 @@ from dashboards.data_io import (
     metrics_summary_snapshot,
 )
 from dashboards.utils import coerce_kpi_types, parse_pipeline_summary
-from dashboards.overview import overview_layout
+from dashboards.overview import overview_layout, render_timeline_table
 from dashboards.pipeline_tab import pipeline_layout
 from dashboards.ml_tab import ml_layout
 from scripts.run_pipeline import write_complete_screener_metrics
@@ -3006,6 +3006,31 @@ def render_tab(tab, refresh_ts=None, prediction_path=None):
         return screener_layout()
     else:
         return dbc.Alert("Tab not found.", color="danger")
+
+
+@app.callback(
+    Output("today-timeline-table", "children"),
+    [
+        Input("timeline-events-store", "data"),
+        Input("timeline-source-filter", "value"),
+        Input("timeline-severity-filter", "value"),
+    ],
+)
+def _update_timeline_table(events, source_filter, severity_filter):
+    if events is None:
+        raise PreventUpdate
+    tz_label = None
+    try:
+        if isinstance(events, list) and events:
+            tz_label = events[0].get("tz_label")
+    except Exception:
+        tz_label = None
+    return render_timeline_table(
+        events if isinstance(events, list) else [],
+        source_filter or "all",
+        severity_filter or "all",
+        tz_label,
+    )
 
 
 # Callback for modal interaction

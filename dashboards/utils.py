@@ -101,14 +101,6 @@ def _parse_timestamp_to_tz(line: str, tz: timezone) -> datetime | None:
         return None
 
 
-def _event_label(token: str) -> str:
-    if token.startswith("SKIP"):
-        return "SKIP"
-    if token.startswith("EXECUTE_SKIP"):
-        return "EXECUTE_SKIP"
-    return token.replace(" ", "_")
-
-
 def parse_timed_events_from_logs(
     pipeline_path: Path, execute_path: Path, ny_tz: str = "America/New_York"
 ) -> list[dict]:
@@ -128,51 +120,168 @@ def parse_timed_events_from_logs(
 
     today = datetime.now(tz).date()
 
-    pipeline_tokens = [
-        "PIPELINE START",
-        "PIPELINE SUMMARY",
-        "PIPELINE END",
-        "FALLBACK_CHECK",
-        "DASH RELOAD",
-    ]
-    execute_tokens = [
-        "EXEC_START",
-        "EXECUTE SUMMARY",
-        "EXECUTE_SKIP",
-        "SKIP reason=",
-        "BUY_SUBMIT",
-        "BUY_FILL",
-        "BUY_CANCELLED",
-        "TRAIL_SUBMIT",
-        "TRAIL_CONFIRMED",
-    ]
+    severity_overrides = {
+        "AUTH_FAIL": "error",
+        "API_FAIL": "error",
+        "FALLBACK_CHECK": "warn",
+        "BUY_CANCELLED": "warn",
+        "SKIP": "warn",
+        "EXECUTE_SKIP": "warn",
+    }
+
+    def _severity_for(event: str) -> str:
+        return severity_overrides.get(event, "info")
+
+    def _search_first(text: str, patterns: list[str]) -> str | None:
+        for pattern in patterns:
+            found = re.search(pattern, text)
+            if found:
+                return found.group(1)
+        return None
+
+    def _extract_fields(text: str) -> list[tuple[str, str]]:
+        """Return ordered key/value pairs found in ``text``.
+
+        This helper prioritizes the commonly requested keys and falls back to
+        generic ``key=value`` pairs, preserving the order of appearance.
+        """
+
+        fields: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def _add(key: str, value: str | None) -> None:
+            if value is None:
+                return
+            norm_key = key.strip()
+            if not norm_key or norm_key in seen:
+                return
+            seen.add(norm_key)
+            fields.append((norm_key, value.strip()))
+
+        _add("symbol", _search_first(text, [r"\bsymbol[:=]\s*([A-Z0-9\.-]+)", r"\bticker[:=]\s*([A-Z0-9\.-]+)"]))
+        _add(
+            "symbol",
+            _search_first(
+                text,
+                [
+                    r"\bfor\s+([A-Z]{1,6})(?:\b|,)",
+                    r"\b([A-Z]{1,6}) order",
+                ],
+            ),
+        )
+        _add("qty", _search_first(text, [r"\bqty[:=]\s*([\d\.]+)", r"\bquantity[:=]\s*([\d\.]+)"]))
+        _add("order_id", _search_first(text, [r"\border[_ ]?id[:=]\s*([\w-]+)"]))
+        _add("rc", _search_first(text, [r"\brc[:=]\s*(-?\d+)"]))
+        _add("reason", _search_first(text, [r"\breason[:=]\s*([^;|]+)", r"\breason\s+(.+)"]))
+
+        for match in re.finditer(r"([A-Za-z_][\w]*)[:=]\s*([^\s,;]+)", text):
+            key = match.group(1)
+            value = match.group(2)
+            _add(key, value)
+
+        return fields
+
+    def _details_text(text: str, fields: list[tuple[str, str]]) -> str:
+        if fields:
+            return " ".join(f"{k}={v}" for k, v in fields)
+        cleaned = text.strip()
+        return cleaned or "-"
+
+    def _classify_event(line: str, source: str) -> tuple[str | None, str]:
+        upper_line = line.upper()
+        if source == "pipeline":
+            mapping = {
+                "PIPELINE START": "PIPELINE_START",
+                "PIPELINE SUMMARY": "PIPELINE_SUMMARY",
+                "PIPELINE END": "PIPELINE_END",
+                "FALLBACK_CHECK": "FALLBACK_CHECK",
+                "DASH RELOAD": "DASH_RELOAD",
+            }
+        else:
+            mapping = {
+                "EXEC_START": "EXEC_START",
+                "EXECUTE SUMMARY": "EXECUTE_SUMMARY",
+                "EXECUTE_SKIP": "EXECUTE_SKIP",
+                "SKIP REASON": "SKIP",
+                "AUTH FAIL": "AUTH_FAIL",
+                "API_FAIL": "API_FAIL",
+                "BUY_SUBMIT": "BUY_SUBMIT",
+                "BUY_FILL": "BUY_FILL",
+                "BUY_CANCELLED": "BUY_CANCELLED",
+                "TRAIL_SUBMIT": "TRAIL_SUBMIT",
+                "TRAIL_CONFIRMED": "TRAIL_CONFIRMED",
+            }
+        for token, label in mapping.items():
+            if token in upper_line:
+                return label, token
+
+        if source == "execute":
+            heuristics = [
+                ("EXEC_START", [r"STARTING\s+PRE-MARKET\s+TRADE\s+EXECUTION"]),
+                (
+                    "EXECUTE_SUMMARY",
+                    [r"SCRIPT\s+COMPLETE", r"EXECUTE\s+SUMMARY"],
+                ),
+                ("AUTH_FAIL", [r"AUTH(ENTICATION)?\s+FAILED", r"AUTH\s+ERROR"]),
+                ("API_FAIL", [r"API\s+ERROR", r"HTTPERROR", r"CONNECTION\s+ERROR"]),
+                (
+                    "BUY_SUBMIT",
+                    [r"SUBMITTING\s+LIMIT\s+BUY\s+ORDER", r"PLAC(ING|ED)\s+BUY\s+ORDER"],
+                ),
+                ("BUY_FILL", [r"ORDER\s+FILLED", r"FILL\s+CONFIRMED"]),
+                ("BUY_CANCELLED", [r"CANCELLED\s+ORDER", r"ORDER\s+CANCELLED", r"ORDER\s+REJECTED"]),
+                ("TRAIL_SUBMIT", [r"TRAILING\s+STOP", r"TRAIL\s+SUBMIT"]),
+                ("TRAIL_CONFIRMED", [r"TRAIL\s+CONFIRMED", r"TRAILING\s+STOP\s+CREATED"]),
+                ("SKIP", [r"SKIP\s+REASON", r"SKIPPING\s"]),
+            ]
+            for label, patterns in heuristics:
+                for pattern in patterns:
+                    if re.search(pattern, upper_line):
+                        return label, pattern
+
+        return None, ""
+
+    def _normalize_event(line: str, source: str) -> dict | None:
+        dt_local = _parse_timestamp_to_tz(line, tz)
+        if not dt_local:
+            return None
+        event, marker = _classify_event(line, source)
+        if not event:
+            return None
+        marker_upper = marker.upper() if marker else event
+        try:
+            idx = line.upper().index(marker_upper)
+            tail = line[idx + len(marker_upper) :]
+        except ValueError:
+            tail = line
+        fields = _extract_fields(tail)
+        symbol = None
+        for key, value in fields:
+            if key.lower() in ("symbol", "ticker"):
+                symbol = value
+                break
+        return {
+            "dt": dt_local,
+            "time_str": dt_local.strftime("%H:%M:%S"),
+            "source": source,
+            "event": event,
+            "symbol": symbol,
+            "severity": _severity_for(event),
+            "details": _details_text(tail, fields),
+            "tz_label": tz_label,
+        }
 
     events: list[dict] = []
 
-    def _process_lines(lines: list[str], tokens: list[str], source: str) -> None:
-        for raw in lines:
-            line = raw.strip()
-            dt_local = _parse_timestamp_to_tz(line, tz)
-            if not dt_local:
-                continue
-            for token in tokens:
-                if token in line:
-                    details = line.split(token, 1)[1].strip()
-                    label = _event_label(token)
-                    events.append(
-                        {
-                            "dt": dt_local,
-                            "time_str": dt_local.strftime("%H:%M:%S"),
-                            "source": source,
-                            "event": label,
-                            "details": details or "-",
-                            "tz_label": tz_label,
-                        }
-                    )
-                    break
+    for line in safe_tail_lines(pipeline_path, 2000):
+        event = _normalize_event(line.strip(), "pipeline")
+        if event:
+            events.append(event)
 
-    _process_lines(safe_tail_lines(pipeline_path, 2000), pipeline_tokens, "pipeline")
-    _process_lines(safe_tail_lines(execute_path, 5000), execute_tokens, "execute")
+    for line in safe_tail_lines(execute_path, 8000):
+        event = _normalize_event(line.strip(), "execute")
+        if event:
+            events.append(event)
 
     today_events = [entry for entry in events if entry["dt"].date() == today]
     today_events.sort(key=lambda e: e["dt"], reverse=True)

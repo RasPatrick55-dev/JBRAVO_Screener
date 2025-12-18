@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import html
+from dash import dcc, html
 
 from dashboards.utils import (
     safe_read_json,
@@ -144,43 +144,54 @@ def _build_today_timeline():
 
     if today_events and today_events[0].get("tz_label"):
         tz_label = today_events[0]["tz_label"]
-    time_label = f"Time ({'NY' if 'New_York' in tz_label else tz_label})"
-
-    if not today_events:
-        body = html.Div("No events found for today.")
-    else:
-        display_events = today_events[:100]
-        rows = [
-            html.Tr(
-                [
-                    html.Td(event["time_str"]),
-                    html.Td(event["source"]),
-                    html.Td(event["event"]),
-                    html.Td(event["details"]),
-                ]
-            )
-            for event in display_events
-        ]
-        table = html.Table(
-            [
-                html.Thead(
-                    html.Tr([
-                        html.Th(time_label),
-                        html.Th("Source"),
-                        html.Th("Event"),
-                        html.Th("Details"),
-                    ])
-                ),
-                html.Tbody(rows),
-            ],
-            className="table table-sm",
-        )
-        body = html.Div(table, style={"maxHeight": "320px", "overflowY": "auto"})
-
     tz_note = html.Small(
         f"Timezone: {tz_label}",
         className="text-muted",
     )
+
+    controls = dbc.Row(
+        [
+            dbc.Col(
+                [
+                    html.Label("Show", className="text-muted small"),
+                    dcc.RadioItems(
+                        id="timeline-source-filter",
+                        options=[
+                            {"label": "All", "value": "all"},
+                            {"label": "Pipeline", "value": "pipeline"},
+                            {"label": "Execute", "value": "execute"},
+                        ],
+                        value="all",
+                        className="text-light",
+                        inputClassName="me-1",
+                        labelClassName="me-3",
+                    ),
+                ],
+                md=6,
+            ),
+            dbc.Col(
+                [
+                    html.Label("Severity", className="text-muted small"),
+                    dcc.RadioItems(
+                        id="timeline-severity-filter",
+                        options=[
+                            {"label": "All", "value": "all"},
+                            {"label": "Warn + Error", "value": "warn"},
+                            {"label": "Error only", "value": "error"},
+                        ],
+                        value="warn",
+                        className="text-light",
+                        inputClassName="me-1",
+                        labelClassName="me-3",
+                    ),
+                ],
+                md=6,
+            ),
+        ],
+        className="mb-2",
+    )
+
+    placeholder_table = render_timeline_table(today_events, "all", "warn", tz_label)
 
     return dbc.Card(
         [
@@ -188,12 +199,84 @@ def _build_today_timeline():
                 [
                     html.H5("Today Timeline (NY)", className="card-title"),
                     tz_note,
-                    body,
+                    controls,
+                    dcc.Store(id="timeline-events-store", data=today_events),
+                    html.Div(placeholder_table, id="today-timeline-table"),
                 ]
             )
         ],
         className="mb-3",
     )
+
+
+def render_timeline_table(
+    events: List[Dict[str, Any]],
+    source_filter: str = "all",
+    severity_filter: str = "all",
+    tz_label: str | None = None,
+):
+    if not events:
+        return dbc.Alert("No events found for today.", color="secondary", className="mb-0")
+
+    filtered = events
+    if source_filter in {"pipeline", "execute"}:
+        filtered = [e for e in filtered if e.get("source") == source_filter]
+    if severity_filter == "warn":
+        filtered = [e for e in filtered if e.get("severity") in {"warn", "error"}]
+    elif severity_filter == "error":
+        filtered = [e for e in filtered if e.get("severity") == "error"]
+
+    severity_colors = {"info": "secondary", "warn": "warning", "error": "danger"}
+    time_label = f"Time ({'NY' if tz_label and 'New_York' in tz_label else tz_label or 'TZ'})"
+
+    rows: List[html.Tr] = []
+    for event in filtered[:200]:
+        severity = event.get("severity") or "info"
+        severity_badge = dbc.Badge(
+            severity.upper(),
+            color=severity_colors.get(severity, "secondary"),
+            pill=True,
+            className="ms-1",
+        )
+        event_badge = dbc.Badge(
+            event.get("event", ""),
+            color="info",
+            className="me-1",
+        )
+        row_class = None
+        if severity == "warn":
+            row_class = "table-warning"
+        elif severity == "error":
+            row_class = "table-danger"
+        rows.append(
+            html.Tr(
+                [
+                    html.Td(event.get("time_str")),
+                    html.Td([event_badge, severity_badge]),
+                    html.Td(event.get("symbol") or "-"),
+                    html.Td(event.get("details") or "-"),
+                ],
+                className=row_class,
+            )
+        )
+
+    table = html.Table(
+        [
+            html.Thead(
+                html.Tr(
+                    [
+                        html.Th(time_label),
+                        html.Th("Event"),
+                        html.Th("Symbol"),
+                        html.Th("Details"),
+                    ]
+                )
+            ),
+            html.Tbody(rows if rows else [html.Tr(html.Td("No events match filters", colSpan=4))]),
+        ],
+        className="table table-sm table-dark mb-0",
+    )
+    return html.Div(table, style={"maxHeight": "320px", "overflowY": "auto"})
 
 
 def overview_layout():
