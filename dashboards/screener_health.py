@@ -1301,28 +1301,38 @@ def register_callbacks(app):
         else:
             hint_data = {}
         creds_alert = None
-        last_run_raw = str(
-            m.get("last_run_utc") or m.get("timestamp") or ""
-        ).strip()
-        if not last_run_raw:
-            try:
-                if METRICS_JSON.exists():
-                    ts = datetime.fromtimestamp(
-                        METRICS_JSON.stat().st_mtime, tz=timezone.utc
-                    )
-                    last_run_raw = ts.strftime("%Y-%m-%d %H:%M:%S UTC")
-            except Exception:
-                last_run_raw = ""
-        if not last_run_raw:
-            exec_last = exec_metrics.get("last_run_utc") if isinstance(exec_metrics, Mapping) else ""
-            if isinstance(exec_last, str) and exec_last.strip():
+        def _format_run_time(raw: Any) -> str:
+            if raw in (None, ""):
+                return ""
+            if isinstance(raw, (int, float)):
                 try:
-                    last_run_raw = datetime.fromisoformat(
-                        exec_last.replace("Z", "+00:00")
-                    ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                    dt = datetime.fromtimestamp(raw, tz=timezone.utc)
+                    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
                 except Exception:
-                    last_run_raw = exec_last
-        last_run = last_run_raw or "n/a"
+                    return str(raw)
+            raw_text = str(raw).strip()
+            if not raw_text:
+                return ""
+            try:
+                return datetime.fromisoformat(raw_text.replace("Z", "+00:00")).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
+            except Exception:
+                return raw_text
+
+        last_run_raw = (
+            m.get("run_started_utc")
+            or m.get("last_run_utc")
+            or m.get("timestamp")
+            or ""
+        )
+        if not last_run_raw and isinstance(exec_metrics, Mapping):
+            for key in ("run_finished_utc", "timestamp", "last_run_utc", "run_started_utc"):
+                candidate = exec_metrics.get(key)
+                if candidate not in (None, ""):
+                    last_run_raw = candidate
+                    break
+        last_run = _format_run_time(last_run_raw) or "n/a"
         sym_in = int(m.get("symbols_in", 0) or 0)
         if sym_in == 0 and isinstance(exec_metrics, Mapping):
             try:
