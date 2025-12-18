@@ -3303,7 +3303,7 @@ class TradeExecutor:
             qty=str(qty),
             limit=f"{limit_price:.4f}",
             limit_raw=f"{raw_limit_price:.8f}",
-            extended_hours=extended_hours_flag,
+            ext=extended_hours_flag,
             order_id=order_id or "",
             price_src=str(price_src or ""),
         )
@@ -3411,6 +3411,7 @@ class TradeExecutor:
                 self.log_info(
                     "BUY_FILL",
                     symbol=symbol,
+                    qty=f"{filled_qty:.0f}",
                     filled_qty=f"{filled_qty:.0f}",
                     avg_price=f"{float(filled_avg_price or 0):.2f}",
                     order_id=order_id,
@@ -3436,6 +3437,7 @@ class TradeExecutor:
                 self.log_info(
                     "BUY_FILL",
                     symbol=symbol,
+                    qty=f"{filled_qty:.0f}",
                     filled_qty=f"{filled_qty:.0f}",
                     avg_price=f"{float(filled_avg_price or 0):.2f}",
                     order_id=order_id,
@@ -3487,6 +3489,7 @@ class TradeExecutor:
             self.log_info(
                 "BUY_FILL",
                 symbol=symbol,
+                qty=f"{filled_qty:.0f}",
                 filled_qty=f"{filled_qty:.0f}",
                 avg_price=f"{float(filled_avg_price or 0):.2f}",
                 partial="true",
@@ -3547,6 +3550,7 @@ class TradeExecutor:
         self.log_info(
             "TRAIL_SUBMIT",
             symbol=symbol,
+            qty=str(qty_int),
             trail_pct=trail_display,
             route="trailing_stop",
         )
@@ -4166,15 +4170,11 @@ def run_executor(
 
     if not in_window:
         start_str, end_str = _premarket_bounds_strings()
-        log_info(
+        loader.record_skip_reason(
             "TIME_WINDOW",
-            window=win,
-            status="outside",
-            count=len(candidates_df),
-            ny_now=now_ny.isoformat(),
-            premarket_bounds=f"{start_str}-{end_str}",
+            count=len(candidates_df) if len(candidates_df) > 0 else 1,
+            detail=f"{start_str}-{end_str}",
         )
-        metrics.skips["TIME_WINDOW"] += len(candidates_df)
         metrics.flush()
         loader.persist_metrics()
         LOGGER.info(
@@ -4185,7 +4185,7 @@ def run_executor(
         return 0
 
     if candidates_df.empty:
-        loader.metrics.record_skip("NO_CANDIDATES", count=1)
+        loader.record_skip_reason("NO_CANDIDATES", count=1)
         loader.persist_metrics()
         LOGGER.info("EXECUTE_SKIP reason=NO_CANDIDATES")
         loader.log_summary()
@@ -4292,6 +4292,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             ",".join(exc.whitespace) or "",
             json.dumps(exc.sanitized, sort_keys=True),
         )
+        log_info("SKIP", reason="AUTH", detail=exc.reason)
         _record_auth_error(exc.reason, exc.sanitized, missing)
         _write_execute_metrics_error(
             "credentials_invalid",
@@ -4319,6 +4320,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     try:
         rc = run_executor(config, creds_snapshot=creds_snapshot)
         metrics_payload = _load_execute_metrics()
+        if metrics_payload is None:
+            fallback_metrics = ExecutionMetrics().as_dict()
+            fallback_metrics["status"] = "ok" if rc == 0 else "error"
+            METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            METRICS_PATH.write_text(json.dumps(fallback_metrics, indent=2, sort_keys=True), encoding="utf-8")
+            metrics_payload = fallback_metrics
         if metrics_payload is not None:
             def _as_int(value: Any) -> int:
                 try:
@@ -4363,6 +4370,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             exc.endpoint or "",
             exc.feed or "",
         )
+        log_info("SKIP", reason="AUTH", detail="unauthorized")
         _record_auth_error("unauthorized", creds_snapshot)
         _write_execute_metrics_error(
             "unauthorized",

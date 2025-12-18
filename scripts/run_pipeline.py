@@ -1613,8 +1613,10 @@ def ensure_candidates(min_rows: int = 1) -> int:
     if current >= min_rows:
         return current
     frame, _ = build_latest_candidates(PROJECT_ROOT, max_rows=max(1, min_rows))
-    write_csv_atomic(str(TOP_CANDIDATES), frame)
-    return int(len(frame.index))
+    normalized = normalize_candidate_df(frame)
+    write_csv_atomic(str(TOP_CANDIDATES), normalized)
+    write_csv_atomic(str(LATEST_CANDIDATES), normalized)
+    return int(len(normalized.index))
 
 
 def _extract_timing(metrics: Mapping[str, Any], key: str) -> float:
@@ -2014,6 +2016,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         write_error_report(step="pipeline", detail=str(exc))
     finally:
         rows_out = metrics_rows if metrics_rows is not None else rows
+        try:
+            ensured = ensure_candidates(max(1, rows_out or 0))
+            rows_out = ensured if ensured else max(rows_out or 0, 1)
+        except Exception:
+            LOG.exception("PIPELINE_ENSURE_CANDIDATES_FAILED")
         final_rows = None
         top_path = Path(base_dir) / "data" / "top_candidates.csv"
         if top_path.exists():
