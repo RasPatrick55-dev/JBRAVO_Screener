@@ -28,7 +28,7 @@ import requests
 
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.utils.env import load_env
-from utils import write_csv_atomic
+from utils import atomic_write_bytes, write_csv_atomic
 from utils.alerts import send_alert
 from utils.env import (
     AlpacaCredentialsError,
@@ -429,6 +429,7 @@ def _log_call(label, fn, *args, **kwargs):
 LOG_PATH = Path("logs") / "execute_trades.log"
 METRICS_PATH = Path("data") / "execute_metrics.json"
 EXECUTED_TRADES_PATH = Path("data") / "executed_trades.csv"
+_EXECUTE_START_UTC: datetime | None = None
 
 
 def _write_execute_metrics_error(
@@ -472,7 +473,11 @@ def _write_execute_metrics_error(
     payload.setdefault("orders_filled", 0)
     payload.setdefault("trailing_attached", 0)
     payload["last_run_utc"] = datetime.now(timezone.utc).isoformat()
-    METRICS_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    enriched = _canonicalize_execute_metrics(payload, end_dt=datetime.now(timezone.utc))
+    atomic_write_bytes(
+        METRICS_PATH,
+        json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8"),
+    )
 EXECUTED_TRADES_COLUMNS: list[str] = [
     "order_id",
     "symbol",
@@ -649,6 +654,66 @@ def _load_execute_metrics() -> Optional[Dict[str, Any]]:
         type(payload).__name__,
     )
     return None
+
+
+def _normalize_space_keys(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    enriched = dict(payload)
+    for key in list(enriched.keys()):
+        if isinstance(key, str) and " " in key:
+            normalized = key.replace(" ", "_")
+            enriched.setdefault(normalized, enriched[key])
+    return enriched
+
+
+def _has_auth_missing(value: Any) -> bool:
+    if value in (None, "", False):
+        return False
+    if isinstance(value, (list, tuple, set, Mapping)):
+        return len(value) > 0
+    return bool(value)
+
+
+def _canonicalize_execute_metrics(
+    payload: Mapping[str, Any], *, start_dt: datetime | None = None, end_dt: datetime | None = None
+) -> Dict[str, Any]:
+    enriched = _normalize_space_keys(payload)
+
+    timestamp = None
+    for key in ("last_run_utc", "last_run", "run_utc", "timestamp"):
+        value = enriched.get(key)
+        if isinstance(value, str) and value.strip():
+            timestamp = value
+            break
+    if end_dt is None:
+        end_dt = datetime.now(timezone.utc)
+    if start_dt is None:
+        start_dt = _EXECUTE_START_UTC
+    enriched["timestamp"] = timestamp or datetime.now(timezone.utc).isoformat()
+
+    auth_missing = enriched.get("auth_missing")
+    auth_ok = enriched.get("auth_ok")
+    if auth_ok is None:
+        auth_ok = not (_has_auth_missing(auth_missing) or str(enriched.get("status", "")).lower() == "auth_error")
+    enriched["auth_ok"] = bool(auth_ok)
+
+    fills_value = enriched.get("orders_filled", enriched.get("fills", 0))
+    trails_value = enriched.get("trailing_attached", enriched.get("trails", 0))
+    try:
+        enriched["fills"] = int(fills_value)
+    except Exception:
+        enriched["fills"] = fills_value
+    try:
+        enriched["trails"] = int(trails_value)
+    except Exception:
+        enriched["trails"] = trails_value
+
+    if start_dt is not None:
+        try:
+            enriched["duration_sec"] = round((end_dt - start_dt).total_seconds(), 3)
+        except Exception:
+            pass
+
+    return enriched
 
 
 def _count_csv_rows(path: Path) -> int:
@@ -3707,9 +3772,14 @@ class TradeExecutor:
             merged.pop("error", None)
         merged["last_run_utc"] = payload.get("last_run_utc", datetime.now(timezone.utc).isoformat())
         try:
-            METRICS_PATH.write_text(
-                json.dumps(merged, indent=2, sort_keys=True),
-                encoding="utf-8",
+            enriched = _canonicalize_execute_metrics(
+                merged,
+                start_dt=_EXECUTE_START_UTC,
+                end_dt=datetime.now(timezone.utc),
+            )
+            atomic_write_bytes(
+                METRICS_PATH,
+                json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8"),
             )
         except Exception as exc:  # pragma: no cover - defensive guard
             _warn_context("metrics.persist", f"write_failed: {exc}")
@@ -4054,6 +4124,9 @@ def run_executor(
     client: Optional[Any] = None,
     creds_snapshot: Mapping[str, Any] | None = None,
 ) -> int:
+    global _EXECUTE_START_UTC
+    if _EXECUTE_START_UTC is None:
+        _EXECUTE_START_UTC = datetime.now(timezone.utc)
     configure_logging(config.log_json)
     metrics = ExecutionMetrics()
     loader = TradeExecutor(config, client, metrics)
@@ -4280,6 +4353,9 @@ def _bootstrap_env() -> list[str]:
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
+    global _EXECUTE_START_UTC
+    if _EXECUTE_START_UTC is None:
+        _EXECUTE_START_UTC = datetime.now(timezone.utc)
     _bootstrap_env()
     try:
         creds_snapshot = assert_alpaca_creds()
@@ -4324,8 +4400,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             fallback_metrics = ExecutionMetrics().as_dict()
             fallback_metrics["status"] = "ok" if rc == 0 else "error"
             METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            METRICS_PATH.write_text(json.dumps(fallback_metrics, indent=2, sort_keys=True), encoding="utf-8")
-            metrics_payload = fallback_metrics
+            enriched = _canonicalize_execute_metrics(
+                fallback_metrics,
+                start_dt=_EXECUTE_START_UTC,
+                end_dt=datetime.now(timezone.utc),
+            )
+            atomic_write_bytes(
+                METRICS_PATH,
+                json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8"),
+            )
+            metrics_payload = enriched
         if metrics_payload is not None:
             def _as_int(value: Any) -> int:
                 try:
