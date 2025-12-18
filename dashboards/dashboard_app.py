@@ -38,6 +38,9 @@ from dashboards.data_io import (
     metrics_summary_snapshot,
 )
 from dashboards.utils import coerce_kpi_types, parse_pipeline_summary
+from dashboards.overview import overview_layout
+from dashboards.pipeline_tab import pipeline_layout
+from dashboards.ml_tab import ml_layout
 from scripts.run_pipeline import write_complete_screener_metrics
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
 
@@ -1227,6 +1230,7 @@ app = Dash(
         dbc.themes.DARKLY,
         "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates@V2.1.0/dbc.min.css",
     ],
+    suppress_callback_exceptions=True,
 )
 
 server = app.server
@@ -1311,6 +1315,27 @@ app.layout = dbc.Container(
                     class_name="mb-3",
                     children=[
                         dbc.Tab(
+                            label="Overview",
+                            tab_id="tab-overview",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Pipeline",
+                            tab_id="tab-pipeline",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="ML",
+                            tab_id="tab-ml",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
                             label="Screener Health",
                             tab_id="tab-screener-health",
                             tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
@@ -1366,6 +1391,7 @@ app.layout = dbc.Container(
                     id="refresh-button",
                     className="btn btn-secondary mb-2",
                 ),
+                dcc.Store(id="refresh-ts"),
                 dcc.Loading(
                     id="loading",
                     children=html.Div(id="tabs-content", className="mt-4"),
@@ -1380,9 +1406,10 @@ app.layout = dbc.Container(
         dcc.Interval(
             id="log-interval", interval=24 * 60 * 60 * 1000, n_intervals=0
         ),
-        dcc.Interval(
+dcc.Interval(
             id="interval-trades", interval=24 * 60 * 60 * 1000, n_intervals=0
         ),
+        dcc.Store(id="predictions-store"),
         dbc.Modal(
             id="detail-modal",
             is_open=False,
@@ -2935,8 +2962,27 @@ def screener_layout():
     return _render_tab("tab-screener", 0, 0, None)
 
 
-@app.callback(Output("tabs-content", "children"), [Input("tabs", "active_tab")])
-def render_tab(tab):
+@app.callback(Output("refresh-ts", "data"), Input("refresh-button", "n_clicks"))
+def _refresh_ts(n_clicks):
+    if n_clicks is None:
+        raise PreventUpdate
+    return datetime.utcnow().isoformat()
+
+
+@app.callback(
+    Output("tabs-content", "children"),
+    [Input("tabs", "active_tab"), Input("refresh-ts", "data"), Input("predictions-dropdown", "value")],
+)
+def render_tab(tab, refresh_ts=None, prediction_path=None):
+    if tab == "tab-overview":
+        logger.info("Rendering content for tab: %s", tab)
+        return overview_layout()
+    if tab == "tab-pipeline":
+        logger.info("Rendering content for tab: %s", tab)
+        return pipeline_layout()
+    if tab == "tab-ml":
+        logger.info("Rendering content for tab: %s", tab)
+        return ml_layout(prediction_path)
     if tab == "tab-screener-health":
         logger.info("Rendering content for tab: %s", tab)
         return build_screener_health()
