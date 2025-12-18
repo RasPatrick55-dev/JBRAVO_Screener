@@ -16,6 +16,7 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 from utils import write_csv_atomic
+from utils.screener_metrics import ensure_canonical_metrics, write_screener_metrics_json
 from utils.env import load_env
 
 load_env()
@@ -422,10 +423,8 @@ def main():
         metrics["universe_prefix_counts"] = {}
 
     try:
-        metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        metrics_path.write_text(
-            json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        metrics = ensure_canonical_metrics(metrics)
+        write_screener_metrics_json(metrics_path, metrics)
     except Exception as exc:  # pragma: no cover - defensive I/O guard
         logger.warning("Failed to update %s: %s", metrics_path, exc)
 

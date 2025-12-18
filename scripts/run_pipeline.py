@@ -25,6 +25,7 @@ from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidat
 from scripts.screener import write_universe_prefix_counts
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
 from utils import write_csv_atomic, atomic_write_bytes
+from utils.screener_metrics import ensure_canonical_metrics, write_screener_metrics_json
 from utils.alerts import send_alert
 from utils.env import get_alpaca_creds
 from utils.telemetry import emit_event
@@ -1486,11 +1487,8 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
         if derived:
             metrics["universe_prefix_counts"] = derived
 
-    metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    metrics_path.write_text(
-        json.dumps(metrics, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    metrics = ensure_canonical_metrics(metrics)
+    write_screener_metrics_json(metrics_path, metrics)
     logger.info(
         "Wrote screener_metrics.json: symbols_in=%s symbols_with_bars=%s rows=%s bars_rows_total=%s",
         metrics.get("symbols_in"),
@@ -1544,8 +1542,8 @@ def _annotate_screener_metrics(
                 except TypeError:
                     error_block[key] = str(value)
         payload["error"] = error_block
-    metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    metrics_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    payload = ensure_canonical_metrics(payload)
+    write_screener_metrics_json(metrics_path, payload)
     return payload
 
 
@@ -1592,7 +1590,6 @@ def _inject_export_daily_bars_arg(args: list[str], export_path: str | Path | Non
 
 
 def _write_refresh_metrics(metrics_path: Path) -> None:
-    metrics_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "last_run_utc": datetime.now(timezone.utc).isoformat(),
         "status": "ok",
@@ -1606,7 +1603,8 @@ def _write_refresh_metrics(metrics_path: Path) -> None:
         payload.update(_record_health("refresh"))
     except Exception:  # pragma: no cover - defensive guard
         LOG.debug("_record_health refresh failed", exc_info=True)
-    metrics_path.write_text(json.dumps(payload), encoding="utf-8")
+    payload = ensure_canonical_metrics(payload)
+    write_screener_metrics_json(metrics_path, payload)
 
 
 def ensure_candidates(min_rows: int = 1) -> int:
