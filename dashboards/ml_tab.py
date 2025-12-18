@@ -58,7 +58,26 @@ def _prediction_preview(path_str: str | None) -> List[Dict[str, Any]]:
         return []
 
 
+def build_predictions_table(path_str: str | None) -> dash_table.DataTable:
+    rows = _prediction_preview(path_str)
+    columns = (
+        [{"name": str(col), "id": str(col)} for col in rows[0].keys()]
+        if rows
+        else []
+    )
+
+    return dash_table.DataTable(
+        columns=columns,
+        data=rows,
+        page_size=50,
+        style_table={"overflowX": "auto", "maxHeight": "500px", "overflowY": "auto"},
+    )
+
+
 def ml_layout(prediction_path: str | None = None):
+    options = _prediction_options()
+    selected_prediction = prediction_path or (options[0]["value"] if options else None)
+
     status_table = dash_table.DataTable(
         columns=[{"name": "key", "id": "key"}, {"name": "value", "id": "value"}],
         data=_ml_status_rows(),
@@ -73,13 +92,6 @@ def ml_layout(prediction_path: str | None = None):
         style_table={"overflowX": "auto"},
     )
 
-    preview = dash_table.DataTable(
-        columns=[],
-        data=_prediction_preview(prediction_path),
-        page_size=50,
-        style_table={"overflowX": "auto", "maxHeight": "500px", "overflowY": "auto"},
-    )
-
     return html.Div(
         [
             html.H5("Nightly ML Status"),
@@ -89,8 +101,10 @@ def ml_layout(prediction_path: str | None = None):
             eval_table,
             html.Hr(),
             html.H5("Predictions Browser"),
-            dcc.Dropdown(id="predictions-dropdown", options=_prediction_options(), value=prediction_path),
-            html.Div(preview, id="predictions-preview"),
+            dcc.Dropdown(
+                id="predictions-dropdown", options=options, value=selected_prediction
+            ),
+            html.Div(build_predictions_table(selected_prediction), id="ml-predictions-table"),
         ]
     )
 
