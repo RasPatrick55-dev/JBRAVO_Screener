@@ -1056,18 +1056,19 @@ REQUIRED_ENV_KEYS = (
 
 
 def configure_logging() -> None:
-    if LOG.handlers:
-        return
-
     LOG.setLevel(logging.INFO)
     fmt = logging.Formatter("%(asctime)s - pipeline - %(message)s")
+
+    for handler in list(LOG.handlers):
+        LOG.removeHandler(handler)
+
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(fmt)
     LOG.addHandler(stream)
 
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    file_handler = logging.FileHandler(LOG_PATH)
+    file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
     file_handler.setFormatter(fmt)
     LOG.addHandler(file_handler)
     LOG.propagate = False
