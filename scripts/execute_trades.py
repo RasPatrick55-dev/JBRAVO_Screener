@@ -432,6 +432,36 @@ EXECUTED_TRADES_PATH = Path("data") / "executed_trades.csv"
 _EXECUTE_START_UTC: datetime | None = None
 
 
+def write_execute_metrics(
+    payload: Mapping[str, Any] | None,
+    *,
+    status: str | None = None,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+) -> Dict[str, Any]:
+    METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(payload or {})
+    if status:
+        payload["status"] = status
+    enriched = _canonicalize_execute_metrics(
+        payload,
+        start_dt=start_dt,
+        end_dt=end_dt or datetime.now(timezone.utc),
+    )
+    atomic_write_bytes(
+        METRICS_PATH,
+        json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8"),
+    )
+    log_info(
+        "METRICS_UPDATED",
+        path=str(METRICS_PATH),
+        run_started_utc=enriched.get("run_started_utc"),
+        run_finished_utc=enriched.get("run_finished_utc"),
+        status=enriched.get("status"),
+    )
+    return enriched
+
+
 def _write_execute_metrics_error(
     message: str,
     *,
@@ -473,10 +503,12 @@ def _write_execute_metrics_error(
     payload.setdefault("orders_filled", 0)
     payload.setdefault("trailing_attached", 0)
     payload["last_run_utc"] = datetime.now(timezone.utc).isoformat()
-    enriched = _canonicalize_execute_metrics(payload, end_dt=datetime.now(timezone.utc))
-    atomic_write_bytes(
-        METRICS_PATH,
-        json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8"),
+    payload.setdefault("auth_ok", False)
+    return write_execute_metrics(
+        payload,
+        status=status,
+        start_dt=_EXECUTE_START_UTC,
+        end_dt=datetime.now(timezone.utc),
     )
 EXECUTED_TRADES_COLUMNS: list[str] = [
     "order_id",
@@ -687,13 +719,34 @@ def _canonicalize_execute_metrics(
     if end_dt is None:
         end_dt = datetime.now(timezone.utc)
     if start_dt is None:
-        start_dt = _EXECUTE_START_UTC
-    enriched["timestamp"] = timestamp or datetime.now(timezone.utc).isoformat()
+        start_dt = _EXECUTE_START_UTC or end_dt
+
+    start_iso = None
+    for key in ("run_started_utc", "run_started", "start_utc", "start"):
+        value = enriched.get(key)
+        if isinstance(value, str) and value.strip():
+            start_iso = value
+            break
+    end_iso = None
+    for key in ("run_finished_utc", "run_finished", "finished_utc", "finish_utc"):
+        value = enriched.get(key)
+        if isinstance(value, str) and value.strip():
+            end_iso = value
+            break
+
+    start_iso = start_iso or start_dt.isoformat()
+    end_iso = end_iso or end_dt.isoformat()
+    enriched["timestamp"] = timestamp or end_iso
+    enriched["run_started_utc"] = start_iso
+    enriched["run_finished_utc"] = end_iso
 
     auth_missing = enriched.get("auth_missing")
     auth_ok = enriched.get("auth_ok")
     if auth_ok is None:
-        auth_ok = not (_has_auth_missing(auth_missing) or str(enriched.get("status", "")).lower() == "auth_error")
+        auth_ok = not (
+            _has_auth_missing(auth_missing)
+            or str(enriched.get("status", "")).lower() == "auth_error"
+        )
     enriched["auth_ok"] = bool(auth_ok)
 
     fills_value = enriched.get("orders_filled", enriched.get("fills", 0))
@@ -701,17 +754,21 @@ def _canonicalize_execute_metrics(
     try:
         enriched["fills"] = int(fills_value)
     except Exception:
-        enriched["fills"] = fills_value
+        enriched["fills"] = 0
     try:
         enriched["trails"] = int(trails_value)
     except Exception:
-        enriched["trails"] = trails_value
+        enriched["trails"] = 0
 
     if start_dt is not None:
         try:
             enriched["duration_sec"] = round((end_dt - start_dt).total_seconds(), 3)
         except Exception:
-            pass
+            enriched["duration_sec"] = 0.0
+    else:
+        enriched.setdefault("duration_sec", 0.0)
+
+    enriched.setdefault("status", "ok")
 
     return enriched
 
@@ -3772,19 +3829,14 @@ class TradeExecutor:
             merged.pop("error", None)
         merged["last_run_utc"] = payload.get("last_run_utc", datetime.now(timezone.utc).isoformat())
         try:
-            enriched = _canonicalize_execute_metrics(
+            write_execute_metrics(
                 merged,
                 start_dt=_EXECUTE_START_UTC,
                 end_dt=datetime.now(timezone.utc),
             )
-            atomic_write_bytes(
-                METRICS_PATH,
-                json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8"),
-            )
         except Exception as exc:  # pragma: no cover - defensive guard
             _warn_context("metrics.persist", f"write_failed: {exc}")
             return
-        log_info("METRICS_UPDATED", path=str(METRICS_PATH))
 
 
 def configure_logging(log_json: bool) -> None:
@@ -4357,59 +4409,59 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if _EXECUTE_START_UTC is None:
         _EXECUTE_START_UTC = datetime.now(timezone.utc)
     _bootstrap_env()
+    rc = 1
+    metrics_payload: Dict[str, Any] | None = None
+    status: str | None = None
     try:
-        creds_snapshot = assert_alpaca_creds()
-    except AlpacaCredentialsError as exc:
-        missing = list(dict.fromkeys(list(exc.missing) + list(exc.whitespace)))
-        LOGGER.error(
-            "[ERROR] ALPACA_CREDENTIALS_INVALID reason=%s missing=%s whitespace=%s sanitized=%s",
-            exc.reason,
-            ",".join(exc.missing) or "",
-            ",".join(exc.whitespace) or "",
-            json.dumps(exc.sanitized, sort_keys=True),
-        )
-        log_info("SKIP", reason="AUTH", detail=exc.reason)
-        _record_auth_error(exc.reason, exc.sanitized, missing)
-        _write_execute_metrics_error(
-            "credentials_invalid",
-            status="auth_error",
-            rc=2,
-            reason=exc.reason,
-            missing=missing,
-        )
-        return 2
+        try:
+            creds_snapshot = assert_alpaca_creds()
+        except AlpacaCredentialsError as exc:
+            missing = list(dict.fromkeys(list(exc.missing) + list(exc.whitespace)))
+            LOGGER.error(
+                "[ERROR] ALPACA_CREDENTIALS_INVALID reason=%s missing=%s whitespace=%s sanitized=%s",
+                exc.reason,
+                ",".join(exc.missing) or "",
+                ",".join(exc.whitespace) or "",
+                json.dumps(exc.sanitized, sort_keys=True),
+            )
+            log_info("SKIP", reason="AUTH", detail=exc.reason)
+            _record_auth_error(exc.reason, exc.sanitized, missing)
+            metrics_payload = _write_execute_metrics_error(
+                "credentials_invalid",
+                status="auth_error",
+                rc=2,
+                reason=exc.reason,
+                missing=missing,
+            )
+            status = "auth_error"
+            rc = 2
+            return rc
 
-    LOGGER.info(
-        "[INFO] ALPACA_CREDENTIALS_OK sanitized=%s",
-        json.dumps(creds_snapshot, sort_keys=True),
-    )
+        LOGGER.info(
+            "[INFO] ALPACA_CREDENTIALS_OK sanitized=%s",
+            json.dumps(creds_snapshot, sort_keys=True),
+        )
 
-    args = parse_args(argv)
-    LOGGER.info(
-        "[INFO] EXEC_CONFIG ext_hours=%s alloc=%.2f max_pos=%d trail_pct=%.1f",
-        args.extended_hours,
-        args.allocation_pct,
-        args.max_positions,
-        args.trailing_percent,
-    )
-    config = build_config(args)
-    try:
+        args = parse_args(argv)
+        LOGGER.info(
+            "[INFO] EXEC_CONFIG ext_hours=%s alloc=%.2f max_pos=%d trail_pct=%.1f",
+            args.extended_hours,
+            args.allocation_pct,
+            args.max_positions,
+            args.trailing_percent,
+        )
+        config = build_config(args)
         rc = run_executor(config, creds_snapshot=creds_snapshot)
         metrics_payload = _load_execute_metrics()
         if metrics_payload is None:
             fallback_metrics = ExecutionMetrics().as_dict()
             fallback_metrics["status"] = "ok" if rc == 0 else "error"
-            METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            enriched = _canonicalize_execute_metrics(
+            metrics_payload = write_execute_metrics(
                 fallback_metrics,
                 start_dt=_EXECUTE_START_UTC,
                 end_dt=datetime.now(timezone.utc),
             )
-            atomic_write_bytes(
-                METRICS_PATH,
-                json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8"),
-            )
-            metrics_payload = enriched
+        status = metrics_payload.get("status") if isinstance(metrics_payload, Mapping) else None
         if metrics_payload is not None:
             def _as_int(value: Any) -> int:
                 try:
@@ -4456,22 +4508,25 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
         log_info("SKIP", reason="AUTH", detail="unauthorized")
         _record_auth_error("unauthorized", creds_snapshot)
-        _write_execute_metrics_error(
+        metrics_payload = _write_execute_metrics_error(
             "unauthorized",
             status="auth_error",
             rc=2,
             endpoint=exc.endpoint or "",
             feed=exc.feed or "",
         )
-        return 2
+        status = "auth_error"
+        rc = 2
+        return rc
     except Exception as exc:  # pragma: no cover - top-level guard
         LOGGER.exception("Executor failed: %s", exc)
-        _write_execute_metrics_error(
+        metrics_payload = _write_execute_metrics_error(
             "executor_exception",
             rc=1,
             exception=exc.__class__.__name__,
             detail=str(exc),
         )
+        status = "error"
         try:
             send_alert(
                 "JBRAVO execute_trades FAILED",
@@ -4482,7 +4537,21 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         except Exception:
             LOGGER.debug("ALERT_EXECUTE_FATAL_FAILED", exc_info=True)
-        return 1
+        rc = 1
+        return rc
+    finally:
+        final_status = status or (metrics_payload.get("status") if isinstance(metrics_payload, Mapping) else None)
+        if final_status is None:
+            final_status = "ok" if rc == 0 else "error"
+        try:
+            metrics_payload = write_execute_metrics(
+                metrics_payload,
+                status=final_status,
+                start_dt=_EXECUTE_START_UTC,
+                end_dt=datetime.now(timezone.utc),
+            )
+        except Exception:
+            LOGGER.debug("METRICS_WRITE_FAILED", exc_info=True)
 
 
 def _warn_context(context: str, message: str) -> None:
