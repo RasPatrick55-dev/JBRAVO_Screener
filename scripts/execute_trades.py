@@ -1548,6 +1548,7 @@ class ExecutorConfig:
     source: Path = Path("data/latest_candidates.csv")
     allocation_pct: float = 0.05
     max_positions: int = 7
+    max_new_positions: int = 7
     entry_buffer_bps: int = 75
     limit_buffer_pct: float = 0.5
     max_gap_pct: float = _env_float("MAX_GAP_PCT", 3.0)
@@ -1585,6 +1586,9 @@ class ExecutionMetrics:
     orders_filled: int = 0
     orders_canceled: int = 0
     trailing_attached: int = 0
+    open_positions: int = 0
+    allowed_new_positions: int = 0
+    open_buy_orders: int = 0
     api_retries: int = 0
     api_failures: int = 0
     auth_ok: bool = False
@@ -1653,6 +1657,9 @@ class ExecutionMetrics:
             "orders_filled": self.orders_filled,
             "orders_canceled": self.orders_canceled,
             "trailing_attached": self.trailing_attached,
+            "open_positions": self.open_positions,
+            "allowed_new_positions": self.allowed_new_positions,
+            "open_buy_orders": self.open_buy_orders,
             "api_retries": self.api_retries,
             "api_failures": self.api_failures,
             "auth_ok": bool(self.auth_ok),
@@ -2809,22 +2816,33 @@ class TradeExecutor:
             )
 
         existing_positions = self.fetch_existing_positions()
-        open_order_symbols = self.fetch_open_order_symbols()
+        open_order_symbols, open_buy_order_count = self.fetch_open_order_symbols()
+        self.metrics.open_buy_orders = open_buy_order_count
         account_buying_power = self.fetch_buying_power()
         try:
             max_positions = int(self.config.max_positions)
         except (TypeError, ValueError):
             max_positions = 0
         max_positions = max(1, max_positions)
+        try:
+            max_new_positions = int(self.config.max_new_positions)
+        except (TypeError, ValueError):
+            max_new_positions = max_positions
+        max_new_positions = max(1, max_new_positions)
         open_count = len(existing_positions)
-        available_slots = max(0, max_positions - open_count)
+        slots_total = max(0, max_positions - open_count)
+        allowed_new = min(slots_total, max_new_positions)
+        self.metrics.open_positions = open_count
+        self.metrics.allowed_new_positions = allowed_new
         LOGGER.info(
-            "[INFO] MAX_POSITIONS cap=%d open=%d slots=%d",
+            "POSITION_LIMIT max_total=%d open=%d slots_total=%d max_new=%d allowed_new=%d",
             max_positions,
             open_count,
-            available_slots,
+            slots_total,
+            max_new_positions,
+            allowed_new,
         )
-        if available_slots <= 0:
+        if slots_total <= 0:
             self.record_skip_reason("MAX_POSITIONS", count=max(1, len(candidates)))
             self.persist_metrics()
             self.log_summary()
@@ -2847,9 +2865,9 @@ class TradeExecutor:
             self.persist_metrics()
             self.log_summary()
             return 0
-        if len(queue) > available_slots:
-            queue = queue[:available_slots]
-        slot_hint = max(1, min(available_slots, len(queue)))
+        if len(queue) > allowed_new:
+            queue = queue[:allowed_new]
+        slot_hint = max(1, min(allowed_new, len(queue)))
         candidates = queue
         try:
             allocation_pct = float(self.config.allocation_pct)
@@ -2918,6 +2936,7 @@ class TradeExecutor:
         price_mode = (self.config.price_source or "entry").lower()
         min_prevclose = max(1.0, float(self.config.min_price or 0.0))
 
+        submitted_new = 0
         for record in candidates:
             symbol = record.get("symbol", "").upper()
             if not symbol:
@@ -2925,7 +2944,9 @@ class TradeExecutor:
             if symbol in open_order_symbols:
                 self.record_skip_reason("OPEN_ORDER", symbol=symbol)
                 continue
-            if len(existing_positions) >= self.config.max_positions:
+            if submitted_new >= allowed_new:
+                break
+            if len(existing_positions) + submitted_new >= max_positions:
                 self.record_skip_reason("MAX_POSITIONS", symbol=symbol)
                 break
 
@@ -3207,6 +3228,7 @@ class TradeExecutor:
                 account_buying_power = max(0.0, account_buying_power - notional)
             if outcome.get("submitted"):
                 open_order_symbols.add(symbol)
+                submitted_new += 1
 
         self.persist_metrics()
         self.log_summary()
@@ -3221,6 +3243,13 @@ class TradeExecutor:
             positions = self.client.get_all_positions()
             for pos in positions:
                 symbol = getattr(pos, "symbol", "")
+                qty = getattr(pos, "qty", None)
+                try:
+                    qty_val = float(qty)
+                except Exception:
+                    qty_val = None
+                if qty_val is not None and qty_val == 0:
+                    continue
                 if symbol:
                     symbols.add(symbol.upper())
         except Exception as exc:
@@ -3242,10 +3271,11 @@ class TradeExecutor:
             return None
         return numeric
 
-    def fetch_open_order_symbols(self) -> set[str]:
+    def fetch_open_order_symbols(self) -> tuple[set[str], int]:
         symbols: set[str] = set()
+        open_buy_orders = 0
         if self.client is None:
-            return symbols
+            return symbols, open_buy_orders
         try:
             request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
             log_info("alpaca.get_orders", status=request.status)
@@ -3254,9 +3284,12 @@ class TradeExecutor:
                 symbol = getattr(order, "symbol", "")
                 if symbol:
                     symbols.add(symbol.upper())
+                side = getattr(order, "side", "")
+                if str(side).lower() == "buy":
+                    open_buy_orders += 1
         except Exception as exc:
             _warn_context("alpaca.get_orders", str(exc))
-        return symbols
+        return symbols, open_buy_orders
 
     def fetch_buying_power(self) -> float:
         def _extract(snapshot: Mapping[str, Any], source: str) -> Optional[float]:
@@ -4008,6 +4041,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Maximum concurrent positions the executor will open",
     )
     parser.add_argument(
+        "--max-new-positions",
+        type=int,
+        default=ExecutorConfig.max_new_positions,
+        help="Maximum new positions the executor will attempt to open per run",
+    )
+    parser.add_argument(
         "--entry-buffer-bps",
         type=int,
         default=ExecutorConfig.entry_buffer_bps,
@@ -4179,6 +4218,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         source=args.source,
         allocation_pct=args.allocation_pct,
         max_positions=args.max_positions,
+        max_new_positions=args.max_new_positions,
         entry_buffer_bps=args.entry_buffer_bps,
         trailing_percent=args.trailing_percent,
         limit_buffer_pct=args.limit_buffer_pct,

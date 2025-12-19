@@ -266,11 +266,12 @@ echo "$RISK_LOG_LINE"
 DEFAULT_MAX_POSITIONS=7
 SIGNAL_QUALITY=$(printf "%s" "$RISK_LOG_LINE" | sed -n 's/.*signal_quality=\([A-Z]*\).*/\1/p')
 FINAL_MAX_POSITIONS=$DEFAULT_MAX_POSITIONS
+FINAL_MAX_NEW_POSITIONS=$DEFAULT_MAX_POSITIONS
 if [ "$SIGNAL_QUALITY" = "LOW" ]; then
-  FINAL_MAX_POSITIONS=1
+  FINAL_MAX_NEW_POSITIONS=1
 fi
 
-RISK_LIMIT_LOG_LINE="[INFO] RISK_LIMIT signal_quality=${SIGNAL_QUALITY:-UNKNOWN} max_positions=${FINAL_MAX_POSITIONS}"
+RISK_LIMIT_LOG_LINE="[INFO] RISK_LIMIT signal_quality=${SIGNAL_QUALITY:-UNKNOWN} max_new_positions=${FINAL_MAX_NEW_POSITIONS} (risk-limited) max_total_positions=${FINAL_MAX_POSITIONS}"
 LOG_TIMESTAMP=$(PYTHONPATH="" python - <<'PY'
 from datetime import datetime, timezone
 print(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S,%f")[:23])
@@ -313,7 +314,7 @@ fi
 
 python -m scripts.execute_trades \
   --source "$EXEC_SOURCE" \
-  --allocation-pct "$FINAL_ALLOCATION_PCT" --min-order-usd 300 --max-positions "$FINAL_MAX_POSITIONS" \
+  --allocation-pct "$FINAL_ALLOCATION_PCT" --min-order-usd 300 --max-positions "$FINAL_MAX_POSITIONS" --max-new-positions "$FINAL_MAX_NEW_POSITIONS" \
   --trailing-percent 3 --time-window premarket --extended-hours true \
   --submit-at-ny "07:00" --price-source prevclose \
   --cancel-after-min 35 --limit-buffer-pct 0.0
