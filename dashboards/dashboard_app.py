@@ -23,7 +23,7 @@ import pytz
 import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
-from flask import jsonify
+from flask import jsonify, redirect, request
 from plotly.subplots import make_subplots
 
 os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
@@ -1233,6 +1233,18 @@ app = Dash(
     ],
     suppress_callback_exceptions=True,
 )
+
+# --- Root redirect: send "/" to the versioned dashboard base path ---
+DASH_BASE_PATH = "/v2/"
+
+
+@app.server.route("/", methods=["GET"])
+def root_to_v2_redirect():
+    qs = request.query_string.decode("utf-8", errors="ignore")
+    target = DASH_BASE_PATH
+    if qs:
+        target = f"{target}?{qs}"
+    return redirect(target, code=302)
 
 server = app.server
 
