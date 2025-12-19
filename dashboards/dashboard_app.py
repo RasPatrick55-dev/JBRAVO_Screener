@@ -1234,19 +1234,19 @@ app = Dash(
     suppress_callback_exceptions=True,
 )
 
-# --- Root redirect: send "/" to the versioned dashboard base path ---
+server = app.server
+
+
 DASH_BASE_PATH = "/v2/"
 
 
-@app.server.route("/", methods=["GET"])
-def root_to_v2_redirect():
-    qs = request.query_string.decode("utf-8", errors="ignore")
-    target = DASH_BASE_PATH
-    if qs:
-        target = f"{target}?{qs}"
-    return redirect(target, code=302)
+@server.route("/")
+def root_redirect():
+    """Backwards compatibility for old bookmarks."""
 
-server = app.server
+    qs = request.query_string.decode("utf-8") if request.query_string else ""
+    target = DASH_BASE_PATH + (f"?{qs}" if qs else "")
+    return redirect(target, code=302)
 
 
 @server.route("/health/overview")
