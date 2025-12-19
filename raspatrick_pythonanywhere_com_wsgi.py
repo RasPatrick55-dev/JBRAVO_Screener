@@ -24,6 +24,26 @@ from dashboards.dashboard_app import app as dash_app  # noqa: E402
 
 application = dash_app.server
 
+# ROOT_REDIRECT_TO_V2
+_real_application = application
+
+
+def application(environ, start_response):
+    path = environ.get("PATH_INFO", "")
+    if path in ("", "/"):
+        qs = environ.get("QUERY_STRING", "")
+        loc = "/v2/" + (f"?{qs}" if qs else "")
+        start_response(
+            "302 Found",
+            [
+                ("Location", loc),
+                ("Content-Type", "text/plain; charset=utf-8"),
+                ("Cache-Control", "no-store"),
+            ],
+        )
+        return [b"Redirecting to /v2/"]
+    return _real_application(environ, start_response)
+
 LOGGER = logging.getLogger("jbravo.wsgi")
 if not LOGGER.handlers:
     handler = logging.StreamHandler()
