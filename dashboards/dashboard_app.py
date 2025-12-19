@@ -18,6 +18,7 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 import os
+import inspect
 import pytz
 import re
 from pathlib import Path
@@ -3014,6 +3015,17 @@ def render_tab(tab, refresh_ts=None):
         return screener_layout()
     else:
         return dbc.Alert("Tab not found.", color="danger")
+
+
+_render_tab_signature = inspect.signature(render_tab)
+_render_tab_param_count = len(_render_tab_signature.parameters)
+if _render_tab_param_count != 2:
+    message = (
+        "render_tab callback signature mismatch: expected 2 parameters (tab, refresh_ts) "
+        f"but found {_render_tab_param_count}."
+    )
+    logger.error(message)
+    raise RuntimeError(message)
 
 
 @app.callback(
