@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import pathlib
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 import requests
 from typing import Any, Mapping
@@ -14,6 +14,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import dcc, html
+from dash.development.base_component import Component
 from dash.dash_table import DataTable
 from dash.dependencies import Input, Output
 
@@ -1103,6 +1104,60 @@ def build_layout():
     )
 
 def register_callbacks(app):
+    def _json_safe(value: Any) -> Any:
+        if isinstance(value, (Component, go.Figure)):
+            return value
+        if isinstance(value, pathlib.Path):
+            return str(value)
+        if isinstance(value, Mapping):
+            return {str(k): _json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [_json_safe(v) for v in value]
+        if isinstance(value, np.ndarray):
+            return [_json_safe(v) for v in value.tolist()]
+        if isinstance(value, np.generic):
+            value = value.item()
+        try:
+            if pd.isna(value):
+                return None
+        except Exception:
+            pass
+        if isinstance(value, (pd.Timestamp, datetime, date)):
+            try:
+                return value.isoformat()
+            except Exception:
+                return str(value)
+        return value
+
+    def _sanitize_top_data(top_rows: Any) -> list[dict[str, Any]]:
+        if isinstance(top_rows, pd.DataFrame):
+            df = top_rows.copy()
+        elif isinstance(top_rows, list) and top_rows and all(isinstance(r, Mapping) for r in top_rows):
+            df = pd.DataFrame(top_rows)
+        else:
+            df = None
+
+        records: list[dict[str, Any]]
+        if isinstance(df, pd.DataFrame):
+            df = df.fillna("")
+            records = df.to_dict("records")
+        elif isinstance(top_rows, list):
+            records = [
+                dict(r) if isinstance(r, Mapping) else {"value": r}
+                for r in top_rows
+            ]
+        else:
+            records = []
+        return [_json_safe(rec) for rec in records]
+
+    def _sanitize_tooltips(tooltips: Any) -> list[dict[str, Any]]:
+        if not isinstance(tooltips, list):
+            return []
+        return [
+            _json_safe(tip if isinstance(tip, Mapping) else {})
+            for tip in tooltips
+        ]
+
     @app.callback(
         Output("sh-metrics-store","data"),
         Output("sh-top-store","data"),
@@ -1232,630 +1287,677 @@ def register_callbacks(app):
         Input("sh-premarket-store","data"),
     )
     def _render(m, top_rows, hist_rows, ev, health, summary, premarket):
-        if not isinstance(m, dict):
-            m = {}
-        else:
-            m = dict(m)
-        if not isinstance(top_rows, list):
-            top_rows = []
-        if not isinstance(hist_rows, list):
-            hist_rows = []
-        if not isinstance(ev, dict):
-            ev = None
-        if not isinstance(health, dict):
-            health = {}
-        if not isinstance(summary, Mapping):
-            summary = {}
-        if not isinstance(premarket, Mapping):
-            premarket = None
-
-        fallback_active = bool(m.get("_fallback_active"))
-        env_paper, env_feed = _environment_state()
-        paper_badge = _paper_badge_component()
-        latest_zero = bool(m.get("_latest_zero_rows"))
-        top_empty_message: Any = ""
-        if latest_zero:
-            top_empty_message = html.Span(
-                "No candidates today. Check Screener tab and Screener Health KPIs for more detail."
-            )
-        exec_metrics = _safe_json(EXECUTE_METRICS_JSON)
-        if not isinstance(exec_metrics, Mapping):
-            exec_metrics = {}
-        skip_payload: dict[str, int] = {}
-        skips_view = exec_metrics.get("skips") if isinstance(exec_metrics, Mapping) else {}
-        if isinstance(skips_view, Mapping):
-            for key, value in skips_view.items():
-                try:
-                    skip_payload[str(key)] = int(value)
-                except (TypeError, ValueError):
-                    continue
-        time_window_skips = int(skip_payload.get("TIME_WINDOW", 0))
-
-        # ---------------- KPIs ----------------
-        def _card(title, value, sub=None):
-            return html.Div([
-                html.Div(title, className="sh-kpi-title"),
-                html.Div(value, className="sh-kpi-value"),
-                html.Div(sub or "", className="sh-kpi-sub")
-            ], className="sh-kpi")
-
-        health_card, health_banner = _health_elements(health)
-        premarket_card = _premarket_pill(premarket)
-        summary_status = str(summary.get("status") or "").strip().lower()
-        auth_reason = summary.get("auth_reason") if isinstance(summary, Mapping) else ""
-        missing_raw = summary.get("auth_missing") if isinstance(summary, Mapping) else ""
-        if isinstance(missing_raw, str):
-            missing_list = [part.strip() for part in missing_raw.replace(";", ",").split(",") if part.strip()]
-        elif isinstance(missing_raw, (list, tuple, set)):
-            missing_list = [str(item).strip() for item in missing_raw if str(item).strip()]
-        else:
-            missing_list = []
-        hint_raw = summary.get("auth_hint") if isinstance(summary, Mapping) else {}
-        if isinstance(hint_raw, str):
-            try:
-                hint_data = json.loads(hint_raw)
-            except Exception:
-                hint_data = {"raw": hint_raw}
-        elif isinstance(hint_raw, Mapping):
-            hint_data = hint_raw
-        else:
-            hint_data = {}
-        creds_alert = None
-        def _format_run_time(raw: Any) -> str:
-            if raw in (None, ""):
-                return ""
-            if isinstance(raw, (int, float)):
-                try:
-                    dt = datetime.fromtimestamp(raw, tz=timezone.utc)
-                    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-                except Exception:
-                    return str(raw)
-            raw_text = str(raw).strip()
-            if not raw_text:
-                return ""
-            try:
-                return datetime.fromisoformat(raw_text.replace("Z", "+00:00")).strftime(
-                    "%Y-%m-%d %H:%M:%S UTC"
-                )
-            except Exception:
-                return raw_text
-
-        last_run_raw = (
-            m.get("run_started_utc")
-            or m.get("last_run_utc")
-            or m.get("timestamp")
-            or ""
-        )
-        if not last_run_raw and isinstance(exec_metrics, Mapping):
-            for key in ("run_finished_utc", "timestamp", "last_run_utc", "run_started_utc"):
-                candidate = exec_metrics.get(key)
-                if candidate not in (None, ""):
-                    last_run_raw = candidate
-                    break
-        last_run = _format_run_time(last_run_raw) or "n/a"
-        sym_in = int(m.get("symbols_in", 0) or 0)
-        if sym_in == 0 and isinstance(exec_metrics, Mapping):
-            try:
-                sym_in_exec = int(exec_metrics.get("symbols_in", 0) or 0)
-            except (TypeError, ValueError):
-                sym_in_exec = 0
-            if sym_in_exec:
-                sym_in = sym_in_exec
-        sym_bars_raw = m.get("symbols_with_bars")
-        if sym_bars_raw in (None, ""):
-            sym_bars_raw = m.get("with_bars")
-        sym_bars = int(sym_bars_raw or 0)
-        bars_tot = int(m.get("bars_rows_total", 0) or 0)
-        rows_raw = m.get("rows")
-        if rows_raw in (None, ""):
-            rows_raw = m.get("rows_out")
-        rows = int(rows_raw or 0)
-        candidate_reason = str(
-            (m.get("candidate_reason") or m.get("status") or "")
-        ).strip().upper()
-        candidate_sub = ""
-        if rows == 0 and candidate_reason:
-            candidate_sub = f"reason: {candidate_reason}"
-        if fallback_active:
-            note = "fallback"
-            candidate_sub = f"{candidate_sub} | {note}" if candidate_sub else note
-        zero_banner = None
-        if rows == 0:
-            zero_banner = html.Div(
-                "Zero candidates in latest screener output.",
-                style={
-                    "background": "#1e2734",
-                    "color": "#d8dee9",
-                    "padding": "8px 12px",
-                    "borderRadius": "6px",
-                    "fontSize": "13px",
-                },
-            )
-        sym_in_text = f"{sym_in:,}"
-        sym_bars_text = f"{sym_bars:,}"
-        bars_tot_text = f"{bars_tot:,}"
-        rows_text = f"{rows:,}"
-        bars_pct_value = 0.0
-        if sym_in > 0:
-            bars_pct_value = (sym_bars / max(sym_in, 1)) * 100
-        bars_pct_text = f"{bars_pct_value:.1f}%"
-        kpi_cards = [
-            health_card,
-            premarket_card,
-            _card("Last Run (UTC)", last_run),
-            _card("Symbols In", sym_in_text),
-            _card("With Bars", sym_bars_text, bars_pct_text),
-            _card("Bar Rows", bars_tot_text),
-            _card("Candidates", rows_text, candidate_sub or None),
-        ]
-        kpi_grid = html.Div(
-            kpi_cards,
-            style={
-                "display": "grid",
-                "gridTemplateColumns": "repeat(7, minmax(140px,1fr))",
-                "gap": "10px",
-            },
-            className="sh-kpi-grid",
-        )
-        source_label = str(m.get("source") or "none")
-        env_label = "Paper" if env_paper else "Live"
-        env_display = f"{env_label} ({env_feed})"
-        caption_children: list[Any] = [
-            html.Span(
-                f"Source: {source_label} • {env_display}",
-                style={"marginRight": "4px"},
-            )
-        ]
-        if m.get("_kpi_inferred_from_log"):
-            caption_children.append(
-                html.Span(
-                    "(recovered from pipeline log)",
-                    style={"fontStyle": "italic", "color": "#cbd5f5"},
-                )
-            )
-        kpi_caption = html.Div(
-            caption_children,
-            style={
-                "fontSize": "12px",
-                "color": "#9aa0b8",
-                "marginTop": "6px",
-            },
-            className="sh-kpi-caption",
-        )
-        kpis = html.Div(
-            [kpi_grid, kpi_caption],
-            className="sh-kpi-wrap",
-            style={"marginBottom": "12px", "display": "grid", "gap": "4px"},
+        empty_fig = _placeholder_figure("Unavailable", "No data available")
+        default_outputs = (
+            None,
+            _paper_badge_component(),
+            html.Div(),
+            "(no data)",
+            "(no data)",
+            "(no data)",
+            "{}",
+            empty_fig,
+            empty_fig,
+            empty_fig,
+            [],
+            "",
+            [],
+            empty_fig,
+            "",
+            empty_fig,
+            None,
+            "",
+            "",
+            "",
+            "",
         )
 
-        banner_parts = []
-        if health_banner is not None:
-            banner_parts.append(health_banner)
-        if zero_banner is not None:
-            banner_parts.append(zero_banner)
-        if banner_parts:
-            health_banner = html.Div(
-                banner_parts,
-                style={"display": "grid", "gap": "10px", "marginBottom": "12px"},
-            )
-        else:
-            health_banner = html.Div()
-
-        # ---------------- Gate pressure ----------------
-        fail = m.get("gate_fail_counts", {}) or {}
-        if fail:
-            df_fail = pd.DataFrame({"gate": list(fail.keys()), "count": list(fail.values())})
-            df_fail = df_fail.sort_values("count", ascending=False)
-            fig_gates = px.bar(df_fail, x="gate", y="count", title="Gate Pressure (Failures by Gate)")
-        else:
-            fig_gates = px.bar(title="Gate Pressure (no data)")
-
-        # ---------------- Coverage donut ----------------
-        cov_values = [sym_bars, max(sym_in - sym_bars, 0)]
-        if sum(cov_values) > 0:
-            cov_df = pd.DataFrame({"label": ["With Bars", "No Bars"], "value": cov_values})
-            fig_cov = px.pie(
-                cov_df, names="label", values="value", title="Universe Coverage", hole=0.45
-            )
-        else:
-            fig_cov = px.pie(title="Universe Coverage (no data)")
-
-        # ---------------- Timings ----------------
-        t = m.get("timings", {}) or {}
-        timing_specs = [
-            ("fetch", "fetch_secs"),
-            ("features", "feature_secs"),
-            ("rank", "rank_secs"),
-            ("gates", "gates_secs"),
-        ]
-
-        def _safe_timing(key: str) -> float | None:
-            value = t.get(key)
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return None
-
-        timing_rows = [
-            {"stage": label, "secs": _safe_timing(field)} for label, field in timing_specs
-        ]
-        timing_rows_numeric = [row for row in timing_rows if row["secs"] is not None]
-        if timing_rows_numeric:
-            tm_df = pd.DataFrame(timing_rows_numeric)
-            fig_tm = px.bar(tm_df, x="stage", y="secs", title="Stage Timings (sec)")
-        else:
-            fig_tm = px.bar(title="Stage Timings (no data)")
-
-        # ---------------- Top table ----------------
-        top_data = top_rows or []
-        tooltips = []
-        if top_data:
-            top_df = pd.DataFrame(top_data)
-            if "score_breakdown" in top_df.columns:
-                top_df["score_breakdown"] = (
-                    top_df["score_breakdown"].astype("string").fillna("").str.slice(0, 180)
-                )
-            top_df = top_df.sort_values("score", ascending=False, na_position="last")
-            top_data = top_df.to_dict("records")
-            for row in top_data:
-                breakdown = str(row.get("score_breakdown") or "").strip()
-                if breakdown:
-                    tooltips.append({"score_breakdown": {"value": breakdown, "type": "markdown"}})
-                else:
-                    tooltips.append({})
-
-        # ---------------- Trend (Rows & With-Bars %) ----------------
-        if hist_rows:
-            hist = pd.DataFrame(hist_rows).copy()
-            # accept run_utc either ISO or naive
-            hist["run_utc"] = pd.to_datetime(hist["run_utc"], errors="coerce", utc=True)
-            hist = hist.sort_values("run_utc").tail(14)
-            hist["with_bars_pct"] = (
-                hist["symbols_with_bars"] / hist["symbols_in"].replace(0, pd.NA)
-            ).astype(float)
-            # Build a tidy frame for two series
-            tidy = pd.DataFrame(
-                {
-                    "run_utc": pd.concat([hist["run_utc"], hist["run_utc"]], ignore_index=True),
-                    "value": pd.concat([hist["rows"], hist["with_bars_pct"]], ignore_index=True),
-                    "series": ["Rows"] * len(hist) + ["With Bars %"] * len(hist),
-                }
-            )
-            fig_trend = px.line(
-                tidy,
-                x="run_utc",
-                y="value",
-                color="series",
-                markers=True,
-                title="14‑Day Trend: Candidates & With‑Bars %",
-            )
-            # nicer y-axis for percent series (auto is fine, we keep simple)
-        else:
-            fig_trend = _placeholder_figure(
-                "14‑Day Trend: Candidates & With‑Bars %",
-                "Not enough history yet",
-            )
-
-        # ---------------- Ranker evaluation (avg label & score) ----------------
-        ranker_warning: str | None = None
-        ranker_summary = "Ranker evaluation not available"
-        ranker_fig = _placeholder_figure(
-            "Ranker deciles",
-            "Ranker evaluation not available (data/ranker_eval/latest.json missing)",
-        )
-        if isinstance(ev, Mapping):
-            dec = ev.get("deciles") or []
-            sample_size_raw = ev.get("sample_size", 0)
-            label_col = ev.get("label_column") or "unknown"
-            score_col = ev.get("score_column") or "score_5d"
-            decile_convention = ev.get("decile_convention") or ""
-            try:
-                top_decile_index = int(ev.get("top_decile_index", 10))
-            except (TypeError, ValueError):
-                top_decile_index = 10
-            try:
-                bottom_decile_index = int(ev.get("bottom_decile_index", 1))
-            except (TypeError, ValueError):
-                bottom_decile_index = 1
-            try:
-                sample_size = int(sample_size_raw)
-            except (TypeError, ValueError):
-                sample_size = 0
-            run_utc = ev.get("run_utc")
-            horizon = ev.get("label_horizon_days")
-            top_avg_label = ev.get("top_avg_label")
-            bottom_avg_label = ev.get("bottom_avg_label")
-            decile_lift = ev.get("decile_lift")
-            if decile_lift is None and isinstance(top_avg_label, (int, float)) and isinstance(
-                bottom_avg_label, (int, float)
-            ):
-                decile_lift = float(top_avg_label) - float(bottom_avg_label)
-
-            signal_quality = ev.get("signal_quality")
-            if not isinstance(signal_quality, str) or not signal_quality:
-                if isinstance(decile_lift, (int, float)):
-                    if decile_lift >= 0.05:
-                        signal_quality = "HIGH"
-                    elif decile_lift >= 0.02:
-                        signal_quality = "MEDIUM"
-                    else:
-                        signal_quality = "LOW"
-                else:
-                    signal_quality = "unknown"
-            signal_quality = (signal_quality or "unknown").upper()
-
-            def _fmt_float(val: Any) -> str:
-                try:
-                    return f"{float(val):.4f}"
-                except (TypeError, ValueError):
-                    return "n/a"
-
-            subtitle_bits: list[str] = []
-            if isinstance(horizon, (int, float)):
-                subtitle_bits.append(f"{int(horizon)}-day horizon")
-            if isinstance(run_utc, str) and run_utc:
-                subtitle_bits.append(f"evaluated {run_utc} UTC")
-            summary_bits = [
-                f"Ranker sample size: {sample_size:,}",
-                f"Label: {label_col}",
-                f"Score column: {score_col}",
-                f"Top decile = {top_decile_index} (highest score bucket)",
-                f"Bottom decile = {bottom_decile_index} (lowest score bucket)",
-                f"Decile lift: {_fmt_float(decile_lift)} ({signal_quality})",
-            ]
-            if subtitle_bits:
-                summary_bits.append(" ".join(subtitle_bits))
-            if decile_convention:
-                summary_bits.append(f"Convention: {decile_convention}")
-            ranker_summary = " • ".join(summary_bits)
-            try:
-                df_dec = pd.DataFrame(dec)
-                required_cols = {"decile", "avg_label", "avg_score"}
-                if not df_dec.empty and required_cols.issubset(df_dec.columns):
-                    df_dec = df_dec.sort_values("decile")
-                    tidy = df_dec.melt(
-                        id_vars=["decile"],
-                        value_vars=["avg_label", "avg_score"],
-                        var_name="metric",
-                        value_name="value",
-                    )
-                    ranker_fig = px.bar(
-                        tidy,
-                        x="decile",
-                        y="value",
-                        color="metric",
-                        barmode="group",
-                        title="Decile averages: label vs score",
-                    )
-                    ranker_fig.update_layout(
-                        template="plotly_dark",
-                        margin=dict(l=20, r=20, t=60, b=20),
-                        legend_title="Metric",
-                    )
-                    if subtitle_bits:
-                        ranker_fig.update_layout(
-                            title={
-                                "text": f"{ranker_fig.layout.title.text}<br><sup>{' · '.join(subtitle_bits)}</sup>",
-                                "x": 0.5,
-                            }
-                        )
-                else:
-                    ranker_warning = "Ranker evaluation not available (missing decile metrics)."
-            except Exception:  # pragma: no cover - defensive dashboard guard
-                ranker_warning = "Ranker evaluation could not be rendered."
-        else:
-            ranker_warning = "Ranker evaluation not available."
-
-        # ---------------- Predictions head & logs ----------------
-        pred_path = _discover_predictions_csv(m)
-        preds_head = "No predictions file available yet"
-        if pred_path:
-            preds = _safe_csv(pred_path, nrows=10)
-            if not preds.empty:
-                keep_cols = [
-                    c
-                    for c in preds.columns
-                    if str(c).lower()
-                    in {"symbol", "score", "timestamp", "close", "gap_pen", "liq_pen"}
-                ]
-                if keep_cols:
-                    preds = preds.loc[:, keep_cols]
-                preds_head = preds.to_csv(index=False)
-        s_tail = _tail(LOG_DIR / "screener.log", 180)
-        p_tail = _tail(LOG_DIR / "pipeline.log", 180)
-        pipeline_summary = _parse_pipeline_summary(p_tail)
-        skip_line = _extract_last_line(p_tail, "EXECUTE_SKIP_NO_CANDIDATES")
-        panel_lines: list[str] = []
-        token_labels = [
-            "PIPELINE_START",
-            "PIPELINE_SUMMARY",
-            "FALLBACK_CHECK",
-            "PIPELINE_END",
-            "DASH RELOAD",
-        ]
-        pipeline_tokens = [
-            _extract_last_line(p_tail, label) for label in token_labels
-        ]
-        for label, token_line in zip(token_labels, pipeline_tokens):
-            panel_lines.append(token_line or f"{label} (missing)")
-        def _try_float(value: Any) -> float:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return 0.0
-
-        if isinstance(pipeline_summary, Mapping) and pipeline_summary:
-            try:
-                sym_block = (
-                    f"symbols_in={int(pipeline_summary.get('symbols_in', 0) or 0)} "
-                    f"with_bars={int(pipeline_summary.get('with_bars', 0) or 0)} "
-                    f"rows={int(pipeline_summary.get('rows', 0) or 0)}"
-                )
-            except Exception:
-                sym_block = f"summary={json.dumps(pipeline_summary, sort_keys=True)}"
-            panel_lines.append(sym_block)
-            fetch_secs = _try_float(pipeline_summary.get("fetch_secs"))
-            feature_secs = _try_float(pipeline_summary.get("feature_secs"))
-            rank_secs = _try_float(pipeline_summary.get("rank_secs"))
-            gate_secs = _try_float(pipeline_summary.get("gate_secs"))
-            panel_lines.append(
-                "timings "
-                f"fetch_secs={fetch_secs:.2f} "
-                f"feature_secs={feature_secs:.2f} "
-                f"rank_secs={rank_secs:.2f} "
-                f"gate_secs={gate_secs:.2f}"
-            )
-            step_rcs_view = pipeline_summary.get("step_rcs")
-            if isinstance(step_rcs_view, Mapping) and step_rcs_view:
-                panel_lines.append("step_rcs=" + json.dumps(step_rcs_view, sort_keys=True))
-            elif isinstance(step_rcs_view, str) and step_rcs_view:
-                panel_lines.append("step_rcs=" + step_rcs_view)
-        if skip_line:
-            panel_lines.append(skip_line)
-        panel_lines.append(f"TIME_WINDOW skips={time_window_skips}")
-        if skip_payload:
-            panel_lines.append(
-                "execute_skips=" + json.dumps(skip_payload, sort_keys=True)
-            )
         try:
-            pipeline_panel = "\n".join(panel_lines) if panel_lines else "(no data)"
-        except Exception as exc:  # pragma: no cover - defensive guard
-            LOGGER.warning("Failed to compose pipeline panel markdown: %s", exc)
-            pipeline_panel = "(error rendering pipeline summary)"
+            if not isinstance(m, dict):
+                m = {}
+            else:
+                m = dict(m)
+            if not isinstance(top_rows, (list, pd.DataFrame)):
+                top_rows = []
+            if not isinstance(hist_rows, list):
+                hist_rows = []
+            if not isinstance(ev, dict):
+                ev = None
+            if not isinstance(health, dict):
+                health = {}
+            if not isinstance(summary, Mapping):
+                summary = {}
+            if not isinstance(premarket, Mapping):
+                premarket = None
 
-        unauthorized_log = "ALPACA_UNAUTHORIZED" in (p_tail or "")
-        if summary_status == "auth_error" or unauthorized_log:
-            detail_blocks: list[Any] = []
-            if missing_list:
-                detail_blocks.append(
-                    html.Div(
-                        "Missing variables: " + ", ".join(missing_list),
-                        style={"fontSize": "13px", "marginBottom": "4px"},
+            fallback_active = bool(m.get("_fallback_active"))
+            env_paper, env_feed = _environment_state()
+            paper_badge = _paper_badge_component()
+            latest_zero = bool(m.get("_latest_zero_rows"))
+            top_empty_message: Any = ""
+            if latest_zero:
+                top_empty_message = html.Span(
+                    "No candidates today. Check Screener tab and Screener Health KPIs for more detail."
+                )
+            exec_metrics = _safe_json(EXECUTE_METRICS_JSON)
+            if not isinstance(exec_metrics, Mapping):
+                exec_metrics = {}
+            skip_payload: dict[str, int] = {}
+            skips_view = exec_metrics.get("skips") if isinstance(exec_metrics, Mapping) else {}
+            if isinstance(skips_view, Mapping):
+                for key, value in skips_view.items():
+                    try:
+                        skip_payload[str(key)] = int(value)
+                    except (TypeError, ValueError):
+                        continue
+            time_window_skips = int(skip_payload.get("TIME_WINDOW", 0))
+
+            # ---------------- KPIs ----------------
+            def _card(title, value, sub=None):
+                return html.Div([
+                    html.Div(title, className="sh-kpi-title"),
+                    html.Div(value, className="sh-kpi-value"),
+                    html.Div(sub or "", className="sh-kpi-sub")
+                ], className="sh-kpi")
+
+            health_card, health_banner = _health_elements(health)
+            premarket_card = _premarket_pill(premarket)
+            summary_status = str(summary.get("status") or "").strip().lower()
+            auth_reason = summary.get("auth_reason") if isinstance(summary, Mapping) else ""
+            missing_raw = summary.get("auth_missing") if isinstance(summary, Mapping) else ""
+            if isinstance(missing_raw, str):
+                missing_list = [part.strip() for part in missing_raw.replace(";", ",").split(",") if part.strip()]
+            elif isinstance(missing_raw, (list, tuple, set)):
+                missing_list = [str(item).strip() for item in missing_raw if str(item).strip()]
+            else:
+                missing_list = []
+            hint_raw = summary.get("auth_hint") if isinstance(summary, Mapping) else {}
+            if isinstance(hint_raw, str):
+                try:
+                    hint_data = json.loads(hint_raw)
+                except Exception:
+                    hint_data = {"raw": hint_raw}
+            elif isinstance(hint_raw, Mapping):
+                hint_data = hint_raw
+            else:
+                hint_data = {}
+            creds_alert = None
+            def _format_run_time(raw: Any) -> str:
+                if raw in (None, ""):
+                    return ""
+                if isinstance(raw, (int, float)):
+                    try:
+                        dt = datetime.fromtimestamp(raw, tz=timezone.utc)
+                        return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+                    except Exception:
+                        return str(raw)
+                raw_text = str(raw).strip()
+                if not raw_text:
+                    return ""
+                try:
+                    return datetime.fromisoformat(raw_text.replace("Z", "+00:00")).strftime(
+                        "%Y-%m-%d %H:%M:%S UTC"
+                    )
+                except Exception:
+                    return raw_text
+
+            last_run_raw = (
+                m.get("run_started_utc")
+                or m.get("last_run_utc")
+                or m.get("timestamp")
+                or ""
+            )
+            if not last_run_raw and isinstance(exec_metrics, Mapping):
+                for key in ("run_finished_utc", "timestamp", "last_run_utc", "run_started_utc"):
+                    candidate = exec_metrics.get(key)
+                    if candidate not in (None, ""):
+                        last_run_raw = candidate
+                        break
+            last_run = _format_run_time(last_run_raw) or "n/a"
+            sym_in = int(m.get("symbols_in", 0) or 0)
+            if sym_in == 0 and isinstance(exec_metrics, Mapping):
+                try:
+                    sym_in_exec = int(exec_metrics.get("symbols_in", 0) or 0)
+                except (TypeError, ValueError):
+                    sym_in_exec = 0
+                if sym_in_exec:
+                    sym_in = sym_in_exec
+            sym_bars_raw = m.get("symbols_with_bars")
+            if sym_bars_raw in (None, ""):
+                sym_bars_raw = m.get("with_bars")
+            sym_bars = int(sym_bars_raw or 0)
+            bars_tot = int(m.get("bars_rows_total", 0) or 0)
+            rows_raw = m.get("rows")
+            if rows_raw in (None, ""):
+                rows_raw = m.get("rows_out")
+            rows = int(rows_raw or 0)
+            candidate_reason = str(
+                (m.get("candidate_reason") or m.get("status") or "")
+            ).strip().upper()
+            candidate_sub = ""
+            if rows == 0 and candidate_reason:
+                candidate_sub = f"reason: {candidate_reason}"
+            if fallback_active:
+                note = "fallback"
+                candidate_sub = f"{candidate_sub} | {note}" if candidate_sub else note
+            zero_banner = None
+            if rows == 0:
+                zero_banner = html.Div(
+                    "Zero candidates in latest screener output.",
+                    style={
+                        "background": "#1e2734",
+                        "color": "#d8dee9",
+                        "padding": "8px 12px",
+                        "borderRadius": "6px",
+                        "fontSize": "13px",
+                    },
+                )
+            sym_in_text = f"{sym_in:,}"
+            sym_bars_text = f"{sym_bars:,}"
+            bars_tot_text = f"{bars_tot:,}"
+            rows_text = f"{rows:,}"
+            bars_pct_value = 0.0
+            if sym_in > 0:
+                bars_pct_value = (sym_bars / max(sym_in, 1)) * 100
+            bars_pct_text = f"{bars_pct_value:.1f}%"
+            kpi_cards = [
+                health_card,
+                premarket_card,
+                _card("Last Run (UTC)", last_run),
+                _card("Symbols In", sym_in_text),
+                _card("With Bars", sym_bars_text, bars_pct_text),
+                _card("Bar Rows", bars_tot_text),
+                _card("Candidates", rows_text, candidate_sub or None),
+            ]
+            kpi_grid = html.Div(
+                kpi_cards,
+                style={
+                    "display": "grid",
+                    "gridTemplateColumns": "repeat(7, minmax(140px,1fr))",
+                    "gap": "10px",
+                },
+                className="sh-kpi-grid",
+            )
+            source_label = str(m.get("source") or "none")
+            env_label = "Paper" if env_paper else "Live"
+            env_display = f"{env_label} ({env_feed})"
+            caption_children: list[Any] = [
+                html.Span(
+                    f"Source: {source_label} • {env_display}",
+                    style={"marginRight": "4px"},
+                )
+            ]
+            if m.get("_kpi_inferred_from_log"):
+                caption_children.append(
+                    html.Span(
+                        "(recovered from pipeline log)",
+                        style={"fontStyle": "italic", "color": "#cbd5f5"},
                     )
                 )
-            if auth_reason:
-                detail_blocks.append(
-                    html.Div(
-                        f"Reason: {auth_reason}",
-                        style={"fontSize": "13px", "marginBottom": "4px"},
-                    )
+            kpi_caption = html.Div(
+                caption_children,
+                style={
+                    "fontSize": "12px",
+                    "color": "#9aa0b8",
+                    "marginTop": "6px",
+                },
+                className="sh-kpi-caption",
+            )
+            kpis = html.Div(
+                [kpi_grid, kpi_caption],
+                className="sh-kpi-wrap",
+                style={"marginBottom": "12px", "display": "grid", "gap": "4px"},
+            )
+
+            banner_parts = []
+            if health_banner is not None:
+                banner_parts.append(health_banner)
+            if zero_banner is not None:
+                banner_parts.append(zero_banner)
+            if banner_parts:
+                health_banner = html.Div(
+                    banner_parts,
+                    style={"display": "grid", "gap": "10px", "marginBottom": "12px"},
                 )
-            hint_entries: list[Any] = []
-            if isinstance(hint_data, Mapping):
-                key_prefix = hint_data.get("key_prefix")
-                if key_prefix:
-                    hint_entries.append(
+            else:
+                health_banner = html.Div()
+
+            # ---------------- Gate pressure ----------------
+            fail = m.get("gate_fail_counts", {}) or {}
+            if fail:
+                df_fail = pd.DataFrame({"gate": list(fail.keys()), "count": list(fail.values())})
+                df_fail = df_fail.sort_values("count", ascending=False)
+                fig_gates = px.bar(df_fail, x="gate", y="count", title="Gate Pressure (Failures by Gate)")
+            else:
+                fig_gates = px.bar(title="Gate Pressure (no data)")
+
+            # ---------------- Coverage donut ----------------
+            cov_values = [sym_bars, max(sym_in - sym_bars, 0)]
+            if sum(cov_values) > 0:
+                cov_df = pd.DataFrame({"label": ["With Bars", "No Bars"], "value": cov_values})
+                fig_cov = px.pie(
+                    cov_df, names="label", values="value", title="Universe Coverage", hole=0.45
+                )
+            else:
+                fig_cov = px.pie(title="Universe Coverage (no data)")
+
+            # ---------------- Timings ----------------
+            t = m.get("timings", {}) or {}
+            timing_specs = [
+                ("fetch", "fetch_secs"),
+                ("features", "feature_secs"),
+                ("rank", "rank_secs"),
+                ("gates", "gates_secs"),
+            ]
+
+            def _safe_timing(key: str) -> float | None:
+                value = t.get(key)
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
+            timing_rows = [
+                {"stage": label, "secs": _safe_timing(field)} for label, field in timing_specs
+            ]
+            timing_rows_numeric = [row for row in timing_rows if row["secs"] is not None]
+            if timing_rows_numeric:
+                tm_df = pd.DataFrame(timing_rows_numeric)
+                fig_tm = px.bar(tm_df, x="stage", y="secs", title="Stage Timings (sec)")
+            else:
+                fig_tm = px.bar(title="Stage Timings (no data)")
+
+            # ---------------- Top table ----------------
+            top_data: list[dict[str, Any]] = []
+            tooltips = []
+            if isinstance(top_rows, pd.DataFrame):
+                top_data = _sanitize_top_data(top_rows)
+            elif isinstance(top_rows, list):
+                top_data = _sanitize_top_data(top_rows)
+            if top_data:
+                top_df = pd.DataFrame(top_data)
+                if "score_breakdown" in top_df.columns:
+                    top_df["score_breakdown"] = (
+                        top_df["score_breakdown"].astype("string").fillna("").str.slice(0, 180)
+                    )
+                top_df = top_df.sort_values("score", ascending=False, na_position="last")
+                top_data = _sanitize_top_data(top_df)
+                for row in top_data:
+                    breakdown = str(row.get("score_breakdown") or "").strip()
+                    if breakdown:
+                        tooltips.append({"score_breakdown": {"value": breakdown, "type": "markdown"}})
+                    else:
+                        tooltips.append({})
+            tooltips = _sanitize_tooltips(tooltips)
+
+            # ---------------- Trend (Rows & With-Bars %) ----------------
+            if hist_rows:
+                hist = pd.DataFrame(hist_rows).copy()
+                # accept run_utc either ISO or naive
+                hist["run_utc"] = pd.to_datetime(hist["run_utc"], errors="coerce", utc=True)
+                hist = hist.sort_values("run_utc").tail(14)
+                hist["with_bars_pct"] = (
+                    hist["symbols_with_bars"] / hist["symbols_in"].replace(0, pd.NA)
+                ).astype(float)
+                # Build a tidy frame for two series
+                tidy = pd.DataFrame(
+                    {
+                        "run_utc": pd.concat([hist["run_utc"], hist["run_utc"]], ignore_index=True),
+                        "value": pd.concat([hist["rows"], hist["with_bars_pct"]], ignore_index=True),
+                        "series": ["Rows"] * len(hist) + ["With Bars %"] * len(hist),
+                    }
+                )
+                fig_trend = px.line(
+                    tidy,
+                    x="run_utc",
+                    y="value",
+                    color="series",
+                    markers=True,
+                    title="14‑Day Trend: Candidates & With‑Bars %",
+                )
+                # nicer y-axis for percent series (auto is fine, we keep simple)
+            else:
+                fig_trend = _placeholder_figure(
+                    "14‑Day Trend: Candidates & With‑Bars %",
+                    "Not enough history yet",
+                )
+
+            # ---------------- Ranker evaluation (avg label & score) ----------------
+            ranker_warning: str | None = None
+            ranker_summary = "Ranker evaluation not available"
+            ranker_fig = _placeholder_figure(
+                "Ranker deciles",
+                "Ranker evaluation not available (data/ranker_eval/latest.json missing)",
+            )
+            if isinstance(ev, Mapping):
+                dec = ev.get("deciles") or []
+                sample_size_raw = ev.get("sample_size", 0)
+                label_col = ev.get("label_column") or "unknown"
+                score_col = ev.get("score_column") or "score_5d"
+                decile_convention = ev.get("decile_convention") or ""
+                try:
+                    top_decile_index = int(ev.get("top_decile_index", 10))
+                except (TypeError, ValueError):
+                    top_decile_index = 10
+                try:
+                    bottom_decile_index = int(ev.get("bottom_decile_index", 1))
+                except (TypeError, ValueError):
+                    bottom_decile_index = 1
+                try:
+                    sample_size = int(sample_size_raw)
+                except (TypeError, ValueError):
+                    sample_size = 0
+                run_utc = ev.get("run_utc")
+                horizon = ev.get("label_horizon_days")
+                top_avg_label = ev.get("top_avg_label")
+                bottom_avg_label = ev.get("bottom_avg_label")
+                decile_lift = ev.get("decile_lift")
+                if decile_lift is None and isinstance(top_avg_label, (int, float)) and isinstance(
+                    bottom_avg_label, (int, float)
+                ):
+                    decile_lift = float(top_avg_label) - float(bottom_avg_label)
+
+                signal_quality = ev.get("signal_quality")
+                if not isinstance(signal_quality, str) or not signal_quality:
+                    if isinstance(decile_lift, (int, float)):
+                        if decile_lift >= 0.05:
+                            signal_quality = "HIGH"
+                        elif decile_lift >= 0.02:
+                            signal_quality = "MEDIUM"
+                        else:
+                            signal_quality = "LOW"
+                    else:
+                        signal_quality = "unknown"
+                signal_quality = (signal_quality or "unknown").upper()
+
+                def _fmt_float(val: Any) -> str:
+                    try:
+                        return f"{float(val):.4f}"
+                    except (TypeError, ValueError):
+                        return "n/a"
+
+                subtitle_bits: list[str] = []
+                if isinstance(horizon, (int, float)):
+                    subtitle_bits.append(f"{int(horizon)}-day horizon")
+                if isinstance(run_utc, str) and run_utc:
+                    subtitle_bits.append(f"evaluated {run_utc} UTC")
+                summary_bits = [
+                    f"Ranker sample size: {sample_size:,}",
+                    f"Label: {label_col}",
+                    f"Score column: {score_col}",
+                    f"Top decile = {top_decile_index} (highest score bucket)",
+                    f"Bottom decile = {bottom_decile_index} (lowest score bucket)",
+                    f"Decile lift: {_fmt_float(decile_lift)} ({signal_quality})",
+                ]
+                if subtitle_bits:
+                    summary_bits.append(" ".join(subtitle_bits))
+                if decile_convention:
+                    summary_bits.append(f"Convention: {decile_convention}")
+                ranker_summary = " • ".join(summary_bits)
+                try:
+                    df_dec = pd.DataFrame(dec)
+                    required_cols = {"decile", "avg_label", "avg_score"}
+                    if not df_dec.empty and required_cols.issubset(df_dec.columns):
+                        df_dec = df_dec.sort_values("decile")
+                        tidy = df_dec.melt(
+                            id_vars=["decile"],
+                            value_vars=["avg_label", "avg_score"],
+                            var_name="metric",
+                            value_name="value",
+                        )
+                        ranker_fig = px.bar(
+                            tidy,
+                            x="decile",
+                            y="value",
+                            color="metric",
+                            barmode="group",
+                            title="Decile averages: label vs score",
+                        )
+                        ranker_fig.update_layout(
+                            template="plotly_dark",
+                            margin=dict(l=20, r=20, t=60, b=20),
+                            legend_title="Metric",
+                        )
+                        if subtitle_bits:
+                            ranker_fig.update_layout(
+                                title={
+                                    "text": f"{ranker_fig.layout.title.text}<br><sup>{' · '.join(subtitle_bits)}</sup>",
+                                    "x": 0.5,
+                                }
+                            )
+                    else:
+                        ranker_warning = "Ranker evaluation not available (missing decile metrics)."
+                except Exception:  # pragma: no cover - defensive dashboard guard
+                    ranker_warning = "Ranker evaluation could not be rendered."
+            else:
+                ranker_warning = "Ranker evaluation not available."
+
+            # ---------------- Predictions head & logs ----------------
+            pred_path = _discover_predictions_csv(m)
+            preds_head = "No predictions file available yet"
+            if pred_path:
+                preds = _safe_csv(pred_path, nrows=10)
+                if not preds.empty:
+                    keep_cols = [
+                        c
+                        for c in preds.columns
+                        if str(c).lower()
+                        in {"symbol", "score", "timestamp", "close", "gap_pen", "liq_pen"}
+                    ]
+                    if keep_cols:
+                        preds = preds.loc[:, keep_cols]
+                    preds_head = preds.to_csv(index=False)
+            s_tail = _tail(LOG_DIR / "screener.log", 180)
+            p_tail = _tail(LOG_DIR / "pipeline.log", 180)
+            pipeline_summary = _parse_pipeline_summary(p_tail)
+            skip_line = _extract_last_line(p_tail, "EXECUTE_SKIP_NO_CANDIDATES")
+            panel_lines: list[str] = []
+            token_labels = [
+                "PIPELINE_START",
+                "PIPELINE_SUMMARY",
+                "FALLBACK_CHECK",
+                "PIPELINE_END",
+                "DASH RELOAD",
+            ]
+            pipeline_tokens = [
+                _extract_last_line(p_tail, label) for label in token_labels
+            ]
+            for label, token_line in zip(token_labels, pipeline_tokens):
+                panel_lines.append(token_line or f"{label} (missing)")
+            def _try_float(value: Any) -> float:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            if isinstance(pipeline_summary, Mapping) and pipeline_summary:
+                try:
+                    sym_block = (
+                        f"symbols_in={int(pipeline_summary.get('symbols_in', 0) or 0)} "
+                        f"with_bars={int(pipeline_summary.get('with_bars', 0) or 0)} "
+                        f"rows={int(pipeline_summary.get('rows', 0) or 0)}"
+                    )
+                except Exception:
+                    sym_block = f"summary={json.dumps(pipeline_summary, sort_keys=True)}"
+                panel_lines.append(sym_block)
+                fetch_secs = _try_float(pipeline_summary.get("fetch_secs"))
+                feature_secs = _try_float(pipeline_summary.get("feature_secs"))
+                rank_secs = _try_float(pipeline_summary.get("rank_secs"))
+                gate_secs = _try_float(pipeline_summary.get("gate_secs"))
+                panel_lines.append(
+                    "timings "
+                    f"fetch_secs={fetch_secs:.2f} "
+                    f"feature_secs={feature_secs:.2f} "
+                    f"rank_secs={rank_secs:.2f} "
+                    f"gate_secs={gate_secs:.2f}"
+                )
+                step_rcs_view = pipeline_summary.get("step_rcs")
+                if isinstance(step_rcs_view, Mapping) and step_rcs_view:
+                    panel_lines.append("step_rcs=" + json.dumps(step_rcs_view, sort_keys=True))
+                elif isinstance(step_rcs_view, str) and step_rcs_view:
+                    panel_lines.append("step_rcs=" + step_rcs_view)
+            if skip_line:
+                panel_lines.append(skip_line)
+            panel_lines.append(f"TIME_WINDOW skips={time_window_skips}")
+            if skip_payload:
+                panel_lines.append(
+                    "execute_skips=" + json.dumps(skip_payload, sort_keys=True)
+                )
+            try:
+                pipeline_panel = "\n".join(panel_lines) if panel_lines else "(no data)"
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning("Failed to compose pipeline panel markdown: %s", exc)
+                pipeline_panel = "(error rendering pipeline summary)"
+
+            unauthorized_log = "ALPACA_UNAUTHORIZED" in (p_tail or "")
+            if summary_status == "auth_error" or unauthorized_log:
+                detail_blocks: list[Any] = []
+                if missing_list:
+                    detail_blocks.append(
                         html.Div(
-                            f"Key prefix: {key_prefix}",
-                            style={"fontSize": "13px", "marginBottom": "2px"},
+                            "Missing variables: " + ", ".join(missing_list),
+                            style={"fontSize": "13px", "marginBottom": "4px"},
                         )
                     )
-                secret_len = hint_data.get("secret_len")
-                if secret_len is not None:
-                    hint_entries.append(
+                if auth_reason:
+                    detail_blocks.append(
                         html.Div(
-                            f"Secret length: {secret_len}",
-                            style={"fontSize": "13px", "marginBottom": "2px"},
+                            f"Reason: {auth_reason}",
+                            style={"fontSize": "13px", "marginBottom": "4px"},
                         )
                     )
-                base_urls = hint_data.get("base_urls")
-                if isinstance(base_urls, Mapping):
-                    for label, url in base_urls.items():
+                hint_entries: list[Any] = []
+                if isinstance(hint_data, Mapping):
+                    key_prefix = hint_data.get("key_prefix")
+                    if key_prefix:
                         hint_entries.append(
                             html.Div(
-                                f"{str(label).title()} URL: {url or 'n/a'}",
+                                f"Key prefix: {key_prefix}",
                                 style={"fontSize": "13px", "marginBottom": "2px"},
                             )
                         )
-                if not hint_entries and hint_data:
-                    hint_entries.append(
-                        html.Div(
-                            f"Hint: {json.dumps(hint_data, sort_keys=True)}",
-                            style={"fontSize": "13px", "marginBottom": "2px"},
+                    secret_len = hint_data.get("secret_len")
+                    if secret_len is not None:
+                        hint_entries.append(
+                            html.Div(
+                                f"Secret length: {secret_len}",
+                                style={"fontSize": "13px", "marginBottom": "2px"},
+                            )
                         )
-                    )
-            alert_children: list[Any] = [
-                html.Div("Credentials invalid", style={"fontWeight": 600, "marginBottom": "4px"}),
-                *detail_blocks,
-                *hint_entries,
-                html.A(
-                    "Troubleshooting guide",
-                    href="https://docs.alpaca.markets/docs/troubleshooting-authentication",
-                    target="_blank",
-                    style={"color": "#ffd7d5", "textDecoration": "underline"},
-                ),
-            ]
-            creds_alert = html.Div(
-                alert_children,
+                    base_urls = hint_data.get("base_urls")
+                    if isinstance(base_urls, Mapping):
+                        for label, url in base_urls.items():
+                            hint_entries.append(
+                                html.Div(
+                                    f"{str(label).title()} URL: {url or 'n/a'}",
+                                    style={"fontSize": "13px", "marginBottom": "2px"},
+                                )
+                            )
+                    if not hint_entries and hint_data:
+                        hint_entries.append(
+                            html.Div(
+                                f"Hint: {json.dumps(hint_data, sort_keys=True)}",
+                                style={"fontSize": "13px", "marginBottom": "2px"},
+                            )
+                        )
+                alert_children: list[Any] = [
+                    html.Div("Credentials invalid", style={"fontWeight": 600, "marginBottom": "4px"}),
+                    *detail_blocks,
+                    *hint_entries,
+                    html.A(
+                        "Troubleshooting guide",
+                        href="https://docs.alpaca.markets/docs/troubleshooting-authentication",
+                        target="_blank",
+                        style={"color": "#ffd7d5", "textDecoration": "underline"},
+                    ),
+                ]
+                creds_alert = html.Div(
+                    alert_children,
+                    style={
+                        "position": "sticky",
+                        "top": 0,
+                        "zIndex": 1100,
+                        "padding": "10px 14px",
+                        "borderRadius": "6px",
+                        "background": "#8c1d13",
+                        "color": "#fff",
+                        "boxShadow": "0 2px 8px rgba(0,0,0,0.35)",
+                        "marginBottom": "12px",
+                    },
+                    className="sh-health-alert",
+                )
+
+            # universe_prefix_counts expected shape: {"NY": 2000, "CX": 500, ...}
+            prefix_raw = m.get("universe_prefix_counts") if isinstance(m, dict) else {}
+            prefix_counts = (
+                json.dumps(prefix_raw, indent=2, sort_keys=True)
+                if isinstance(prefix_raw, dict) and prefix_raw
+                else "(no data)"
+            )
+
+            # http stats expected shape: {"200": 7400, "429": 100, ...}
+            http_view = m.get("http_stats") if isinstance(m, dict) else {}
+            if not isinstance(http_view, dict) or not http_view:
+                http_json = "(no data)\nHTTP metrics not yet instrumented."
+            else:
+                http_json = json.dumps(http_view, indent=2, sort_keys=True)
+
+            # cache stats expected shape: {"cache_hits": 1234, ...}
+            cache_view = m.get("cache_stats") if isinstance(m, dict) else {}
+            if not isinstance(cache_view, dict) or not cache_view:
+                cache_json = "(no data)\nCache metrics not yet instrumented."
+            else:
+                cache_json = json.dumps(cache_view, indent=2, sort_keys=True)
+
+            timings_dict = m.get("timings") if isinstance(m, dict) else {}
+            if not isinstance(timings_dict, dict):
+                timings_dict = {}
+            base_timings = {"fetch_secs": "n/a", "feature_secs": "n/a", "rank_secs": "n/a", "gates_secs": "n/a"}
+            timings_view = {**base_timings, **timings_dict}
+            timings_json = json.dumps({k: timings_view.get(k) for k in sorted(timings_view)}, indent=2)
+
+            banner_children: list[Any] = []
+            if creds_alert:
+                banner_children.append(creds_alert)
+            if health_banner:
+                banner_children.append(health_banner)
+
+            return (
+                banner_children if banner_children else None,
+                paper_badge,
+                kpis,
+                prefix_counts,
+                http_json,
+                cache_json,
+                timings_json,
+                fig_gates,
+                fig_cov,
+                fig_tm,
+                top_data,
+                top_empty_message,
+                tooltips,
+                fig_trend,
+                ranker_summary,
+                ranker_fig,
+                ranker_warning,
+                preds_head,
+                s_tail,
+                p_tail,
+                pipeline_panel,
+            )
+        except Exception:  # pragma: no cover - defensive dashboard guard
+            LOGGER.exception("Failed to render screener health dashboard")
+            error_banner = html.Div(
+                "Screener Health failed to render. See error logs for details.",
                 style={
-                    "position": "sticky",
-                    "top": 0,
-                    "zIndex": 1100,
-                    "padding": "10px 14px",
-                    "borderRadius": "6px",
                     "background": "#8c1d13",
                     "color": "#fff",
-                    "boxShadow": "0 2px 8px rgba(0,0,0,0.35)",
-                    "marginBottom": "12px",
+                    "padding": "10px 14px",
+                    "borderRadius": "6px",
+                    "fontWeight": 600,
                 },
                 className="sh-health-alert",
             )
-
-        # universe_prefix_counts expected shape: {"NY": 2000, "CX": 500, ...}
-        prefix_raw = m.get("universe_prefix_counts") if isinstance(m, dict) else {}
-        prefix_counts = (
-            json.dumps(prefix_raw, indent=2, sort_keys=True)
-            if isinstance(prefix_raw, dict) and prefix_raw
-            else "(no data)"
-        )
-
-        # http stats expected shape: {"200": 7400, "429": 100, ...}
-        http_view = m.get("http_stats") if isinstance(m, dict) else {}
-        if not isinstance(http_view, dict) or not http_view:
-            http_json = "(no data)\nHTTP metrics not yet instrumented."
-        else:
-            http_json = json.dumps(http_view, indent=2, sort_keys=True)
-
-        # cache stats expected shape: {"cache_hits": 1234, ...}
-        cache_view = m.get("cache_stats") if isinstance(m, dict) else {}
-        if not isinstance(cache_view, dict) or not cache_view:
-            cache_json = "(no data)\nCache metrics not yet instrumented."
-        else:
-            cache_json = json.dumps(cache_view, indent=2, sort_keys=True)
-
-        timings_dict = m.get("timings") if isinstance(m, dict) else {}
-        if not isinstance(timings_dict, dict):
-            timings_dict = {}
-        base_timings = {"fetch_secs": "n/a", "feature_secs": "n/a", "rank_secs": "n/a", "gates_secs": "n/a"}
-        timings_view = {**base_timings, **timings_dict}
-        timings_json = json.dumps({k: timings_view.get(k) for k in sorted(timings_view)}, indent=2)
-
-        banner_children: list[Any] = []
-        if creds_alert:
-            banner_children.append(creds_alert)
-        if health_banner:
-            banner_children.append(health_banner)
-
-        return (
-            banner_children if banner_children else None,
-            paper_badge,
-            kpis,
-            prefix_counts,
-            http_json,
-            cache_json,
-            timings_json,
-            fig_gates,
-            fig_cov,
-            fig_tm,
-            top_data,
-            top_empty_message,
-            tooltips,
-            fig_trend,
-            ranker_summary,
-            ranker_fig,
-            ranker_warning,
-            preds_head,
-            s_tail,
-            p_tail,
-            pipeline_panel,
-        )
+            safe_outputs = list(default_outputs)
+            safe_outputs[0] = error_banner
+            return tuple(safe_outputs)
