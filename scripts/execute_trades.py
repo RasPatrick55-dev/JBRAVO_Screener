@@ -804,6 +804,35 @@ def _canonicalize_execute_metrics(
             enriched["duration_sec"] = 1.0
 
     enriched.setdefault("status", "ok")
+    metrics_defaults: Dict[str, Any] = {
+        "open_positions": 0,
+        "open_orders": 0,
+        "configured_max_positions": 0,
+        "risk_limited_max_positions": 0,
+        "slots_total": 0,
+        "allowed_new_positions": 0,
+        "exit_reason": "UNKNOWN",
+        "in_window": False,
+    }
+    for key, default in metrics_defaults.items():
+        value = enriched.get(key)
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            enriched[key] = default
+    for key in (
+        "open_positions",
+        "open_orders",
+        "configured_max_positions",
+        "risk_limited_max_positions",
+        "slots_total",
+        "allowed_new_positions",
+    ):
+        try:
+            enriched[key] = int(enriched.get(key, 0))
+        except Exception:
+            enriched[key] = metrics_defaults[key]
+    exit_reason_val = enriched.get("exit_reason")
+    enriched["exit_reason"] = str(exit_reason_val or "UNKNOWN")
+    enriched["in_window"] = bool(enriched.get("in_window"))
 
     return enriched
 
@@ -1577,6 +1606,7 @@ class ExecutorConfig:
     max_chase_count: int = 6
     max_chase_gap_pct: float = 5.0
     chase_enabled: bool = False
+    diagnostic: bool = False
 
 
 @dataclass
@@ -1587,12 +1617,18 @@ class ExecutionMetrics:
     orders_canceled: int = 0
     trailing_attached: int = 0
     open_positions: int = 0
+    open_orders: int = 0
     allowed_new_positions: int = 0
     open_buy_orders: int = 0
+    configured_max_positions: int = 0
+    risk_limited_max_positions: int = 0
+    slots_total: int = 0
     api_retries: int = 0
     api_failures: int = 0
     auth_ok: bool = False
     auth_reason: str | None = None
+    exit_reason: str = "UNKNOWN"
+    in_window: bool = False
     latency_samples: List[float] = field(default_factory=list)
     skipped_reasons: Counter = field(default_factory=Counter)
     status: str = "ok"
@@ -1658,12 +1694,18 @@ class ExecutionMetrics:
             "orders_canceled": self.orders_canceled,
             "trailing_attached": self.trailing_attached,
             "open_positions": self.open_positions,
+            "open_orders": self.open_orders,
             "allowed_new_positions": self.allowed_new_positions,
+            "configured_max_positions": self.configured_max_positions,
+            "risk_limited_max_positions": self.risk_limited_max_positions,
+            "slots_total": self.slots_total,
             "open_buy_orders": self.open_buy_orders,
             "api_retries": self.api_retries,
             "api_failures": self.api_failures,
             "auth_ok": bool(self.auth_ok),
             "auth_reason": self.auth_reason,
+            "exit_reason": str(self.exit_reason or "UNKNOWN"),
+            "in_window": bool(self.in_window),
             "latency_secs": {
                 "p50": self.percentile(0.5),
                 "p95": self.percentile(0.95),
@@ -2149,6 +2191,19 @@ class TradeExecutor:
                 LOGGER.info(json.dumps({"event": event, **payload}))
             except TypeError:  # pragma: no cover - serialization guard
                 LOGGER.info(json.dumps({"event": event, "message": str(payload)}))
+
+    def _log_diagnostic_snapshot(self) -> None:
+        if not getattr(self.config, "diagnostic", False):
+            return
+        LOGGER.info(
+            "[DIAGNOSTIC_EXECUTE] exit_reason=%s allowed_new_positions=%s open_positions=%s open_orders=%s slots_total=%s in_window=%s",
+            str(self.metrics.exit_reason or "UNKNOWN"),
+            int(self.metrics.allowed_new_positions),
+            int(self.metrics.open_positions),
+            int(self.metrics.open_orders),
+            int(self.metrics.slots_total),
+            bool(self.metrics.in_window),
+        )
 
     def _market_label(self) -> str:
         tz_name = str(self.config.market_timezone or "America/New_York")
@@ -2797,33 +2852,32 @@ class TradeExecutor:
         *,
         prefiltered: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
+        diagnostic_mode = bool(getattr(self.config, "diagnostic", False))
         self.metrics.symbols_in = len(df)
         if prefiltered is not None:
             candidates = prefiltered
         else:
             records = self.hydrate_candidates(df)
             candidates = self.guard_candidates(records)
-        if not candidates:
-            self.metrics.record_skip("NO_CANDIDATES", count=max(1, len(df)))
-            LOGGER.info("No candidates passed guardrails; nothing to do.")
-            self.persist_metrics()
-            self.log_summary()
-            return 0
-
+        allowed, status, resolved_window = self.evaluate_time_window()
+        self.metrics.in_window = bool(allowed)
         if self.config.dry_run:
             LOGGER.info(
                 "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
             )
 
         existing_positions = self.fetch_existing_positions()
-        open_order_symbols, open_buy_order_count = self.fetch_open_order_symbols()
+        open_order_symbols, open_buy_order_count, open_order_total = self.fetch_open_order_symbols()
         self.metrics.open_buy_orders = open_buy_order_count
+        self.metrics.open_orders = open_order_total
         account_buying_power = self.fetch_buying_power()
         try:
             max_positions = int(self.config.max_positions)
         except (TypeError, ValueError):
             max_positions = 0
         max_positions = max(1, max_positions)
+        self.metrics.configured_max_positions = max_positions
+        self.metrics.risk_limited_max_positions = max_positions
         try:
             max_new_positions = int(self.config.max_new_positions)
         except (TypeError, ValueError):
@@ -2834,6 +2888,7 @@ class TradeExecutor:
         allowed_new = min(slots_total, max_new_positions)
         self.metrics.open_positions = open_count
         self.metrics.allowed_new_positions = allowed_new
+        self.metrics.slots_total = slots_total
         LOGGER.info(
             "POSITION_LIMIT max_total=%d open=%d slots_total=%d max_new=%d allowed_new=%d",
             max_positions,
@@ -2842,9 +2897,19 @@ class TradeExecutor:
             max_new_positions,
             allowed_new,
         )
+        if not candidates:
+            self.metrics.exit_reason = "NO_CANDIDATES"
+            self.metrics.record_skip("NO_CANDIDATES", count=max(1, len(df)))
+            LOGGER.info("No candidates passed guardrails; nothing to do.")
+            self.persist_metrics()
+            self._log_diagnostic_snapshot()
+            self.log_summary()
+            return 0
         if slots_total <= 0:
             self.record_skip_reason("MAX_POSITIONS", count=max(1, len(candidates)))
+            self.metrics.exit_reason = "MAX_POSITIONS"
             self.persist_metrics()
+            self._log_diagnostic_snapshot()
             self.log_summary()
             return 0
         queue: list[dict[str, Any]] = []
@@ -2862,7 +2927,10 @@ class TradeExecutor:
                 open_count,
                 max_positions,
             )
+            if not self.metrics.exit_reason or self.metrics.exit_reason == "UNKNOWN":
+                self.metrics.exit_reason = "NO_SLOTS"
             self.persist_metrics()
+            self._log_diagnostic_snapshot()
             self.log_summary()
             return 0
         if len(queue) > allowed_new:
@@ -2901,10 +2969,11 @@ class TradeExecutor:
                 weight_mode = True
                 weight_map = {k: v / total_weight for k, v in raw_weights.items()}
 
-        allowed, status, resolved_window = self.evaluate_time_window()
         if not allowed:
             self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
+            self.metrics.exit_reason = "TIME_WINDOW"
             self.persist_metrics()
+            self._log_diagnostic_snapshot()
             self.log_summary()
             return 0
         bp_raw = self._last_buying_power_raw
@@ -2922,7 +2991,9 @@ class TradeExecutor:
                 detail=f"buying_power={bp_display}",
                 count=max(1, len(candidates)),
             )
+            self.metrics.exit_reason = "CASH"
             self.persist_metrics()
+            self._log_diagnostic_snapshot()
             self.log_summary()
             return 0
         limit_buffer_ratio = max(0.0, float(self.config.limit_buffer_pct)) / 100.0
@@ -3204,6 +3275,18 @@ class TradeExecutor:
                 self.record_skip_reason("CASH", symbol=symbol, detail=detail)
                 continue
 
+            if diagnostic_mode:
+                self.log_info(
+                    "DIAGNOSTIC_ORDER",
+                    symbol=symbol,
+                    qty=qty,
+                    limit_price=f"{rounded_limit:.4f}",
+                    limit_raw=f"{limit_price:.8f}",
+                )
+                if not self.metrics.exit_reason or self.metrics.exit_reason == "UNKNOWN":
+                    self.metrics.exit_reason = "DIAGNOSTIC"
+                continue
+
             if self.config.dry_run:
                 self.log_info(
                     "DRY_RUN_ORDER",
@@ -3212,6 +3295,8 @@ class TradeExecutor:
                     limit_price=f"{rounded_limit:.4f}",
                     limit_raw=f"{limit_price:.8f}",
                 )
+                if not self.metrics.exit_reason or self.metrics.exit_reason == "UNKNOWN":
+                    self.metrics.exit_reason = "DRY_RUN"
                 continue
 
             outcome = self.execute_order(
@@ -3230,7 +3315,16 @@ class TradeExecutor:
                 open_order_symbols.add(symbol)
                 submitted_new += 1
 
+        if not self.metrics.exit_reason or self.metrics.exit_reason == "UNKNOWN":
+            if self.metrics.orders_submitted > 0:
+                self.metrics.exit_reason = "EXECUTED"
+            elif diagnostic_mode:
+                self.metrics.exit_reason = "DIAGNOSTIC"
+            else:
+                self.metrics.exit_reason = "NO_ACTION"
+
         self.persist_metrics()
+        self._log_diagnostic_snapshot()
         self.log_summary()
         return 0
 
@@ -3271,16 +3365,18 @@ class TradeExecutor:
             return None
         return numeric
 
-    def fetch_open_order_symbols(self) -> tuple[set[str], int]:
+    def fetch_open_order_symbols(self) -> tuple[set[str], int, int]:
         symbols: set[str] = set()
         open_buy_orders = 0
+        total_orders = 0
         if self.client is None:
-            return symbols, open_buy_orders
+            return symbols, open_buy_orders, total_orders
         try:
             request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
             log_info("alpaca.get_orders", status=request.status)
             orders = self.client.get_orders(request)
             for order in orders or []:
+                total_orders += 1
                 symbol = getattr(order, "symbol", "")
                 if symbol:
                     symbols.add(symbol.upper())
@@ -3289,7 +3385,7 @@ class TradeExecutor:
                     open_buy_orders += 1
         except Exception as exc:
             _warn_context("alpaca.get_orders", str(exc))
-        return symbols, open_buy_orders
+        return symbols, open_buy_orders, total_orders
 
     def fetch_buying_power(self) -> float:
         def _extract(snapshot: Mapping[str, Any], source: str) -> Optional[float]:
@@ -3463,6 +3559,16 @@ class TradeExecutor:
         raw_limit_price = float(raw_limit if raw_limit is not None else limit_price)
         normalized_limit = normalize_price_for_alpaca(raw_limit_price, "buy")
         limit_price = _round_limit_price(normalized_limit)
+        if getattr(self.config, "diagnostic", False):
+            self.log_info(
+                "DIAGNOSTIC_SKIP_SUBMIT",
+                symbol=symbol,
+                qty=str(qty),
+                limit=f"{limit_price:.4f}",
+                limit_raw=f"{raw_limit_price:.8f}",
+                price_src=str(price_src or ""),
+            )
+            return outcome
         order_request = LimitOrderRequest(
             symbol=symbol,
             qty=qty,
@@ -3704,6 +3810,9 @@ class TradeExecutor:
         return outcome
 
     def cancel_order(self, order_id: str, symbol: str) -> None:
+        if getattr(self.config, "diagnostic", False):
+            self.log_info("DIAGNOSTIC_CANCEL_SKIP", order_id=order_id or "", symbol=symbol)
+            return
         if self.client is None or not order_id:
             return
         try:
@@ -3719,6 +3828,9 @@ class TradeExecutor:
             _warn_context("alpaca.cancel_order", f"{order_id}: {exc}")
 
     def attach_trailing_stop(self, symbol: str, qty: float, avg_price: Optional[Any]) -> None:
+        if getattr(self.config, "diagnostic", False):
+            self.log_info("DIAGNOSTIC_TRAIL_SKIP", symbol=symbol, qty=str(qty))
+            return
         if qty <= 0 or self.client is None:
             return
         qty_int = int(qty) if int(qty) == qty else math.floor(qty)
@@ -3782,6 +3894,10 @@ class TradeExecutor:
         )
 
     def submit_with_retries(self, request: Any) -> Optional[Any]:
+        if getattr(self.config, "diagnostic", False):
+            request_type = getattr(request, "__class__", type("")).__name__
+            self.log_info("DIAGNOSTIC_SUBMIT_SKIP", request_type=request_type)
+            return None
         if self.client is None:
             return None
         attempts = 3
@@ -4149,6 +4265,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="If true, only log intended actions without submitting orders",
     )
     parser.add_argument(
+        "--diagnostic",
+        action="store_true",
+        default=ExecutorConfig.diagnostic,
+        help="Diagnostic mode: run allocation logic and emit metrics without submitting or canceling orders",
+    )
+    parser.add_argument(
         "--allow-bump-to-one",
         type=lambda s: s.lower() in {"1", "true", "yes", "y"},
         default=ExecutorConfig.allow_bump_to_one,
@@ -4246,6 +4368,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         max_chase_count=args.max_chase_count,
         max_chase_gap_pct=args.max_chase_gap_pct,
         chase_enabled=args.chase_enabled,
+        diagnostic=bool(getattr(args, "diagnostic", False)),
     )
 
 
@@ -4260,6 +4383,7 @@ def run_executor(
         _EXECUTE_START_UTC = datetime.now(timezone.utc)
     configure_logging(config.log_json)
     metrics = ExecutionMetrics()
+    diagnostic_mode = bool(getattr(config, "diagnostic", False))
     loader = TradeExecutor(config, client, metrics)
     if config.dry_run:
         banner = "=" * 72
@@ -4294,6 +4418,8 @@ def run_executor(
     except (TypeError, ValueError):
         configured_max_positions = 0
     configured_max_positions = max(1, configured_max_positions)
+    metrics.configured_max_positions = configured_max_positions
+    metrics.risk_limited_max_positions = configured_max_positions
 
     loader._log_top_candidates(
         candidates_df.to_dict(orient="records"),
@@ -4336,6 +4462,7 @@ def run_executor(
     log_info(
         "EXEC_START",
         dry_run=bool(config.dry_run),
+        diagnostic=bool(config.diagnostic),
         time_window=configured_window,
         resolved=win,
         ny_now=now_ny.isoformat(),
@@ -4379,24 +4506,29 @@ def run_executor(
         metrics.status = "auth_error"
         metrics.record_error("auth_check_failed", detail=metrics.auth_reason)
 
+    metrics.in_window = bool(in_window)
     if not in_window:
         start_str, end_str = _premarket_bounds_strings()
-        loader.record_skip_reason(
-            "TIME_WINDOW",
-            count=len(candidates_df) if len(candidates_df) > 0 else 1,
-            detail=f"{start_str}-{end_str}",
-        )
-        metrics.flush()
-        loader.persist_metrics()
-        LOGGER.info(
-            "EXECUTE_SKIP reason=TIME_WINDOW count=%s",
-            len(candidates_df),
-        )
-        loader.log_summary()
-        return 0
+        if not diagnostic_mode:
+            loader.record_skip_reason(
+                "TIME_WINDOW",
+                count=len(candidates_df) if len(candidates_df) > 0 else 1,
+                detail=f"{start_str}-{end_str}",
+            )
+        metrics.exit_reason = "TIME_WINDOW"
+        if not diagnostic_mode:
+            metrics.flush()
+            loader.persist_metrics()
+            LOGGER.info(
+                "EXECUTE_SKIP reason=TIME_WINDOW count=%s",
+                len(candidates_df),
+            )
+            loader.log_summary()
+            return 0
 
     if candidates_df.empty:
         loader.record_skip_reason("NO_CANDIDATES", count=1)
+        metrics.exit_reason = "NO_CANDIDATES"
         loader.persist_metrics()
         LOGGER.info("EXECUTE_SKIP reason=NO_CANDIDATES")
         loader.log_summary()
@@ -4411,19 +4543,22 @@ def run_executor(
         trading_client = client
         base_url = os.getenv("APCA_API_BASE_URL", "")
         paper_mode = None
-    elif config.dry_run or not filtered:
-        trading_client = None
-        base_url = ""
-        paper_mode = None
     else:
-        trading_client, base_url, paper_mode, forced_mode = _create_trading_client()
-        forced_label = forced_mode if forced_mode is not None else "auto"
-        LOGGER.info(
-            "[INFO] TRADING_MODE base=%s paper_mode=%s forced=%s",
-            base_url or "",
-            bool(paper_mode),
-            forced_label,
-        )
+        skip_trading_client = config.dry_run and not diagnostic_mode
+        skip_trading_client = skip_trading_client or (not filtered and not diagnostic_mode)
+        if skip_trading_client:
+            trading_client = None
+            base_url = ""
+            paper_mode = None
+        else:
+            trading_client, base_url, paper_mode, forced_mode = _create_trading_client()
+            forced_label = forced_mode if forced_mode is not None else "auto"
+            LOGGER.info(
+                "[INFO] TRADING_MODE base=%s paper_mode=%s forced=%s",
+                base_url or "",
+                bool(paper_mode),
+                forced_label,
+            )
     _paper_only_guard(trading_client, base_url)
     if trading_client is not None and client is None:
         try:
