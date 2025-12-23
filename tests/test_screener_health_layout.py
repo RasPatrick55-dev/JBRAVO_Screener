@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 from pathlib import Path
 
@@ -129,3 +130,38 @@ def test_decile_panels_surface_reason_and_sample_size(
         joined = " ".join(annotation_texts)
         assert "no_labeled_samples" in joined
         assert "sample_size=0" in joined
+
+
+def test_screener_health_callback_returns_full_output_shape_with_empty_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _prepare_artifacts(tmp_path)
+    render = _render_callback(monkeypatch, tmp_path)
+
+    with caplog.at_level(logging.ERROR, logger=screener_health.LOGGER.name):
+        outputs = render(None, None, None, None, None, None, None)
+
+    assert len(outputs) == 21
+    assert "Failed to render screener health dashboard" not in caplog.text
+
+
+def test_screener_health_callback_logs_and_recovers_on_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _prepare_artifacts(tmp_path)
+    render = _render_callback(monkeypatch, tmp_path)
+
+    def _boom():
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(screener_health, "_environment_state", _boom)
+
+    with caplog.at_level(logging.ERROR, logger=screener_health.LOGGER.name):
+        outputs = render({}, [], [], None, {}, {}, {})
+
+    assert len(outputs) == 21
+    error_banner = outputs[0]
+    assert isinstance(error_banner, screener_health.html.Div)
+    banner_text = " ".join(error_banner.children) if isinstance(error_banner.children, list) else str(error_banner.children)
+    assert "failed to render" in banner_text.lower()
+    assert "Failed to render screener health dashboard" in caplog.text
