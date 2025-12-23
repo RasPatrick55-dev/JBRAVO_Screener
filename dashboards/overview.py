@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Mapping
@@ -20,21 +22,60 @@ from dashboards.utils import (
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 LOG_DIR = BASE_DIR / "logs"
+logger = logging.getLogger(__name__)
+
+
+def _load_metrics_json(path: Path, defaults: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = defaults.copy()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+        if isinstance(loaded, dict):
+            payload.update(loaded)
+        else:
+            logger.warning("OPS_SUMMARY_READ_FAIL path=%s err=non-object payload", path)
+    except FileNotFoundError:
+        logger.warning("OPS_SUMMARY_READ_FAIL path=%s err=missing", path)
+    except json.JSONDecodeError as exc:
+        logger.warning("OPS_SUMMARY_READ_FAIL path=%s err=%s", path, exc)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("OPS_SUMMARY_READ_FAIL path=%s err=%s", path, exc)
+    return payload
 
 
 def _read_screener_metrics() -> Dict[str, Any]:
     path = DATA_DIR / "screener_metrics.json"
-    payload = safe_read_json(path)
+    defaults = {
+        "timestamp": "n/a",
+        "last_run_utc": None,
+        "symbols_in": 0,
+        "with_bars": 0,
+        "rows_out": 0,
+    }
+    payload = _load_metrics_json(path, defaults)
+    if payload == defaults or not payload:
+        parsed = parse_pipeline_summary(LOG_DIR / "pipeline.log")
+        if parsed:
+            payload.update(parsed)
     if payload:
         payload.setdefault("timestamp", payload.get("last_run_utc"))
-    else:
-        payload = parse_pipeline_summary(LOG_DIR / "pipeline.log")
     return payload
 
 
 def _read_execute_metrics() -> Dict[str, Any]:
     path = DATA_DIR / "execute_metrics.json"
-    return safe_read_json(path)
+    defaults = {
+        "configured_max_positions": 0,
+        "risk_limited_max_positions": 0,
+        "open_positions": 0,
+        "open_orders": 0,
+        "allowed_new_positions": 0,
+        "exit_reason": "n/a",
+        "in_window": False,
+        "orders_submitted": 0,
+        "fills": 0,
+    }
+    return _load_metrics_json(path, defaults)
 
 
 def _read_candidates() -> tuple[int | None, List[Dict[str, Any]]]:
