@@ -226,6 +226,42 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
     assert any("skips.TIME_WINDOW=1" in entry for entry in summary_lines)
 
 
+def test_time_window_metrics_include_position_fields(tmp_path, monkeypatch):
+    csv_path = tmp_path / "candidates.csv"
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "ZZZ",
+                "close": 42.0,
+                "score": 1.2,
+                "universe_count": 5,
+                "score_breakdown": "{}",
+            }
+        ]
+    )
+    frame.to_csv(csv_path, index=False)
+    config = ExecutorConfig(source=csv_path, dry_run=True)
+
+    def fake_window(self):
+        return False, "outside premarket (NY)", "premarket"
+
+    monkeypatch.setattr(execute_mod.TradeExecutor, "evaluate_time_window", fake_window)
+    rc = run_executor(config, client=StubTradingClient())
+    assert rc == 0
+
+    metrics_payload = json.loads(execute_mod.METRICS_PATH.read_text(encoding="utf-8"))
+    for key in (
+        "open_positions",
+        "open_orders",
+        "allowed_new_positions",
+        "max_total_positions",
+        "risk_limited_max_positions",
+        "exit_reason",
+    ):
+        assert key in metrics_payload
+    assert metrics_payload.get("exit_reason") in {None, "TIME_WINDOW", "UNKNOWN"}
+
+
 def test_dry_run_creates_metrics_with_zero_orders(tmp_path, caplog):
     csv_path = tmp_path / "candidates.csv"
     frame = pd.DataFrame(

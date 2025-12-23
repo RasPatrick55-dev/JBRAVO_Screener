@@ -808,10 +808,10 @@ def _canonicalize_execute_metrics(
         "open_positions": 0,
         "open_orders": 0,
         "configured_max_positions": 0,
+        "max_total_positions": 0,
         "risk_limited_max_positions": 0,
         "slots_total": 0,
         "allowed_new_positions": 0,
-        "exit_reason": "UNKNOWN",
         "in_window": False,
     }
     for key, default in metrics_defaults.items():
@@ -822,6 +822,7 @@ def _canonicalize_execute_metrics(
         "open_positions",
         "open_orders",
         "configured_max_positions",
+        "max_total_positions",
         "risk_limited_max_positions",
         "slots_total",
         "allowed_new_positions",
@@ -831,7 +832,10 @@ def _canonicalize_execute_metrics(
         except Exception:
             enriched[key] = metrics_defaults[key]
     exit_reason_val = enriched.get("exit_reason")
-    enriched["exit_reason"] = str(exit_reason_val or "UNKNOWN")
+    if exit_reason_val is None:
+        enriched["exit_reason"] = None
+    else:
+        enriched["exit_reason"] = str(exit_reason_val or "UNKNOWN")
     enriched["in_window"] = bool(enriched.get("in_window"))
 
     return enriched
@@ -1620,6 +1624,7 @@ class ExecutionMetrics:
     open_orders: int = 0
     allowed_new_positions: int = 0
     open_buy_orders: int = 0
+    max_total_positions: int = 0
     configured_max_positions: int = 0
     risk_limited_max_positions: int = 0
     slots_total: int = 0
@@ -1627,7 +1632,7 @@ class ExecutionMetrics:
     api_failures: int = 0
     auth_ok: bool = False
     auth_reason: str | None = None
-    exit_reason: str = "UNKNOWN"
+    exit_reason: str | None = None
     in_window: bool = False
     latency_samples: List[float] = field(default_factory=list)
     skipped_reasons: Counter = field(default_factory=Counter)
@@ -1686,6 +1691,7 @@ class ExecutionMetrics:
         for key, value in sorted(self.skipped_reasons.items()):
             if key not in skip_payload:
                 skip_payload[key] = int(value)
+        max_total_positions = self.max_total_positions or self.configured_max_positions
         payload: Dict[str, Any] = {
             "last_run_utc": datetime.now(timezone.utc).isoformat(),
             "symbols_in": self.symbols_in,
@@ -1696,6 +1702,7 @@ class ExecutionMetrics:
             "open_positions": self.open_positions,
             "open_orders": self.open_orders,
             "allowed_new_positions": self.allowed_new_positions,
+            "max_total_positions": max_total_positions,
             "configured_max_positions": self.configured_max_positions,
             "risk_limited_max_positions": self.risk_limited_max_positions,
             "slots_total": self.slots_total,
@@ -1704,7 +1711,7 @@ class ExecutionMetrics:
             "api_failures": self.api_failures,
             "auth_ok": bool(self.auth_ok),
             "auth_reason": self.auth_reason,
-            "exit_reason": str(self.exit_reason or "UNKNOWN"),
+            "exit_reason": None if self.exit_reason is None else str(self.exit_reason or "UNKNOWN"),
             "in_window": bool(self.in_window),
             "latency_secs": {
                 "p50": self.percentile(0.5),
@@ -2876,6 +2883,7 @@ class TradeExecutor:
         except (TypeError, ValueError):
             max_positions = 0
         max_positions = max(1, max_positions)
+        self.metrics.max_total_positions = max_positions
         self.metrics.configured_max_positions = max_positions
         self.metrics.risk_limited_max_positions = max_positions
         try:
@@ -4372,6 +4380,31 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
     )
 
 
+def _seed_initial_metrics(metrics: ExecutionMetrics, config: ExecutorConfig) -> None:
+    try:
+        max_positions = int(config.max_positions)
+    except (TypeError, ValueError):
+        max_positions = 0
+    max_positions = max(1, max_positions)
+    metrics.max_total_positions = max_positions
+    metrics.configured_max_positions = max_positions
+    metrics.risk_limited_max_positions = max_positions
+    metrics.open_positions = 0
+    metrics.open_orders = 0
+    metrics.allowed_new_positions = 0
+    metrics.slots_total = 0
+    metrics.exit_reason = None
+    metrics.symbols_in = 0
+    try:
+        write_execute_metrics(
+            metrics.as_dict(),
+            start_dt=_EXECUTE_START_UTC,
+            end_dt=_EXECUTE_START_UTC,
+        )
+    except Exception:
+        LOGGER.debug("INITIAL_METRICS_WRITE_FAILED", exc_info=True)
+
+
 def run_executor(
     config: ExecutorConfig,
     *,
@@ -4383,6 +4416,7 @@ def run_executor(
         _EXECUTE_START_UTC = datetime.now(timezone.utc)
     configure_logging(config.log_json)
     metrics = ExecutionMetrics()
+    _seed_initial_metrics(metrics, config)
     diagnostic_mode = bool(getattr(config, "diagnostic", False))
     loader = TradeExecutor(config, client, metrics)
     if config.dry_run:
@@ -4418,6 +4452,7 @@ def run_executor(
     except (TypeError, ValueError):
         configured_max_positions = 0
     configured_max_positions = max(1, configured_max_positions)
+    metrics.max_total_positions = configured_max_positions
     metrics.configured_max_positions = configured_max_positions
     metrics.risk_limited_max_positions = configured_max_positions
 
