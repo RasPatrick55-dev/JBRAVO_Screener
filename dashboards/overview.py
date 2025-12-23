@@ -334,6 +334,17 @@ def _build_skip_chart(skips: Dict[str, int]):
 
 
 def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) -> dbc.Card:
+    def _metric_row(label: str, value: Any) -> dbc.Row:
+        display = value
+        if display is None:
+            display = "n/a"
+        return dbc.Row(
+            [
+                dbc.Col(html.Span(label, className="text-muted small"), md=7, xs=7),
+                dbc.Col(html.Strong(display), md=5, xs=5, className="text-end"),
+            ],
+            className="py-1",
+        )
     pipeline_rc = metrics.get("rc")
     pipeline_status = "ok"
     if pipeline_rc not in (None, 0):
@@ -384,28 +395,63 @@ def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) ->
     pipeline_body = dbc.Card(
         dbc.CardBody(
             [
-                html.H6("Pipeline", className="card-title"),
-                html.Div([html.Strong("Last run: "), last_screener]),
-                html.Div([html.Strong("Universe: "), str(universe) if universe is not None else "n/a"]),
-                html.Div([html.Strong("Rows out: "), str(rows_out) if rows_out is not None else "n/a"]),
+                html.H6("Screener", className="card-title"),
+                _metric_row("Timestamp", last_screener),
+                _metric_row("Symbols In", universe),
+                _metric_row("With Bars", metrics.get("with_bars")),
+                _metric_row("Rows Out", rows_out),
             ]
         ),
         className="mb-3",
     )
 
+    exit_reason_raw = exec_metrics.get("exit_reason")
+    if exit_reason_raw is None:
+        exit_reason = "None"
+    else:
+        exit_reason_text = str(exit_reason_raw)
+        exit_reason = "OK" if exit_reason_text.lower() == "ok" else exit_reason_text
+
+    in_window = exec_metrics.get("in_window")
+    if in_window is True:
+        in_window_text = "Yes"
+    elif in_window is False:
+        in_window_text = "No"
+    else:
+        in_window_text = "Unknown"
+
     executor_body = dbc.Card(
         dbc.CardBody(
             [
                 html.H6("Executor", className="card-title"),
-                html.Div([html.Strong("Started: "), run_started]),
-                html.Div([html.Strong("Finished: "), run_finished]),
-                html.Div([html.Strong("Auth OK: "), str(exec_metrics.get("auth_ok", "n/a"))]),
-                html.Div([html.Strong("Orders submitted: "), str(exec_metrics.get("orders_submitted", "n/a"))]),
-                html.Div([html.Strong("Fills: "), str(fills if fills is not None else "n/a")]),
-                html.Div([html.Strong("Open positions: "), str(exec_metrics.get("open_positions", "n/a"))]),
-                html.Div([html.Strong("Allowed new positions: "), str(exec_metrics.get("allowed_new_positions", "n/a"))]),
-                html.Div([html.Strong("Exit reason: "), str(exec_metrics.get("exit_reason", "n/a"))]),
-                html.Div([html.Strong("Skips: "), skip_block]),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                _metric_row("Configured Max Positions", exec_metrics.get("configured_max_positions")),
+                                _metric_row("Risk-limited Max Positions", exec_metrics.get("risk_limited_max_positions")),
+                                _metric_row("Open Positions", exec_metrics.get("open_positions")),
+                                _metric_row("Open Orders", exec_metrics.get("open_orders")),
+                            ],
+                            md=6,
+                            xs=12,
+                        ),
+                        dbc.Col(
+                            [
+                                _metric_row("Allowed New Positions", exec_metrics.get("allowed_new_positions")),
+                                _metric_row("Exit Reason", exit_reason),
+                                _metric_row("In Window", in_window_text),
+                                _metric_row("Orders submitted", exec_metrics.get("orders_submitted")),
+                            ],
+                            md=6,
+                            xs=12,
+                        ),
+                    ]
+                ),
+                _metric_row("Started", run_started),
+                _metric_row("Finished", run_finished),
+                _metric_row("Fills", fills if fills is not None else "n/a"),
+                html.Div([html.Strong("Skips: "), skip_block], className="mt-2"),
             ]
         ),
         className="mb-3",
