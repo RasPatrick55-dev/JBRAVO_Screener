@@ -1288,9 +1288,14 @@ def register_callbacks(app):
     )
     def _render(m, top_rows, hist_rows, ev, health, summary, premarket):
         empty_fig = _placeholder_figure("Unavailable", "No data available")
+        try:
+            paper_badge_default = _paper_badge_component()
+        except Exception:  # pragma: no cover - defensive badge guard
+            LOGGER.exception("Failed to render paper/live badge")
+            paper_badge_default = html.Span("env unavailable")
         default_outputs = (
             None,
-            _paper_badge_component(),
+            paper_badge_default,
             html.Div(),
             "(no data)",
             "(no data)",
@@ -1332,7 +1337,11 @@ def register_callbacks(app):
 
             fallback_active = bool(m.get("_fallback_active"))
             env_paper, env_feed = _environment_state()
-            paper_badge = _paper_badge_component()
+            paper_badge = paper_badge_default
+            try:
+                paper_badge = _paper_badge_component()
+            except Exception:  # pragma: no cover - defensive badge guard
+                LOGGER.exception("Failed to render paper/live badge")
             latest_zero = bool(m.get("_latest_zero_rows"))
             top_empty_message: Any = ""
             if latest_zero:
