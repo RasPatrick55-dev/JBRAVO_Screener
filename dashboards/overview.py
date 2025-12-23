@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 from zoneinfo import ZoneInfo
 
 import dash_bootstrap_components as dbc
@@ -73,6 +73,13 @@ def _format_time(ts: str | None) -> str:
         return datetime.fromisoformat(str(ts)).strftime("%Y-%m-%d %H:%M UTC")
     except Exception:
         return str(ts)
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 
 def _compute_alerts(metrics: Dict[str, Any], exec_metrics: Dict[str, Any], candidates_rows: int | None) -> List[dbc.Badge]:
@@ -279,6 +286,154 @@ def render_timeline_table(
     return html.Div(table, style={"maxHeight": "320px", "overflowY": "auto"})
 
 
+def _status_badge(label: str, status: str) -> dbc.Badge:
+    colors = {"ok": "success", "warn": "warning", "error": "danger"}
+    return dbc.Badge(label, color=colors.get(status, "secondary"), className="me-2", pill=True)
+
+
+def _extract_skip_counts(raw: Mapping[str, Any] | None) -> Dict[str, int]:
+    if not isinstance(raw, Mapping):
+        return {}
+    cleaned: Dict[str, int] = {}
+    for key, value in raw.items():
+        count = _as_int(value)
+        if count is None:
+            continue
+        cleaned[str(key)] = max(count, 0)
+    return cleaned
+
+
+def _build_skip_chart(skips: Dict[str, int]):
+    if not skips:
+        return dbc.Alert("No skip data available", color="secondary", className="mb-0")
+
+    try:
+        reasons = list(skips.keys())
+        counts = [skips[r] for r in reasons]
+        colors = ["#f0ad4e" if reason == "TIME_WINDOW" else "#17a2b8" for reason in reasons]
+        figure = {
+            "data": [
+                {
+                    "type": "bar",
+                    "x": reasons,
+                    "y": counts,
+                    "marker": {"color": colors},
+                }
+            ],
+            "layout": {
+                "paper_bgcolor": "rgba(0,0,0,0)",
+                "plot_bgcolor": "rgba(0,0,0,0)",
+                "font": {"color": "#f8f9fa"},
+                "margin": {"l": 40, "r": 10, "t": 10, "b": 40},
+                "height": 220,
+            },
+        }
+        return dcc.Graph(id="ops-summary-skip-chart", figure=figure, config={"displayModeBar": False})
+    except Exception as exc:  # pragma: no cover - defensive rendering
+        return dbc.Alert(f"Skip chart unavailable: {exc}", color="warning", className="mb-0")
+
+
+def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) -> dbc.Card:
+    pipeline_rc = metrics.get("rc")
+    pipeline_status = "ok"
+    if pipeline_rc not in (None, 0):
+        pipeline_status = "error"
+    if not metrics:
+        pipeline_status = "warn"
+
+    skip_counts = _extract_skip_counts(
+        exec_metrics.get("skips") or exec_metrics.get("skip_reasons")  # type: ignore[arg-type]
+    )
+    exec_status_val = str(exec_metrics.get("status", "")).lower()
+    executor_status = "ok"
+    if exec_metrics.get("auth_ok") is False or exec_status_val in {"error", "failed", "fail"}:
+        executor_status = "error"
+    elif skip_counts.get("TIME_WINDOW", 0) > 0:
+        executor_status = "warn"
+
+    last_screener = _format_time(metrics.get("timestamp") or metrics.get("last_run_utc"))
+    universe = metrics.get("symbols_in") or metrics.get("symbols") or metrics.get("universe_count")
+    rows_out = metrics.get("rows_out") or metrics.get("rows")
+
+    run_started = _format_time(exec_metrics.get("run_started_utc") or exec_metrics.get("started_utc"))
+    run_finished = _format_time(exec_metrics.get("run_finished_utc") or exec_metrics.get("timestamp"))
+    fills = exec_metrics.get("fills", exec_metrics.get("orders_filled"))
+
+    in_window_raw = exec_metrics.get("in_window")
+    if in_window_raw is None:
+        time_window_badge = _status_badge("Window n/a", "warn")
+    else:
+        in_window = bool(in_window_raw)
+        time_window_badge = _status_badge(
+            "In window" if in_window else "Out of window", "ok" if in_window else "warn"
+        )
+
+    skip_items = [f"{reason}: {count}" for reason, count in sorted(skip_counts.items(), key=lambda kv: kv[1], reverse=True)]
+    skip_block = html.Ul([html.Li(text) for text in skip_items]) if skip_items else html.Div("No skips")
+
+    status_row = html.Div(
+        [
+            _status_badge("Pipeline OK" if pipeline_status == "ok" else "Pipeline issue", pipeline_status),
+            _status_badge("Executor OK" if executor_status == "ok" else "Executor attention", executor_status),
+            time_window_badge,
+        ],
+        id="ops-summary-status",
+        className="mb-3",
+    )
+
+    pipeline_body = dbc.Card(
+        dbc.CardBody(
+            [
+                html.H6("Pipeline", className="card-title"),
+                html.Div([html.Strong("Last run: "), last_screener]),
+                html.Div([html.Strong("Universe: "), str(universe) if universe is not None else "n/a"]),
+                html.Div([html.Strong("Rows out: "), str(rows_out) if rows_out is not None else "n/a"]),
+            ]
+        ),
+        className="mb-3",
+    )
+
+    executor_body = dbc.Card(
+        dbc.CardBody(
+            [
+                html.H6("Executor", className="card-title"),
+                html.Div([html.Strong("Started: "), run_started]),
+                html.Div([html.Strong("Finished: "), run_finished]),
+                html.Div([html.Strong("Auth OK: "), str(exec_metrics.get("auth_ok", "n/a"))]),
+                html.Div([html.Strong("Orders submitted: "), str(exec_metrics.get("orders_submitted", "n/a"))]),
+                html.Div([html.Strong("Fills: "), str(fills if fills is not None else "n/a")]),
+                html.Div([html.Strong("Open positions: "), str(exec_metrics.get("open_positions", "n/a"))]),
+                html.Div([html.Strong("Allowed new positions: "), str(exec_metrics.get("allowed_new_positions", "n/a"))]),
+                html.Div([html.Strong("Exit reason: "), str(exec_metrics.get("exit_reason", "n/a"))]),
+                html.Div([html.Strong("Skips: "), skip_block]),
+            ]
+        ),
+        className="mb-3",
+    )
+
+    skip_chart = _build_skip_chart(skip_counts)
+
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.H5("Ops Summary", className="card-title"),
+                status_row,
+                dbc.Row(
+                    [
+                        dbc.Col(pipeline_body, md=6),
+                        dbc.Col(executor_body, md=6),
+                    ]
+                ),
+                html.Div(
+                    [html.H6("Skip breakdown", className="card-title"), skip_chart],
+                    className="mt-2",
+                ),
+            ]
+        ),
+        className="mb-3",
+    )
+
+
 def overview_layout():
     metrics = _read_screener_metrics()
     exec_metrics = _read_execute_metrics()
@@ -286,6 +441,7 @@ def overview_layout():
     ml_status = _read_nightly_ml_status()
     ranker_eval_path = _read_ranker_eval_path()
     timeline = _build_today_timeline()
+    ops_summary = _build_ops_summary(metrics, exec_metrics)
 
     pipeline_items = [
         f"Last run: {_format_time(metrics.get('timestamp') or metrics.get('last_run_utc'))}",
@@ -339,6 +495,7 @@ def overview_layout():
     return html.Div(
         [
             alerts_block,
+            ops_summary,
             dbc.Row(
                 [
                     dbc.Col(_build_card("Pipeline", pipeline_items), md=6),
@@ -359,4 +516,3 @@ def overview_layout():
             ),
         ]
     )
-
