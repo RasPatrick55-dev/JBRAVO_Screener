@@ -332,6 +332,48 @@ def _status_badge(label: str, status: str) -> dbc.Badge:
     return dbc.Badge(label, color=colors.get(status, "secondary"), className="me-2", pill=True)
 
 
+def _exit_reason_display(reason_raw: Any) -> tuple[str, str]:
+    if reason_raw is None:
+        return "None", "text-danger"
+
+    reason_text = str(reason_raw).strip()
+    if not reason_text:
+        return "Unknown", "text-danger"
+
+    normalized = reason_text.upper()
+    if normalized in {"OK", "EXECUTED"}:
+        return reason_text, "text-success"
+    if normalized in {"TIME_WINDOW", "MAX_POSITIONS"}:
+        return reason_text, "text-warning"
+    if normalized == "AUTH_FAIL":
+        return reason_text, "text-danger"
+
+    if "SKIP" in normalized:
+        return reason_text, "text-warning"
+
+    return reason_text, "text-danger"
+
+
+def _in_window_display(raw_value: Any) -> tuple[str, str]:
+    if raw_value is True:
+        return "Yes", "text-success"
+    if raw_value is False:
+        return "No", "text-warning"
+    return "Unknown", "text-muted"
+
+
+def _allowed_positions_display(raw_value: Any) -> tuple[Any, str]:
+    allowed_int = _as_int(raw_value)
+    if allowed_int is None:
+        return raw_value if raw_value is not None else "n/a", "text-danger"
+
+    if allowed_int > 0:
+        return allowed_int, "text-success"
+    if allowed_int == 0:
+        return allowed_int, "text-warning"
+    return allowed_int, "text-danger"
+
+
 def _extract_skip_counts(raw: Mapping[str, Any] | None) -> Dict[str, int]:
     if not isinstance(raw, Mapping):
         return {}
@@ -375,17 +417,17 @@ def _build_skip_chart(skips: Dict[str, int]):
 
 
 def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) -> dbc.Card:
-    def _metric_row(label: str, value: Any) -> dbc.Row:
-        display = value
-        if display is None:
-            display = "n/a"
+    def _metric_row(label: str, value: Any, value_class: str | None = None) -> dbc.Row:
+        display = value if value is not None else "n/a"
+        value_node = html.Span(display, className=value_class) if value_class else display
         return dbc.Row(
             [
                 dbc.Col(html.Span(label, className="text-muted small"), md=7, xs=7),
-                dbc.Col(html.Strong(display), md=5, xs=5, className="text-end"),
+                dbc.Col(html.Strong(value_node), md=5, xs=5, className="text-end"),
             ],
             className="py-1",
         )
+
     pipeline_rc = metrics.get("rc")
     pipeline_status = "ok"
     if pipeline_rc not in (None, 0):
@@ -446,20 +488,11 @@ def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) ->
         className="mb-3",
     )
 
-    exit_reason_raw = exec_metrics.get("exit_reason")
-    if exit_reason_raw is None:
-        exit_reason = "None"
-    else:
-        exit_reason_text = str(exit_reason_raw)
-        exit_reason = "OK" if exit_reason_text.lower() == "ok" else exit_reason_text
-
-    in_window = exec_metrics.get("in_window")
-    if in_window is True:
-        in_window_text = "Yes"
-    elif in_window is False:
-        in_window_text = "No"
-    else:
-        in_window_text = "Unknown"
+    exit_reason, exit_reason_class = _exit_reason_display(exec_metrics.get("exit_reason"))
+    in_window_text, in_window_class = _in_window_display(exec_metrics.get("in_window"))
+    allowed_new_positions, allowed_positions_class = _allowed_positions_display(
+        exec_metrics.get("allowed_new_positions")
+    )
 
     executor_body = dbc.Card(
         dbc.CardBody(
@@ -479,9 +512,9 @@ def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) ->
                         ),
                         dbc.Col(
                             [
-                                _metric_row("Allowed New Positions", exec_metrics.get("allowed_new_positions")),
-                                _metric_row("Exit Reason", exit_reason),
-                                _metric_row("In Window", in_window_text),
+                                _metric_row("Allowed New Positions", allowed_new_positions, allowed_positions_class),
+                                _metric_row("Exit Reason", exit_reason, exit_reason_class),
+                                _metric_row("In Window", in_window_text, in_window_class),
                                 _metric_row("Orders submitted", exec_metrics.get("orders_submitted")),
                             ],
                             md=6,
@@ -500,10 +533,23 @@ def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) ->
 
     skip_chart = _build_skip_chart(skip_counts)
 
+    legend = dbc.Alert(
+        [
+            html.Span("Color legend: ", className="fw-bold me-2"),
+            html.Span("Green = OK", className="text-success me-3"),
+            html.Span("Yellow = Warning", className="text-warning me-3"),
+            html.Span("Red = Error", className="text-danger me-3"),
+            html.Span("Gray = Unknown", className="text-muted"),
+        ],
+        color="dark",
+        className="py-2 px-3 mb-3",
+    )
+
     return dbc.Card(
         dbc.CardBody(
             [
                 html.H5("Ops Summary", className="card-title"),
+                legend,
                 status_row,
                 dbc.Row(
                     [
