@@ -12,6 +12,22 @@ To launch the dashboard locally run:
 python dashboards/dashboard_app.py
 ```
 
+## Dashboard Metrics
+
+The dashboard surfaces executor state in the Ops Summary. Metrics map to the executor JSON as follows:
+
+| Field | Meaning |
+|-------|---------|
+| `configured_max_positions` | The portfolio cap set via CLI/env |
+| `risk_limited_max_positions` | Cap after risk scaler |
+| `open_positions` | Number of open positions with nonzero qty |
+| `open_orders` | Number of live orders |
+| `allowed_new_positions` | Number of new positions permitted this run |
+| `in_window` | Boolean indicating premarket/market window |
+| `exit_reason` | Final executor logic outcome |
+
+Color coding in the Ops Summary uses the following legend: green for OK, yellow for warnings (for example when outside the trading window), red for errors such as auth failures, and gray when a value is unknown.
+
 ## Pre-Market Autopilot
 
 The orchestrator now bootstraps environment variables automatically from
