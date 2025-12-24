@@ -26,6 +26,7 @@ DEFAULT_COLUMNS = [
     "exit_time",
     "net_pnl",
     "side",
+    "order_status",
     "order_type",
     "exit_reason",
     "mfe_pct",
@@ -302,45 +303,70 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
         ts = _coerce_datetime(event.get("timestamp"))
         order_type = _safe_str(event.get("order_type"))
 
-        if not symbol or not side or qty <= 0 or price == 0 or ts is None:
+        if not symbol or side not in {"buy", "sell"} or qty <= 0 or price == 0 or ts is None:
             continue
 
         position = positions.setdefault(symbol, [])
-        remaining = qty
 
-        if position and position[0]["side"] != side:
-            while remaining > 0 and position:
-                lot = position[0]
-                close_qty = min(remaining, lot["qty"])
-                trades.append(
-                    {
-                        "symbol": symbol,
-                        "qty": close_qty,
-                        "entry_price": lot["price"],
-                        "exit_price": price,
-                        "entry_time": _isoformat(lot["timestamp"]),
-                        "exit_time": _isoformat(ts),
-                        "net_pnl": _net_pnl(lot["side"], lot["price"], price, close_qty),
-                        "side": lot["side"],
-                        "order_type": order_type or lot.get("order_type", ""),
-                        "exit_reason": "",
-                    }
-                )
-                lot["qty"] -= close_qty
-                remaining -= close_qty
-                if lot["qty"] <= 0:
-                    position.pop(0)
-
-        if remaining > 0:
+        if side == "buy":
             position.append(
                 {
                     "side": side,
-                    "qty": remaining,
+                    "qty": qty,
+                    "initial_qty": qty,
                     "price": price,
                     "timestamp": ts,
                     "order_type": order_type,
+                    "sell_qty": 0.0,
+                    "sell_notional": 0.0,
+                    "exit_time": None,
+                    "exit_order_type": "",
                 }
             )
+            continue
+
+        remaining = qty
+        while remaining > 0 and position:
+            lot = position[0]
+            close_qty = min(remaining, lot["qty"])
+            lot["qty"] -= close_qty
+            lot["sell_qty"] += close_qty
+            lot["sell_notional"] += close_qty * price
+            lot["exit_time"] = ts if lot["exit_time"] is None or ts > lot["exit_time"] else lot["exit_time"]
+            if not lot["exit_order_type"] and order_type:
+                lot["exit_order_type"] = order_type
+
+            remaining -= close_qty
+
+            if lot["qty"] <= 0:
+                entry_qty = lot["initial_qty"]
+                exit_qty = lot["sell_qty"]
+                if exit_qty <= 0:
+                    position.pop(0)
+                    continue
+
+                entry_price = (lot["price"] * entry_qty) / entry_qty if entry_qty else 0.0
+                exit_price = lot["sell_notional"] / exit_qty if exit_qty else 0.0
+                exit_time = lot["exit_time"]
+
+                if entry_price and exit_price and exit_time is not None:
+                    trades.append(
+                        {
+                            "symbol": symbol,
+                            "qty": exit_qty,
+                            "entry_price": entry_price,
+                            "exit_price": exit_price,
+                            "entry_time": _isoformat(lot["timestamp"]),
+                            "exit_time": _isoformat(exit_time),
+                            "net_pnl": _net_pnl("buy", entry_price, exit_price, exit_qty),
+                            "side": "buy",
+                            "order_status": "closed",
+                            "order_type": lot["exit_order_type"],
+                            "exit_reason": lot["exit_order_type"],
+                        }
+                    )
+
+                position.pop(0)
 
     return trades
 
