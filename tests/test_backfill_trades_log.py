@@ -163,6 +163,27 @@ def test_trailing_stop_exit_sets_type_and_reason():
     assert trade["order_status"] == "filled"
 
 
+def test_order_type_uses_alpaca_type_not_status():
+    events = [
+        {"symbol": "AMD", "side": "buy", "qty": 1, "price": 50, "timestamp": "2024-04-01T00:00:00Z"},
+        {
+            "symbol": "AMD",
+            "side": "sell",
+            "qty": 1,
+            "price": 55,
+            "timestamp": "2024-04-01T01:00:00Z",
+            "order_type": "limit",
+            "order_status": "partial_fill",
+        },
+    ]
+
+    trades = build_trades_from_events(events)
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade["order_type"] == "limit"
+    assert trade["order_status"] == "partial_fill"
+
+
 def test_backfill_writes_atomic(tmp_path, monkeypatch, dummy_events):
     dest = tmp_path / "trades_log.csv"
 

@@ -230,7 +230,7 @@ def test_refresh_populates_exit_efficiency_with_daily_peak(tmp_path):
         cache_path=cache_path,
         bar_fetcher=fake_fetch,
     )
-    expected_eff = (11.0 / 12.0) * 100
+    expected_eff = ((11.0 - 10.0) / (12.0 - 10.0)) * 100
     assert pytest.approx(df.loc[0, "peak_price"], rel=1e-6) == 12.0
     assert pytest.approx(df.loc[0, "exit_efficiency_pct"], rel=1e-6) == expected_eff
 
@@ -366,7 +366,7 @@ def test_exit_efficiency_nan_when_peak_missing_or_clamped():
     )
     enriched = compute_exit_quality_columns(trades)
     assert pd.isna(enriched.loc[0, "exit_efficiency_pct"])
-    assert enriched.loc[1, "exit_efficiency_pct"] == pytest.approx(100.0)
+    assert enriched.loc[1, "exit_efficiency_pct"] == pytest.approx(0.0)
 
 
 def test_rebound_columns_exist():
