@@ -88,46 +88,6 @@ def fetch_with_backoff(
     return pd.DataFrame()
 
 
-def fetch_with_backoff(
-    fetcher: Callable[[], pd.DataFrame],
-    *,
-    max_attempts: int = 5,
-    base_delay: float = 1.0,
-) -> pd.DataFrame:
-    """Fetch data with exponential backoff when Alpaca responds with 429.
-
-    Returns an empty DataFrame after exhausting retries to allow best-effort callers
-    to continue processing other trades.
-    """
-
-    delay = base_delay
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return fetcher()
-        except Exception as exc:  # pragma: no cover - exercised via integration
-            status = getattr(exc, "status_code", None) or getattr(
-                getattr(exc, "error", None), "code", None
-            )
-            if status == 429 or "429" in str(exc):
-                if attempt == max_attempts:
-                    logger.warning(
-                        "Alpaca 429 rate limit reached after %s attempts.", attempt
-                    )
-                    break
-                time.sleep(delay)
-                delay *= 2
-                continue
-            logger.debug(
-                "Backoff fetch failed (attempt %s/%s): %s",
-                attempt,
-                max_attempts,
-                exc,
-                exc_info=True,
-            )
-            break
-    return pd.DataFrame()
-
-
 def _normalize_pnl(df: pd.DataFrame) -> pd.DataFrame:
     for candidate in ("net_pnl", "pnl", "netPnL", "net_pnl_usd"):
         if candidate in df.columns:
@@ -165,6 +125,18 @@ def load_trades_log(base_dir: Path | str | None = None) -> pd.DataFrame:
         df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
     if "pnl" not in df.columns and {"qty", "entry_price", "exit_price"}.issubset(df.columns):
         df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["qty"]
+    if "pnl" in df.columns:
+        df["pnl"] = pd.to_numeric(df["pnl"], errors="coerce")
+    if "return_pct" not in df.columns and {"entry_price", "exit_price"}.issubset(df.columns):
+        entry_price = pd.to_numeric(df["entry_price"], errors="coerce")
+        exit_price = pd.to_numeric(df["exit_price"], errors="coerce")
+        df["return_pct"] = np.where(
+            entry_price > 0,
+            (exit_price / entry_price - 1) * 100,
+            0.0,
+        )
+    elif "return_pct" in df.columns:
+        df["return_pct"] = pd.to_numeric(df["return_pct"], errors="coerce")
     df = df.dropna(subset=["symbol"])
     if "exit_time" in df.columns:
         df = df.dropna(subset=["exit_time"])
@@ -186,6 +158,57 @@ def _normalize_bars_frame(df: pd.DataFrame) -> pd.DataFrame:
         if col in frame.columns:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
     frame.dropna(subset=["timestamp"], inplace=True)
+    return frame
+
+
+def _prepare_summary_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    frame = _normalize_pnl(df).copy()
+
+    for col in ("entry_time", "exit_time"):
+        if col in frame.columns:
+            frame[col] = pd.to_datetime(frame[col], utc=True, errors="coerce")
+
+    qty = pd.to_numeric(frame.get("qty", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    entry_price = pd.to_numeric(frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    exit_price = pd.to_numeric(frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+
+    pnl_series = frame.get("pnl")
+    computed_pnl = (exit_price - entry_price) * qty
+    if pnl_series is None:
+        frame["pnl"] = computed_pnl
+    else:
+        frame["pnl"] = pd.to_numeric(pnl_series, errors="coerce")
+        missing_mask = frame["pnl"].isna()
+        if missing_mask.any():
+            frame.loc[missing_mask, "pnl"] = computed_pnl.loc[missing_mask]
+
+    computed_returns = np.where(
+        entry_price > 0,
+        (exit_price / entry_price - 1) * 100,
+        0.0,
+    )
+    return_pct = frame.get("return_pct")
+    if return_pct is None:
+        frame["return_pct"] = computed_returns
+    else:
+        frame["return_pct"] = pd.to_numeric(return_pct, errors="coerce").fillna(
+            pd.Series(computed_returns, index=frame.index)
+        )
+
+    frame["exit_efficiency_pct"] = pd.to_numeric(
+        frame.get("exit_efficiency_pct", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    )
+    if "hold_days" in frame.columns:
+        frame["hold_days"] = pd.to_numeric(frame["hold_days"], errors="coerce")
+    elif {"entry_time", "exit_time"}.issubset(frame.columns):
+        frame["hold_days"] = (
+            frame["exit_time"] - frame["entry_time"]
+        ).dt.total_seconds() / (24 * 3600)
+
     return frame
 
 
@@ -377,32 +400,16 @@ def compute_exit_quality_columns(
 
     if df.empty:
         return df
-    frame = df.copy()
+    frame = _prepare_summary_frame(df)
 
-    for col in ("entry_price", "exit_price", "peak_price", "trough_price", "post_exit_peak"):
-        if col in frame.columns:
-            frame[col] = pd.to_numeric(frame[col], errors="coerce")
-
-    entry_price = frame.get("entry_price")
-    exit_price = frame.get("exit_price")
-    peak_price = frame.get("peak_price")
-    trough_price = frame.get("trough_price")
-    post_exit_peak = frame.get("post_exit_peak", pd.Series(dtype=float))
-    if post_exit_peak is None or len(post_exit_peak) != len(frame):
-        post_exit_peak = pd.Series(np.nan, index=frame.index)
-
-    frame["return_pct"] = np.where(
-        entry_price > 0,
-        (exit_price / entry_price - 1) * 100,
-        0.0,
+    entry_price = pd.to_numeric(frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    exit_price = pd.to_numeric(frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    peak_price = pd.to_numeric(frame.get("peak_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    trough_price = pd.to_numeric(frame.get("trough_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    post_exit_peak = pd.to_numeric(
+        frame.get("post_exit_peak", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
     )
-
-    if "entry_time" in frame.columns and "exit_time" in frame.columns:
-        entry_ts = pd.to_datetime(frame["entry_time"], utc=True, errors="coerce")
-        exit_ts = pd.to_datetime(frame["exit_time"], utc=True, errors="coerce")
-        frame["hold_days"] = (exit_ts - entry_ts).dt.total_seconds() / (24 * 3600)
-    else:
-        frame["hold_days"] = np.nan
 
     frame["mfe_pct"] = np.where(
         (entry_price > 0) & (peak_price.notna()),
@@ -449,6 +456,19 @@ def compute_exit_quality_columns(
 def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
     """Summarize trades for predefined time windows."""
 
+    def _safe_mean(series: pd.Series | None) -> float:
+        if series is None or len(series.index) == 0:
+            return 0.0
+        series = series.dropna()
+        if series.empty:
+            return 0.0
+        try:
+            value = float(series.mean())
+        except Exception:
+            return 0.0
+        return 0.0 if math.isnan(value) else value
+
+    frame = _prepare_summary_frame(df)
     now = datetime.now(timezone.utc)
     windows: dict[str, datetime | None] = {
         "7D": now - timedelta(days=7),
@@ -458,52 +478,53 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
     }
     summaries: dict[str, dict[str, float]] = {}
 
-    pnl_series = _compute_pnl_series(df)
+    time_series: pd.Series | None = None
+    if "exit_time" in frame.columns:
+        time_series = frame["exit_time"]
+    elif "entry_time" in frame.columns:
+        time_series = frame["entry_time"]
 
+    default_window = {
+        "trades": 0,
+        "net_pnl": 0.0,
+        "total_pnl": 0.0,
+        "win_rate": 0.0,
+        "win_rate_pct": 0.0,
+        "avg_return_pct": 0.0,
+        "avg_hold_days": 0.0,
+        "avg_exit_efficiency_pct": 0.0,
+        "sold_too_soon": 0,
+    }
     for label, cutoff in windows.items():
-        subset = df
-        if cutoff is not None and "exit_time" in df.columns:
-            subset = df[df["exit_time"] >= cutoff]
+        subset = frame
+        if cutoff is not None and time_series is not None:
+            subset = frame[time_series >= cutoff]
         trades = int(len(subset.index))
-        return_series = subset.get("return_pct", pd.Series(dtype=float))
-        avg_return = _ensure_number(return_series.mean(skipna=True)) if trades else 0.0
-
-        subset_pnl = pnl_series.loc[subset.index] if not pnl_series.empty else pd.Series(dtype=float)
-        wins = int((subset_pnl > 0).sum()) if trades else 0
-        win_rate = (wins / trades * 100.0) if trades else 0.0
-
-        hold_days = _ensure_number(subset.get("hold_days", pd.Series(dtype=float)).mean(skipna=True)) if trades else 0.0
-        exit_eff_series = subset.get("exit_efficiency_pct", pd.Series(dtype=float))
-        exit_eff = _ensure_number(exit_eff_series.mean(skipna=True)) if trades else 0.0
+        pnl_series = subset.get("pnl", pd.Series(dtype=float))
+        net_pnl = float(np.nansum(pnl_series)) if trades else 0.0
+        win_rate = float((pnl_series > 0).mean()) if trades else 0.0
+        win_rate_pct = win_rate * 100.0
+        avg_return = _safe_mean(subset.get("return_pct", pd.Series(dtype=float))) if trades else 0.0
+        hold_days = _safe_mean(subset.get("hold_days", pd.Series(dtype=float))) if trades else 0.0
+        if "exit_efficiency_pct" in subset.columns:
+            exit_eff = _safe_mean(subset["exit_efficiency_pct"]) if trades else 0.0
+        else:
+            exit_eff = 0.0
         sold_soon = int(subset.get("sold_too_soon", pd.Series(dtype=bool)).sum()) if trades else 0
-        total_pnl = _ensure_number(np.nansum(subset_pnl)) if trades else 0.0
         summaries[label] = {
             "trades": trades,
             "avg_return_pct": avg_return,
-            "win_rate_pct": win_rate,
+            "win_rate_pct": win_rate_pct,
             "win_rate": win_rate,
             "avg_hold_days": hold_days,
             "avg_exit_efficiency_pct": exit_eff,
             "sold_too_soon": sold_soon,
-            "total_pnl": total_pnl,
-            "net_pnl": total_pnl,
+            "total_pnl": net_pnl,
+            "net_pnl": net_pnl,
         }
     # ensure all required windows exist even if frame was filtered
     for label in SUMMARY_WINDOWS:
-        summaries.setdefault(
-            label,
-            {
-                "trades": 0,
-                "avg_return_pct": 0.0,
-                "win_rate_pct": 0.0,
-                "win_rate": 0.0,
-                "avg_hold_days": 0.0,
-                "avg_exit_efficiency_pct": 0.0,
-                "sold_too_soon": 0,
-                "total_pnl": 0.0,
-                "net_pnl": 0.0,
-            },
-        )
+        summaries.setdefault(label, default_window.copy())
     return summaries
 
 
@@ -519,19 +540,6 @@ def _coerce_json(value: Any) -> Any:
     if isinstance(value, (pd.Timedelta,)):
         return value.total_seconds()
     return value
-
-
-def _compute_pnl_series(df: pd.DataFrame) -> pd.Series:
-    if "pnl" in df.columns:
-        return pd.to_numeric(df["pnl"], errors="coerce")
-    if "net_pnl" in df.columns:
-        return pd.to_numeric(df["net_pnl"], errors="coerce")
-    if {"qty", "entry_price", "exit_price"}.issubset(df.columns):
-        exit_price = pd.to_numeric(df["exit_price"], errors="coerce")
-        entry_price = pd.to_numeric(df["entry_price"], errors="coerce")
-        qty = pd.to_numeric(df["qty"], errors="coerce")
-        return (exit_price - entry_price) * qty
-    return pd.Series(dtype=float)
 
 
 def _parse_mtime(value: Any) -> float | None:
@@ -651,20 +659,7 @@ def refresh_trade_performance_cache(
 
     trades_df = load_trades_log(base)
     if trades_df.empty:
-        summary: dict[str, Any] = {
-            label: {
-                "trades": 0,
-                "avg_return_pct": 0.0,
-                "win_rate_pct": 0.0,
-                "win_rate": 0.0,
-                "avg_hold_days": 0.0,
-                "avg_exit_efficiency_pct": 0.0,
-                "sold_too_soon": 0,
-                "total_pnl": 0.0,
-                "net_pnl": 0.0,
-            }
-            for label in SUMMARY_WINDOWS
-        }
+        summary = summarize_by_window(trades_df)
         write_cache(trades_df, summary, cache, trades_log_time=None)
         return trades_df, summary
 
@@ -677,20 +672,20 @@ def refresh_trade_performance_cache(
     except Exception:
         logger.warning("Excursion enrichment failed; proceeding without peaks.", exc_info=True)
         excursions = trades_df.copy()
+        for col in ("peak_price", "trough_price", "post_exit_peak"):
+            if col not in excursions.columns:
+                excursions[col] = np.nan
     try:
         enriched = compute_exit_quality_columns(excursions)
     except Exception:
         logger.warning("Exit quality enrichment failed; proceeding with raw trades.", exc_info=True)
-        enriched = excursions.copy()
-        if "return_pct" not in enriched.columns and {"entry_price", "exit_price"}.issubset(enriched.columns):
-            enriched["return_pct"] = np.where(
-                enriched["entry_price"] > 0,
-                (enriched["exit_price"] / enriched["entry_price"] - 1) * 100,
-                0.0,
-            )
+        enriched = _prepare_summary_frame(excursions)
         for col, default in (("hold_days", 0.0), ("exit_efficiency_pct", 0.0), ("sold_too_soon", 0)):
             if col not in enriched.columns:
                 enriched[col] = default
+        for col in ("mfe_pct", "mae_pct", "missed_profit_pct"):
+            if col not in enriched.columns:
+                enriched[col] = np.nan
     summary = summarize_by_window(enriched)
     try:
         trades_mtime = trades_log.stat().st_mtime

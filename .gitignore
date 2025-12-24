@@ -2,7 +2,7 @@ __pycache__/
 *.pyc
 .env
 trades.db
- pipeline.log
+pipeline.log
 assets_backup/
 
 # Ignore runtime data and logs
@@ -11,5 +11,10 @@ logs/*.log*
 data/open_positions.csv
 data/trades_log.csv
 data/trade_performance_cache.json
+data/trade_performance_cache.json.*
 data/*.json
 data/predictions/
+data/predictions/*
+.pytest_cache/
+.coverage
+htmlcov/
