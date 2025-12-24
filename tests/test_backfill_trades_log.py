@@ -42,7 +42,7 @@ def test_build_trades_from_events_pairs_buys_and_sells(dummy_events):
     assert trade["exit_price"] == 110
     assert trade["net_pnl"] == 10
     assert trade["side"] == "buy"
-    assert trade["order_status"] == "closed"
+    assert trade["order_status"] == "filled"
 
 
 def test_merge_trades_deduplicates_on_key(dummy_events, tmp_path):
@@ -81,8 +81,24 @@ def test_build_trades_supports_multi_fill_entry_and_exit():
     events = [
         {"symbol": "AAPL", "side": "buy", "qty": 5, "price": 10, "timestamp": "2024-01-01T00:00:00Z"},
         {"symbol": "AAPL", "side": "buy", "qty": 5, "price": 11, "timestamp": "2024-01-01T00:01:00Z"},
-        {"symbol": "AAPL", "side": "sell", "qty": 6, "price": 12, "timestamp": "2024-01-01T01:00:00Z", "order_type": "trailing_stop"},
-        {"symbol": "AAPL", "side": "sell", "qty": 4, "price": 13, "timestamp": "2024-01-01T01:30:00Z", "order_type": "limit"},
+        {
+            "symbol": "AAPL",
+            "side": "sell",
+            "qty": 6,
+            "price": 12,
+            "timestamp": "2024-01-01T01:00:00Z",
+            "order_type": "trailing_stop",
+            "order_status": "partial_fill",
+        },
+        {
+            "symbol": "AAPL",
+            "side": "sell",
+            "qty": 4,
+            "price": 13,
+            "timestamp": "2024-01-01T01:30:00Z",
+            "order_type": "limit",
+            "order_status": "filled",
+        },
     ]
 
     trades = build_trades_from_events(events)
@@ -95,13 +111,13 @@ def test_build_trades_supports_multi_fill_entry_and_exit():
     assert first["exit_price"] == 12
     assert first["exit_time"] == "2024-01-01T01:00:00+00:00"
     assert first["order_type"] == "trailing_stop"
-    assert first["exit_reason"] == "trailing_stop"
+    assert first["exit_reason"] == "TrailingStop"
 
     assert second["qty"] == 5
     assert second["entry_price"] == 11
     assert pytest.approx(second["exit_price"], rel=1e-6) == 12.8
     assert second["exit_time"] == "2024-01-01T01:30:00+00:00"
-    assert all(trade["order_status"] == "closed" for trade in trades)
+    assert all(trade["order_status"] == "filled" for trade in trades)
     assert all(trade["entry_time"] for trade in trades)
 
 
@@ -120,9 +136,31 @@ def test_partial_exit_accumulates_and_sets_exit_price():
     assert trade["entry_price"] == 20
     assert pytest.approx(trade["exit_price"], rel=1e-6) == 21.6
     assert trade["exit_time"] == "2024-02-01T02:00:00+00:00"
-    assert trade["order_status"] == "closed"
+    assert trade["order_status"] == "filled"
     assert trade["exit_price"] != 0
     assert trade["entry_time"] != ""
+
+
+def test_trailing_stop_exit_sets_type_and_reason():
+    events = [
+        {"symbol": "MSFT", "side": "buy", "qty": 2, "price": 100, "timestamp": "2024-03-01T00:00:00Z", "order_type": "market"},
+        {
+            "symbol": "MSFT",
+            "side": "sell",
+            "qty": 2,
+            "price": 101,
+            "timestamp": "2024-03-02T00:00:00Z",
+            "order_type": "trailing_stop",
+            "order_status": "filled",
+        },
+    ]
+
+    trades = build_trades_from_events(events)
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade["order_type"] == "trailing_stop"
+    assert trade["exit_reason"] == "TrailingStop"
+    assert trade["order_status"] == "filled"
 
 
 def test_backfill_writes_atomic(tmp_path, monkeypatch, dummy_events):

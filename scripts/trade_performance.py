@@ -447,11 +447,11 @@ def compute_exit_quality_columns(
         np.nan,
     )
 
-    valid_peak_mask = (peak_price.notna()) & (entry_price.notna()) & (peak_price > entry_price)
+    valid_peak_mask = (peak_price.notna()) & (peak_price > 0) & (exit_price.notna())
     exit_eff = np.where(
         valid_peak_mask,
         (exit_price / peak_price) * 100,
-        0.0,
+        np.nan,
     )
     frame["exit_efficiency_pct"] = np.clip(exit_eff, 0, 100)
     frame["missed_profit_pct"] = np.where(
