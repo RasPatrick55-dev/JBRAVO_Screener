@@ -93,7 +93,8 @@ def test_summarize_by_window_counts_recent_trades():
     assert summary["7D"]["trades"] == 1
     assert summary["7D"]["sold_too_soon"] == 1
     assert summary["7D"]["net_pnl"] == pytest.approx(15.0)
-    assert summary["7D"]["win_rate"] == pytest.approx(100.0)
+    assert summary["7D"]["win_rate"] == pytest.approx(1.0)
+    assert summary["7D"]["win_rate_pct"] == pytest.approx(100.0)
 
 
 def test_summary_always_includes_windows_and_numbers():
@@ -142,7 +143,7 @@ def test_summary_computes_pnl_and_win_rate_when_missing_column():
     summary = summarize_by_window(frame)
     window = summary["ALL"]
     assert window["net_pnl"] == pytest.approx((7 - 5) * 10 + (8 - 10) * 5)
-    assert window["win_rate"] == pytest.approx(50.0)
+    assert window["win_rate"] == pytest.approx(0.5)
 
 
 def test_refresh_best_effort_when_excursions_fail(tmp_path, monkeypatch):
