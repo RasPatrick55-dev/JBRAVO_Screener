@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -32,6 +33,7 @@ DEFAULT_MISSED_PROFIT_THRESHOLD = 3.0
 DEFAULT_EXIT_EFFICIENCY_THRESHOLD = 60.0
 DEFAULT_REBOUND_DAYS = 5
 DEFAULT_REBOUND_THRESHOLD_PCT = 3.0
+SUMMARY_WINDOWS = ("7D", "30D", "365D", "ALL")
 
 BarsFetcher = Callable[[str, datetime, datetime, Any], pd.DataFrame]
 
@@ -43,6 +45,17 @@ def _safe_to_float(value: Any) -> float | None:
         return float(value)
     except Exception:
         return None
+
+
+def _ensure_number(value: Any) -> float:
+    try:
+        if value is None:
+            return 0.0
+        if isinstance(value, float) and math.isnan(value):
+            return 0.0
+        return float(value)
+    except Exception:
+        return 0.0
 
 
 def _normalize_pnl(df: pd.DataFrame) -> pd.DataFrame:
@@ -106,6 +119,37 @@ def _normalize_bars_frame(df: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def fetch_bars_with_backoff(
+    data_client: StockHistoricalDataClient | None,
+    request: StockBarsRequest,
+    *,
+    max_attempts: int = 5,
+    base_delay: float = 1.0,
+) -> pd.DataFrame:
+    if data_client is None:
+        return pd.DataFrame()
+    delay = base_delay
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = data_client.get_stock_bars(request)
+            candidate = getattr(response, "df", pd.DataFrame())
+            if candidate is None:
+                return pd.DataFrame()
+            return _normalize_bars_frame(candidate)
+        except Exception as exc:
+            status = getattr(exc, "status_code", None) or getattr(getattr(exc, "error", None), "code", None)
+            if status == 429 or "429" in str(exc):
+                if attempt == max_attempts:
+                    logger.warning("Alpaca 429 rate limit reached after %s attempts.", attempt)
+                    break
+                time.sleep(delay)
+                delay *= 2
+                continue
+            logger.debug("Bar fetch failed (attempt %s/%s): %s", attempt, max_attempts, exc, exc_info=True)
+            break
+    return pd.DataFrame()
+
+
 def _fetch_bars_for_trade(
     symbol: str,
     start: datetime,
@@ -126,36 +170,25 @@ def _fetch_bars_for_trade(
     if data_client is None:
         return pd.DataFrame()
 
-    timeframes: list[Any] = [
-        TimeFrame(5, TimeFrameUnit.Minute),
-        TimeFrame(15, TimeFrameUnit.Minute),
-        TimeFrame.Hour,
+    timeframe_candidates: list[Any] = [
         TimeFrame.Day,
+        TimeFrame.Hour,
+        TimeFrame(15, TimeFrameUnit.Minute),
     ]
-    for timeframe in timeframes:
-        try:
-            request = StockBarsRequest(
-                symbol_or_symbols=symbol,
-                timeframe=timeframe,
-                start=start,
-                end=end,
-                feed=feed,
-            )
-            response = data_client.get_stock_bars(request)
-            candidate = getattr(response, "df", pd.DataFrame())
-            if candidate is None or candidate.empty:
-                continue
-            bars = _normalize_bars_frame(candidate)
-            if bars.empty:
-                continue
-            bars = bars[(bars["timestamp"] >= start) & (bars["timestamp"] <= end)]
-            if not bars.empty:
-                return bars
-        except Exception:
-            logger.debug(
-                "Failed to fetch bars for %s timeframe=%s", symbol, timeframe, exc_info=True
-            )
+    for timeframe in timeframe_candidates:
+        request = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            feed=feed,
+        )
+        bars = fetch_bars_with_backoff(data_client, request)
+        if bars.empty:
             continue
+        bars = bars[(bars["timestamp"] >= start) & (bars["timestamp"] <= end)]
+        if not bars.empty:
+            return bars
     return pd.DataFrame()
 
 
@@ -203,8 +236,16 @@ def compute_trade_excursions(
 
         bars = _fetch_bars_for_trade(symbol, start, post_end, data_client, feed, bar_fetcher=bar_fetcher)
         if bars.empty:
+            exit_reason = _infer_exit_reason(row)
+            trailing_pct = _safe_to_float(
+                row.get("trailing_pct")
+                or row.get("trailing_percent")
+                or row.get("trailing_stop_pct")
+            )
             fallback_peak = max(filter(lambda v: v is not None, (entry_price, exit_price)), default=None)
             fallback_trough = min(filter(lambda v: v is not None, (entry_price, exit_price)), default=None)
+            if exit_reason == "TrailingStop" and trailing_pct == 3.0 and exit_price:
+                fallback_peak = exit_price / 0.97
             peak_prices.append(fallback_peak)
             trough_prices.append(fallback_trough)
             post_exit_peaks.append(fallback_peak or fallback_trough)
@@ -290,7 +331,9 @@ def compute_exit_quality_columns(
     post_exit_peak = frame.get("post_exit_peak")
 
     frame["return_pct"] = np.where(
-        entry_price > 0, (exit_price - entry_price) / entry_price * 100, np.nan
+        entry_price > 0,
+        (exit_price / entry_price - 1) * 100,
+        0.0,
     )
 
     if "entry_time" in frame.columns and "exit_time" in frame.columns:
@@ -360,21 +403,43 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         if cutoff is not None and "exit_time" in df.columns:
             subset = df[df["exit_time"] >= cutoff]
         trades = int(len(subset.index))
-        avg_return = float(np.nanmean(subset["return_pct"])) if trades else 0.0
-        win_rate = float((subset["return_pct"] > 0).mean() * 100) if trades else 0.0
-        hold_days = float(np.nanmean(subset["hold_days"])) if trades else 0.0
-        exit_eff = float(np.nanmean(subset["exit_efficiency_pct"])) if trades else 0.0
+        return_series = subset.get("return_pct", pd.Series(dtype=float))
+        avg_return = _ensure_number(return_series.mean(skipna=True)) if trades else 0.0
+        win_rate = _ensure_number((return_series > 0).mean() * 100) if trades else 0.0
+        hold_days = _ensure_number(subset.get("hold_days", pd.Series(dtype=float)).mean(skipna=True)) if trades else 0.0
+        exit_eff_series = subset.get("exit_efficiency_pct", pd.Series(dtype=float))
+        exit_eff = _ensure_number(exit_eff_series.mean(skipna=True)) if trades else 0.0
         sold_soon = int(subset.get("sold_too_soon", pd.Series(dtype=bool)).sum()) if trades else 0
-        total_pnl = float(np.nansum(pnl_series.loc[subset.index])) if trades and pnl_series is not None else 0.0
+        total_pnl = (
+            _ensure_number(np.nansum(pnl_series.loc[subset.index])) if trades and pnl_series is not None else 0.0
+        )
         summaries[label] = {
             "trades": trades,
             "avg_return_pct": avg_return,
             "win_rate_pct": win_rate,
+            "win_rate": win_rate,
             "avg_hold_days": hold_days,
             "avg_exit_efficiency_pct": exit_eff,
             "sold_too_soon": sold_soon,
             "total_pnl": total_pnl,
+            "net_pnl": total_pnl,
         }
+    # ensure all required windows exist even if frame was filtered
+    for label in SUMMARY_WINDOWS:
+        summaries.setdefault(
+            label,
+            {
+                "trades": 0,
+                "avg_return_pct": 0.0,
+                "win_rate_pct": 0.0,
+                "win_rate": 0.0,
+                "avg_hold_days": 0.0,
+                "avg_exit_efficiency_pct": 0.0,
+                "sold_too_soon": 0,
+                "total_pnl": 0.0,
+                "net_pnl": 0.0,
+            },
+        )
     return summaries
 
 
@@ -392,12 +457,27 @@ def _coerce_json(value: Any) -> Any:
     return value
 
 
+def _parse_mtime(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        pass
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value).timestamp()
+        except Exception:
+            return None
+    return None
+
+
 def write_cache(
     df: pd.DataFrame,
     summary: Mapping[str, Any],
     path: Path | str = CACHE_PATH,
     *,
-    trades_log_mtime: float | None = None,
+    trades_log_time: float | None = None,
 ) -> Path:
     """Persist cache to disk."""
 
@@ -408,11 +488,17 @@ def write_cache(
     for record in df.to_dict(orient="records"):
         cleaned = {k: _coerce_json(v) for k, v in record.items()}
         records.append(cleaned)
+    trades_log_iso: str | None = None
+    if trades_log_time is not None:
+        try:
+            trades_log_iso = datetime.fromtimestamp(float(trades_log_time), tz=timezone.utc).isoformat()
+        except Exception:
+            trades_log_iso = None
     payload = {
         "written_at": datetime.now(timezone.utc).isoformat(),
         "summary": summary,
         "trades": records,
-        "trades_log_mtime": trades_log_mtime,
+        "trades_log_time": trades_log_iso,
     }
     atomic_write_bytes(target, json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"))
     return target
@@ -453,7 +539,7 @@ def is_cache_stale(
         return True
     try:
         payload = json.loads(cache.read_text(encoding="utf-8"))
-        cached_mtime = payload.get("trades_log_mtime")
+        cached_mtime = _parse_mtime(payload.get("trades_log_time"))
     except Exception:
         return True
     try:
@@ -464,7 +550,7 @@ def is_cache_stale(
         return True
     if cached_mtime is None:
         return True
-    return trades_mtime > float(cached_mtime)
+    return abs(trades_mtime - cached_mtime) > 1e-6
 
 
 def refresh_trade_performance_cache(
@@ -489,26 +575,51 @@ def refresh_trade_performance_cache(
     trades_df = load_trades_log(base)
     if trades_df.empty:
         summary: dict[str, Any] = {
-            "7D": {"trades": 0, "avg_return_pct": 0.0, "win_rate_pct": 0.0, "avg_hold_days": 0.0, "avg_exit_efficiency_pct": 0.0, "sold_too_soon": 0, "total_pnl": 0.0},
-            "30D": {"trades": 0, "avg_return_pct": 0.0, "win_rate_pct": 0.0, "avg_hold_days": 0.0, "avg_exit_efficiency_pct": 0.0, "sold_too_soon": 0, "total_pnl": 0.0},
-            "365D": {"trades": 0, "avg_return_pct": 0.0, "win_rate_pct": 0.0, "avg_hold_days": 0.0, "avg_exit_efficiency_pct": 0.0, "sold_too_soon": 0, "total_pnl": 0.0},
-            "ALL": {"trades": 0, "avg_return_pct": 0.0, "win_rate_pct": 0.0, "avg_hold_days": 0.0, "avg_exit_efficiency_pct": 0.0, "sold_too_soon": 0, "total_pnl": 0.0},
+            label: {
+                "trades": 0,
+                "avg_return_pct": 0.0,
+                "win_rate_pct": 0.0,
+                "win_rate": 0.0,
+                "avg_hold_days": 0.0,
+                "avg_exit_efficiency_pct": 0.0,
+                "sold_too_soon": 0,
+                "total_pnl": 0.0,
+                "net_pnl": 0.0,
+            }
+            for label in SUMMARY_WINDOWS
         }
-        write_cache(trades_df, summary, cache, trades_log_mtime=None)
+        write_cache(trades_df, summary, cache, trades_log_time=None)
         return trades_df, summary
 
-    excursions = compute_trade_excursions(
-        trades_df,
-        data_client,
-        lookback_days=lookback_days,
-    )
-    enriched = compute_exit_quality_columns(excursions)
+    try:
+        excursions = compute_trade_excursions(
+            trades_df,
+            data_client,
+            lookback_days=lookback_days,
+        )
+    except Exception:
+        logger.warning("Excursion enrichment failed; proceeding without peaks.", exc_info=True)
+        excursions = trades_df.copy()
+    try:
+        enriched = compute_exit_quality_columns(excursions)
+    except Exception:
+        logger.warning("Exit quality enrichment failed; proceeding with raw trades.", exc_info=True)
+        enriched = excursions.copy()
+        if "return_pct" not in enriched.columns and {"entry_price", "exit_price"}.issubset(enriched.columns):
+            enriched["return_pct"] = np.where(
+                enriched["entry_price"] > 0,
+                (enriched["exit_price"] / enriched["entry_price"] - 1) * 100,
+                0.0,
+            )
+        for col, default in (("hold_days", 0.0), ("exit_efficiency_pct", 0.0), ("sold_too_soon", 0)):
+            if col not in enriched.columns:
+                enriched[col] = default
     summary = summarize_by_window(enriched)
     try:
         trades_mtime = trades_log.stat().st_mtime
     except Exception:
         trades_mtime = None
-    write_cache(enriched, summary, cache, trades_log_mtime=trades_mtime)
+    write_cache(enriched, summary, cache, trades_log_time=trades_mtime)
     return enriched, summary
 
 
@@ -533,6 +644,7 @@ __all__ = [
     "BASE_DIR",
     "CACHE_PATH",
     "CACHE_MAX_AGE_HOURS",
+    "SUMMARY_WINDOWS",
     "compute_exit_quality_columns",
     "compute_trade_excursions",
     "is_cache_stale",
