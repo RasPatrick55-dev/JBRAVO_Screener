@@ -904,6 +904,7 @@ def _build_trade_perf_kpis(metrics: Mapping[str, Any]) -> list[Any]:
         _card("Win Rate", f"{win_rate:.1f}%", "warning"),
         _card("Avg Hold (days)", f"{hold_days:.2f}", "secondary"),
         _card("Exit Efficiency", f"{exit_eff:.1f}%", "success"),
+        _card("TrailingStop exits", f"{stop_exits}", "info"),
         _card("Trailing-Stop Rebound Rate (5D ≥3%)", rebound_value, "info"),
     ]
     return cards
@@ -3236,6 +3237,8 @@ def _prepare_trade_perf_frame(store_data: Mapping[str, Any], window: str) -> pd.
     for col in numeric_cols:
         if col in frame.columns:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    if "exit_efficiency_pct" not in frame.columns:
+        frame["exit_efficiency_pct"] = np.nan
     if "rebounded" in frame.columns:
         frame["rebounded"] = frame["rebounded"].fillna(False)
     if "is_trailing_stop_exit" in frame.columns:

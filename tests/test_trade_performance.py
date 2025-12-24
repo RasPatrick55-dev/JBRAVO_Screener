@@ -191,6 +191,56 @@ def test_refresh_best_effort_when_excursions_fail(tmp_path, monkeypatch):
         assert summary[window]["net_pnl"] >= 0.0
 
 
+def test_refresh_populates_exit_efficiency_with_daily_peak(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    entry_ts = now - timedelta(days=2)
+    exit_ts = now - timedelta(days=1)
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "qty": 5,
+                "entry_price": 10.0,
+                "exit_price": 11.0,
+                "entry_time": entry_ts,
+                "exit_time": exit_ts,
+            }
+        ]
+    )
+    trades.to_csv(data_dir / "trades_log.csv", index=False)
+
+    def fake_fetch(_symbol, start, end, _timeframe):
+        return pd.DataFrame(
+            {
+                "timestamp": [start + timedelta(hours=1), end - timedelta(hours=1)],
+                "high": [12.0, 11.5],
+                "low": [9.5, 10.5],
+                "close": [11.0, 11.2],
+            }
+        )
+
+    cache_path = data_dir / "trade_performance_cache.json"
+    df, summary = refresh_trade_performance_cache(
+        base_dir=tmp_path,
+        data_client=None,
+        lookback_days=30,
+        force=True,
+        cache_path=cache_path,
+        bar_fetcher=fake_fetch,
+    )
+    expected_eff = (11.0 / 12.0) * 100
+    assert pytest.approx(df.loc[0, "peak_price"], rel=1e-6) == 12.0
+    assert pytest.approx(df.loc[0, "exit_efficiency_pct"], rel=1e-6) == expected_eff
+
+    payload = read_cache(cache_path)
+    assert payload is not None
+    assert pytest.approx(payload["summary"]["ALL"]["avg_exit_efficiency_pct"], rel=1e-6) == expected_eff
+    cached_trade = payload["trades"][0]
+    assert pytest.approx(cached_trade["exit_efficiency_pct"], rel=1e-6) == expected_eff
+
+
 def test_refresh_uses_full_history_and_enrichment_mask(tmp_path):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True)
@@ -290,7 +340,7 @@ def test_refresh_skips_enrichment_outside_lookback(tmp_path):
     assert payload["trades_total"] == 1
 
 
-def test_exit_efficiency_zero_when_peak_missing_or_below_entry():
+def test_exit_efficiency_nan_when_peak_missing_or_clamped():
     now = datetime.now(timezone.utc)
     trades = pd.DataFrame(
         [
@@ -308,15 +358,15 @@ def test_exit_efficiency_zero_when_peak_missing_or_below_entry():
                 "entry_time": now - timedelta(days=2),
                 "exit_time": now - timedelta(days=1),
                 "entry_price": 10.0,
-                "exit_price": 11.0,
+                "exit_price": 12.0,
                 "peak_price": 9.5,
                 "trough_price": 8.0,
             },
         ]
     )
     enriched = compute_exit_quality_columns(trades)
-    assert enriched.loc[0, "exit_efficiency_pct"] == pytest.approx(0.0)
-    assert enriched.loc[1, "exit_efficiency_pct"] == pytest.approx(0.0)
+    assert pd.isna(enriched.loc[0, "exit_efficiency_pct"])
+    assert enriched.loc[1, "exit_efficiency_pct"] == pytest.approx(100.0)
 
 
 def test_rebound_columns_exist():

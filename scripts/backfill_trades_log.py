@@ -195,7 +195,8 @@ def fetch_account_fill_events(
                     "qty": _safe_float(item.get("qty") or item.get("quantity")),
                     "price": _safe_float(item.get("price")),
                     "timestamp": ts,
-                    "order_type": _safe_str(item.get("order_type") or item.get("type")),
+                    "order_type": _safe_str(item.get("order_type") or item.get("type")).lower(),
+                    "order_status": _clean_order_status(item.get("order_status") or item.get("status")),
                 }
             )
 
@@ -213,6 +214,11 @@ def _clean_order_side(side: Any) -> str:
     if isinstance(side, OrderSide):
         return side.value
     return _safe_str(getattr(side, "value", side)).lower()
+
+
+def _clean_order_status(status: Any) -> str:
+    raw = getattr(status, "value", status)
+    return _safe_str(raw).lower()
 
 
 def fetch_order_fill_events(
@@ -259,7 +265,8 @@ def fetch_order_fill_events(
                     "qty": _safe_float(getattr(order, "filled_qty", 0.0)),
                     "price": _safe_float(getattr(order, "filled_avg_price", 0.0)),
                     "timestamp": ts,
-                    "order_type": _safe_str(getattr(order, "order_type", "")),
+                    "order_type": _safe_str(getattr(order, "type", getattr(order, "order_type", ""))).lower(),
+                    "order_status": _clean_order_status(getattr(order, "status", "")),
                 }
             )
 
@@ -301,7 +308,8 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
         qty = _safe_float(event.get("qty"))
         price = _safe_float(event.get("price"))
         ts = _coerce_datetime(event.get("timestamp"))
-        order_type = _safe_str(event.get("order_type"))
+        order_type = _safe_str(event.get("order_type")).lower()
+        order_status = _clean_order_status(event.get("order_status"))
 
         if not symbol or side not in {"buy", "sell"} or qty <= 0 or price == 0 or ts is None:
             continue
@@ -317,10 +325,12 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
                     "price": price,
                     "timestamp": ts,
                     "order_type": order_type,
+                    "order_status": order_status,
                     "sell_qty": 0.0,
                     "sell_notional": 0.0,
                     "exit_time": None,
                     "exit_order_type": "",
+                    "exit_order_status": "",
                 }
             )
             continue
@@ -335,6 +345,8 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
             lot["exit_time"] = ts if lot["exit_time"] is None or ts > lot["exit_time"] else lot["exit_time"]
             if not lot["exit_order_type"] and order_type:
                 lot["exit_order_type"] = order_type
+            if not lot["exit_order_status"] and order_status:
+                lot["exit_order_status"] = order_status
 
             remaining -= close_qty
 
@@ -348,6 +360,8 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
                 entry_price = (lot["price"] * entry_qty) / entry_qty if entry_qty else 0.0
                 exit_price = lot["sell_notional"] / exit_qty if exit_qty else 0.0
                 exit_time = lot["exit_time"]
+                exit_order_type = lot["exit_order_type"] or lot.get("order_type", "")
+                exit_reason = "TrailingStop" if exit_order_type == "trailing_stop" else ""
 
                 if entry_price and exit_price and exit_time is not None:
                     trades.append(
@@ -360,9 +374,9 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
                             "exit_time": _isoformat(exit_time),
                             "net_pnl": _net_pnl("buy", entry_price, exit_price, exit_qty),
                             "side": "buy",
-                            "order_status": "closed",
-                            "order_type": lot["exit_order_type"],
-                            "exit_reason": lot["exit_order_type"],
+                            "order_status": lot.get("exit_order_status") or "filled",
+                            "order_type": exit_order_type,
+                            "exit_reason": exit_reason,
                         }
                     )
 
