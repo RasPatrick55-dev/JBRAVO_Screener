@@ -6,6 +6,7 @@ import pytest
 from scripts.trade_performance import (
     SUMMARY_WINDOWS,
     compute_exit_quality_columns,
+    compute_rebound_metrics,
     compute_trade_excursions,
     load_trades_log,
     refresh_trade_performance_cache,
@@ -206,3 +207,124 @@ def test_exit_efficiency_zero_when_peak_missing_or_below_entry():
     enriched = compute_exit_quality_columns(trades)
     assert enriched.loc[0, "exit_efficiency_pct"] == pytest.approx(0.0)
     assert enriched.loc[1, "exit_efficiency_pct"] == pytest.approx(0.0)
+
+
+def test_rebound_columns_exist():
+    exit_ts = datetime(2024, 1, 5, tzinfo=timezone.utc)
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "ABC",
+                "entry_time": exit_ts - timedelta(days=3),
+                "exit_time": exit_ts,
+                "entry_price": 95.0,
+                "exit_price": 97.0,
+                "peak_price": 100.0,
+                "trough_price": 90.0,
+                "trailing_pct": 3.0,
+                "exit_reason": "TrailingStop",
+            }
+        ]
+    )
+    enriched = compute_exit_quality_columns(trades)
+    def fake_fetch(_symbol, start, end, _timeframe):
+        return pd.DataFrame(
+            {
+                "timestamp": [start + timedelta(days=1)],
+                "high": [101.0],
+                "low": [100.0],
+                "close": [100.5],
+                "open": [100.0],
+            }
+        )
+
+    rebound_df = compute_rebound_metrics(
+        enriched,
+        data_client=None,
+        bar_fetcher=fake_fetch,
+        rebound_window_days=5,
+        rebound_threshold_pct=3.0,
+    )
+    assert "rebound_pct" in rebound_df.columns
+    assert "rebounded" in rebound_df.columns
+    assert "post_exit_high" in rebound_df.columns
+    assert bool(rebound_df.loc[0, "rebounded"]) is True
+    assert bool(rebound_df.loc[0, "is_trailing_stop_exit"]) is True
+    assert rebound_df.loc[0, "rebound_window_days"] == 5
+
+
+def test_rebound_rate_numeric():
+    now = datetime.now(timezone.utc)
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "entry_time": now - timedelta(days=2),
+                "exit_time": now - timedelta(days=1),
+                "entry_price": 100.0,
+                "exit_price": 97.0,
+                "rebound_pct": 4.0,
+                "rebounded": True,
+                "is_trailing_stop_exit": True,
+            },
+            {
+                "symbol": "BBB",
+                "entry_time": now - timedelta(days=3),
+                "exit_time": now - timedelta(days=1),
+                "entry_price": 50.0,
+                "exit_price": 48.5,
+                "rebound_pct": 1.0,
+                "rebounded": False,
+                "is_trailing_stop_exit": True,
+            },
+        ]
+    )
+    summary = summarize_by_window(frame)
+    metrics = summary["ALL"]
+    assert isinstance(metrics["rebound_rate"], float)
+    assert metrics["rebound_rate"] == pytest.approx(0.5)
+    assert metrics["stop_exits"] == 2
+    assert metrics["rebounds"] == 1
+    assert metrics["avg_rebound_pct"] == pytest.approx(2.5)
+
+
+def test_rebound_rate_zero_when_no_stop_exits():
+    now = datetime.now(timezone.utc)
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "entry_time": now - timedelta(days=2),
+                "exit_time": now - timedelta(days=1),
+                "entry_price": 100.0,
+                "exit_price": 101.0,
+                "is_trailing_stop_exit": False,
+            }
+        ]
+    )
+    summary = summarize_by_window(frame)
+    metrics = summary["ALL"]
+    assert metrics["stop_exits"] == 0
+    assert metrics["rebound_rate"] == 0.0
+    assert metrics["rebounds"] == 0
+
+
+def test_summary_contains_rebound_metrics():
+    now = datetime.now(timezone.utc)
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "entry_time": now - timedelta(days=1),
+                "exit_time": now,
+                "pnl": float("nan"),
+                "return_pct": float("nan"),
+            }
+        ]
+    )
+    summary = summarize_by_window(frame)
+    for window in SUMMARY_WINDOWS:
+        metrics = summary[window]
+        for key in ("stop_exits", "rebounds", "rebound_rate", "avg_rebound_pct"):
+            assert key in metrics
+            assert metrics[key] == metrics[key]
