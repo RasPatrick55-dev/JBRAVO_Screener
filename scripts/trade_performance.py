@@ -33,6 +33,7 @@ DEFAULT_MISSED_PROFIT_THRESHOLD = 3.0
 DEFAULT_EXIT_EFFICIENCY_THRESHOLD = 60.0
 DEFAULT_REBOUND_DAYS = 5
 DEFAULT_REBOUND_THRESHOLD_PCT = 3.0
+DEFAULT_TRAILING_STOP_TOLERANCE = 0.005
 SUMMARY_WINDOWS = ("7D", "30D", "365D", "ALL")
 
 BarsFetcher = Callable[[str, datetime, datetime, Any], pd.DataFrame]
@@ -389,6 +390,35 @@ def _infer_exit_reason(row: Mapping[str, Any]) -> str:
     return "Other"
 
 
+def _normalize_trailing_pct(value: Any) -> float | None:
+    pct = _safe_to_float(value)
+    if pct is None:
+        return None
+    if pct > 1:
+        return pct / 100.0
+    return pct
+
+
+def _is_trailing_stop_exit(row: Mapping[str, Any], *, tolerance: float = DEFAULT_TRAILING_STOP_TOLERANCE) -> bool:
+    reason = (row.get("exit_reason") or row.get("reason") or "").strip()
+    if reason == "TrailingStop":
+        return True
+
+    trailing_pct = _normalize_trailing_pct(
+        row.get("trailing_pct")
+        or row.get("trailing_percent")
+        or row.get("trailing_stop_pct")
+    )
+    peak_price = _safe_to_float(row.get("peak_price"))
+    exit_price = _safe_to_float(row.get("exit_price"))
+    if trailing_pct is None or peak_price is None or exit_price is None:
+        return False
+    if peak_price <= 0 or exit_price >= peak_price:
+        return False
+    observed = (peak_price - exit_price) / peak_price
+    return abs(observed - trailing_pct) < tolerance
+
+
 def compute_exit_quality_columns(
     df: pd.DataFrame,
     *,
@@ -450,6 +480,90 @@ def compute_exit_quality_columns(
         | (frame["exit_efficiency_pct"] < exit_eff_threshold)
         | frame["post_exit_rebound"].fillna(False)
     )
+    frame["is_trailing_stop_exit"] = [
+        _is_trailing_stop_exit(row) for row in frame.to_dict(orient="records")
+    ]
+    return frame
+
+
+def compute_rebound_metrics(
+    df: pd.DataFrame,
+    data_client: StockHistoricalDataClient | None,
+    *,
+    rebound_window_days: int = DEFAULT_REBOUND_DAYS,
+    rebound_threshold_pct: float = DEFAULT_REBOUND_THRESHOLD_PCT,
+    bar_fetcher: BarsFetcher | None = None,
+    trailing_tolerance: float = DEFAULT_TRAILING_STOP_TOLERANCE,
+) -> pd.DataFrame:
+    """Compute post-exit rebound metrics for trailing-stop exits using daily bars."""
+
+    frame = df.copy()
+    if frame.empty:
+        frame["rebound_window_days"] = rebound_window_days
+        frame["post_exit_high"] = np.nan
+        frame["rebound_pct"] = np.nan
+        frame["rebounded"] = False
+        if "is_trailing_stop_exit" not in frame.columns:
+            frame["is_trailing_stop_exit"] = False
+        return frame
+
+    feed = os.getenv("ALPACA_DATA_FEED", "iex")
+    if "exit_reason" not in frame.columns:
+        frame["exit_reason"] = [
+            _infer_exit_reason(row) for row in frame.to_dict(orient="records")
+        ]
+    if "is_trailing_stop_exit" not in frame.columns:
+        frame["is_trailing_stop_exit"] = [
+            _is_trailing_stop_exit(row, tolerance=trailing_tolerance)
+            for row in frame.to_dict(orient="records")
+        ]
+
+    rebound_window_days = int(rebound_window_days) if rebound_window_days is not None else DEFAULT_REBOUND_DAYS
+    frame["rebound_window_days"] = rebound_window_days
+
+    post_exit_highs: list[float | None] = [np.nan] * len(frame.index)
+    rebound_pcts: list[float | None] = [np.nan] * len(frame.index)
+    rebound_flags: list[bool] = [False] * len(frame.index)
+
+    for idx, row in frame.iterrows():
+        if not bool(row.get("is_trailing_stop_exit")):
+            continue
+        symbol = str(row.get("symbol") or "").upper()
+        exit_ts = row.get("exit_time")
+        exit_price = _safe_to_float(row.get("exit_price"))
+        if not symbol or exit_price is None or not isinstance(exit_ts, pd.Timestamp):
+            continue
+        start = (exit_ts + timedelta(days=1)).to_pydatetime()
+        end = (exit_ts + timedelta(days=max(rebound_window_days, 0))).to_pydatetime()
+
+        try:
+            bars = _fetch_bars_for_trade(
+                symbol,
+                start,
+                end,
+                data_client,
+                feed,
+                bar_fetcher=bar_fetcher,
+                use_intraday=False,
+            )
+        except Exception:
+            logger.debug("Post-exit bar fetch failed for %s", symbol, exc_info=True)
+            continue
+        if bars.empty:
+            continue
+        highs = bars.get("high", pd.Series(dtype=float))
+        if highs.empty:
+            continue
+        post_high = highs.max()
+        post_exit_highs[idx] = post_high
+        if exit_price and not pd.isna(post_high):
+            pct = (post_high - exit_price) / exit_price * 100
+            rebound_pcts[idx] = pct
+            rebound_flags[idx] = pct >= rebound_threshold_pct
+
+    frame["post_exit_high"] = post_exit_highs
+    frame["rebound_pct"] = rebound_pcts
+    frame["rebounded"] = rebound_flags
     return frame
 
 
@@ -494,6 +608,10 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         "avg_hold_days": 0.0,
         "avg_exit_efficiency_pct": 0.0,
         "sold_too_soon": 0,
+        "stop_exits": 0,
+        "rebounds": 0,
+        "rebound_rate": 0.0,
+        "avg_rebound_pct": 0.0,
     }
     for label, cutoff in windows.items():
         subset = frame
@@ -511,6 +629,14 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         else:
             exit_eff = 0.0
         sold_soon = int(subset.get("sold_too_soon", pd.Series(dtype=bool)).sum()) if trades else 0
+        trailing_mask = subset.get("is_trailing_stop_exit")
+        if trailing_mask is None:
+            trailing_mask = pd.Series(False, index=subset.index)
+        trailing_subset = subset[trailing_mask.fillna(False)] if trades else pd.DataFrame()
+        stop_exits = int(len(trailing_subset.index)) if not trailing_subset.empty else 0
+        rebounds = int(trailing_subset.get("rebounded", pd.Series(dtype=bool)).sum()) if stop_exits else 0
+        avg_rebound_pct = _safe_mean(trailing_subset.get("rebound_pct", pd.Series(dtype=float))) if stop_exits else 0.0
+        rebound_rate = rebounds / stop_exits if stop_exits else 0.0
         summaries[label] = {
             "trades": trades,
             "avg_return_pct": avg_return,
@@ -521,6 +647,10 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
             "sold_too_soon": sold_soon,
             "total_pnl": net_pnl,
             "net_pnl": net_pnl,
+            "stop_exits": stop_exits,
+            "rebounds": rebounds,
+            "rebound_rate": rebound_rate,
+            "avg_rebound_pct": avg_rebound_pct,
         }
     # ensure all required windows exist even if frame was filtered
     for label in SUMMARY_WINDOWS:
@@ -645,6 +775,7 @@ def refresh_trade_performance_cache(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     force: bool = False,
     cache_path: Path | str = CACHE_PATH,
+    bar_fetcher: BarsFetcher | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Recompute trade performance cache (best effort)."""
 
@@ -668,6 +799,7 @@ def refresh_trade_performance_cache(
             trades_df,
             data_client,
             lookback_days=lookback_days,
+            bar_fetcher=bar_fetcher,
         )
     except Exception:
         logger.warning("Excursion enrichment failed; proceeding without peaks.", exc_info=True)
@@ -686,13 +818,33 @@ def refresh_trade_performance_cache(
         for col in ("mfe_pct", "mae_pct", "missed_profit_pct"):
             if col not in enriched.columns:
                 enriched[col] = np.nan
-    summary = summarize_by_window(enriched)
+    try:
+        rebound_enriched = compute_rebound_metrics(
+            enriched,
+            data_client,
+            rebound_window_days=DEFAULT_REBOUND_DAYS,
+            rebound_threshold_pct=DEFAULT_REBOUND_THRESHOLD_PCT,
+            bar_fetcher=bar_fetcher,
+        )
+    except Exception:
+        logger.warning("Rebound enrichment failed; proceeding without rebound metrics.", exc_info=True)
+        rebound_enriched = enriched.copy()
+        for col, default in (
+            ("rebound_window_days", DEFAULT_REBOUND_DAYS),
+            ("post_exit_high", np.nan),
+            ("rebound_pct", np.nan),
+            ("rebounded", False),
+            ("is_trailing_stop_exit", False),
+        ):
+            if col not in rebound_enriched.columns:
+                rebound_enriched[col] = default
+    summary = summarize_by_window(rebound_enriched)
     try:
         trades_mtime = trades_log.stat().st_mtime
     except Exception:
         trades_mtime = None
-    write_cache(enriched, summary, cache, trades_log_time=trades_mtime)
-    return enriched, summary
+    write_cache(rebound_enriched, summary, cache, trades_log_time=trades_mtime)
+    return rebound_enriched, summary
 
 
 def build_data_client() -> StockHistoricalDataClient | None:
@@ -716,9 +868,13 @@ __all__ = [
     "BASE_DIR",
     "CACHE_PATH",
     "CACHE_MAX_AGE_HOURS",
+    "DEFAULT_REBOUND_DAYS",
+    "DEFAULT_REBOUND_THRESHOLD_PCT",
+    "DEFAULT_TRAILING_STOP_TOLERANCE",
     "SUMMARY_WINDOWS",
     "compute_exit_quality_columns",
     "compute_trade_excursions",
+    "compute_rebound_metrics",
     "is_cache_stale",
     "load_trades_log",
     "fetch_with_backoff",

@@ -152,6 +152,11 @@ TRADE_PERF_TABLE_FIELDS = [
     "trough_price",
     "missed_profit_pct",
     "exit_efficiency_pct",
+    "is_trailing_stop_exit",
+    "rebound_window_days",
+    "rebound_pct",
+    "rebounded",
+    "post_exit_high",
 ]
 
 
@@ -886,6 +891,12 @@ def _build_trade_perf_kpis(metrics: Mapping[str, Any]) -> list[Any]:
     win_rate = float(metrics.get("win_rate_pct", 0.0) or 0.0)
     hold_days = float(metrics.get("avg_hold_days", 0.0) or 0.0)
     exit_eff = float(metrics.get("avg_exit_efficiency_pct", 0.0) or 0.0)
+    stop_exits = _coerce_int_value(metrics.get("stop_exits", 0))
+    rebounds = _coerce_int_value(metrics.get("rebounds", 0))
+    rebound_rate = float(metrics.get("rebound_rate", 0.0) or 0.0) * 100.0
+    rebound_value = (
+        f"{rebound_rate:.1f}% ({rebounds}/{stop_exits})" if stop_exits else f"{rebound_rate:.1f}%"
+    )
     cards: list[Any] = [
         _card("Trades", f"{trades}", "info"),
         _card("Total P&L", f"{total_pnl:,.2f}", "success" if total_pnl >= 0 else "danger"),
@@ -893,6 +904,7 @@ def _build_trade_perf_kpis(metrics: Mapping[str, Any]) -> list[Any]:
         _card("Win Rate", f"{win_rate:.1f}%", "warning"),
         _card("Avg Hold (days)", f"{hold_days:.2f}", "secondary"),
         _card("Exit Efficiency", f"{exit_eff:.1f}%", "success"),
+        _card("Trailing-Stop Rebound Rate (5D ≥3%)", rebound_value, "info"),
     ]
     return cards
 
@@ -930,6 +942,11 @@ def make_trade_performance_layout():
         {"name": "Trough Price", "id": "trough_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
         {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
         {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Trailing Stop Exit", "id": "is_trailing_stop_exit"},
+        {"name": "Rebound Window (days)", "id": "rebound_window_days", "type": "numeric", "format": Format(precision=0, scheme="f")},
+        {"name": "Post-exit High", "id": "post_exit_high", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Rebounded", "id": "rebounded"},
     ]
 
     return html.Div(
@@ -976,6 +993,13 @@ def make_trade_performance_layout():
                 ],
                 className="g-3",
             ),
+            dbc.Row(
+                [
+                    dbc.Col(dcc.Graph(id="trade-perf-rebound-scatter"), md=6),
+                    dbc.Col(dcc.Graph(id="trade-perf-rebound-hist"), md=6),
+                ],
+                className="g-3",
+            ),
             html.H4("Per-trade details", className="mt-4"),
             dash_table.DataTable(
                 id="trade-perf-table",
@@ -983,6 +1007,7 @@ def make_trade_performance_layout():
                 data=store_data.get("trades", []),
                 sort_action="native",
                 filter_action="native",
+                filter_query='{exit_reason} = "TrailingStop" && {rebounded} = true',
                 page_size=20,
                 style_table={"overflowX": "auto"},
                 style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
@@ -3204,10 +3229,17 @@ def _prepare_trade_perf_frame(store_data: Mapping[str, Any], window: str) -> pd.
         "trough_price",
         "missed_profit_pct",
         "exit_efficiency_pct",
+        "rebound_pct",
+        "rebound_window_days",
+        "post_exit_high",
     ]
     for col in numeric_cols:
         if col in frame.columns:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    if "rebounded" in frame.columns:
+        frame["rebounded"] = frame["rebounded"].fillna(False)
+    if "is_trailing_stop_exit" in frame.columns:
+        frame["is_trailing_stop_exit"] = frame["is_trailing_stop_exit"].fillna(False)
     if "exit_reason" in frame.columns:
         frame["exit_reason"] = frame["exit_reason"].fillna("Unknown")
     if window != "ALL" and "exit_time" in frame.columns:
@@ -3224,6 +3256,8 @@ def _prepare_trade_perf_frame(store_data: Mapping[str, Any], window: str) -> pd.
         Output("trade-perf-scatter", "figure"),
         Output("trade-perf-eff-hist", "figure"),
         Output("trade-perf-reason-bar", "figure"),
+        Output("trade-perf-rebound-scatter", "figure"),
+        Output("trade-perf-rebound-hist", "figure"),
         Output("trade-perf-table", "data"),
         Output("trade-perf-status", "children"),
     ],
@@ -3246,6 +3280,13 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
                 color="info",
             )
         )
+        status_children.append(
+            dbc.Badge(
+                f"Trailing-stop exits: {metrics.get('stop_exits', 0)}; rebounds: {metrics.get('rebounds', 0)}",
+                color="secondary",
+                className="ms-2",
+            )
+        )
 
     if frame.empty:
         empty_data = store_mapping.get("trades", []) if isinstance(store_mapping, Mapping) else []
@@ -3254,6 +3295,8 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
             _empty_trade_perf_fig("MFE % vs Return %"),
             _empty_trade_perf_fig("Exit efficiency %"),
             _empty_trade_perf_fig("Exit reasons"),
+            _empty_trade_perf_fig("Exit Efficiency vs Rebound %"),
+            _empty_trade_perf_fig("Rebound %"),
             empty_data,
             status_children,
         )
@@ -3284,6 +3327,34 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
         data=[go.Bar(x=reason_counts.index, y=reason_counts.values)],
         layout=go.Layout(title="Exit reasons", template="plotly_dark"),
     )
+    trailing_mask = frame.get("is_trailing_stop_exit")
+    if trailing_mask is None:
+        trailing_mask = pd.Series(False, index=frame.index)
+    trailing_frame = frame[trailing_mask.fillna(False)]
+    valid_rebounds = (
+        trailing_frame.dropna(subset=["rebound_pct"])
+        if (not trailing_frame.empty and "rebound_pct" in trailing_frame.columns)
+        else pd.DataFrame()
+    )
+    rebound_scatter = _empty_trade_perf_fig("Exit Efficiency % vs Rebound %")
+    rebound_hist = _empty_trade_perf_fig("Rebound %")
+    if not valid_rebounds.empty:
+        rebound_scatter = px.scatter(
+            valid_rebounds,
+            x="exit_efficiency_pct",
+            y="rebound_pct",
+            color="rebounded",
+            hover_data=["symbol", "exit_time", "exit_price", "rebound_pct"],
+            title="Exit Efficiency % vs Rebound %",
+        )
+        rebound_scatter.update_layout(template="plotly_dark")
+        rebound_hist = px.histogram(
+            valid_rebounds,
+            x="rebound_pct",
+            nbins=15,
+            title="Rebound %",
+        )
+        rebound_hist.update_layout(template="plotly_dark")
 
     table_frame = frame.copy()
     for col in ("entry_time", "exit_time"):
@@ -3292,7 +3363,16 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
     table_frame = table_frame.reindex(columns=TRADE_PERF_TABLE_FIELDS)
     table_data = table_frame.fillna("").to_dict("records")
 
-    return _build_trade_perf_kpis(metrics), scatter_fig, eff_hist, reason_bar, table_data, status_children
+    return (
+        _build_trade_perf_kpis(metrics),
+        scatter_fig,
+        eff_hist,
+        reason_bar,
+        rebound_scatter,
+        rebound_hist,
+        table_data,
+        status_children,
+    )
 
 
 @app.callback(
