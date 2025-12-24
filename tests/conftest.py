@@ -1,4 +1,6 @@
+import logging
 import os
+
 import pytest
 from alpaca.data.timeframe import TimeFrame
 
@@ -11,6 +13,16 @@ def _tf_eq(self, other):
     )
 
 TimeFrame.__eq__ = _tf_eq
+
+
+@pytest.fixture
+def null_logger():
+    logger = logging.getLogger("null_logger")
+    if not logger.handlers:
+        handler = logging.NullHandler()
+        logger.addHandler(handler)
+    logger.propagate = False
+    return logger
 
 @pytest.fixture(autouse=True)
 def check_alpaca_env(request):
