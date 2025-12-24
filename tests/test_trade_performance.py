@@ -4,9 +4,11 @@ import pandas as pd
 import pytest
 
 from scripts.trade_performance import (
+    SUMMARY_WINDOWS,
     compute_exit_quality_columns,
     compute_trade_excursions,
     load_trades_log,
+    refresh_trade_performance_cache,
     summarize_by_window,
 )
 
@@ -90,3 +92,59 @@ def test_summarize_by_window_counts_recent_trades():
     assert {"7D", "30D", "365D", "ALL"}.issubset(summary.keys())
     assert summary["7D"]["trades"] == 1
     assert summary["7D"]["sold_too_soon"] == 1
+    assert summary["7D"]["net_pnl"] == pytest.approx(15.0)
+    assert summary["7D"]["win_rate"] == pytest.approx(100.0)
+
+
+def test_summary_always_includes_windows_and_numbers():
+    now = datetime.now(timezone.utc)
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "SPY",
+                "exit_time": now,
+                "return_pct": float("nan"),
+                "pnl": float("nan"),
+            }
+        ]
+    )
+    summary = summarize_by_window(frame)
+    for window in SUMMARY_WINDOWS:
+        assert window in summary
+        assert isinstance(summary[window]["net_pnl"], float)
+        assert isinstance(summary[window]["win_rate"], float)
+        assert summary[window]["win_rate"] == summary[window]["win_rate"]  # not NaN
+        assert summary[window]["net_pnl"] == summary[window]["net_pnl"]  # not NaN
+
+
+def test_refresh_best_effort_when_excursions_fail(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "ABC",
+                "qty": 10,
+                "entry_price": 10.0,
+                "exit_price": 11.0,
+                "entry_time": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                "exit_time": datetime(2024, 1, 2, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    trades.to_csv(data_dir / "trades_log.csv", index=False)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("scripts.trade_performance.compute_trade_excursions", boom)
+
+    cache_path = data_dir / "trade_performance_cache.json"
+    df, summary = refresh_trade_performance_cache(
+        base_dir=tmp_path, data_client=None, force=True, cache_path=cache_path
+    )
+    assert not df.empty
+    for window in SUMMARY_WINDOWS:
+        assert window in summary
+        assert summary[window]["win_rate"] >= 0.0
+        assert summary[window]["net_pnl"] >= 0.0
