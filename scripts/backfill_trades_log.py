@@ -5,8 +5,9 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import pandas as pd
 import requests
@@ -288,21 +289,11 @@ def _net_pnl(entry_side: str, entry_price: float, exit_price: float, qty: float)
 
 
 def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    positions: Dict[str, List[Dict[str, Any]]] = {}
+    open_lots: Dict[str, Deque[Dict[str, Any]]] = {}
     trades: List[Dict[str, Any]] = []
 
-    sorted_events = sorted(
-        (
-            e
-            for e in events
-            if _safe_str(e.get("symbol"))
-            and _safe_float(e.get("qty")) > 0
-            and _coerce_datetime(e.get("timestamp")) is not None
-        ),
-        key=lambda e: _coerce_datetime(e.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc),
-    )
-
-    for event in sorted_events:
+    validated_events: List[Tuple[int, Dict[str, Any]]] = []
+    for idx, event in enumerate(events):
         symbol = _safe_str(event.get("symbol")).upper()
         side = _safe_str(event.get("side")).lower()
         qty = _safe_float(event.get("qty"))
@@ -314,20 +305,46 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
         if not symbol or side not in {"buy", "sell"} or qty <= 0 or price == 0 or ts is None:
             continue
 
-        position = positions.setdefault(symbol, [])
-
-        if side == "buy":
-            position.append(
+        validated_events.append(
+            (
+                idx,
                 {
+                    "symbol": symbol,
                     "side": side,
                     "qty": qty,
-                    "initial_qty": qty,
                     "price": price,
                     "timestamp": ts,
                     "order_type": order_type,
                     "order_status": order_status,
-                    "sell_qty": 0.0,
-                    "sell_notional": 0.0,
+                },
+            )
+        )
+
+    sorted_events = sorted(
+        validated_events,
+        key=lambda e: (e[1]["timestamp"], e[0]),
+    )
+
+    for _, event in sorted_events:
+        symbol = event["symbol"]
+        side = event["side"]
+        qty = event["qty"]
+        price = event["price"]
+        ts = event["timestamp"]
+        order_type = event["order_type"]
+        order_status = event["order_status"]
+
+        lots = open_lots.setdefault(symbol, deque())
+
+        if side == "buy":
+            lots.append(
+                {
+                    "entry_qty": qty,
+                    "remaining_qty": qty,
+                    "entry_notional": qty * price,
+                    "entry_time": ts,
+                    "exit_qty": 0.0,
+                    "exit_notional": 0.0,
                     "exit_time": None,
                     "exit_order_type": "",
                     "exit_order_status": "",
@@ -336,51 +353,52 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
             continue
 
         remaining = qty
-        while remaining > 0 and position:
-            lot = position[0]
-            close_qty = min(remaining, lot["qty"])
-            lot["qty"] -= close_qty
-            lot["sell_qty"] += close_qty
-            lot["sell_notional"] += close_qty * price
+        while remaining > 0 and lots:
+            lot = lots[0]
+            match_qty = min(remaining, lot["remaining_qty"])
+            lot["remaining_qty"] -= match_qty
+            lot["exit_qty"] += match_qty
+            lot["exit_notional"] += match_qty * price
             lot["exit_time"] = ts if lot["exit_time"] is None or ts > lot["exit_time"] else lot["exit_time"]
-            if not lot["exit_order_type"] and order_type:
-                lot["exit_order_type"] = order_type
-            if not lot["exit_order_status"] and order_status:
+
+            if order_type:
+                if order_type == "trailing_stop" or not lot["exit_order_type"]:
+                    lot["exit_order_type"] = order_type
+            if order_status:
                 lot["exit_order_status"] = order_status
 
-            remaining -= close_qty
+            remaining -= match_qty
 
-            if lot["qty"] <= 0:
-                entry_qty = lot["initial_qty"]
-                exit_qty = lot["sell_qty"]
+            if lot["remaining_qty"] <= 0:
+                exit_qty = lot["exit_qty"]
+                entry_qty = lot["entry_qty"]
                 if exit_qty <= 0:
-                    position.pop(0)
+                    lots.popleft()
                     continue
 
-                entry_price = (lot["price"] * entry_qty) / entry_qty if entry_qty else 0.0
-                exit_price = lot["sell_notional"] / exit_qty if exit_qty else 0.0
-                exit_time = lot["exit_time"]
-                exit_order_type = lot["exit_order_type"] or lot.get("order_type", "")
+                entry_price = lot["entry_notional"] / entry_qty if entry_qty else 0.0
+                exit_price = lot["exit_notional"] / exit_qty if exit_qty else 0.0
+                exit_time = lot["exit_time"] or ts
+                exit_order_type = lot["exit_order_type"]
                 exit_reason = "TrailingStop" if exit_order_type == "trailing_stop" else ""
 
-                if entry_price and exit_price and exit_time is not None:
-                    trades.append(
-                        {
-                            "symbol": symbol,
-                            "qty": exit_qty,
-                            "entry_price": entry_price,
-                            "exit_price": exit_price,
-                            "entry_time": _isoformat(lot["timestamp"]),
-                            "exit_time": _isoformat(exit_time),
-                            "net_pnl": _net_pnl("buy", entry_price, exit_price, exit_qty),
-                            "side": "buy",
-                            "order_status": lot.get("exit_order_status") or "filled",
-                            "order_type": exit_order_type,
-                            "exit_reason": exit_reason,
-                        }
-                    )
+                trades.append(
+                    {
+                        "symbol": symbol,
+                        "qty": exit_qty,
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "entry_time": _isoformat(lot["entry_time"]),
+                        "exit_time": _isoformat(exit_time),
+                        "net_pnl": _net_pnl("buy", entry_price, exit_price, exit_qty),
+                        "side": "buy",
+                        "order_status": lot.get("exit_order_status") or "filled",
+                        "order_type": exit_order_type,
+                        "exit_reason": exit_reason,
+                    }
+                )
 
-                position.pop(0)
+                lots.popleft()
 
     return trades
 
