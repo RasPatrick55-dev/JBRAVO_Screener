@@ -58,6 +58,76 @@ def _ensure_number(value: Any) -> float:
         return 0.0
 
 
+def fetch_with_backoff(
+    fetcher: Callable[[], pd.DataFrame],
+    *,
+    max_attempts: int = 5,
+    base_delay: float = 1.0,
+) -> pd.DataFrame:
+    """Fetch data with exponential backoff when Alpaca responds with 429.
+
+    Returns an empty DataFrame after exhausting retries to allow best-effort callers
+    to continue processing other trades.
+    """
+
+    delay = base_delay
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fetcher()
+        except Exception as exc:  # pragma: no cover - exercised via integration
+            status = getattr(exc, "status_code", None) or getattr(getattr(exc, "error", None), "code", None)
+            if status == 429 or "429" in str(exc):
+                if attempt == max_attempts:
+                    logger.warning("Alpaca 429 rate limit reached after %s attempts.", attempt)
+                    break
+                time.sleep(delay)
+                delay *= 2
+                continue
+            logger.debug("Backoff fetch failed (attempt %s/%s): %s", attempt, max_attempts, exc, exc_info=True)
+            break
+    return pd.DataFrame()
+
+
+def fetch_with_backoff(
+    fetcher: Callable[[], pd.DataFrame],
+    *,
+    max_attempts: int = 5,
+    base_delay: float = 1.0,
+) -> pd.DataFrame:
+    """Fetch data with exponential backoff when Alpaca responds with 429.
+
+    Returns an empty DataFrame after exhausting retries to allow best-effort callers
+    to continue processing other trades.
+    """
+
+    delay = base_delay
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fetcher()
+        except Exception as exc:  # pragma: no cover - exercised via integration
+            status = getattr(exc, "status_code", None) or getattr(
+                getattr(exc, "error", None), "code", None
+            )
+            if status == 429 or "429" in str(exc):
+                if attempt == max_attempts:
+                    logger.warning(
+                        "Alpaca 429 rate limit reached after %s attempts.", attempt
+                    )
+                    break
+                time.sleep(delay)
+                delay *= 2
+                continue
+            logger.debug(
+                "Backoff fetch failed (attempt %s/%s): %s",
+                attempt,
+                max_attempts,
+                exc,
+                exc_info=True,
+            )
+            break
+    return pd.DataFrame()
+
+
 def _normalize_pnl(df: pd.DataFrame) -> pd.DataFrame:
     for candidate in ("net_pnl", "pnl", "netPnL", "net_pnl_usd"):
         if candidate in df.columns:
@@ -128,26 +198,15 @@ def fetch_bars_with_backoff(
 ) -> pd.DataFrame:
     if data_client is None:
         return pd.DataFrame()
-    delay = base_delay
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = data_client.get_stock_bars(request)
-            candidate = getattr(response, "df", pd.DataFrame())
-            if candidate is None:
-                return pd.DataFrame()
-            return _normalize_bars_frame(candidate)
-        except Exception as exc:
-            status = getattr(exc, "status_code", None) or getattr(getattr(exc, "error", None), "code", None)
-            if status == 429 or "429" in str(exc):
-                if attempt == max_attempts:
-                    logger.warning("Alpaca 429 rate limit reached after %s attempts.", attempt)
-                    break
-                time.sleep(delay)
-                delay *= 2
-                continue
-            logger.debug("Bar fetch failed (attempt %s/%s): %s", attempt, max_attempts, exc, exc_info=True)
-            break
-    return pd.DataFrame()
+
+    def _do_fetch() -> pd.DataFrame:
+        response = data_client.get_stock_bars(request)
+        candidate = getattr(response, "df", pd.DataFrame())
+        if candidate is None:
+            return pd.DataFrame()
+        return _normalize_bars_frame(candidate)
+
+    return fetch_with_backoff(_do_fetch, max_attempts=max_attempts, base_delay=base_delay)
 
 
 def _fetch_bars_for_trade(
@@ -157,6 +216,8 @@ def _fetch_bars_for_trade(
     data_client: StockHistoricalDataClient | None,
     feed: str,
     bar_fetcher: BarsFetcher | None = None,
+    *,
+    use_intraday: bool = False,
 ) -> pd.DataFrame:
     if bar_fetcher is not None:
         try:
@@ -170,11 +231,9 @@ def _fetch_bars_for_trade(
     if data_client is None:
         return pd.DataFrame()
 
-    timeframe_candidates: list[Any] = [
-        TimeFrame.Day,
-        TimeFrame.Hour,
-        TimeFrame(15, TimeFrameUnit.Minute),
-    ]
+    timeframe_candidates: list[Any] = [TimeFrame.Day]
+    if use_intraday:
+        timeframe_candidates.extend([TimeFrame.Hour, TimeFrame(15, TimeFrameUnit.Minute)])
     for timeframe in timeframe_candidates:
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
@@ -223,11 +282,18 @@ def compute_trade_excursions(
         exit_ts = row.get("exit_time")
         entry_price = _safe_to_float(row.get("entry_price"))
         exit_price = _safe_to_float(row.get("exit_price"))
+        exit_reason = _infer_exit_reason(row)
+        trailing_pct = _safe_to_float(
+            row.get("trailing_pct")
+            or row.get("trailing_percent")
+            or row.get("trailing_stop_pct")
+        )
+        estimated_peak = exit_price / 0.97 if exit_reason == "TrailingStop" and trailing_pct == 3.0 and exit_price else None
 
         if not isinstance(entry_ts, pd.Timestamp) or pd.isna(entry_ts) or not isinstance(exit_ts, pd.Timestamp):
-            peak_prices.append(entry_price or exit_price or None)
-            trough_prices.append(entry_price or exit_price or None)
-            post_exit_peaks.append(exit_price or entry_price or None)
+            peak_prices.append(estimated_peak if estimated_peak is not None else np.nan)
+            trough_prices.append(np.nan)
+            post_exit_peaks.append(estimated_peak if estimated_peak is not None else np.nan)
             continue
 
         start = entry_ts.to_pydatetime()
@@ -236,19 +302,9 @@ def compute_trade_excursions(
 
         bars = _fetch_bars_for_trade(symbol, start, post_end, data_client, feed, bar_fetcher=bar_fetcher)
         if bars.empty:
-            exit_reason = _infer_exit_reason(row)
-            trailing_pct = _safe_to_float(
-                row.get("trailing_pct")
-                or row.get("trailing_percent")
-                or row.get("trailing_stop_pct")
-            )
-            fallback_peak = max(filter(lambda v: v is not None, (entry_price, exit_price)), default=None)
-            fallback_trough = min(filter(lambda v: v is not None, (entry_price, exit_price)), default=None)
-            if exit_reason == "TrailingStop" and trailing_pct == 3.0 and exit_price:
-                fallback_peak = exit_price / 0.97
-            peak_prices.append(fallback_peak)
-            trough_prices.append(fallback_trough)
-            post_exit_peaks.append(fallback_peak or fallback_trough)
+            peak_prices.append(estimated_peak if estimated_peak is not None else np.nan)
+            trough_prices.append(np.nan)
+            post_exit_peaks.append(estimated_peak if estimated_peak is not None else np.nan)
             continue
 
         window_bars = bars[(bars["timestamp"] >= start) & (bars["timestamp"] <= end)]
@@ -273,8 +329,11 @@ def compute_trade_excursions(
         if trough is None and "close" in window_bars.columns:
             trough = _series_trough(window_bars["close"])
 
-        peak_prices.append(peak if peak is not None else entry_price or exit_price)
-        trough_prices.append(trough if trough is not None else entry_price or exit_price)
+        if peak is None and estimated_peak is not None:
+            peak = estimated_peak
+
+        peak_prices.append(peak if peak is not None else np.nan)
+        trough_prices.append(trough if trough is not None else (entry_price or exit_price or np.nan))
 
         post_peak = _series_peak(post_bars.get("high", pd.Series(dtype=float))) or _series_peak(
             post_bars.get("close", pd.Series(dtype=float))
@@ -328,7 +387,9 @@ def compute_exit_quality_columns(
     exit_price = frame.get("exit_price")
     peak_price = frame.get("peak_price")
     trough_price = frame.get("trough_price")
-    post_exit_peak = frame.get("post_exit_peak")
+    post_exit_peak = frame.get("post_exit_peak", pd.Series(dtype=float))
+    if post_exit_peak is None or len(post_exit_peak) != len(frame):
+        post_exit_peak = pd.Series(np.nan, index=frame.index)
 
     frame["return_pct"] = np.where(
         entry_price > 0,
@@ -354,10 +415,11 @@ def compute_exit_quality_columns(
         np.nan,
     )
 
+    valid_peak_mask = (peak_price.notna()) & (entry_price.notna()) & (peak_price > entry_price)
     exit_eff = np.where(
-        peak_price > 0,
+        valid_peak_mask,
         (exit_price / peak_price) * 100,
-        np.nan,
+        0.0,
     )
     frame["exit_efficiency_pct"] = np.clip(exit_eff, 0, 100)
     frame["missed_profit_pct"] = np.where(
@@ -396,7 +458,7 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
     }
     summaries: dict[str, dict[str, float]] = {}
 
-    pnl_series = df.get("pnl") if "pnl" in df.columns else df.get("net_pnl")
+    pnl_series = _compute_pnl_series(df)
 
     for label, cutoff in windows.items():
         subset = df
@@ -405,14 +467,16 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         trades = int(len(subset.index))
         return_series = subset.get("return_pct", pd.Series(dtype=float))
         avg_return = _ensure_number(return_series.mean(skipna=True)) if trades else 0.0
-        win_rate = _ensure_number((return_series > 0).mean() * 100) if trades else 0.0
+
+        subset_pnl = pnl_series.loc[subset.index] if not pnl_series.empty else pd.Series(dtype=float)
+        wins = int((subset_pnl > 0).sum()) if trades else 0
+        win_rate = (wins / trades * 100.0) if trades else 0.0
+
         hold_days = _ensure_number(subset.get("hold_days", pd.Series(dtype=float)).mean(skipna=True)) if trades else 0.0
         exit_eff_series = subset.get("exit_efficiency_pct", pd.Series(dtype=float))
         exit_eff = _ensure_number(exit_eff_series.mean(skipna=True)) if trades else 0.0
         sold_soon = int(subset.get("sold_too_soon", pd.Series(dtype=bool)).sum()) if trades else 0
-        total_pnl = (
-            _ensure_number(np.nansum(pnl_series.loc[subset.index])) if trades and pnl_series is not None else 0.0
-        )
+        total_pnl = _ensure_number(np.nansum(subset_pnl)) if trades else 0.0
         summaries[label] = {
             "trades": trades,
             "avg_return_pct": avg_return,
@@ -455,6 +519,19 @@ def _coerce_json(value: Any) -> Any:
     if isinstance(value, (pd.Timedelta,)):
         return value.total_seconds()
     return value
+
+
+def _compute_pnl_series(df: pd.DataFrame) -> pd.Series:
+    if "pnl" in df.columns:
+        return pd.to_numeric(df["pnl"], errors="coerce")
+    if "net_pnl" in df.columns:
+        return pd.to_numeric(df["net_pnl"], errors="coerce")
+    if {"qty", "entry_price", "exit_price"}.issubset(df.columns):
+        exit_price = pd.to_numeric(df["exit_price"], errors="coerce")
+        entry_price = pd.to_numeric(df["entry_price"], errors="coerce")
+        qty = pd.to_numeric(df["qty"], errors="coerce")
+        return (exit_price - entry_price) * qty
+    return pd.Series(dtype=float)
 
 
 def _parse_mtime(value: Any) -> float | None:
@@ -649,6 +726,7 @@ __all__ = [
     "compute_trade_excursions",
     "is_cache_stale",
     "load_trades_log",
+    "fetch_with_backoff",
     "read_cache",
     "refresh_trade_performance_cache",
     "summarize_by_window",
