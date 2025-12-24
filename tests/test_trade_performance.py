@@ -4,6 +4,8 @@ import pandas as pd
 import pytest
 
 from scripts.trade_performance import (
+    cache_refresh_summary_token,
+    read_cache,
     SUMMARY_WINDOWS,
     compute_exit_quality_columns,
     compute_rebound_metrics,
@@ -19,6 +21,15 @@ pytestmark = pytest.mark.alpaca_optional
 def test_load_trades_log_handles_missing(tmp_path):
     df = load_trades_log(tmp_path)
     assert df.empty
+
+
+def test_cache_refresh_summary_token_includes_counts():
+    token = cache_refresh_summary_token(10, 3, {"7D": {}, "ALL": {}}, 400, 0)
+    assert "trades_total=10" in token
+    assert "trades_enriched=3" in token
+    assert "lookback_days=400" in token
+    assert "windows=7D,ALL" in token
+    assert token.endswith("rc=0")
 
 
 def test_trade_excursions_and_exit_quality_bounds():
@@ -178,6 +189,105 @@ def test_refresh_best_effort_when_excursions_fail(tmp_path, monkeypatch):
         assert window in summary
         assert summary[window]["win_rate"] >= 0.0
         assert summary[window]["net_pnl"] >= 0.0
+
+
+def test_refresh_uses_full_history_and_enrichment_mask(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "OLD",
+                "qty": 10,
+                "entry_price": 5.0,
+                "exit_price": 6.0,
+                "entry_time": now - timedelta(days=500, hours=2),
+                "exit_time": now - timedelta(days=500),
+            },
+            {
+                "symbol": "NEW",
+                "qty": 8,
+                "entry_price": 15.0,
+                "exit_price": 16.0,
+                "entry_time": now - timedelta(days=3),
+                "exit_time": now - timedelta(days=1),
+            },
+        ]
+    )
+    trades.to_csv(data_dir / "trades_log.csv", index=False)
+
+    calls: list[str] = []
+
+    def fake_fetch(symbol, start, end, _timeframe):
+        calls.append(symbol)
+        return pd.DataFrame(
+            {
+                "timestamp": [start + timedelta(hours=1), end - timedelta(hours=1)],
+                "high": [float(symbol != "OLD") + 16.0, float(symbol != "OLD") + 16.5],
+                "low": [15.0, 15.5],
+                "close": [15.5, 16.1],
+            }
+        )
+
+    cache_path = data_dir / "trade_performance_cache.json"
+    df, summary = refresh_trade_performance_cache(
+        base_dir=tmp_path,
+        data_client=None,
+        lookback_days=30,
+        force=True,
+        cache_path=cache_path,
+        bar_fetcher=fake_fetch,
+    )
+    payload = read_cache(cache_path)
+
+    assert summary["ALL"]["trades"] == 2
+    assert summary["ALL"]["net_pnl"] == pytest.approx((6 - 5) * 10 + (16 - 15) * 8)
+    assert summary["30D"]["trades"] == 1
+    assert int(df["needs_enrichment"].sum()) == 1
+    assert payload["trades_total"] == 2
+    assert payload["trades_enriched"] == 1
+    assert payload["lookback_days_used"] == 30
+    assert len(calls) == 1
+
+
+def test_refresh_skips_enrichment_outside_lookback(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "OLD",
+                "qty": 5,
+                "entry_price": 20.0,
+                "exit_price": 22.0,
+                "entry_time": now - timedelta(days=100),
+                "exit_time": now - timedelta(days=90),
+            }
+        ]
+    )
+    trades.to_csv(data_dir / "trades_log.csv", index=False)
+
+    def boom_fetch(*_args, **_kwargs):
+        raise AssertionError("Enrichment should not run for trades outside lookback.")
+
+    cache_path = data_dir / "trade_performance_cache.json"
+    df, summary = refresh_trade_performance_cache(
+        base_dir=tmp_path,
+        data_client=None,
+        lookback_days=7,
+        force=True,
+        cache_path=cache_path,
+        bar_fetcher=boom_fetch,
+    )
+    payload = read_cache(cache_path)
+
+    assert summary["ALL"]["trades"] == 1
+    assert summary["ALL"]["net_pnl"] == pytest.approx((22 - 20) * 5)
+    assert int(df["needs_enrichment"].sum()) == 0
+    assert payload["trades_enriched"] == 0
+    assert payload["trades_total"] == 1
 
 
 def test_exit_efficiency_zero_when_peak_missing_or_below_entry():

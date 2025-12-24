@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Iterable, Optional
 
+import pandas as pd
 from utils.env import load_env
 
 from scripts.trade_performance import (
@@ -34,7 +35,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--lookback-days",
         type=int,
         default=DEFAULT_LOOKBACK_DAYS,
-        help="Lookback horizon for trade performance calculations (default: 400).",
+        help="Lookback horizon for trade enrichment (default: 400).",
     )
     parser.add_argument(
         "--force",
@@ -71,11 +72,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             force=bool(args.force),
             cache_path=cache_path,
         )
-        token = cache_refresh_summary_token(len(df.index), summary, rc)
+        enrichment_flags = df.get("needs_enrichment", [])
+        trades_enriched = int(pd.Series(enrichment_flags, dtype=bool).sum()) if len(df.index) else 0
+        token = cache_refresh_summary_token(len(df.index), trades_enriched, summary, int(args.lookback_days), rc)
     except Exception:
         LOG.exception("TRADE_PERFORMANCE_REFRESH_FAILED")
         rc = 1
-        token = cache_refresh_summary_token(0, {}, rc)
+        token = cache_refresh_summary_token(0, 0, {}, int(args.lookback_days), rc)
 
     print(token)
     return rc

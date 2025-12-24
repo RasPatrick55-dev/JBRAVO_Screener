@@ -281,7 +281,6 @@ def compute_trade_excursions(
     *,
     bar_fetcher: BarsFetcher | None = None,
     post_exit_days: int = DEFAULT_REBOUND_DAYS,
-    lookback_days: int | None = None,
 ) -> pd.DataFrame:
     """Compute per-trade excursions (MFE/MAE) using intraday bars."""
 
@@ -291,10 +290,6 @@ def compute_trade_excursions(
     feed = os.getenv("ALPACA_DATA_FEED", "iex")
 
     frame = df.copy()
-    now = datetime.now(timezone.utc)
-    if lookback_days is not None and "exit_time" in frame.columns:
-        cutoff = now - timedelta(days=lookback_days)
-        frame = frame[frame["exit_time"] >= cutoff]
 
     peak_prices: list[float | None] = []
     trough_prices: list[float | None] = []
@@ -693,6 +688,9 @@ def write_cache(
     path: Path | str = CACHE_PATH,
     *,
     trades_log_time: float | None = None,
+    trades_total: int | None = None,
+    trades_enriched: int | None = None,
+    lookback_days_used: int | None = None,
 ) -> Path:
     """Persist cache to disk."""
 
@@ -714,6 +712,9 @@ def write_cache(
         "summary": summary,
         "trades": records,
         "trades_log_time": trades_log_iso,
+        "trades_total": trades_total,
+        "trades_enriched": trades_enriched,
+        "lookback_days_used": lookback_days_used,
     }
     atomic_write_bytes(target, json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"))
     return target
@@ -791,60 +792,103 @@ def refresh_trade_performance_cache(
     trades_df = load_trades_log(base)
     if trades_df.empty:
         summary = summarize_by_window(trades_df)
-        write_cache(trades_df, summary, cache, trades_log_time=None)
+        write_cache(
+            trades_df,
+            summary,
+            cache,
+            trades_log_time=None,
+            trades_total=0,
+            trades_enriched=0,
+            lookback_days_used=lookback_days,
+        )
         return trades_df, summary
 
+    prepared = _prepare_summary_frame(trades_df)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=lookback_days)
+    needs_enrichment = pd.Series(False, index=prepared.index)
+    if "exit_time" in prepared.columns:
+        exit_times = prepared["exit_time"]
+        needs_enrichment = exit_times >= cutoff
+
+    enrichment_mask = needs_enrichment.fillna(False)
+    enrichment_candidates = prepared[enrichment_mask]
+
+    excursions_frame = prepared.copy()
+    excursions_frame["needs_enrichment"] = enrichment_mask
+    for col in ("peak_price", "trough_price", "post_exit_peak"):
+        if col not in excursions_frame.columns:
+            excursions_frame[col] = np.nan
+
     try:
-        excursions = compute_trade_excursions(
-            trades_df,
+        excursions_enriched = compute_trade_excursions(
+            enrichment_candidates,
             data_client,
-            lookback_days=lookback_days,
             bar_fetcher=bar_fetcher,
         )
+        if not excursions_enriched.empty:
+            for col in ("peak_price", "trough_price", "post_exit_peak"):
+                excursions_frame.loc[enrichment_mask, col] = excursions_enriched[col].values
     except Exception:
         logger.warning("Excursion enrichment failed; proceeding without peaks.", exc_info=True)
-        excursions = trades_df.copy()
         for col in ("peak_price", "trough_price", "post_exit_peak"):
-            if col not in excursions.columns:
-                excursions[col] = np.nan
+            if col not in excursions_frame.columns:
+                excursions_frame[col] = np.nan
     try:
-        enriched = compute_exit_quality_columns(excursions)
+        enriched = compute_exit_quality_columns(excursions_frame)
     except Exception:
         logger.warning("Exit quality enrichment failed; proceeding with raw trades.", exc_info=True)
-        enriched = _prepare_summary_frame(excursions)
+        enriched = _prepare_summary_frame(excursions_frame)
         for col, default in (("hold_days", 0.0), ("exit_efficiency_pct", 0.0), ("sold_too_soon", 0)):
             if col not in enriched.columns:
                 enriched[col] = default
         for col in ("mfe_pct", "mae_pct", "missed_profit_pct"):
             if col not in enriched.columns:
                 enriched[col] = np.nan
+
+    rebound_frame = enriched.copy()
+    for col, default in (
+        ("rebound_window_days", DEFAULT_REBOUND_DAYS),
+        ("post_exit_high", np.nan),
+        ("rebound_pct", np.nan),
+        ("rebounded", False),
+    ):
+        if col not in rebound_frame.columns:
+            rebound_frame[col] = default
     try:
-        rebound_enriched = compute_rebound_metrics(
-            enriched,
+        rebound_candidates = enriched[enrichment_mask]
+        rebound_enriched_subset = compute_rebound_metrics(
+            rebound_candidates,
             data_client,
             rebound_window_days=DEFAULT_REBOUND_DAYS,
             rebound_threshold_pct=DEFAULT_REBOUND_THRESHOLD_PCT,
             bar_fetcher=bar_fetcher,
         )
+        if not rebound_enriched_subset.empty:
+            for col in ("rebound_window_days", "post_exit_high", "rebound_pct", "rebounded", "is_trailing_stop_exit"):
+                if col in rebound_enriched_subset.columns:
+                    rebound_frame.loc[enrichment_mask, col] = rebound_enriched_subset[col].values
     except Exception:
         logger.warning("Rebound enrichment failed; proceeding without rebound metrics.", exc_info=True)
-        rebound_enriched = enriched.copy()
-        for col, default in (
-            ("rebound_window_days", DEFAULT_REBOUND_DAYS),
-            ("post_exit_high", np.nan),
-            ("rebound_pct", np.nan),
-            ("rebounded", False),
-            ("is_trailing_stop_exit", False),
-        ):
-            if col not in rebound_enriched.columns:
-                rebound_enriched[col] = default
-    summary = summarize_by_window(rebound_enriched)
+        if "is_trailing_stop_exit" not in rebound_frame.columns:
+            rebound_frame["is_trailing_stop_exit"] = False
+    summary = summarize_by_window(rebound_frame)
     try:
         trades_mtime = trades_log.stat().st_mtime
     except Exception:
         trades_mtime = None
-    write_cache(rebound_enriched, summary, cache, trades_log_time=trades_mtime)
-    return rebound_enriched, summary
+    trades_total = int(len(prepared.index))
+    trades_enriched = int(enrichment_mask.sum())
+    write_cache(
+        rebound_frame,
+        summary,
+        cache,
+        trades_log_time=trades_mtime,
+        trades_total=trades_total,
+        trades_enriched=trades_enriched,
+        lookback_days_used=lookback_days,
+    )
+    return rebound_frame, summary
 
 
 def build_data_client() -> StockHistoricalDataClient | None:
@@ -859,9 +903,19 @@ def build_data_client() -> StockHistoricalDataClient | None:
         return None
 
 
-def cache_refresh_summary_token(trades: int, summary: Mapping[str, Any], rc: int) -> str:
+def cache_refresh_summary_token(
+    trades_total: int,
+    trades_enriched: int,
+    summary: Mapping[str, Any],
+    lookback_days: int,
+    rc: int,
+) -> str:
     windows = ",".join(summary.keys()) if summary else ""
-    return f"[INFO] TRADEPERF_REFRESH trades={trades} windows={windows} rc={rc}"
+    return (
+        f"[INFO] TRADEPERF_REFRESH trades_total={trades_total} "
+        f"trades_enriched={trades_enriched} lookback_days={lookback_days} "
+        f"windows={windows} rc={rc}"
+    )
 
 
 __all__ = [
