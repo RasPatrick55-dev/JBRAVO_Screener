@@ -1,0 +1,546 @@
+"""Trade performance metrics, excursions, and cache management."""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+import numpy as np
+import pandas as pd
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
+from utils import atomic_write_bytes
+from utils.env import get_alpaca_creds
+
+logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(os.environ.get("JBRAVO_HOME", Path(__file__).resolve().parents[1]))
+DATA_DIR = BASE_DIR / "data"
+TRADES_LOG_PATH = DATA_DIR / "trades_log.csv"
+CACHE_PATH = DATA_DIR / "trade_performance_cache.json"
+CACHE_MAX_AGE_HOURS = 6
+MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "7"))
+DEFAULT_LOOKBACK_DAYS = 400
+DEFAULT_MISSED_PROFIT_THRESHOLD = 3.0
+DEFAULT_EXIT_EFFICIENCY_THRESHOLD = 60.0
+DEFAULT_REBOUND_DAYS = 5
+DEFAULT_REBOUND_THRESHOLD_PCT = 3.0
+
+BarsFetcher = Callable[[str, datetime, datetime, Any], pd.DataFrame]
+
+
+def _safe_to_float(value: Any) -> float | None:
+    try:
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _normalize_pnl(df: pd.DataFrame) -> pd.DataFrame:
+    for candidate in ("net_pnl", "pnl", "netPnL", "net_pnl_usd"):
+        if candidate in df.columns:
+            if candidate != "pnl":
+                df = df.rename(columns={candidate: "pnl"})
+            break
+    return df
+
+
+def load_trades_log(base_dir: Path | str | None = None) -> pd.DataFrame:
+    """Load trades_log.csv with safe defaults and normalized columns."""
+
+    base = Path(base_dir) if base_dir else BASE_DIR
+    path = Path(base) / "data" / "trades_log.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        logger.warning("Unable to read trades log at %s", path, exc_info=True)
+        return pd.DataFrame()
+
+    df = _normalize_pnl(df)
+    if "symbol" in df.columns:
+        df["symbol"] = (
+            df["symbol"].astype("string").str.upper().str.strip().fillna("")
+        )
+    for col in ("entry_time", "exit_time"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
+    for price_col in ("entry_price", "exit_price"):
+        if price_col in df.columns:
+            df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
+    if "qty" in df.columns:
+        df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
+    if "pnl" not in df.columns and {"qty", "entry_price", "exit_price"}.issubset(df.columns):
+        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["qty"]
+    df = df.dropna(subset=["symbol"])
+    if "exit_time" in df.columns:
+        df = df.dropna(subset=["exit_time"])
+    return df
+
+
+def _normalize_bars_frame(df: pd.DataFrame) -> pd.DataFrame:
+    frame = df.copy()
+    if isinstance(frame.index, pd.MultiIndex):
+        frame = frame.reset_index()
+    if "timestamp" not in frame.columns and frame.index.name == "timestamp":
+        frame = frame.reset_index()
+    if "timestamp" not in frame.columns and "time" in frame.columns:
+        frame = frame.rename(columns={"time": "timestamp"})
+    if "timestamp" not in frame.columns:
+        frame["timestamp"] = frame.index
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+    for col in ("high", "low", "close", "open"):
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    frame.dropna(subset=["timestamp"], inplace=True)
+    return frame
+
+
+def _fetch_bars_for_trade(
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    data_client: StockHistoricalDataClient | None,
+    feed: str,
+    bar_fetcher: BarsFetcher | None = None,
+) -> pd.DataFrame:
+    if bar_fetcher is not None:
+        try:
+            fetched = bar_fetcher(symbol, start, end, None)
+            if isinstance(fetched, pd.DataFrame):
+                normalized = _normalize_bars_frame(fetched)
+                if not normalized.empty:
+                    return normalized
+        except Exception:
+            logger.debug("Custom bar_fetcher failed for %s", symbol, exc_info=True)
+    if data_client is None:
+        return pd.DataFrame()
+
+    timeframes: list[Any] = [
+        TimeFrame(5, TimeFrameUnit.Minute),
+        TimeFrame(15, TimeFrameUnit.Minute),
+        TimeFrame.Hour,
+        TimeFrame.Day,
+    ]
+    for timeframe in timeframes:
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+                feed=feed,
+            )
+            response = data_client.get_stock_bars(request)
+            candidate = getattr(response, "df", pd.DataFrame())
+            if candidate is None or candidate.empty:
+                continue
+            bars = _normalize_bars_frame(candidate)
+            if bars.empty:
+                continue
+            bars = bars[(bars["timestamp"] >= start) & (bars["timestamp"] <= end)]
+            if not bars.empty:
+                return bars
+        except Exception:
+            logger.debug(
+                "Failed to fetch bars for %s timeframe=%s", symbol, timeframe, exc_info=True
+            )
+            continue
+    return pd.DataFrame()
+
+
+def compute_trade_excursions(
+    df: pd.DataFrame,
+    data_client: StockHistoricalDataClient | None,
+    *,
+    bar_fetcher: BarsFetcher | None = None,
+    post_exit_days: int = DEFAULT_REBOUND_DAYS,
+    lookback_days: int | None = None,
+) -> pd.DataFrame:
+    """Compute per-trade excursions (MFE/MAE) using intraday bars."""
+
+    if df.empty:
+        return df
+
+    feed = os.getenv("ALPACA_DATA_FEED", "iex")
+
+    frame = df.copy()
+    now = datetime.now(timezone.utc)
+    if lookback_days is not None and "exit_time" in frame.columns:
+        cutoff = now - timedelta(days=lookback_days)
+        frame = frame[frame["exit_time"] >= cutoff]
+
+    peak_prices: list[float | None] = []
+    trough_prices: list[float | None] = []
+    post_exit_peaks: list[float | None] = []
+
+    for _, row in frame.iterrows():
+        symbol = str(row.get("symbol") or "").upper()
+        entry_ts = row.get("entry_time")
+        exit_ts = row.get("exit_time")
+        entry_price = _safe_to_float(row.get("entry_price"))
+        exit_price = _safe_to_float(row.get("exit_price"))
+
+        if not isinstance(entry_ts, pd.Timestamp) or pd.isna(entry_ts) or not isinstance(exit_ts, pd.Timestamp):
+            peak_prices.append(entry_price or exit_price or None)
+            trough_prices.append(entry_price or exit_price or None)
+            post_exit_peaks.append(exit_price or entry_price or None)
+            continue
+
+        start = entry_ts.to_pydatetime()
+        end = exit_ts.to_pydatetime()
+        post_end = end + timedelta(days=max(post_exit_days, 0))
+
+        bars = _fetch_bars_for_trade(symbol, start, post_end, data_client, feed, bar_fetcher=bar_fetcher)
+        if bars.empty:
+            fallback_peak = max(filter(lambda v: v is not None, (entry_price, exit_price)), default=None)
+            fallback_trough = min(filter(lambda v: v is not None, (entry_price, exit_price)), default=None)
+            peak_prices.append(fallback_peak)
+            trough_prices.append(fallback_trough)
+            post_exit_peaks.append(fallback_peak or fallback_trough)
+            continue
+
+        window_bars = bars[(bars["timestamp"] >= start) & (bars["timestamp"] <= end)]
+        post_bars = bars[(bars["timestamp"] > end)]
+
+        def _series_peak(candidate: pd.Series) -> float | None:
+            if candidate.empty:
+                return None
+            value = candidate.max()
+            return float(value) if not pd.isna(value) else None
+
+        def _series_trough(candidate: pd.Series) -> float | None:
+            if candidate.empty:
+                return None
+            value = candidate.min()
+            return float(value) if not pd.isna(value) else None
+
+        peak = _series_peak(window_bars.get("high", pd.Series(dtype=float)))
+        trough = _series_trough(window_bars.get("low", pd.Series(dtype=float)))
+        if peak is None and "close" in window_bars.columns:
+            peak = _series_peak(window_bars["close"])
+        if trough is None and "close" in window_bars.columns:
+            trough = _series_trough(window_bars["close"])
+
+        peak_prices.append(peak if peak is not None else entry_price or exit_price)
+        trough_prices.append(trough if trough is not None else entry_price or exit_price)
+
+        post_peak = _series_peak(post_bars.get("high", pd.Series(dtype=float))) or _series_peak(
+            post_bars.get("close", pd.Series(dtype=float))
+        )
+        post_exit_peaks.append(post_peak if post_peak is not None else peak_prices[-1])
+
+    frame["peak_price"] = peak_prices
+    frame["trough_price"] = trough_prices
+    frame["post_exit_peak"] = post_exit_peaks
+    return frame
+
+
+def _infer_exit_reason(row: Mapping[str, Any]) -> str:
+    raw_reason = row.get("exit_reason") or row.get("reason")
+    if isinstance(raw_reason, str) and raw_reason.strip():
+        return raw_reason.strip()
+
+    haystack_parts: list[str] = []
+    for key in ("order_type", "notes", "exit_notes"):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            haystack_parts.append(value)
+    haystack = " ".join(haystack_parts).lower()
+    hold_days = _safe_to_float(row.get("hold_days")) or 0.0
+
+    if "trail" in haystack or "trailing" in haystack:
+        return "TrailingStop"
+    if hold_days >= MAX_HOLD_DAYS:
+        return "MaxHold"
+    return "Other"
+
+
+def compute_exit_quality_columns(
+    df: pd.DataFrame,
+    *,
+    missed_profit_threshold: float = DEFAULT_MISSED_PROFIT_THRESHOLD,
+    exit_eff_threshold: float = DEFAULT_EXIT_EFFICIENCY_THRESHOLD,
+    rebound_threshold_pct: float = DEFAULT_REBOUND_THRESHOLD_PCT,
+) -> pd.DataFrame:
+    """Add return_pct, hold_days, exit efficiency, and sold-too-soon signals."""
+
+    if df.empty:
+        return df
+    frame = df.copy()
+
+    for col in ("entry_price", "exit_price", "peak_price", "trough_price", "post_exit_peak"):
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+
+    entry_price = frame.get("entry_price")
+    exit_price = frame.get("exit_price")
+    peak_price = frame.get("peak_price")
+    trough_price = frame.get("trough_price")
+    post_exit_peak = frame.get("post_exit_peak")
+
+    frame["return_pct"] = np.where(
+        entry_price > 0, (exit_price - entry_price) / entry_price * 100, np.nan
+    )
+
+    if "entry_time" in frame.columns and "exit_time" in frame.columns:
+        entry_ts = pd.to_datetime(frame["entry_time"], utc=True, errors="coerce")
+        exit_ts = pd.to_datetime(frame["exit_time"], utc=True, errors="coerce")
+        frame["hold_days"] = (exit_ts - entry_ts).dt.total_seconds() / (24 * 3600)
+    else:
+        frame["hold_days"] = np.nan
+
+    frame["mfe_pct"] = np.where(
+        (entry_price > 0) & (peak_price.notna()),
+        (peak_price - entry_price) / entry_price * 100,
+        np.nan,
+    )
+    frame["mae_pct"] = np.where(
+        (entry_price > 0) & (trough_price.notna()),
+        (trough_price - entry_price) / entry_price * 100,
+        np.nan,
+    )
+
+    exit_eff = np.where(
+        peak_price > 0,
+        (exit_price / peak_price) * 100,
+        np.nan,
+    )
+    frame["exit_efficiency_pct"] = np.clip(exit_eff, 0, 100)
+    frame["missed_profit_pct"] = np.where(
+        peak_price > 0,
+        (peak_price - exit_price) / peak_price * 100,
+        np.nan,
+    )
+    frame["post_exit_rebound"] = np.where(
+        (post_exit_peak.notna()) & (exit_price.notna()),
+        post_exit_peak >= exit_price * (1 + rebound_threshold_pct / 100),
+        False,
+    )
+
+    if "exit_reason" not in frame.columns:
+        frame["exit_reason"] = [
+            _infer_exit_reason(row) for row in frame.to_dict(orient="records")
+        ]
+
+    frame["sold_too_soon"] = (
+        (frame["missed_profit_pct"] > missed_profit_threshold)
+        | (frame["exit_efficiency_pct"] < exit_eff_threshold)
+        | frame["post_exit_rebound"].fillna(False)
+    )
+    return frame
+
+
+def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
+    """Summarize trades for predefined time windows."""
+
+    now = datetime.now(timezone.utc)
+    windows: dict[str, datetime | None] = {
+        "7D": now - timedelta(days=7),
+        "30D": now - timedelta(days=30),
+        "365D": now - timedelta(days=365),
+        "ALL": None,
+    }
+    summaries: dict[str, dict[str, float]] = {}
+
+    pnl_series = df.get("pnl") if "pnl" in df.columns else df.get("net_pnl")
+
+    for label, cutoff in windows.items():
+        subset = df
+        if cutoff is not None and "exit_time" in df.columns:
+            subset = df[df["exit_time"] >= cutoff]
+        trades = int(len(subset.index))
+        avg_return = float(np.nanmean(subset["return_pct"])) if trades else 0.0
+        win_rate = float((subset["return_pct"] > 0).mean() * 100) if trades else 0.0
+        hold_days = float(np.nanmean(subset["hold_days"])) if trades else 0.0
+        exit_eff = float(np.nanmean(subset["exit_efficiency_pct"])) if trades else 0.0
+        sold_soon = int(subset.get("sold_too_soon", pd.Series(dtype=bool)).sum()) if trades else 0
+        total_pnl = float(np.nansum(pnl_series.loc[subset.index])) if trades and pnl_series is not None else 0.0
+        summaries[label] = {
+            "trades": trades,
+            "avg_return_pct": avg_return,
+            "win_rate_pct": win_rate,
+            "avg_hold_days": hold_days,
+            "avg_exit_efficiency_pct": exit_eff,
+            "sold_too_soon": sold_soon,
+            "total_pnl": total_pnl,
+        }
+    return summaries
+
+
+def _coerce_json(value: Any) -> Any:
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (np.floating, float)):
+        if math.isnan(value):
+            return None
+        return float(value)
+    if isinstance(value, (np.integer, int)):
+        return int(value)
+    if isinstance(value, (pd.Timedelta,)):
+        return value.total_seconds()
+    return value
+
+
+def write_cache(
+    df: pd.DataFrame,
+    summary: Mapping[str, Any],
+    path: Path | str = CACHE_PATH,
+    *,
+    trades_log_mtime: float | None = None,
+) -> Path:
+    """Persist cache to disk."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    records: list[dict[str, Any]] = []
+    for record in df.to_dict(orient="records"):
+        cleaned = {k: _coerce_json(v) for k, v in record.items()}
+        records.append(cleaned)
+    payload = {
+        "written_at": datetime.now(timezone.utc).isoformat(),
+        "summary": summary,
+        "trades": records,
+        "trades_log_mtime": trades_log_mtime,
+    }
+    atomic_write_bytes(target, json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"))
+    return target
+
+
+def read_cache(path: Path | str = CACHE_PATH) -> dict[str, Any] | None:
+    target = Path(path)
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception:
+        logger.warning("Failed to read trade performance cache at %s", path, exc_info=True)
+        return None
+    df = pd.DataFrame(payload.get("trades", []))
+    for col in ("entry_time", "exit_time"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
+    payload["df"] = df
+    return payload
+
+
+def is_cache_stale(
+    cache_path: Path | str = CACHE_PATH,
+    trades_log_path: Path | str = TRADES_LOG_PATH,
+    *,
+    max_age_hours: int = CACHE_MAX_AGE_HOURS,
+) -> bool:
+    cache = Path(cache_path)
+    trades_path = Path(trades_log_path)
+    if not cache.exists():
+        return True
+    try:
+        cache_age_hours = (datetime.now(timezone.utc) - datetime.fromtimestamp(cache.stat().st_mtime, tz=timezone.utc)).total_seconds() / 3600
+    except Exception:
+        return True
+    if cache_age_hours > max_age_hours:
+        return True
+    try:
+        payload = json.loads(cache.read_text(encoding="utf-8"))
+        cached_mtime = payload.get("trades_log_mtime")
+    except Exception:
+        return True
+    try:
+        trades_mtime = trades_path.stat().st_mtime
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return True
+    if cached_mtime is None:
+        return True
+    return trades_mtime > float(cached_mtime)
+
+
+def refresh_trade_performance_cache(
+    *,
+    base_dir: Path | str | None = None,
+    data_client: StockHistoricalDataClient | None = None,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    force: bool = False,
+    cache_path: Path | str = CACHE_PATH,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Recompute trade performance cache (best effort)."""
+
+    base = Path(base_dir) if base_dir else BASE_DIR
+    trades_log = Path(base) / "data" / "trades_log.csv"
+    cache = Path(cache_path)
+
+    if not force and not is_cache_stale(cache, trades_log):
+        cached = read_cache(cache)
+        if cached is not None:
+            return cached.get("df", pd.DataFrame()), cached.get("summary", {})
+
+    trades_df = load_trades_log(base)
+    if trades_df.empty:
+        summary: dict[str, Any] = {
+            "7D": {"trades": 0, "avg_return_pct": 0.0, "win_rate_pct": 0.0, "avg_hold_days": 0.0, "avg_exit_efficiency_pct": 0.0, "sold_too_soon": 0, "total_pnl": 0.0},
+            "30D": {"trades": 0, "avg_return_pct": 0.0, "win_rate_pct": 0.0, "avg_hold_days": 0.0, "avg_exit_efficiency_pct": 0.0, "sold_too_soon": 0, "total_pnl": 0.0},
+            "365D": {"trades": 0, "avg_return_pct": 0.0, "win_rate_pct": 0.0, "avg_hold_days": 0.0, "avg_exit_efficiency_pct": 0.0, "sold_too_soon": 0, "total_pnl": 0.0},
+            "ALL": {"trades": 0, "avg_return_pct": 0.0, "win_rate_pct": 0.0, "avg_hold_days": 0.0, "avg_exit_efficiency_pct": 0.0, "sold_too_soon": 0, "total_pnl": 0.0},
+        }
+        write_cache(trades_df, summary, cache, trades_log_mtime=None)
+        return trades_df, summary
+
+    excursions = compute_trade_excursions(
+        trades_df,
+        data_client,
+        lookback_days=lookback_days,
+    )
+    enriched = compute_exit_quality_columns(excursions)
+    summary = summarize_by_window(enriched)
+    try:
+        trades_mtime = trades_log.stat().st_mtime
+    except Exception:
+        trades_mtime = None
+    write_cache(enriched, summary, cache, trades_log_mtime=trades_mtime)
+    return enriched, summary
+
+
+def build_data_client() -> StockHistoricalDataClient | None:
+    key, secret, _, _ = get_alpaca_creds()
+    if not key or not secret:
+        logger.warning("Missing Alpaca credentials; proceeding without data client.")
+        return None
+    try:
+        return StockHistoricalDataClient(key, secret)
+    except Exception:
+        logger.warning("Unable to initialize StockHistoricalDataClient.", exc_info=True)
+        return None
+
+
+def cache_refresh_summary_token(trades: int, summary: Mapping[str, Any], rc: int) -> str:
+    windows = ",".join(summary.keys()) if summary else ""
+    return f"[INFO] TRADEPERF_REFRESH trades={trades} windows={windows} rc={rc}"
+
+
+__all__ = [
+    "BASE_DIR",
+    "CACHE_PATH",
+    "CACHE_MAX_AGE_HOURS",
+    "compute_exit_quality_columns",
+    "compute_trade_excursions",
+    "is_cache_stale",
+    "load_trades_log",
+    "read_cache",
+    "refresh_trade_performance_cache",
+    "summarize_by_window",
+    "write_cache",
+    "build_data_client",
+    "cache_refresh_summary_token",
+]

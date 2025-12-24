@@ -43,6 +43,14 @@ from dashboards.overview import overview_layout, render_timeline_table
 from dashboards.pipeline_tab import pipeline_layout
 from dashboards.ml_tab import build_predictions_table, ml_layout
 from scripts.run_pipeline import write_complete_screener_metrics
+from scripts.trade_performance import (
+    CACHE_PATH as TRADE_PERFORMANCE_CACHE_PATH,
+    build_data_client as build_trade_performance_client,
+    is_cache_stale as trade_performance_cache_stale,
+    read_cache as read_trade_performance_cache,
+    refresh_trade_performance_cache,
+    summarize_by_window,
+)
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
 
 # Base directory of the project (parent of this file)
@@ -126,6 +134,25 @@ def _is_paper_mode() -> bool:
 TRADES_LOG_REAL = Path(trades_log_real_path)
 TRADES_LOG_PAPER = Path(trades_log_path)
 TRADES_LOG_FOR_SYMBOLS = TRADES_LOG_PAPER if _is_paper_mode() else TRADES_LOG_REAL
+TRADE_PERFORMANCE_CACHE = Path(TRADE_PERFORMANCE_CACHE_PATH)
+TRADE_PERF_TABLE_FIELDS = [
+    "symbol",
+    "entry_time",
+    "exit_time",
+    "qty",
+    "entry_price",
+    "exit_price",
+    "pnl",
+    "return_pct",
+    "hold_days",
+    "exit_reason",
+    "mfe_pct",
+    "mae_pct",
+    "peak_price",
+    "trough_price",
+    "missed_profit_pct",
+    "exit_efficiency_pct",
+]
 
 
 def tail_log(log_path: str, limit: int = 10) -> list[str]:
@@ -802,6 +829,168 @@ def make_trades_exits_layout():
     )
 
 
+def _load_trade_performance_payload(force_refresh: bool = False) -> tuple[dict[str, Any], list[Any]]:
+    alerts: list[Any] = []
+    cache_path = TRADE_PERFORMANCE_CACHE
+    trades_missing = not TRADES_LOG_PATH.exists()
+    try:
+        stale = trade_performance_cache_stale(cache_path, TRADES_LOG_PATH)
+    except Exception:
+        stale = True
+    if force_refresh or stale:
+        try:
+            data_client = build_trade_performance_client()
+            refresh_trade_performance_cache(
+                base_dir=Path(BASE_DIR),
+                data_client=data_client,
+                cache_path=cache_path,
+            )
+        except Exception as exc:
+            logger.warning("Trade performance cache refresh failed: %s", exc)
+            alerts.append(
+                dbc.Alert(
+                    "Unable to refresh trade performance cache; showing the last available snapshot.",
+                    color="warning",
+                )
+            )
+    payload = read_trade_performance_cache(cache_path) or {}
+    if not payload.get("trades"):
+        message = (
+            "Trades log is unavailable. Add trades_log.csv to view performance."
+            if trades_missing
+            else "No closed trades available yet."
+        )
+        alerts.append(dbc.Alert(message, color="info"))
+    return payload, alerts
+
+
+def _build_trade_perf_kpis(metrics: Mapping[str, Any]) -> list[Any]:
+    def _card(label: str, value: str | float | int, accent: str = "primary") -> dbc.Col:
+        return dbc.Col(
+            dbc.Card(
+                [
+                    dbc.CardHeader(label),
+                    dbc.CardBody(html.H4(value, className="card-title")),
+                ],
+                className="text-center",
+                color="dark",
+                outline=True,
+                style={"borderColor": f"var(--bs-{accent})"},
+            ),
+            md=2,
+        )
+
+    trades = int(metrics.get("trades", 0) or 0)
+    total_pnl = float(metrics.get("total_pnl", 0.0) or 0.0)
+    avg_return = float(metrics.get("avg_return_pct", 0.0) or 0.0)
+    win_rate = float(metrics.get("win_rate_pct", 0.0) or 0.0)
+    hold_days = float(metrics.get("avg_hold_days", 0.0) or 0.0)
+    exit_eff = float(metrics.get("avg_exit_efficiency_pct", 0.0) or 0.0)
+    cards: list[Any] = [
+        _card("Trades", f"{trades}", "info"),
+        _card("Total P&L", f"{total_pnl:,.2f}", "success" if total_pnl >= 0 else "danger"),
+        _card("Avg Return %", f"{avg_return:.2f}%", "primary"),
+        _card("Win Rate", f"{win_rate:.1f}%", "warning"),
+        _card("Avg Hold (days)", f"{hold_days:.2f}", "secondary"),
+        _card("Exit Efficiency", f"{exit_eff:.1f}%", "success"),
+    ]
+    return cards
+
+
+def make_trade_performance_layout():
+    payload, alerts = _load_trade_performance_payload()
+    store_data = {
+        "trades": payload.get("trades", []),
+        "summary": payload.get("summary", {}),
+        "written_at": payload.get("written_at"),
+    }
+    updated_badge = (
+        dbc.Badge(
+            f"Cache updated {payload.get('written_at')}",
+            color="secondary",
+            className="ms-2",
+        )
+        if payload.get("written_at")
+        else None
+    )
+    trade_perf_columns = [
+        {"name": "Symbol", "id": "symbol"},
+        {"name": "Entry Time", "id": "entry_time"},
+        {"name": "Exit Time", "id": "exit_time"},
+        {"name": "Qty", "id": "qty", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Exit Price", "id": "exit_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Exit Reason", "id": "exit_reason"},
+        {"name": "MFE %", "id": "mfe_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "MAE %", "id": "mae_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Peak Price", "id": "peak_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Trough Price", "id": "trough_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+    ]
+
+    return html.Div(
+        [
+            dcc.Store(id="trade-perf-store", data=store_data),
+            html.Div(alerts),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            html.H3("Trade Performance", className="text-light"),
+                            html.P(
+                                "Aggregate P&L, exit quality, and excursion metrics across your closed trades.",
+                                className="text-muted",
+                            ),
+                        ]
+                    ),
+                    dbc.Col(
+                        dbc.RadioItems(
+                            id="trade-perf-range",
+                            options=[
+                                {"label": "7D", "value": "7D"},
+                                {"label": "30D", "value": "30D"},
+                                {"label": "1Y", "value": "365D"},
+                                {"label": "All", "value": "ALL"},
+                            ],
+                            value="30D",
+                            inline=True,
+                            labelClassName="me-3",
+                        ),
+                        md=4,
+                        className="d-flex align-items-center justify-content-end",
+                    ),
+                ],
+                className="mb-3",
+            ),
+            html.Div(updated_badge, id="trade-perf-status", className="mb-3"),
+            dbc.Row(id="trade-perf-kpis", className="g-2 mb-3"),
+            dbc.Row(
+                [
+                    dbc.Col(dcc.Graph(id="trade-perf-scatter"), md=6),
+                    dbc.Col(dcc.Graph(id="trade-perf-eff-hist"), md=3),
+                    dbc.Col(dcc.Graph(id="trade-perf-reason-bar"), md=3),
+                ],
+                className="g-3",
+            ),
+            html.H4("Per-trade details", className="mt-4"),
+            dash_table.DataTable(
+                id="trade-perf-table",
+                columns=trade_perf_columns,
+                data=store_data.get("trades", []),
+                sort_action="native",
+                filter_action="native",
+                page_size=20,
+                style_table={"overflowX": "auto"},
+                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
+            ),
+        ]
+    )
+
+
 def _resolve_trades_dataframe() -> tuple[pd.DataFrame | None, str, str, list[Any]]:
     """Return the most suitable trades dataframe and metadata."""
 
@@ -1393,6 +1582,13 @@ app.layout = dbc.Container(
                         dbc.Tab(
                             label="Trades / Exits",
                             tab_id="tab-trades",
+                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                            className="custom-tab",
+                        ),
+                        dbc.Tab(
+                            label="Trade Performance",
+                            tab_id="tab-trade-performance",
                             tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                             active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                             className="custom-tab",
@@ -2982,6 +3178,123 @@ def _refresh_ts(n_clicks):
     return datetime.utcnow().isoformat()
 
 
+def _empty_trade_perf_fig(title: str) -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(template="plotly_dark", title=title)
+    return fig
+
+
+def _prepare_trade_perf_frame(store_data: Mapping[str, Any], window: str) -> pd.DataFrame:
+    if not store_data or not store_data.get("trades"):
+        return pd.DataFrame()
+    frame = pd.DataFrame(store_data.get("trades"))
+    for col in ("entry_time", "exit_time"):
+        if col in frame.columns:
+            frame[col] = pd.to_datetime(frame[col], utc=True, errors="coerce")
+    numeric_cols = [
+        "qty",
+        "entry_price",
+        "exit_price",
+        "pnl",
+        "return_pct",
+        "hold_days",
+        "mfe_pct",
+        "mae_pct",
+        "peak_price",
+        "trough_price",
+        "missed_profit_pct",
+        "exit_efficiency_pct",
+    ]
+    for col in numeric_cols:
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    if "exit_reason" in frame.columns:
+        frame["exit_reason"] = frame["exit_reason"].fillna("Unknown")
+    if window != "ALL" and "exit_time" in frame.columns:
+        now = datetime.now(timezone.utc)
+        days = 365 if window == "365D" else int(window.replace("D", ""))
+        cutoff = now - timedelta(days=days)
+        frame = frame[frame["exit_time"] >= cutoff]
+    return frame
+
+
+@app.callback(
+    [
+        Output("trade-perf-kpis", "children"),
+        Output("trade-perf-scatter", "figure"),
+        Output("trade-perf-eff-hist", "figure"),
+        Output("trade-perf-reason-bar", "figure"),
+        Output("trade-perf-table", "data"),
+        Output("trade-perf-status", "children"),
+    ],
+    [Input("trade-perf-range", "value"), Input("trade-perf-store", "data")],
+)
+def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]):
+    store_mapping = store_data if isinstance(store_data, Mapping) else {}
+    frame = _prepare_trade_perf_frame(store_mapping, range_value or "30D")
+    summary = store_mapping.get("summary", {}) if isinstance(store_mapping, Mapping) else {}
+    metrics = summary.get(range_value) or summarize_by_window(frame).get(range_value, {})
+    status_children: list[Any] = []
+    if store_mapping.get("written_at"):
+        status_children.append(
+            dbc.Badge(f"Cache updated {store_mapping['written_at']}", color="secondary", className="me-2")
+        )
+    if metrics:
+        status_children.append(
+            dbc.Badge(
+                f"Sold-too-soon flags: {metrics.get('sold_too_soon', 0)}",
+                color="info",
+            )
+        )
+
+    if frame.empty:
+        empty_data = store_mapping.get("trades", []) if isinstance(store_mapping, Mapping) else []
+        return (
+            [],
+            _empty_trade_perf_fig("MFE % vs Return %"),
+            _empty_trade_perf_fig("Exit efficiency %"),
+            _empty_trade_perf_fig("Exit reasons"),
+            empty_data,
+            status_children,
+        )
+
+    if "exit_reason" not in frame.columns:
+        frame["exit_reason"] = "Unknown"
+
+    scatter_fig = px.scatter(
+        frame,
+        x="mfe_pct",
+        y="return_pct",
+        color="exit_reason",
+        hover_data=["symbol", "exit_time", "return_pct", "exit_efficiency_pct"],
+        title="MFE % vs Return %",
+    )
+    scatter_fig.update_layout(template="plotly_dark")
+
+    eff_hist = px.histogram(
+        frame,
+        x="exit_efficiency_pct",
+        nbins=20,
+        title="Exit efficiency %",
+    )
+    eff_hist.update_layout(template="plotly_dark")
+
+    reason_counts = frame["exit_reason"].value_counts()
+    reason_bar = go.Figure(
+        data=[go.Bar(x=reason_counts.index, y=reason_counts.values)],
+        layout=go.Layout(title="Exit reasons", template="plotly_dark"),
+    )
+
+    table_frame = frame.copy()
+    for col in ("entry_time", "exit_time"):
+        if col in table_frame.columns:
+            table_frame[col] = table_frame[col].dt.strftime("%Y-%m-%d %H:%M")
+    table_frame = table_frame.reindex(columns=TRADE_PERF_TABLE_FIELDS)
+    table_data = table_frame.fillna("").to_dict("records")
+
+    return _build_trade_perf_kpis(metrics), scatter_fig, eff_hist, reason_bar, table_data, status_children
+
+
 @app.callback(
     Output("ml-predictions-table", "children"),
     [Input("predictions-dropdown", "value"), Input("refresh-ts", "data")],
@@ -3022,6 +3335,9 @@ def render_tab(tab, refresh_ts=None):
     elif tab == "tab-trades":
         logger.info("Rendering content for tab: %s", tab)
         return make_trades_exits_layout()
+    elif tab == "tab-trade-performance":
+        logger.info("Rendering content for tab: %s", tab)
+        return make_trade_performance_layout()
     elif tab == "tab-screener":
         logger.info("Rendering content for tab: %s", tab)
         return screener_layout()

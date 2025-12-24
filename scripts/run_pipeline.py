@@ -1893,6 +1893,21 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if rc_metrics:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
             _sync_top_candidates_to_latest(base_dir)
+            try:
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "scripts.trade_performance_refresh",
+                        "--lookback-days",
+                        "400",
+                    ],
+                    cwd=PROJECT_ROOT,
+                    check=True,
+                )
+                LOG.info("[INFO] TRADE_PERFORMANCE_CACHE_REFRESHED")
+            except Exception:
+                LOG.warning("TRADE_PERFORMANCE_CACHE_REFRESH_FAILED", exc_info=True)
         if "labels" in steps:
             current_step = "labels"
             bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
