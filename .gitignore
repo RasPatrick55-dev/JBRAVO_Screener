@@ -11,3 +11,5 @@ logs/*.log*
 data/open_positions.csv
 data/trades_log.csv
 data/trade_performance_cache.json
+data/*.json
+data/predictions/

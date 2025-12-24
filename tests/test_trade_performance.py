@@ -117,6 +117,34 @@ def test_summary_always_includes_windows_and_numbers():
         assert summary[window]["net_pnl"] == summary[window]["net_pnl"]  # not NaN
 
 
+def test_summary_computes_pnl_and_win_rate_when_missing_column():
+    now = datetime.now(timezone.utc)
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "ABC",
+                "entry_time": now - timedelta(days=1),
+                "exit_time": now,
+                "entry_price": 5.0,
+                "exit_price": 7.0,
+                "qty": 10,
+            },
+            {
+                "symbol": "DEF",
+                "entry_time": now - timedelta(days=2),
+                "exit_time": now - timedelta(days=1),
+                "entry_price": 10.0,
+                "exit_price": 8.0,
+                "qty": 5,
+            },
+        ]
+    )
+    summary = summarize_by_window(frame)
+    window = summary["ALL"]
+    assert window["net_pnl"] == pytest.approx((7 - 5) * 10 + (8 - 10) * 5)
+    assert window["win_rate"] == pytest.approx(50.0)
+
+
 def test_refresh_best_effort_when_excursions_fail(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True)
@@ -148,3 +176,32 @@ def test_refresh_best_effort_when_excursions_fail(tmp_path, monkeypatch):
         assert window in summary
         assert summary[window]["win_rate"] >= 0.0
         assert summary[window]["net_pnl"] >= 0.0
+
+
+def test_exit_efficiency_zero_when_peak_missing_or_below_entry():
+    now = datetime.now(timezone.utc)
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "XYZ",
+                "entry_time": now - timedelta(days=1),
+                "exit_time": now,
+                "entry_price": 10.0,
+                "exit_price": 11.0,
+                "peak_price": float("nan"),
+                "trough_price": 9.0,
+            },
+            {
+                "symbol": "QRS",
+                "entry_time": now - timedelta(days=2),
+                "exit_time": now - timedelta(days=1),
+                "entry_price": 10.0,
+                "exit_price": 11.0,
+                "peak_price": 9.5,
+                "trough_price": 8.0,
+            },
+        ]
+    )
+    enriched = compute_exit_quality_columns(trades)
+    assert enriched.loc[0, "exit_efficiency_pct"] == pytest.approx(0.0)
+    assert enriched.loc[1, "exit_efficiency_pct"] == pytest.approx(0.0)

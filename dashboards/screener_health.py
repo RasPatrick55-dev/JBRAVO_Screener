@@ -206,6 +206,10 @@ def load_kpis() -> dict[str, Any]:
     if all(not isinstance(kpis.get(field), int) for field in numeric_fields):
         primary_source = "none"
 
+    for field in numeric_fields:
+        if not isinstance(kpis.get(field), int):
+            kpis[field] = 0
+
     kpis["source"] = primary_source
     kpis["_kpi_inferred_from_log"] = inferred_from_log
     _log_kpi_source(primary_source)
