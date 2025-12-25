@@ -182,6 +182,44 @@ def test_order_type_uses_alpaca_type_not_status():
     trade = trades[0]
     assert trade["order_type"] == "limit"
     assert trade["order_status"] == "partial_fill"
+    assert trade["order_type"] not in {"filled", "partial_fill", "order_type"}
+    assert trade["order_type"] in {"limit", "market", "trailing_stop", "stop", "stop_limit", "stop_loss", "take_profit"}
+
+
+def test_backfill_uses_exit_order_metadata_and_sanitizes(tmp_path, monkeypatch):
+    dest = tmp_path / "trades_log.csv"
+
+    events = [
+        {"symbol": "AMD", "side": "buy", "qty": 1, "price": 50, "timestamp": "2024-04-01T00:00:00Z", "order_id": "entry-1"},
+        {
+            "symbol": "AMD",
+            "side": "sell",
+            "qty": 1,
+            "price": 55,
+            "timestamp": "2024-04-01T01:00:00Z",
+            "order_id": "exit-1",
+            "order_status": "partially_filled",
+            "order_type": "filled",
+        },
+    ]
+
+    monkeypatch.setattr("scripts.backfill_trades_log.gather_fill_events", lambda *a, **k: events)
+
+    def fake_fetch_order_metadata(order_ids, **kwargs):
+        return {"exit-1": {"type": "stop_limit", "status": "partially_filled"}}
+
+    monkeypatch.setattr("scripts.backfill_trades_log._fetch_order_metadata", fake_fetch_order_metadata)
+
+    backfill(1, dest, merge=True)
+
+    df = pd.read_csv(dest)
+    assert df.shape[0] == 1
+    row = df.iloc[0].to_dict()
+    assert row["exit_order_id"] == "exit-1"
+    assert row["entry_order_id"] == "entry-1"
+    assert row["order_type"] == "stop_limit"
+    assert row["order_type"] not in {"filled", "partially_filled", "order_type"}
+    assert row["order_status"] == "filled"
 
 
 def test_backfill_writes_atomic(tmp_path, monkeypatch, dummy_events):

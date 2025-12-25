@@ -25,6 +25,8 @@ DEFAULT_COLUMNS = [
     "exit_price",
     "entry_time",
     "exit_time",
+    "entry_order_id",
+    "exit_order_id",
     "net_pnl",
     "side",
     "order_status",
@@ -196,6 +198,7 @@ def fetch_account_fill_events(
                     "qty": _safe_float(item.get("qty") or item.get("quantity")),
                     "price": _safe_float(item.get("price")),
                     "timestamp": ts,
+                    "order_id": _safe_str(item.get("order_id") or item.get("id")),
                     "order_type": _clean_order_type(item.get("order_type") or item.get("type")),
                     "order_status": _clean_order_status(item.get("order_status") or item.get("status")),
                 }
@@ -224,7 +227,7 @@ def _clean_order_status(status: Any) -> str:
 
 def _clean_order_type(order_type: Any) -> str:
     raw = _safe_str(getattr(order_type, "value", order_type)).lower()
-    if raw in {"fill", "partial_fill", "partial-filled", "filled"}:
+    if raw in {"fill", "partial_fill", "partial-filled", "filled", "partially_filled"}:
         return ""
     return raw
 
@@ -273,6 +276,7 @@ def fetch_order_fill_events(
                     "qty": _safe_float(getattr(order, "filled_qty", 0.0)),
                     "price": _safe_float(getattr(order, "filled_avg_price", 0.0)),
                     "timestamp": ts,
+                    "order_id": _safe_str(getattr(order, "id", getattr(order, "order_id", ""))),
                     "order_type": _clean_order_type(getattr(order, "type", getattr(order, "order_type", ""))),
                     "order_status": _clean_order_status(getattr(order, "status", "")),
                 }
@@ -306,6 +310,7 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
         qty = _safe_float(event.get("qty"))
         price = _safe_float(event.get("price"))
         ts = _coerce_datetime(event.get("timestamp"))
+        order_id = _safe_str(event.get("order_id") or event.get("id"))
         order_type = _clean_order_type(event.get("order_type"))
         order_status = _clean_order_status(event.get("order_status"))
 
@@ -321,6 +326,7 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
                     "qty": qty,
                     "price": price,
                     "timestamp": ts,
+                    "order_id": order_id,
                     "order_type": order_type,
                     "order_status": order_status,
                 },
@@ -340,6 +346,7 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
         ts = event["timestamp"]
         order_type = event["order_type"]
         order_status = event["order_status"]
+        order_id = event["order_id"]
 
         lots = open_lots.setdefault(symbol, deque())
 
@@ -355,6 +362,8 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
                     "exit_time": None,
                     "exit_order_type": "",
                     "exit_order_status": "",
+                    "entry_order_id": order_id,
+                    "exit_order_id": "",
                 }
             )
             continue
@@ -367,6 +376,8 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
             lot["exit_qty"] += match_qty
             lot["exit_notional"] += match_qty * price
             lot["exit_time"] = ts if lot["exit_time"] is None or ts > lot["exit_time"] else lot["exit_time"]
+            if order_id:
+                lot["exit_order_id"] = order_id
 
             if order_type:
                 if order_type == "trailing_stop" or not lot["exit_order_type"]:
@@ -397,6 +408,8 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
                         "exit_price": exit_price,
                         "entry_time": _isoformat(lot["entry_time"]),
                         "exit_time": _isoformat(exit_time),
+                        "entry_order_id": lot.get("entry_order_id", ""),
+                        "exit_order_id": lot.get("exit_order_id", ""),
                         "net_pnl": _net_pnl("buy", entry_price, exit_price, exit_qty),
                         "side": "buy",
                         "order_status": "filled",
@@ -447,10 +460,82 @@ def merge_trades(existing: pd.DataFrame, new_trades: List[Dict[str, Any]], *, me
     return combined
 
 
-def _atomic_write(df: pd.DataFrame, path: Path) -> None:
+def _fetch_order_metadata(
+    order_ids: Iterable[str], *, session: Optional[requests.Session] = None, logger: logging.Logger, max_attempts: int = 5
+) -> Dict[str, Dict[str, str]]:
+    session = session or requests.Session()
+    headers = _alpaca_headers()
+    base = _alpaca_base_url()
+    order_meta: Dict[str, Dict[str, str]] = {}
+
+    for order_id in order_ids:
+        if not order_id or order_id in order_meta:
+            continue
+
+        url = f"{base}/v2/orders/{order_id}"
+        resp = _http_get_with_backoff(
+            session, url, headers=headers, params={}, logger=logger, max_attempts=max_attempts  # type: ignore[arg-type]
+        )
+        if resp is None:
+            continue
+        if resp.status_code == 404:
+            logger.warning("Order %s not found when fetching metadata", order_id)
+            order_meta[order_id] = {"type": "", "status": ""}
+            continue
+        try:
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception:
+            logger.warning("Failed to fetch metadata for order %s", order_id)
+            order_meta[order_id] = {"type": "", "status": ""}
+            continue
+
+        order_meta[order_id] = {
+            "type": _clean_order_type(payload.get("type") or payload.get("order_type")),
+            "status": _clean_order_status(payload.get("status")),
+        }
+
+    return order_meta
+
+
+def _apply_order_metadata(trades: List[Dict[str, Any]], *, logger: logging.Logger, session: Optional[requests.Session] = None) -> None:
+    order_ids = {trade.get("exit_order_id", "") for trade in trades}
+    order_meta = _fetch_order_metadata(order_ids, session=session, logger=logger)
+
+    for trade in trades:
+        exit_order_id = trade.get("exit_order_id", "")
+        meta = order_meta.get(exit_order_id)
+        if meta:
+            trade["order_type"] = meta.get("type", "")
+        else:
+            trade["order_type"] = ""
+
+        trade["exit_reason"] = "TrailingStop" if trade.get("order_type") == "trailing_stop" else trade.get("exit_reason", "")
+
+
+def _sanitize_trades_df(df: pd.DataFrame, logger: logging.Logger) -> pd.DataFrame:
+    sanitized = df.copy()
+
+    if sanitized.columns.duplicated().any():
+        dupes = [col for col, duped in zip(sanitized.columns, sanitized.columns.duplicated()) if duped]
+        logger.warning("[WARN] BACKFILL_SANITIZE duplicate_columns cols=%s", ",".join(sorted(set(dupes))))
+        sanitized = sanitized.loc[:, ~sanitized.columns.duplicated()]
+
+    if "order_type" in sanitized.columns:
+        mask = sanitized["order_type"] == "order_type"
+        if mask.any():
+            count = int(mask.sum())
+            logger.warning("[WARN] BACKFILL_SANITIZE order_type_header_leak rows=%s", count)
+            sanitized.loc[mask, "order_type"] = ""
+
+    return sanitized
+
+
+def _atomic_write(df: pd.DataFrame, path: Path, *, logger: logging.Logger) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    df.to_csv(tmp_path, index=False)
+    sanitized = _sanitize_trades_df(df, logger)
+    sanitized.to_csv(tmp_path, index=False)
     tmp_path.replace(path)
 
 
@@ -489,8 +574,10 @@ def backfill(days: int, out_path: Path, merge: bool) -> None:
     start = end - timedelta(days=days)
     logger.info("Fetching trade fills between %s and %s", start.isoformat(), end.isoformat())
 
-    events = gather_fill_events(start, end, logger=logger)
+    session = requests.Session()
+    events = gather_fill_events(start, end, logger=logger, session=session)
     trades = build_trades_from_events(events)
+    _apply_order_metadata(trades, logger=logger, session=session)
     logger.info("Built %s trades from %s fill events", len(trades), len(events))
 
     if merge and out_path.exists():
@@ -499,7 +586,7 @@ def backfill(days: int, out_path: Path, merge: bool) -> None:
         existing_df = pd.DataFrame(columns=DEFAULT_COLUMNS)
 
     merged_df = merge_trades(existing_df, trades, merge_existing=merge)
-    _atomic_write(merged_df, out_path)
+    _atomic_write(merged_df, out_path, logger=logger)
     logger.info("Wrote %s rows to %s", len(merged_df), out_path)
 
 
