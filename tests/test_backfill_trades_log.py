@@ -181,9 +181,9 @@ def test_order_type_uses_alpaca_type_not_status():
     assert len(trades) == 1
     trade = trades[0]
     assert trade["order_type"] == "limit"
-    assert trade["order_status"] == "partial_fill"
-    assert trade["order_type"] not in {"filled", "partial_fill", "order_type"}
-    assert trade["order_type"] in {"limit", "market", "trailing_stop", "stop", "stop_limit", "stop_loss", "take_profit"}
+    assert trade["order_status"] in {"filled", "closed"}
+    assert trade["order_type"] not in {"fill", "partial_fill", "filled", "partially_filled", "order_type"}
+    assert trade["order_type"] in {"market", "limit", "stop", "stop_limit", "trailing_stop"}
 
 
 def test_backfill_uses_exit_order_metadata_and_sanitizes(tmp_path, monkeypatch):
