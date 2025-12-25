@@ -1573,7 +1573,10 @@ def api_candidates():
     )
 
 
-def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
+DEFAULT_ACTIVE_TAB = "tab-overview"
+
+
+def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
     return dbc.Tabs(
         id="tabs",
         active_tab=active_tab,
@@ -1582,6 +1585,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Overview",
                 tab_id="tab-overview",
+                id="tab-overview",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1589,6 +1593,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Pipeline",
                 tab_id="tab-pipeline",
+                id="tab-pipeline",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1596,6 +1601,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="ML",
                 tab_id="tab-ml",
+                id="tab-ml",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1603,6 +1609,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Screener Health",
                 tab_id="tab-screener-health",
+                id="tab-screener-health",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1610,6 +1617,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Screener",
                 tab_id="tab-screener",
+                id="tab-screener",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1617,6 +1625,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Execute Trades",
                 tab_id="tab-execute",
+                id="tab-execute",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1624,6 +1633,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Account",
                 tab_id="tab-account",
+                id="tab-account",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1631,6 +1641,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Symbol Performance",
                 tab_id="tab-symbol-performance",
+                id="tab-symbol-performance",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1638,6 +1649,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Monitoring Positions",
                 tab_id="tab-monitor",
+                id="tab-monitor",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1645,6 +1657,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Trades / Exits",
                 tab_id="tab-trades",
+                id="tab-trades",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1652,6 +1665,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
             dbc.Tab(
                 label="Trade Performance",
                 tab_id="tab-trade-performance",
+                id="tab-trade-performance",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
                 active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
                 className="custom-tab",
@@ -1663,6 +1677,7 @@ def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
 app.layout = dbc.Container(
     [
         dcc.Location(id="url", refresh=False),
+        dcc.Store(id="active-tab-store", storage_type="memory", data={"active_tab": DEFAULT_ACTIVE_TAB}),
         dbc.Row(
             dbc.Col(
                 html.H1(
@@ -1745,23 +1760,90 @@ _TAB_HASH_MAP = {
     "trade-performance": "tab-trade-performance",
     "tab-trade-performance": "tab-trade-performance",
 }
+_TAB_IDS = {
+    "tab-overview",
+    "tab-pipeline",
+    "tab-ml",
+    "tab-screener-health",
+    "tab-screener",
+    "tab-execute",
+    "tab-account",
+    "tab-symbol-performance",
+    "tab-monitor",
+    "tab-trades",
+    "tab-trade-performance",
+}
 
 
-@app.callback(Output("tabs", "active_tab"), Input("url", "hash"), State("tabs", "active_tab"))
-def _sync_tab_from_hash(url_hash: str | None, current_tab: str | None):
-    if not url_hash:
-        raise PreventUpdate
-    target = _TAB_HASH_MAP.get(url_hash.lstrip("#"))
-    if target and target != current_tab:
-        return target
-    raise PreventUpdate
+def tab_from_triggered_id(triggered_id: str | None) -> str | None:
+    if not triggered_id:
+        return None
+    if triggered_id in _TAB_HASH_MAP:
+        return _TAB_HASH_MAP[triggered_id]
+    if triggered_id in _TAB_IDS:
+        return triggered_id
+    return None
 
 
-@app.callback(Output("url", "hash"), Input("tabs", "active_tab"))
-def _sync_hash_from_tab(active_tab: str | None):
-    if not active_tab:
-        raise PreventUpdate
-    return f"#{active_tab}"
+@app.callback(
+    Output("active-tab-store", "data"),
+    [
+        Input("tab-overview", "n_clicks"),
+        Input("tab-pipeline", "n_clicks"),
+        Input("tab-ml", "n_clicks"),
+        Input("tab-screener-health", "n_clicks"),
+        Input("tab-screener", "n_clicks"),
+        Input("tab-execute", "n_clicks"),
+        Input("tab-account", "n_clicks"),
+        Input("tab-symbol-performance", "n_clicks"),
+        Input("tab-monitor", "n_clicks"),
+        Input("tab-trades", "n_clicks"),
+        Input("tab-trade-performance", "n_clicks"),
+        Input("url", "hash"),
+    ],
+    State("active-tab-store", "data"),
+)
+def _update_active_tab_store(
+    overview_clicks,
+    pipeline_clicks,
+    ml_clicks,
+    screener_health_clicks,
+    screener_clicks,
+    execute_clicks,
+    account_clicks,
+    symbol_perf_clicks,
+    monitor_clicks,
+    trades_clicks,
+    trade_perf_clicks,
+    url_hash,
+    store_data,
+):
+    ctx = dash.callback_context
+    triggered = getattr(ctx, "triggered_id", None)
+    tab_id = tab_from_triggered_id(triggered)
+    if triggered == "url":
+        tab_id = _TAB_HASH_MAP.get((url_hash or "").lstrip("#"))
+    if tab_id:
+        return {"active_tab": tab_id}
+    if isinstance(store_data, Mapping):
+        existing = store_data.get("active_tab")
+        if existing:
+            return {"active_tab": existing}
+    return {"active_tab": DEFAULT_ACTIVE_TAB}
+
+
+@app.callback(Output("tabs", "active_tab"), Input("active-tab-store", "data"))
+def _sync_tabs_to_store(store_data: Mapping[str, Any] | None):
+    if isinstance(store_data, Mapping) and store_data.get("active_tab") in _TAB_IDS:
+        return store_data["active_tab"]
+    return DEFAULT_ACTIVE_TAB
+
+
+@app.callback(Output("url", "hash"), Input("active-tab-store", "data"))
+def _sync_hash_from_store(store_data: Mapping[str, Any] | None):
+    if isinstance(store_data, Mapping) and store_data.get("active_tab"):
+        return f"#{store_data['active_tab']}"
+    return f"#{DEFAULT_ACTIVE_TAB}"
 
 
 def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
@@ -3497,9 +3579,12 @@ def update_ml_predictions_table(prediction_path, refresh_ts=None):
 
 @app.callback(
     Output("tabs-content", "children"),
-    [Input("tabs", "active_tab"), Input("refresh-ts", "data")],
+    [Input("active-tab-store", "data"), Input("refresh-ts", "data")],
 )
-def render_tab(tab, refresh_ts=None):
+def render_tab(store_data, refresh_ts=None):
+    tab = DEFAULT_ACTIVE_TAB
+    if isinstance(store_data, Mapping) and store_data.get("active_tab"):
+        tab = store_data["active_tab"]
     if tab == "tab-overview":
         logger.info("Rendering content for tab: %s", tab)
         return overview_layout()
@@ -3541,7 +3626,7 @@ _render_tab_signature = inspect.signature(render_tab)
 _render_tab_param_count = len(_render_tab_signature.parameters)
 if _render_tab_param_count != 2:
     message = (
-        "render_tab callback signature mismatch: expected 2 parameters (tab, refresh_ts) "
+        "render_tab callback signature mismatch: expected 2 parameters (store_data, refresh_ts) "
         f"but found {_render_tab_param_count}."
     )
     logger.error(message)
