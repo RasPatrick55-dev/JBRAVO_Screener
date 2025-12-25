@@ -49,6 +49,7 @@ from scripts.trade_performance import (
     is_cache_stale as trade_performance_cache_stale,
     read_cache as read_trade_performance_cache,
     refresh_trade_performance_cache,
+    evaluate_sold_too_soon_flags,
     summarize_by_window,
 )
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
@@ -1089,6 +1090,18 @@ def make_trade_performance_layout():
         {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
         {"name": "Rebounded", "id": "rebounded"},
     ]
+    sold_too_columns = [
+        {"name": "Exit Time", "id": "exit_time"},
+        {"name": "Symbol", "id": "symbol"},
+        {"name": "Order Type", "id": "order_type"},
+        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Rebounded", "id": "rebounded"},
+        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
+    ]
 
     return html.Div(
         [
@@ -1126,6 +1139,103 @@ def make_trade_performance_layout():
             ),
             html.Div(updated_badge, id="trade-perf-status", className="mb-3"),
             dbc.Row(id="trade-perf-kpis", className="g-2 mb-3"),
+            dbc.Card(
+                [
+                    dbc.CardHeader("Sold Too Soon Controls"),
+                    dbc.CardBody(
+                        [
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            html.Label("Flag mode"),
+                                            dbc.RadioItems(
+                                                id="soldtoo-mode",
+                                                options=[
+                                                    {"label": "Either", "value": "either"},
+                                                    {"label": "Efficiency only", "value": "efficiency"},
+                                                    {"label": "Missed-profit only", "value": "missed"},
+                                                ],
+                                                value="either",
+                                                inline=True,
+                                                labelClassName="me-3",
+                                            ),
+                                        ],
+                                        md=4,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.Label("Exit efficiency cutoff (%)"),
+                                            dcc.Slider(
+                                                id="soldtoo-eff-cutoff",
+                                                min=0,
+                                                max=100,
+                                                step=1,
+                                                value=40,
+                                                marks=None,
+                                                tooltip={"placement": "bottom", "always_visible": False},
+                                            ),
+                                        ],
+                                        md=4,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.Label("Missed profit cutoff (%)"),
+                                            dcc.Slider(
+                                                id="soldtoo-missed-cutoff",
+                                                min=0,
+                                                max=20,
+                                                step=0.5,
+                                                value=3,
+                                                marks=None,
+                                                tooltip={"placement": "bottom", "always_visible": False},
+                                            ),
+                                        ],
+                                        md=4,
+                                    ),
+                                ],
+                                className="gy-3",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            html.Label("Rebound threshold (%)"),
+                                            dcc.Slider(
+                                                id="soldtoo-rebound-threshold",
+                                                min=0,
+                                                max=20,
+                                                step=0.5,
+                                                value=3,
+                                                marks=None,
+                                                tooltip={"placement": "bottom", "always_visible": False},
+                                            ),
+                                        ],
+                                        md=6,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.Label("Rebound window (days)"),
+                                            dcc.Slider(
+                                                id="soldtoo-rebound-window",
+                                                min=1,
+                                                max=30,
+                                                step=1,
+                                                value=5,
+                                                marks=None,
+                                                tooltip={"placement": "bottom", "always_visible": False},
+                                            ),
+                                        ],
+                                        md=6,
+                                    ),
+                                ],
+                                className="gy-3 mt-2",
+                            ),
+                        ]
+                    ),
+                    className="bg-dark text-light mb-3",
+                ]
+            ),
             dbc.Row(
                 dbc.Col(dcc.Graph(id="trade-perf-window-bar"), width=12),
                 className="mb-3",
@@ -1153,6 +1263,19 @@ def make_trade_performance_layout():
                 sort_action="native",
                 filter_action="native",
                 filter_query='{exit_reason} = "TrailingStop" && {rebounded} = true',
+                page_size=20,
+                style_table={"overflowX": "auto"},
+                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
+            ),
+            html.H4("Sold Too Soon (Flagged Trades)", className="mt-5 text-light"),
+            html.Div(id="soldtoo-summary-chips", className="mb-2 d-flex flex-wrap gap-2"),
+            dash_table.DataTable(
+                id="soldtoo-table",
+                columns=sold_too_columns,
+                data=[],
+                sort_action="native",
+                filter_action="native",
+                sort_by=[{"column_id": "exit_time", "direction": "desc"}],
                 page_size=20,
                 style_table={"overflowX": "auto"},
                 style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
@@ -3663,6 +3786,101 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
         table_data,
         status_children,
     )
+
+
+def _format_chip(label: str, value: str | float) -> dbc.Badge:
+    return dbc.Badge(f"{label}: {value}", color="secondary", className="me-2")
+
+
+@app.callback(
+    [
+        Output("soldtoo-table", "data"),
+        Output("soldtoo-summary-chips", "children"),
+    ],
+    [
+        Input("soldtoo-mode", "value"),
+        Input("soldtoo-eff-cutoff", "value"),
+        Input("soldtoo-missed-cutoff", "value"),
+        Input("soldtoo-rebound-threshold", "value"),
+        Input("soldtoo-rebound-window", "value"),
+        Input("trade-perf-store", "data"),
+        Input("refresh-ts", "data"),
+        Input("active-tab-store", "data"),
+    ],
+)
+def update_sold_too_soon_table(
+    mode: str,
+    eff_cutoff: float,
+    missed_cutoff: float,
+    rebound_threshold: float,
+    rebound_window_days: int,
+    store_data: Mapping[str, Any] | None,
+    _refresh_ts: str | None,
+    active_tab: Mapping[str, Any] | None,
+):
+    if isinstance(active_tab, Mapping) and active_tab.get("active_tab") not in (None, "tab-trade-performance"):
+        return dash.no_update, dash.no_update
+
+    trades = []
+    if isinstance(store_data, Mapping):
+        trades = store_data.get("trades", [])
+    if not trades:
+        return [], []
+
+    evaluated = evaluate_sold_too_soon_flags(
+        trades,
+        efficiency_cutoff_pct=eff_cutoff or 0.0,
+        missed_profit_cutoff_pct=missed_cutoff or 0.0,
+        mode=mode or "either",
+        rebound_threshold_pct=rebound_threshold,
+        rebound_window_days=rebound_window_days,
+    )
+
+    flagged = evaluated[evaluated["sold_too_soon_flag"] == True]  # noqa: E712
+    total_trades = len(evaluated.index)
+    flagged_count = len(flagged.index)
+
+    def _safe_mean(series: pd.Series) -> float:
+        if series is None or series.empty:
+            return 0.0
+        numeric = pd.to_numeric(series, errors="coerce").dropna()
+        if numeric.empty:
+            return 0.0
+        return float(numeric.mean())
+
+    avg_return = _safe_mean(flagged.get("return_pct", pd.Series(dtype=float)))
+    avg_eff = _safe_mean(flagged.get("exit_efficiency_pct", pd.Series(dtype=float)))
+    total_pnl = float(pd.to_numeric(flagged.get("pnl", pd.Series(dtype=float)), errors="coerce").sum()) if flagged_count else 0.0
+
+    summary = [
+        _format_chip("Flagged", f"{flagged_count} of {total_trades}"),
+        _format_chip("Avg return (flagged)", f"{avg_return:.2f}%"),
+        _format_chip("Avg exit efficiency", f"{avg_eff:.2f}%"),
+        _format_chip("Total P&L", f"{total_pnl:,.2f}"),
+    ]
+
+    table_frame = flagged.copy()
+    for col in ("entry_time", "exit_time"):
+        if col in table_frame.columns:
+            table_frame[col] = pd.to_datetime(table_frame[col], utc=True, errors="coerce")
+    if "exit_time" in table_frame.columns:
+        table_frame = table_frame.sort_values("exit_time", ascending=False, na_position="last")
+        table_frame["exit_time"] = table_frame["exit_time"].dt.strftime("%Y-%m-%d %H:%M")
+    desired_columns = [
+        "exit_time",
+        "symbol",
+        "order_type",
+        "return_pct",
+        "exit_efficiency_pct",
+        "missed_profit_pct",
+        "rebound_pct",
+        "rebounded",
+        "hold_days",
+        "pnl",
+    ]
+    table_frame = table_frame.reindex(columns=desired_columns).fillna("")
+
+    return table_frame.to_dict("records"), summary
 
 
 @app.callback(

@@ -10,6 +10,7 @@ from scripts.trade_performance import (
     compute_exit_quality_columns,
     compute_rebound_metrics,
     compute_trade_excursions,
+    evaluate_sold_too_soon_flags,
     load_trades_log,
     refresh_trade_performance_cache,
     summarize_by_window,
@@ -156,6 +157,75 @@ def test_summary_computes_pnl_and_win_rate_when_missing_column():
     window = summary["ALL"]
     assert window["net_pnl"] == pytest.approx((7 - 5) * 10 + (8 - 10) * 5)
     assert window["win_rate"] == pytest.approx(0.5)
+
+
+def test_evaluate_sold_too_soon_flags_modes():
+    now = datetime.now(timezone.utc)
+    trades = [
+        {
+            "symbol": "AAA",
+            "entry_time": now - timedelta(days=2),
+            "exit_time": now - timedelta(days=1),
+            "entry_price": 10.0,
+            "exit_price": 10.5,
+            "qty": 1,
+            "exit_efficiency_pct": 30.0,
+            "missed_profit_pct": 2.0,
+            "rebound_pct": 4.0,
+        },
+        {
+            "symbol": "BBB",
+            "entry_time": now - timedelta(days=4),
+            "exit_time": now - timedelta(days=2),
+            "entry_price": 20.0,
+            "exit_price": 18.0,
+            "qty": 2,
+            "exit_efficiency_pct": 60.0,
+            "missed_profit_pct": 6.0,
+            "rebound_pct": 8.0,
+        },
+        {
+            "symbol": "CCC",
+            "entry_time": now - timedelta(days=5),
+            "exit_time": now - timedelta(days=3),
+            "entry_price": 10.0,
+            "exit_price": 10.0,
+            "qty": 3,
+            "exit_efficiency_pct": 70.0,
+            "peak_price": 12.0,
+            "rebound_pct": 6.0,
+        },
+        {
+            "symbol": "DDD",
+            "entry_time": now - timedelta(days=6),
+            "exit_time": now - timedelta(days=2),
+            "entry_price": 15.0,
+            "exit_price": 15.5,
+            "qty": 1,
+            "exit_efficiency_pct": 80.0,
+            "missed_profit_pct": 1.0,
+            "rebound_pct": 1.0,
+        },
+    ]
+
+    evaluated = evaluate_sold_too_soon_flags(
+        trades,
+        efficiency_cutoff_pct=50,
+        missed_profit_cutoff_pct=5,
+        mode="either",
+        rebound_threshold_pct=5,
+        rebound_window_days=5,
+    )
+    assert evaluated["sold_too_soon_flag"].sum() == 3
+    assert evaluated.loc[evaluated["symbol"] == "CCC", "missed_profit_pct"].iat[0] == pytest.approx(20.0)
+    assert bool(evaluated.loc[evaluated["symbol"] == "BBB", "rebounded"].iat[0]) is True
+    assert bool(evaluated.loc[evaluated["symbol"] == "AAA", "rebounded"].iat[0]) is False
+
+    efficiency_only = evaluate_sold_too_soon_flags(trades, efficiency_cutoff_pct=50, mode="efficiency")
+    assert efficiency_only["sold_too_soon_flag"].sum() == 1
+
+    missed_only = evaluate_sold_too_soon_flags(trades, missed_profit_cutoff_pct=5, mode="missed")
+    assert missed_only["sold_too_soon_flag"].sum() == 2
 
 
 def test_refresh_best_effort_when_excursions_fail(tmp_path, monkeypatch):
