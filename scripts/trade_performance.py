@@ -213,6 +213,36 @@ def _prepare_summary_frame(df: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _ensure_exit_reasons(frame: pd.DataFrame) -> pd.DataFrame:
+    if "exit_reason" not in frame.columns:
+        frame["exit_reason"] = [
+            _infer_exit_reason(row) for row in frame.to_dict(orient="records")
+        ]
+    frame["exit_reason"] = frame["exit_reason"].fillna("").astype("string")
+    return frame
+
+
+def _annotate_stop_exits(frame: pd.DataFrame) -> pd.DataFrame:
+    annotated = _ensure_exit_reasons(frame.copy())
+    existing_stop = (
+        annotated["is_stop_exit"].fillna(False).astype(bool)
+        if "is_stop_exit" in annotated.columns
+        else pd.Series(False, index=annotated.index)
+    )
+    trailing_flag = (
+        annotated["is_trailing_stop_exit"].fillna(False).astype(bool)
+        if "is_trailing_stop_exit" in annotated.columns
+        else pd.Series(False, index=annotated.index)
+    )
+    order_type = annotated.get("order_type", pd.Series("", index=annotated.index)).fillna("").astype("string")
+    exit_reason = annotated["exit_reason"].str.lower()
+    computed_stop = (
+        order_type.str.lower() == "trailing_stop"
+    ) | exit_reason.str.contains("trail", na=False)
+    annotated["is_stop_exit"] = (computed_stop | existing_stop | trailing_flag).astype(bool)
+    return annotated
+
+
 def fetch_bars_with_backoff(
     data_client: StockHistoricalDataClient | None,
     request: StockBarsRequest,
@@ -426,6 +456,7 @@ def compute_exit_quality_columns(
     if df.empty:
         return df
     frame = _prepare_summary_frame(df)
+    frame = _annotate_stop_exits(frame)
 
     entry_price = pd.to_numeric(frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
     exit_price = pd.to_numeric(frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
@@ -470,19 +501,12 @@ def compute_exit_quality_columns(
         False,
     )
 
-    if "exit_reason" not in frame.columns:
-        frame["exit_reason"] = [
-            _infer_exit_reason(row) for row in frame.to_dict(orient="records")
-        ]
-
     frame["sold_too_soon"] = (
         (frame["missed_profit_pct"] > missed_profit_threshold)
         | (frame["exit_efficiency_pct"] < exit_eff_threshold)
         | frame["post_exit_rebound"].fillna(False)
     )
-    frame["is_trailing_stop_exit"] = [
-        _is_trailing_stop_exit(row) for row in frame.to_dict(orient="records")
-    ]
+    frame["is_trailing_stop_exit"] = frame.get("is_stop_exit", False)
     return frame
 
 
@@ -497,26 +521,31 @@ def compute_rebound_metrics(
 ) -> pd.DataFrame:
     """Compute post-exit rebound metrics for trailing-stop exits using daily bars."""
 
-    frame = df.copy()
+    frame = _annotate_stop_exits(df)
     if frame.empty:
         frame["rebound_window_days"] = rebound_window_days
         frame["post_exit_high"] = np.nan
         frame["rebound_pct"] = np.nan
         frame["rebounded"] = False
-        if "is_trailing_stop_exit" not in frame.columns:
-            frame["is_trailing_stop_exit"] = False
+        for col in ("is_trailing_stop_exit", "is_stop_exit"):
+            if col not in frame.columns:
+                frame[col] = False
         return frame
 
     feed = os.getenv("ALPACA_DATA_FEED", "iex")
-    if "exit_reason" not in frame.columns:
-        frame["exit_reason"] = [
-            _infer_exit_reason(row) for row in frame.to_dict(orient="records")
-        ]
     if "is_trailing_stop_exit" not in frame.columns:
         frame["is_trailing_stop_exit"] = [
             _is_trailing_stop_exit(row, tolerance=trailing_tolerance)
             for row in frame.to_dict(orient="records")
         ]
+    if "is_stop_exit" not in frame.columns:
+        frame["is_stop_exit"] = [
+            _is_trailing_stop_exit(row, tolerance=trailing_tolerance)
+            for row in frame.to_dict(orient="records")
+        ]
+    else:
+        frame["is_stop_exit"] = frame["is_stop_exit"].fillna(False)
+    frame["is_trailing_stop_exit"] = frame.get("is_trailing_stop_exit", False) | frame["is_stop_exit"]
 
     rebound_window_days = int(rebound_window_days) if rebound_window_days is not None else DEFAULT_REBOUND_DAYS
     frame["rebound_window_days"] = rebound_window_days
@@ -526,7 +555,7 @@ def compute_rebound_metrics(
     rebound_flags: list[bool] = [False] * len(frame.index)
 
     for idx, row in frame.iterrows():
-        if not bool(row.get("is_trailing_stop_exit")):
+        if not bool(row.get("is_stop_exit")):
             continue
         symbol = str(row.get("symbol") or "").upper()
         exit_ts = row.get("exit_time")
@@ -583,6 +612,7 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         return 0.0 if math.isnan(value) else value
 
     frame = _prepare_summary_frame(df)
+    frame = _annotate_stop_exits(frame)
     now = datetime.now(timezone.utc)
     windows: dict[str, datetime | None] = {
         "7D": now - timedelta(days=7),
@@ -601,7 +631,6 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
     default_window = {
         "trades": 0,
         "net_pnl": 0.0,
-        "total_pnl": 0.0,
         "win_rate": 0.0,
         "win_rate_pct": 0.0,
         "avg_return_pct": 0.0,
@@ -625,17 +654,18 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         avg_return = _safe_mean(subset.get("return_pct", pd.Series(dtype=float))) if trades else 0.0
         hold_days = _safe_mean(subset.get("hold_days", pd.Series(dtype=float))) if trades else 0.0
         if "exit_efficiency_pct" in subset.columns:
-            exit_eff = _safe_mean(subset["exit_efficiency_pct"]) if trades else 0.0
+            exit_eff_series = pd.to_numeric(subset["exit_efficiency_pct"], errors="coerce")
+            exit_eff = _safe_mean(exit_eff_series) if trades else 0.0
         else:
             exit_eff = 0.0
         sold_soon = int(subset.get("sold_too_soon", pd.Series(dtype=bool)).sum()) if trades else 0
-        trailing_mask = subset.get("is_trailing_stop_exit")
-        if trailing_mask is None:
-            trailing_mask = pd.Series(False, index=subset.index)
-        trailing_subset = subset[trailing_mask.fillna(False)] if trades else pd.DataFrame()
-        stop_exits = int(len(trailing_subset.index)) if not trailing_subset.empty else 0
-        rebounds = int(trailing_subset.get("rebounded", pd.Series(dtype=bool)).sum()) if stop_exits else 0
-        avg_rebound_pct = _safe_mean(trailing_subset.get("rebound_pct", pd.Series(dtype=float))) if stop_exits else 0.0
+        stop_mask = subset.get("is_stop_exit")
+        if stop_mask is None:
+            stop_mask = pd.Series(False, index=subset.index)
+        stop_subset = subset[stop_mask.fillna(False)] if trades else pd.DataFrame()
+        stop_exits = int(len(stop_subset.index)) if not stop_subset.empty else 0
+        rebounds = int(stop_subset.get("rebounded", pd.Series(dtype=bool)).sum()) if stop_exits else 0
+        avg_rebound_pct = _safe_mean(stop_subset.get("rebound_pct", pd.Series(dtype=float))) if stop_exits else 0.0
         rebound_rate = rebounds / stop_exits if stop_exits else 0.0
         summaries[label] = {
             "trades": trades,
@@ -645,12 +675,11 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
             "avg_hold_days": hold_days,
             "avg_exit_efficiency_pct": exit_eff,
             "sold_too_soon": sold_soon,
-            "total_pnl": net_pnl,
-            "net_pnl": net_pnl,
             "stop_exits": stop_exits,
             "rebounds": rebounds,
             "rebound_rate": rebound_rate,
             "avg_rebound_pct": avg_rebound_pct,
+            "net_pnl": net_pnl,
         }
     # ensure all required windows exist even if frame was filtered
     for label in SUMMARY_WINDOWS:
@@ -844,7 +873,7 @@ def refresh_trade_performance_cache(
     except Exception:
         logger.warning("Exit quality enrichment failed; proceeding with raw trades.", exc_info=True)
         enriched = _prepare_summary_frame(excursions_frame)
-        for col, default in (("hold_days", 0.0), ("exit_efficiency_pct", 0.0), ("sold_too_soon", 0)):
+        for col, default in (("hold_days", 0.0), ("exit_efficiency_pct", 0.0), ("sold_too_soon", 0), ("is_stop_exit", False)):
             if col not in enriched.columns:
                 enriched[col] = default
         for col in ("mfe_pct", "mae_pct", "missed_profit_pct"):
@@ -857,6 +886,8 @@ def refresh_trade_performance_cache(
         ("post_exit_high", np.nan),
         ("rebound_pct", np.nan),
         ("rebounded", False),
+        ("is_stop_exit", False),
+        ("is_trailing_stop_exit", False),
     ):
         if col not in rebound_frame.columns:
             rebound_frame[col] = default
@@ -873,10 +904,14 @@ def refresh_trade_performance_cache(
             for col in ("rebound_window_days", "post_exit_high", "rebound_pct", "rebounded", "is_trailing_stop_exit"):
                 if col in rebound_enriched_subset.columns:
                     rebound_frame.loc[enrichment_mask, col] = rebound_enriched_subset[col].values
+            if "is_stop_exit" in rebound_enriched_subset.columns:
+                rebound_frame.loc[enrichment_mask, "is_stop_exit"] = rebound_enriched_subset["is_stop_exit"].values
     except Exception:
         logger.warning("Rebound enrichment failed; proceeding without rebound metrics.", exc_info=True)
         if "is_trailing_stop_exit" not in rebound_frame.columns:
             rebound_frame["is_trailing_stop_exit"] = False
+        if "is_stop_exit" not in rebound_frame.columns:
+            rebound_frame["is_stop_exit"] = False
     summary = summarize_by_window(rebound_frame)
     try:
         trades_mtime = trades_log.stat().st_mtime
