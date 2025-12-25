@@ -102,16 +102,21 @@ MAX_OPEN_TRADES = 10
 
 
 def _normalize_pnl(df: pd.DataFrame | None) -> pd.DataFrame | None:
-    """Return ``df`` with common P&L columns normalized to ``net_pnl``."""
+    """Return ``df`` with normalized ``pnl`` / ``net_pnl`` columns."""
 
     if df is None:
         return None
-    for candidate in ("net_pnl", "pnl", "netPnL", "net_pnl_usd"):
-        if candidate in df.columns:
-            if candidate != "net_pnl":
-                df = df.rename(columns={candidate: "net_pnl"})
+    normalized = df.copy()
+    for alias in ("net_pnl", "netPnL", "net_pnl_usd"):
+        if alias in normalized.columns and "net_pnl" not in normalized.columns:
+            normalized["net_pnl"] = normalized[alias]
             break
-    return df
+
+    if "net_pnl" not in normalized.columns and "pnl" in normalized.columns:
+        normalized["net_pnl"] = normalized["pnl"]
+    if "pnl" not in normalized.columns and "net_pnl" in normalized.columns:
+        normalized["pnl"] = normalized["net_pnl"]
+    return normalized
 
 
 def _coerce_int_value(value: Any) -> int:
@@ -837,7 +842,8 @@ def make_trades_exits_layout():
 def _load_trade_performance_payload(force_refresh: bool = False) -> tuple[dict[str, Any], list[Any]]:
     alerts: list[Any] = []
     cache_path = TRADE_PERFORMANCE_CACHE
-    trades_missing = not TRADES_LOG_PATH.exists()
+    cache_exists = cache_path.exists()
+    payload = read_trade_performance_cache(cache_path) or {}
     try:
         stale = trade_performance_cache_stale(cache_path, TRADES_LOG_PATH)
     except Exception:
@@ -858,13 +864,14 @@ def _load_trade_performance_payload(force_refresh: bool = False) -> tuple[dict[s
                     color="warning",
                 )
             )
-    payload = read_trade_performance_cache(cache_path) or {}
+        refreshed = read_trade_performance_cache(cache_path) or {}
+        if refreshed:
+            payload = refreshed
     if not payload.get("trades"):
-        message = (
-            "Trades log is unavailable. Add trades_log.csv to view performance."
-            if trades_missing
-            else "No closed trades available yet."
-        )
+        if cache_exists:
+            message = "No closed trades available yet."
+        else:
+            message = "Trade performance cache not found. Run trade_performance_refresh to populate it."
         alerts.append(dbc.Alert(message, color="info"))
     return payload, alerts
 
@@ -1527,6 +1534,7 @@ def api_candidates():
 # Layout with Tabs and Modals
 app.layout = dbc.Container(
     [
+        dcc.Location(id="url", refresh=False),
         dbc.Row(
             dbc.Col(
                 html.H1(
@@ -1668,6 +1676,49 @@ register_screener_health(app)
 
 
 # Callbacks for tabs content
+_TAB_HASH_MAP = {
+    "overview": "tab-overview",
+    "tab-overview": "tab-overview",
+    "pipeline": "tab-pipeline",
+    "tab-pipeline": "tab-pipeline",
+    "ml": "tab-ml",
+    "tab-ml": "tab-ml",
+    "screener-health": "tab-screener-health",
+    "tab-screener-health": "tab-screener-health",
+    "screener": "tab-screener",
+    "tab-screener": "tab-screener",
+    "execute": "tab-execute",
+    "tab-execute": "tab-execute",
+    "account": "tab-account",
+    "tab-account": "tab-account",
+    "symbol-performance": "tab-symbol-performance",
+    "tab-symbol-performance": "tab-symbol-performance",
+    "monitor": "tab-monitor",
+    "tab-monitor": "tab-monitor",
+    "trades": "tab-trades",
+    "tab-trades": "tab-trades",
+    "trade-performance": "tab-trade-performance",
+    "tab-trade-performance": "tab-trade-performance",
+}
+
+
+@app.callback(Output("tabs", "active_tab"), Input("url", "hash"), State("tabs", "active_tab"))
+def _sync_tab_from_hash(url_hash: str | None, current_tab: str | None):
+    if not url_hash:
+        raise PreventUpdate
+    target = _TAB_HASH_MAP.get(url_hash.lstrip("#"))
+    if target and target != current_tab:
+        return target
+    raise PreventUpdate
+
+
+@app.callback(Output("url", "hash"), Input("tabs", "active_tab"))
+def _sync_hash_from_tab(active_tab: str | None):
+    if not active_tab:
+        raise PreventUpdate
+    return f"#{active_tab}"
+
+
 def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
     app.logger.info("Rendering tab %s", tab)
     if tab == "tab-screener":
