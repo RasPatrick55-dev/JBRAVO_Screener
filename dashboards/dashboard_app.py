@@ -848,7 +848,8 @@ def _load_trade_performance_payload(force_refresh: bool = False) -> tuple[dict[s
         stale = trade_performance_cache_stale(cache_path, TRADES_LOG_PATH)
     except Exception:
         stale = True
-    if force_refresh or stale:
+    should_refresh = force_refresh or (stale and cache_exists)
+    if should_refresh:
         try:
             data_client = build_trade_performance_client()
             refresh_trade_performance_cache(
@@ -871,50 +872,86 @@ def _load_trade_performance_payload(force_refresh: bool = False) -> tuple[dict[s
         if cache_exists:
             message = "No closed trades available yet."
         else:
-            message = "Trade performance cache not found. Run trade_performance_refresh to populate it."
+            message = (
+                "Trade performance cache not found. Run "
+                "`python -m scripts.trade_performance_refresh --lookback-days 400 --force` "
+                "to populate it."
+            )
         alerts.append(dbc.Alert(message, color="info"))
     return payload, alerts
 
 
-def _build_trade_perf_kpis(metrics: Mapping[str, Any]) -> list[Any]:
-    def _card(label: str, value: str | float | int, accent: str = "primary") -> dbc.Col:
-        return dbc.Col(
-            dbc.Card(
-                [
-                    dbc.CardHeader(label),
-                    dbc.CardBody(html.H4(value, className="card-title")),
-                ],
-                className="text-center",
-                color="dark",
-                outline=True,
-                style={"borderColor": f"var(--bs-{accent})"},
-            ),
-            md=2,
+def _build_trade_perf_kpis(summary: Mapping[str, Mapping[str, Any]]) -> list[Any]:
+    def _metric(label: str, value: str) -> html.Div:
+        return html.Div(
+            [
+                html.Span(label, className="text-muted me-2"),
+                html.Strong(value),
+            ],
+            className="d-flex justify-content-between",
         )
 
-    trades = int(metrics.get("trades", 0) or 0)
-    total_pnl = float(metrics.get("total_pnl", 0.0) or 0.0)
-    avg_return = float(metrics.get("avg_return_pct", 0.0) or 0.0)
-    win_rate = float(metrics.get("win_rate_pct", 0.0) or 0.0)
-    hold_days = float(metrics.get("avg_hold_days", 0.0) or 0.0)
-    exit_eff = float(metrics.get("avg_exit_efficiency_pct", 0.0) or 0.0)
-    stop_exits = _coerce_int_value(metrics.get("stop_exits", 0))
-    rebounds = _coerce_int_value(metrics.get("rebounds", 0))
-    rebound_rate = float(metrics.get("rebound_rate", 0.0) or 0.0) * 100.0
-    rebound_value = (
-        f"{rebound_rate:.1f}% ({rebounds}/{stop_exits})" if stop_exits else f"{rebound_rate:.1f}%"
-    )
-    cards: list[Any] = [
-        _card("Trades", f"{trades}", "info"),
-        _card("Total P&L", f"{total_pnl:,.2f}", "success" if total_pnl >= 0 else "danger"),
-        _card("Avg Return %", f"{avg_return:.2f}%", "primary"),
-        _card("Win Rate", f"{win_rate:.1f}%", "warning"),
-        _card("Avg Hold (days)", f"{hold_days:.2f}", "secondary"),
-        _card("Exit Efficiency", f"{exit_eff:.1f}%", "success"),
-        _card("TrailingStop exits", f"{stop_exits}", "info"),
-        _card("Trailing-Stop Rebound Rate (5D ≥3%)", rebound_value, "info"),
-    ]
+    def _format_pct(value: Any) -> str:
+        try:
+            return f"{float(value):.1f}%"
+        except Exception:
+            return "0.0%"
+
+    cards: list[Any] = []
+    for window in ("7D", "30D", "365D", "ALL"):
+        metrics = summary.get(window, {}) if isinstance(summary, Mapping) else {}
+        trades = int(metrics.get("trades", 0) or 0)
+        total_pnl = float(metrics.get("net_pnl", 0.0) or 0.0)
+        win_rate = metrics.get("win_rate_pct", metrics.get("win_rate", 0.0))
+        avg_return = metrics.get("avg_return_pct", 0.0)
+        stop_exits = _coerce_int_value(metrics.get("stop_exits", 0))
+        rebounds = _coerce_int_value(metrics.get("rebounds", 0))
+        rebound_rate = float(metrics.get("rebound_rate", 0.0) or 0.0) * 100.0
+        avg_rebound_pct = float(metrics.get("avg_rebound_pct", 0.0) or 0.0)
+        cards.append(
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader(f"{window} KPIs"),
+                        dbc.CardBody(
+                            [
+                                _metric("Trades", f"{trades}"),
+                                _metric("Net P&L", f"{total_pnl:,.2f}"),
+                                _metric("Win rate", _format_pct(win_rate)),
+                                _metric("Avg return", _format_pct(avg_return)),
+                                _metric("Stop exits", f"{stop_exits}"),
+                                _metric("Rebounds", f"{rebounds}"),
+                                _metric("Rebound rate", _format_pct(rebound_rate)),
+                                _metric("Avg rebound %", f"{avg_rebound_pct:.2f}%"),
+                            ]
+                        ),
+                    ],
+                    color="dark",
+                    outline=True,
+                    style={"borderColor": "var(--bs-info)"},
+                ),
+                md=3,
+                className="mb-3",
+            )
+        )
     return cards
+
+
+def _build_window_net_pnl_bar(summary: Mapping[str, Mapping[str, Any]]) -> go.Figure:
+    windows = []
+    pnl_values = []
+    for window in ("7D", "30D", "365D", "ALL"):
+        windows.append(window)
+        metrics = summary.get(window, {}) if isinstance(summary, Mapping) else {}
+        pnl_values.append(float(metrics.get("net_pnl", 0.0) or 0.0))
+    fig = px.bar(
+        x=windows,
+        y=pnl_values,
+        labels={"x": "Window", "y": "Net P&L"},
+        title="Net P&L by window",
+    )
+    fig.update_layout(template="plotly_dark")
+    return fig
 
 
 def make_trade_performance_layout():
@@ -993,6 +1030,10 @@ def make_trade_performance_layout():
             ),
             html.Div(updated_badge, id="trade-perf-status", className="mb-3"),
             dbc.Row(id="trade-perf-kpis", className="g-2 mb-3"),
+            dbc.Row(
+                dbc.Col(dcc.Graph(id="trade-perf-window-bar"), width=12),
+                className="mb-3",
+            ),
             dbc.Row(
                 [
                     dbc.Col(dcc.Graph(id="trade-perf-scatter"), md=6),
@@ -1531,6 +1572,93 @@ def api_candidates():
         }
     )
 
+
+def build_tabs(active_tab: str = "tab-screener-health") -> dbc.Tabs:
+    return dbc.Tabs(
+        id="tabs",
+        active_tab=active_tab,
+        class_name="mb-3",
+        children=[
+            dbc.Tab(
+                label="Overview",
+                tab_id="tab-overview",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="Pipeline",
+                tab_id="tab-pipeline",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="ML",
+                tab_id="tab-ml",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="Screener Health",
+                tab_id="tab-screener-health",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="Screener",
+                tab_id="tab-screener",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="Execute Trades",
+                tab_id="tab-execute",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="Account",
+                tab_id="tab-account",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="Symbol Performance",
+                tab_id="tab-symbol-performance",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="Monitoring Positions",
+                tab_id="tab-monitor",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="Trades / Exits",
+                tab_id="tab-trades",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
+                label="Trade Performance",
+                tab_id="tab-trade-performance",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+        ],
+    )
+
 # Layout with Tabs and Modals
 app.layout = dbc.Container(
     [
@@ -1545,90 +1673,7 @@ app.layout = dbc.Container(
         ),
         html.Div(
             [
-                dbc.Tabs(
-                    id="tabs",
-                    active_tab="tab-screener-health",
-                    class_name="mb-3",
-                    children=[
-                        dbc.Tab(
-                            label="Overview",
-                            tab_id="tab-overview",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Pipeline",
-                            tab_id="tab-pipeline",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="ML",
-                            tab_id="tab-ml",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Screener Health",
-                            tab_id="tab-screener-health",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Screener",
-                            tab_id="tab-screener",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Execute Trades",
-                            tab_id="tab-execute",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Account",
-                            tab_id="tab-account",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Symbol Performance",
-                            tab_id="tab-symbol-performance",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Monitoring Positions",
-                            tab_id="tab-monitor",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Trades / Exits",
-                            tab_id="tab-trades",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                        dbc.Tab(
-                            label="Trade Performance",
-                            tab_id="tab-trade-performance",
-                            tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                            active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
-                            className="custom-tab",
-                        ),
-                    ],
-                ),
+                build_tabs(),
                 html.Button(
                     "Refresh Now",
                     id="refresh-button",
@@ -1649,7 +1694,7 @@ app.layout = dbc.Container(
         dcc.Interval(
             id="log-interval", interval=24 * 60 * 60 * 1000, n_intervals=0
         ),
-dcc.Interval(
+        dcc.Interval(
             id="interval-trades", interval=24 * 60 * 60 * 1000, n_intervals=0
         ),
         dcc.Store(id="predictions-store"),
@@ -3307,6 +3352,7 @@ def _prepare_trade_perf_frame(store_data: Mapping[str, Any], window: str) -> pd.
 @app.callback(
     [
         Output("trade-perf-kpis", "children"),
+        Output("trade-perf-window-bar", "figure"),
         Output("trade-perf-scatter", "figure"),
         Output("trade-perf-eff-hist", "figure"),
         Output("trade-perf-reason-bar", "figure"),
@@ -3318,10 +3364,15 @@ def _prepare_trade_perf_frame(store_data: Mapping[str, Any], window: str) -> pd.
     [Input("trade-perf-range", "value"), Input("trade-perf-store", "data")],
 )
 def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]):
+    window = range_value or "30D"
     store_mapping = store_data if isinstance(store_data, Mapping) else {}
-    frame = _prepare_trade_perf_frame(store_mapping, range_value or "30D")
+    frame = _prepare_trade_perf_frame(store_mapping, window)
     summary = store_mapping.get("summary", {}) if isinstance(store_mapping, Mapping) else {}
-    metrics = summary.get(range_value) or summarize_by_window(frame).get(range_value, {})
+    if not summary:
+        summary = summarize_by_window(frame)
+    metrics = summary.get(window) or summarize_by_window(frame).get(window, {})
+    summary_bar = _build_window_net_pnl_bar(summary)
+    kpi_cards = _build_trade_perf_kpis(summary)
     status_children: list[Any] = []
     if store_mapping.get("written_at"):
         status_children.append(
@@ -3340,12 +3391,13 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
                 color="secondary",
                 className="ms-2",
             )
-        )
+            )
 
     if frame.empty:
         empty_data = store_mapping.get("trades", []) if isinstance(store_mapping, Mapping) else []
         return (
-            [],
+            kpi_cards,
+            summary_bar,
             _empty_trade_perf_fig("MFE % vs Return %"),
             _empty_trade_perf_fig("Exit efficiency %"),
             _empty_trade_perf_fig("Exit reasons"),
@@ -3411,6 +3463,11 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
         rebound_hist.update_layout(template="plotly_dark")
 
     table_frame = frame.copy()
+    if "exit_time" in table_frame.columns:
+        table_frame = table_frame.sort_values("exit_time", ascending=False, na_position="last")
+    elif "entry_time" in table_frame.columns:
+        table_frame = table_frame.sort_values("entry_time", ascending=False, na_position="last")
+    table_frame = table_frame.head(50)
     for col in ("entry_time", "exit_time"):
         if col in table_frame.columns:
             table_frame[col] = table_frame[col].dt.strftime("%Y-%m-%d %H:%M")
@@ -3418,7 +3475,8 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
     table_data = table_frame.fillna("").to_dict("records")
 
     return (
-        _build_trade_perf_kpis(metrics),
+        kpi_cards,
+        summary_bar,
         scatter_fig,
         eff_hist,
         reason_bar,
