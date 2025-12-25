@@ -413,6 +413,106 @@ def test_rebound_columns_exist():
     assert rebound_df.loc[0, "rebound_window_days"] == 5
 
 
+def test_trailing_stop_order_type_counts_as_stop_exit():
+    now = datetime.now(timezone.utc)
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "ABC",
+                "entry_time": now - timedelta(days=2),
+                "exit_time": now - timedelta(days=1),
+                "entry_price": 10.0,
+                "exit_price": 9.7,
+                "order_type": "trailing_stop",
+            }
+        ]
+    )
+    enriched = compute_exit_quality_columns(frame)
+    summary = summarize_by_window(enriched)
+    assert summary["ALL"]["stop_exits"] >= 1
+    assert bool(enriched.loc[0, "is_stop_exit"]) is True
+
+
+def test_rebound_pct_computed_with_post_exit_bars():
+    exit_ts = datetime(2024, 2, 1, tzinfo=timezone.utc)
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "XYZ",
+                "entry_time": exit_ts - timedelta(days=3),
+                "exit_time": exit_ts,
+                "entry_price": 95.0,
+                "exit_price": 97.0,
+                "order_type": "trailing_stop",
+            }
+        ]
+    )
+    enriched = compute_exit_quality_columns(trades)
+
+    def fake_fetch(_symbol, start, end, _timeframe):
+        return pd.DataFrame(
+            {
+                "timestamp": [start + timedelta(days=1), end],
+                "high": [100.0, 101.0],
+                "low": [98.0, 99.0],
+                "close": [99.5, 100.5],
+                "open": [98.5, 99.5],
+            }
+        )
+
+    rebound_df = compute_rebound_metrics(
+        enriched,
+        data_client=None,
+        bar_fetcher=fake_fetch,
+        rebound_window_days=5,
+        rebound_threshold_pct=3.0,
+    )
+    assert rebound_df.loc[0, "rebound_pct"] == pytest.approx((101.0 - 97.0) / 97.0 * 100)
+    assert bool(rebound_df.loc[0, "rebounded"]) is True
+
+
+def test_exit_efficiency_computed_from_daily_bars():
+    start = datetime(2024, 3, 1, tzinfo=timezone.utc)
+    end = start + timedelta(days=2)
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "entry_time": start,
+                "exit_time": end,
+                "qty": 10,
+                "entry_price": 10.0,
+                "exit_price": 12.0,
+            }
+        ]
+    )
+
+    def fake_fetch(symbol, fetch_start, fetch_end, _timeframe):
+        assert symbol == "AAA"
+        assert fetch_start == start
+        assert fetch_end >= end
+        return pd.DataFrame(
+            {
+                "timestamp": [
+                    fetch_start + timedelta(hours=1),
+                    fetch_start + timedelta(hours=5),
+                    fetch_end - timedelta(hours=2),
+                ],
+                "high": [11.0, 13.5, 12.5],
+                "low": [9.5, 9.8, 10.2],
+                "close": [10.8, 12.8, 12.2],
+            }
+        )
+
+    excursions = compute_trade_excursions(trades, data_client=None, bar_fetcher=fake_fetch)
+    enriched = compute_exit_quality_columns(excursions)
+    summary = summarize_by_window(enriched)
+    expected_eff = ((12.0 - 10.0) / (13.5 - 10.0)) * 100
+    assert enriched.loc[0, "peak_price"] == pytest.approx(13.5)
+    assert enriched.loc[0, "exit_efficiency_pct"] == pytest.approx(expected_eff)
+    assert summary["ALL"]["avg_exit_efficiency_pct"] == pytest.approx(expected_eff)
+
+
 def test_rebound_rate_numeric():
     now = datetime.now(timezone.utc)
     frame = pd.DataFrame(
