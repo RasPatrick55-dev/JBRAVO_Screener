@@ -954,6 +954,102 @@ def _build_window_net_pnl_bar(summary: Mapping[str, Mapping[str, Any]]) -> go.Fi
     return fig
 
 
+def _format_trade_perf_pct(value: Any) -> str:
+    try:
+        numeric = float(value)
+    except Exception:
+        return "0.0%"
+    if numeric <= 1:
+        numeric *= 100.0
+    return f"{numeric:.1f}%"
+
+
+def _render_trade_perf_summary_card(window_label: str, summary: Mapping[str, Mapping[str, Any]]) -> dbc.Col:
+    metrics = summary.get(window_label, {}) if isinstance(summary, Mapping) else {}
+    trades = _coerce_int_value(metrics.get("trades"))
+    pnl = metrics.get("net_pnl", 0.0) or 0.0
+    win_rate = metrics.get("win_rate_pct", metrics.get("win_rate", 0.0))
+    stop_exits = _coerce_int_value(metrics.get("stop_exits"))
+    rebound_rate = metrics.get("rebound_rate", 0.0)
+    rows = [
+        html.Div(["Trades", html.Span(f"{trades}", className="float-end")]),
+        html.Div(["Net P&L", html.Span(f"{float(pnl):,.2f}", className="float-end")]),
+        html.Div(["Win rate", html.Span(_format_trade_perf_pct(win_rate), className="float-end")]),
+        html.Div(["Stop exits", html.Span(f"{stop_exits}", className="float-end")]),
+        html.Div(["Rebound rate", html.Span(_format_trade_perf_pct(rebound_rate), className="float-end")]),
+    ]
+    card = dbc.Card(
+        [
+            dbc.CardHeader(f"{window_label} Overview"),
+            dbc.CardBody(rows),
+        ],
+        className="bg-dark text-light h-100",
+    )
+    return dbc.Col(card, md=6, className="mb-3")
+
+
+def render_trade_performance_panel() -> html.Div:
+    cache_path = TRADE_PERFORMANCE_CACHE
+    refresh_hint = (
+        "python -m scripts.trade_performance_refresh --lookback-days 400 --force"
+    )
+    if not cache_path.exists():
+        return html.Div(
+            dbc.Alert(
+                [
+                    "Trade performance cache not found. ",
+                    html.Code(refresh_hint),
+                    " to populate it.",
+                ],
+                color="info",
+            )
+        )
+    try:
+        payload = read_trade_performance_cache(cache_path) or {}
+    except Exception as exc:
+        return html.Div(
+            dbc.Alert(
+                f"Unable to read trade performance cache: {exc}",
+                color="danger",
+            )
+        )
+    summary = payload.get("summary", {}) if isinstance(payload, Mapping) else {}
+    if not summary:
+        return html.Div(
+            dbc.Alert(
+                [
+                    "Trade performance summary is empty. Refresh it with ",
+                    html.Code(refresh_hint),
+                    ".",
+                ],
+                color="secondary",
+            )
+        )
+
+    cards = dbc.Row(
+        [
+            _render_trade_perf_summary_card("30D", summary),
+            _render_trade_perf_summary_card("ALL", summary),
+        ],
+        className="g-3 mb-4",
+    )
+    updated_badge = None
+    if payload.get("written_at"):
+        updated_badge = dbc.Badge(
+            f"Cache updated {payload['written_at']}",
+            color="secondary",
+            className="mb-3",
+        )
+    return html.Div(
+        [
+            html.H2("Trade Performance", className="text-light mb-3"),
+            updated_badge,
+            cards,
+            make_trade_performance_layout(),
+        ]
+    )
+
+
 def make_trade_performance_layout():
     payload, alerts = _load_trade_performance_payload()
     store_data = {
@@ -1823,11 +1919,11 @@ def _update_active_tab_store(
     tab_id = tab_from_triggered_id(triggered)
     if triggered == "url":
         tab_id = _TAB_HASH_MAP.get((url_hash or "").lstrip("#"))
-    if tab_id:
+    if tab_id in _TAB_IDS:
         return {"active_tab": tab_id}
     if isinstance(store_data, Mapping):
         existing = store_data.get("active_tab")
-        if existing:
+        if existing in _TAB_IDS:
             return {"active_tab": existing}
     return {"active_tab": DEFAULT_ACTIVE_TAB}
 
@@ -3614,12 +3710,12 @@ def render_tab(store_data, refresh_ts=None):
         return make_trades_exits_layout()
     elif tab == "tab-trade-performance":
         logger.info("Rendering content for tab: %s", tab)
-        return make_trade_performance_layout()
+        return render_trade_performance_panel()
     elif tab == "tab-screener":
         logger.info("Rendering content for tab: %s", tab)
         return screener_layout()
     else:
-        return dbc.Alert("Tab not found.", color="danger")
+        return dbc.Alert("Tab not implemented yet.", color="secondary")
 
 
 _render_tab_signature = inspect.signature(render_tab)
