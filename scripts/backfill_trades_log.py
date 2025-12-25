@@ -196,7 +196,7 @@ def fetch_account_fill_events(
                     "qty": _safe_float(item.get("qty") or item.get("quantity")),
                     "price": _safe_float(item.get("price")),
                     "timestamp": ts,
-                    "order_type": _safe_str(item.get("order_type") or item.get("type")).lower(),
+                    "order_type": _clean_order_type(item.get("order_type") or item.get("type")),
                     "order_status": _clean_order_status(item.get("order_status") or item.get("status")),
                 }
             )
@@ -220,6 +220,13 @@ def _clean_order_side(side: Any) -> str:
 def _clean_order_status(status: Any) -> str:
     raw = getattr(status, "value", status)
     return _safe_str(raw).lower()
+
+
+def _clean_order_type(order_type: Any) -> str:
+    raw = _safe_str(getattr(order_type, "value", order_type)).lower()
+    if raw in {"fill", "partial_fill", "partial-filled", "filled"}:
+        return ""
+    return raw
 
 
 def fetch_order_fill_events(
@@ -266,7 +273,7 @@ def fetch_order_fill_events(
                     "qty": _safe_float(getattr(order, "filled_qty", 0.0)),
                     "price": _safe_float(getattr(order, "filled_avg_price", 0.0)),
                     "timestamp": ts,
-                    "order_type": _safe_str(getattr(order, "type", getattr(order, "order_type", ""))).lower(),
+                    "order_type": _clean_order_type(getattr(order, "type", getattr(order, "order_type", ""))),
                     "order_status": _clean_order_status(getattr(order, "status", "")),
                 }
             )
@@ -299,7 +306,7 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
         qty = _safe_float(event.get("qty"))
         price = _safe_float(event.get("price"))
         ts = _coerce_datetime(event.get("timestamp"))
-        order_type = _safe_str(event.get("order_type")).lower()
+        order_type = _clean_order_type(event.get("order_type"))
         order_status = _clean_order_status(event.get("order_status"))
 
         if not symbol or side not in {"buy", "sell"} or qty <= 0 or price == 0 or ts is None:
@@ -392,7 +399,7 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
                         "exit_time": _isoformat(exit_time),
                         "net_pnl": _net_pnl("buy", entry_price, exit_price, exit_qty),
                         "side": "buy",
-                        "order_status": lot.get("exit_order_status") or "filled",
+                        "order_status": "filled",
                         "order_type": exit_order_type,
                         "exit_reason": exit_reason,
                     }
