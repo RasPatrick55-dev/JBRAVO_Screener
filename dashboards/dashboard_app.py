@@ -1051,6 +1051,7 @@ def render_trade_performance_panel() -> html.Div:
 
 
 def make_trade_performance_layout():
+    # Safe version: Sold Too Soon UI placeholder (no changes for now)
     payload, alerts = _load_trade_performance_payload()
     store_data = {
         "trades": payload.get("trades", []),
