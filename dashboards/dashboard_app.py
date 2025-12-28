@@ -45,10 +45,7 @@ from dashboards.ml_tab import build_predictions_table, ml_layout
 from scripts.run_pipeline import write_complete_screener_metrics
 from scripts.trade_performance import (
     CACHE_PATH as TRADE_PERFORMANCE_CACHE_PATH,
-    build_data_client as build_trade_performance_client,
-    is_cache_stale as trade_performance_cache_stale,
-    read_cache as read_trade_performance_cache,
-    refresh_trade_performance_cache,
+    evaluate_sold_too_soon_flags,
     summarize_by_window,
 )
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
@@ -839,49 +836,46 @@ def make_trades_exits_layout():
     )
 
 
-def _load_trade_performance_payload(force_refresh: bool = False) -> tuple[dict[str, Any], list[Any]]:
-    alerts: list[Any] = []
-    cache_path = TRADE_PERFORMANCE_CACHE
-    cache_exists = cache_path.exists()
-    payload = read_trade_performance_cache(cache_path) or {}
+def _load_trade_perf_cache() -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "summary": {},
+        "trades": [],
+        "written_at": None,
+        "trades_total": 0,
+    }
     try:
-        stale = trade_performance_cache_stale(cache_path, TRADES_LOG_PATH)
+        with open(TRADE_PERFORMANCE_CACHE, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
     except Exception:
-        stale = True
-    should_refresh = force_refresh or (stale and cache_exists)
-    if should_refresh:
-        try:
-            data_client = build_trade_performance_client()
-            refresh_trade_performance_cache(
-                base_dir=Path(BASE_DIR),
-                data_client=data_client,
-                cache_path=cache_path,
-            )
-        except Exception as exc:
-            logger.warning("Trade performance cache refresh failed: %s", exc)
-            alerts.append(
-                dbc.Alert(
-                    "Unable to refresh trade performance cache; showing the last available snapshot.",
-                    color="warning",
-                )
-            )
-        refreshed = read_trade_performance_cache(cache_path) or {}
-        if refreshed:
-            payload = refreshed
-    if not payload.get("trades"):
-        if cache_exists:
-            message = "No closed trades available yet."
-        else:
-            message = (
-                "Trade performance cache not found. Run "
-                "`python -m scripts.trade_performance_refresh --lookback-days 400 --force` "
-                "to populate it."
-            )
-        alerts.append(dbc.Alert(message, color="info"))
-    return payload, alerts
+        payload = {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+    summary = payload.get("summary", {})
+    if not isinstance(summary, Mapping):
+        summary = {}
+    trades = payload.get("trades", [])
+    if not isinstance(trades, list):
+        trades = []
+    written_at = payload.get("written_at")
+    trades_total = payload.get("trades_total", len(trades))
+    try:
+        trades_total = int(trades_total)
+    except Exception:
+        trades_total = len(trades)
+    defaults.update(
+        {
+            "summary": summary,
+            "trades": trades,
+            "written_at": written_at,
+            "trades_total": trades_total,
+        }
+    )
+    return defaults
 
 
-def _build_trade_perf_kpis(summary: Mapping[str, Mapping[str, Any]]) -> list[Any]:
+def _build_trade_perf_kpis(
+    summary: Mapping[str, Mapping[str, Any]], windows: tuple[str, ...] = ("30D", "ALL")
+) -> list[Any]:
     def _metric(label: str, value: str) -> html.Div:
         return html.Div(
             [
@@ -898,7 +892,7 @@ def _build_trade_perf_kpis(summary: Mapping[str, Mapping[str, Any]]) -> list[Any
             return "0.0%"
 
     cards: list[Any] = []
-    for window in ("7D", "30D", "365D", "ALL"):
+    for window in windows:
         metrics = summary.get(window, {}) if isinstance(summary, Mapping) else {}
         trades = int(metrics.get("trades", 0) or 0)
         total_pnl = float(metrics.get("net_pnl", 0.0) or 0.0)
@@ -954,119 +948,41 @@ def _build_window_net_pnl_bar(summary: Mapping[str, Mapping[str, Any]]) -> go.Fi
     return fig
 
 
-def _format_trade_perf_pct(value: Any) -> str:
-    try:
-        numeric = float(value)
-    except Exception:
-        return "0.0%"
-    if numeric <= 1:
-        numeric *= 100.0
-    return f"{numeric:.1f}%"
-
-
-def _render_trade_perf_summary_card(window_label: str, summary: Mapping[str, Mapping[str, Any]]) -> dbc.Col:
-    metrics = summary.get(window_label, {}) if isinstance(summary, Mapping) else {}
-    trades = _coerce_int_value(metrics.get("trades"))
-    pnl = metrics.get("net_pnl", 0.0) or 0.0
-    win_rate = metrics.get("win_rate_pct", metrics.get("win_rate", 0.0))
-    stop_exits = _coerce_int_value(metrics.get("stop_exits"))
-    rebound_rate = metrics.get("rebound_rate", 0.0)
-    rows = [
-        html.Div(["Trades", html.Span(f"{trades}", className="float-end")]),
-        html.Div(["Net P&L", html.Span(f"{float(pnl):,.2f}", className="float-end")]),
-        html.Div(["Win rate", html.Span(_format_trade_perf_pct(win_rate), className="float-end")]),
-        html.Div(["Stop exits", html.Span(f"{stop_exits}", className="float-end")]),
-        html.Div(["Rebound rate", html.Span(_format_trade_perf_pct(rebound_rate), className="float-end")]),
-    ]
-    card = dbc.Card(
-        [
-            dbc.CardHeader(f"{window_label} Overview"),
-            dbc.CardBody(rows),
-        ],
-        className="bg-dark text-light h-100",
-    )
-    return dbc.Col(card, md=6, className="mb-3")
-
-
 def render_trade_performance_panel() -> html.Div:
-    cache_path = TRADE_PERFORMANCE_CACHE
-    refresh_hint = (
-        "python -m scripts.trade_performance_refresh --lookback-days 400 --force"
-    )
-    if not cache_path.exists():
-        return html.Div(
-            dbc.Alert(
-                [
-                    "Trade performance cache not found. ",
-                    html.Code(refresh_hint),
-                    " to populate it.",
-                ],
-                color="info",
-            )
-        )
-    try:
-        payload = read_trade_performance_cache(cache_path) or {}
-    except Exception as exc:
-        return html.Div(
-            dbc.Alert(
-                f"Unable to read trade performance cache: {exc}",
-                color="danger",
-            )
-        )
-    summary = payload.get("summary", {}) if isinstance(payload, Mapping) else {}
-    if not summary:
-        return html.Div(
-            dbc.Alert(
-                [
-                    "Trade performance summary is empty. Refresh it with ",
-                    html.Code(refresh_hint),
-                    ".",
-                ],
-                color="secondary",
-            )
-        )
-
-    cards = dbc.Row(
-        [
-            _render_trade_perf_summary_card("30D", summary),
-            _render_trade_perf_summary_card("ALL", summary),
-        ],
-        className="g-3 mb-4",
-    )
-    updated_badge = None
-    if payload.get("written_at"):
-        updated_badge = dbc.Badge(
-            f"Cache updated {payload['written_at']}",
-            color="secondary",
-            className="mb-3",
-        )
-    return html.Div(
-        [
-            html.H2("Trade Performance", className="text-light mb-3"),
-            updated_badge,
-            cards,
-            make_trade_performance_layout(),
-        ]
-    )
-
-
-def make_trade_performance_layout():
-    # Safe version: Sold Too Soon UI placeholder (no changes for now)
-    payload, alerts = _load_trade_performance_payload()
+    payload = _load_trade_perf_cache()
     store_data = {
         "trades": payload.get("trades", []),
         "summary": payload.get("summary", {}),
         "written_at": payload.get("written_at"),
+        "trades_total": payload.get("trades_total", 0),
     }
-    updated_badge = (
-        dbc.Badge(
-            f"Cache updated {payload.get('written_at')}",
-            color="secondary",
-            className="ms-2",
+    status_badges: list[Any] = []
+    if store_data.get("written_at"):
+        status_badges.append(
+            dbc.Badge(
+                f"Cache updated {store_data['written_at']}",
+                color="secondary",
+                className="me-2",
+            )
         )
-        if payload.get("written_at")
-        else None
-    )
+    if store_data.get("summary"):
+        metrics = store_data["summary"].get("ALL", {}) or {}
+        status_badges.append(
+            dbc.Badge(
+                f"Trades: {metrics.get('trades', 0)}",
+                color="info",
+                className="me-2",
+            )
+        )
+    alerts: list[Any] = []
+    if not store_data.get("trades"):
+        alerts.append(
+            dbc.Alert(
+                "Trade performance cache is empty. Run the refresh script to populate results.",
+                color="info",
+                className="mb-3",
+            )
+        )
     trade_perf_columns = [
         {"name": "Symbol", "id": "symbol"},
         {"name": "Entry Time", "id": "entry_time"},
@@ -1090,6 +1006,18 @@ def make_trade_performance_layout():
         {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
         {"name": "Rebounded", "id": "rebounded"},
     ]
+    sold_too_columns = [
+        {"name": "Exit Time", "id": "exit_time"},
+        {"name": "Symbol", "id": "symbol"},
+        {"name": "Order Type", "id": "order_type"},
+        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Rebounded", "id": "rebounded"},
+        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
+    ]
 
     return html.Div(
         [
@@ -1099,21 +1027,20 @@ def make_trade_performance_layout():
                 [
                     dbc.Col(
                         [
-                            html.H3("Trade Performance", className="text-light"),
+                            html.H2("Trade Performance", className="text-light mb-0"),
                             html.P(
-                                "Aggregate P&L, exit quality, and excursion metrics across your closed trades.",
+                                "Aggregate P&L, exit quality, and excursion metrics across closed trades.",
                                 className="text-muted",
                             ),
-                        ]
+                        ],
+                        md=8,
                     ),
                     dbc.Col(
                         dbc.RadioItems(
                             id="trade-perf-range",
                             options=[
-                                {"label": "7D", "value": "7D"},
                                 {"label": "30D", "value": "30D"},
-                                {"label": "1Y", "value": "365D"},
-                                {"label": "All", "value": "ALL"},
+                                {"label": "ALL", "value": "ALL"},
                             ],
                             value="30D",
                             inline=True,
@@ -1125,38 +1052,173 @@ def make_trade_performance_layout():
                 ],
                 className="mb-3",
             ),
-            html.Div(updated_badge, id="trade-perf-status", className="mb-3"),
-            dbc.Row(id="trade-perf-kpis", className="g-2 mb-3"),
             dbc.Row(
-                dbc.Col(dcc.Graph(id="trade-perf-window-bar"), width=12),
-                className="mb-3",
+                _build_trade_perf_kpis(store_data.get("summary", {})),
+                id="trade-perf-kpis",
+                className="g-3 mb-3",
             ),
-            dbc.Row(
+            dbc.Card(
                 [
-                    dbc.Col(dcc.Graph(id="trade-perf-scatter"), md=6),
-                    dbc.Col(dcc.Graph(id="trade-perf-eff-hist"), md=3),
-                    dbc.Col(dcc.Graph(id="trade-perf-reason-bar"), md=3),
+                    dbc.CardHeader("Sold Too Soon Controls", className="fw-bold"),
+                    dbc.CardBody(
+                        [
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            html.Label("Flag mode"),
+                                            dbc.RadioItems(
+                                                id="sold-too-mode",
+                                                options=[
+                                                    {"label": "Either", "value": "either"},
+                                                    {"label": "Efficiency only", "value": "efficiency"},
+                                                    {"label": "Missed-profit only", "value": "missed"},
+                                                ],
+                                                value="either",
+                                                inline=True,
+                                                labelClassName="me-3",
+                                            ),
+                                        ],
+                                        md=4,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.Label("Exit efficiency cutoff (%)"),
+                                            dcc.Slider(
+                                                id="sold-too-eff-cutoff",
+                                                min=0,
+                                                max=100,
+                                                step=1,
+                                                value=40,
+                                                marks=None,
+                                                tooltip={"placement": "bottom", "always_visible": False},
+                                            ),
+                                        ],
+                                        md=4,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.Label("Missed profit cutoff (%)"),
+                                            dcc.Slider(
+                                                id="sold-too-missed-cutoff",
+                                                min=0,
+                                                max=20,
+                                                step=0.5,
+                                                value=3,
+                                                marks=None,
+                                                tooltip={"placement": "bottom", "always_visible": False},
+                                            ),
+                                        ],
+                                        md=4,
+                                    ),
+                                ],
+                                className="gy-3",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            html.Label("Rebound threshold (%)"),
+                                            dcc.Slider(
+                                                id="sold-too-rebound-threshold",
+                                                min=0,
+                                                max=20,
+                                                step=0.5,
+                                                value=3,
+                                                marks=None,
+                                                tooltip={"placement": "bottom", "always_visible": False},
+                                            ),
+                                        ],
+                                        md=6,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            html.Label("Rebound window (days)"),
+                                            dcc.Slider(
+                                                id="sold-too-rebound-window",
+                                                min=1,
+                                                max=30,
+                                                step=1,
+                                                value=5,
+                                                marks=None,
+                                                tooltip={"placement": "bottom", "always_visible": False},
+                                            ),
+                                        ],
+                                        md=6,
+                                    ),
+                                ],
+                                className="gy-3 mt-2",
+                            ),
+                        ]
+                    ),
                 ],
-                className="g-3",
+                className="bg-dark text-light mb-3",
             ),
-            dbc.Row(
+            dbc.Card(
                 [
-                    dbc.Col(dcc.Graph(id="trade-perf-rebound-scatter"), md=6),
-                    dbc.Col(dcc.Graph(id="trade-perf-rebound-hist"), md=6),
+                    dbc.CardHeader(
+                        [
+                            html.Span("Trade Performance Charts"),
+                            html.Div(status_badges, id="trade-perf-status", className="mt-2"),
+                        ],
+                        className="d-flex justify-content-between align-items-center flex-wrap gap-2",
+                    ),
+                    dbc.CardBody(
+                        [
+                            dbc.Row(dbc.Col(dcc.Graph(id="trade-perf-window-bar", figure=_empty_trade_perf_fig("Net P&L by window")), width=12), className="mb-3"),
+                            dbc.Row(
+                                [
+                                    dbc.Col(dcc.Graph(id="trade-perf-scatter", figure=_empty_trade_perf_fig("MFE % vs Return %")), md=6),
+                                    dbc.Col(dcc.Graph(id="trade-perf-eff-hist", figure=_empty_trade_perf_fig("Exit efficiency %")), md=3),
+                                    dbc.Col(dcc.Graph(id="trade-perf-reason-bar", figure=_empty_trade_perf_fig("Exit reasons")), md=3),
+                                ],
+                                className="g-3",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(dcc.Graph(id="trade-perf-rebound-scatter", figure=_empty_trade_perf_fig("Exit Efficiency % vs Rebound %")), md=6),
+                                    dbc.Col(dcc.Graph(id="trade-perf-rebound-hist", figure=_empty_trade_perf_fig("Rebound %")), md=6),
+                                ],
+                                className="g-3",
+                            ),
+                            html.H4("Per-trade details", className="mt-4"),
+                            dash_table.DataTable(
+                                id="trade-perf-table",
+                                columns=trade_perf_columns,
+                                data=store_data.get("trades", []),
+                                sort_action="native",
+                                filter_action="native",
+                                filter_query='{exit_reason} = "TrailingStop" && {rebounded} = true',
+                                page_size=20,
+                                style_table={"overflowX": "auto"},
+                                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
+                            ),
+                        ]
+                    ),
                 ],
-                className="g-3",
+                className="bg-dark text-light mb-3",
             ),
-            html.H4("Per-trade details", className="mt-4"),
-            dash_table.DataTable(
-                id="trade-perf-table",
-                columns=trade_perf_columns,
-                data=store_data.get("trades", []),
-                sort_action="native",
-                filter_action="native",
-                filter_query='{exit_reason} = "TrailingStop" && {rebounded} = true',
-                page_size=20,
-                style_table={"overflowX": "auto"},
-                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
+            dbc.Card(
+                [
+                    dbc.CardHeader("Sold Too Soon (Flagged Trades)", className="fw-bold"),
+                    dbc.CardBody(
+                        [
+                            html.Div(id="sold-too-soon-summary", className="mb-2 d-flex flex-wrap gap-2"),
+                            dash_table.DataTable(
+                                id="sold-too-soon-table",
+                                columns=sold_too_columns,
+                                data=[],
+                                sort_action="native",
+                                filter_action="native",
+                                sort_by=[{"column_id": "exit_time", "direction": "desc"}],
+                                page_size=20,
+                                style_table={"overflowX": "auto"},
+                                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
+                            ),
+                        ]
+                    ),
+                ],
+                className="bg-dark text-light",
             ),
         ]
     )
@@ -3664,6 +3726,105 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
         table_data,
         status_children,
     )
+
+
+def _format_chip(label: str, value: str | float) -> dbc.Badge:
+    return dbc.Badge(f"{label}: {value}", color="secondary", className="me-2")
+
+
+@app.callback(
+    [
+        Output("sold-too-soon-table", "data"),
+        Output("sold-too-soon-summary", "children"),
+    ],
+    [
+        Input("active-tab-store", "data"),
+        Input("refresh-ts", "data"),
+        Input("sold-too-mode", "value"),
+        Input("sold-too-eff-cutoff", "value"),
+        Input("sold-too-missed-cutoff", "value"),
+        Input("sold-too-rebound-threshold", "value"),
+        Input("sold-too-rebound-window", "value"),
+    ],
+)
+def update_sold_too_soon_table(
+    active_tab: Mapping[str, Any] | None,
+    _refresh_ts: str | None,
+    mode: str,
+    eff_cutoff: float,
+    missed_cutoff: float,
+    rebound_threshold: float,
+    rebound_window_days: int,
+):
+    if isinstance(active_tab, Mapping) and active_tab.get("active_tab") not in (None, "tab-trade-performance"):
+        return dash.no_update, dash.no_update
+
+    payload = _load_trade_perf_cache()
+    trades = payload.get("trades", [])
+    if not trades:
+        return [], []
+
+    try:
+        evaluated = evaluate_sold_too_soon_flags(
+            trades,
+            efficiency_cutoff_pct=eff_cutoff or 0.0,
+            missed_profit_cutoff_pct=missed_cutoff or 0.0,
+            mode=mode or "either",
+            rebound_threshold_pct=rebound_threshold,
+            rebound_window_days=rebound_window_days,
+        )
+    except Exception:
+        return [], []
+
+    flagged = evaluated[evaluated["sold_too_soon_flag"] == True]  # noqa: E712
+    total_trades = payload.get("trades_total", len(evaluated.index))
+    try:
+        total_trades = int(total_trades)
+    except Exception:
+        total_trades = len(evaluated.index)
+    flagged_count = len(flagged.index)
+
+    def _safe_mean(series: pd.Series) -> float:
+        if series is None or series.empty:
+            return 0.0
+        numeric = pd.to_numeric(series, errors="coerce").dropna()
+        if numeric.empty:
+            return 0.0
+        return float(numeric.mean())
+
+    avg_return = _safe_mean(flagged.get("return_pct", pd.Series(dtype=float)))
+    avg_eff = _safe_mean(flagged.get("exit_efficiency_pct", pd.Series(dtype=float)))
+    total_pnl = float(pd.to_numeric(flagged.get("pnl", pd.Series(dtype=float)), errors="coerce").sum()) if flagged_count else 0.0
+
+    summary = [
+        _format_chip("Flagged", f"{flagged_count} of {total_trades}"),
+        _format_chip("Avg return (flagged)", f"{avg_return:.2f}%"),
+        _format_chip("Avg exit efficiency", f"{avg_eff:.2f}%"),
+        _format_chip("Total P&L", f"{total_pnl:,.2f}"),
+    ]
+
+    table_frame = flagged.copy()
+    for col in ("entry_time", "exit_time"):
+        if col in table_frame.columns:
+            table_frame[col] = pd.to_datetime(table_frame[col], utc=True, errors="coerce")
+    if "exit_time" in table_frame.columns:
+        table_frame = table_frame.sort_values("exit_time", ascending=False, na_position="last")
+        table_frame["exit_time"] = table_frame["exit_time"].dt.strftime("%Y-%m-%d %H:%M")
+    desired_columns = [
+        "exit_time",
+        "symbol",
+        "order_type",
+        "return_pct",
+        "exit_efficiency_pct",
+        "missed_profit_pct",
+        "rebound_pct",
+        "rebounded",
+        "hold_days",
+        "pnl",
+    ]
+    table_frame = table_frame.reindex(columns=desired_columns).fillna("")
+
+    return table_frame.to_dict("records"), summary
 
 
 @app.callback(

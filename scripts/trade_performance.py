@@ -9,7 +9,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -507,6 +507,105 @@ def compute_exit_quality_columns(
         | frame["post_exit_rebound"].fillna(False)
     )
     frame["is_trailing_stop_exit"] = frame.get("is_stop_exit", False)
+    return frame
+
+
+def evaluate_sold_too_soon_flags(
+    trades: Sequence[Mapping[str, Any]] | pd.DataFrame,
+    *,
+    efficiency_cutoff_pct: float = 40.0,
+    missed_profit_cutoff_pct: float = 3.0,
+    mode: str = "either",
+    rebound_threshold_pct: float | None = None,
+    rebound_window_days: int | None = None,
+) -> pd.DataFrame:
+    """Return trades with an in-memory sold-too-soon flag.
+
+    This is a lightweight evaluator intended for UI callbacks. It does not
+    perform any cache writes or network fetches.
+    """
+
+    frame = pd.DataFrame(trades)
+    if frame.empty:
+        frame["sold_too_soon_flag"] = []
+        return frame
+
+    frame = frame.copy()
+    for col in ("entry_time", "exit_time"):
+        if col in frame.columns:
+            frame[col] = pd.to_datetime(frame[col], utc=True, errors="coerce")
+
+    entry_price = pd.to_numeric(frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    exit_price = pd.to_numeric(frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    qty = pd.to_numeric(frame.get("qty", pd.Series(np.nan, index=frame.index)), errors="coerce")
+
+    pnl_series = pd.to_numeric(frame.get("pnl", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    pnl_fallback = (exit_price - entry_price) * qty
+    frame["pnl"] = pnl_series.where(~pnl_series.isna(), pnl_fallback)
+
+    return_pct = pd.to_numeric(frame.get("return_pct", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    computed_return = np.where(
+        (entry_price > 0) & (exit_price.notna()),
+        (exit_price - entry_price) / entry_price * 100,
+        np.nan,
+    )
+    frame["return_pct"] = return_pct.where(~return_pct.isna(), computed_return)
+
+    hold_days_series = pd.to_numeric(frame.get("hold_days", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    hold_days_calc = np.where(
+        (frame.get("exit_time") is not None)
+        & (frame.get("entry_time") is not None)
+        & frame.get("exit_time").notna()
+        & frame.get("entry_time").notna(),
+        (frame["exit_time"] - frame["entry_time"]).dt.total_seconds() / 86_400,
+        np.nan,
+    )
+    frame["hold_days"] = hold_days_series.where(~hold_days_series.isna(), hold_days_calc)
+
+    missed_profit = pd.to_numeric(
+        frame.get("missed_profit_pct", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    )
+    peak_price = pd.to_numeric(frame.get("peak_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    fallback_mask = (
+        missed_profit.isna()
+        & peak_price.notna()
+        & exit_price.notna()
+        & entry_price.notna()
+        & (entry_price != 0)
+    )
+    fallback_missed = (peak_price - exit_price) / entry_price * 100
+    frame["missed_profit_pct"] = missed_profit.where(~fallback_mask, fallback_missed)
+
+    efficiency = pd.to_numeric(
+        frame.get("exit_efficiency_pct", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    )
+    eff_condition = (efficiency < float(efficiency_cutoff_pct)).fillna(False)
+    missed_condition = (frame["missed_profit_pct"] >= float(missed_profit_cutoff_pct)).fillna(False)
+
+    normalized_mode = (mode or "either").strip().lower()
+    if normalized_mode.startswith("efficiency"):
+        sold_flags = eff_condition
+    elif normalized_mode.startswith("missed"):
+        sold_flags = missed_condition
+    else:
+        sold_flags = eff_condition | missed_condition
+    frame["sold_too_soon_flag"] = sold_flags.fillna(False)
+
+    rebound_series = pd.to_numeric(frame.get("rebound_pct", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    if rebound_threshold_pct is not None:
+        rebound_flags = (rebound_series >= float(rebound_threshold_pct)).fillna(False)
+    else:
+        rebound_flags = (
+            pd.Series(frame.get("rebounded", False), index=frame.index, dtype="boolean")
+            .fillna(False)
+            .astype(bool)
+        )
+    frame["rebounded"] = rebound_flags
+    if rebound_window_days is not None:
+        frame["rebound_window_days"] = rebound_window_days
+
     return frame
 
 
