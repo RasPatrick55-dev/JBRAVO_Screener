@@ -1059,6 +1059,50 @@ def render_trade_performance_panel() -> html.Div:
             ),
             dbc.Card(
                 [
+                    dbc.CardHeader(
+                        [
+                            html.Span("Trade Performance Charts"),
+                            html.Div(status_badges, id="trade-perf-status", className="mt-2"),
+                        ],
+                        className="d-flex justify-content-between align-items-center flex-wrap gap-2",
+                    ),
+                    dbc.CardBody(
+                        [
+                            dbc.Row(dbc.Col(dcc.Graph(id="trade-perf-window-bar", figure=_empty_trade_perf_fig("Net P&L by window")), width=12), className="mb-3"),
+                            dbc.Row(
+                                [
+                                    dbc.Col(dcc.Graph(id="trade-perf-scatter", figure=_empty_trade_perf_fig("MFE % vs Return %")), md=6),
+                                    dbc.Col(dcc.Graph(id="trade-perf-eff-hist", figure=_empty_trade_perf_fig("Exit efficiency %")), md=3),
+                                    dbc.Col(dcc.Graph(id="trade-perf-reason-bar", figure=_empty_trade_perf_fig("Exit reasons")), md=3),
+                                ],
+                                className="g-3",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(dcc.Graph(id="trade-perf-rebound-scatter", figure=_empty_trade_perf_fig("Exit Efficiency % vs Rebound %")), md=6),
+                                    dbc.Col(dcc.Graph(id="trade-perf-rebound-hist", figure=_empty_trade_perf_fig("Rebound %")), md=6),
+                                ],
+                                className="g-3",
+                            ),
+                            html.H4("Per-trade details", className="mt-4"),
+                            dash_table.DataTable(
+                                id="trade-perf-table",
+                                columns=trade_perf_columns,
+                                data=store_data.get("trades", []),
+                                sort_action="native",
+                                filter_action="native",
+                                filter_query='{exit_reason} = "TrailingStop" && {rebounded} = true',
+                                page_size=20,
+                                style_table={"overflowX": "auto"},
+                                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
+                            ),
+                        ]
+                    ),
+                ],
+                className="bg-dark text-light mb-3",
+            ),
+            dbc.Card(
+                [
                     dbc.CardHeader("Sold Too Soon Controls", className="fw-bold"),
                     dbc.CardBody(
                         [
@@ -1148,50 +1192,6 @@ def render_trade_performance_panel() -> html.Div:
                                     ),
                                 ],
                                 className="gy-3 mt-2",
-                            ),
-                        ]
-                    ),
-                ],
-                className="bg-dark text-light mb-3",
-            ),
-            dbc.Card(
-                [
-                    dbc.CardHeader(
-                        [
-                            html.Span("Trade Performance Charts"),
-                            html.Div(status_badges, id="trade-perf-status", className="mt-2"),
-                        ],
-                        className="d-flex justify-content-between align-items-center flex-wrap gap-2",
-                    ),
-                    dbc.CardBody(
-                        [
-                            dbc.Row(dbc.Col(dcc.Graph(id="trade-perf-window-bar", figure=_empty_trade_perf_fig("Net P&L by window")), width=12), className="mb-3"),
-                            dbc.Row(
-                                [
-                                    dbc.Col(dcc.Graph(id="trade-perf-scatter", figure=_empty_trade_perf_fig("MFE % vs Return %")), md=6),
-                                    dbc.Col(dcc.Graph(id="trade-perf-eff-hist", figure=_empty_trade_perf_fig("Exit efficiency %")), md=3),
-                                    dbc.Col(dcc.Graph(id="trade-perf-reason-bar", figure=_empty_trade_perf_fig("Exit reasons")), md=3),
-                                ],
-                                className="g-3",
-                            ),
-                            dbc.Row(
-                                [
-                                    dbc.Col(dcc.Graph(id="trade-perf-rebound-scatter", figure=_empty_trade_perf_fig("Exit Efficiency % vs Rebound %")), md=6),
-                                    dbc.Col(dcc.Graph(id="trade-perf-rebound-hist", figure=_empty_trade_perf_fig("Rebound %")), md=6),
-                                ],
-                                className="g-3",
-                            ),
-                            html.H4("Per-trade details", className="mt-4"),
-                            dash_table.DataTable(
-                                id="trade-perf-table",
-                                columns=trade_perf_columns,
-                                data=store_data.get("trades", []),
-                                sort_action="native",
-                                filter_action="native",
-                                filter_query='{exit_reason} = "TrailingStop" && {rebounded} = true',
-                                page_size=20,
-                                style_table={"overflowX": "auto"},
-                                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
                             ),
                         ]
                     ),
@@ -3732,6 +3732,7 @@ def _format_chip(label: str, value: str | float) -> dbc.Badge:
     return dbc.Badge(f"{label}: {value}", color="secondary", className="me-2")
 
 
+
 @app.callback(
     [
         Output("sold-too-soon-table", "data"),
@@ -3747,7 +3748,7 @@ def _format_chip(label: str, value: str | float) -> dbc.Badge:
         Input("sold-too-rebound-window", "value"),
     ],
 )
-def update_sold_too_soon_table(
+def _update_sold_too_soon_table(
     active_tab: Mapping[str, Any] | None,
     _refresh_ts: str | None,
     mode: str,
