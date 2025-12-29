@@ -285,9 +285,15 @@ def load_screener_metrics(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     symbols_with_any_bars = _coerce_int(
         payload.get("symbols_with_any_bars") or payload.get("symbols_with_bars_any")
     )
-    symbols_with_bars_fetch = _coerce_int(
-        payload.get("symbols_with_bars_fetch")
-    ) or _coerce_int(payload.get("symbols_with_required_bars")) or _coerce_int(payload.get("symbols_with_bars"))
+    symbols_with_bars_fetch = _coerce_int(payload.get("symbols_with_bars_fetch"))
+    symbols_attempted_fetch = _coerce_int(payload.get("symbols_attempted_fetch"))
+    if symbols_with_any_bars is not None:
+        symbols_with_bars_fetch = symbols_with_any_bars
+    elif symbols_with_bars_fetch is None:
+        symbols_with_bars_fetch = _coerce_int(payload.get("symbols_with_required_bars")) or _coerce_int(
+            payload.get("symbols_with_bars")
+        )
+    attempted_fetch = symbols_attempted_fetch or symbols_with_bars_fetch
     symbols_with_required_bars = _coerce_int(
         payload.get("symbols_with_required_bars")
     ) or symbols_with_bars_fetch
@@ -313,6 +319,7 @@ def load_screener_metrics(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         "last_run_utc": payload.get("last_run_utc") or payload.get("last_run"),
         "symbols_in": _coerce_int(payload.get("symbols_in")),
         "symbols_with_bars_fetch": symbols_with_bars_fetch,
+        "symbols_attempted_fetch": attempted_fetch,
         "symbols_with_any_bars": symbols_with_any_bars,
         "symbols_with_required_bars": symbols_with_required_bars,
         "symbols_with_bars_post": _coerce_int(payload.get("symbols_with_bars_post")),

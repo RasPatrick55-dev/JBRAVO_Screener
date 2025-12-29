@@ -353,6 +353,9 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
     return None
 
 
+DEFAULT_REQUIRED_BARS = 250
+
+
 def compose_metrics_from_artifacts(
     base_dir: Path,
     *,
@@ -396,6 +399,11 @@ def compose_metrics_from_artifacts(
         if isinstance(hint, int) and hint > 0:
             symbols_in_effective = hint
             break
+    required_bars_value = (
+        _coerce_optional_int(existing_metrics.get("required_bars"))
+        or _coerce_optional_int(fetch_stats.get("required_bars")) if fetch_stats else None
+        or DEFAULT_REQUIRED_BARS
+    )
     fetch_symbols_required = (
         _coerce_optional_int(fetch_stats.get("symbols_with_required_bars_fetch"))
         if fetch_stats
@@ -430,6 +438,7 @@ def compose_metrics_from_artifacts(
         or fallback_bars
         or rows_final
     )
+    fetch_any_attempted = fetch_symbols_any or fetch_symbols_legacy
     if symbols_in_effective <= 0 and with_bars_any > 0:
         LOG.warning(
             "[WARN] METRICS_SYMBOLS_IN_RECOVERED from_with_bars=%s",
@@ -450,9 +459,11 @@ def compose_metrics_from_artifacts(
     payload = {
         "last_run_utc": _now_iso(),
         "symbols_in": int(symbols_in_effective or 0),
+        "required_bars": int(required_bars_value or 0),
         "symbols_with_bars": int(with_bars_required),
         "symbols_with_bars_raw": int(with_bars_required),
-        "symbols_with_bars_fetch": fetch_symbols_required or fetch_symbols_legacy,
+        "symbols_with_bars_fetch": None,
+        "symbols_attempted_fetch": None,
         "symbols_with_required_bars": int(with_bars_required),
         "symbols_with_any_bars": int(with_bars_any),
         "symbols_with_bars_required": int(with_bars_required),
@@ -464,7 +475,15 @@ def compose_metrics_from_artifacts(
         "rows": int(rows_final),
         "rows_premetrics": int(rows_final),
         "latest_source": latest_source or "unknown",
+        "metrics_version": 2,
     }
+    if fetch_any_attempted is not None:
+        if with_bars_any and fetch_any_attempted == with_bars_any:
+            payload["symbols_with_bars_fetch"] = fetch_any_attempted
+        else:
+            payload["symbols_attempted_fetch"] = fetch_any_attempted
+    elif fetch_symbols_required is not None:
+        payload["symbols_attempted_fetch"] = fetch_symbols_required
     if post_stats and "candidates_final" in post_stats:
         payload["candidates_final"] = _coerce_optional_int(post_stats.get("candidates_final")) or int(rows_final)
     return payload
@@ -2132,20 +2151,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         metrics = dict(metrics or {})
         metrics.update(metrics_payload)
         try:
-            _write_json(metrics_path, metrics_payload)
+            write_screener_metrics_json(metrics_path, metrics_payload)
         except Exception:
             LOG.exception("SCREENER_METRICS_WRITE_FAILED path=%s", metrics_path)
-        candidates_final = int(metrics_payload.get("rows", 0))
-        bars_rows_total_int = int(metrics_payload.get("bars_rows_total", 0) or 0)
-        with_bars_effective = int(metrics_payload.get("symbols_with_bars", 0) or 0)
-        with_bars_any = int(metrics_payload.get("symbols_with_any_bars", with_bars_effective) or 0)
+        metrics_final = ensure_canonical_metrics(_read_json(metrics_path))
+        candidates_final = int(metrics_final.get("rows", 0))
+        bars_rows_total_int = int(metrics_final.get("bars_rows_total", 0) or 0)
+        with_bars_effective = int(metrics_final.get("symbols_with_required_bars", 0) or 0)
+        with_bars_any = int(metrics_final.get("symbols_with_any_bars", with_bars_effective) or 0)
+        summary_rows = int(metrics_final.get("rows", summary_rows) or 0)
         summary = SimpleNamespace(
-            symbols_in=int(metrics_payload.get("symbols_in", symbols_in) or 0),
+            symbols_in=int(metrics_final.get("symbols_in", symbols_in) or 0),
             with_bars=with_bars_effective,
             with_bars_any=with_bars_any,
             rows=candidates_final,
             bars_rows_total=bars_rows_total_int,
-            source=summary_source,
+            source=metrics_final.get("latest_source", summary_source),
         )
         t = SimpleNamespace(
             fetch=fetch_secs,
@@ -2194,7 +2215,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if rc != 0:
                 kpis = write_complete_screener_metrics(base_dir)
             else:
-                kpis = metrics_payload
+                kpis = metrics_final
             rows_for_stamp = int(kpis.get("rows") or 0)
             LOG.info(
                 "SCREENER_METRICS_SYNC symbols_in=%s with_bars=%s rows=%s bars_rows_total=%s",

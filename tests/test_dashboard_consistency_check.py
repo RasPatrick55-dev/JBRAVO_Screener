@@ -79,3 +79,22 @@ def test_dashboard_consistency_detects_missing_metrics(
     assert findings_path.exists()
     report_json = json.loads((reports_dir / "dashboard_consistency.json").read_text())
     assert report_json["inputs"]["screener_metrics"]["present"] is False
+
+
+def test_dashboard_consistency_allows_fetch_superset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_alert(monkeypatch)
+    _build_test_layout(tmp_path)
+    data_dir = tmp_path / "data"
+    metrics = {
+        "symbols_in": 57,
+        "symbols_with_required_bars": 57,
+        "symbols_with_any_bars": 100,
+        "symbols_with_bars_fetch": 419,
+        "bars_rows_total_fetch": 1000,
+        "rows": 2,
+    }
+    (data_dir / "screener_metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+
+    errors = checker.run_assertions(tmp_path)
+
+    assert errors == []

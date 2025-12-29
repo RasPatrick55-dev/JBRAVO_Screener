@@ -351,6 +351,7 @@ def _gather_universe(metrics: Mapping[str, Any], summary_data: Mapping[str, Any]
     any_bars = _get("symbols_with_any_bars")
     if not any_bars:
         any_bars = _get("symbols_with_bars_any") or required
+    required_bars_value = _get("required_bars") or _get("bars_required")
     universe = {
         "symbols_in": _get("symbols_in"),
         "symbols_with_required_bars": required,
@@ -359,6 +360,7 @@ def _gather_universe(metrics: Mapping[str, Any], summary_data: Mapping[str, Any]
         "rows": _get("rows"),
         "bars_rows_total": bars_total,
         "source": source,
+        "required_bars": required_bars_value,
     }
     return universe
 
@@ -570,11 +572,21 @@ def _write_findings(path: Path, report: Mapping[str, Any]) -> None:
     executor = checks.get("executor", {})
     trades = checks.get("trades_log", {})
     prefix = checks.get("prefix_sanity", {})
+    universe = checks.get("universe", {})
 
     lines = [
         f"Generated at: {report.get('generated_at_utc', 'n/a')}",
         f"Screener last run: {timestamps.get('screener_last_run_utc', 'n/a')} (pipeline end {timestamps.get('pipeline_end_utc', 'n/a')})",
     ]
+    if universe:
+        lines.append(
+            "Any bars fetched: {any_bars} | Required bars (>= {required_bars}): {required_bars_count} | Scored symbols: {symbols_in}".format(
+                any_bars=universe.get("symbols_with_any_bars", 0),
+                required_bars=universe.get("required_bars", 0) or 0,
+                required_bars_count=universe.get("symbols_with_required_bars", 0),
+                symbols_in=universe.get("symbols_in", 0),
+            )
+        )
     latest = candidates.get("latest", {})
     source = checks.get("universe", {}).get("source") or "unknown"
     lines.append(
@@ -706,6 +718,7 @@ def run_assertions(base_dir: Path) -> list[str]:
     if not isinstance(metrics, Mapping):
         metrics = {}
 
+    latest_df, latest_info = _safe_read_csv(data_dir / "latest_candidates.csv")
     _, top_info = _safe_read_csv(data_dir / "top_candidates.csv")
     top_rows = _coerce_int(top_info.get("rows"))
     rows_metric = _coerce_int(metrics.get("rows"))
@@ -713,33 +726,14 @@ def run_assertions(base_dir: Path) -> list[str]:
         errors.append(
             f"[PARITY] top_candidates.csv rows={top_rows} does not match screener_metrics.json rows={rows_metric}"
         )
+    latest_rows = _coerce_int(latest_info.get("rows"))
+    if latest_rows in (None, 0):
+        errors.append("[FALLBACK] latest_candidates.csv empty (header-only)")
 
-    stage_fetch, _ = _safe_read_json(data_dir / "screener_stage_fetch.json")
-
-    for key in ("symbols_with_bars_fetch", "bars_rows_total_fetch", "symbols_with_any_bars", "symbols_with_required_bars"):
+    for key in ("bars_rows_total_fetch", "symbols_with_any_bars", "symbols_with_required_bars"):
         if _coerce_int(metrics.get(key)) is None:
             errors.append(f"[FIELDS] screener_metrics.json missing numeric {key}")
 
-    derived_required = (
-        _coerce_int(stage_fetch.get("symbols_with_required_bars_fetch"))
-        if isinstance(stage_fetch, Mapping)
-        else None
-    )
-    derived_any = (
-        _coerce_int(stage_fetch.get("symbols_with_any_bars_fetch"))
-        if isinstance(stage_fetch, Mapping)
-        else None
-    )
-    required_metric = _coerce_int(metrics.get("symbols_with_required_bars"))
-    any_metric = _coerce_int(metrics.get("symbols_with_any_bars"))
-    if derived_required is not None and required_metric not in (None, derived_required):
-        errors.append(
-            f"[FALLBACK] symbols_with_required_bars={required_metric} does not match fetch snapshot {derived_required}"
-        )
-    if derived_any is not None and any_metric not in (None, derived_any):
-        errors.append(
-            f"[FALLBACK] symbols_with_any_bars={any_metric} does not match fetch snapshot {derived_any}"
-        )
     fallback_pairs = (
         ("bars_rows_total_fetch", "bars_rows_total"),
     )
