@@ -1,6 +1,8 @@
 {
   "symbols_in": 10,
   "symbols_with_bars": 8,
+  "symbols_with_any_bars": 8,
+  "symbols_with_required_bars": 8,
   "bars_rows_total": 200,
   "rows": 2,
   "symbols_with_bars_fetch": 8,

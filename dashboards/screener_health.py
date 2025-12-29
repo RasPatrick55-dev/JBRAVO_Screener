@@ -131,6 +131,8 @@ def _normalize_metrics(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         "last_run_utc": None,
         "symbols_in": None,
         "symbols_with_bars": None,
+        "symbols_with_any_bars": None,
+        "symbols_with_required_bars": None,
         "bars_rows_total": None,
         "rows": None,
     }
@@ -165,7 +167,18 @@ def _count_rows(path: pathlib.Path) -> int | None:
 def load_kpis() -> dict[str, Any]:
     metrics = _normalize_metrics(safe_read_json(METRICS_JSON))
     kpis = dict(metrics)
-    numeric_fields = ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows")
+    if kpis.get("symbols_with_required_bars") in (None, ""):
+        kpis["symbols_with_required_bars"] = kpis.get("symbols_with_bars")
+    if kpis.get("symbols_with_any_bars") in (None, ""):
+        kpis["symbols_with_any_bars"] = kpis.get("symbols_with_bars")
+    numeric_fields = (
+        "symbols_in",
+        "symbols_with_bars",
+        "symbols_with_any_bars",
+        "symbols_with_required_bars",
+        "bars_rows_total",
+        "rows",
+    )
     primary_source = "screener_metrics.json"
     inferred_from_log = False
 
@@ -209,6 +222,8 @@ def load_kpis() -> dict[str, Any]:
     for field in numeric_fields:
         if not isinstance(kpis.get(field), int):
             kpis[field] = 0
+    if kpis.get("symbols_with_any_bars", 0) < kpis.get("symbols_with_required_bars", 0):
+        kpis["symbols_with_any_bars"] = kpis["symbols_with_required_bars"]
 
     kpis["source"] = primary_source
     kpis["_kpi_inferred_from_log"] = inferred_from_log
@@ -1435,10 +1450,18 @@ def register_callbacks(app):
                     sym_in_exec = 0
                 if sym_in_exec:
                     sym_in = sym_in_exec
-            sym_bars_raw = m.get("symbols_with_bars")
-            if sym_bars_raw in (None, ""):
-                sym_bars_raw = m.get("with_bars")
-            sym_bars = int(sym_bars_raw or 0)
+            sym_bars_required_raw = (
+                m.get("symbols_with_required_bars")
+                if "symbols_with_required_bars" in m
+                else m.get("symbols_with_bars")
+            )
+            if sym_bars_required_raw in (None, ""):
+                sym_bars_required_raw = m.get("with_bars")
+            sym_bars_required = int(sym_bars_required_raw or 0)
+            sym_bars_any_raw = m.get("symbols_with_any_bars")
+            if sym_bars_any_raw in (None, ""):
+                sym_bars_any_raw = m.get("symbols_with_bars_any")
+            sym_bars_any = int(sym_bars_any_raw or sym_bars_required)
             bars_tot = int(m.get("bars_rows_total", 0) or 0)
             rows_raw = m.get("rows")
             if rows_raw in (None, ""):
@@ -1466,19 +1489,19 @@ def register_callbacks(app):
                     },
                 )
             sym_in_text = f"{sym_in:,}"
-            sym_bars_text = f"{sym_bars:,}"
+            sym_bars_text = f"{sym_bars_required:,}"
             bars_tot_text = f"{bars_tot:,}"
             rows_text = f"{rows:,}"
             bars_pct_value = 0.0
             if sym_in > 0:
-                bars_pct_value = (sym_bars / max(sym_in, 1)) * 100
+                bars_pct_value = (sym_bars_required / max(sym_in, 1)) * 100
             bars_pct_text = f"{bars_pct_value:.1f}%"
             kpi_cards = [
                 health_card,
                 premarket_card,
                 _card("Last Run (UTC)", last_run),
                 _card("Symbols In", sym_in_text),
-                _card("With Bars", sym_bars_text, bars_pct_text),
+                _card("With Bars (required)", sym_bars_text, bars_pct_text),
                 _card("Bar Rows", bars_tot_text),
                 _card("Candidates", rows_text, candidate_sub or None),
             ]
@@ -1545,9 +1568,9 @@ def register_callbacks(app):
                 fig_gates = px.bar(title="Gate Pressure (no data)")
 
             # ---------------- Coverage donut ----------------
-            cov_values = [sym_bars, max(sym_in - sym_bars, 0)]
+            cov_values = [sym_bars_any, max(sym_in - sym_bars_any, 0)]
             if sum(cov_values) > 0:
-                cov_df = pd.DataFrame({"label": ["With Bars", "No Bars"], "value": cov_values})
+                cov_df = pd.DataFrame({"label": ["With Bars (any)", "No Bars"], "value": cov_values})
                 fig_cov = px.pie(
                     cov_df, names="label", values="value", title="Universe Coverage", hole=0.45
                 )

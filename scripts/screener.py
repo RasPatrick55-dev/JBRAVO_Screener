@@ -554,6 +554,7 @@ SKIP_KEYS = [
 
 DEFAULT_TOP_N = 15
 DEFAULT_MIN_HISTORY = 180
+BARS_REQUIRED_FOR_INDICATORS = 250
 ASSET_CACHE_RELATIVE = Path("data") / "reference" / "assets_cache.json"
 ASSET_HTTP_TIMEOUT = 15
 BARS_BATCH_SIZE = 200
@@ -581,6 +582,36 @@ def _symbol_count(frame: Optional[pd.DataFrame]) -> int:
         return int(frame["symbol"].astype("string").dropna().str.upper().nunique())
     except Exception:
         return int(frame["symbol"].nunique())
+
+
+def summarize_bar_history_counts(history: Optional[pd.DataFrame], *, required_bars: int) -> dict[str, int]:
+    """Summarize coverage counts for fetched bars.
+
+    Returns the number of symbols that have **any** bars (``>0`` rows) and the
+    number that meet the ``required_bars`` threshold. The required count is
+    clamped so it can never exceed the ``any`` count.
+    """
+
+    if not isinstance(history, pd.DataFrame) or history.empty:
+        return {"any": 0, "required": 0}
+
+    if "symbol" not in history.columns:
+        return {"any": 0, "required": 0}
+
+    count_series = pd.to_numeric(history.get("n"), errors="coerce").fillna(0)
+    symbols = history.get("symbol").astype("string").str.upper()
+
+    any_mask = count_series > 0
+    any_count = int(symbols[any_mask].nunique()) if any_mask.any() else 0
+
+    threshold = max(int(required_bars or 0), 0)
+    required_mask = count_series >= threshold
+    required_count = int(symbols[required_mask].nunique()) if required_mask.any() else 0
+
+    if required_count > any_count:
+        required_count = any_count
+
+    return {"any": any_count, "required": required_count}
 
 
 def _export_daily_bars_csv(
@@ -1663,6 +1694,10 @@ def _fetch_daily_bars(
     else:
         hist = pd.DataFrame(columns=["symbol", "n"])
 
+    coverage_counts = summarize_bar_history_counts(
+        hist, required_bars=BARS_REQUIRED_FOR_INDICATORS
+    )
+
     if min_history > 0 and not hist.empty:
         keep = set(hist.loc[hist["n"] >= min_history, "symbol"].tolist())
         insufficient = set(hist.loc[hist["n"] < min_history, "symbol"].tolist())
@@ -1683,13 +1718,18 @@ def _fetch_daily_bars(
     if insufficient:
         metrics["insufficient_history"] = len(insufficient)
 
-    symbols_with_bars = int(combined["symbol"].nunique()) if not combined.empty else 0
-    symbols_no_bars = max(len(unique_symbols) - symbols_with_bars, 0)
+    symbols_with_bars_required = coverage_counts["required"]
+    symbols_with_bars_any = coverage_counts["any"]
+    symbols_no_bars = max(len(unique_symbols) - symbols_with_bars_any, 0)
     bars_rows_total = int(len(combined))
     metrics.update(
         {
             "symbols_in": len(unique_symbols),
-            "symbols_with_bars": symbols_with_bars,
+            "symbols_with_required_bars": symbols_with_bars_required,
+            "symbols_with_any_bars": symbols_with_bars_any,
+            "symbols_with_bars": symbols_with_bars_required,
+            "symbols_with_bars_required": symbols_with_bars_required,
+            "symbols_with_bars_any": symbols_with_bars_any,
             "symbols_no_bars": symbols_no_bars,
             "bars_rows_total": bars_rows_total,
         }
@@ -3910,7 +3950,9 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         "screener_stage_fetch.json",
         {
             "last_run_utc": _now_iso(),
-            "symbols_with_bars_fetch": _symbol_count(bars_df if isinstance(bars_df, pd.DataFrame) else None),
+            "symbols_with_bars_fetch": _coerce_int(fetch_metrics.get("symbols_with_required_bars")),
+            "symbols_with_required_bars_fetch": _coerce_int(fetch_metrics.get("symbols_with_required_bars")),
+            "symbols_with_any_bars_fetch": _coerce_int(fetch_metrics.get("symbols_with_any_bars")),
             "bars_rows_total_fetch": int(bars_df.shape[0]) if hasattr(bars_df, "shape") else 0,
         },
         base_dir=base_dir,
@@ -4815,6 +4857,10 @@ def write_outputs(
         {
             "bars_rows_total": _coerce_int(fetch_payload.get("bars_rows_total", 0)),
             "symbols_with_bars": _coerce_int(fetch_payload.get("symbols_with_bars", 0)),
+            "symbols_with_required_bars": _coerce_int(fetch_payload.get("symbols_with_required_bars", 0)),
+            "symbols_with_any_bars": _coerce_int(fetch_payload.get("symbols_with_any_bars", 0)),
+            "symbols_with_bars_required": _coerce_int(fetch_payload.get("symbols_with_bars_required", 0)),
+            "symbols_with_bars_any": _coerce_int(fetch_payload.get("symbols_with_bars_any", 0)),
             "symbols_no_bars": _coerce_int(fetch_payload.get("symbols_no_bars", 0)),
             "rate_limited": _coerce_int(fetch_payload.get("rate_limited", 0)),
             "http_404_batches": _coerce_int(fetch_payload.get("http_404_batches", 0)),
@@ -4836,9 +4882,16 @@ def write_outputs(
     else:
         symbol_count = 0
     rows_total = int(scored_df.shape[0]) if isinstance(scored_df, pd.DataFrame) else 0
-    metrics["symbols_with_bars"] = int(symbol_count)
-    metrics["bars_rows_total"] = int(rows_total)
-    metrics["symbols_no_bars"] = max(int(metrics.get("symbols_in", 0)) - int(symbol_count), 0)
+    if not metrics.get("symbols_with_required_bars"):
+        metrics["symbols_with_required_bars"] = int(symbol_count)
+    if not metrics.get("symbols_with_any_bars"):
+        metrics["symbols_with_any_bars"] = int(symbol_count)
+    metrics["symbols_with_bars"] = int(metrics.get("symbols_with_required_bars", symbol_count))
+    metrics.setdefault("symbols_with_bars_required", metrics["symbols_with_bars"])
+    metrics.setdefault("symbols_with_bars_any", metrics.get("symbols_with_any_bars", symbol_count))
+    if not metrics.get("bars_rows_total"):
+        metrics["bars_rows_total"] = int(rows_total)
+    metrics["symbols_no_bars"] = max(int(metrics.get("symbols_in", 0)) - int(metrics.get("symbols_with_any_bars", 0)), 0)
     prefix_counts_payload = fetch_payload.get("universe_prefix_counts")
     if isinstance(prefix_counts_payload, dict):
         metrics["universe_prefix_counts"] = {
@@ -4919,6 +4972,8 @@ def write_outputs(
         "run_utc": metrics.get("last_run_utc"),
         "symbols_in": metrics.get("symbols_in", 0),
         "symbols_with_bars": metrics.get("symbols_with_bars", 0),
+        "symbols_with_any_bars": metrics.get("symbols_with_any_bars", metrics.get("symbols_with_bars", 0)),
+        "symbols_with_required_bars": metrics.get("symbols_with_required_bars", metrics.get("symbols_with_bars", 0)),
         "bars_rows_total": metrics.get("bars_rows_total", 0),
         "rows": metrics.get("rows", 0),
         "fetch_secs": timing_payload.get("fetch_secs", 0),

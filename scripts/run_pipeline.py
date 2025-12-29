@@ -49,6 +49,8 @@ _SPLIT_FLAG_MAP = {
 _SUMMARY_RE = re.compile(
     r"PIPELINE_SUMMARY.*?symbols_in=(?P<symbols_in>\d+).*?"
     r"with_bars=(?P<symbols_with_bars>\d+).*?"
+    r"(?:with_bars_any=(?P<with_bars_any>\d+).*?)?"
+    r"(?:with_bars_required=(?P<with_bars_required>\d+).*?)?"
     r"rows=(?P<rows>\d+)"
     r"(?:.*?(?:bars?_rows(?:_total)?)=(?P<bars_rows_total>\d+))?"
 )
@@ -361,12 +363,19 @@ def compose_metrics_from_artifacts(
 ) -> dict[str, Any]:
     base = Path(base_dir)
     data_dir = base / "data"
+    metrics_path = data_dir / "screener_metrics.json"
+    existing_metrics = ensure_canonical_metrics(_read_json(metrics_path))
     fetch_stats = _read_json(data_dir / "screener_stage_fetch.json")
     post_stats = _read_json(data_dir / "screener_stage_post.json")
     rows_final = _count_rows(data_dir / "top_candidates.csv")
     latest_rows = _count_rows(data_dir / "latest_candidates.csv")
     if latest_rows:
         rows_final = max(rows_final, latest_rows)
+    metrics_rows = _coerce_optional_int(existing_metrics.get("rows")) or _coerce_optional_int(
+        existing_metrics.get("rows_out")
+    )
+    if metrics_rows is not None:
+        rows_final = max(rows_final, metrics_rows)
     if rows_final == 0 and post_stats:
         hinted = _coerce_optional_int(post_stats.get("candidates_final"))
         if hinted:
@@ -376,6 +385,7 @@ def compose_metrics_from_artifacts(
     if scored_rows <= 0 and scored_candidates.exists():
         scored_rows = 0
     symbols_in_hints = [
+        _coerce_optional_int(existing_metrics.get("symbols_in")),
         _coerce_optional_int(symbols_in),
         _coerce_optional_int(fetch_stats.get("symbols_in")) if fetch_stats else None,
         _coerce_optional_int(post_stats.get("symbols_in")) if post_stats else None,
@@ -386,32 +396,67 @@ def compose_metrics_from_artifacts(
         if isinstance(hint, int) and hint > 0:
             symbols_in_effective = hint
             break
-    fetch_symbols = _coerce_optional_int(fetch_stats.get("symbols_with_bars_fetch")) if fetch_stats else None
+    fetch_symbols_required = (
+        _coerce_optional_int(fetch_stats.get("symbols_with_required_bars_fetch"))
+        if fetch_stats
+        else None
+    )
+    fetch_symbols_any = (
+        _coerce_optional_int(fetch_stats.get("symbols_with_any_bars_fetch")) if fetch_stats else None
+    )
+    fetch_symbols_legacy = (
+        _coerce_optional_int(fetch_stats.get("symbols_with_bars_fetch")) if fetch_stats else None
+    )
     fallback_symbols = _coerce_optional_int(fallback_symbols_with_bars)
-    with_bars_effective = fetch_symbols or fallback_symbols or 0
+    with_bars_required = (
+        _coerce_optional_int(existing_metrics.get("symbols_with_required_bars"))
+        or fetch_symbols_required
+        or fetch_symbols_legacy
+        or fallback_symbols
+        or 0
+    )
+    with_bars_any = (
+        _coerce_optional_int(existing_metrics.get("symbols_with_any_bars"))
+        or fetch_symbols_any
+        or _coerce_optional_int(existing_metrics.get("symbols_with_bars_any"))
+        or with_bars_required
+        or 0
+    )
     bars_fetch = _coerce_optional_int(fetch_stats.get("bars_rows_total_fetch")) if fetch_stats else None
     fallback_bars = _coerce_optional_int(fallback_bars_rows_total)
-    bars_effective = bars_fetch or fallback_bars or rows_final
-    if symbols_in_effective <= 0 and with_bars_effective > 0:
+    bars_effective = (
+        _coerce_optional_int(existing_metrics.get("bars_rows_total"))
+        or bars_fetch
+        or fallback_bars
+        or rows_final
+    )
+    if symbols_in_effective <= 0 and with_bars_any > 0:
         LOG.warning(
             "[WARN] METRICS_SYMBOLS_IN_RECOVERED from_with_bars=%s",
-            with_bars_effective,
+            with_bars_required,
         )
-        symbols_in_effective = with_bars_effective
-    if with_bars_effective > symbols_in_effective:
+        symbols_in_effective = with_bars_any
+    if with_bars_required > symbols_in_effective:
         LOG.warning(
             "[WARN] METRICS_WITH_BARS_CLAMP with_bars=%s symbols_in=%s",
-            with_bars_effective,
+            with_bars_required,
             symbols_in_effective,
         )
-        with_bars_effective = symbols_in_effective
+        with_bars_required = symbols_in_effective
+    if with_bars_any < with_bars_required:
+        with_bars_any = with_bars_required
+
     bars_effective = max(int(bars_effective or 0), int(rows_final))
     payload = {
         "last_run_utc": _now_iso(),
         "symbols_in": int(symbols_in_effective or 0),
-        "symbols_with_bars": int(with_bars_effective),
-        "symbols_with_bars_raw": int(with_bars_effective),
-        "symbols_with_bars_fetch": fetch_symbols,
+        "symbols_with_bars": int(with_bars_required),
+        "symbols_with_bars_raw": int(with_bars_required),
+        "symbols_with_bars_fetch": fetch_symbols_required or fetch_symbols_legacy,
+        "symbols_with_required_bars": int(with_bars_required),
+        "symbols_with_any_bars": int(with_bars_any),
+        "symbols_with_bars_required": int(with_bars_required),
+        "symbols_with_bars_any": int(with_bars_any),
         "symbols_with_bars_post": _coerce_optional_int(post_stats.get("symbols_with_bars_post")) if post_stats else None,
         "bars_rows_total": int(bars_effective or 0),
         "bars_rows_total_fetch": bars_fetch,
@@ -435,6 +480,7 @@ def _backfill_metrics_from_summary(
     summary_map = {
         "symbols_in": getattr(summary, "symbols_in", None),
         "symbols_with_bars": getattr(summary, "with_bars", None),
+        "symbols_with_any_bars": getattr(summary, "with_bars_any", None),
         "rows": getattr(summary, "rows", None),
         "bars_rows_total": getattr(summary, "bars_rows_total", None),
     }
@@ -2092,9 +2138,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         candidates_final = int(metrics_payload.get("rows", 0))
         bars_rows_total_int = int(metrics_payload.get("bars_rows_total", 0) or 0)
         with_bars_effective = int(metrics_payload.get("symbols_with_bars", 0) or 0)
+        with_bars_any = int(metrics_payload.get("symbols_with_any_bars", with_bars_effective) or 0)
         summary = SimpleNamespace(
             symbols_in=int(metrics_payload.get("symbols_in", symbols_in) or 0),
             with_bars=with_bars_effective,
+            with_bars_any=with_bars_any,
             rows=candidates_final,
             bars_rows_total=bars_rows_total_int,
             source=summary_source,
@@ -2123,6 +2171,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "[INFO] PIPELINE_SUMMARY",
             f"symbols_in={summary.symbols_in}",
             f"with_bars={summary.with_bars}",
+            f"with_bars_any={summary.with_bars_any}",
+            f"with_bars_required={summary.with_bars}",
             f"rows={summary.rows}",
             f"fetch_secs={t.fetch:.3f}",
             f"feature_secs={t.features:.3f}",

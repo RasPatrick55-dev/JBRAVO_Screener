@@ -168,7 +168,9 @@ def _update_coverage_history(snapshot: Dict[str, Any]) -> Dict[str, Optional[int
     history = _load_health_history()
     latest_entry = history[-1] if history else None
 
-    coverage_value = _coerce_int(snapshot.get("symbols_with_bars_fetch"))
+    coverage_value = _coerce_int(snapshot.get("symbols_with_any_bars"))
+    if coverage_value is None:
+        coverage_value = _coerce_int(snapshot.get("symbols_with_bars_fetch"))
     timestamp = snapshot.get("last_run_utc")
     if not timestamp:
         timestamp = _mtime_iso(DATA_DIR / "top_candidates.csv")
@@ -280,9 +282,17 @@ def load_screener_metrics(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     metrics_path = base / "screener_metrics.json"
     payload = _read_json_safe(metrics_path)
 
+    symbols_with_any_bars = _coerce_int(
+        payload.get("symbols_with_any_bars") or payload.get("symbols_with_bars_any")
+    )
     symbols_with_bars_fetch = _coerce_int(
         payload.get("symbols_with_bars_fetch")
-    ) or _coerce_int(payload.get("symbols_with_bars"))
+    ) or _coerce_int(payload.get("symbols_with_required_bars")) or _coerce_int(payload.get("symbols_with_bars"))
+    symbols_with_required_bars = _coerce_int(
+        payload.get("symbols_with_required_bars")
+    ) or symbols_with_bars_fetch
+    if symbols_with_any_bars is None:
+        symbols_with_any_bars = symbols_with_required_bars
     bars_rows_total_fetch = _coerce_int(
         payload.get("bars_rows_total_fetch")
     ) or _coerce_int(payload.get("bars_rows_total"))
@@ -303,6 +313,8 @@ def load_screener_metrics(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         "last_run_utc": payload.get("last_run_utc") or payload.get("last_run"),
         "symbols_in": _coerce_int(payload.get("symbols_in")),
         "symbols_with_bars_fetch": symbols_with_bars_fetch,
+        "symbols_with_any_bars": symbols_with_any_bars,
+        "symbols_with_required_bars": symbols_with_required_bars,
         "symbols_with_bars_post": _coerce_int(payload.get("symbols_with_bars_post")),
         "bars_rows_total_fetch": bars_rows_total_fetch,
         "bars_rows_total_post": _coerce_int(payload.get("bars_rows_total_post")),
@@ -353,6 +365,8 @@ def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         "last_run_utc": last_run_utc,
         "symbols_in": metrics.get("symbols_in"),
         "symbols_with_bars_fetch": metrics.get("symbols_with_bars_fetch"),
+        "symbols_with_any_bars": metrics.get("symbols_with_any_bars"),
+        "symbols_with_required_bars": metrics.get("symbols_with_required_bars"),
         "bars_rows_total_fetch": metrics.get("bars_rows_total_fetch"),
         "symbols_with_bars_post": metrics.get("symbols_with_bars_post"),
         "bars_rows_total_post": metrics.get("bars_rows_total_post"),
@@ -371,7 +385,7 @@ def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     }
 
     # Legacy aliases for existing callers
-    snapshot["symbols_with_bars"] = snapshot["symbols_with_bars_fetch"]
+    snapshot["symbols_with_bars"] = snapshot["symbols_with_required_bars"] or snapshot["symbols_with_bars_fetch"]
     snapshot["bars_rows_total"] = snapshot["bars_rows_total_fetch"]
     snapshot["rows"] = snapshot["rows_premetrics"]
     snapshot["source"] = snapshot.get("latest_source")
