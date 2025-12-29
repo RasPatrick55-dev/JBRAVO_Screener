@@ -5,7 +5,7 @@ from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
-from dash.dash_table import Format
+from dash.dash_table.Format import Format
 from datetime import datetime, timezone, timedelta
 import subprocess
 import json
@@ -1203,9 +1203,9 @@ def render_trade_performance_panel() -> html.Div:
                     dbc.CardHeader("Sold Too Soon (Flagged Trades)", className="fw-bold"),
                     dbc.CardBody(
                         [
-                            html.Div(id="sold-too-soon-summary", className="mb-2 d-flex flex-wrap gap-2"),
+                            html.Div(id="sold-too-summary-chips", className="mb-2 d-flex flex-wrap gap-2"),
                             dash_table.DataTable(
-                                id="sold-too-soon-table",
+                                id="sold-too-table",
                                 columns=sold_too_columns,
                                 data=[],
                                 sort_action="native",
@@ -3735,8 +3735,8 @@ def _format_chip(label: str, value: str | float) -> dbc.Badge:
 
 @app.callback(
     [
-        Output("sold-too-soon-table", "data"),
-        Output("sold-too-soon-summary", "children"),
+        Output("sold-too-table", "data"),
+        Output("sold-too-summary-chips", "children"),
     ],
     [
         Input("active-tab-store", "data"),
