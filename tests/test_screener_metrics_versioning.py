@@ -37,3 +37,19 @@ def test_required_bars_and_with_bars_are_canonicalised() -> None:
     assert canonical["with_bars"] == 8
     assert canonical["required_bars"] == 250
     assert canonical["metrics_version"] == 2
+
+
+def test_required_bars_respects_policy_not_availability(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REQUIRED_BARS", "300")
+    payload = {
+        "symbols_in": 5,
+        "symbols_with_bars": 2,
+        "symbols_with_required_bars": 2,
+        "rows": 1,
+        "required_bars": 150,
+    }
+
+    canonical = ensure_canonical_metrics(payload)
+
+    assert canonical["required_bars"] == 300
+    assert canonical["symbols_with_required_bars"] == 2

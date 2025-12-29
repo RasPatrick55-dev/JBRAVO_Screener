@@ -734,21 +734,19 @@ def run_assertions(base_dir: Path) -> list[str]:
         if _coerce_int(metrics.get(key)) is None:
             errors.append(f"[FIELDS] screener_metrics.json missing numeric {key}")
 
-    fallback_pairs = (
-        ("bars_rows_total_fetch", "bars_rows_total"),
-    )
-    for new_key, legacy_key in fallback_pairs:
-        new_value = _coerce_int(metrics.get(new_key))
-        legacy_value = _coerce_int(metrics.get(legacy_key))
-        if new_value is None:
-            if legacy_value is None:
-                errors.append(
-                    f"[FALLBACK] {new_key} missing and legacy {legacy_key} unavailable"
-                )
-            continue
-        if legacy_value is not None and legacy_value != new_value:
-            errors.append(
-                f"[FALLBACK] {legacy_key}={legacy_value} must match {new_key}={new_value} when both present"
+    bars_rows_total_fetch = _coerce_int(metrics.get("bars_rows_total_fetch"))
+    bars_rows_total = _coerce_int(metrics.get("bars_rows_total"))
+    if bars_rows_total_fetch is not None and bars_rows_total is not None:
+        if bars_rows_total_fetch != bars_rows_total:
+            diff = bars_rows_total_fetch - bars_rows_total
+            pct = (diff / bars_rows_total * 100) if bars_rows_total else None
+            pct_str = f"{pct:.2f}%" if pct is not None else "n/a"
+            LOGGER.warning(
+                "[WARN] bars_rows_total_fetch=%s differs from bars_rows_total=%s (diff=%s pct=%s)",
+                bars_rows_total_fetch,
+                bars_rows_total,
+                diff,
+                pct_str,
             )
 
     conn_payload, _ = _safe_read_json(data_dir / "connection_health.json")

@@ -48,6 +48,11 @@ def _stub_alert(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(checker, "send_alert", lambda *args, **kwargs: None)
 
 
+def _write_minimal_latest_candidates(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("timestamp,symbol,score\n", encoding="utf-8")
+
+
 def test_dashboard_consistency_check_runs_with_ok_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -98,3 +103,46 @@ def test_dashboard_consistency_allows_fetch_superset(tmp_path: Path, monkeypatch
     errors = checker.run_assertions(tmp_path)
 
     assert errors == []
+
+
+def test_no_fallback_or_warning_when_bar_totals_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _stub_alert(monkeypatch)
+    _build_test_layout(tmp_path)
+    caplog.set_level("WARNING")
+
+    errors = checker.run_assertions(tmp_path)
+
+    assert errors == []
+    assert "[WARN] bars_rows_total_fetch" not in caplog.text
+    assert "[FALLBACK]" not in "".join(errors)
+
+
+def test_bar_total_mismatch_warns_without_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _stub_alert(monkeypatch)
+    _build_test_layout(tmp_path)
+    metrics_path = tmp_path / "data" / "screener_metrics.json"
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics["bars_rows_total_fetch"] = 1000
+    metrics["bars_rows_total"] = 200
+    metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+    monkeypatch.setattr(checker.LOGGER, "propagate", True)
+    caplog.set_level("WARNING", logger=checker.LOGGER.name)
+
+    errors = checker.run_assertions(tmp_path)
+
+    assert errors == []
+    assert "[WARN] bars_rows_total_fetch" in caplog.text
+
+
+def test_fallback_triggers_only_when_candidates_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_alert(monkeypatch)
+    _build_test_layout(tmp_path)
+    _write_minimal_latest_candidates(tmp_path / "data" / "latest_candidates.csv")
+
+    errors = checker.run_assertions(tmp_path)
+
+    assert any(error.startswith("[FALLBACK] latest_candidates.csv empty") for error in errors)
