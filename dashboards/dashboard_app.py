@@ -1007,6 +1007,22 @@ def render_trade_performance_panel() -> html.Div:
         {"name": "Rebounded", "id": "rebounded"},
     ]
 
+    trade_pnl_columns = [
+        {"name": "Exit Time", "id": "exit_time"},
+        {"name": "Symbol", "id": "symbol"},
+        {"name": "Side", "id": "side"},
+        {"name": "Qty", "id": "qty", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Exit Price", "id": "exit_price", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Entry Value", "id": "entry_value", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Exit Value", "id": "exit_value", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Order Type", "id": "order_type"},
+        {"name": "Exit Reason", "id": "exit_reason"},
+    ]
+
 
     sold_too_columns = [
         {"name": "Exit Time", "id": "exit_time"},
@@ -1053,7 +1069,9 @@ def render_trade_performance_panel() -> html.Div:
                         dbc.RadioItems(
                             id="trade-perf-range",
                             options=[
+                                {"label": "7D", "value": "7D"},
                                 {"label": "30D", "value": "30D"},
+                                {"label": "365D", "value": "365D"},
                                 {"label": "ALL", "value": "ALL"},
                             ],
                             value="30D",
@@ -1210,6 +1228,19 @@ def render_trade_performance_panel() -> html.Div:
                                     dbc.Col(dcc.Graph(id="trade-perf-rebound-hist", figure=_empty_trade_perf_fig("Rebound %")), md=6),
                                 ],
                                 className="g-3",
+                            ),
+                            html.H4("Closed Trades — Cash P&L", className="mt-4"),
+                            html.Div(id="trade-pnl-summary-chips", className="mb-2 d-flex flex-wrap gap-2"),
+                            dash_table.DataTable(
+                                id="trade-pnl-table",
+                                columns=trade_pnl_columns,
+                                data=[],
+                                sort_action="native",
+                                filter_action="native",
+                                sort_by=[{"column_id": "exit_time", "direction": "desc"}],
+                                page_size=20,
+                                style_table={"overflowX": "auto"},
+                                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
                             ),
                             html.H4("Per-trade details", className="mt-4"),
                             dash_table.DataTable(
@@ -3734,6 +3765,148 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
         table_data,
         status_children,
     )
+
+
+def _build_trade_pnl_summary(frame: pd.DataFrame) -> list[Any]:
+    if frame is None or frame.empty:
+        return [
+            _format_chip("Trades", "0"),
+            _format_chip("Total P&L", "0.00"),
+            _format_chip("Avg P&L", "0.00"),
+            _format_chip("Median P&L", "0.00"),
+            _format_chip("Win rate", "0.0%"),
+            _format_chip("Gross profit", "0.00"),
+            _format_chip("Gross loss", "0.00"),
+            _format_chip("Profit factor", "n/a"),
+            _format_chip("Best/Worst trade", "n/a"),
+        ]
+
+    pnl = pd.to_numeric(frame.get("pnl"), errors="coerce")
+    pnl = pnl.fillna(0.0)
+    trades = len(pnl.index)
+    total_pnl = float(pnl.sum())
+    avg_pnl = float(pnl.mean()) if trades else 0.0
+    median_pnl = float(pnl.median()) if trades else 0.0
+    wins = pnl[pnl > 0].count()
+    win_rate = (wins / trades) * 100.0 if trades else 0.0
+    gross_profit = float(pnl[pnl > 0].sum())
+    gross_loss = float(pnl[pnl < 0].sum())
+    if gross_loss < 0:
+        profit_factor = gross_profit / abs(gross_loss) if abs(gross_loss) > 0 else float("inf")
+        profit_factor_display = f"{profit_factor:.2f}" if math.isfinite(profit_factor) else "∞"
+    else:
+        profit_factor_display = "∞" if gross_profit > 0 else "n/a"
+
+    best = float(pnl.max()) if not pnl.empty else 0.0
+    worst = float(pnl.min()) if not pnl.empty else 0.0
+    best_worst = f"{best:,.2f} / {worst:,.2f}" if trades else "n/a"
+
+    return [
+        _format_chip("Trades", f"{trades}"),
+        _format_chip("Total P&L", f"{total_pnl:,.2f}"),
+        _format_chip("Avg P&L", f"{avg_pnl:,.2f}"),
+        _format_chip("Median P&L", f"{median_pnl:,.2f}"),
+        _format_chip("Win rate", f"{win_rate:.1f}%"),
+        _format_chip("Gross profit", f"{gross_profit:,.2f}"),
+        _format_chip("Gross loss", f"{gross_loss:,.2f}"),
+        _format_chip("Profit factor", profit_factor_display),
+        _format_chip("Best/Worst trade", best_worst),
+    ]
+
+
+@app.callback(
+    [
+        Output("trade-pnl-table", "data"),
+        Output("trade-pnl-summary-chips", "children"),
+    ],
+    [
+        Input("active-tab-store", "data"),
+        Input("refresh-ts", "data"),
+        Input("trade-perf-range", "value"),
+    ],
+)
+def update_trade_pnl_table(
+    active_tab: Mapping[str, Any] | None, _refresh_ts: str | None, window: str | None
+):
+    if isinstance(active_tab, Mapping) and active_tab.get("active_tab") not in (None, "tab-trade-performance"):
+        return dash.no_update, dash.no_update
+
+    window = window or "30D"
+    payload = _load_trade_perf_cache()
+    trades = payload.get("trades", [])
+    if not trades:
+        empty_frame = pd.DataFrame(columns=["exit_time"])
+        return [], _build_trade_pnl_summary(empty_frame)
+
+    frame = pd.DataFrame(trades)
+    if "exit_time" in frame.columns:
+        frame["exit_time"] = pd.to_datetime(frame["exit_time"], utc=True, errors="coerce")
+    if "entry_time" in frame.columns:
+        frame["entry_time"] = pd.to_datetime(frame["entry_time"], utc=True, errors="coerce")
+
+    for col in ("qty", "entry_price", "exit_price", "pnl", "return_pct", "hold_days"):
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        else:
+            frame[col] = np.nan
+
+    frame["qty"] = frame["qty"].fillna(0.0)
+    frame["entry_price"] = frame["entry_price"].fillna(0.0)
+    frame["exit_price"] = frame["exit_price"].fillna(0.0)
+    frame["entry_value"] = frame["qty"] * frame["entry_price"]
+    frame["exit_value"] = frame["qty"] * frame["exit_price"]
+
+    pnl_fallback = frame["exit_value"] - frame["entry_value"]
+    if "pnl" not in frame.columns:
+        frame["pnl"] = pnl_fallback
+    else:
+        frame["pnl"] = frame["pnl"].fillna(pnl_fallback)
+        missing_mask = pd.to_numeric(frame["pnl"], errors="coerce").isna()
+        frame.loc[missing_mask, "pnl"] = pnl_fallback[missing_mask]
+
+    if "hold_days" not in frame.columns:
+        frame["hold_days"] = np.nan
+    if frame["hold_days"].isna().any() and "entry_time" in frame.columns and "exit_time" in frame.columns:
+        frame.loc[frame["hold_days"].isna(), "hold_days"] = (
+            frame["exit_time"] - frame["entry_time"]
+        ).dt.total_seconds() / 86400.0
+
+    frame["side"] = frame["side"] if "side" in frame.columns else "long"
+    frame["side"] = frame["side"].fillna("long")
+    if "order_type" not in frame.columns:
+        frame["order_type"] = ""
+    if "exit_reason" not in frame.columns:
+        frame["exit_reason"] = ""
+
+    if window != "ALL" and "exit_time" in frame.columns:
+        now = datetime.now(timezone.utc)
+        days = 365 if window == "365D" else int(window.replace("D", "") or 0)
+        cutoff = now - timedelta(days=days)
+        frame = frame[frame["exit_time"] >= cutoff]
+
+    if "exit_time" in frame.columns:
+        frame = frame.sort_values("exit_time", ascending=False, na_position="last")
+        frame["exit_time"] = frame["exit_time"].dt.strftime("%Y-%m-%d %H:%M")
+
+    table_columns = [
+        "exit_time",
+        "symbol",
+        "side",
+        "qty",
+        "entry_price",
+        "exit_price",
+        "entry_value",
+        "exit_value",
+        "pnl",
+        "return_pct",
+        "hold_days",
+        "order_type",
+        "exit_reason",
+    ]
+    table_frame = frame.reindex(columns=table_columns).fillna("")
+    summary_chips = _build_trade_pnl_summary(frame)
+
+    return table_frame.to_dict("records"), summary_chips
 
 
 def _format_chip(label: str, value: str | float) -> dbc.Badge:

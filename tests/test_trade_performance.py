@@ -50,6 +50,8 @@ def test_sold_too_layout_ids_are_kebab_case():
     layout_json = json.dumps(_jsonify(layout))
     assert "sold-too-mode" in layout_json
     assert "sold-too-table" in layout_json
+    assert "trade-pnl-table" in layout_json
+    assert "trade-pnl-summary-chips" in layout_json
     assert "soldtoo-mode" not in layout_json
 
 
