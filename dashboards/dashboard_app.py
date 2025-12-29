@@ -5,7 +5,7 @@ from dash import Dash, html, dash_table, dcc
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
-from dash.dash_table.Format import Format
+from dash.dash_table import Format
 from datetime import datetime, timezone, timedelta
 import subprocess
 import json
@@ -987,23 +987,23 @@ def render_trade_performance_panel() -> html.Div:
         {"name": "Symbol", "id": "symbol"},
         {"name": "Entry Time", "id": "entry_time"},
         {"name": "Exit Time", "id": "exit_time"},
-        {"name": "Qty", "id": "qty", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Price", "id": "exit_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Qty", "id": "qty", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Exit Price", "id": "exit_price", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
         {"name": "Exit Reason", "id": "exit_reason"},
-        {"name": "MFE %", "id": "mfe_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "MAE %", "id": "mae_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Peak Price", "id": "peak_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Trough Price", "id": "trough_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "MFE %", "id": "mfe_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "MAE %", "id": "mae_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Peak Price", "id": "peak_price", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Trough Price", "id": "trough_price", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
         {"name": "Trailing Stop Exit", "id": "is_trailing_stop_exit"},
-        {"name": "Rebound Window (days)", "id": "rebound_window_days", "type": "numeric", "format": Format(precision=0, scheme="f")},
-        {"name": "Post-exit High", "id": "post_exit_high", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Rebound Window (days)", "id": "rebound_window_days", "type": "numeric", "format": Format.Format(precision=0, scheme="f")},
+        {"name": "Post-exit High", "id": "post_exit_high", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
         {"name": "Rebounded", "id": "rebounded"},
     ]
 
@@ -1012,25 +1012,25 @@ def render_trade_performance_panel() -> html.Div:
         {"name": "Exit Time", "id": "exit_time"},
         {"name": "Symbol", "id": "symbol"},
         {"name": "Order Type", "id": "order_type"},
-        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
         {"name": "Rebounded", "id": "rebounded"},
-        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
     ]
     sold_too_columns = [
         {"name": "Exit Time", "id": "exit_time"},
         {"name": "Symbol", "id": "symbol"},
         {"name": "Order Type", "id": "order_type"},
-        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
         {"name": "Rebounded", "id": "rebounded"},
-        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
+        {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format.Format(precision=2, scheme="f")},
     ]
 
     return html.Div(
@@ -2918,7 +2918,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                                 "name": "Avg Exit Efficiency",
                                 "id": "avg_exit_efficiency",
                                 "type": "numeric",
-                                "format": Format(precision=2, scheme=Format.Scheme.percentage),
+                                "format": Format.Format(precision=2, scheme=Format.Scheme.percentage),
                             },
                         ],
                         style_table={"overflowX": "auto"},
@@ -2968,8 +2968,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 col_def: dict[str, Any] = {"name": col.replace("_", " ").title(), "id": col}
                 if col in {"exit_efficiency", "exit_pct", "mfe_pct"}:
                     col_def["type"] = "numeric"
-                    col_def["format"] = Format(
-                        precision=2, scheme=Format.Scheme.percentage
+                    col_def["format"] = Format.Format(precision=2, scheme=Format.Scheme.percentage
                     )
                 column_defs.append(col_def)
 
