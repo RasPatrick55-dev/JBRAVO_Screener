@@ -103,6 +103,10 @@ Pipeline options worth knowing:
 
 The Bollinger-band squeeze component now applies a shape-safe mask so the ranking pass no longer crashes with NumPy shape mismatch errors.
 
+### Sentiment enrichment (optional)
+
+Enable `USE_SENTIMENT=true` to append per-symbol sentiment to screener outputs. The screener reads `SENTIMENT_API_URL` (required) and `SENTIMENT_API_KEY` (optional) for the JSON HTTP provider, using `SENTIMENT_TIMEOUT_SECS` (default `8`) for requests. Scores are cached at `data/cache/sentiment/YYYY-MM-DD.json` so repeated runs only fetch missing symbols for the day. Adjust impact with `SENTIMENT_WEIGHT` (default `0.0`) and optionally gate out strongly negative values with `MIN_SENTIMENT` (default `-999`, which disables gating). When enabled the screener records `sentiment_enabled`, `sentiment_missing_count`, and `sentiment_avg` in `data/screener_metrics.json`.
+
 ### Screener pipeline modes
 
 `scripts/screener.py` now exposes dedicated modes that break the nightly run
