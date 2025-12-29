@@ -1964,54 +1964,33 @@ _TAB_IDS = {
 }
 
 
-def tab_from_triggered_id(triggered_id: str | None) -> str | None:
-    if not triggered_id:
-        return None
-    if triggered_id in _TAB_HASH_MAP:
-        return _TAB_HASH_MAP[triggered_id]
-    if triggered_id in _TAB_IDS:
-        return triggered_id
-    return None
-
-
 @app.callback(
     Output("active-tab-store", "data"),
     [
-        Input("tab-overview", "n_clicks"),
-        Input("tab-pipeline", "n_clicks"),
-        Input("tab-ml", "n_clicks"),
-        Input("tab-screener-health", "n_clicks"),
-        Input("tab-screener", "n_clicks"),
-        Input("tab-execute", "n_clicks"),
-        Input("tab-account", "n_clicks"),
-        Input("tab-symbol-performance", "n_clicks"),
-        Input("tab-monitor", "n_clicks"),
-        Input("tab-trades", "n_clicks"),
-        Input("tab-trade-performance", "n_clicks"),
+        Input("tabs", "active_tab"),
         Input("url", "hash"),
     ],
     State("active-tab-store", "data"),
 )
 def _update_active_tab_store(
-    overview_clicks,
-    pipeline_clicks,
-    ml_clicks,
-    screener_health_clicks,
-    screener_clicks,
-    execute_clicks,
-    account_clicks,
-    symbol_perf_clicks,
-    monitor_clicks,
-    trades_clicks,
-    trade_perf_clicks,
-    url_hash,
+    active_tab_value: str | None,
+    url_hash: str | None,
     store_data,
 ):
+    """
+    Update the active tab state based on the Tabs component or URL hash.
+
+    Dash Bootstrap Components Tabs no longer expose ``n_clicks`` on individual tabs,
+    so we listen to ``tabs.active_tab`` instead and keep the hash fallback for
+    direct links.
+    """
     ctx = dash.callback_context
     triggered = getattr(ctx, "triggered_id", None)
-    tab_id = tab_from_triggered_id(triggered)
+    tab_id = None
     if triggered == "url":
         tab_id = _TAB_HASH_MAP.get((url_hash or "").lstrip("#"))
+    else:
+        tab_id = active_tab_value
     if tab_id in _TAB_IDS:
         return {"active_tab": tab_id}
     if isinstance(store_data, Mapping):
