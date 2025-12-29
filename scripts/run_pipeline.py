@@ -1340,29 +1340,49 @@ def run_step(name: str, cmd: Sequence[str], *, timeout: Optional[float] = None) 
     env.setdefault("PYTHONUNBUFFERED", "1")
     env.setdefault("APCA_DATA_API_BASE_URL", "https://data.alpaca.markets")
     env.setdefault("ALPACA_DATA_FEED", "iex")
-    proc = subprocess.Popen(
-        list(cmd),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        cwd=PROJECT_ROOT,
-        env=env,
-        text=False,
-    )
-    out: bytes = b""
-    err: bytes = b""
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        out, err = proc.communicate()
-        LOG.error("STEP_TIMEOUT name=%s timeout=%s rc=%s", name, timeout, proc.returncode)
-    if out:
-        LOG.info("%s stdout:\n%s", name.upper(), out.decode(errors="replace")[-8000:])
-    if err:
-        LOG.info("%s stderr:\n%s", name.upper(), err.decode(errors="replace")[-8000:])
-    elapsed = time.time() - started
-    LOG.info("END %s rc=%s secs=%.1f", name, proc.returncode, elapsed)
-    return proc.returncode, elapsed
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"step.{name}.out"
+    heartbeat_interval = 15.0
+    last_heartbeat = started
+    rc = -1
+    with open(log_path, "a", encoding="utf-8") as log_file:
+        log_file.write(f"[{datetime.now(timezone.utc).isoformat()}] START {name}\n")
+        log_file.flush()
+        try:
+            proc = subprocess.Popen(
+                list(cmd),
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                cwd=PROJECT_ROOT,
+                env=env,
+                text=True,
+            )
+        except Exception as exc:
+            LOG.error("Failed to launch step %s: %s", name, exc)
+            return 1, 0.0
+
+        while True:
+            try:
+                rc = proc.wait(timeout=1)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+
+            now = time.time()
+            if timeout and (now - started) > timeout:
+                proc.kill()
+                rc = proc.wait(timeout=5)
+                LOG.error("STEP_TIMEOUT name=%s timeout=%s rc=%s", name, timeout, rc)
+                break
+            if now - last_heartbeat >= heartbeat_interval:
+                elapsed = now - started
+                LOG.info("[INFO] %s still running secs=%.1f log=%s", name, elapsed, log_path)
+                last_heartbeat = now
+        elapsed = time.time() - started
+        log_file.write(f"[{datetime.now(timezone.utc).isoformat()}] END {name} rc={rc} secs={elapsed:.1f}\n")
+    LOG.info("END %s rc=%s secs=%.1f log=%s", name, rc, elapsed, log_path)
+    return rc, elapsed
 
 
 def _run_step_metrics(cmd: Sequence[str], *, timeout: Optional[float] = None) -> tuple[int, float]:
