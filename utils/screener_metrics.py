@@ -7,12 +7,25 @@ dashboard and ensures atomic writes so readers never observe partial output.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from . import atomic_write_bytes
+
+
+DEFAULT_REQUIRED_BARS = 250
+
+
+def configured_required_bars() -> int:
+    env_value = os.getenv("REQUIRED_BARS")
+    try:
+        configured = int(env_value) if env_value not in (None, "") else DEFAULT_REQUIRED_BARS
+    except Exception:
+        configured = DEFAULT_REQUIRED_BARS
+    return configured if configured > 0 else DEFAULT_REQUIRED_BARS
 
 
 def _coerce_int(value: Any) -> int:
@@ -45,8 +58,8 @@ def ensure_canonical_metrics(payload: Mapping[str, Any] | None) -> dict[str, Any
     timestamp = metrics.get("timestamp") or metrics.get("last_run_utc")
     metrics["timestamp"] = timestamp if isinstance(timestamp, str) and timestamp else now_iso
 
-    required_bars = _coerce_optional_int(metrics.get("required_bars") or metrics.get("bars_required"))
-    metrics["required_bars"] = required_bars if required_bars is not None else 0
+    configured_bars = configured_required_bars()
+    metrics["required_bars"] = configured_bars
 
     symbols_in = _coerce_optional_int(metrics.get("symbols_in"))
     if symbols_in is None:
@@ -130,4 +143,4 @@ def write_screener_metrics_json(path: Path, payload: Mapping[str, Any]) -> None:
     atomic_write_bytes(path, serialised)
 
 
-__all__ = ["ensure_canonical_metrics", "write_screener_metrics_json"]
+__all__ = ["configured_required_bars", "ensure_canonical_metrics", "write_screener_metrics_json"]
