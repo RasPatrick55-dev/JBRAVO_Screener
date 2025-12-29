@@ -1,8 +1,10 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
 
+from dashboards import dashboard_app
 from scripts.trade_performance import (
     cache_refresh_summary_token,
     read_cache,
@@ -31,6 +33,24 @@ def test_cache_refresh_summary_token_includes_counts():
     assert "lookback_days=400" in token
     assert "windows=7D,ALL" in token
     assert token.endswith("rc=0")
+
+
+def test_sold_too_layout_ids_are_kebab_case():
+    layout = dashboard_app.render_trade_performance_panel()
+
+    def _jsonify(node):
+        if hasattr(node, "to_plotly_json"):
+            return _jsonify(node.to_plotly_json())
+        if isinstance(node, dict):
+            return {key: _jsonify(value) for key, value in node.items()}
+        if isinstance(node, (list, tuple)):
+            return [_jsonify(item) for item in node]
+        return node
+
+    layout_json = json.dumps(_jsonify(layout))
+    assert "sold-too-mode" in layout_json
+    assert "sold-too-table" in layout_json
+    assert "soldtoo-mode" not in layout_json
 
 
 def test_trade_excursions_and_exit_quality_bounds():
