@@ -3950,6 +3950,7 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         "screener_stage_fetch.json",
         {
             "last_run_utc": _now_iso(),
+            "required_bars": BARS_REQUIRED_FOR_INDICATORS,
             "symbols_with_bars_fetch": _coerce_int(fetch_metrics.get("symbols_with_required_bars")),
             "symbols_with_required_bars_fetch": _coerce_int(fetch_metrics.get("symbols_with_required_bars")),
             "symbols_with_any_bars_fetch": _coerce_int(fetch_metrics.get("symbols_with_any_bars")),
@@ -4820,12 +4821,13 @@ def write_outputs(
     diag_json = diag_frame.to_json(orient="records", indent=2)
     atomic_write_bytes(diag_json_path, diag_json.encode("utf-8"))
 
+    scored_count = int(scored_df.shape[0]) if isinstance(scored_df, pd.DataFrame) else 0
     metrics = {
         "last_run_utc": _format_timestamp(now),
         "status": status,
         "rows": int(top_df.shape[0]),
-        "ranked_rows": int(scored_df.shape[0]),
-        "symbols_in": int(stats.get("symbols_in", 0)),
+        "ranked_rows": scored_count,
+        "symbols_in": scored_count,
         "candidates_out": int(stats.get("candidates_out", 0)),
         "shortlist_requested": int(stats.get("shortlist_requested", 0)),
         "shortlist_size": int(stats.get("shortlist_candidates", 0)),
@@ -4853,14 +4855,20 @@ def write_outputs(
     metrics["ranker_version"] = str(cfg_for_summary.get("version", "unknown"))
     metrics["feature_summary"] = _summarise_features(scored_df, cfg_for_summary)
     fetch_payload = fetch_metrics or {}
+    required_bars = _coerce_int(fetch_payload.get("required_bars", BARS_REQUIRED_FOR_INDICATORS))
+    required_bars_count = _coerce_int(fetch_payload.get("symbols_with_required_bars", 0))
+    any_bars_count = _coerce_int(fetch_payload.get("symbols_with_any_bars", 0))
+    if any_bars_count == 0:
+        any_bars_count = required_bars_count
     metrics.update(
         {
+            "required_bars": required_bars,
             "bars_rows_total": _coerce_int(fetch_payload.get("bars_rows_total", 0)),
-            "symbols_with_bars": _coerce_int(fetch_payload.get("symbols_with_bars", 0)),
-            "symbols_with_required_bars": _coerce_int(fetch_payload.get("symbols_with_required_bars", 0)),
-            "symbols_with_any_bars": _coerce_int(fetch_payload.get("symbols_with_any_bars", 0)),
-            "symbols_with_bars_required": _coerce_int(fetch_payload.get("symbols_with_bars_required", 0)),
-            "symbols_with_bars_any": _coerce_int(fetch_payload.get("symbols_with_bars_any", 0)),
+            "symbols_with_bars": required_bars_count,
+            "symbols_with_required_bars": required_bars_count,
+            "symbols_with_any_bars": any_bars_count,
+            "symbols_with_bars_required": required_bars_count,
+            "symbols_with_bars_any": any_bars_count,
             "symbols_no_bars": _coerce_int(fetch_payload.get("symbols_no_bars", 0)),
             "rate_limited": _coerce_int(fetch_payload.get("rate_limited", 0)),
             "http_404_batches": _coerce_int(fetch_payload.get("http_404_batches", 0)),
@@ -4889,6 +4897,7 @@ def write_outputs(
     metrics["symbols_with_bars"] = int(metrics.get("symbols_with_required_bars", symbol_count))
     metrics.setdefault("symbols_with_bars_required", metrics["symbols_with_bars"])
     metrics.setdefault("symbols_with_bars_any", metrics.get("symbols_with_any_bars", symbol_count))
+    metrics["with_bars"] = metrics["symbols_with_bars"]
     if not metrics.get("bars_rows_total"):
         metrics["bars_rows_total"] = int(rows_total)
     metrics["symbols_no_bars"] = max(int(metrics.get("symbols_in", 0)) - int(metrics.get("symbols_with_any_bars", 0)), 0)
@@ -4963,6 +4972,13 @@ def write_outputs(
         }
     )
     metrics["reject_samples"] = (reject_samples or [])[:10]
+    attempted_fetch = _coerce_int(fetch_payload.get("symbols_with_bars_fetch", 0))
+    if attempted_fetch and attempted_fetch != metrics["symbols_with_any_bars"]:
+        metrics["symbols_attempted_fetch"] = attempted_fetch
+        metrics.pop("symbols_with_bars_fetch", None)
+    else:
+        metrics["symbols_with_bars_fetch"] = attempted_fetch or metrics["symbols_with_any_bars"]
+    metrics["metrics_version"] = 2
     timing_payload = _normalize_timings(timings)
     metrics["timings"] = timing_payload
     _write_json_atomic(metrics_path, metrics)
@@ -5346,7 +5362,10 @@ def main(
             "screener_stage_fetch.json",
             {
                 "last_run_utc": _now_iso(),
+                "required_bars": BARS_REQUIRED_FOR_INDICATORS,
                 "symbols_with_bars_fetch": _symbol_count(frame if isinstance(frame, pd.DataFrame) else None),
+                "symbols_with_required_bars_fetch": _symbol_count(frame if isinstance(frame, pd.DataFrame) else None),
+                "symbols_with_any_bars_fetch": _symbol_count(frame if isinstance(frame, pd.DataFrame) else None),
                 "bars_rows_total_fetch": int(frame.shape[0]) if hasattr(frame, "shape") else 0,
             },
             base_dir=base_dir,
