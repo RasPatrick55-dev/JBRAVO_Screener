@@ -34,6 +34,12 @@ import requests
 
 from scripts import logger_utils
 
+from utils.features.sentiment import (
+    JsonHttpSentimentProvider,
+    SentimentProvider,
+    load_sentiment_cache,
+    persist_sentiment_cache,
+)
 
 def _to_symbol_list(obj: Iterable[object] | pd.Series | pd.DataFrame | None) -> list[str]:
     """Normalize a container of symbols into a de-duplicated uppercase list."""
@@ -563,10 +569,12 @@ BAR_MAX_RETRIES = 3
 
 SCREENER_METRICS_PATH = Path("data") / "screener_metrics.json"
 METRICS_SUMMARY_PATH = Path("data") / "metrics_summary.csv"
+SENTIMENT_CACHE_DIR = Path("data") / "cache" / "sentiment"
 AUTH_CONTEXT: dict[str, object] = {
     "base_dir": Path(__file__).resolve().parents[1],
     "creds": {},
 }
+_SENTIMENT_PROVIDER_WARNED = False
 
 
 def _now_iso() -> str:
@@ -780,6 +788,57 @@ def write_universe_prefix_counts(
     universe = _load_symbol_stats_universe(base_dir)
     _write_universe_prefix_metrics(universe, metrics)
     return metrics
+
+
+def _resolve_sentiment_settings() -> dict[str, object]:
+    enabled = _as_bool(os.environ.get("USE_SENTIMENT"), False)
+    api_url = os.environ.get("SENTIMENT_API_URL")
+    api_key = os.environ.get("SENTIMENT_API_KEY")
+    timeout = _coerce_float(os.environ.get("SENTIMENT_TIMEOUT_SECS"), 8.0)
+    if timeout is None or timeout <= 0:
+        timeout = 8.0
+    weight = _coerce_float(os.environ.get("SENTIMENT_WEIGHT"), 0.0)
+    if weight is None:
+        weight = 0.0
+    min_sentiment = _coerce_float(os.environ.get("MIN_SENTIMENT"), -999.0)
+    if min_sentiment is None:
+        min_sentiment = -999.0
+    return {
+        "enabled": enabled,
+        "api_url": api_url,
+        "api_key": api_key,
+        "timeout": float(timeout),
+        "weight": float(weight),
+        "min": float(min_sentiment),
+    }
+
+
+def _build_sentiment_provider(settings: Mapping[str, object]) -> Optional[SentimentProvider]:
+    global _SENTIMENT_PROVIDER_WARNED
+
+    if not settings.get("enabled"):
+        return None
+    api_url = str(settings.get("api_url") or "").strip()
+    if not api_url:
+        if not _SENTIMENT_PROVIDER_WARNED:
+            LOGGER.warning(
+                "USE_SENTIMENT enabled but SENTIMENT_API_URL is not set; skipping sentiment fetch."
+            )
+            _SENTIMENT_PROVIDER_WARNED = True
+        return None
+    api_key = settings.get("api_key")
+    timeout = settings.get("timeout", 8.0)
+    try:
+        return JsonHttpSentimentProvider(
+            api_url,
+            api_key=str(api_key) if api_key not in (None, "") else None,
+            timeout=float(timeout or 8.0),
+        )
+    except Exception as exc:
+        if not _SENTIMENT_PROVIDER_WARNED:
+            LOGGER.warning("Failed to initialise sentiment provider: %s", exc)
+            _SENTIMENT_PROVIDER_WARNED = True
+        return None
 
 
 def make_verify_hook(enabled: bool):
@@ -2956,6 +3015,102 @@ def _ensure_score_breakdown(raw: object, score_value: Optional[float]) -> str:
     return json.dumps({})
 
 
+def _inject_sentiment_breakdown(frame: pd.DataFrame) -> None:
+    if frame is None or frame.empty:
+        return
+    if "sentiment" not in frame.columns or "score_breakdown" not in frame.columns:
+        return
+
+    def _update(row: pd.Series) -> str:
+        raw = row.get("score_breakdown", "")
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) and raw else {}
+        except Exception:
+            payload = {}
+        value = row.get("sentiment")
+        payload["sentiment"] = None if pd.isna(value) else round(float(value), 4)
+        return json.dumps({k: payload[k] for k in sorted(payload)})
+
+    frame["score_breakdown"] = frame.apply(_update, axis=1)
+
+
+def _apply_sentiment_scores(
+    scored_df: pd.DataFrame,
+    *,
+    run_ts: datetime,
+    settings: Mapping[str, object],
+    cache_dir: Path = SENTIMENT_CACHE_DIR,
+    provider_factory: Optional[Callable[[Mapping[str, object]], Optional[SentimentProvider]]] = None,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    summary = {
+        "sentiment_enabled": bool(settings.get("enabled")),
+        "sentiment_missing_count": 0,
+        "sentiment_avg": None,
+        "sentiment_gated": 0,
+    }
+    if not summary["sentiment_enabled"]:
+        return scored_df, summary
+
+    frame = scored_df.copy() if isinstance(scored_df, pd.DataFrame) else pd.DataFrame()
+    if "sentiment" not in frame.columns:
+        frame["sentiment"] = pd.Series(dtype="Float64")
+    if frame.empty:
+        return frame, summary
+
+    provider_builder = provider_factory or _build_sentiment_provider
+    provider = provider_builder(settings) if provider_builder else None
+
+    cache = load_sentiment_cache(cache_dir, run_ts.date()) if cache_dir is not None else {}
+    sentiments: dict[str, float] = dict(cache)
+    symbols = frame.get("symbol", pd.Series(dtype="string")).astype("string").str.upper().fillna("")
+    missing = [sym for sym in symbols.unique() if sym and sym not in sentiments]
+    if provider is not None:
+        for sym in missing:
+            value = provider.get_symbol_sentiment(sym, run_ts)
+            if value is None:
+                continue
+            sentiments[sym] = value
+
+    if provider is not None and sentiments != cache and cache_dir is not None:
+        persist_sentiment_cache(cache_dir, run_ts.date(), sentiments)
+
+    sentiment_series = pd.Series(
+        (sentiments.get(sym) for sym in symbols.tolist()),
+        index=frame.index,
+        dtype="Float64",
+    )
+    frame["sentiment"] = sentiment_series
+
+    weight = _coerce_float(settings.get("weight"), 0.0) or 0.0
+    if weight:
+        base_score = pd.to_numeric(frame.get("Score"), errors="coerce").fillna(0.0)
+        frame["Score"] = base_score + sentiment_series.fillna(0.0) * float(weight)
+        frame["score"] = frame["Score"]
+
+    min_value = _coerce_float(settings.get("min"), -999.0)
+    if min_value is None:
+        min_value = -999.0
+    gate_threshold = float(min_value)
+    gated_mask = sentiment_series.notna() & sentiment_series.lt(gate_threshold)
+    if gate_threshold > -999 and gated_mask.any():
+        summary["sentiment_gated"] = int(gated_mask.sum())
+        frame = frame.loc[~gated_mask].copy()
+        sentiment_series = sentiment_series.loc[frame.index]
+        frame["sentiment"] = sentiment_series
+
+    if "score_breakdown" not in frame.columns:
+        scores = frame.get("Score", pd.Series(dtype="float64"))
+        frame["score_breakdown"] = [_ensure_score_breakdown(None, score) for score in scores]
+    _inject_sentiment_breakdown(frame)
+
+    values = pd.to_numeric(frame.get("sentiment"), errors="coerce")
+    valid_mask = values.notna()
+    summary["sentiment_missing_count"] = int(frame.shape[0] - valid_mask.sum())
+    summary["sentiment_avg"] = float(values[valid_mask].mean()) if valid_mask.any() else None
+
+    return frame, summary
+
+
 def _normalise_top_candidates(
     top_df: pd.DataFrame,
     scored_df: Optional[pd.DataFrame],
@@ -4023,6 +4178,9 @@ def write_predictions(
     ranked_df: Optional[pd.DataFrame],
     run_meta: Optional[Mapping[str, object]],
     top_n: int = 200,
+    *,
+    sentiment_series: Optional[pd.Series] = None,
+    sentiment_enabled: bool = False,
 ) -> None:
     run_ts = datetime.now(tz=timezone.utc)
     run_date = run_ts.date().isoformat()
@@ -4045,6 +4203,7 @@ def write_predictions(
         gate_counters=gate_info,
         ranker_cfg=ranker_info,
         limit=top_n,
+        sentiment=sentiment_series if sentiment_enabled else None,
     )
     payload["relax_gates"] = str(meta.get("relax_gates", "none"))
 
@@ -4061,12 +4220,17 @@ def _prepare_predictions_frame(
     gate_counters: Optional[Mapping[str, object]] = None,
     ranker_cfg: Optional[Mapping[str, object]] = None,
     limit: int = 200,
+    sentiment: Optional[pd.Series] = None,
 ) -> pd.DataFrame:
     columns = [
         "run_date",
         "symbol",
         "rank",
         "score",
+    ]
+    if sentiment is not None:
+        columns.append("sentiment")
+    columns += [
         "passed_gates",
         "ranker_version",
         "gate_preset",
@@ -4115,6 +4279,14 @@ def _prepare_predictions_frame(
 
     limit = max(1, int(limit)) if limit else frame.shape[0]
     frame = frame.head(limit)
+    sentiment_values: Optional[pd.Series]
+    if sentiment is not None:
+        try:
+            sentiment_values = pd.to_numeric(sentiment, errors="coerce").reindex(frame.index)
+        except Exception:
+            sentiment_values = pd.Series(pd.NA, index=frame.index, dtype="Float64")
+    else:
+        sentiment_values = None
 
     run_date_str = run_date.date().isoformat()
     gate_preset = "custom"
@@ -4138,7 +4310,7 @@ def _prepare_predictions_frame(
             component_breakdowns.str.strip() == "", score_breakdowns
         )
 
-    payload = pd.DataFrame({
+    payload_dict: dict[str, pd.Series | str] = {
         "run_date": run_date_str,
         "symbol": frame.get("symbol", pd.Series(dtype="string")).astype(str).str.upper(),
         "rank": pd.to_numeric(frame.get("rank"), errors="coerce").astype("Int64"),
@@ -4177,7 +4349,10 @@ def _prepare_predictions_frame(
         "bb_bandwidth": _coerce_float(frame.get("BB_BANDWIDTH")),
         "atr_pct": _coerce_float(frame.get("ATR_pct")),
         "components_json": component_breakdowns,
-    })
+    }
+    if sentiment_values is not None:
+        payload_dict["sentiment"] = sentiment_values
+    payload = pd.DataFrame(payload_dict)
 
     payload["score_breakdown_json"] = payload["score_breakdown_json"].apply(
         lambda s: s[:1024] if isinstance(s, str) else ""
@@ -4232,6 +4407,13 @@ def run_screener(
     prepared = _prepare_input_frame(df)
     stats: dict[str, int] = {"symbols_in": 0, "candidates_out": 0}
     skip_reasons = {key: 0 for key in SKIP_KEYS}
+    sentiment_settings = _resolve_sentiment_settings()
+    sentiment_summary: dict[str, object] = {
+        "sentiment_enabled": bool(sentiment_settings.get("enabled")),
+        "sentiment_missing_count": 0,
+        "sentiment_avg": None,
+        "sentiment_gated": 0,
+    }
 
     try:
         shortlist_limit = (
@@ -4449,6 +4631,11 @@ def run_screener(
         "rank_secs"
     )
     scored_df = _apply_quality_filters(scored_df, ranker_cfg)
+    scored_df, sentiment_summary = _apply_sentiment_scores(
+        scored_df,
+        run_ts=now,
+        settings=sentiment_settings,
+    )
 
     if not scored_df.empty:
         scored_df = scored_df.copy()
@@ -4492,6 +4679,8 @@ def run_screener(
         )
         if int(candidates_df.shape[0]) > prev_count:
             gate_fail_counts["gate_policy_tier"] = gate_fail_counts.get("gate_policy_tier") or "soft"
+        if sentiment_summary.get("sentiment_gated"):
+            gate_fail_counts["sentiment"] = int(sentiment_summary.get("sentiment_gated", 0) or 0)
 
     if not candidates_df.empty:
         candidates_df["gates_passed"] = True
@@ -4699,6 +4888,11 @@ def run_screener(
         universe_count=scored_count if scored_count else stats.get("symbols_in"),
     )
 
+    stats["sentiment_enabled"] = bool(sentiment_summary.get("sentiment_enabled"))
+    stats["sentiment_missing_count"] = int(sentiment_summary.get("sentiment_missing_count", 0) or 0)
+    stats["sentiment_avg"] = sentiment_summary.get("sentiment_avg")
+    stats["sentiment_gated"] = int(sentiment_summary.get("sentiment_gated", 0) or 0)
+
     if stats["candidates_out"] == 0:
         if combined_rejects:
             LOGGER.info(
@@ -4784,12 +4978,23 @@ def write_outputs(
     if isinstance(ranker_cfg, Mapping):
         gate_preset_meta = gate_preset_meta or str(ranker_cfg.get("_gate_preset") or "") or None
         gate_relax_meta = gate_relax_meta or str(ranker_cfg.get("_gate_relax_mode") or "") or None
+    sentiment_enabled = bool(stats.get("sentiment_enabled"))
+    sentiment_missing = int(stats.get("sentiment_missing_count", 0) or 0)
+    sentiment_avg = stats.get("sentiment_avg")
+    sentiment_series = (
+        scored_df.get("sentiment") if sentiment_enabled and isinstance(scored_df, pd.DataFrame) else None
+    )
     run_meta = {
         "ranker_version": str(cfg_for_summary.get("version", "unknown")),
         "gate_preset": gate_preset_meta or "standard",
         "relax_gates": gate_relax_meta or "none",
     }
-    write_predictions(scored_df, run_meta)
+    write_predictions(
+        scored_df,
+        run_meta,
+        sentiment_series=sentiment_series,
+        sentiment_enabled=sentiment_enabled,
+    )
 
     diagnostics_dir = data_dir / "diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
@@ -4840,6 +5045,11 @@ def write_outputs(
         "backtest_win_rate_mean": float(stats.get("backtest_win_rate_mean", 0.0)),
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
     }
+    metrics["sentiment_enabled"] = sentiment_enabled
+    metrics["sentiment_missing_count"] = sentiment_missing if sentiment_enabled else 0
+    metrics["sentiment_avg"] = (
+        float(sentiment_avg) if sentiment_enabled and sentiment_avg is not None else None
+    )
     metrics["gate_preset"] = run_meta["gate_preset"]
     metrics["relax_gates"] = run_meta["relax_gates"]
     gate_counts: dict[str, Union[int, str]] = {}
