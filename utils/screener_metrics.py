@@ -37,9 +37,22 @@ def ensure_canonical_metrics(payload: Mapping[str, Any] | None) -> dict[str, Any
     metrics["timestamp"] = timestamp if isinstance(timestamp, str) and timestamp else now_iso
 
     metrics["rows_out"] = _coerce_int(metrics.get("rows_out") or metrics.get("rows", 0))
-    metrics["with_bars"] = _coerce_int(
-        metrics.get("with_bars") or metrics.get("symbols_with_bars", 0)
-    )
+    any_bars = metrics.get("symbols_with_any_bars")
+    required_bars = metrics.get("symbols_with_required_bars")
+    if required_bars is None:
+        required_bars = metrics.get("symbols_with_bars")
+    if any_bars is None:
+        any_bars = metrics.get("symbols_with_bars_any") or metrics.get("symbols_with_bars")
+
+    metrics["with_bars_required"] = _coerce_int(required_bars)
+    metrics["with_bars_any"] = _coerce_int(any_bars)
+    metrics["with_bars"] = metrics["with_bars_required"]
+    metrics["symbols_with_required_bars"] = metrics["with_bars_required"]
+    metrics["symbols_with_any_bars"] = metrics["with_bars_any"]
+    if "symbols_with_bars" not in metrics or metrics.get("symbols_with_bars") in (None, ""):
+        metrics["symbols_with_bars"] = metrics["with_bars_required"]
+    metrics.setdefault("symbols_with_bars_required", metrics["with_bars_required"])
+    metrics.setdefault("symbols_with_bars_any", metrics["with_bars_any"])
 
     universe_count = metrics.get("universe_count")
     if universe_count is None:

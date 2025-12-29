@@ -66,3 +66,39 @@ def test_write_complete_screener_metrics_counts_rows_when_missing(tmp_path):
     assert result["rows"] == 3
     assert result["last_run_utc"]
     assert json.loads(metrics_path.read_text(encoding="utf-8")) == result
+
+
+@pytest.mark.alpaca_optional
+def test_compose_metrics_prefers_existing_screener_metrics(tmp_path):
+    base_dir = tmp_path
+    data_dir = base_dir / "data"
+    data_dir.mkdir()
+
+    screener_metrics = {
+        "symbols_in": 12,
+        "symbols_with_any_bars": 11,
+        "symbols_with_required_bars": 9,
+        "bars_rows_total": 999,
+        "rows": 4,
+        "latest_source": "screener",
+    }
+    (data_dir / "screener_metrics.json").write_text(json.dumps(screener_metrics), encoding="utf-8")
+    (data_dir / "top_candidates.csv").write_text("symbol,score\nA,1\nB,2\n", encoding="utf-8")
+    (data_dir / "screener_stage_fetch.json").write_text(
+        json.dumps(
+            {
+                "symbols_with_any_bars_fetch": 2,
+                "symbols_with_required_bars_fetch": 1,
+                "bars_rows_total_fetch": 10,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = run_pipeline.compose_metrics_from_artifacts(base_dir)
+
+    assert payload["symbols_with_any_bars"] == 11
+    assert payload["symbols_with_required_bars"] == 9
+    assert payload["symbols_with_bars"] == 9
+    assert payload["bars_rows_total"] == 999
+    assert payload["symbols_in"] == 12

@@ -345,9 +345,17 @@ def _gather_universe(metrics: Mapping[str, Any], summary_data: Mapping[str, Any]
     if not source and isinstance(summary_data, Mapping):
         source = summary_data.get("source")
 
+    required = _get("symbols_with_required_bars")
+    if not required:
+        required = _get("symbols_with_bars")
+    any_bars = _get("symbols_with_any_bars")
+    if not any_bars:
+        any_bars = _get("symbols_with_bars_any") or required
     universe = {
         "symbols_in": _get("symbols_in"),
-        "symbols_with_bars": _get("symbols_with_bars"),
+        "symbols_with_required_bars": required,
+        "symbols_with_any_bars": any_bars,
+        "symbols_with_bars": required,
         "rows": _get("rows"),
         "bars_rows_total": bars_total,
         "source": source,
@@ -524,6 +532,8 @@ def _build_kpis(universe: Mapping[str, Any], candidates: Mapping[str, Any], gate
     kpis = {
         "symbols_in": universe.get("symbols_in", 0),
         "symbols_with_bars": universe.get("symbols_with_bars", 0),
+        "symbols_with_any_bars": universe.get("symbols_with_any_bars", 0),
+        "symbols_with_required_bars": universe.get("symbols_with_required_bars", universe.get("symbols_with_bars", 0)),
         "candidate_rows": candidates.get("latest", {}).get("row_count")
         or candidates.get("top", {}).get("row_count")
         or candidates.get("scored", {}).get("row_count")
@@ -704,12 +714,33 @@ def run_assertions(base_dir: Path) -> list[str]:
             f"[PARITY] top_candidates.csv rows={top_rows} does not match screener_metrics.json rows={rows_metric}"
         )
 
-    for key in ("symbols_with_bars_fetch", "bars_rows_total_fetch"):
+    stage_fetch, _ = _safe_read_json(data_dir / "screener_stage_fetch.json")
+
+    for key in ("symbols_with_bars_fetch", "bars_rows_total_fetch", "symbols_with_any_bars", "symbols_with_required_bars"):
         if _coerce_int(metrics.get(key)) is None:
             errors.append(f"[FIELDS] screener_metrics.json missing numeric {key}")
 
+    derived_required = (
+        _coerce_int(stage_fetch.get("symbols_with_required_bars_fetch"))
+        if isinstance(stage_fetch, Mapping)
+        else None
+    )
+    derived_any = (
+        _coerce_int(stage_fetch.get("symbols_with_any_bars_fetch"))
+        if isinstance(stage_fetch, Mapping)
+        else None
+    )
+    required_metric = _coerce_int(metrics.get("symbols_with_required_bars"))
+    any_metric = _coerce_int(metrics.get("symbols_with_any_bars"))
+    if derived_required is not None and required_metric not in (None, derived_required):
+        errors.append(
+            f"[FALLBACK] symbols_with_required_bars={required_metric} does not match fetch snapshot {derived_required}"
+        )
+    if derived_any is not None and any_metric not in (None, derived_any):
+        errors.append(
+            f"[FALLBACK] symbols_with_any_bars={any_metric} does not match fetch snapshot {derived_any}"
+        )
     fallback_pairs = (
-        ("symbols_with_bars_fetch", "symbols_with_bars"),
         ("bars_rows_total_fetch", "bars_rows_total"),
     )
     for new_key, legacy_key in fallback_pairs:

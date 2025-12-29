@@ -31,6 +31,8 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
                 "last_run_utc": "2024-01-01T09:05:00Z",
                 "symbols_in": 12,
                 "symbols_with_bars": 10,
+                "symbols_with_any_bars": 10,
+                "symbols_with_required_bars": 10,
                 "rows": 2,
                 "source": "screener",
                 "gate_fail_total": 1,

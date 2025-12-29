@@ -434,7 +434,7 @@ def parse_pipeline_summary(path: Path) -> Dict[str, Any]:
         if "PIPELINE_SUMMARY" not in line:
             continue
         match = re.search(
-            r"symbols_in=(\d+)\s+with_bars=(\d+)\s+rows=(\d+)(?:[^\n\r]*?(?:\sbar_rows|\sbars_rows_total)=(\d+))?",
+            r"symbols_in=(\d+)\s+with_bars=(\d+)(?:\s+with_bars_any=(\d+))?(?:\s+with_bars_required=(\d+))?\s+rows=(\d+)(?:[^\n\r]*?(?:\sbar_rows|\sbars_rows_total)=(\d+))?",
             line,
         )
         if match:
@@ -442,10 +442,14 @@ def parse_pipeline_summary(path: Path) -> Dict[str, Any]:
                 "last_run_utc": None,
                 "symbols_in": int(match.group(1)),
                 "symbols_with_bars": int(match.group(2)),
-                "rows": int(match.group(3)),
+                "rows": int(match.group(5)),
             }
+            if match.group(3):
+                payload["symbols_with_any_bars"] = int(match.group(3))
             if match.group(4):
-                payload["bars_rows_total"] = int(match.group(4))
+                payload["symbols_with_required_bars"] = int(match.group(4))
+            if match.group(6):
+                payload["bars_rows_total"] = int(match.group(6))
             return payload
         break
     return {}
@@ -462,6 +466,8 @@ def coerce_kpi_types(metrics: Dict[str, Any]) -> Dict[str, Any]:
     int_fields = {
         "symbols_in": ("symbols_in",),
         "symbols_with_bars": ("symbols_with_bars", "with_bars"),
+        "symbols_with_any_bars": ("symbols_with_any_bars", "with_bars_any", "symbols_with_bars_any"),
+        "symbols_with_required_bars": ("symbols_with_required_bars", "with_bars_required"),
         "bars_rows_total": ("bars_rows_total",),
         "rows": ("rows", "rows_out"),
     }
