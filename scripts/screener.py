@@ -34,12 +34,7 @@ import requests
 
 from scripts import logger_utils
 
-from utils.features.sentiment import (
-    JsonHttpSentimentProvider,
-    SentimentProvider,
-    load_sentiment_cache,
-    persist_sentiment_cache,
-)
+from utils.sentiment import JsonHttpSentimentClient, load_sentiment_cache, persist_sentiment_cache
 
 def _to_symbol_list(obj: Iterable[object] | pd.Series | pd.DataFrame | None) -> list[str]:
     """Normalize a container of symbols into a de-duplicated uppercase list."""
@@ -791,7 +786,7 @@ def write_universe_prefix_counts(
 
 
 def _resolve_sentiment_settings() -> dict[str, object]:
-    enabled = _as_bool(os.environ.get("USE_SENTIMENT"), False)
+    use_flag = _as_bool(os.environ.get("USE_SENTIMENT"), False)
     api_url = os.environ.get("SENTIMENT_API_URL")
     api_key = os.environ.get("SENTIMENT_API_KEY")
     timeout = _coerce_float(os.environ.get("SENTIMENT_TIMEOUT_SECS"), 8.0)
@@ -803,6 +798,7 @@ def _resolve_sentiment_settings() -> dict[str, object]:
     min_sentiment = _coerce_float(os.environ.get("MIN_SENTIMENT"), -999.0)
     if min_sentiment is None:
         min_sentiment = -999.0
+    enabled = bool(use_flag and (api_url or "").strip())
     return {
         "enabled": enabled,
         "api_url": api_url,
@@ -810,35 +806,34 @@ def _resolve_sentiment_settings() -> dict[str, object]:
         "timeout": float(timeout),
         "weight": float(weight),
         "min": float(min_sentiment),
+        "url_set": bool((api_url or "").strip()),
+        "use_flag": bool(use_flag),
     }
 
 
-def _build_sentiment_provider(settings: Mapping[str, object]) -> Optional[SentimentProvider]:
+def _build_sentiment_client(settings: Mapping[str, object]) -> Optional[JsonHttpSentimentClient]:
     global _SENTIMENT_PROVIDER_WARNED
 
     if not settings.get("enabled"):
         return None
-    api_url = str(settings.get("api_url") or "").strip()
-    if not api_url:
-        if not _SENTIMENT_PROVIDER_WARNED:
-            LOGGER.warning(
-                "USE_SENTIMENT enabled but SENTIMENT_API_URL is not set; skipping sentiment fetch."
-            )
-            _SENTIMENT_PROVIDER_WARNED = True
+
+    env = {
+        "USE_SENTIMENT": "true" if settings.get("enabled") else "false",
+        "SENTIMENT_API_URL": settings.get("api_url"),
+        "SENTIMENT_API_KEY": settings.get("api_key"),
+        "SENTIMENT_TIMEOUT_SECS": settings.get("timeout"),
+    }
+    client = JsonHttpSentimentClient(
+        base_url=str(settings.get("api_url") or ""),
+        api_key=settings.get("api_key") if settings.get("api_key") not in (None, "") else None,
+        timeout=float(settings.get("timeout", 8.0) or 8.0),
+        env=env,
+    )
+    if not client.enabled() and not _SENTIMENT_PROVIDER_WARNED:
+        LOGGER.warning("USE_SENTIMENT enabled but SENTIMENT_API_URL is not set; skipping sentiment fetch.")
+        _SENTIMENT_PROVIDER_WARNED = True
         return None
-    api_key = settings.get("api_key")
-    timeout = settings.get("timeout", 8.0)
-    try:
-        return JsonHttpSentimentProvider(
-            api_url,
-            api_key=str(api_key) if api_key not in (None, "") else None,
-            timeout=float(timeout or 8.0),
-        )
-    except Exception as exc:
-        if not _SENTIMENT_PROVIDER_WARNED:
-            LOGGER.warning("Failed to initialise sentiment provider: %s", exc)
-            _SENTIMENT_PROVIDER_WARNED = True
-        return None
+    return client
 
 
 def make_verify_hook(enabled: bool):
@@ -3015,11 +3010,14 @@ def _ensure_score_breakdown(raw: object, score_value: Optional[float]) -> str:
     return json.dumps({})
 
 
-def _inject_sentiment_breakdown(frame: pd.DataFrame) -> None:
+def _inject_sentiment_breakdown(frame: pd.DataFrame, *, weight: float, min_sentiment: float) -> None:
     if frame is None or frame.empty:
         return
     if "sentiment" not in frame.columns or "score_breakdown" not in frame.columns:
         return
+    if frame.get("score_breakdown") is None:
+        frame["score_breakdown"] = pd.Series("{}", index=frame.index, dtype="string")
+    frame["score_breakdown"] = frame["score_breakdown"].fillna("{}")
 
     def _update(row: pd.Series) -> str:
         raw = row.get("score_breakdown", "")
@@ -3029,6 +3027,8 @@ def _inject_sentiment_breakdown(frame: pd.DataFrame) -> None:
             payload = {}
         value = row.get("sentiment")
         payload["sentiment"] = None if pd.isna(value) else round(float(value), 4)
+        payload["sentiment_weight"] = float(weight)
+        payload["min_sentiment"] = float(min_sentiment)
         return json.dumps({k: payload[k] for k in sorted(payload)})
 
     frame["score_breakdown"] = frame.apply(_update, axis=1)
@@ -3040,7 +3040,7 @@ def _apply_sentiment_scores(
     run_ts: datetime,
     settings: Mapping[str, object],
     cache_dir: Path = SENTIMENT_CACHE_DIR,
-    provider_factory: Optional[Callable[[Mapping[str, object]], Optional[SentimentProvider]]] = None,
+    client_factory: Optional[Callable[[Mapping[str, object]], Optional[object]]] = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     summary = {
         "sentiment_enabled": bool(settings.get("enabled")),
@@ -3057,21 +3057,31 @@ def _apply_sentiment_scores(
     if frame.empty:
         return frame, summary
 
-    provider_builder = provider_factory or _build_sentiment_provider
-    provider = provider_builder(settings) if provider_builder else None
+    client_builder = client_factory or _build_sentiment_client
+    client = client_builder(settings) if client_builder else None
 
     cache = load_sentiment_cache(cache_dir, run_ts.date()) if cache_dir is not None else {}
     sentiments: dict[str, float] = dict(cache)
     symbols = frame.get("symbol", pd.Series(dtype="string")).astype("string").str.upper().fillna("")
     missing = [sym for sym in symbols.unique() if sym and sym not in sentiments]
-    if provider is not None:
+    if client is not None:
         for sym in missing:
-            value = provider.get_symbol_sentiment(sym, run_ts)
+            value = None
+            if hasattr(client, "get_score"):
+                try:
+                    value = client.get_score(sym, run_ts.date().isoformat())
+                except Exception:
+                    value = None
+            elif hasattr(client, "get_symbol_sentiment"):
+                try:
+                    value = client.get_symbol_sentiment(sym, run_ts)
+                except Exception:
+                    value = None
             if value is None:
                 continue
             sentiments[sym] = value
 
-    if provider is not None and sentiments != cache and cache_dir is not None:
+    if client is not None and sentiments != cache and cache_dir is not None:
         persist_sentiment_cache(cache_dir, run_ts.date(), sentiments)
 
     sentiment_series = pd.Series(
@@ -3101,7 +3111,7 @@ def _apply_sentiment_scores(
     if "score_breakdown" not in frame.columns:
         scores = frame.get("Score", pd.Series(dtype="float64"))
         frame["score_breakdown"] = [_ensure_score_breakdown(None, score) for score in scores]
-    _inject_sentiment_breakdown(frame)
+    _inject_sentiment_breakdown(frame, weight=weight, min_sentiment=gate_threshold)
 
     values = pd.to_numeric(frame.get("sentiment"), errors="coerce")
     valid_mask = values.notna()
@@ -4414,6 +4424,13 @@ def run_screener(
         "sentiment_avg": None,
         "sentiment_gated": 0,
     }
+    LOGGER.info(
+        "[INFO] SENTIMENT enabled=%s url_set=%s weight=%.3f min=%.3f",
+        bool(sentiment_settings.get("enabled")),
+        bool(sentiment_settings.get("url_set")),
+        float(_coerce_float(sentiment_settings.get("weight"), 0.0) or 0.0),
+        float(_coerce_float(sentiment_settings.get("min"), -999.0) or -999.0),
+    )
 
     try:
         shortlist_limit = (

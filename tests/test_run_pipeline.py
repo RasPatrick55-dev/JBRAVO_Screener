@@ -100,3 +100,21 @@ def test_pipeline_refresh_latest(tmp_path, monkeypatch):
     assert "timings" in metrics
     assert metrics.get("status") == "ok"
     assert metrics.get("auth_missing") == []
+
+
+def test_run_step_streams_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
+    cmd = [
+        sys.executable,
+        "-c",
+        "import sys; [sys.stdout.write('x'*1000+'\\n') for _ in range(1500)]",
+    ]
+    rc, _ = run_pipeline.run_step("loud", cmd, timeout=5)
+
+    log_path = tmp_path / "logs" / "step.loud.out"
+    assert rc == 0
+    assert log_path.exists()
+    content = log_path.read_text(encoding="utf-8")
+    assert "START loud" in content
+    assert "END loud" in content
+    assert "x" * 1000 in content
