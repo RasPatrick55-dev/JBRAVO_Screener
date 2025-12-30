@@ -9,12 +9,13 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from collections import Counter
 
 import numpy as np
 import pandas as pd
+from scripts import db
 from utils import write_csv_atomic
 from utils.screener_metrics import ensure_canonical_metrics, write_screener_metrics_json
 from utils.env import load_env
@@ -396,6 +397,13 @@ def main():
         logger.info(
             f"Metrics summary CSV successfully updated: {metrics_summary_file}"
         )
+        try:
+            db.upsert_metrics_daily(
+                datetime.now(timezone.utc).date(),
+                summary_metrics,
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning("[WARN] DB_WRITE_FAILED table=metrics_daily err=%s", exc)
     except Exception as e:
         logger.error(f"Failed to write metrics_summary.csv: {e}")
         return 1
@@ -438,4 +446,3 @@ if __name__ == "__main__":
     elapsed_time = end_time - start_time
     logger.info("Script finished in %s", elapsed_time)
     sys.exit(exit_code)
-

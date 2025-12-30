@@ -22,6 +22,7 @@ TABLE_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS screener_candidates (
         run_date DATE NOT NULL,
+        timestamp TIMESTAMPTZ,
         symbol TEXT NOT NULL,
         score NUMERIC,
         exchange TEXT,

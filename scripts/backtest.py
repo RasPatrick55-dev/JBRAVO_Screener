@@ -19,6 +19,7 @@ import json
 import numpy as np
 import pandas as pd
 
+from scripts import db
 from utils import logger_utils
 from utils.env import load_env, get_alpaca_creds
 
@@ -919,6 +920,10 @@ def run_backtest(
         write_csv_atomic(trades_path, trades_df)
         write_csv_atomic(equity_path, equity_df.reset_index())
         write_csv_atomic(metrics_path, summary_df)
+        try:
+            db.insert_backtest_results(datetime.now(timezone.utc).date(), summary_df)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning("[WARN] DB_WRITE_FAILED table=backtest_results err=%s", exc)
         logger.info(f"Trades log successfully updated with net_pnl at {trades_path}.")
 
     except Exception as e:
@@ -1019,4 +1024,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

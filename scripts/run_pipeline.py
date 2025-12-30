@@ -21,6 +21,7 @@ import zoneinfo
 import pandas as pd
 import requests
 
+from scripts import db
 from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
 from scripts.screener import write_universe_prefix_counts
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
@@ -1824,6 +1825,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
 
     started = time.time()
+    started_dt = datetime.fromtimestamp(started, timezone.utc)
     metrics: dict[str, Any] = {}
     symbols_in = 0
     symbols_with_bars = 0
@@ -2306,6 +2308,29 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             health.trading_status,
             health.data_status,
         )
+        ended_at = datetime.now(timezone.utc)
+        summary_payload = {
+            "symbols_in": int(summary.symbols_in or 0),
+            "with_bars": int(summary.with_bars or 0),
+            "with_bars_any": int(summary.with_bars_any or 0),
+            "rows": int(summary.rows or 0),
+            "bars_rows_total": int(summary.bars_rows_total or 0) if summary.bars_rows_total is not None else None,
+            "source": summary.source,
+            "fetch_secs": t.fetch,
+            "feature_secs": t.features,
+            "rank_secs": t.rank,
+            "gate_secs": t.gates,
+            "stage_times": {k: float(v) for k, v in stage_times.items()},
+            "step_rcs": {k: int(v) for k, v in step_rcs.items()},
+            "degraded": bool(degraded),
+            "latest_source": summary.source,
+            "trading_ok": bool(trading_ok),
+            "data_ok": bool(data_ok),
+        }
+        try:
+            db.upsert_pipeline_run(today, started_dt, ended_at, int(rc), summary_payload)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning("[WARN] DB_WRITE_FAILED table=pipeline_runs err=%s", exc)
         duration = time.time() - started
         logger.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
         try:
