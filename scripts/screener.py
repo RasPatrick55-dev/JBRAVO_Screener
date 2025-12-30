@@ -4831,12 +4831,12 @@ def run_screener(
     timing_info["rank_secs"] = timing_info.get("rank_secs", 0.0) + rank_timer.lap(
         "rank_secs"
     )
-    scored_df = _apply_quality_filters(scored_df, ranker_cfg)
     scored_df, sentiment_summary = _apply_sentiment_scores(
         scored_df,
         run_ts=now,
         settings=sentiment_settings,
     )
+    scored_df = _apply_quality_filters(scored_df, ranker_cfg)
 
     if not scored_df.empty:
         scored_df = scored_df.copy()
