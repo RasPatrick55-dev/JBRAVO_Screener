@@ -2,18 +2,24 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import math
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
+from sqlalchemy import text
+
+from scripts import db
 
 BASE_DIR = Path(
     os.environ.get("JBRAVO_HOME", Path(__file__).resolve().parents[1])
 ).expanduser()
 DATA_DIR = BASE_DIR / "data"
 REPORTS_DIR = BASE_DIR / "reports"
+
+logger = logging.getLogger(__name__)
 
 
 def _read_json_safe(path: Path) -> Dict[str, Any]:
@@ -404,18 +410,67 @@ def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
 def screener_table() -> Tuple[pd.DataFrame, str, str]:
     """Return (DataFrame, iso timestamp, file source) for the screener table."""
 
-    top_path = DATA_DIR / "top_candidates.csv"
-    latest_path = DATA_DIR / "latest_candidates.csv"
+    def _db_candidates() -> tuple[pd.DataFrame, Optional[str]]:
+        if not db.db_enabled():
+            return pd.DataFrame(), None
+        engine = db.get_engine()
+        if engine is None:
+            return pd.DataFrame(), None
+        try:
+            with engine.connect() as connection:
+                latest_run_date = connection.execute(
+                    text("SELECT MAX(run_date) FROM screener_candidates")
+                ).scalar()
+            if not latest_run_date:
+                logger.info("DASH_DB_READ_OK table=screener_candidates rows=0")
+                return pd.DataFrame(), None
+            with engine.connect() as connection:
+                result = connection.execute(
+                    text(
+                        """
+                        SELECT
+                            run_date, timestamp, symbol, score, exchange, close, volume,
+                            universe_count, score_breakdown, entry_price, adv20, atrp, source
+                        FROM screener_candidates
+                        WHERE run_date = :run_date
+                        ORDER BY score DESC NULLS LAST
+                        """
+                    ),
+                    {"run_date": latest_run_date},
+                )
+                rows = result.fetchall()
+                columns = result.keys()
+            df_db = pd.DataFrame(rows, columns=columns)
+            run_label = str(latest_run_date)
+            logger.info(
+                "DASH_DB_READ_OK table=screener_candidates rows=%s run_date=%s",
+                len(df_db),
+                run_label,
+            )
+            return df_db, run_label
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.info("DASH_DB_READ_FALLBACK reason=%s", exc)
+            return pd.DataFrame(), None
 
-    df = _read_csv_safe(top_path)
-    updated = _mtime_iso(top_path)
-    source_file = "top_candidates.csv"
+    db_df, run_label = _db_candidates()
+    if not db_df.empty or run_label is not None:
+        df = db_df
+        updated = run_label or ""
+        source_file = "screener_candidates (db)"
+    else:
+        logger.info("DASH_DB_READ_FALLBACK reason=csv_fallback")
+        top_path = DATA_DIR / "top_candidates.csv"
+        latest_path = DATA_DIR / "latest_candidates.csv"
 
-    if df.empty:
-        df = _read_csv_safe(latest_path)
-        source_file = "latest_candidates.csv"
-        if not updated:
-            updated = _mtime_iso(latest_path)
+        df = _read_csv_safe(top_path)
+        updated = _mtime_iso(top_path)
+        source_file = "top_candidates.csv"
+
+        if df.empty:
+            df = _read_csv_safe(latest_path)
+            source_file = "latest_candidates.csv"
+            if not updated:
+                updated = _mtime_iso(latest_path)
 
     df = df.copy()
     for column in ("score", "win_rate", "net_pnl", "close", "adv20", "atrp"):
@@ -430,6 +485,49 @@ def screener_table() -> Tuple[pd.DataFrame, str, str]:
 
 def metrics_summary_snapshot() -> Dict[str, Any]:
     """Return the latest metrics summary row from ``data/metrics_summary.csv``."""
+
+    if db.db_enabled():
+        engine = db.get_engine()
+        if engine is not None:
+            try:
+                with engine.connect() as connection:
+                    latest_run_date = connection.execute(
+                        text("SELECT MAX(run_date) FROM metrics_daily")
+                    ).scalar()
+                if latest_run_date:
+                    with engine.connect() as connection:
+                        result = connection.execute(
+                            text(
+                                """
+                                SELECT run_date, total_trades, win_rate, net_pnl, expectancy,
+                                       profit_factor, max_drawdown, sharpe, sortino
+                                FROM metrics_daily
+                                WHERE run_date = :run_date
+                                LIMIT 1
+                                """
+                            ),
+                            {"run_date": latest_run_date},
+                        )
+                        row = result.mappings().first()
+                    if row:
+                        logger.info("DASH_DB_READ_OK table=metrics_daily run_date=%s", latest_run_date)
+                        return {
+                            "profit_factor": row.get("profit_factor"),
+                            "expectancy": row.get("expectancy"),
+                            "win_rate": row.get("win_rate"),
+                            "net_pnl": row.get("net_pnl"),
+                            "max_drawdown": row.get("max_drawdown"),
+                            "sharpe": row.get("sharpe"),
+                            "sortino": row.get("sortino"),
+                            "last_run_utc": str(row.get("run_date")),
+                        }
+                logger.info("DASH_DB_READ_OK table=metrics_daily rows=0")
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.info("DASH_DB_READ_FALLBACK reason=%s", exc)
+        else:
+            logger.info("DASH_DB_READ_FALLBACK reason=db_disabled")
+    else:
+        logger.info("DASH_DB_READ_FALLBACK reason=db_disabled")
 
     path = DATA_DIR / "metrics_summary.csv"
     try:
