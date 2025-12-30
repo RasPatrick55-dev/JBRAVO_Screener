@@ -361,12 +361,14 @@ def record_executed_trade(
         price_value = float(price)
     except (TypeError, ValueError):
         price_value = 0.0
+    event_time_value = _coerce_trade_timestamp(timestamp)
+    exit_price = price_value if side_value == "sell" else 0.0
     entry_price = price_value if side_value == "buy" else 0.0
-    current_price = price_value if side_value == "buy" else 0.0
-    entry_time = _coerce_trade_timestamp(timestamp)
+    current_price = price_value if side_value == "buy" else exit_price
     raw_payload = dict(raw or {})
     if event_label and "event_type" not in raw_payload:
         raw_payload["event_type"] = event_label
+    exit_time_value = event_time_value if side_value == "sell" else ""
 
     row = {
         "order_id": str(order_id or ""),
@@ -376,9 +378,9 @@ def record_executed_trade(
         "current_price": current_price,
         "unrealized_pl": 0.0,
         "entry_price": entry_price,
-        "entry_time": entry_time,
-        "exit_price": 0.0,
-        "exit_time": "",
+        "entry_time": event_time_value,
+        "exit_price": exit_price,
+        "exit_time": exit_time_value,
         "net_pnl": 0.0,
         "pnl": 0.0,
         "order_status": str(status or ""),
@@ -441,6 +443,74 @@ def record_executed_trade(
             row["order_id"],
             exc,
         )
+    order_event_payload = {
+        "symbol": row["symbol"],
+        "qty": row["qty"],
+        "order_id": row["order_id"],
+        "status": row["order_status"],
+        "event_type": event_for_log or "UNKNOWN",
+        "event_time": event_time_value,
+        "raw": raw_payload or None,
+    }
+    try:
+        db.insert_order_event(order_event_payload)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.warning(
+            "[WARN] DB_WRITE_FAILED table=order_events event=%s order_id=%s err=%s",
+            event_for_log or "",
+            row["order_id"],
+            exc,
+        )
+    if (event_label or "").upper() == "BUY_FILL":
+        try:
+            trade_ok = db.upsert_trade_on_buy_fill(
+                row["symbol"],
+                row["qty"],
+                row["order_id"],
+                event_time_value,
+                price_value,
+            )
+            if not trade_ok:
+                LOGGER.warning(
+                    "[WARN] DB_TRADE_UPSERT_FAILED symbol=%s order_id=%s",
+                    row["symbol"],
+                    row["order_id"],
+                )
+            else:
+                open_trades = db.count_open_trades()
+                LOGGER.info("OPEN_TRADES count=%s", open_trades)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "[WARN] DB_TRADE_UPSERT_FAILED symbol=%s order_id=%s err=%s",
+                row["symbol"],
+                row["order_id"],
+                exc,
+            )
+    if side_value == "sell" and (event_label or "").upper().endswith("FILL"):
+        try:
+            close_ok = db.close_trade_on_sell_fill(
+                row["symbol"],
+                row["order_id"],
+                event_time_value,
+                price_value,
+                (event_label or "").upper(),
+            )
+            if not close_ok:
+                LOGGER.warning(
+                    "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s order_id=%s",
+                    row["symbol"],
+                    row["order_id"],
+                )
+            else:
+                open_trades = db.count_open_trades()
+                LOGGER.info("OPEN_TRADES count=%s", open_trades)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s order_id=%s err=%s",
+                row["symbol"],
+                row["order_id"],
+                exc,
+            )
 
 
 def _isoformat_or_none(timestamp: Any) -> str | None:
@@ -548,7 +618,24 @@ def log_trade_event_db(
             order_id or "",
             "db_disabled",
         )
-
+    order_event_payload = {
+        "symbol": symbol,
+        "qty": qty_value,
+        "order_id": order_id,
+        "status": status,
+        "event_type": event_label,
+        "event_time": entry_time_value,
+        "raw": raw_payload or None,
+    }
+    try:
+        db.insert_order_event(order_event_payload)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.warning(
+            "[WARN] DB_WRITE_FAILED table=order_events event=%s order_id=%s err=%s",
+            event_label,
+            order_id or "",
+            exc,
+        )
 
 
 def log_info(tag: str, **kv: Any) -> None:
