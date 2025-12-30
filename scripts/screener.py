@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 import requests
 
+from scripts import db
 from scripts import logger_utils
 
 from utils.sentiment import JsonHttpSentimentClient, load_sentiment_cache, persist_sentiment_cache
@@ -4363,6 +4364,7 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
     )
     LOGGER.info("Full nightly outputs written to %s", output_path)
 
+    latest_candidates_df: pd.DataFrame | None = None
     refresh_latest = _as_bool(getattr(args, "refresh_latest", True), True)
     if refresh_latest:
         try:
@@ -4370,9 +4372,18 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
                 from .run_pipeline import refresh_latest_candidates  # type: ignore
             except Exception:  # pragma: no cover - fallback for script execution
                 from scripts.run_pipeline import refresh_latest_candidates  # type: ignore
-            refresh_latest_candidates()
+            latest_candidates_df = refresh_latest_candidates()
         except Exception as exc:  # pragma: no cover - copy failures unexpected
             LOGGER.warning("Failed to refresh latest candidates: %s", exc)
+
+    if latest_candidates_df is not None:
+        try:
+            db.insert_screener_candidates(
+                datetime.now(timezone.utc).date(),
+                latest_candidates_df,
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("[WARN] DB_WRITE_FAILED table=screener_candidates err=%s", exc)
 
     _update_metrics_file(
         base_dir,

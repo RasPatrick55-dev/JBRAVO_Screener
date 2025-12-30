@@ -26,6 +26,7 @@ NY = ZoneInfo("America/New_York")
 import pandas as pd
 import requests
 
+from scripts import db
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.utils.env import load_env
 from utils import atomic_write_bytes, write_csv_atomic
@@ -408,6 +409,10 @@ def record_executed_trade(
             symbol,
             EXECUTED_TRADES_PATH,
         )
+    try:
+        db.insert_executed_trade(row)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.warning("[WARN] DB_WRITE_FAILED table=executed_trades err=%s", exc)
 
 
 
