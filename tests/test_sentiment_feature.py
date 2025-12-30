@@ -307,3 +307,78 @@ def test_sentiment_stage_entry_log_and_fetch_logs(tmp_path: Path, caplog: pytest
 
     assert "[INFO] SENTIMENT_STAGE enter df_rows=1 cols_has_symbol=True" in caplog.text
     assert "[INFO] SENTIMENT_FETCH start target=1 unique=1" in caplog.text
+    assert "[INFO] SENTIMENT_FETCH done target=1" in caplog.text
+
+
+def test_sentiment_runs_when_candidates_empty(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    run_ts = datetime(2024, 9, 1, tzinfo=timezone.utc)
+    frame = pd.DataFrame(
+        {
+            "symbol": [f"SYM{i}" for i in range(10)],
+            "Score": list(range(10)),
+            "score_breakdown": ["{}"] * 10,
+        }
+    )
+    settings = {"enabled": True, "weight": 0.0, "min": -1.0, "api_url": "http://example.test/api"}
+
+    class NullClient:
+        def __init__(self) -> None:
+            self.errors = 0
+
+        def get_score(self, symbol: str, date_utc: str) -> Optional[float]:
+            return None
+
+    with caplog.at_level("INFO"):
+        updated, summary = screener._apply_sentiment_scores(
+            frame,
+            run_ts=run_ts,
+            settings=settings,
+            cache_dir=tmp_path / "data" / "cache" / "sentiment",
+            client_factory=lambda *_: NullClient(),
+        )
+
+    cache_file = tmp_path / "data" / "cache" / "sentiment" / f"{run_ts.date().isoformat()}.json"
+    assert cache_file.exists()
+    cache_payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    assert cache_payload == {}
+    assert cache_file.stat().st_size > 0
+    assert "[INFO] SENTIMENT_STAGE enter df_rows=10 cols_has_symbol=True" in caplog.text
+    assert "[INFO] SENTIMENT_FETCH start target=10 unique=10" in caplog.text
+    assert "[INFO] SENTIMENT_FETCH done target=10" in caplog.text
+    assert summary["sentiment_missing_count"] == len(frame)
+    assert summary["sentiment_enabled"] is True
+
+    stats_common = {
+        "candidates_out": 0,
+        "shortlist_requested": 10,
+        "shortlist_candidates": len(frame),
+        "coarse_ranked": len(frame),
+        "shortlist_path": "",
+        "backtest_target": 0,
+        "backtest_evaluated": 0,
+        "backtest_lookback": 0,
+        "backtest_expectancy_mean": 0.0,
+        "backtest_win_rate_mean": 0.0,
+    }
+    stats_enabled = {
+        **stats_common,
+        "sentiment_enabled": True,
+        "sentiment_missing_count": summary["sentiment_missing_count"],
+        "sentiment_avg": summary["sentiment_avg"],
+        "sentiment_gated": summary.get("sentiment_gated", 0),
+    }
+    skip_reasons = {key: 0 for key in screener.SKIP_KEYS}
+    top_df = pd.DataFrame(columns=screener.TOP_CANDIDATE_COLUMNS)
+    screener.write_outputs(
+        tmp_path,
+        top_df,
+        updated.iloc[0:0],
+        stats_enabled,
+        skip_reasons,
+        now=run_ts,
+    )
+    metrics_path = tmp_path / "data" / "screener_metrics.json"
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    assert metrics["sentiment_enabled"] is True
+    assert metrics["sentiment_missing_count"] == len(frame)
+    assert metrics["sentiment_avg"] is None
