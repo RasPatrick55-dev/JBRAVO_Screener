@@ -25,6 +25,7 @@ NY = ZoneInfo("America/New_York")
 
 import pandas as pd
 import requests
+from sqlalchemy import text
 
 from scripts import db
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
@@ -1583,7 +1584,8 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
 
 @dataclass
 class ExecutorConfig:
-    source: Path = Path("data/latest_candidates.csv")
+    source_path: Path = Path("data/latest_candidates.csv")
+    source_type: str = "csv"
     allocation_pct: float = 0.05
     max_positions: int = 7
     max_new_positions: int = 7
@@ -2562,11 +2564,58 @@ class TradeExecutor:
             log_info("TIME_WINDOW", message=message)
         return allowed, message, resolved_window
 
+    def _load_latest_candidates_from_db(self) -> tuple[pd.DataFrame, Optional[str]]:
+        engine = db.get_engine()
+        if engine is None:
+            raise CandidateLoadError("DATABASE_URL not configured")
+        with engine.connect() as connection:
+            latest_run_date = connection.execute(text("SELECT MAX(run_date) FROM screener_candidates")).scalar()
+        if not latest_run_date:
+            LOGGER.info("[INFO] DB_CANDIDATES rows=0")
+            return pd.DataFrame(), None
+        with engine.connect() as connection:
+            result = connection.execute(
+                text(
+                    """
+                    SELECT
+                        run_date, timestamp, symbol, score, exchange, close, volume,
+                        universe_count, score_breakdown, entry_price, adv20, atrp, source
+                    FROM screener_candidates
+                    WHERE run_date = :run_date
+                    ORDER BY score DESC NULLS LAST
+                    """
+                ),
+                {"run_date": latest_run_date},
+            )
+            rows = result.fetchall()
+            columns = result.keys()
+        df = pd.DataFrame(rows, columns=columns)
+        if "symbol" in df.columns:
+            df["symbol"] = df["symbol"].astype("string").str.upper()
+        run_label = str(latest_run_date)
+        LOGGER.info("[INFO] DB_CANDIDATES rows=%s run_date=%s", len(df), run_label)
+        return df, run_label
+
     def load_candidates(self, *, rank: bool = True) -> pd.DataFrame:
-        path = self.config.source
-        if not path.exists():
-            raise CandidateLoadError(f"Candidate file not found: {path}")
-        df = pd.read_csv(path, dtype={"symbol": "string"})
+        source_type = (self.config.source_type or "csv").strip().lower()
+        df: pd.DataFrame
+        base_dir: Path | None = None
+        if source_type == "db":
+            try:
+                df, _ = self._load_latest_candidates_from_db()
+                base_dir = Path.cwd()
+            except Exception as exc:
+                LOGGER.warning("[WARN] DB_READ_FAILED err=%s -> falling back to CSV", exc)
+                source_type = "csv"
+        if source_type != "db":
+            path = self.config.source_path
+            if not path.exists():
+                raise CandidateLoadError(f"Candidate file not found: {path}")
+            df = pd.read_csv(path, dtype={"symbol": "string"})
+            try:
+                base_dir = path.resolve().parent.parent
+            except Exception:
+                base_dir = Path.cwd()
         raw_columns = list(df.columns)
         LOGGER.info("[INFO] CANDIDATE_COLUMNS raw=%s", raw_columns)
         normalized_columns = [str(column).strip() for column in raw_columns]
@@ -2577,9 +2626,7 @@ class TradeExecutor:
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
-        try:
-            base_dir = path.resolve().parent.parent
-        except Exception:
+        if base_dir is None:
             base_dir = Path.cwd()
         df = _canonicalize_candidate_header(df, base_dir)
         preserved_score_cols = [
@@ -4150,7 +4197,18 @@ def _ensure_trading_auth(
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Execute trades for pipeline candidates")
-    parser.add_argument("--source", type=Path, default=ExecutorConfig.source, help="Path to the candidate CSV file")
+    parser.add_argument(
+        "--source",
+        choices=("db", "csv"),
+        default=ExecutorConfig.source_type,
+        help="Candidate source: db or csv (default csv)",
+    )
+    parser.add_argument(
+        "--source-path",
+        type=Path,
+        default=ExecutorConfig.source_path,
+        help="Path to the candidate CSV file (used when --source=csv)",
+    )
     parser.add_argument(
         "--allocation-pct",
         type=float,
@@ -4350,7 +4408,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 def build_config(args: argparse.Namespace) -> ExecutorConfig:
     market_timezone = args.market_timezone or ExecutorConfig.market_timezone
     return ExecutorConfig(
-        source=args.source,
+        source_path=args.source_path,
+        source_type=(args.source or "csv").lower(),
         allocation_pct=args.allocation_pct,
         max_positions=args.max_positions,
         max_new_positions=args.max_new_positions,
@@ -4627,7 +4686,7 @@ def run_executor(
 
 
 def load_candidates(path: Path) -> pd.DataFrame:
-    config = ExecutorConfig(source=path)
+    config = ExecutorConfig(source_path=path, source_type="csv")
     metrics = ExecutionMetrics()
     executor = TradeExecutor(config, None, metrics)
     return executor.load_candidates()
