@@ -4585,6 +4585,7 @@ def run_screener(
     shortlist_path: Optional[Union[str, Path]] = None,
     backtest_top_k: Optional[int] = None,
     backtest_lookback: Optional[int] = None,
+    debug_no_gates: bool = False,
 ) -> Tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -4615,6 +4616,9 @@ def run_screener(
         float(_coerce_float(sentiment_settings.get("weight"), 0.0) or 0.0),
         float(_coerce_float(sentiment_settings.get("min"), -999.0) or -999.0),
     )
+
+    if debug_no_gates:
+        LOGGER.warning("[WARN] DEBUG_NO_GATES enabled")
 
     try:
         shortlist_limit = (
@@ -4836,7 +4840,10 @@ def run_screener(
         run_ts=now,
         settings=sentiment_settings,
     )
-    scored_df = _apply_quality_filters(scored_df, ranker_cfg)
+    if debug_no_gates:
+        scored_df = scored_df.copy()
+    else:
+        scored_df = _apply_quality_filters(scored_df, ranker_cfg)
 
     if not scored_df.empty:
         scored_df = scored_df.copy()
@@ -4865,23 +4872,32 @@ def run_screener(
 
     gates_timer = T()
     LOGGER.info("[STAGE] gates start")
-    candidates_df, gate_fail_counts, gate_rejects = apply_gates(scored_df, ranker_cfg)
-    LOGGER.info("[STAGE] gates end (candidates=%d)", int(candidates_df.shape[0]))
+    if debug_no_gates:
+        candidates_df = scored_df.copy()
+        gate_fail_counts = {
+            "gate_total_passed": int(candidates_df.shape[0]),
+            "gate_total_failed": 0,
+            "debug_no_gates": "enabled",
+        }
+        gate_rejects = []
+    else:
+        candidates_df, gate_fail_counts, gate_rejects = apply_gates(scored_df, ranker_cfg)
+        prev_count = int(candidates_df.shape[0])
+        candidates_df = _soft_gate_with_min(scored_df, candidates_df, ranker_cfg)
+        if isinstance(gate_fail_counts, dict):
+            gate_fail_counts["gate_total_passed"] = int(candidates_df.shape[0])
+            gate_fail_counts["gate_total_failed"] = max(
+                int(scored_df.shape[0]) - int(candidates_df.shape[0]),
+                0,
+            )
+            if int(candidates_df.shape[0]) > prev_count:
+                gate_fail_counts["gate_policy_tier"] = gate_fail_counts.get("gate_policy_tier") or "soft"
+            if sentiment_summary.get("sentiment_gated"):
+                gate_fail_counts["sentiment"] = int(sentiment_summary.get("sentiment_gated", 0) or 0)
     timing_info["gates_secs"] = timing_info.get("gates_secs", 0.0) + gates_timer.lap(
         "gates_secs"
     )
-    prev_count = int(candidates_df.shape[0])
-    candidates_df = _soft_gate_with_min(scored_df, candidates_df, ranker_cfg)
-    if isinstance(gate_fail_counts, dict):
-        gate_fail_counts["gate_total_passed"] = int(candidates_df.shape[0])
-        gate_fail_counts["gate_total_failed"] = max(
-            int(scored_df.shape[0]) - int(candidates_df.shape[0]),
-            0,
-        )
-        if int(candidates_df.shape[0]) > prev_count:
-            gate_fail_counts["gate_policy_tier"] = gate_fail_counts.get("gate_policy_tier") or "soft"
-        if sentiment_summary.get("sentiment_gated"):
-            gate_fail_counts["sentiment"] = int(sentiment_summary.get("sentiment_gated", 0) or 0)
+    LOGGER.info("[STAGE] gates end (candidates=%d)", int(candidates_df.shape[0]))
 
     if not candidates_df.empty:
         candidates_df["gates_passed"] = True
@@ -5070,6 +5086,11 @@ def run_screener(
         candidates_df.reset_index(drop=True, inplace=True)
         candidates_df["rank"] = np.arange(1, candidates_df.shape[0] + 1, dtype=int)
 
+    debug_final_cap: Optional[int] = None
+    if debug_no_gates:
+        debug_final_cap = min(6, int(scored_df.shape[0]))
+        stats["candidates_out"] = debug_final_cap
+
     skip_reasons["NAN_DATA"] += _coerce_int(gate_fail_counts.get("nan_data"))
     skip_reasons["INSUFFICIENT_HISTORY"] += _coerce_int(
         gate_fail_counts.get("insufficient_history")
@@ -5081,7 +5102,10 @@ def run_screener(
             break
         combined_rejects.append(entry)
 
-    top_df = _prepare_top_frame(candidates_df, top_n)
+    top_df = _prepare_top_frame(
+        candidates_df,
+        debug_final_cap if debug_final_cap is not None else top_n,
+    )
     scored_count = int(scored_df.shape[0]) if isinstance(scored_df, pd.DataFrame) else 0
     top_df = _normalise_top_candidates(
         top_df,
@@ -5194,6 +5218,9 @@ def write_outputs(
         "gate_preset": gate_preset_meta or "standard",
         "relax_gates": gate_relax_meta or "none",
     }
+    debug_no_gates_enabled = bool(
+        isinstance(gate_counters, Mapping) and gate_counters.get("debug_no_gates") == "enabled"
+    )
     write_predictions(
         scored_df,
         run_meta,
@@ -5250,6 +5277,10 @@ def write_outputs(
         "backtest_win_rate_mean": float(stats.get("backtest_win_rate_mean", 0.0)),
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
     }
+    if debug_no_gates_enabled:
+        metrics["candidates_final"] = min(6, scored_count)
+    else:
+        metrics["candidates_final"] = int(top_df.shape[0])
     metrics["sentiment_enabled"] = sentiment_enabled
     metrics["sentiment_missing_count"] = sentiment_missing
     metrics["sentiment_avg"] = float(sentiment_avg) if sentiment_avg is not None else None
@@ -5596,6 +5627,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Optional relaxation override for diagnostics (default: none)",
     )
     parser.add_argument(
+        "--debug-no-gates",
+        choices=["true", "false"],
+        default="false",
+        help="Bypass gating for verification (runs sentiment on full shortlist; not for production)",
+    )
+    parser.add_argument(
         "--dollar-vol-min",
         type=float,
         default=2000000,
@@ -5609,6 +5646,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parsed.reuse_cache = _as_bool(getattr(parsed, "reuse_cache", True), True)
     parsed.skip_fetch = _as_bool(getattr(parsed, "skip_fetch", False), False)
     parsed.refresh_latest = _as_bool(getattr(parsed, "refresh_latest", True), True)
+    parsed.debug_no_gates = _as_bool(getattr(parsed, "debug_no_gates", False), False)
     try:
         parsed.ranker_config = Path(parsed.ranker_config)
     except Exception:
@@ -5810,6 +5848,7 @@ def main(
             relax_gates=args.relax_gates,
             dollar_vol_min=args.dollar_vol_min,
             ranker_config=base_ranker_cfg,
+            debug_no_gates=bool(args.debug_no_gates),
         )
         timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(fetch_elapsed, 3)
         write_outputs(
