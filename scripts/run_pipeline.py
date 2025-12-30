@@ -1777,19 +1777,8 @@ def ingest_artifacts_to_db(run_date: date) -> None:
         _log_fail("all", "engine_unavailable")
         return
 
-    score_breakdown_raw: list[Any] = []
     run_date_value = run_date.isoformat() if hasattr(run_date, "isoformat") else run_date
-
-    def _parse_score_breakdown(value: Any) -> Any:
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except Exception:
-                score_breakdown_raw.append(value)
-                return None
-        if isinstance(value, (Mapping, list)):
-            return value
-        return None
+    score_breakdown_raw: list[Any] = []
 
     try:
         candidates_df = pd.read_csv(LATEST_CANDIDATES)
@@ -1803,16 +1792,26 @@ def ingest_artifacts_to_db(run_date: date) -> None:
         rows: list[dict[str, Any]] = []
         for _, row in candidates_df.iterrows():
             record = row.to_dict() if isinstance(row, Mapping) else dict(row)
+            symbol = (record.get("symbol") or "").upper()
+            score_breakdown_raw_value = record.get("score_breakdown")
+            normalized_score_breakdown = db.normalize_score_breakdown(score_breakdown_raw_value, symbol=symbol)
+            if normalized_score_breakdown is None:
+                try:
+                    is_empty_score = score_breakdown_raw_value in (None, "") or pd.isna(score_breakdown_raw_value)
+                except Exception:
+                    is_empty_score = score_breakdown_raw_value in (None, "")
+                if not is_empty_score:
+                    score_breakdown_raw.append(score_breakdown_raw_value)
             payload = {
                 "run_date": run_date_value,
                 "timestamp": record.get("timestamp"),
-                "symbol": (record.get("symbol") or "").upper(),
+                "symbol": symbol,
                 "score": record.get("score"),
                 "exchange": record.get("exchange"),
                 "close": record.get("close"),
                 "volume": record.get("volume"),
                 "universe_count": record.get("universe_count"),
-                "score_breakdown": _parse_score_breakdown(record.get("score_breakdown")),
+                "score_breakdown": normalized_score_breakdown,
                 "entry_price": record.get("entry_price"),
                 "adv20": record.get("adv20"),
                 "atrp": record.get("atrp"),
