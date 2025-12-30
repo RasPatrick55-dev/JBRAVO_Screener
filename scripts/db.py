@@ -565,6 +565,35 @@ def get_open_trades(engine: Optional[Engine] = None, limit: int = 200) -> list[d
         return []
 
 
+def get_closed_trades_missing_exit(
+    engine: Optional[Engine], updated_after: datetime, limit: int = 200
+) -> list[dict[str, Any]]:
+    db_engine = engine or _engine_or_none()
+    if db_engine is None:
+        return []
+    limit = max(1, int(limit or 0))
+    try:
+        with db_engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT trade_id, symbol, qty, entry_price, exit_price, exit_order_id, exit_time, realized_pnl
+                    FROM trades
+                    WHERE status='CLOSED'
+                      AND (exit_price IS NULL OR exit_order_id IS NULL OR realized_pnl IS NULL)
+                      AND updated_at >= :updated_after
+                    ORDER BY updated_at DESC NULLS LAST, trade_id DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"updated_after": updated_after, "limit": limit},
+            ).mappings().all()
+            return [dict(row) for row in rows]
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
+        return []
+
+
 def close_trade(
     engine: Optional[Engine],
     trade_id: Any,
@@ -761,6 +790,94 @@ def update_trade_exit_fields(
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning(
             "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+            trade_id,
+            exit_order_id or "",
+            exc,
+        )
+        return False
+
+
+def decorate_trade_exit(
+    engine: Optional[Engine],
+    trade_id: Any,
+    *,
+    exit_order_id: str | None,
+    exit_time: Any,
+    exit_price: Any,
+    exit_reason: str | None,
+    realized_pnl: Any | None = None,
+) -> bool:
+    db_engine = engine or _engine_or_none()
+    if db_engine is None:
+        logger.warning(
+            "[WARN] DB_TRADE_EXIT_DECORATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+            trade_id,
+            exit_order_id or "",
+            "disabled",
+        )
+        return False
+
+    normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
+    try:
+        with db_engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT qty, entry_price
+                    FROM trades
+                    WHERE trade_id=:trade_id
+                    """
+                ),
+                {"trade_id": trade_id},
+            ).fetchone()
+            if row is None:
+                logger.warning(
+                    "[WARN] DB_TRADE_EXIT_DECORATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                    trade_id,
+                    exit_order_id or "",
+                    "trade_not_found",
+                )
+                return False
+
+            qty_value = row[0]
+            entry_price_value = row[1]
+            computed_realized = realized_pnl
+            try:
+                if exit_price is not None and entry_price_value is not None:
+                    computed_realized = float(exit_price) - float(entry_price_value)
+                    if qty_value is not None:
+                        computed_realized *= float(qty_value)
+            except Exception:
+                pass
+
+            connection.execute(
+                text(
+                    """
+                    UPDATE trades
+                    SET exit_order_id=:exit_order_id,
+                        exit_time=:exit_time,
+                        exit_price=:exit_price,
+                        realized_pnl=:realized_pnl,
+                        exit_reason=:exit_reason,
+                        status='CLOSED',
+                        updated_at=now()
+                    WHERE trade_id=:trade_id
+                    """
+                ),
+                {
+                    "exit_order_id": exit_order_id,
+                    "exit_time": normalized_exit_time,
+                    "exit_price": exit_price,
+                    "realized_pnl": computed_realized,
+                    "exit_reason": exit_reason,
+                    "trade_id": trade_id,
+                },
+            )
+        _log_write_result(True, "trades", 1)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "[WARN] DB_TRADE_EXIT_DECORATE_FAILED trade_id=%s exit_order_id=%s err=%s",
             trade_id,
             exit_order_id or "",
             exc,
