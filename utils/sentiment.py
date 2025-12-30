@@ -61,6 +61,8 @@ class JsonHttpSentimentClient:
         self.api_key = api_key
         self.timeout = timeout
         self.session = session or requests.Session()
+        self.errors = 0
+        self._log_count = 0
 
     def _config(self) -> dict[str, object]:
         env = self._env
@@ -110,14 +112,25 @@ class JsonHttpSentimentClient:
             )
             response.raise_for_status()
             payload = response.json()
-        except Exception:
+        except Exception as exc:
+            self.errors += 1
+            if self._log_count < 3:
+                LOGGER.warning("Sentiment fetch failed: %s", exc)
+                self._log_count += 1
+            elif self._log_count == 3:
+                LOGGER.warning("Further sentiment fetch errors suppressed")
+                self._log_count += 1
             return None
 
         if not isinstance(payload, Mapping):
+            self.errors += 1
             return None
 
         raw = payload.get("sentiment", payload.get("score"))
-        return _clamp_score(raw)
+        score = _clamp_score(raw)
+        if score is None:
+            self.errors += 1
+        return score
 
 
 def load_sentiment_cache(cache_dir: Path | str = DEFAULT_CACHE_DIR, run_date: date | str = None) -> dict[str, float]:

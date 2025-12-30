@@ -3010,6 +3010,34 @@ def _ensure_score_breakdown(raw: object, score_value: Optional[float]) -> str:
     return json.dumps({})
 
 
+def _extract_sentiment_symbols(frame: pd.DataFrame) -> pd.Series:
+    """Return the symbol series used for sentiment lookups."""
+
+    if frame is None:
+        return pd.Series(dtype="string")
+    empty = pd.Series(dtype="string", index=frame.index)
+    if frame.empty:
+        return empty
+
+    if "symbol" in frame.columns:
+        return (
+            frame.get("symbol", pd.Series(dtype="string"))
+            .astype("string")
+            .str.strip()
+            .str.upper()
+            .fillna("")
+        )
+
+    index_name = str(frame.index.name or "").strip().lower()
+    if index_name in {"symbol", "ticker"}:
+        idx_series = pd.Series(frame.index, index=frame.index, dtype="string").astype("string")
+        normalized = idx_series.str.strip().str.upper().fillna("")
+        pattern = normalized.str.match(r"^[A-Z][A-Z0-9\\.]{0,5}$", na=False)
+        if pattern.any() and float(pattern.mean()) >= 0.6:
+            return normalized
+    return empty
+
+
 def _inject_sentiment_breakdown(frame: pd.DataFrame, *, weight: float, min_sentiment: float) -> None:
     if frame is None or frame.empty:
         return
@@ -3047,6 +3075,7 @@ def _apply_sentiment_scores(
         "sentiment_missing_count": 0,
         "sentiment_avg": None,
         "sentiment_gated": 0,
+        "sentiment_errors": 0,
     }
     if not summary["sentiment_enabled"]:
         return scored_df, summary
@@ -3054,35 +3083,90 @@ def _apply_sentiment_scores(
     frame = scored_df.copy() if isinstance(scored_df, pd.DataFrame) else pd.DataFrame()
     if "sentiment" not in frame.columns:
         frame["sentiment"] = pd.Series(dtype="Float64")
-    if frame.empty:
-        return frame, summary
+    symbols = _extract_sentiment_symbols(frame)
+    target_symbols = [sym for sym in symbols.tolist() if sym]
+    target_unique = list(dict.fromkeys(target_symbols))
+    LOGGER.info("[INFO] SENTIMENT_FETCH start target=%d", len(target_unique))
 
+    fetch_started = time.perf_counter()
     client_builder = client_factory or _build_sentiment_client
     client = client_builder(settings) if client_builder else None
 
     cache = load_sentiment_cache(cache_dir, run_ts.date()) if cache_dir is not None else {}
     sentiments: dict[str, float] = dict(cache)
-    symbols = frame.get("symbol", pd.Series(dtype="string")).astype("string").str.upper().fillna("")
-    missing = [sym for sym in symbols.unique() if sym and sym not in sentiments]
+    cache_hits = sum(1 for sym in target_unique if sym in cache)
+    missing = [sym for sym in target_unique if sym not in sentiments]
+    fetched = 0
+    local_errors = 0
+    log_limit = 3
+    errors_before = 0
+    if client is not None:
+        for attr in ("errors", "errors_count", "error_count"):
+            try:
+                errors_before = int(getattr(client, attr))
+                break
+            except Exception:
+                continue
+
     if client is not None:
         for sym in missing:
             value = None
             if hasattr(client, "get_score"):
                 try:
                     value = client.get_score(sym, run_ts.date().isoformat())
-                except Exception:
-                    value = None
+                except Exception as exc:
+                    local_errors += 1
+                    if local_errors <= log_limit:
+                        LOGGER.warning("Sentiment fetch failed for %s: %s", sym, exc)
+                    elif local_errors == log_limit + 1:
+                        LOGGER.warning("Further sentiment fetch errors suppressed")
+                    continue
             elif hasattr(client, "get_symbol_sentiment"):
                 try:
                     value = client.get_symbol_sentiment(sym, run_ts)
-                except Exception:
-                    value = None
+                except Exception as exc:
+                    local_errors += 1
+                    if local_errors <= log_limit:
+                        LOGGER.warning("Sentiment fetch failed for %s: %s", sym, exc)
+                    elif local_errors == log_limit + 1:
+                        LOGGER.warning("Further sentiment fetch errors suppressed")
+                    continue
             if value is None:
                 continue
             sentiments[sym] = value
+            fetched += 1
 
-    if client is not None and sentiments != cache and cache_dir is not None:
-        persist_sentiment_cache(cache_dir, run_ts.date(), sentiments)
+    cache_path: Optional[Path] = None
+    if cache_dir is not None:
+        try:
+            cache_path = persist_sentiment_cache(cache_dir, run_ts.date(), sentiments)
+        except Exception as exc:
+            LOGGER.warning("Failed to persist sentiment cache: %s", exc)
+            cache_path = Path(cache_dir) / f"{run_ts.date().isoformat()}.json"
+
+    errors_after = errors_before
+    if client is not None:
+        for attr in ("errors", "errors_count", "error_count"):
+            try:
+                errors_after = int(getattr(client, attr))
+                break
+            except Exception:
+                continue
+    errors_total = local_errors + max(0, errors_after - errors_before)
+    summary["sentiment_errors"] = int(errors_total)
+
+    missing_after = [sym for sym in target_unique if sym not in sentiments]
+    elapsed = time.perf_counter() - fetch_started
+    LOGGER.info(
+        "[INFO] SENTIMENT_FETCH done target=%d cache_hit=%d fetched=%d missing=%d errors=%d secs=%.3f cache_file=%s",
+        len(target_unique),
+        cache_hits,
+        fetched,
+        len(missing_after),
+        int(errors_total),
+        elapsed,
+        cache_path or (Path(cache_dir) / f"{run_ts.date().isoformat()}.json" if cache_dir else ""),
+    )
 
     sentiment_series = pd.Series(
         (sentiments.get(sym) for sym in symbols.tolist()),
@@ -4976,6 +5060,11 @@ def write_outputs(
     if scored_df is None:
         scored_df = pd.DataFrame()
 
+    sentiment_enabled = bool(stats.get("sentiment_enabled"))
+    if sentiment_enabled and "sentiment" not in scored_df.columns:
+        scored_df = scored_df.copy()
+        scored_df["sentiment"] = pd.Series(pd.NA, index=scored_df.index, dtype="Float64")
+
     top_path = data_dir / "top_candidates.csv"
     scored_path = data_dir / "scored_candidates.csv"
     metrics_path = data_dir / "screener_metrics.json"
@@ -4995,7 +5084,6 @@ def write_outputs(
     if isinstance(ranker_cfg, Mapping):
         gate_preset_meta = gate_preset_meta or str(ranker_cfg.get("_gate_preset") or "") or None
         gate_relax_meta = gate_relax_meta or str(ranker_cfg.get("_gate_relax_mode") or "") or None
-    sentiment_enabled = bool(stats.get("sentiment_enabled"))
     sentiment_missing = int(stats.get("sentiment_missing_count", 0) or 0)
     sentiment_avg = stats.get("sentiment_avg")
     sentiment_series = (

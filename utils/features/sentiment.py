@@ -48,16 +48,21 @@ class JsonHttpSentimentProvider:
         self.api_key = api_key
         self.timeout = timeout if timeout and timeout > 0 else 8.0
         self.session = session or requests.Session()
-        self._logged_error = False
+        self.errors = 0
+        self._log_count = 0
+        self._suppressed_logged = False
 
-    def _log_once(self, message: str, *args: object) -> None:
-        if self._logged_error:
-            return
-        try:
-            LOGGER.warning(message, *args)
-        except Exception:
-            LOGGER.warning(message)
-        self._logged_error = True
+    def _record_error(self, message: str, *args: object) -> None:
+        self.errors += 1
+        if self._log_count < 3:
+            try:
+                LOGGER.warning(message, *args)
+            except Exception:
+                LOGGER.warning(message)
+            self._log_count += 1
+        elif not self._suppressed_logged:
+            LOGGER.warning("Further sentiment fetch errors suppressed")
+            self._suppressed_logged = True
 
     def get_symbol_sentiment(self, symbol: str, asof_utc: datetime) -> Optional[float]:
         params = {
@@ -75,27 +80,45 @@ class JsonHttpSentimentProvider:
                 headers=headers,
                 timeout=self.timeout,
             )
+        except requests.Timeout as exc:
+            self._record_error("Sentiment fetch timed out for %s: %s", params["symbol"], exc)
+            return None
+        except Exception as exc:
+            self._record_error("Sentiment fetch failed: %s", exc)
+            return None
+
+        status = getattr(response, "status_code", 200)
+        if status != 200:
+            self._record_error("Sentiment HTTP %s for %s", status, params["symbol"])
+            return None
+
+        try:
             response.raise_for_status()
         except Exception as exc:
-            self._log_once("Sentiment fetch failed: %s", exc)
+            self._record_error("Sentiment fetch failed: %s", exc)
             return None
 
         try:
             payload = response.json()
         except ValueError as exc:
-            self._log_once("Invalid sentiment payload: %s", exc)
+            self._record_error("Invalid sentiment payload: %s", exc)
             return None
 
         if not isinstance(payload, Mapping):
-            self._log_once("Unexpected sentiment response type: %s", type(payload))
+            self._record_error("Unexpected sentiment response type: %s", type(payload))
             return None
 
         raw = payload.get("sentiment", payload.get("score"))
         score = _coerce_sentiment_value(raw)
         if score is None:
-            self._log_once("Sentiment response missing/invalid for %s", params["symbol"])
+            self._record_error("Sentiment response missing/invalid for %s", params["symbol"])
             return None
         return score
+
+    def get(self, symbol: str, asof_utc: datetime) -> Optional[float]:
+        """Alias for get_symbol_sentiment to match provider expectations."""
+
+        return self.get_symbol_sentiment(symbol, asof_utc)
 
 
 def load_sentiment_cache(cache_dir: Path, run_date: date) -> dict[str, float]:
@@ -120,13 +143,15 @@ def load_sentiment_cache(cache_dir: Path, run_date: date) -> dict[str, float]:
     return cache
 
 
-def persist_sentiment_cache(cache_dir: Path, run_date: date, cache: Mapping[str, float]) -> Path:
+def persist_sentiment_cache(
+    cache_dir: Path, run_date: date, cache: Mapping[str, float] | None = None
+) -> Path:
     """Persist sentiment cache to ``cache_dir/<date>.json``."""
 
     path = Path(cache_dir) / f"{run_date.isoformat()}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     cleaned: dict[str, float] = {}
-    for sym, value in cache.items():
+    for sym, value in (cache or {}).items():
         score = _coerce_sentiment_value(value)
         if score is None:
             continue
