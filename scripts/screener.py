@@ -3083,6 +3083,7 @@ def _apply_sentiment_scores(
         "sentiment_avg": None,
         "sentiment_gated": 0,
         "sentiment_errors": 0,
+        "sentiment_min": _coerce_float(settings.get("min"), -999.0) or -999.0,
     }
     cache_dir_path = Path(cache_dir) if cache_dir is not None else None
     run_date = run_ts.date() if hasattr(run_ts, "date") else None
@@ -3227,9 +3228,10 @@ def _apply_sentiment_scores(
             fetched += 1
 
     cache_path: Optional[Path] = None
-    if cache_dir_path is not None and not cache_dir_error and run_date is not None:
+    persistable = {k: v for k, v in sentiments.items() if v is not None}
+    if cache_dir_path is not None and not cache_dir_error and run_date is not None and persistable:
         try:
-            cache_path = persist_sentiment_cache(cache_dir_path, run_date, sentiments)
+            cache_path = persist_sentiment_cache(cache_dir_path, run_date, persistable)
         except Exception as exc:
             LOGGER.error(
                 "[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_invalid cache_dir=%s err=%s",
@@ -3237,6 +3239,12 @@ def _apply_sentiment_scores(
                 exc,
             )
             cache_path = cache_dir_path / f"{run_date.isoformat()}.json"
+    elif rows_count > 0 and target_unique:
+        LOGGER.info(
+            "[INFO] SENTIMENT_FETCH skip cache persist reason=%s target=%d",
+            "empty_payload",
+            len(target_unique),
+        )
 
     errors_after = errors_before
     if client is not None and not skip_reason:
@@ -3257,14 +3265,17 @@ def _apply_sentiment_scores(
     elif cache_dir_path is not None and run_date is not None:
         cache_hint = str(Path(cache_dir_path) / f"{run_date.isoformat()}.json")
     LOGGER.info(
-        "[INFO] SENTIMENT_FETCH done target=%d cache_hit=%d fetched=%d missing=%d errors=%d secs=%.3f cache_file=%s",
+        "[INFO] SENTIMENT_FETCH done target=%d fetched=%d missing=%d cache_file=%s",
         len(target_unique),
-        cache_hits,
         fetched,
         len(missing_after),
+        cache_hint,
+    )
+    LOGGER.info(
+        "[INFO] SENTIMENT_FETCH stats cache_hit=%d errors=%d secs=%.3f",
+        cache_hits,
         int(errors_total),
         elapsed,
-        cache_hint,
     )
 
     sentiment_series = pd.Series(
@@ -3276,26 +3287,18 @@ def _apply_sentiment_scores(
 
     weight = _coerce_float(settings.get("weight"), 0.0) or 0.0
     if weight:
-        base_score = pd.to_numeric(frame.get("Score"), errors="coerce").fillna(0.0)
+        base_score = pd.to_numeric(
+            frame.get("Score", pd.Series(dtype="float64")),
+            errors="coerce",
+        ).fillna(0.0)
         sent_for_score = sentiment_series.fillna(0.0)
         frame["Score"] = base_score + sent_for_score * float(weight)
         frame["score"] = frame["Score"]
 
-    min_value = _coerce_float(settings.get("min"), -999.0)
-    if min_value is None:
-        min_value = -999.0
-    gate_threshold = float(min_value)
-    gated_mask = sentiment_series.notna() & sentiment_series.lt(gate_threshold)
-    if gate_threshold > -999 and gated_mask.any():
-        summary["sentiment_gated"] = int(gated_mask.sum())
-        frame = frame.loc[~gated_mask].copy()
-        sentiment_series = sentiment_series.loc[frame.index]
-        frame["sentiment"] = sentiment_series
-
     if "score_breakdown" not in frame.columns:
         scores = frame.get("Score", pd.Series(dtype="float64"))
         frame["score_breakdown"] = [_ensure_score_breakdown(None, score) for score in scores]
-    _inject_sentiment_breakdown(frame, weight=weight, min_sentiment=gate_threshold)
+    _inject_sentiment_breakdown(frame, weight=weight, min_sentiment=summary["sentiment_min"])
 
     values = pd.to_numeric(frame.get("sentiment"), errors="coerce")
     valid_mask = values.notna()
@@ -3303,6 +3306,20 @@ def _apply_sentiment_scores(
     summary["sentiment_avg"] = float(values[valid_mask].mean()) if valid_mask.any() else None
 
     return frame, summary
+
+
+def _apply_sentiment_gate(df: pd.DataFrame, *, threshold: float) -> tuple[pd.DataFrame, int]:
+    if df is None or df.empty:
+        return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame(), 0
+    if threshold is None or threshold <= -999:
+        return df.copy(), 0
+    frame = df.copy()
+    sent_series = pd.to_numeric(frame.get("sentiment"), errors="coerce")
+    keep_mask = ~(sent_series.notna() & sent_series.lt(float(threshold)))
+    removed = int((~keep_mask).sum())
+    if removed:
+        frame = frame.loc[keep_mask].copy()
+    return frame, removed
 
 
 def _normalise_top_candidates(
@@ -4840,6 +4857,7 @@ def run_screener(
         run_ts=now,
         settings=sentiment_settings,
     )
+    sentiment_gate_threshold = float(sentiment_summary.get("sentiment_min", -999.0) or -999.0)
     if debug_no_gates:
         scored_df = scored_df.copy()
     else:
@@ -4872,6 +4890,7 @@ def run_screener(
 
     gates_timer = T()
     LOGGER.info("[STAGE] gates start")
+    sentiment_gated = 0
     if debug_no_gates:
         candidates_df = scored_df.copy()
         gate_fail_counts = {
@@ -4884,6 +4903,9 @@ def run_screener(
         candidates_df, gate_fail_counts, gate_rejects = apply_gates(scored_df, ranker_cfg)
         prev_count = int(candidates_df.shape[0])
         candidates_df = _soft_gate_with_min(scored_df, candidates_df, ranker_cfg)
+        candidates_df, sentiment_gated = _apply_sentiment_gate(
+            candidates_df, threshold=sentiment_gate_threshold
+        )
         if isinstance(gate_fail_counts, dict):
             gate_fail_counts["gate_total_passed"] = int(candidates_df.shape[0])
             gate_fail_counts["gate_total_failed"] = max(
@@ -4892,8 +4914,8 @@ def run_screener(
             )
             if int(candidates_df.shape[0]) > prev_count:
                 gate_fail_counts["gate_policy_tier"] = gate_fail_counts.get("gate_policy_tier") or "soft"
-            if sentiment_summary.get("sentiment_gated"):
-                gate_fail_counts["sentiment"] = int(sentiment_summary.get("sentiment_gated", 0) or 0)
+            if sentiment_gated:
+                gate_fail_counts["sentiment"] = sentiment_gated
     timing_info["gates_secs"] = timing_info.get("gates_secs", 0.0) + gates_timer.lap(
         "gates_secs"
     )
@@ -5116,6 +5138,8 @@ def run_screener(
     stats["sentiment_enabled"] = bool(sentiment_summary.get("sentiment_enabled"))
     stats["sentiment_missing_count"] = int(sentiment_summary.get("sentiment_missing_count", 0) or 0)
     stats["sentiment_avg"] = sentiment_summary.get("sentiment_avg")
+    if sentiment_gated:
+        sentiment_summary["sentiment_gated"] = sentiment_gated
     stats["sentiment_gated"] = int(sentiment_summary.get("sentiment_gated", 0) or 0)
 
     if stats["candidates_out"] == 0:
