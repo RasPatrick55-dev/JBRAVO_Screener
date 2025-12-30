@@ -70,18 +70,6 @@ def _coerce_date(run_date: Any) -> str:
         return str(run_date)
 
 
-def _coerce_json(value: Any) -> Any:
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except Exception:
-            return {"raw": value}
-        return parsed
-    if isinstance(value, (Mapping, list)):
-        return value
-    return value
-
-
 def _json_dumps_or_none(payload: Any) -> Optional[str]:
     if payload is None:
         return None
@@ -92,6 +80,41 @@ def _json_dumps_or_none(payload: Any) -> Optional[str]:
             return json.dumps({"raw": str(payload)})
         except Exception:
             return None
+
+
+def normalize_score_breakdown(value: Any, symbol: str | None = None) -> Optional[str]:
+    """Return a JSON-serialised score_breakdown or None on failure."""
+
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):  # type: ignore[arg-type]
+            return None
+    except Exception:
+        pass
+
+    normalized: Any
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            normalized = json.loads(stripped)
+        except Exception:
+            normalized = {"raw": value}
+    elif isinstance(value, (Mapping, list)):
+        normalized = value
+    else:
+        normalized = {"raw": value}
+
+    try:
+        return json.dumps(normalized)
+    except Exception as exc:
+        logger.warning(
+            "[WARN] SCORE_BREAKDOWN_JSON_FAIL symbol=%s detail=%s", (symbol or "UNKNOWN").upper(), exc
+        )
+        return None
 
 
 def _log_write_result(ok: bool, table: str, rows: int, err: Exception | None = None) -> None:
@@ -165,16 +188,17 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
         record = {}
         for key in columns:
             record[key] = row.get(key) if isinstance(row, Mapping) else row[key] if key in row else None
+        symbol = (record.get("symbol") or "").upper()
         payload = {
             "run_date": _coerce_date(run_date),
             "timestamp": record.get("timestamp"),
-            "symbol": (record.get("symbol") or "").upper(),
+            "symbol": symbol,
             "score": record.get("score"),
             "exchange": record.get("exchange"),
             "close": record.get("close"),
             "volume": record.get("volume"),
             "universe_count": record.get("universe_count"),
-            "score_breakdown": _json_dumps_or_none(_coerce_json(record.get("score_breakdown"))),
+            "score_breakdown": normalize_score_breakdown(record.get("score_breakdown"), symbol=symbol),
             "entry_price": record.get("entry_price"),
             "adv20": record.get("adv20"),
             "atrp": record.get("atrp"),
