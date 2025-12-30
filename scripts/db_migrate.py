@@ -112,10 +112,58 @@ def _execute_statement(engine, statement: str) -> bool:
 
 
 def run_upgrade(engine) -> bool:
+    if not _repair_screener_candidates_schema(engine):
+        return False
+
     for ddl in TABLE_STATEMENTS + INDEX_STATEMENTS:
         if not _execute_statement(engine, ddl):
             return False
     return True
+
+
+def _repair_screener_candidates_schema(engine) -> bool:
+    try:
+        with engine.begin() as connection:
+            table_exists = connection.execute(
+                text("SELECT to_regclass('public.screener_candidates')")
+            ).scalar()
+            if not table_exists:
+                return True
+
+            columns = {
+                row[0]
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_schema=current_schema()
+                          AND table_name='screener_candidates'
+                        """
+                    )
+                )
+            }
+
+            if "run_date" in columns:
+                return True
+
+            if "run date" in columns:
+                connection.execute(text('ALTER TABLE screener_candidates RENAME COLUMN "run date" TO run_date'))
+                return True
+
+            rowcount = connection.execute(text("SELECT COUNT(*) FROM screener_candidates")).scalar() or 0
+            if rowcount == 0:
+                logger.warning("[WARN] DB_MIGRATE screener_candidates missing run_date; recreating empty table")
+                connection.execute(text("DROP TABLE screener_candidates"))
+                return True
+
+            logger.warning(
+                "[WARN] DB_MIGRATE screener_candidates missing run_date with existing data; manual repair required"
+            )
+            return False
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_MIGRATE_SCHEMA_CHECK %s", exc)
+        return False
 
 
 def main() -> None:
