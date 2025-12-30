@@ -1840,6 +1840,8 @@ class ExecutorConfig:
     max_chase_gap_pct: float = 5.0
     chase_enabled: bool = False
     diagnostic: bool = False
+    reconcile_only: bool = False
+    reconcile_lookback_days: int = 7
 
 
 @dataclass
@@ -2419,6 +2421,132 @@ class TradeExecutor:
         self._last_buying_power_raw: Any = None
         self._prev_close_cache: Dict[str, Optional[float]] = {}
         self._ranking_key: str = "score"
+
+    def reconcile_closed_trades(self) -> None:
+        if not db.db_enabled():
+            return
+        engine = db.get_engine()
+        if engine is None:
+            return
+        try:
+            open_trades = db.get_open_trades(engine)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=open_trades err=%s", exc)
+            open_trades = []
+        LOGGER.info("[INFO] RECONCILE_START open_trades=%s", len(open_trades))
+        if not open_trades:
+            LOGGER.info("[INFO] RECONCILE_END closed=%s", 0)
+            return
+        if self.client is None:
+            LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=ALL err=client_unavailable")
+            LOGGER.info("[INFO] RECONCILE_END closed=%s", 0)
+            return
+
+        try:
+            lookback_days = int(getattr(self.config, "reconcile_lookback_days", 7))
+        except Exception:
+            lookback_days = 7
+        lookback_days = max(0, lookback_days)
+        after_time = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+
+        open_by_symbol: Dict[str, list[dict[str, Any]]] = {}
+        for trade in open_trades:
+            symbol = str(trade.get("symbol", "")).upper()
+            if not symbol:
+                continue
+            open_by_symbol.setdefault(symbol, []).append(trade)
+        for trades in open_by_symbol.values():
+            trades.sort(
+                key=lambda t: db.normalize_ts(t.get("entry_time")) or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
+
+        closed_count = 0
+        for symbol, trades in open_by_symbol.items():
+            if not trades:
+                continue
+            request_kwargs: Dict[str, Any] = {"symbols": [symbol], "after": after_time.isoformat()}
+            status_closed = getattr(QueryOrderStatus, "CLOSED", None) or getattr(QueryOrderStatus, "closed", None)
+            if status_closed is not None:
+                request_kwargs["status"] = status_closed
+            side_sell = getattr(OrderSide, "SELL", None) or getattr(OrderSide, "Sell", None)
+            if side_sell is not None:
+                request_kwargs["side"] = side_sell
+            try:
+                request = GetOrdersRequest(**{k: v for k, v in request_kwargs.items() if v is not None})
+            except Exception:
+                request = GetOrdersRequest()
+            try:
+                log_info("alpaca.get_orders", status=getattr(request, "status", None), symbol=symbol)
+                orders = self.client.get_orders(request)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=%s err=%s", symbol, exc)
+                continue
+
+            for order in orders or []:
+                side_value = str(getattr(order, "side", "")).lower()
+                status_value = str(getattr(order, "status", "")).lower()
+                if side_value != "sell" or status_value != "filled":
+                    continue
+                if not trades:
+                    break
+                trade = trades.pop(0)
+                trade_id = trade.get("trade_id")
+                exit_time_raw = getattr(order, "filled_at", None) or datetime.now(timezone.utc)
+                exit_price_raw = getattr(order, "filled_avg_price", None)
+                try:
+                    exit_price = float(exit_price_raw) if exit_price_raw is not None else None
+                except (TypeError, ValueError):
+                    exit_price = None
+                order_type = str(getattr(order, "type", "")).lower()
+                order_class = str(getattr(order, "order_class", "")).lower()
+                exit_reason = "TRAIL_STOP" if "trailing" in order_type or "trailing" in order_class else "SELL_FILL"
+                order_id = str(getattr(order, "id", "") or getattr(order, "order_id", ""))
+                try:
+                    db.insert_order_event(
+                        engine=engine,
+                        event_type="SELL_FILL",
+                        symbol=symbol,
+                        qty=getattr(order, "filled_qty", getattr(order, "qty", None)),
+                        order_id=order_id,
+                        status=status_value,
+                        event_time=exit_time_raw,
+                        raw=_order_snapshot(order),
+                    )
+                except Exception as exc:  # pragma: no cover - defensive guard
+                    LOGGER.warning(
+                        "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=order_event err=%s",
+                        trade_id,
+                        symbol,
+                        exc,
+                    )
+                try:
+                    closed = db.close_trade(engine, trade_id, order_id, exit_time_raw, exit_price, exit_reason)
+                except Exception as exc:  # pragma: no cover - defensive guard
+                    LOGGER.warning(
+                        "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
+                        trade_id,
+                        symbol,
+                        exc,
+                    )
+                    closed = False
+                if closed:
+                    closed_count += 1
+                    LOGGER.info(
+                        "[INFO] RECONCILE_CLOSE trade_id=%s symbol=%s exit_price=%s reason=%s",
+                        trade_id,
+                        symbol,
+                        "" if exit_price is None else exit_price,
+                        exit_reason,
+                    )
+                else:
+                    LOGGER.warning(
+                        "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
+                        trade_id,
+                        symbol,
+                        "close_failed",
+                    )
+        LOGGER.info("[INFO] RECONCILE_END closed=%s", closed_count)
 
     def log_info(self, event: str, **payload: Any) -> None:
         log_info(event, **payload)
@@ -4705,6 +4833,18 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Emit structured JSON logs in addition to human readable ones",
     )
     parser.add_argument(
+        "--reconcile-only",
+        type=lambda s: s.lower() in {"1", "true", "yes", "y"},
+        default=ExecutorConfig.reconcile_only,
+        help="Run reconciliation of closed trades and exit without placing new orders",
+    )
+    parser.add_argument(
+        "--reconcile-lookback-days",
+        type=int,
+        default=ExecutorConfig.reconcile_lookback_days,
+        help="Lookback window in days for reconciliation queries (default 7)",
+    )
+    parser.add_argument(
         "--time-window",
         choices=("premarket", "regular", "any", "auto"),
         default=ExecutorConfig.time_window,
@@ -4757,6 +4897,8 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         max_chase_gap_pct=args.max_chase_gap_pct,
         chase_enabled=args.chase_enabled,
         diagnostic=bool(getattr(args, "diagnostic", False)),
+        reconcile_only=bool(getattr(args, "reconcile_only", False)),
+        reconcile_lookback_days=int(getattr(args, "reconcile_lookback_days", ExecutorConfig.reconcile_lookback_days)),
     )
 
 
@@ -4806,6 +4948,48 @@ def run_executor(
             "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
         )
         LOGGER.info(banner)
+    if getattr(config, "reconcile_only", False):
+        account_payload: Optional[Mapping[str, Any]] = None
+        clock_payload: Optional[Mapping[str, Any]] = None
+        if client is not None:
+            trading_client = client
+            base_url = os.getenv("APCA_API_BASE_URL", "")
+        else:
+            trading_client, base_url, paper_mode, forced_mode = _create_trading_client()
+            forced_label = forced_mode if forced_mode is not None else "auto"
+            LOGGER.info(
+                "[INFO] TRADING_MODE base=%s paper_mode=%s forced=%s",
+                base_url or "",
+                bool(paper_mode),
+                forced_label,
+            )
+        _paper_only_guard(trading_client, base_url)
+        if trading_client is not None and client is None:
+            try:
+                account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
+            except AlpacaAuthFailure:
+                metrics.api_failures += 1
+                metrics.record_skip("API_FAIL", count=1)
+                metrics.record_error(
+                    "auth_failure",
+                    stage="ensure_trading_auth",
+                    base_url=base_url or "",
+                )
+                loader.persist_metrics()
+                return 2
+        executor = TradeExecutor(
+            config,
+            trading_client,
+            metrics,
+            base_url=base_url or "",
+            account_snapshot=account_payload,
+            clock_snapshot=clock_payload,
+        )
+        metrics.exit_reason = "RECONCILE_ONLY"
+        executor.reconcile_closed_trades()
+        executor.persist_metrics()
+        executor.log_summary()
+        return 0
     try:
         frame = loader.load_candidates(rank=False)
     except CandidateLoadError as exc:
