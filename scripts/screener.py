@@ -3077,22 +3077,77 @@ def _apply_sentiment_scores(
         "sentiment_gated": 0,
         "sentiment_errors": 0,
     }
+    cache_dir_path = Path(cache_dir) if cache_dir is not None else None
+    run_date = run_ts.date()
+
+    LOGGER.info(
+        "[INFO] SENTIMENT_STAGE enter enabled=%s cache_dir=%s run_date=%s",
+        summary["sentiment_enabled"],
+        cache_dir_path,
+        run_date,
+    )
+
+    api_url_missing = not str(settings.get("api_url") or "").strip()
     if not summary["sentiment_enabled"]:
+        if settings.get("use_flag") and not settings.get("url_set"):
+            LOGGER.warning("[WARN] SENTIMENT_FETCH skipped reason=missing_api_url")
+        else:
+            LOGGER.info("[INFO] SENTIMENT_FETCH skipped reason=disabled")
         return scored_df, summary
 
     frame = scored_df.copy() if isinstance(scored_df, pd.DataFrame) else pd.DataFrame()
     if "sentiment" not in frame.columns:
         frame["sentiment"] = pd.Series(dtype="Float64")
-    symbols = _extract_sentiment_symbols(frame)
-    target_symbols = [sym for sym in symbols.tolist() if sym]
-    target_unique = list(dict.fromkeys(target_symbols))
-    LOGGER.info("[INFO] SENTIMENT_FETCH start target=%d", len(target_unique))
+    has_symbol_col = "symbol" in frame.columns
+    rows_count = int(frame.shape[0]) if isinstance(frame, pd.DataFrame) else 0
+    symbols_series = _extract_sentiment_symbols(frame)
+    target_symbols: list[str] = []
+    for sym in symbols_series.tolist():
+        if pd.isna(sym):
+            continue
+        norm = str(sym).strip().upper()
+        if norm:
+            target_symbols.append(norm)
+    target_unique: list[str] = []
+    seen: set[str] = set()
+    for sym in target_symbols:
+        if sym in seen:
+            continue
+        seen.add(sym)
+        target_unique.append(sym)
+
+    LOGGER.info("[INFO] SENTIMENT_FETCH start target=%d unique=%d", len(target_symbols), len(target_unique))
+    if not target_unique:
+        LOGGER.warning(
+            "[WARN] SENTIMENT_FETCH skipped reason=empty_target df_rows=%d symbol_col=%s index_name=%s",
+            rows_count,
+            has_symbol_col,
+            frame.index.name,
+        )
+    if api_url_missing:
+        LOGGER.warning("[WARN] SENTIMENT_FETCH skipped reason=missing_api_url")
 
     fetch_started = time.perf_counter()
     client_builder = client_factory or _build_sentiment_client
     client = client_builder(settings) if client_builder else None
 
-    cache = load_sentiment_cache(cache_dir, run_ts.date()) if cache_dir is not None else {}
+    cache_dir_error = False
+    if cache_dir_path is not None:
+        try:
+            cache_dir_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            LOGGER.error(
+                "[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_error path=%s err=%s",
+                cache_dir_path,
+                exc,
+            )
+            cache_dir_error = True
+
+    cache = (
+        load_sentiment_cache(cache_dir_path, run_date)
+        if cache_dir_path is not None and not cache_dir_error
+        else {}
+    )
     sentiments: dict[str, float] = dict(cache)
     cache_hits = sum(1 for sym in target_unique if sym in cache)
     missing = [sym for sym in target_unique if sym not in sentiments]
@@ -3100,6 +3155,13 @@ def _apply_sentiment_scores(
     local_errors = 0
     log_limit = 3
     errors_before = 0
+    if client is not None and not (hasattr(client, "get_score") or hasattr(client, "get_symbol_sentiment")):
+        LOGGER.warning(
+            "[WARN] SENTIMENT_FETCH skipped reason=no_get_score client=%s",
+            type(client).__name__,
+        )
+        client = None
+
     if client is not None:
         for attr in ("errors", "errors_count", "error_count"):
             try:
@@ -3137,12 +3199,16 @@ def _apply_sentiment_scores(
             fetched += 1
 
     cache_path: Optional[Path] = None
-    if cache_dir is not None:
+    if cache_dir_path is not None and not cache_dir_error:
         try:
-            cache_path = persist_sentiment_cache(cache_dir, run_ts.date(), sentiments)
+            cache_path = persist_sentiment_cache(cache_dir_path, run_date, sentiments)
         except Exception as exc:
-            LOGGER.warning("Failed to persist sentiment cache: %s", exc)
-            cache_path = Path(cache_dir) / f"{run_ts.date().isoformat()}.json"
+            LOGGER.error(
+                "[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_error path=%s err=%s",
+                cache_dir_path,
+                exc,
+            )
+            cache_path = cache_dir_path / f"{run_date.isoformat()}.json"
 
     errors_after = errors_before
     if client is not None:
@@ -3165,11 +3231,11 @@ def _apply_sentiment_scores(
         len(missing_after),
         int(errors_total),
         elapsed,
-        cache_path or (Path(cache_dir) / f"{run_ts.date().isoformat()}.json" if cache_dir else ""),
+        cache_path or (Path(cache_dir_path) / f"{run_date.isoformat()}.json" if cache_dir_path else ""),
     )
 
     sentiment_series = pd.Series(
-        (sentiments.get(sym) for sym in symbols.tolist()),
+        (sentiments.get(sym) for sym in symbols_series.tolist()),
         index=frame.index,
         dtype="Float64",
     )
