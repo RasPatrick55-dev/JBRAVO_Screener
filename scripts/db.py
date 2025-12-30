@@ -1,10 +1,11 @@
 import json
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Mapping, Optional
 
 import pandas as pd
+from dateutil import parser
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
@@ -80,6 +81,45 @@ def _json_dumps_or_none(payload: Any) -> Optional[str]:
             return json.dumps({"raw": str(payload)})
         except Exception:
             return None
+
+
+def normalize_ts(value: Any, field: str | None = None) -> datetime | None:
+    """Return a timezone-aware datetime parsed from ``value`` or None on failure."""
+
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):  # type: ignore[arg-type]
+            return None
+    except Exception:
+        pass
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
+
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            parsed = parser.isoparse(candidate)
+        except Exception:
+            logger.warning(
+                "[WARN] EXECUTED_TRADES_TS_PARSE_FAIL field=%s value=%s", field or "unknown", value
+            )
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    logger.warning("[WARN] EXECUTED_TRADES_TS_PARSE_FAIL field=%s value=%s", field or "unknown", value)
+    return None
 
 
 def normalize_score_breakdown(value: Any, symbol: str | None = None) -> Optional[str]:
@@ -364,12 +404,15 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> None:
     if engine is None:
         return
 
+    entry_time = normalize_ts(row_dict.get("entry_time"), field="entry_time")
+    exit_time = normalize_ts(row_dict.get("exit_time"), field="exit_time")
+
     payload = {
         "symbol": (row_dict.get("symbol") or "").upper(),
         "qty": row_dict.get("qty"),
-        "entry_time": row_dict.get("entry_time"),
+        "entry_time": entry_time,
         "entry_price": row_dict.get("entry_price"),
-        "exit_time": row_dict.get("exit_time"),
+        "exit_time": exit_time,
         "exit_price": row_dict.get("exit_price"),
         "pnl": row_dict.get("pnl"),
         "net_pnl": row_dict.get("net_pnl"),
@@ -392,6 +435,7 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> None:
     try:
         with engine.begin() as connection:
             connection.execute(stmt, payload)
+        logger.info("[INFO] DB_WRITE_OK table=executed_trades symbol=%s", payload["symbol"])
         _log_write_result(True, "executed_trades", 1)
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "executed_trades", 0, exc)
