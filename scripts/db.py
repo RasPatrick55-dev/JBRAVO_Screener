@@ -168,6 +168,26 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
     if engine is None:
         return
 
+    schema_stmt = text(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'screener_candidates'
+          AND column_name = 'run_date'
+        LIMIT 1
+        """
+    )
+    try:
+        with engine.connect() as connection:
+            has_run_date = connection.execute(schema_stmt).scalar() is not None
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_INGEST_FAILED table=screener_candidates err=%s", exc)
+        return
+
+    if not has_run_date:
+        logger.warning("[WARN] DB_SCHEMA_MISMATCH screener_candidates missing run_date")
+        return
+
     normalized = df_candidates.copy()
     columns = {
         "timestamp": None,
@@ -233,9 +253,9 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
     try:
         with engine.begin() as connection:
             connection.execute(stmt, rows)
-        _log_write_result(True, "screener_candidates", len(rows))
+        logger.info("[INFO] DB_INGEST_OK table=screener_candidates rows=%s", len(rows))
     except Exception as exc:  # pragma: no cover - defensive logging
-        _log_write_result(False, "screener_candidates", 0, exc)
+        logger.warning("[WARN] DB_INGEST_FAILED table=screener_candidates err=%s", exc)
 
 
 def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> None:
