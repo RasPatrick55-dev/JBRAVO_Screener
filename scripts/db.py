@@ -589,7 +589,7 @@ def close_trade(
             row = connection.execute(
                 text(
                     """
-                    SELECT qty, entry_price
+                    SELECT status, qty, entry_price
                     FROM trades
                     WHERE trade_id=:trade_id
                     """
@@ -604,8 +604,17 @@ def close_trade(
                     "trade_not_found",
                 )
                 return False
-            qty_value = row[0]
-            entry_price_value = row[1]
+            status_value = (row[0] or "").upper()
+            if status_value == "CLOSED":
+                logger.info(
+                    "[INFO] DB_TRADE_CLOSE_SKIPPED trade_id=%s exit_order_id=%s reason=%s",
+                    trade_id,
+                    exit_order_id or "",
+                    "status_closed",
+                )
+                return False
+            qty_value = row[1]
+            entry_price_value = row[2]
             realized_pnl = None
             try:
                 if exit_price is not None and entry_price_value is not None:
@@ -642,6 +651,116 @@ def close_trade(
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning(
             "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
+            trade_id,
+            exit_order_id or "",
+            exc,
+        )
+        return False
+
+
+def update_trade_exit_fields(
+    engine: Optional[Engine],
+    trade_id: Any,
+    *,
+    exit_order_id: str | None = None,
+    exit_time: Any | None = None,
+    exit_price: Any | None = None,
+    exit_reason: str | None = None,
+) -> bool:
+    db_engine = engine or _engine_or_none()
+    if db_engine is None:
+        logger.warning(
+            "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+            trade_id,
+            exit_order_id or "",
+            "disabled",
+        )
+        return False
+
+    normalized_exit_time = None
+    if exit_time is not None:
+        normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
+
+    try:
+        with db_engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT status, qty, entry_price, exit_price, realized_pnl
+                    FROM trades
+                    WHERE trade_id=:trade_id
+                    """
+                ),
+                {"trade_id": trade_id},
+            ).fetchone()
+            if row is None:
+                logger.warning(
+                    "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                    trade_id,
+                    exit_order_id or "",
+                    "trade_not_found",
+                )
+                return False
+
+            status_value = (row[0] or "").upper()
+            qty_value = row[1]
+            entry_price_value = row[2]
+            existing_exit_price = row[3]
+            existing_realized_pnl = row[4]
+            final_exit_price = exit_price if exit_price is not None else existing_exit_price
+
+            realized_pnl = existing_realized_pnl
+            try:
+                if final_exit_price is not None and entry_price_value is not None:
+                    realized_pnl = float(final_exit_price) - float(entry_price_value)
+                    if qty_value is not None:
+                        realized_pnl *= float(qty_value)
+            except Exception:
+                realized_pnl = existing_realized_pnl
+
+            should_skip = (
+                status_value == "CLOSED"
+                and exit_order_id is None
+                and normalized_exit_time is None
+                and exit_price is None
+                and exit_reason is None
+            )
+            if should_skip:
+                logger.info(
+                    "[INFO] DB_TRADE_EXIT_UPDATE_SKIPPED trade_id=%s reason=%s",
+                    trade_id,
+                    "no_fields",
+                )
+                return False
+
+            connection.execute(
+                text(
+                    """
+                    UPDATE trades
+                    SET exit_order_id=COALESCE(:exit_order_id, exit_order_id),
+                        exit_time=COALESCE(:exit_time, exit_time),
+                        exit_price=COALESCE(:exit_price, exit_price),
+                        realized_pnl=:realized_pnl,
+                        exit_reason=COALESCE(:exit_reason, exit_reason),
+                        status='CLOSED',
+                        updated_at=now()
+                    WHERE trade_id=:trade_id
+                    """
+                ),
+                {
+                    "exit_order_id": exit_order_id,
+                    "exit_time": normalized_exit_time,
+                    "exit_price": exit_price,
+                    "realized_pnl": realized_pnl,
+                    "exit_reason": exit_reason,
+                    "trade_id": trade_id,
+                },
+            )
+        _log_write_result(True, "trades", 1)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
             trade_id,
             exit_order_id or "",
             exc,
