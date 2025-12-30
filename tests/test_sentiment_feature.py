@@ -130,6 +130,7 @@ def test_sentiment_missing_does_not_gate(tmp_path: Path) -> None:
     assert summary["sentiment_gated"] == 0
     assert summary["sentiment_missing_count"] == 1
     assert updated.shape[0] == 1
+    assert pd.isna(updated["sentiment"].iat[0])
     breakdown = json.loads(updated["score_breakdown"].iat[0])
     assert breakdown.get("sentiment") is None
     assert breakdown["sentiment_weight"] == pytest.approx(2.0)
@@ -167,6 +168,7 @@ def test_screener_metrics_include_sentiment_keys(tmp_path: Path) -> None:
     metrics_path = base_dir / "data" / "screener_metrics.json"
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     assert metrics["sentiment_enabled"] is True
+    assert isinstance(metrics["sentiment_missing_count"], int)
     assert metrics["sentiment_missing_count"] == 0
     assert metrics["sentiment_avg"] == pytest.approx(0.2)
     assert metrics["metrics_version"] == 2
@@ -175,14 +177,15 @@ def test_screener_metrics_include_sentiment_keys(tmp_path: Path) -> None:
     disabled_stats = {
         **stats_common,
         "sentiment_enabled": False,
-        "sentiment_missing_count": 5,
+        "sentiment_missing_count": 1,
         "sentiment_avg": None,
         "sentiment_gated": 0,
     }
     screener.write_outputs(disabled_dir, top_df, scored_df, disabled_stats, skip_reasons)
     disabled_metrics = json.loads((disabled_dir / "data" / "screener_metrics.json").read_text(encoding="utf-8"))
     assert disabled_metrics["sentiment_enabled"] is False
-    assert disabled_metrics["sentiment_missing_count"] == 0
+    assert isinstance(disabled_metrics["sentiment_missing_count"], int)
+    assert disabled_metrics["sentiment_missing_count"] == 1
     assert disabled_metrics["sentiment_avg"] is None
     assert disabled_metrics["metrics_version"] == 2
 
@@ -207,7 +210,7 @@ def test_sentiment_fetch_writes_cache_and_column(tmp_path: Path) -> None:
             return values.get(symbol)
 
     provider = Provider()
-    settings = {"enabled": True, "weight": 0.0, "min": -1.0}
+    settings = {"enabled": True, "weight": 0.0, "min": -1.0, "api_url": "http://example.test/api"}
     updated, summary = screener._apply_sentiment_scores(
         frame,
         run_ts=run_ts,
@@ -269,7 +272,7 @@ def test_sentiment_targets_use_symbol_column(tmp_path: Path, caplog: pytest.LogC
             return {"AAA": 0.5, "BBB": -0.25}.get(symbol)
 
     client = RecordingClient()
-    settings = {"enabled": True, "weight": 0.0, "min": -1.0}
+    settings = {"enabled": True, "weight": 0.0, "min": -1.0, "api_url": "http://example.test/api"}
 
     with caplog.at_level("INFO"):
         updated, summary = screener._apply_sentiment_scores(
@@ -286,3 +289,21 @@ def test_sentiment_targets_use_symbol_column(tmp_path: Path, caplog: pytest.LogC
     assert pd.isna(updated.loc[2, "sentiment"])
     assert updated.loc[0:1, "sentiment"].tolist() == pytest.approx([0.5, -0.25], nan_ok=True)
     assert updated.loc[3, "sentiment"] == pytest.approx(0.5)
+
+
+def test_sentiment_stage_entry_log_and_fetch_logs(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    run_ts = datetime(2024, 8, 1, tzinfo=timezone.utc)
+    frame = pd.DataFrame({"symbol": ["AAA"], "Score": [1.0], "score_breakdown": ["{}"]})
+    settings = {"enabled": True, "weight": 0.0, "min": -1.0, "api_url": "http://example.test/api"}
+
+    with caplog.at_level("INFO"):
+        screener._apply_sentiment_scores(
+            frame,
+            run_ts=run_ts,
+            settings=settings,
+            cache_dir=tmp_path / "data" / "cache" / "sentiment",
+            client_factory=lambda *_: None,
+        )
+
+    assert "[INFO] SENTIMENT_STAGE enter df_rows=1 cols_has_symbol=True" in caplog.text
+    assert "[INFO] SENTIMENT_FETCH start target=1 unique=1" in caplog.text

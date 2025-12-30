@@ -3070,6 +3070,13 @@ def _apply_sentiment_scores(
     cache_dir: Path = SENTIMENT_CACHE_DIR,
     client_factory: Optional[Callable[[Mapping[str, object]], Optional[object]]] = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
+    LOGGER.info(
+        "[INFO] SENTIMENT_STAGE enter df_rows=%d cols_has_symbol=%s cache_dir=%s run_date=%s",
+        len(scored_df) if hasattr(scored_df, "__len__") else 0,
+        isinstance(scored_df, pd.DataFrame) and "symbol" in getattr(scored_df, "columns", []),
+        str(cache_dir),
+        str(run_ts.date() if hasattr(run_ts, "date") else None),
+    )
     summary = {
         "sentiment_enabled": bool(settings.get("enabled")),
         "sentiment_missing_count": 0,
@@ -3078,28 +3085,30 @@ def _apply_sentiment_scores(
         "sentiment_errors": 0,
     }
     cache_dir_path = Path(cache_dir) if cache_dir is not None else None
-    run_date = run_ts.date()
-
-    LOGGER.info(
-        "[INFO] SENTIMENT_STAGE enter enabled=%s cache_dir=%s run_date=%s",
-        summary["sentiment_enabled"],
-        cache_dir_path,
-        run_date,
-    )
-
-    api_url_missing = not str(settings.get("api_url") or "").strip()
-    if not summary["sentiment_enabled"]:
-        if settings.get("use_flag") and not settings.get("url_set"):
-            LOGGER.warning("[WARN] SENTIMENT_FETCH skipped reason=missing_api_url")
-        else:
-            LOGGER.info("[INFO] SENTIMENT_FETCH skipped reason=disabled")
-        return scored_df, summary
+    run_date = run_ts.date() if hasattr(run_ts, "date") else None
 
     frame = scored_df.copy() if isinstance(scored_df, pd.DataFrame) else pd.DataFrame()
     if "sentiment" not in frame.columns:
         frame["sentiment"] = pd.Series(dtype="Float64")
     has_symbol_col = "symbol" in frame.columns
     rows_count = int(frame.shape[0]) if isinstance(frame, pd.DataFrame) else 0
+    api_url_missing = not str(settings.get("api_url") or "").strip()
+    expect_fetch = bool(settings.get("use_flag")) and bool(settings.get("url_set"))
+    if not summary["sentiment_enabled"]:
+        if settings.get("use_flag") and not settings.get("url_set"):
+            LOGGER.warning("[WARN] SENTIMENT_FETCH skipped reason=missing_api_url")
+        else:
+            LOGGER.info("[INFO] SENTIMENT_FETCH skipped reason=disabled")
+        summary["sentiment_missing_count"] = rows_count
+        summary["sentiment_avg"] = None
+        return scored_df, summary
+
+    if run_date is None:
+        LOGGER.error("[ERROR] SENTIMENT_FETCH skipped reason=run_date_invalid")
+        summary["sentiment_missing_count"] = rows_count
+        summary["sentiment_avg"] = None
+        return frame, summary
+
     symbols_series = _extract_sentiment_symbols(frame)
     target_symbols: list[str] = []
     for sym in symbols_series.tolist():
@@ -3117,7 +3126,18 @@ def _apply_sentiment_scores(
         target_unique.append(sym)
 
     LOGGER.info("[INFO] SENTIMENT_FETCH start target=%d unique=%d", len(target_symbols), len(target_unique))
+    skip_reason: Optional[str] = None
+    if frame.empty:
+        skip_reason = "df_empty"
+        LOGGER.warning("[WARN] SENTIMENT_FETCH skipped reason=df_empty")
+    if not has_symbol_col:
+        skip_reason = skip_reason or "missing_symbol_col"
+        LOGGER.error(
+            "[ERROR] SENTIMENT_FETCH skipped reason=missing_symbol_col cols=%s",
+            list(frame.columns),
+        )
     if not target_unique:
+        skip_reason = skip_reason or "empty_target"
         LOGGER.warning(
             "[WARN] SENTIMENT_FETCH skipped reason=empty_target df_rows=%d symbol_col=%s index_name=%s",
             rows_count,
@@ -3125,11 +3145,15 @@ def _apply_sentiment_scores(
             frame.index.name,
         )
     if api_url_missing:
+        skip_reason = skip_reason or "missing_api_url"
         LOGGER.warning("[WARN] SENTIMENT_FETCH skipped reason=missing_api_url")
+    if cache_dir_path is None:
+        skip_reason = skip_reason or "cache_dir_invalid"
+        LOGGER.error("[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_invalid cache_dir=%s", cache_dir)
 
     fetch_started = time.perf_counter()
     client_builder = client_factory or _build_sentiment_client
-    client = client_builder(settings) if client_builder else None
+    client = client_builder(settings) if client_builder and not skip_reason else None
 
     cache_dir_error = False
     if cache_dir_path is not None:
@@ -3137,11 +3161,12 @@ def _apply_sentiment_scores(
             cache_dir_path.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
             LOGGER.error(
-                "[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_error path=%s err=%s",
+                "[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_invalid cache_dir=%s err=%s",
                 cache_dir_path,
                 exc,
             )
             cache_dir_error = True
+            skip_reason = skip_reason or "cache_dir_invalid"
 
     cache = (
         load_sentiment_cache(cache_dir_path, run_date)
@@ -3162,7 +3187,10 @@ def _apply_sentiment_scores(
         )
         client = None
 
-    if client is not None:
+    if skip_reason and expect_fetch and rows_count > 0:
+        LOGGER.error("[ERROR] SENTIMENT_FETCH unexpected_skip reason=%s", skip_reason)
+
+    if client is not None and not skip_reason:
         for attr in ("errors", "errors_count", "error_count"):
             try:
                 errors_before = int(getattr(client, attr))
@@ -3170,7 +3198,7 @@ def _apply_sentiment_scores(
             except Exception:
                 continue
 
-    if client is not None:
+    if client is not None and not skip_reason and target_unique:
         for sym in missing:
             value = None
             if hasattr(client, "get_score"):
@@ -3199,19 +3227,19 @@ def _apply_sentiment_scores(
             fetched += 1
 
     cache_path: Optional[Path] = None
-    if cache_dir_path is not None and not cache_dir_error:
+    if cache_dir_path is not None and not cache_dir_error and run_date is not None:
         try:
             cache_path = persist_sentiment_cache(cache_dir_path, run_date, sentiments)
         except Exception as exc:
             LOGGER.error(
-                "[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_error path=%s err=%s",
+                "[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_invalid cache_dir=%s err=%s",
                 cache_dir_path,
                 exc,
             )
             cache_path = cache_dir_path / f"{run_date.isoformat()}.json"
 
     errors_after = errors_before
-    if client is not None:
+    if client is not None and not skip_reason:
         for attr in ("errors", "errors_count", "error_count"):
             try:
                 errors_after = int(getattr(client, attr))
@@ -3223,6 +3251,11 @@ def _apply_sentiment_scores(
 
     missing_after = [sym for sym in target_unique if sym not in sentiments]
     elapsed = time.perf_counter() - fetch_started
+    cache_hint = ""
+    if cache_path is not None:
+        cache_hint = str(cache_path)
+    elif cache_dir_path is not None and run_date is not None:
+        cache_hint = str(Path(cache_dir_path) / f"{run_date.isoformat()}.json")
     LOGGER.info(
         "[INFO] SENTIMENT_FETCH done target=%d cache_hit=%d fetched=%d missing=%d errors=%d secs=%.3f cache_file=%s",
         len(target_unique),
@@ -3231,11 +3264,11 @@ def _apply_sentiment_scores(
         len(missing_after),
         int(errors_total),
         elapsed,
-        cache_path or (Path(cache_dir_path) / f"{run_date.isoformat()}.json" if cache_dir_path else ""),
+        cache_hint,
     )
 
     sentiment_series = pd.Series(
-        (sentiments.get(sym) for sym in symbols_series.tolist()),
+        (sentiments.get(sym, np.nan) for sym in symbols_series.tolist()),
         index=frame.index,
         dtype="Float64",
     )
@@ -3244,7 +3277,8 @@ def _apply_sentiment_scores(
     weight = _coerce_float(settings.get("weight"), 0.0) or 0.0
     if weight:
         base_score = pd.to_numeric(frame.get("Score"), errors="coerce").fillna(0.0)
-        frame["Score"] = base_score + sentiment_series.fillna(0.0) * float(weight)
+        sent_for_score = sentiment_series.fillna(0.0)
+        frame["Score"] = base_score + sent_for_score * float(weight)
         frame["score"] = frame["Score"]
 
     min_value = _coerce_float(settings.get("min"), -999.0)
@@ -5217,10 +5251,8 @@ def write_outputs(
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
     }
     metrics["sentiment_enabled"] = sentiment_enabled
-    metrics["sentiment_missing_count"] = sentiment_missing if sentiment_enabled else 0
-    metrics["sentiment_avg"] = (
-        float(sentiment_avg) if sentiment_enabled and sentiment_avg is not None else None
-    )
+    metrics["sentiment_missing_count"] = sentiment_missing
+    metrics["sentiment_avg"] = float(sentiment_avg) if sentiment_avg is not None else None
     metrics["gate_preset"] = run_meta["gate_preset"]
     metrics["relax_gates"] = run_meta["relax_gates"]
     gate_counts: dict[str, Union[int, str]] = {}
