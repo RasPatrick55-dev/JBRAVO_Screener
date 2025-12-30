@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import pytest
@@ -184,3 +185,66 @@ def test_screener_metrics_include_sentiment_keys(tmp_path: Path) -> None:
     assert disabled_metrics["sentiment_missing_count"] == 0
     assert disabled_metrics["sentiment_avg"] is None
     assert disabled_metrics["metrics_version"] == 2
+
+
+def test_sentiment_fetch_writes_cache_and_column(tmp_path: Path) -> None:
+    run_ts = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    cache_dir = tmp_path / "data" / "cache" / "sentiment"
+    frame = pd.DataFrame(
+        {
+            "symbol": ["AAA", "BBB", "CCC", "DDD", "EEE"],
+            "Score": [1, 2, 3, 4, 5],
+            "score_breakdown": ["{}"] * 5,
+        }
+    )
+
+    class Provider:
+        def __init__(self) -> None:
+            self.errors = 0
+
+        def get_symbol_sentiment(self, symbol: str, asof_utc: datetime) -> Optional[float]:
+            values = {"AAA": 0.1, "BBB": 0.2, "CCC": 0.3}
+            return values.get(symbol)
+
+    provider = Provider()
+    settings = {"enabled": True, "weight": 0.0, "min": -1.0}
+    updated, summary = screener._apply_sentiment_scores(
+        frame,
+        run_ts=run_ts,
+        settings=settings,
+        cache_dir=cache_dir,
+        client_factory=lambda *_: provider,
+    )
+
+    cache_file = cache_dir / f"{run_ts.date().isoformat()}.json"
+    assert cache_file.exists()
+    cached_payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    assert cached_payload == {"AAA": 0.1, "BBB": 0.2, "CCC": 0.3}
+    assert "sentiment" in updated.columns
+    assert summary["sentiment_missing_count"] == 2
+
+    stats_common = {
+        "candidates_out": 0,
+        "shortlist_requested": 0,
+        "shortlist_candidates": 0,
+        "coarse_ranked": 0,
+        "shortlist_path": "",
+        "backtest_target": 0,
+        "backtest_evaluated": 0,
+        "backtest_lookback": 0,
+        "backtest_expectancy_mean": 0.0,
+        "backtest_win_rate_mean": 0.0,
+    }
+    stats_enabled = {
+        **stats_common,
+        "sentiment_enabled": True,
+        "sentiment_missing_count": summary["sentiment_missing_count"],
+        "sentiment_avg": summary["sentiment_avg"],
+        "sentiment_gated": summary.get("sentiment_gated", 0),
+    }
+    skip_reasons = {key: 0 for key in screener.SKIP_KEYS}
+    top_df = pd.DataFrame(columns=screener.TOP_CANDIDATE_COLUMNS)
+
+    screener.write_outputs(tmp_path, top_df, updated, stats_enabled, skip_reasons)
+    saved = pd.read_csv(tmp_path / "data" / "scored_candidates.csv")
+    assert "sentiment" in saved.columns
