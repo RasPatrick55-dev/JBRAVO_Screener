@@ -11,6 +11,7 @@ from scripts.execute_trades import ExecutionMetrics, ExecutorConfig, TradeExecut
 def test_reconcile_closes_open_trades(monkeypatch):
     fake_engine = object()
     closed_calls: list[dict] = []
+    update_calls: list[dict] = []
     event_calls: list[dict] = []
 
     monkeypatch.setattr(db, "db_enabled", lambda: True)
@@ -42,8 +43,13 @@ def test_reconcile_closes_open_trades(monkeypatch):
         event_calls.append(kwargs)
         return True
 
+    def fake_update_trade_exit_fields(engine, trade_id, **kwargs):
+        update_calls.append({"trade_id": trade_id, **kwargs})
+        return True
+
     monkeypatch.setattr(db, "close_trade", fake_close_trade)
     monkeypatch.setattr(db, "insert_order_event", fake_insert_order_event)
+    monkeypatch.setattr(db, "update_trade_exit_fields", fake_update_trade_exit_fields)
 
     filled_order = SimpleNamespace(
         id="sell-1",
@@ -65,6 +71,9 @@ def test_reconcile_closes_open_trades(monkeypatch):
             self.request = request
             return self.orders
 
+        def get_all_positions(self):
+            return []
+
     client = FakeClient([filled_order])
     config = ExecutorConfig(reconcile_lookback_days=3)
     executor = TradeExecutor(config, client, ExecutionMetrics())
@@ -72,7 +81,8 @@ def test_reconcile_closes_open_trades(monkeypatch):
     executor.reconcile_closed_trades()
 
     assert len(closed_calls) == 1
-    assert closed_calls[0]["exit_order_id"] == "sell-1"
-    assert closed_calls[0]["exit_reason"] == "TRAIL_STOP"
-    assert pytest.approx(closed_calls[0]["exit_price"]) == 11.25
+    assert closed_calls[0]["exit_order_id"] is None
+    assert closed_calls[0]["exit_reason"] == "POSITION_CLOSED"
+    assert closed_calls[0]["exit_price"] is None
+    assert any(call.get("exit_order_id") == "sell-1" and call.get("exit_reason") == "TRAIL_STOP" for call in update_calls)
     assert any(call.get("event_type") == "SELL_FILL" for call in event_calls)
