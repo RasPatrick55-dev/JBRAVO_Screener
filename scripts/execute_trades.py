@@ -2428,19 +2428,6 @@ class TradeExecutor:
         engine = db.get_engine()
         if engine is None:
             return
-        try:
-            open_trades = db.get_open_trades(engine)
-        except Exception as exc:  # pragma: no cover - defensive guard
-            LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=open_trades err=%s", exc)
-            open_trades = []
-        LOGGER.info("[INFO] RECONCILE_START open_trades=%s", len(open_trades))
-        if not open_trades:
-            LOGGER.info("[INFO] RECONCILE_END closed=%s", 0)
-            return
-        if self.client is None:
-            LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=ALL err=client_unavailable")
-            LOGGER.info("[INFO] RECONCILE_END closed=%s", 0)
-            return
 
         try:
             lookback_days = int(getattr(self.config, "reconcile_lookback_days", 7))
@@ -2448,155 +2435,16 @@ class TradeExecutor:
             lookback_days = 7
         lookback_days = max(0, lookback_days)
         after_time = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        decorate_window_days = min(2, max(1, lookback_days or 0))
+        decorate_after_time = datetime.now(timezone.utc) - timedelta(days=decorate_window_days)
 
-        try:
-            log_info("alpaca.get_positions")
-            positions = self.client.get_all_positions()
-        except Exception as exc:  # pragma: no cover - defensive guard
-            LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=ALL err=%s", exc)
-            positions = []
-        open_symbols_on_alpaca = {
-            str(getattr(pos, "symbol", "")).upper()
-            for pos in positions
-            if getattr(pos, "qty", None) not in (None, "", 0, "0", 0.0)
-        }
-
-        open_by_symbol: Dict[str, list[dict[str, Any]]] = {}
-        for trade in open_trades:
-            symbol = str(trade.get("symbol", "")).upper()
-            if not symbol:
-                continue
-            open_by_symbol.setdefault(symbol, []).append(trade)
-        for trades in open_by_symbol.values():
-            trades.sort(
-                key=lambda t: db.normalize_ts(t.get("entry_time")) or datetime.min.replace(tzinfo=timezone.utc),
-                reverse=True,
-            )
-
-        closed_count = 0
-        for symbol, trades in list(open_by_symbol.items()):
-            remaining_trades: list[dict[str, Any]] = []
-            for trade in trades:
-                trade_id = trade.get("trade_id")
-                if symbol not in open_symbols_on_alpaca:
-                    try:
-                        closed = db.close_trade(
-                            engine=engine,
-                            trade_id=trade_id,
-                            exit_order_id=None,
-                            exit_time=datetime.now(timezone.utc),
-                            exit_price=None,
-                            exit_reason="POSITION_CLOSED",
-                        )
-                    except Exception as exc:  # pragma: no cover - defensive guard
-                        LOGGER.warning(
-                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade_position err=%s",
-                            trade_id,
-                            symbol,
-                            exc,
-                        )
-                        closed = False
-                    if closed:
-                        closed_count += 1
-                        LOGGER.info(
-                            "[INFO] RECONCILE_CLOSE_BY_POSITION trade_id=%s symbol=%s",
-                            trade_id,
-                            symbol,
-                        )
-                    request_kwargs: Dict[str, Any] = {"symbols": [symbol], "after": after_time.isoformat()}
-                    status_closed = getattr(QueryOrderStatus, "CLOSED", None) or getattr(QueryOrderStatus, "closed", None)
-                    if status_closed is not None:
-                        request_kwargs["status"] = status_closed
-                    side_sell = getattr(OrderSide, "SELL", None) or getattr(OrderSide, "Sell", None)
-                    if side_sell is not None:
-                        request_kwargs["side"] = side_sell
-                    try:
-                        request = GetOrdersRequest(**{k: v for k, v in request_kwargs.items() if v is not None})
-                    except Exception:
-                        request = GetOrdersRequest()
-                    try:
-                        log_info("alpaca.get_orders", status=getattr(request, "status", None), symbol=symbol)
-                        orders = self.client.get_orders(request)
-                    except Exception as exc:  # pragma: no cover - defensive guard
-                        LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=%s err=%s", symbol, exc)
-                        orders = []
-                    latest_order: Any = None
-                    latest_filled_at: Optional[datetime] = None
-                    for order in orders or []:
-                        side_value = str(getattr(order, "side", "")).lower()
-                        status_value = str(getattr(order, "status", "")).lower()
-                        if side_value != "sell" or status_value != "filled":
-                            continue
-                        filled_at = db.normalize_ts(getattr(order, "filled_at", None)) or None
-                        if filled_at is None:
-                            continue
-                        if latest_filled_at is None or filled_at > latest_filled_at:
-                            latest_filled_at = filled_at
-                            latest_order = order
-                    if latest_order is not None:
-                        order = latest_order
-                        order_id = str(getattr(order, "id", "") or getattr(order, "order_id", ""))
-                        exit_time_raw = getattr(order, "filled_at", None) or datetime.now(timezone.utc)
-                        exit_price_raw = getattr(order, "filled_avg_price", None)
-                        try:
-                            exit_price = float(exit_price_raw) if exit_price_raw is not None else None
-                        except (TypeError, ValueError):
-                            exit_price = None
-                        order_type = str(getattr(order, "type", "")).lower()
-                        order_class = str(getattr(order, "order_class", "")).lower()
-                        exit_reason = "TRAIL_STOP" if "trailing" in order_type or "trailing" in order_class else "SELL_FILL"
-                        try:
-                            db.insert_order_event(
-                                engine=engine,
-                                event_type="SELL_FILL",
-                                symbol=symbol,
-                                qty=getattr(order, "filled_qty", getattr(order, "qty", None)),
-                                order_id=order_id,
-                                status=str(getattr(order, "status", "")),
-                                event_time=exit_time_raw,
-                                raw=_order_snapshot(order),
-                            )
-                        except Exception as exc:  # pragma: no cover - defensive guard
-                            LOGGER.warning(
-                                "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=order_event err=%s",
-                                trade_id,
-                                symbol,
-                                exc,
-                            )
-                        try:
-                            updated = db.update_trade_exit_fields(
-                                engine=engine,
-                                trade_id=trade_id,
-                                exit_order_id=order_id,
-                                exit_time=exit_time_raw,
-                                exit_price=exit_price,
-                                exit_reason=exit_reason,
-                            )
-                        except Exception as exc:  # pragma: no cover - defensive guard
-                            LOGGER.warning(
-                                "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=update_trade_exit err=%s",
-                                trade_id,
-                                symbol,
-                                exc,
-                            )
-                            updated = False
-                        if updated:
-                            LOGGER.info(
-                                "[INFO] RECONCILE_DECORATE_SELL trade_id=%s exit_order_id=%s exit_price=%s",
-                                trade_id,
-                                order_id,
-                                "" if exit_price is None else exit_price,
-                            )
-                else:
-                    remaining_trades.append(trade)
-            open_by_symbol[symbol] = remaining_trades
-
-        for symbol, trades in open_by_symbol.items():
-            if not trades:
-                continue
+        def _latest_filled_sell_order(symbol: str) -> Any | None:
             request_kwargs: Dict[str, Any] = {"symbols": [symbol], "after": after_time.isoformat()}
+            status_all = getattr(QueryOrderStatus, "ALL", None) or getattr(QueryOrderStatus, "all", None)
             status_closed = getattr(QueryOrderStatus, "CLOSED", None) or getattr(QueryOrderStatus, "closed", None)
-            if status_closed is not None:
+            if status_all is not None:
+                request_kwargs["status"] = status_all
+            elif status_closed is not None:
                 request_kwargs["status"] = status_closed
             side_sell = getattr(OrderSide, "SELL", None) or getattr(OrderSide, "Sell", None)
             if side_sell is not None:
@@ -2610,72 +2458,276 @@ class TradeExecutor:
                 orders = self.client.get_orders(request)
             except Exception as exc:  # pragma: no cover - defensive guard
                 LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=%s err=%s", symbol, exc)
-                continue
+                return None
 
+            latest_order: Any | None = None
+            latest_filled_at: datetime | None = None
             for order in orders or []:
                 side_value = str(getattr(order, "side", "")).lower()
                 status_value = str(getattr(order, "status", "")).lower()
                 if side_value != "sell" or status_value != "filled":
                     continue
+                filled_at = db.normalize_ts(getattr(order, "filled_at", None)) or None
+                if filled_at is None or filled_at < after_time:
+                    continue
+                if latest_filled_at is None or filled_at > latest_filled_at:
+                    latest_filled_at = filled_at
+                    latest_order = order
+            return latest_order
+
+        try:
+            open_trades = db.get_open_trades(engine)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=open_trades err=%s", exc)
+            open_trades = []
+        LOGGER.info("[INFO] RECONCILE_START open_trades=%s", len(open_trades))
+        if self.client is None:
+            LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=ALL err=client_unavailable")
+            return
+
+        closed_count = 0
+        open_by_symbol: Dict[str, list[dict[str, Any]]] = {}
+
+        if open_trades:
+            try:
+                log_info("alpaca.get_positions")
+                positions = self.client.get_all_positions()
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=ALL err=%s", exc)
+                positions = []
+            open_symbols_on_alpaca = {
+                str(getattr(pos, "symbol", "")).upper()
+                for pos in positions
+                if getattr(pos, "qty", None) not in (None, "", 0, "0", 0.0)
+            }
+
+            for trade in open_trades:
+                symbol = str(trade.get("symbol", "")).upper()
+                if not symbol:
+                    continue
+                open_by_symbol.setdefault(symbol, []).append(trade)
+            for trades in open_by_symbol.values():
+                trades.sort(
+                    key=lambda t: db.normalize_ts(t.get("entry_time")) or datetime.min.replace(tzinfo=timezone.utc),
+                    reverse=True,
+                )
+
+            for symbol, trades in list(open_by_symbol.items()):
+                remaining_trades: list[dict[str, Any]] = []
+                for trade in trades:
+                    trade_id = trade.get("trade_id")
+                    if symbol not in open_symbols_on_alpaca:
+                        try:
+                            closed = db.close_trade(
+                                engine=engine,
+                                trade_id=trade_id,
+                                exit_order_id=None,
+                                exit_time=datetime.now(timezone.utc),
+                                exit_price=None,
+                                exit_reason="POSITION_CLOSED",
+                            )
+                        except Exception as exc:  # pragma: no cover - defensive guard
+                            LOGGER.warning(
+                                "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade_position err=%s",
+                                trade_id,
+                                symbol,
+                                exc,
+                            )
+                            closed = False
+                        if closed:
+                            closed_count += 1
+                            LOGGER.info(
+                                "[INFO] RECONCILE_CLOSE_BY_POSITION trade_id=%s symbol=%s",
+                                trade_id,
+                                symbol,
+                            )
+                    else:
+                        remaining_trades.append(trade)
+                open_by_symbol[symbol] = remaining_trades
+
+            for symbol, trades in open_by_symbol.items():
                 if not trades:
-                    break
-                trade = trades.pop(0)
-                trade_id = trade.get("trade_id")
-                exit_time_raw = getattr(order, "filled_at", None) or datetime.now(timezone.utc)
-                exit_price_raw = getattr(order, "filled_avg_price", None)
+                    continue
+                request_kwargs: Dict[str, Any] = {"symbols": [symbol], "after": after_time.isoformat()}
+                status_closed = getattr(QueryOrderStatus, "CLOSED", None) or getattr(QueryOrderStatus, "closed", None)
+                if status_closed is not None:
+                    request_kwargs["status"] = status_closed
+                side_sell = getattr(OrderSide, "SELL", None) or getattr(OrderSide, "Sell", None)
+                if side_sell is not None:
+                    request_kwargs["side"] = side_sell
                 try:
-                    exit_price = float(exit_price_raw) if exit_price_raw is not None else None
-                except (TypeError, ValueError):
-                    exit_price = None
-                order_type = str(getattr(order, "type", "")).lower()
-                order_class = str(getattr(order, "order_class", "")).lower()
-                exit_reason = "TRAIL_STOP" if "trailing" in order_type or "trailing" in order_class else "SELL_FILL"
-                order_id = str(getattr(order, "id", "") or getattr(order, "order_id", ""))
+                    request = GetOrdersRequest(**{k: v for k, v in request_kwargs.items() if v is not None})
+                except Exception:
+                    request = GetOrdersRequest()
                 try:
-                    db.insert_order_event(
-                        engine=engine,
-                        event_type="SELL_FILL",
-                        symbol=symbol,
-                        qty=getattr(order, "filled_qty", getattr(order, "qty", None)),
-                        order_id=order_id,
-                        status=status_value,
-                        event_time=exit_time_raw,
-                        raw=_order_snapshot(order),
-                    )
+                    log_info("alpaca.get_orders", status=getattr(request, "status", None), symbol=symbol)
+                    orders = self.client.get_orders(request)
                 except Exception as exc:  # pragma: no cover - defensive guard
-                    LOGGER.warning(
-                        "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=order_event err=%s",
-                        trade_id,
-                        symbol,
-                        exc,
-                    )
-                try:
-                    closed = db.close_trade(engine, trade_id, order_id, exit_time_raw, exit_price, exit_reason)
-                except Exception as exc:  # pragma: no cover - defensive guard
-                    LOGGER.warning(
-                        "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
-                        trade_id,
-                        symbol,
-                        exc,
-                    )
-                    closed = False
-                if closed:
-                    closed_count += 1
-                    LOGGER.info(
-                        "[INFO] RECONCILE_CLOSE trade_id=%s symbol=%s exit_price=%s reason=%s",
-                        trade_id,
-                        symbol,
-                        "" if exit_price is None else exit_price,
-                        exit_reason,
-                    )
-                else:
-                    LOGGER.warning(
-                        "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
-                        trade_id,
-                        symbol,
-                        "close_failed",
-                    )
-        LOGGER.info("[INFO] RECONCILE_END closed=%s", closed_count)
+                    LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=%s err=%s", symbol, exc)
+                    continue
+
+                for order in orders or []:
+                    side_value = str(getattr(order, "side", "")).lower()
+                    status_value = str(getattr(order, "status", "")).lower()
+                    if side_value != "sell" or status_value != "filled":
+                        continue
+                    if not trades:
+                        break
+                    trade = trades.pop(0)
+                    trade_id = trade.get("trade_id")
+                    exit_time_raw = getattr(order, "filled_at", None) or datetime.now(timezone.utc)
+                    exit_price_raw = getattr(order, "filled_avg_price", None)
+                    try:
+                        exit_price = float(exit_price_raw) if exit_price_raw is not None else None
+                    except (TypeError, ValueError):
+                        exit_price = None
+                    order_type = str(getattr(order, "type", "")).lower()
+                    order_class = str(getattr(order, "order_class", "")).lower()
+                    exit_reason = "TRAIL_STOP" if "trailing" in order_type or "trailing" in order_class else "SELL_FILL"
+                    order_id = str(getattr(order, "id", "") or getattr(order, "order_id", ""))
+                    try:
+                        db.insert_order_event(
+                            engine=engine,
+                            event_type="SELL_FILL",
+                            symbol=symbol,
+                            qty=getattr(order, "filled_qty", getattr(order, "qty", None)),
+                            order_id=order_id,
+                            status=status_value,
+                            event_time=exit_time_raw,
+                            raw=_order_snapshot(order),
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive guard
+                        LOGGER.warning(
+                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=order_event err=%s",
+                            trade_id,
+                            symbol,
+                            exc,
+                        )
+                    try:
+                        closed = db.close_trade(engine, trade_id, order_id, exit_time_raw, exit_price, exit_reason)
+                    except Exception as exc:  # pragma: no cover - defensive guard
+                        LOGGER.warning(
+                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
+                            trade_id,
+                            symbol,
+                            exc,
+                        )
+                        closed = False
+                    if closed:
+                        closed_count += 1
+                        LOGGER.info(
+                            "[INFO] RECONCILE_CLOSE trade_id=%s symbol=%s exit_price=%s reason=%s",
+                            trade_id,
+                            symbol,
+                            "" if exit_price is None else exit_price,
+                            exit_reason,
+                        )
+                    else:
+                        LOGGER.warning(
+                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
+                            trade_id,
+                            symbol,
+                            "close_failed",
+                        )
+
+        decorated_count = 0
+        try:
+            trades_to_decorate = db.get_closed_trades_missing_exit(
+                engine=engine, updated_after=decorate_after_time
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=get_closed_trades err=%s", exc)
+            trades_to_decorate = []
+
+        latest_sell_order_by_symbol: Dict[str, Any | None] = {}
+        for trade in trades_to_decorate:
+            trade_id = trade.get("trade_id")
+            symbol = str(trade.get("symbol", "")).upper()
+            if trade_id is None or not symbol:
+                continue
+            if symbol not in latest_sell_order_by_symbol:
+                latest_sell_order_by_symbol[symbol] = _latest_filled_sell_order(symbol)
+            order = latest_sell_order_by_symbol.get(symbol)
+            if order is None:
+                LOGGER.warning("[WARN] RECONCILE_DECORATE_MISS trade_id=%s symbol=%s", trade_id, symbol)
+                continue
+
+            exit_time_raw = getattr(order, "filled_at", None) or datetime.now(timezone.utc)
+            exit_price_raw = getattr(order, "filled_avg_price", None)
+            try:
+                exit_price = float(exit_price_raw) if exit_price_raw is not None else None
+            except (TypeError, ValueError):
+                exit_price = None
+            order_type = str(getattr(order, "type", "")).lower()
+            order_class = str(getattr(order, "order_class", "")).lower()
+            exit_reason = "TRAIL_STOP" if "trailing" in order_type or "trailing" in order_class else "SELL_FILL"
+            order_id = str(getattr(order, "id", "") or getattr(order, "order_id", ""))
+
+            try:
+                db.insert_order_event(
+                    engine=engine,
+                    event_type="SELL_FILL",
+                    symbol=symbol,
+                    qty=getattr(order, "filled_qty", getattr(order, "qty", None)),
+                    order_id=order_id,
+                    status=str(getattr(order, "status", "")),
+                    event_time=exit_time_raw,
+                    raw=_order_snapshot(order),
+                )
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning(
+                    "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=order_event err=%s",
+                    trade_id,
+                    symbol,
+                    exc,
+                )
+
+            realized_pnl = None
+            try:
+                entry_price_value = trade.get("entry_price")
+                qty_value = trade.get("qty")
+                if exit_price is not None and entry_price_value is not None and qty_value is not None:
+                    realized_pnl = (float(exit_price) - float(entry_price_value)) * float(qty_value)
+            except Exception:
+                realized_pnl = None
+
+            try:
+                decorated = db.decorate_trade_exit(
+                    engine=engine,
+                    trade_id=trade_id,
+                    exit_order_id=order_id,
+                    exit_time=exit_time_raw,
+                    exit_price=exit_price,
+                    exit_reason=exit_reason,
+                    realized_pnl=realized_pnl,
+                )
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning(
+                    "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=decorate_exit err=%s",
+                    trade_id,
+                    symbol,
+                    exc,
+                )
+                decorated = False
+
+            if decorated:
+                decorated_count += 1
+                LOGGER.info(
+                    "[INFO] RECONCILE_DECORATE_SELL trade_id=%s symbol=%s exit_order_id=%s exit_price=%s reason=%s",
+                    trade_id,
+                    symbol,
+                    order_id,
+                    "" if exit_price is None else exit_price,
+                    exit_reason,
+                )
+            else:
+                LOGGER.warning(
+                    "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=decorate_exit err=%s",
+                    trade_id,
+                    symbol,
+                    "decorate_failed",
+                )
+        LOGGER.info("[INFO] RECONCILE_END closed=%s decorated=%s", closed_count, decorated_count)
 
     def log_info(self, event: str, **payload: Any) -> None:
         log_info(event, **payload)
