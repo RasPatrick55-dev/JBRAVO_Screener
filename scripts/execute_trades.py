@@ -2463,19 +2463,15 @@ class TradeExecutor:
             if tc is None:
                 tc = orders_client_holder.get("client")
             if tc is None:
-                try:
-                    tc, _, _, _ = _create_trading_client()
-                    orders_client_holder["client"] = tc
-                except Exception as exc:  # pragma: no cover - defensive guard
-                    LOGGER.warning(
-                        "[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=%s err_type=%s",
-                        exc,
-                        type(exc).__name__,
-                    )
-                    stats["orders_error"] = True
-                    return None, None, stats
+                tc = get_trading_client()
+                orders_client_holder["client"] = tc
 
-            if tc is None or not hasattr(tc, "get_orders"):
+            if tc is None:
+                LOGGER.warning("RECONCILE_ALPACA_FAIL action=get_trading_client err=unavailable")
+                stats["orders_error"] = True
+                return None, None, stats
+
+            if not hasattr(tc, "get_orders"):
                 LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=client_unavailable")
                 stats["orders_error"] = True
                 return None, None, stats
@@ -2537,9 +2533,12 @@ class TradeExecutor:
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=open_trades err=%s", exc)
             open_trades = []
         LOGGER.info("[INFO] RECONCILE_START open_trades=%s", len(open_trades))
-        if self.client is None:
-            LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=ALL err=client_unavailable")
-            return
+        if self.client is None or not hasattr(self.client, "get_orders"):
+            tc = get_trading_client()
+            if tc is None:
+                LOGGER.warning("RECONCILE_ALPACA_FAIL action=get_trading_client err=unavailable")
+                return
+            self.client = tc
 
         closed_count = 0
         open_by_symbol: Dict[str, list[dict[str, Any]]] = {}
@@ -4800,12 +4799,37 @@ def configure_logging(log_json: bool) -> None:
     LOGGER.setLevel(logging.INFO)
 
 
-def _create_trading_client() -> tuple[Any, str, bool, bool | None]:
-    if TradingClient is None:
-        raise RuntimeError("alpaca-py TradingClient is unavailable")
-    api_key, api_secret, base_url, _ = get_alpaca_creds()
-    if not api_key or not api_secret:
-        raise RuntimeError("Missing Alpaca credentials for trading client")
+def get_trading_client():
+    """
+    Return an Alpaca TradingClient in paper mode.
+    Never hard-fail at import time; callers must handle None.
+    """
+    try:
+        from alpaca.trading.client import TradingClient as AlpacaTradingClient
+    except Exception as e:
+        LOGGER.warning("TradingClient import failed: %s", e)
+        return None
+
+    key = os.getenv("APCA_API_KEY_ID")
+    secret = os.getenv("APCA_API_SECRET_KEY")
+    base_url = os.getenv("APCA_API_BASE_URL", "")
+
+    if not key or not secret:
+        LOGGER.warning("TradingClient unavailable: missing APCA_API_KEY_ID/APCA_API_SECRET_KEY")
+        return None
+
+    # We remain paper-mode only. If base_url contains paper, use paper=True.
+    paper = "paper" in (base_url or "").lower()
+
+    try:
+        return AlpacaTradingClient(key, secret, paper=paper)
+    except Exception as e:
+        LOGGER.warning("TradingClient init failed: %s", e)
+        return None
+
+
+def _create_trading_client() -> tuple[Any | None, str, bool, bool | None]:
+    _, _, base_url, _ = get_alpaca_creds()
     forced_raw = os.getenv("JBR_EXEC_PAPER")
     forced_mode: bool | None = None
     paper_mode: bool
@@ -4818,7 +4842,7 @@ def _create_trading_client() -> tuple[Any, str, bool, bool | None]:
     resolved_base = (base_url or "https://paper-api.alpaca.markets").rstrip("/")
     if not resolved_base:
         resolved_base = "https://paper-api.alpaca.markets"
-    client = TradingClient(api_key, api_secret, paper=paper_mode)
+    client = get_trading_client()
     return client, resolved_base, paper_mode, forced_mode
 
 
