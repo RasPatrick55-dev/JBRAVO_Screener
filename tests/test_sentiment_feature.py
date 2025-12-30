@@ -248,3 +248,41 @@ def test_sentiment_fetch_writes_cache_and_column(tmp_path: Path) -> None:
     screener.write_outputs(tmp_path, top_df, updated, stats_enabled, skip_reasons)
     saved = pd.read_csv(tmp_path / "data" / "scored_candidates.csv")
     assert "sentiment" in saved.columns
+
+
+def test_sentiment_targets_use_symbol_column(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    run_ts = datetime(2024, 7, 1, tzinfo=timezone.utc)
+    frame = pd.DataFrame(
+        {
+            "symbol": ["aaa", "BBB", None, "aaa"],
+            "Score": [1.0, 2.0, 3.0, 4.0],
+            "score_breakdown": ["{}"] * 4,
+        }
+    )
+
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get_score(self, symbol: str, date_utc: str) -> Optional[float]:
+            self.calls.append(symbol)
+            return {"AAA": 0.5, "BBB": -0.25}.get(symbol)
+
+    client = RecordingClient()
+    settings = {"enabled": True, "weight": 0.0, "min": -1.0}
+
+    with caplog.at_level("INFO"):
+        updated, summary = screener._apply_sentiment_scores(
+            frame,
+            run_ts=run_ts,
+            settings=settings,
+            cache_dir=tmp_path / "data" / "cache" / "sentiment",
+            client_factory=lambda *_: client,
+        )
+
+    assert client.calls == ["AAA", "BBB"]
+    assert "[WARN] SENTIMENT_FETCH skipped reason=empty_target" not in caplog.text
+    assert summary["sentiment_missing_count"] == 1
+    assert pd.isna(updated.loc[2, "sentiment"])
+    assert updated.loc[0:1, "sentiment"].tolist() == pytest.approx([0.5, -0.25], nan_ok=True)
+    assert updated.loc[3, "sentiment"] == pytest.approx(0.5)
