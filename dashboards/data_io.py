@@ -22,6 +22,74 @@ REPORTS_DIR = BASE_DIR / "reports"
 logger = logging.getLogger(__name__)
 
 
+def _db_engine() -> Optional[Any]:
+    if not db.db_enabled():
+        logger.warning("DASH_DB_READ_FALLBACK table=trades err=db_disabled")
+        return None
+    engine = db.get_engine()
+    if engine is None:
+        logger.warning("DASH_DB_READ_FALLBACK table=trades err=db_engine_none")
+    return engine
+
+
+def load_trades_db(limit: int = 500) -> pd.DataFrame:
+    """Return trades from the database ordered by lifecycle recency."""
+
+    engine = _db_engine()
+    if engine is None:
+        return pd.DataFrame()
+
+    stmt = text(
+        """
+        select trade_id, symbol, qty, status, entry_time, entry_price,
+               exit_time, exit_price, realized_pnl, exit_reason, created_at, updated_at
+        from trades
+        order by coalesce(exit_time, entry_time) desc
+        limit :limit
+        """
+    )
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(stmt, {"limit": int(limit)})
+            rows = result.fetchall()
+            columns = result.keys()
+        df = pd.DataFrame(rows, columns=columns)
+        logger.info("DASH_DB_READ_OK table=trades rows=%d", len(df))
+        return df
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("DASH_DB_READ_FALLBACK table=trades err=%s", exc)
+        return pd.DataFrame()
+
+
+def load_open_trades_db() -> pd.DataFrame:
+    """Return OPEN trades ordered by entry_time desc."""
+
+    engine = _db_engine()
+    if engine is None:
+        return pd.DataFrame()
+
+    stmt = text(
+        """
+        select trade_id, symbol, qty, status, entry_time, entry_price,
+               exit_time, exit_price, realized_pnl, exit_reason, created_at, updated_at
+        from trades
+        where status = 'OPEN'
+        order by entry_time desc
+        """
+    )
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(stmt)
+            rows = result.fetchall()
+            columns = result.keys()
+        df = pd.DataFrame(rows, columns=columns)
+        logger.info("DASH_DB_READ_OK table=trades rows=%d", len(df))
+        return df
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("DASH_DB_READ_FALLBACK table=trades err=%s", exc)
+        return pd.DataFrame()
+
+
 def _read_json_safe(path: Path) -> Dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as handle:
