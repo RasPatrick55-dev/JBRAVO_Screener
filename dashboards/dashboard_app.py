@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 from flask import jsonify, redirect, request
 from plotly.subplots import make_subplots
+from scripts import db
 
 os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 
@@ -37,6 +38,8 @@ from dashboards.data_io import (
     screener_health as load_screener_health,
     screener_table,
     metrics_summary_snapshot,
+    load_trades_db,
+    load_open_trades_db,
 )
 from dashboards.utils import coerce_kpi_types, parse_pipeline_summary
 from dashboards.overview import overview_layout, render_timeline_table
@@ -706,50 +709,210 @@ def load_symbol_perf_df() -> pd.DataFrame | dbc.Alert:
     return df
 
 
-def load_trades_for_exits() -> pd.DataFrame | dbc.Alert:
-    """Load trades for exit analytics with graceful fallback."""
+def _compute_trade_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a trades dataframe with hold_days/return_pct convenience columns."""
 
-    df, alert = load_csv(
+    normalized = _normalize_pnl(df)
+    if normalized is None or normalized.empty:
+        return pd.DataFrame()
+
+    work = normalized.copy()
+    if "status" in work.columns:
+        work["status"] = work["status"].astype(str).str.upper()
+    entry_times = pd.to_datetime(work.get("entry_time"), utc=True, errors="coerce")
+    exit_times = pd.to_datetime(work.get("exit_time"), utc=True, errors="coerce")
+    now = pd.Timestamp.utcnow()
+    if "entry_time" in work.columns:
+        effective_exit = exit_times.fillna(now) if "exit_time" in work.columns else pd.Series(now, index=work.index)
+        work["hold_days"] = (effective_exit - entry_times).dt.days
+        work["entry_time"] = entry_times
+        if "exit_time" in work.columns:
+            work["exit_time"] = exit_times
+
+    if "realized_pnl" in work.columns and "net_pnl" not in work.columns:
+        work["net_pnl"] = work["realized_pnl"]
+    if "pnl" not in work.columns and "net_pnl" in work.columns:
+        work["pnl"] = work["net_pnl"]
+
+    if {"entry_price", "exit_price"}.issubset(work.columns):
+        entry_price = pd.to_numeric(work["entry_price"], errors="coerce")
+        exit_price = pd.to_numeric(work["exit_price"], errors="coerce")
+        with pd.option_context("mode.use_inf_as_na", True):
+            return_pct = ((exit_price - entry_price) / entry_price) * 100
+        work["return_pct"] = return_pct
+        if "exit_pct" not in work.columns:
+            work["exit_pct"] = return_pct
+
+    return work
+
+
+def load_trades_for_exits() -> tuple[pd.DataFrame, pd.DataFrame, dbc.Alert | None, str]:
+    """Load trades for exit analytics with DB-first fallback to CSV."""
+
+    db_enabled = db.db_enabled()
+    db_ready = db.get_engine() is not None if db_enabled else False
+
+    db_trades = load_trades_db()
+    open_db_trades = load_open_trades_db() if not db_trades.empty else pd.DataFrame()
+    if not db_trades.empty:
+        recent_df = _compute_trade_columns(db_trades)
+        open_df = _compute_trade_columns(open_db_trades)
+        if open_df.empty and not recent_df.empty and "status" in recent_df.columns:
+            open_df = recent_df[recent_df["status"] == "OPEN"].copy()
+        if "entry_time" in open_df.columns:
+            open_df.sort_values("entry_time", ascending=False, inplace=True)
+        if "exit_time" in recent_df.columns:
+            recent_df.sort_values(by="exit_time", ascending=False, na_position="last", inplace=True)
+        return recent_df, open_df, None, "db"
+
+    csv_df, alert = load_csv(
         str(TRADES_LOG_PATH),
-        required_columns=["symbol", "entry_time", "exit_time", "pnl"],
+        required_columns=["symbol", "entry_time"],
         alert_prefix="Trades log",
     )
     if alert:
-        return alert
+        if db_enabled and db_ready is False:
+            return pd.DataFrame(), pd.DataFrame(), dbc.Alert("Trades unavailable.", color="warning"), "unavailable"
+        if not db_enabled:
+            return pd.DataFrame(), pd.DataFrame(), dbc.Alert("No trades yet (paper).", color="info"), "csv"
+        return pd.DataFrame(), pd.DataFrame(), alert, "unavailable"
 
-    if not isinstance(df, pd.DataFrame):
-        return dbc.Alert("Trades log is unavailable.", color="warning")
+    if not isinstance(csv_df, pd.DataFrame) or csv_df.empty:
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            dbc.Alert("No trades yet (paper).", color="info"),
+            "csv",
+        )
 
-    for col in ("entry_time", "exit_time"):
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
+    csv_df = _compute_trade_columns(csv_df)
+    open_df = pd.DataFrame()
+    if "status" in csv_df.columns:
+        open_df = csv_df[csv_df["status"] == "OPEN"].copy()
+    elif "exit_time" in csv_df.columns:
+        open_df = csv_df[csv_df["exit_time"].isna()].copy()
 
-    if "exit_time" in df.columns:
-        df = df.sort_values(by="exit_time", ascending=False, na_position="last")
+    if "entry_time" in open_df.columns:
+        open_df.sort_values("entry_time", ascending=False, inplace=True)
+    sorted_csv = (
+        csv_df.sort_values(by="exit_time", ascending=False, na_position="last")
+        if "exit_time" in csv_df.columns
+        else csv_df
+    )
 
-    return df
+    return sorted_csv, open_df, None, "csv"
 
 
 def make_trades_exits_layout():
     """Build the Trades / Exits analytics layout."""
 
-    df_trades = load_trades_for_exits()
+    trades_df, open_trades_df, alert, source_label = load_trades_for_exits()
 
-    if not isinstance(df_trades, pd.DataFrame):
-        return html.Div([df_trades])
+    if alert:
+        return html.Div([alert])
 
-    has_exit_reason = "exit_reason" in df_trades.columns
-    has_exit_eff = "exit_efficiency" in df_trades.columns
+    if trades_df.empty and open_trades_df.empty:
+        return dbc.Alert("No trades yet (paper).", color="info", className="m-2")
+
+    has_exit_reason = "exit_reason" in trades_df.columns
+    has_exit_eff = "exit_efficiency" in trades_df.columns
+
+    open_table: Any
+    if not open_trades_df.empty:
+        open_columns = [
+            col
+            for col in (
+                "symbol",
+                "qty",
+                "entry_time",
+                "entry_price",
+                "hold_days",
+                "return_pct",
+                "status",
+            )
+            if col in open_trades_df.columns
+        ]
+        if not open_columns:
+            open_columns = list(open_trades_df.columns)
+        open_table = _styled_table(
+            open_trades_df[open_columns],
+            table_id="open-trades-table",
+            page_size=10,
+        )
+    else:
+        open_table = dbc.Alert("No trades yet (paper).", color="info")
+
+    preferred_recent_columns = [
+        "symbol",
+        "status",
+        "entry_time",
+        "exit_time",
+        "qty",
+        "entry_price",
+        "exit_price",
+        "return_pct",
+        "net_pnl",
+        "exit_reason",
+        "hold_days",
+    ]
+    recent_columns = [
+        col for col in preferred_recent_columns if col in trades_df.columns
+    ] or list(trades_df.columns)
+    recent_table = _styled_table(
+        trades_df[recent_columns],
+        table_id="recent-trades-table",
+        page_size=20,
+    )
+
+    summary_cards: list[Any] = []
+    if not trades_df.empty:
+        pnl_col = "net_pnl" if "net_pnl" in trades_df.columns else "pnl"
+        total_trades = len(trades_df)
+        open_count = len(open_trades_df) if not open_trades_df.empty else 0
+        if "status" in trades_df.columns:
+            closed_count = len(trades_df[trades_df["status"] == "CLOSED"])
+        else:
+            closed_count = max(0, total_trades - open_count)
+        realized_pnl = float(trades_df[pnl_col].sum()) if pnl_col in trades_df.columns else 0.0
+        avg_hold = (
+            float(pd.to_numeric(trades_df["hold_days"], errors="coerce").mean())
+            if "hold_days" in trades_df.columns
+            else 0.0
+        )
+        kpi_data = [
+            ("Trades", total_trades),
+            ("Open", open_count),
+            ("Closed", closed_count),
+            ("Realized PnL", f"${realized_pnl:,.2f}"),
+            ("Avg Hold (days)", f"{avg_hold:.1f}"),
+        ]
+        for label, value in kpi_data:
+            summary_cards.append(
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            [
+                                html.Div(label, className="text-muted small"),
+                                html.H5(value, className="mb-0"),
+                            ]
+                        ),
+                        className="h-100",
+                    ),
+                    md=2,
+                    sm=4,
+                    xs=6,
+                )
+            )
 
     table_columns = [
         {"name": "Symbol", "id": "symbol"},
         {"name": "Entry Time", "id": "entry_time"},
         {"name": "Exit Time", "id": "exit_time"},
         {"name": "Exit %", "id": "exit_pct"}
-        if "exit_pct" in df_trades.columns
+        if "exit_pct" in trades_df.columns
         else None,
         {"name": "Net PnL", "id": "net_pnl"}
-        if "net_pnl" in df_trades.columns
+        if "net_pnl" in trades_df.columns
         else None,
     ]
     if has_exit_reason:
@@ -762,7 +925,7 @@ def make_trades_exits_layout():
     trades_table = dash_table.DataTable(
         id="trades-exits-table",
         columns=table_columns,
-        data=df_trades.to_dict("records"),
+        data=trades_df.to_dict("records"),
         page_size=20,
         sort_action="native",
         filter_action="native",
@@ -770,7 +933,7 @@ def make_trades_exits_layout():
     )
 
     if has_exit_reason:
-        exit_counts = df_trades["exit_reason"].value_counts().reset_index()
+        exit_counts = trades_df["exit_reason"].value_counts().reset_index()
         exit_counts.columns = ["exit_reason", "count"]
         counts_bar = dcc.Graph(
             id="exit-reason-counts",
@@ -793,7 +956,7 @@ def make_trades_exits_layout():
 
     if has_exit_reason and has_exit_eff:
         eff_by_reason = (
-            df_trades.groupby("exit_reason")["exit_efficiency"]
+            trades_df.groupby("exit_reason")["exit_efficiency"]
             .mean()
             .sort_values(ascending=False)
             .reset_index()
@@ -823,6 +986,27 @@ def make_trades_exits_layout():
             html.H3("Trades & Exit Analytics"),
             html.P(
                 "Review how well each exit rule captures profit, using exit_reason and exit_efficiency from trades_log.csv."
+            ),
+            (dbc.Row(summary_cards, className="g-3 mb-3") if summary_cards else html.Div()),
+            dbc.Card(
+                [
+                    dbc.CardHeader(
+                        [
+                            html.Span("Open Trades"),
+                            dbc.Badge(source_label.upper(), color="secondary", className="ms-2"),
+                        ],
+                        className="d-flex justify-content-between align-items-center",
+                    ),
+                    dbc.CardBody(open_table),
+                ],
+                className="mb-3 bg-dark text-light",
+            ),
+            dbc.Card(
+                [
+                    dbc.CardHeader("Recent Trades"),
+                    dbc.CardBody(recent_table),
+                ],
+                className="mb-4 bg-dark text-light",
             ),
             html.Div(trades_table, style={"marginBottom": "2rem"}),
             html.Div(
