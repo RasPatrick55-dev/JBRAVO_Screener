@@ -397,14 +397,23 @@ def upsert_metrics_daily(run_date: Any, summary_metrics_dict: Mapping[str, Any] 
         _log_write_result(False, "metrics_daily", 0, exc)
 
 
-def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> None:
+def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
     if not row_dict:
-        return
+        return False
     engine = _engine_or_none()
+    event_label = (row_dict.get("event_type") or row_dict.get("status") or row_dict.get("order_status") or "").upper()
+    order_id = row_dict.get("order_id")
     if engine is None:
-        return
+        logger.warning(
+            "[WARN] DB_WRITE_FAILED table=executed_trades event=%s order_id=%s err=%s",
+            event_label,
+            order_id or "",
+            "disabled",
+        )
+        _log_write_result(False, "executed_trades", 0, RuntimeError("db_disabled"))
+        return False
 
-    entry_time = normalize_ts(row_dict.get("entry_time"), field="entry_time")
+    entry_time = normalize_ts(row_dict.get("entry_time"), field="entry_time") or datetime.now(timezone.utc)
     exit_time = normalize_ts(row_dict.get("exit_time"), field="exit_time")
 
     payload = {
@@ -435,7 +444,20 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> None:
     try:
         with engine.begin() as connection:
             connection.execute(stmt, payload)
-        logger.info("[INFO] DB_WRITE_OK table=executed_trades symbol=%s", payload["symbol"])
+        logger.info(
+            "[INFO] DB_WRITE_OK table=executed_trades event=%s order_id=%s symbol=%s",
+            event_label or "",
+            order_id or "",
+            payload["symbol"],
+        )
         _log_write_result(True, "executed_trades", 1)
+        return True
     except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "[WARN] DB_WRITE_FAILED table=executed_trades event=%s order_id=%s err=%s",
+            event_label or "",
+            order_id or "",
+            exc,
+        )
         _log_write_result(False, "executed_trades", 0, exc)
+        return False
