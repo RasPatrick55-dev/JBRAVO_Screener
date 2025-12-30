@@ -20,6 +20,7 @@ import zoneinfo
 
 import pandas as pd
 import requests
+from sqlalchemy import text
 
 from scripts import db
 from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
@@ -103,6 +104,8 @@ LOG_PATH = PROJECT_ROOT / "logs" / "pipeline.log"
 SCREENER_METRICS_PATH = DATA_DIR / "screener_metrics.json"
 LATEST_CANDIDATES = DATA_DIR / "latest_candidates.csv"
 TOP_CANDIDATES = DATA_DIR / "top_candidates.csv"
+BACKTEST_RESULTS = DATA_DIR / "backtest_results.csv"
+METRICS_SUMMARY = DATA_DIR / "metrics_summary.csv"
 DEFAULT_WSGI_PATH = Path("/var/www/raspatrick_pythonanywhere_com_wsgi.py")
 BASE_DIR = PROJECT_ROOT
 copyfile = shutil.copyfile
@@ -113,6 +116,10 @@ DEFAULT_LABELS_BARS_PATH = Path("data") / "daily_bars.csv"
 DEFAULT_RANKER_SCORE_COLUMN = "score_5d"
 DEFAULT_RANKER_TARGET_COLUMN = "model_score_5d"
 DEFAULT_ALLOC_WEIGHT_TOP_K = 4
+_PIPELINE_SUMMARY_FOR_DB: dict[str, Any] | None = None
+_PIPELINE_RC: int | None = None
+_PIPELINE_STARTED_AT: datetime | None = None
+_PIPELINE_ENDED_AT: datetime | None = None
 
 
 def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy hook
@@ -1750,6 +1757,244 @@ def _reload_dashboard(enabled: bool) -> None:
         )
 
 
+def ingest_artifacts_to_db(run_date: date) -> None:
+    """Ingest CSV artifacts into the database for durability."""
+
+    from scripts.db import db_enabled, get_engine
+
+    def _log_ok(table: str, rows: int) -> None:
+        logger.info("[INFO] DB_INGEST_OK table=%s rows=%s", table, rows)
+
+    def _log_fail(table: str, err: Exception | str) -> None:
+        logger.warning("[WARN] DB_INGEST_FAILED table=%s err=%s", table, err)
+
+    if not db_enabled():
+        _log_fail("all", "db_disabled")
+        return
+
+    engine = get_engine()
+    if engine is None:
+        _log_fail("all", "engine_unavailable")
+        return
+
+    score_breakdown_raw: list[Any] = []
+    run_date_value = run_date.isoformat() if hasattr(run_date, "isoformat") else run_date
+
+    def _parse_score_breakdown(value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                score_breakdown_raw.append(value)
+                return None
+        if isinstance(value, (Mapping, list)):
+            return value
+        return None
+
+    try:
+        candidates_df = pd.read_csv(LATEST_CANDIDATES)
+    except FileNotFoundError:
+        candidates_df = pd.DataFrame()
+    except Exception as exc:
+        _log_fail("screener_candidates", exc)
+        candidates_df = pd.DataFrame()
+
+    if not candidates_df.empty:
+        rows: list[dict[str, Any]] = []
+        for _, row in candidates_df.iterrows():
+            record = row.to_dict() if isinstance(row, Mapping) else dict(row)
+            payload = {
+                "run_date": run_date_value,
+                "timestamp": record.get("timestamp"),
+                "symbol": (record.get("symbol") or "").upper(),
+                "score": record.get("score"),
+                "exchange": record.get("exchange"),
+                "close": record.get("close"),
+                "volume": record.get("volume"),
+                "universe_count": record.get("universe_count"),
+                "score_breakdown": _parse_score_breakdown(record.get("score_breakdown")),
+                "entry_price": record.get("entry_price"),
+                "adv20": record.get("adv20"),
+                "atrp": record.get("atrp"),
+                "source": record.get("source"),
+            }
+            rows.append(payload)
+        stmt = text(
+            """
+            INSERT INTO screener_candidates (
+                run_date, timestamp, symbol, score, exchange, close, volume,
+                universe_count, score_breakdown, entry_price, adv20, atrp, source
+            )
+            VALUES (
+                :run_date, :timestamp, :symbol, :score, :exchange, :close, :volume,
+                :universe_count, CAST(:score_breakdown AS JSONB), :entry_price, :adv20, :atrp, :source
+            )
+            ON CONFLICT (run_date, symbol) DO UPDATE SET
+                timestamp=EXCLUDED.timestamp,
+                score=EXCLUDED.score,
+                exchange=EXCLUDED.exchange,
+                close=EXCLUDED.close,
+                volume=EXCLUDED.volume,
+                universe_count=EXCLUDED.universe_count,
+                score_breakdown=EXCLUDED.score_breakdown,
+                entry_price=EXCLUDED.entry_price,
+                adv20=EXCLUDED.adv20,
+                atrp=EXCLUDED.atrp,
+                source=EXCLUDED.source
+            """
+        )
+        try:
+            with engine.begin() as connection:
+                connection.execute(stmt, rows)
+            _log_ok("screener_candidates", len(rows))
+        except Exception as exc:
+            _log_fail("screener_candidates", exc)
+
+    try:
+        backtest_df = pd.read_csv(BACKTEST_RESULTS)
+    except FileNotFoundError:
+        backtest_df = pd.DataFrame()
+    except Exception as exc:
+        _log_fail("backtest_results", exc)
+        backtest_df = pd.DataFrame()
+
+    if not backtest_df.empty:
+        rows_bt: list[dict[str, Any]] = []
+        columns = {
+            "symbol",
+            "trades",
+            "win_rate",
+            "net_pnl",
+            "expectancy",
+            "profit_factor",
+            "max_drawdown",
+            "sharpe",
+            "sortino",
+        }
+        for _, row in backtest_df.iterrows():
+            record = row.to_dict() if isinstance(row, Mapping) else dict(row)
+            payload_bt = {"run_date": run_date_value}
+            for col in columns:
+                payload_bt[col] = record.get(col)
+            payload_bt["symbol"] = (payload_bt.get("symbol") or "").upper()
+            rows_bt.append(payload_bt)
+        stmt_bt = text(
+            """
+            INSERT INTO backtest_results (
+                run_date, symbol, trades, win_rate, net_pnl, expectancy,
+                profit_factor, max_drawdown, sharpe, sortino
+            )
+            VALUES (
+                :run_date, :symbol, :trades, :win_rate, :net_pnl, :expectancy,
+                :profit_factor, :max_drawdown, :sharpe, :sortino
+            )
+            ON CONFLICT (run_date, symbol) DO UPDATE SET
+                trades=EXCLUDED.trades,
+                win_rate=EXCLUDED.win_rate,
+                net_pnl=EXCLUDED.net_pnl,
+                expectancy=EXCLUDED.expectancy,
+                profit_factor=EXCLUDED.profit_factor,
+                max_drawdown=EXCLUDED.max_drawdown,
+                sharpe=EXCLUDED.sharpe,
+                sortino=EXCLUDED.sortino
+            """
+        )
+        try:
+            with engine.begin() as connection:
+                connection.execute(stmt_bt, rows_bt)
+            _log_ok("backtest_results", len(rows_bt))
+        except Exception as exc:
+            _log_fail("backtest_results", exc)
+
+    try:
+        metrics_df = pd.read_csv(METRICS_SUMMARY)
+    except FileNotFoundError:
+        metrics_df = pd.DataFrame()
+    except Exception as exc:
+        _log_fail("metrics_daily", exc)
+        metrics_df = pd.DataFrame()
+
+    if not metrics_df.empty:
+        latest_row = metrics_df.tail(1).to_dict(orient="records")[0]
+        payload_metrics = {
+            "run_date": run_date_value,
+            "total_trades": latest_row.get("total_trades"),
+            "win_rate": latest_row.get("win_rate"),
+            "net_pnl": latest_row.get("net_pnl"),
+            "expectancy": latest_row.get("expectancy"),
+            "profit_factor": latest_row.get("profit_factor"),
+            "max_drawdown": latest_row.get("max_drawdown"),
+            "sharpe": latest_row.get("sharpe"),
+            "sortino": latest_row.get("sortino"),
+        }
+        stmt_metrics = text(
+            """
+            INSERT INTO metrics_daily (
+                run_date, total_trades, win_rate, net_pnl, expectancy,
+                profit_factor, max_drawdown, sharpe, sortino
+            )
+            VALUES (
+                :run_date, :total_trades, :win_rate, :net_pnl, :expectancy,
+                :profit_factor, :max_drawdown, :sharpe, :sortino
+            )
+            ON CONFLICT (run_date) DO UPDATE SET
+                total_trades=EXCLUDED.total_trades,
+                win_rate=EXCLUDED.win_rate,
+                net_pnl=EXCLUDED.net_pnl,
+                expectancy=EXCLUDED.expectancy,
+                profit_factor=EXCLUDED.profit_factor,
+                max_drawdown=EXCLUDED.max_drawdown,
+                sharpe=EXCLUDED.sharpe,
+                sortino=EXCLUDED.sortino
+            """
+        )
+        try:
+            with engine.begin() as connection:
+                connection.execute(stmt_metrics, payload_metrics)
+            _log_ok("metrics_daily", 1)
+        except Exception as exc:
+            _log_fail("metrics_daily", exc)
+
+    summary_payload = _PIPELINE_SUMMARY_FOR_DB or {}
+    if score_breakdown_raw:
+        summary_payload = dict(summary_payload)
+        summary_payload["score_breakdown_raw"] = score_breakdown_raw
+
+    def _dump_summary(payload: Mapping[str, Any] | None) -> str:
+        try:
+            return json.dumps(payload or {})
+        except Exception:
+            try:
+                return json.dumps({"raw": str(payload)})
+            except Exception:
+                return "{}"
+
+    stmt_pipeline = text(
+        """
+        INSERT INTO pipeline_runs (run_date, started_at, ended_at, rc, summary)
+        VALUES (:run_date, :started_at, :ended_at, :rc, CAST(:summary AS JSONB))
+        ON CONFLICT (run_date) DO UPDATE
+        SET started_at=EXCLUDED.started_at,
+            ended_at=EXCLUDED.ended_at,
+            rc=EXCLUDED.rc,
+            summary=EXCLUDED.summary
+        """
+    )
+    payload_pipeline = {
+        "run_date": run_date_value,
+        "started_at": _PIPELINE_STARTED_AT,
+        "ended_at": _PIPELINE_ENDED_AT or datetime.now(timezone.utc),
+        "rc": int(_PIPELINE_RC or 0),
+        "summary": _dump_summary(summary_payload),
+    }
+    try:
+        with engine.begin() as connection:
+            connection.execute(stmt_pipeline, payload_pipeline)
+        _log_ok("pipeline_runs", 1)
+    except Exception as exc:
+        _log_fail("pipeline_runs", exc)
+
+
 def _split_or_string(exec_args: str, split_list: Optional[Sequence[str]]) -> list[str]:
     if split_list is not None and len(split_list) > 0:
         return [token for token in split_list if token != "--"]
@@ -1831,6 +2076,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     started = time.time()
     started_dt = datetime.fromtimestamp(started, timezone.utc)
+    global _PIPELINE_STARTED_AT
+    _PIPELINE_STARTED_AT = started_dt
     metrics: dict[str, Any] = {}
     symbols_in = 0
     symbols_with_bars = 0
@@ -2339,11 +2586,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "trading_ok": bool(trading_ok),
             "data_ok": bool(data_ok),
         }
+        global _PIPELINE_SUMMARY_FOR_DB, _PIPELINE_RC, _PIPELINE_ENDED_AT
+        _PIPELINE_SUMMARY_FOR_DB = dict(summary_payload)
+        _PIPELINE_RC = int(rc)
         try:
             db.upsert_pipeline_run(today, started_dt, ended_at, int(rc), summary_payload)
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.warning("[WARN] DB_WRITE_FAILED table=pipeline_runs err=%s", exc)
+        _PIPELINE_ENDED_AT = ended_at
         duration = time.time() - started
+        ingest_artifacts_to_db(today)
         logger.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
         try:
             env = os.environ.copy()
