@@ -1351,6 +1351,11 @@ def run_step(name: str, cmd: Sequence[str], *, timeout: Optional[float] = None) 
         log_file.write(f"[{datetime.now(timezone.utc).isoformat()}] START {name}\n")
         log_file.flush()
         try:
+            LOG.info(
+                "[INFO] CHILD_ENV_KEYS has_database_url=%s keys_count=%d",
+                bool(env.get("DATABASE_URL")),
+                len(env),
+            )
             proc = subprocess.Popen(
                 list(cmd),
                 stdout=log_file,
@@ -1981,6 +1986,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 logger.warning("[WARN] METRICS_STEP rc=%s (continuing)", rc_metrics)
             _sync_top_candidates_to_latest(base_dir)
             try:
+                env = os.environ.copy()
+                LOG.info(
+                    "[INFO] CHILD_ENV_KEYS has_database_url=%s keys_count=%d",
+                    bool(env.get("DATABASE_URL")),
+                    len(env),
+                )
                 subprocess.run(
                     [
                         sys.executable,
@@ -1991,6 +2002,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     ],
                     cwd=PROJECT_ROOT,
                     check=True,
+                    env=env,
                 )
                 LOG.info("[INFO] TRADE_PERFORMANCE_CACHE_REFRESHED")
             except Exception:
@@ -2334,6 +2346,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         duration = time.time() - started
         logger.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
         try:
+            env = os.environ.copy()
+            LOG.info(
+                "[INFO] CHILD_ENV_KEYS has_database_url=%s keys_count=%d",
+                bool(env.get("DATABASE_URL")),
+                len(env),
+            )
             subprocess.run(
                 [
                     sys.executable,
@@ -2348,6 +2366,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 ],
                 cwd=PROJECT_ROOT,
                 check=True,
+                env=env,
             )
             LOG.info("ACCOUNT_EQUITY_REFRESH_OK")
         except Exception:
