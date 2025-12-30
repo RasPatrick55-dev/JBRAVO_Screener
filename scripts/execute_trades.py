@@ -2438,15 +2438,36 @@ class TradeExecutor:
         after_time = now_utc - timedelta(days=lookback_days)
         decorate_window_days = min(2, max(1, lookback_days or 0))
         decorate_after_time = now_utc - timedelta(days=decorate_window_days)
+        orders_client_holder: Dict[str, Any] = {
+            "client": self.client if hasattr(self.client, "get_orders") else None
+        }
 
-        def _latest_filled_sell_order(symbol: str) -> tuple[Any | None, datetime | None, Dict[str, int]]:
-            stats: Dict[str, int] = {"fetched_orders": 0, "symbol_sells": 0, "filled_sells": 0}
-            tc = self.client
-            if tc is None or not hasattr(tc, "get_orders"):
-                LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=%s err=client_unavailable", symbol)
-                return None, None, stats
-
+        def _latest_filled_sell_order(symbol: str) -> tuple[Any | None, datetime | None, Dict[str, Any]]:
             after_iso = (now_utc - timedelta(days=lookback_days)).isoformat()
+            stats: Dict[str, Any] = {
+                "after_iso": after_iso,
+                "fetched_orders": 0,
+                "symbol_sells": 0,
+                "filled_sells": 0,
+                "orders_error": False,
+            }
+
+            tc: Any = self.client if hasattr(self.client, "get_orders") else None
+            if tc is None:
+                tc = orders_client_holder.get("client")
+            if tc is None:
+                try:
+                    tc, _, _, _ = _create_trading_client()
+                    orders_client_holder["client"] = tc
+                except Exception as exc:  # pragma: no cover - defensive guard
+                    LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=%s", exc)
+                    stats["orders_error"] = True
+                    return None, None, stats
+
+            if tc is None or not hasattr(tc, "get_orders"):
+                LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=client_unavailable")
+                stats["orders_error"] = True
+                return None, None, stats
             try:
                 log_info(
                     "alpaca.get_orders",
@@ -2458,8 +2479,9 @@ class TradeExecutor:
                 )
                 orders = tc.get_orders(status="all", after=after_iso, direction="desc", limit=500)
             except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=%s err=%s", symbol, exc)
-                return None, None, stats
+                LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=%s", exc)
+                stats["orders_error"] = True
+                orders = []
 
             stats["fetched_orders"] = len(orders or [])
             symbol_upper = symbol.upper()
@@ -2652,7 +2674,7 @@ class TradeExecutor:
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=get_closed_trades err=%s", exc)
             trades_to_decorate = []
 
-        latest_sell_order_by_symbol: Dict[str, tuple[Any | None, datetime | None, Dict[str, int]]] = {}
+        latest_sell_order_by_symbol: Dict[str, tuple[Any | None, datetime | None, Dict[str, Any]]] = {}
         for trade in trades_to_decorate:
             trade_id = trade.get("trade_id")
             symbol = str(trade.get("symbol", "")).upper()
@@ -2663,18 +2685,20 @@ class TradeExecutor:
             order, filled_at, stats = latest_sell_order_by_symbol[symbol]
             if order is None:
                 LOGGER.warning(
-                    "[WARN] RECONCILE_DECORATE_MISS trade_id=%s symbol=%s lookback_days=%s fetched_orders=%s %s_sell_orders=%s filled_sells=%s",
+                    "[WARN] RECONCILE_DECORATE_MISS trade_id=%s symbol=%s after_iso=%s lookback_days=%s fetched_orders=%s orders_error=%s %s_sell_orders=%s filled_sells=%s",
                     trade_id,
                     symbol,
+                    stats.get("after_iso"),
                     lookback_days,
                     stats.get("fetched_orders", 0),
+                    stats.get("orders_error", False),
                     symbol.lower(),
                     stats.get("symbol_sells", 0),
                     stats.get("filled_sells", 0),
                 )
                 continue
 
-            exit_time_raw = filled_at or db.normalize_ts(getattr(order, "filled_at", None)) or datetime.now(timezone.utc)
+            exit_time_raw = filled_at
             exit_price_raw = getattr(order, "filled_avg_price", None)
             try:
                 exit_price = float(exit_price_raw) if exit_price_raw is not None else None
