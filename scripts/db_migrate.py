@@ -85,6 +85,37 @@ TABLE_STATEMENTS = [
         created_at TIMESTAMPTZ DEFAULT now()
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS order_events (
+        event_id BIGSERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        qty NUMERIC,
+        order_id TEXT,
+        status TEXT,
+        event_type TEXT NOT NULL,
+        event_time TIMESTAMPTZ NOT NULL,
+        raw JSONB,
+        created_at TIMESTAMPTZ DEFAULT now()
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS trades (
+        trade_id BIGSERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        qty NUMERIC,
+        entry_order_id TEXT UNIQUE,
+        entry_time TIMESTAMPTZ,
+        entry_price NUMERIC,
+        exit_order_id TEXT,
+        exit_time TIMESTAMPTZ,
+        exit_price NUMERIC,
+        realized_pnl NUMERIC,
+        exit_reason TEXT,
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    """,
 ]
 
 INDEX_STATEMENTS = [
@@ -93,6 +124,13 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS executed_trades_symbol_idx ON executed_trades (symbol);",
     "CREATE INDEX IF NOT EXISTS executed_trades_entry_time_idx ON executed_trades (entry_time);",
     "CREATE INDEX IF NOT EXISTS executed_trades_exit_time_idx ON executed_trades (exit_time);",
+    "CREATE INDEX IF NOT EXISTS idx_order_events_symbol ON order_events(symbol);",
+    "CREATE INDEX IF NOT EXISTS idx_order_events_order_id ON order_events(order_id);",
+    "CREATE INDEX IF NOT EXISTS idx_order_events_event_time ON order_events(event_time);",
+    "CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);",
+    "CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);",
+    "CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);",
+    "CREATE INDEX IF NOT EXISTS idx_trades_exit_time ON trades(exit_time);",
 ]
 
 
