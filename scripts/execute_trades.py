@@ -44,7 +44,7 @@ import utils.telemetry as telemetry
 try:  # pragma: no cover - import guard for optional dependency
     from alpaca.common.exceptions import APIError
     from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
+    from alpaca.trading.enums import OrderDirection, OrderSide, QueryOrderStatus, TimeInForce
     from alpaca.trading.requests import (
         GetOrdersRequest,
         LimitOrderRequest,
@@ -66,12 +66,18 @@ except Exception:  # pragma: no cover - lightweight fallback for tests
         BUY = _Enum("buy")
         SELL = _Enum("sell")
 
+    class OrderDirection:  # type: ignore
+        ASC = _Enum("asc")
+        DESC = _Enum("desc")
+
     class TimeInForce:  # type: ignore
         DAY = _Enum("day")
         GTC = _Enum("gtc")
 
     class QueryOrderStatus:  # type: ignore
         OPEN = _Enum("open")
+        CLOSED = _Enum("closed")
+        ALL = _Enum("all")
 
     class LimitOrderRequest:  # type: ignore
         def __init__(self, **kwargs: Any) -> None:
@@ -2443,7 +2449,8 @@ class TradeExecutor:
         }
 
         def _latest_filled_sell_order(symbol: str) -> tuple[Any | None, datetime | None, Dict[str, Any]]:
-            after_iso = (now_utc - timedelta(days=lookback_days)).isoformat()
+            after_dt = now_utc - timedelta(days=lookback_days)
+            after_iso = after_dt.isoformat()
             stats: Dict[str, Any] = {
                 "after_iso": after_iso,
                 "fetched_orders": 0,
@@ -2460,7 +2467,11 @@ class TradeExecutor:
                     tc, _, _, _ = _create_trading_client()
                     orders_client_holder["client"] = tc
                 except Exception as exc:  # pragma: no cover - defensive guard
-                    LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=%s", exc)
+                    LOGGER.warning(
+                        "[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=%s err_type=%s",
+                        exc,
+                        type(exc).__name__,
+                    )
                     stats["orders_error"] = True
                     return None, None, stats
 
@@ -2469,17 +2480,27 @@ class TradeExecutor:
                 stats["orders_error"] = True
                 return None, None, stats
             try:
+                req = GetOrdersRequest(
+                    status=getattr(QueryOrderStatus, "ALL", None),
+                    after=after_dt,
+                    direction=getattr(OrderDirection, "DESC", None),
+                    limit=500,
+                )
                 log_info(
                     "alpaca.get_orders",
-                    status="all",
+                    status=getattr(req, "status", None),
                     symbol=symbol,
-                    direction="desc",
-                    limit=500,
-                    after=after_iso,
+                    direction=getattr(req, "direction", None),
+                    limit=getattr(req, "limit", None),
+                    after=getattr(req, "after", None),
                 )
-                orders = tc.get_orders(status="all", after=after_iso, direction="desc", limit=500)
+                orders = tc.get_orders(req)
             except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=%s", exc)
+                LOGGER.warning(
+                    "[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=%s err_type=%s",
+                    exc,
+                    type(exc).__name__,
+                )
                 stats["orders_error"] = True
                 orders = []
 
@@ -2528,7 +2549,11 @@ class TradeExecutor:
                 log_info("alpaca.get_positions")
                 positions = self.client.get_all_positions()
             except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=ALL err=%s", exc)
+                LOGGER.warning(
+                    "[WARN] RECONCILE_ALPACA_FAIL symbol=ALL err=%s err_type=%s",
+                    exc,
+                    type(exc).__name__,
+                )
                 positions = []
             open_symbols_on_alpaca = {
                 str(getattr(pos, "symbol", "")).upper()
@@ -2598,7 +2623,12 @@ class TradeExecutor:
                     log_info("alpaca.get_orders", status=getattr(request, "status", None), symbol=symbol)
                     orders = self.client.get_orders(request)
                 except Exception as exc:  # pragma: no cover - defensive guard
-                    LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL symbol=%s err=%s", symbol, exc)
+                    LOGGER.warning(
+                        "[WARN] RECONCILE_ALPACA_FAIL symbol=%s err=%s err_type=%s",
+                        symbol,
+                        exc,
+                        type(exc).__name__,
+                    )
                     continue
 
                 for order in orders or []:
@@ -2685,16 +2715,15 @@ class TradeExecutor:
             order, filled_at, stats = latest_sell_order_by_symbol[symbol]
             if order is None:
                 LOGGER.warning(
-                    "[WARN] RECONCILE_DECORATE_MISS trade_id=%s symbol=%s after_iso=%s lookback_days=%s fetched_orders=%s orders_error=%s %s_sell_orders=%s filled_sells=%s",
+                    "[WARN] RECONCILE_DECORATE_MISS trade_id=%s symbol=%s after_iso=%s lookback_days=%s fetched_orders=%s tsla_sell_orders=%s filled_sells=%s orders_error=%s",
                     trade_id,
                     symbol,
                     stats.get("after_iso"),
                     lookback_days,
                     stats.get("fetched_orders", 0),
-                    stats.get("orders_error", False),
-                    symbol.lower(),
                     stats.get("symbol_sells", 0),
                     stats.get("filled_sells", 0),
+                    stats.get("orders_error", False),
                 )
                 continue
 
