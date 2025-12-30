@@ -80,7 +80,7 @@ def test_insert_executed_trade_normalizes_and_logs(monkeypatch, caplog):
         (
             record
             for record in caplog.records
-            if "DB_WRITE_OK table=executed_trades symbol=XYZ" in record.message
+            if "DB_WRITE_OK table=executed_trades" in record.message
         ),
         None,
     )

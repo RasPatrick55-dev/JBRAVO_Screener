@@ -346,10 +346,13 @@ def record_executed_trade(
     order_id: str,
     order_type: str,
     timestamp: Any | None = None,
+    event_type: str | None = None,
+    raw: Mapping[str, Any] | None = None,
 ) -> None:
     """Append a trade execution event to ``executed_trades.csv``."""
 
     side_value = (side or "").lower()
+    event_label = (event_type or "").upper() or None
     try:
         qty_value = float(qty)
     except (TypeError, ValueError):
@@ -361,6 +364,9 @@ def record_executed_trade(
     entry_price = price_value if side_value == "buy" else 0.0
     current_price = price_value if side_value == "buy" else 0.0
     entry_time = _coerce_trade_timestamp(timestamp)
+    raw_payload = dict(raw or {})
+    if event_label and "event_type" not in raw_payload:
+        raw_payload["event_type"] = event_label
 
     row = {
         "order_id": str(order_id or ""),
@@ -378,6 +384,8 @@ def record_executed_trade(
         "order_status": str(status or ""),
         "order_type": str(order_type or ""),
         "side": side_value,
+        "event_type": event_label,
+        "raw": raw_payload or None,
     }
 
     existing: pd.DataFrame
@@ -410,10 +418,136 @@ def record_executed_trade(
             symbol,
             EXECUTED_TRADES_PATH,
         )
+    event_for_log = event_label or row["order_status"]
     try:
-        db.insert_executed_trade(row)
+        db_ok = db.insert_executed_trade(row)
+        if db_ok:
+            LOGGER.info(
+                "[INFO] DB_WRITE_OK table=executed_trades event=%s order_id=%s",
+                event_for_log or "",
+                row["order_id"],
+            )
+        else:
+            LOGGER.warning(
+                "[WARN] DB_WRITE_FAILED table=executed_trades event=%s order_id=%s err=%s",
+                event_for_log or "",
+                row["order_id"],
+                "db_disabled",
+            )
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOGGER.warning("[WARN] DB_WRITE_FAILED table=executed_trades err=%s", exc)
+        LOGGER.warning(
+            "[WARN] DB_WRITE_FAILED table=executed_trades event=%s order_id=%s err=%s",
+            event_for_log or "",
+            row["order_id"],
+            exc,
+        )
+
+
+def _isoformat_or_none(timestamp: Any) -> str | None:
+    if timestamp in (None, ""):
+        return None
+    if isinstance(timestamp, datetime):
+        dt = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    try:
+        parsed = pd.to_datetime(timestamp, utc=True, errors="coerce")
+    except Exception:
+        return None
+    if isinstance(parsed, pd.Series):
+        if parsed.empty:
+            return None
+        parsed = parsed.iloc[0]
+    if pd.isna(parsed):
+        return None
+    if isinstance(parsed, pd.Timestamp):
+        if parsed.tzinfo is None:
+            parsed = parsed.tz_localize(timezone.utc)
+        return parsed.tz_convert(timezone.utc).isoformat()
+    return None
+
+
+def _order_snapshot(order: Any) -> Dict[str, Any]:
+    if order is None:
+        return {}
+    fields = (
+        "id",
+        "symbol",
+        "qty",
+        "side",
+        "status",
+        "type",
+        "limit_price",
+        "filled_qty",
+        "filled_avg_price",
+        "submitted_at",
+        "created_at",
+        "client_order_id",
+        "trail_percent",
+    )
+    snapshot: Dict[str, Any] = {}
+    for field in fields:
+        value = getattr(order, field, None)
+        iso_value = _isoformat_or_none(value)
+        snapshot[field] = iso_value if iso_value is not None else value
+    return {key: value for key, value in snapshot.items() if value not in (None, "", [], {}, ())}
+
+
+def log_trade_event_db(
+    *,
+    event_type: str,
+    symbol: str,
+    qty: float,
+    order_id: str,
+    status: str,
+    entry_price: float | None = None,
+    entry_time: Any | None = None,
+    raw: Mapping[str, Any] | None = None,
+) -> None:
+    event_label = (event_type or "").upper() or "UNKNOWN"
+    try:
+        qty_value = float(qty)
+    except (TypeError, ValueError):
+        qty_value = 0.0
+    try:
+        entry_price_value = float(entry_price) if entry_price is not None else 0.0
+    except (TypeError, ValueError):
+        entry_price_value = 0.0
+    entry_time_value = entry_time or datetime.now(timezone.utc)
+    raw_payload = dict(raw or {})
+    raw_payload.setdefault("event_type", event_label)
+    row = {
+        "symbol": symbol,
+        "qty": qty_value,
+        "entry_time": entry_time_value,
+        "entry_price": entry_price_value,
+        "order_id": order_id,
+        "status": status,
+        "event_type": event_label,
+        "raw": raw_payload,
+    }
+    try:
+        db_ok = db.insert_executed_trade(row)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.warning(
+            "[WARN] DB_WRITE_FAILED table=executed_trades event=%s order_id=%s err=%s",
+            event_label,
+            order_id or "",
+            exc,
+        )
+        return
+    if db_ok:
+        LOGGER.info(
+            "[INFO] DB_WRITE_OK table=executed_trades event=%s order_id=%s",
+            event_label,
+            order_id or "",
+        )
+    else:
+        LOGGER.warning(
+            "[WARN] DB_WRITE_FAILED table=executed_trades event=%s order_id=%s err=%s",
+            event_label,
+            order_id or "",
+            "db_disabled",
+        )
 
 
 
@@ -1595,6 +1729,7 @@ class ExecutorConfig:
     ref_buffer_pct: float = _env_float("REF_BUFFER_PCT", 0.5)
     trailing_percent: float = 3.0
     cancel_after_min: int = 35
+    max_poll_secs: int = 60
     extended_hours: bool = True
     time_window: str = "auto"
     market_timezone: str = "America/New_York"
@@ -3500,22 +3635,28 @@ class TradeExecutor:
         filled_at: Any | None,
     ) -> None:
         try:
-            price_value = float(avg_price)
-        except (TypeError, ValueError):
-            price_value = 0.0
-        try:
-            record_executed_trade(
-                symbol=symbol,
-                side="buy",
-                qty=qty,
-                price=price_value,
-                status=status,
-                order_id=order_id,
-                order_type="limit",
-                timestamp=filled_at,
-            )
-        except Exception:
-            LOGGER.exception("Failed to record executed buy trade for %s", symbol)
+        price_value = float(avg_price)
+    except (TypeError, ValueError):
+        price_value = 0.0
+    try:
+        record_executed_trade(
+            symbol=symbol,
+            side="buy",
+            qty=qty,
+            price=price_value,
+            status=status,
+            order_id=order_id,
+            order_type="limit",
+            timestamp=filled_at or datetime.now(timezone.utc),
+            event_type="BUY_FILL",
+            raw={
+                "event_type": "BUY_FILL",
+                "filled_at": _isoformat_or_none(filled_at),
+                "status": status,
+            },
+        )
+    except Exception:
+        LOGGER.exception("Failed to record executed buy trade for %s", symbol)
 
     def _record_trailing_submit(
         self,
@@ -3525,6 +3666,7 @@ class TradeExecutor:
         order_id: str,
         status: str,
         submitted_at: Any | None,
+        parent_order_id: str | None,
     ) -> None:
         try:
             price_value = float(avg_price)
@@ -3535,14 +3677,22 @@ class TradeExecutor:
                 symbol=symbol,
                 side="sell",
                 qty=qty,
-                price=price_value,
-                status=status,
-                order_id=order_id,
-                order_type="trailing_stop",
-                timestamp=submitted_at,
-            )
-        except Exception:
-            LOGGER.exception("Failed to record trailing stop submit for %s", symbol)
+            price=price_value,
+            status="submitted",
+            order_id=order_id,
+            order_type="trailing_stop",
+            timestamp=submitted_at or datetime.now(timezone.utc),
+            event_type="TRAIL_SUBMIT",
+            raw={
+                "event_type": "TRAIL_SUBMIT",
+                "parent_order_id": parent_order_id,
+                "trail_percent": self.config.trailing_percent,
+                "status": status,
+                "submitted_at": _isoformat_or_none(submitted_at),
+            },
+        )
+    except Exception:
+        LOGGER.exception("Failed to record trailing stop submit for %s", symbol)
 
     def _parse_snapshot_time(self, timestamp: Any) -> Optional[datetime]:
         if timestamp in (None, ""):
@@ -3667,9 +3817,35 @@ class TradeExecutor:
             order_id=order_id or "",
             price_src=str(price_src or ""),
         )
+        submitted_at = getattr(submitted_order, "submitted_at", None)
+        if submitted_at is None:
+            submitted_at = getattr(submitted_order, "created_at", None)
+        request_payload = {
+            "limit_price": limit_price,
+            "extended_hours": bool(self.config.extended_hours),
+            "time_in_force": str(getattr(order_request, "time_in_force", "day")),
+            "qty": qty,
+        }
+        log_trade_event_db(
+            event_type="BUY_SUBMIT",
+            symbol=symbol,
+            qty=qty,
+            order_id=order_id,
+            status="submitted",
+            entry_price=limit_price,
+            entry_time=submitted_at or datetime.now(timezone.utc),
+            raw={
+                "event_type": "BUY_SUBMIT",
+                "submitted_at": _isoformat_or_none(submitted_at),
+                "request": request_payload,
+                "response": _order_snapshot(submitted_order),
+            },
+        )
 
         fill_deadline = datetime.now(timezone.utc) + timedelta(minutes=self.config.cancel_after_min)
         submit_ts = time.time()
+        max_poll_seconds = max(0, int(getattr(self.config, "max_poll_secs", 0) or 0))
+        poll_timeout_ts = submit_ts + max_poll_seconds if max_poll_seconds > 0 else None
         current_limit = limit_price
 
         filled_qty = 0.0
@@ -3751,6 +3927,30 @@ class TradeExecutor:
                 source=ref_src or "",
                 order_id=chase_order_id,
             )
+            chased_submitted_at = getattr(chased_order, "submitted_at", None) or getattr(
+                chased_order, "created_at", None
+            )
+            log_trade_event_db(
+                event_type="BUY_SUBMIT",
+                symbol=symbol,
+                qty=qty,
+                order_id=chase_order_id,
+                status="submitted",
+                entry_price=candidate_limit,
+                entry_time=chased_submitted_at or datetime.now(timezone.utc),
+                raw={
+                    "event_type": "BUY_SUBMIT",
+                    "submitted_at": _isoformat_or_none(chased_submitted_at),
+                    "request": {
+                        "limit_price": candidate_limit,
+                        "extended_hours": bool(self.config.extended_hours),
+                        "time_in_force": str(getattr(request, "time_in_force", "day")),
+                        "qty": qty,
+                        "chase_attempt": chase_attempts,
+                    },
+                    "response": _order_snapshot(chased_order),
+                },
+            )
             return chase_order_id, time.time(), candidate_limit
 
         while datetime.now(timezone.utc) < fill_deadline:
@@ -3759,6 +3959,14 @@ class TradeExecutor:
                 order = self.client.get_order_by_id(order_id)
             except Exception as exc:
                 _warn_context("alpaca.get_order", f"{order_id}: {exc}")
+                break
+            now_ts = time.time()
+            if poll_timeout_ts is not None and now_ts >= poll_timeout_ts:
+                LOGGER.warning(
+                    "[WARN] POLL_TIMEOUT order_id=%s waited_secs=%.1f",
+                    order_id,
+                    now_ts - submit_ts,
+                )
                 break
             last_order_snapshot = order
             status = str(getattr(order, "status", "")).lower()
@@ -3785,7 +3993,7 @@ class TradeExecutor:
                     status,
                     filled_at,
                 )
-                self.attach_trailing_stop(symbol, filled_qty, filled_avg_price)
+                self.attach_trailing_stop(symbol, filled_qty, filled_avg_price, order_id)
                 outcome["filled_qty"] = filled_qty
                 return outcome
             if status in {"canceled", "expired", "rejected"}:
@@ -3812,7 +4020,7 @@ class TradeExecutor:
                     status_label,
                     filled_at,
                 )
-                self.attach_trailing_stop(symbol, filled_qty, filled_avg_price)
+                self.attach_trailing_stop(symbol, filled_qty, filled_avg_price, order_id)
                 outcome["filled_qty"] = filled_qty
                 return outcome
             now_ts = time.time()
@@ -3865,7 +4073,7 @@ class TradeExecutor:
                 status_label,
                 filled_at,
             )
-            self.attach_trailing_stop(symbol, filled_qty, filled_avg_price)
+            self.attach_trailing_stop(symbol, filled_qty, filled_avg_price, order_id)
             outcome["filled_qty"] = filled_qty
         return outcome
 
@@ -3887,7 +4095,9 @@ class TradeExecutor:
         except Exception as exc:
             _warn_context("alpaca.cancel_order", f"{order_id}: {exc}")
 
-    def attach_trailing_stop(self, symbol: str, qty: float, avg_price: Optional[Any]) -> None:
+    def attach_trailing_stop(
+        self, symbol: str, qty: float, avg_price: Optional[Any], parent_order_id: str | None = None
+    ) -> None:
         if getattr(self.config, "diagnostic", False):
             self.log_info("DIAGNOSTIC_TRAIL_SKIP", symbol=symbol, qty=str(qty))
             return
@@ -3951,6 +4161,7 @@ class TradeExecutor:
             order_id,
             status,
             submitted_at,
+            parent_order_id,
         )
 
     def submit_with_retries(self, request: Any) -> Optional[Any]:
@@ -4274,6 +4485,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Minutes after regular market open to cancel unfilled orders",
     )
     parser.add_argument(
+        "--max-poll-secs",
+        type=int,
+        default=ExecutorConfig.max_poll_secs,
+        help="Maximum seconds to poll an order before emitting a timeout warning and moving on",
+    )
+    parser.add_argument(
         "--extended-hours",
         type=lambda s: s.lower() in {"1", "true", "yes", "y"},
         default=ExecutorConfig.extended_hours,
@@ -4419,6 +4636,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         max_gap_pct=args.max_gap_pct,
         ref_buffer_pct=args.ref_buffer_pct,
         cancel_after_min=args.cancel_after_min,
+        max_poll_secs=args.max_poll_secs,
         extended_hours=args.extended_hours,
         dry_run=args.dry_run,
         min_order_usd=args.min_order_usd,
