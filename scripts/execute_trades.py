@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from zoneinfo import ZoneInfo
+from dateutil.parser import isoparse
 
 NY = ZoneInfo("America/New_York")
 
@@ -562,10 +563,46 @@ def _order_snapshot(order: Any) -> Dict[str, Any]:
     )
     snapshot: Dict[str, Any] = {}
     for field in fields:
-        value = getattr(order, field, None)
+        if isinstance(order, Mapping):
+            value = order.get(field)
+        else:
+            value = getattr(order, field, None)
         iso_value = _isoformat_or_none(value)
         snapshot[field] = iso_value if iso_value is not None else value
     return {key: value for key, value in snapshot.items() if value not in (None, "", [], {}, ())}
+
+
+def alpaca_list_orders_http(lookback_days: int, limit: int = 500) -> list[dict]:
+    """
+    Return orders from Alpaca REST /v2/orders using APCA_API_BASE_URL.
+    Must work in paper mode. No alpaca-py dependency.
+    """
+    load_env()
+    base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+    api_key = os.getenv("APCA_API_KEY_ID")
+    api_secret = os.getenv("APCA_API_SECRET_KEY")
+    if not api_key or not api_secret:
+        raise ValueError("missing APCA_API_KEY_ID or APCA_API_SECRET_KEY")
+    url = f"{(base_url or '').rstrip('/')}/v2/orders"
+    after_iso = (datetime.now(timezone.utc) - timedelta(days=max(0, lookback_days))).isoformat()
+    params = {
+        "status": "all",
+        "after": after_iso,
+        "direction": "desc",
+        "limit": limit,
+        "nested": "true",
+    }
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+    response = requests.get(url, headers=headers, params=params, timeout=15)
+    if response.status_code != 200:
+        response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, list):
+        return payload
+    return []
 
 
 def log_trade_event_db(
@@ -2444,13 +2481,43 @@ class TradeExecutor:
         after_time = now_utc - timedelta(days=lookback_days)
         decorate_window_days = min(2, max(1, lookback_days or 0))
         decorate_after_time = now_utc - timedelta(days=decorate_window_days)
-        orders_client_holder: Dict[str, Any] = {
-            "client": self.client if hasattr(self.client, "get_orders") else None
-        }
+        orders_cache: Dict[str, Any] = {"orders": None, "error": False}
+        after_iso = after_time.isoformat()
+
+        def _fetch_orders() -> list[dict]:
+            cached = orders_cache.get("orders")
+            if cached is not None:
+                return cached
+            if orders_cache.get("error"):
+                return []
+            try:
+                orders = alpaca_list_orders_http(lookback_days=lookback_days, limit=500)
+                orders_cache["orders"] = orders or []
+                LOGGER.info(
+                    "[INFO] RECONCILE_FETCH after=%s fetched_orders=%s",
+                    after_iso,
+                    len(orders_cache["orders"]),
+                )
+                return orders_cache["orders"]
+            except requests.HTTPError as exc:
+                response = getattr(exc, "response", None)
+                status = getattr(response, "status_code", "ERR")
+                err_text = getattr(response, "text", None) or str(exc)
+                LOGGER.warning(
+                    "[WARN] RECONCILE_ALPACA_FAIL action=http_orders status=%s err=%s",
+                    status,
+                    err_text,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "[WARN] RECONCILE_ALPACA_FAIL action=http_orders status=ERR err=%s",
+                    exc,
+                )
+            orders_cache["error"] = True
+            orders_cache["orders"] = []
+            return []
 
         def _latest_filled_sell_order(symbol: str) -> tuple[Any | None, datetime | None, Dict[str, Any]]:
-            after_dt = now_utc - timedelta(days=lookback_days)
-            after_iso = after_dt.isoformat()
             stats: Dict[str, Any] = {
                 "after_iso": after_iso,
                 "fetched_orders": 0,
@@ -2459,65 +2526,31 @@ class TradeExecutor:
                 "orders_error": False,
             }
 
-            tc: Any = self.client if hasattr(self.client, "get_orders") else None
-            if tc is None:
-                tc = orders_client_holder.get("client")
-            if tc is None:
-                tc = get_trading_client()
-                orders_client_holder["client"] = tc
-
-            if tc is None:
-                LOGGER.warning("RECONCILE_ALPACA_FAIL action=get_trading_client err=unavailable")
-                stats["orders_error"] = True
-                return None, None, stats
-
-            if not hasattr(tc, "get_orders"):
-                LOGGER.warning("[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=client_unavailable")
-                stats["orders_error"] = True
-                return None, None, stats
-            try:
-                req = GetOrdersRequest(
-                    status=getattr(QueryOrderStatus, "ALL", None),
-                    after=after_dt,
-                    direction=getattr(OrderDirection, "DESC", None),
-                    limit=500,
-                )
-                log_info(
-                    "alpaca.get_orders",
-                    status=getattr(req, "status", None),
-                    symbol=symbol,
-                    direction=getattr(req, "direction", None),
-                    limit=getattr(req, "limit", None),
-                    after=getattr(req, "after", None),
-                )
-                orders = tc.get_orders(req)
-            except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning(
-                    "[WARN] RECONCILE_ALPACA_FAIL action=get_orders err=%s err_type=%s",
-                    exc,
-                    type(exc).__name__,
-                )
-                stats["orders_error"] = True
-                orders = []
-
+            orders = _fetch_orders()
+            stats["orders_error"] = bool(orders_cache.get("error"))
             stats["fetched_orders"] = len(orders or [])
             symbol_upper = symbol.upper()
             filled_sells: list[tuple[Any, datetime]] = []
 
             for order in orders or []:
-                if str(getattr(order, "symbol", "")).upper() != symbol_upper:
+                if str(order.get("symbol", "")).upper() != symbol_upper:
                     continue
-                side_value = str(getattr(order, "side", "")).lower()
+                side_value = str(order.get("side", "")).lower()
                 if side_value != "sell":
                     continue
                 stats["symbol_sells"] += 1
-                status_value = str(getattr(order, "status", "")).lower()
-                filled_at_value = getattr(order, "filled_at", None)
+                status_value = str(order.get("status", "")).lower()
+                filled_at_value = order.get("filled_at")
                 if status_value != "filled" or filled_at_value is None:
                     continue
-                filled_at = db.normalize_ts(filled_at_value)
-                if filled_at is None:
+                try:
+                    filled_at = isoparse(str(filled_at_value))
+                except Exception:
                     continue
+                if filled_at.tzinfo is None:
+                    filled_at = filled_at.replace(tzinfo=timezone.utc)
+                else:
+                    filled_at = filled_at.astimezone(timezone.utc)
                 filled_sells.append((order, filled_at))
 
             stats["filled_sells"] = len(filled_sells)
@@ -2533,7 +2566,7 @@ class TradeExecutor:
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=open_trades err=%s", exc)
             open_trades = []
         LOGGER.info("[INFO] RECONCILE_START open_trades=%s", len(open_trades))
-        if self.client is None or not hasattr(self.client, "get_orders"):
+        if self.client is None:
             tc = get_trading_client()
             if tc is None:
                 LOGGER.warning("RECONCILE_ALPACA_FAIL action=get_trading_client err=unavailable")
@@ -2607,56 +2640,50 @@ class TradeExecutor:
             for symbol, trades in open_by_symbol.items():
                 if not trades:
                     continue
-                request_kwargs: Dict[str, Any] = {"symbols": [symbol], "after": after_time.isoformat()}
-                status_closed = getattr(QueryOrderStatus, "CLOSED", None) or getattr(QueryOrderStatus, "closed", None)
-                if status_closed is not None:
-                    request_kwargs["status"] = status_closed
-                side_sell = getattr(OrderSide, "SELL", None) or getattr(OrderSide, "Sell", None)
-                if side_sell is not None:
-                    request_kwargs["side"] = side_sell
-                try:
-                    request = GetOrdersRequest(**{k: v for k, v in request_kwargs.items() if v is not None})
-                except Exception:
-                    request = GetOrdersRequest()
-                try:
-                    log_info("alpaca.get_orders", status=getattr(request, "status", None), symbol=symbol)
-                    orders = self.client.get_orders(request)
-                except Exception as exc:  # pragma: no cover - defensive guard
-                    LOGGER.warning(
-                        "[WARN] RECONCILE_ALPACA_FAIL symbol=%s err=%s err_type=%s",
-                        symbol,
-                        exc,
-                        type(exc).__name__,
-                    )
-                    continue
-
-                for order in orders or []:
-                    side_value = str(getattr(order, "side", "")).lower()
-                    status_value = str(getattr(order, "status", "")).lower()
-                    if side_value != "sell" or status_value != "filled":
+                orders = _fetch_orders()
+                symbol_orders: list[tuple[Mapping[str, Any], datetime]] = []
+                for order in orders:
+                    if str(order.get("symbol", "")).upper() != symbol:
                         continue
+                    if str(order.get("side", "")).lower() != "sell":
+                        continue
+                    if str(order.get("status", "")).lower() != "filled":
+                        continue
+                    filled_at_raw = order.get("filled_at")
+                    if filled_at_raw in (None, ""):
+                        continue
+                    try:
+                        filled_at_dt = isoparse(str(filled_at_raw))
+                    except Exception:
+                        continue
+                    if filled_at_dt.tzinfo is None:
+                        filled_at_dt = filled_at_dt.replace(tzinfo=timezone.utc)
+                    else:
+                        filled_at_dt = filled_at_dt.astimezone(timezone.utc)
+                    symbol_orders.append((order, filled_at_dt))
+                symbol_orders.sort(key=lambda item: item[1], reverse=True)
+
+                for order, filled_at_dt in symbol_orders:
                     if not trades:
                         break
                     trade = trades.pop(0)
                     trade_id = trade.get("trade_id")
-                    exit_time_raw = getattr(order, "filled_at", None) or datetime.now(timezone.utc)
-                    exit_price_raw = getattr(order, "filled_avg_price", None)
+                    exit_time_raw = filled_at_dt or datetime.now(timezone.utc)
+                    exit_price_raw = order.get("filled_avg_price")
                     try:
                         exit_price = float(exit_price_raw) if exit_price_raw is not None else None
                     except (TypeError, ValueError):
                         exit_price = None
-                    order_type = str(getattr(order, "type", "")).lower()
-                    order_class = str(getattr(order, "order_class", "")).lower()
-                    exit_reason = "TRAIL_STOP" if "trailing" in order_type or "trailing" in order_class else "SELL_FILL"
-                    order_id = str(getattr(order, "id", "") or getattr(order, "order_id", ""))
+                    exit_reason = "TRAIL_STOP" if order.get("type") == "trailing_stop" else "SELL_FILL"
+                    order_id = str(order.get("id") or order.get("order_id") or "")
                     try:
                         db.insert_order_event(
                             engine=engine,
                             event_type="SELL_FILL",
                             symbol=symbol,
-                            qty=getattr(order, "filled_qty", getattr(order, "qty", None)),
+                            qty=order.get("filled_qty", order.get("qty")),
                             order_id=order_id,
-                            status=status_value,
+                            status=str(order.get("status", "")),
                             event_time=exit_time_raw,
                             raw=_order_snapshot(order),
                         )
@@ -2727,23 +2754,23 @@ class TradeExecutor:
                 continue
 
             exit_time_raw = filled_at
-            exit_price_raw = getattr(order, "filled_avg_price", None)
+            exit_price_raw = order.get("filled_avg_price")
             try:
                 exit_price = float(exit_price_raw) if exit_price_raw is not None else None
             except (TypeError, ValueError):
                 exit_price = None
-            order_type = str(getattr(order, "type", "")).lower()
+            order_type = str(order.get("type", "")).lower()
             exit_reason = "TRAIL_STOP" if order_type == "trailing_stop" else "SELL_FILL"
-            order_id = str(getattr(order, "id", "") or getattr(order, "order_id", ""))
+            order_id = str(order.get("id") or order.get("order_id") or "")
 
             try:
                 db.insert_order_event(
                     engine=engine,
                     event_type="SELL_FILL",
                     symbol=symbol,
-                    qty=getattr(order, "filled_qty", getattr(order, "qty", None)),
+                    qty=order.get("filled_qty", order.get("qty")),
                     order_id=order_id,
-                    status=str(getattr(order, "status", "")),
+                    status=str(order.get("status", "")),
                     event_time=exit_time_raw,
                     raw=_order_snapshot(order),
                 )
