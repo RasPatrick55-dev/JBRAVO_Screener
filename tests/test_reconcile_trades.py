@@ -81,7 +81,7 @@ def test_reconcile_closes_open_trades(monkeypatch):
         def __init__(self, orders):
             self.orders = orders
 
-        def get_orders(self, request):
+        def get_orders(self, **request):
             self.request = request
             return self.orders
 
@@ -156,7 +156,7 @@ def test_reconcile_decorates_without_open_trades(monkeypatch):
         def __init__(self, orders):
             self.orders = orders
 
-        def get_orders(self, request):
+        def get_orders(self, **request):
             self.request = request
             return self.orders
 
