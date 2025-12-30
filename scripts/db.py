@@ -463,31 +463,58 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
         return False
 
 
-def insert_order_event(event: Mapping[str, Any] | None) -> bool:
-    if not event:
-        return False
-    engine = _engine_or_none()
-    event_label = (event.get("event_type") or "").upper()
-    order_id = event.get("order_id")
-    if engine is None:
+def insert_order_event(
+    event: Mapping[str, Any] | None = None,
+    *,
+    engine: Optional[Engine] = None,
+    event_type: str | None = None,
+    symbol: str | None = None,
+    qty: Any | None = None,
+    order_id: str | None = None,
+    status: str | None = None,
+    event_time: Any | None = None,
+    raw: Any | None = None,
+) -> bool:
+    if event is None:
+        event = {}
+    payload = dict(event)
+    if event_type is not None:
+        payload.setdefault("event_type", event_type)
+    if symbol is not None:
+        payload.setdefault("symbol", symbol)
+    if qty is not None:
+        payload.setdefault("qty", qty)
+    if order_id is not None:
+        payload.setdefault("order_id", order_id)
+    if status is not None:
+        payload.setdefault("status", status)
+    if event_time is not None:
+        payload.setdefault("event_time", event_time)
+    payload.setdefault("event_type", "UNKNOWN")
+
+    db_engine = engine or _engine_or_none()
+    event_label = (payload.get("event_type") or "").upper()
+    order_id_value = payload.get("order_id")
+    if db_engine is None:
         logger.warning(
             "[WARN] DB_WRITE_FAILED table=order_events event=%s order_id=%s err=%s",
             event_label,
-            order_id or "",
+            order_id_value or "",
             "disabled",
         )
         _log_write_result(False, "order_events", 0, RuntimeError("db_disabled"))
         return False
 
-    event_time = normalize_ts(event.get("event_time"), field="event_time") or datetime.now(timezone.utc)
-    payload = {
-        "symbol": (event.get("symbol") or "").upper(),
-        "qty": event.get("qty"),
-        "order_id": order_id,
-        "status": event.get("status"),
-        "event_type": event.get("event_type") or "UNKNOWN",
-        "event_time": event_time,
-        "raw": _json_dumps_or_none(event),
+    normalized_event_time = normalize_ts(payload.get("event_time"), field="event_time") or datetime.now(timezone.utc)
+    raw_payload = raw if raw is not None else payload
+    stmt_payload = {
+        "symbol": (payload.get("symbol") or "").upper(),
+        "qty": payload.get("qty"),
+        "order_id": order_id_value,
+        "status": payload.get("status"),
+        "event_type": payload.get("event_type") or "UNKNOWN",
+        "event_time": normalized_event_time,
+        "raw": _json_dumps_or_none(raw_payload),
     }
     stmt = text(
         """
@@ -500,18 +527,125 @@ def insert_order_event(event: Mapping[str, Any] | None) -> bool:
         """
     )
     try:
-        with engine.begin() as connection:
-            connection.execute(stmt, payload)
+        with db_engine.begin() as connection:
+            connection.execute(stmt, stmt_payload)
         _log_write_result(True, "order_events", 1)
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning(
             "[WARN] DB_WRITE_FAILED table=order_events event=%s order_id=%s err=%s",
             event_label,
-            order_id or "",
+            order_id_value or "",
             exc,
         )
         _log_write_result(False, "order_events", 0, exc)
+        return False
+
+
+def get_open_trades(engine: Optional[Engine] = None, limit: int = 200) -> list[dict[str, Any]]:
+    db_engine = engine or _engine_or_none()
+    if db_engine is None:
+        return []
+    limit = max(1, int(limit or 0))
+    stmt = text(
+        """
+        SELECT trade_id, symbol, qty, entry_time, entry_price, entry_order_id
+        FROM trades
+        WHERE status='OPEN'
+        ORDER BY entry_time DESC NULLS LAST, trade_id DESC
+        LIMIT :limit
+        """
+    )
+    try:
+        with db_engine.connect() as connection:
+            rows = connection.execute(stmt, {"limit": limit}).mappings().all()
+            return [dict(row) for row in rows]
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
+        return []
+
+
+def close_trade(
+    engine: Optional[Engine],
+    trade_id: Any,
+    exit_order_id: str | None,
+    exit_time: Any,
+    exit_price: Any,
+    exit_reason: str | None,
+) -> bool:
+    db_engine = engine or _engine_or_none()
+    if db_engine is None:
+        logger.warning(
+            "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
+            trade_id,
+            exit_order_id or "",
+            "disabled",
+        )
+        return False
+
+    normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
+    try:
+        with db_engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT qty, entry_price
+                    FROM trades
+                    WHERE trade_id=:trade_id
+                    """
+                ),
+                {"trade_id": trade_id},
+            ).fetchone()
+            if row is None:
+                logger.warning(
+                    "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                    trade_id,
+                    exit_order_id or "",
+                    "trade_not_found",
+                )
+                return False
+            qty_value = row[0]
+            entry_price_value = row[1]
+            realized_pnl = None
+            try:
+                if exit_price is not None and entry_price_value is not None:
+                    realized_pnl = float(exit_price) - float(entry_price_value)
+                    if qty_value is not None:
+                        realized_pnl *= float(qty_value)
+            except Exception:
+                realized_pnl = None
+            connection.execute(
+                text(
+                    """
+                    UPDATE trades
+                    SET exit_order_id=:exit_order_id,
+                        exit_time=:exit_time,
+                        exit_price=:exit_price,
+                        realized_pnl=:realized_pnl,
+                        exit_reason=:exit_reason,
+                        status='CLOSED',
+                        updated_at=now()
+                    WHERE trade_id=:trade_id
+                    """
+                ),
+                {
+                    "exit_order_id": exit_order_id,
+                    "exit_time": normalized_exit_time,
+                    "exit_price": exit_price,
+                    "realized_pnl": realized_pnl,
+                    "exit_reason": exit_reason,
+                    "trade_id": trade_id,
+                },
+            )
+        _log_write_result(True, "trades", 1)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
+            trade_id,
+            exit_order_id or "",
+            exc,
+        )
         return False
 
 
