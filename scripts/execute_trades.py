@@ -3635,28 +3635,39 @@ class TradeExecutor:
         filled_at: Any | None,
     ) -> None:
         try:
-        price_value = float(avg_price)
-    except (TypeError, ValueError):
-        price_value = 0.0
-    try:
-        record_executed_trade(
-            symbol=symbol,
-            side="buy",
-            qty=qty,
-            price=price_value,
-            status=status,
-            order_id=order_id,
-            order_type="limit",
-            timestamp=filled_at or datetime.now(timezone.utc),
-            event_type="BUY_FILL",
-            raw={
-                "event_type": "BUY_FILL",
-                "filled_at": _isoformat_or_none(filled_at),
-                "status": status,
-            },
-        )
-    except Exception:
-        LOGGER.exception("Failed to record executed buy trade for %s", symbol)
+            price_value = float(avg_price)
+        except (TypeError, ValueError):
+            price_value = 0.0
+        try:
+            record_executed_trade(
+                symbol=symbol,
+                side="buy",
+                qty=qty,
+                price=price_value,
+                status=status,
+                order_id=order_id,
+                order_type="limit",
+                timestamp=filled_at or datetime.now(timezone.utc),
+                event_type="BUY_FILL",
+                raw={
+                    "event_type": "BUY_FILL",
+                    "filled_at": _isoformat_or_none(filled_at),
+                    "status": status,
+                },
+            )
+            LOGGER.info(
+                "DB_WRITE_OK table=executed_trades event=BUY_FILL order_id=%s symbol=%s",
+                order_id,
+                symbol,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "DB_WRITE_FAILED table=executed_trades event=BUY_FILL order_id=%s symbol=%s err=%s",
+                order_id,
+                symbol,
+                exc,
+            )
+            LOGGER.exception("Failed to record executed buy trade for %s", symbol)
 
     def _record_trailing_submit(
         self,
@@ -3677,22 +3688,22 @@ class TradeExecutor:
                 symbol=symbol,
                 side="sell",
                 qty=qty,
-            price=price_value,
-            status="submitted",
-            order_id=order_id,
-            order_type="trailing_stop",
-            timestamp=submitted_at or datetime.now(timezone.utc),
-            event_type="TRAIL_SUBMIT",
-            raw={
-                "event_type": "TRAIL_SUBMIT",
-                "parent_order_id": parent_order_id,
-                "trail_percent": self.config.trailing_percent,
-                "status": status,
-                "submitted_at": _isoformat_or_none(submitted_at),
-            },
-        )
-    except Exception:
-        LOGGER.exception("Failed to record trailing stop submit for %s", symbol)
+                price=price_value,
+                status="submitted",
+                order_id=order_id,
+                order_type="trailing_stop",
+                timestamp=submitted_at or datetime.now(timezone.utc),
+                event_type="TRAIL_SUBMIT",
+                raw={
+                    "event_type": "TRAIL_SUBMIT",
+                    "parent_order_id": parent_order_id,
+                    "trail_percent": self.config.trailing_percent,
+                    "status": status,
+                    "submitted_at": _isoformat_or_none(submitted_at),
+                },
+            )
+        except Exception:
+            LOGGER.exception("Failed to record trailing stop submit for %s", symbol)
 
     def _parse_snapshot_time(self, timestamp: Any) -> Optional[datetime]:
         if timestamp in (None, ""):
