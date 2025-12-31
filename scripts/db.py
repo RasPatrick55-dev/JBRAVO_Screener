@@ -350,12 +350,12 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
         logger.warning("[WARN] DB_INGEST_FAILED table=screener_candidates err=%s", exc)
 
 
-def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> None:
+def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> bool:
     if df_results is None or df_results.empty:
-        return
+        return False
     engine = _engine_or_none()
     if engine is None:
-        return
+        return False
 
     rows: list[dict[str, Any]] = []
     for _, row in df_results.iterrows():
@@ -398,8 +398,10 @@ def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> N
         with engine.begin() as connection:
             connection.execute(stmt, rows)
         _log_write_result(True, "backtest_results", len(rows))
+        return True
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "backtest_results", 0, exc)
+        return False
 
 
 def upsert_metrics_daily(run_date: Any, summary_metrics_dict: Mapping[str, Any] | None) -> None:
