@@ -52,6 +52,7 @@ from scripts.trade_performance import (
     summarize_by_window,
 )
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
+from dashboards.db_client import db_query_df
 
 # Base directory of the project (parent of this file)
 BASE_DIR = os.environ.get(
@@ -75,7 +76,6 @@ metrics_summary_path = os.path.join(BASE_DIR, "data", "metrics_summary.csv")
 executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
 historical_candidates_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
 execute_metrics_path = os.path.join(BASE_DIR, "data", "execute_metrics.json")
-account_equity_path = os.path.join(BASE_DIR, "data", "account_equity.csv")
 
 # Absolute paths to log files for the Screener tab
 screener_log_dir = os.path.join(BASE_DIR, "logs")
@@ -640,12 +640,285 @@ def load_executed_trades() -> tuple[pd.DataFrame, dbc.Alert | None]:
     return _safe_csv_with_message(Path(executed_trades_path))
 
 
-def load_account_equity() -> tuple[pd.DataFrame, dbc.Alert | None]:
-    df, alert = _safe_csv_with_message(Path(account_equity_path), required=["timestamp", "equity"])
-    if alert is None and not df.empty and "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
-        df = df.dropna(subset=["timestamp"])
-    return df, alert
+_ACCOUNT_LATEST_SQL = """
+SELECT taken_at, account_id, status, equity, cash, buying_power, portfolio_value
+FROM v_account_latest
+LIMIT 1
+"""
+
+_ACCOUNT_SERIES_SQL = """
+SELECT taken_at, equity, cash, buying_power, portfolio_value, status
+FROM v_account_equity_curve
+WHERE taken_at >= (NOW() AT TIME ZONE 'utc') - INTERVAL '7 days'
+ORDER BY taken_at DESC
+LIMIT 500
+"""
+
+_ACCOUNT_SERIES_FALLBACK_SQL = """
+SELECT taken_at, equity, cash, buying_power, portfolio_value, status
+FROM alpaca_account_snapshots
+WHERE taken_at >= (NOW() AT TIME ZONE 'utc') - INTERVAL '7 days'
+ORDER BY taken_at DESC
+LIMIT 500
+"""
+
+_ACCOUNT_RECENT_SQL = """
+SELECT taken_at, equity, cash, buying_power, status
+FROM alpaca_account_snapshots
+ORDER BY taken_at DESC
+LIMIT 25
+"""
+
+
+def _account_query_with_fallback(
+    primary_sql: str, fallback_sql: str | None = None
+) -> tuple[pd.DataFrame, list[dbc.Alert]]:
+    alerts: list[dbc.Alert] = []
+    df, alert = db_query_df(primary_sql)
+    if alert:
+        alerts.append(alert)
+    if df is not None:
+        return df, alerts
+    if fallback_sql:
+        fallback_df, fallback_alert = db_query_df(fallback_sql)
+        if fallback_alert:
+            alerts.append(fallback_alert)
+        if fallback_df is not None:
+            alerts.append(
+                dbc.Alert(
+                    "Using alpaca_account_snapshots as fallback for account history.",
+                    color="info",
+                    className="mb-3",
+                )
+            )
+            return fallback_df, alerts
+    return pd.DataFrame(), alerts
+
+
+def _normalize_account_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    frame = df.copy()
+    frame["taken_at"] = pd.to_datetime(frame["taken_at"], utc=True, errors="coerce")
+    frame = frame.dropna(subset=["taken_at"])
+
+    numeric_cols = ["equity", "cash", "buying_power", "portfolio_value"]
+    for col in numeric_cols:
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    if "status" in frame.columns:
+        frame["status"] = frame["status"].astype(str)
+    return frame
+
+
+def _load_account_latest() -> tuple[pd.DataFrame, list[dbc.Alert]]:
+    latest_df, alerts = _account_query_with_fallback(_ACCOUNT_LATEST_SQL)
+    normalized = _normalize_account_frame(latest_df).head(1)
+    return normalized, alerts
+
+
+def _load_account_series() -> tuple[pd.DataFrame, list[dbc.Alert]]:
+    series_df, alerts = _account_query_with_fallback(
+        _ACCOUNT_SERIES_SQL, _ACCOUNT_SERIES_FALLBACK_SQL
+    )
+    normalized = _normalize_account_frame(series_df).sort_values("taken_at")
+    return normalized, alerts
+
+
+def _load_account_recent() -> tuple[pd.DataFrame, list[dbc.Alert]]:
+    recent_df, alert = db_query_df(_ACCOUNT_RECENT_SQL)
+    alerts = [alert] if alert else []
+    normalized = _normalize_account_frame(recent_df)
+    return normalized, alerts
+
+
+def _format_currency(value: Any) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    return f"${numeric:,.2f}"
+
+
+def _timestamp_badges(taken_at: pd.Timestamp | None) -> list[dbc.Badge]:
+    if taken_at is None or not isinstance(taken_at, pd.Timestamp):
+        return []
+    ny_tz = pytz.timezone("America/New_York")
+    ny_time = taken_at.tz_convert(ny_tz)
+    return [
+        dbc.Badge(f"UTC: {taken_at.strftime('%Y-%m-%d %H:%M:%S')}", color="secondary", className="me-2"),
+        dbc.Badge(f"NY: {ny_time.strftime('%Y-%m-%d %H:%M:%S')}", color="info"),
+    ]
+
+
+def _account_kpi_card(title: str, value: Any, color: str = "secondary") -> dbc.Col:
+    return dbc.Col(
+        dbc.Card(
+            [
+                dbc.CardHeader(title),
+                dbc.CardBody(html.H4(_format_currency(value), className="card-title")),
+            ],
+            className="mb-3",
+            color=color,
+            inverse=False,
+        ),
+        md=2,
+    )
+
+
+def _account_status_badge(status: str | None) -> dbc.Badge | None:
+    if not status:
+        return None
+    status_text = str(status).upper()
+    color = "success" if status_text == "ACTIVE" else "warning"
+    return dbc.Badge(f"Status: {status_text}", color=color, className="me-2")
+
+
+def _account_timeseries_fig(df: pd.DataFrame, y: str, title: str) -> dcc.Graph:
+    if df.empty or y not in df.columns:
+        return dcc.Graph(
+            figure=go.Figure(layout=go.Layout(template="plotly_dark", title=f"No {title} data"))
+        )
+    fig = px.line(df, x="taken_at", y=y, title=title, template="plotly_dark")
+    fig.update_layout(margin=dict(l=10, r=10, t=40, b=10))
+    return dcc.Graph(figure=fig)
+
+
+def _account_drawdown_fig(df: pd.DataFrame) -> dcc.Graph:
+    if df.empty or "equity" not in df.columns:
+        return dcc.Graph(
+            figure=go.Figure(layout=go.Layout(template="plotly_dark", title="Drawdown (equity)"))
+        )
+    equity = df["equity"].fillna(method="ffill")
+    running_max = equity.cummax()
+    with pd.option_context("mode.use_inf_as_na", True):
+        drawdown = (equity - running_max) / running_max * 100
+    fig = px.area(
+        pd.DataFrame({"taken_at": df["taken_at"], "drawdown_pct": drawdown}),
+        x="taken_at",
+        y="drawdown_pct",
+        title="Drawdown (from equity)",
+        template="plotly_dark",
+    )
+    fig.update_yaxes(ticksuffix="%")
+    fig.update_layout(margin=dict(l=10, r=10, t=40, b=10))
+    return dcc.Graph(figure=fig)
+
+
+def _account_table(df: pd.DataFrame) -> dash_table.DataTable:
+    display_df = df.copy()
+    display_df["taken_at"] = display_df["taken_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    columns = [
+        {"name": "Taken At (UTC)", "id": "taken_at"},
+        {"name": "Equity", "id": "equity", "type": "numeric", "format": Format(precision=2, scheme=Format.Scheme.fixed)},
+        {"name": "Cash", "id": "cash", "type": "numeric", "format": Format(precision=2, scheme=Format.Scheme.fixed)},
+        {"name": "Buying Power", "id": "buying_power", "type": "numeric", "format": Format(precision=2, scheme=Format.Scheme.fixed)},
+        {"name": "Status", "id": "status"},
+    ]
+    return dash_table.DataTable(
+        data=display_df.to_dict("records"),
+        columns=columns,
+        style_table={"overflowX": "auto"},
+        style_header={"backgroundColor": "#343a40", "color": "#fff"},
+        style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+    )
+
+
+def render_account_tab() -> dbc.Container:
+    alerts: list[dbc.Alert] = []
+    latest_df, latest_alerts = _load_account_latest()
+    series_df, series_alerts = _load_account_series()
+    recent_df, recent_alerts = _load_account_recent()
+
+    alerts.extend(latest_alerts)
+    alerts.extend(series_alerts)
+    alerts.extend(recent_alerts)
+
+    if alerts:
+        deduped = []
+        seen: set[str] = set()
+        for alert in alerts:
+            content = getattr(alert, "children", "")
+            key = str(content)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(alert)
+        alerts = deduped
+
+    if series_df.empty and recent_df.empty and latest_df.empty:
+        empty_state = dbc.Alert(
+            "No account snapshots yet. Run python -m scripts.fetch_account_snapshot or wait for the scheduled task.",
+            color="info",
+            className="mb-3",
+        )
+        return dbc.Container(alerts + [empty_state], fluid=True)
+
+    latest_row = latest_df.iloc[0] if not latest_df.empty else None
+    taken_at = latest_row["taken_at"] if latest_row is not None else None
+
+    kpi_cards: list[dbc.Col] = []
+    if latest_row is not None:
+        kpi_cards.extend(
+            [
+                _account_kpi_card("Equity", latest_row.get("equity"), color="primary"),
+                _account_kpi_card("Cash", latest_row.get("cash"), color="info"),
+                _account_kpi_card("Buying Power", latest_row.get("buying_power"), color="secondary"),
+            ]
+        )
+        if "portfolio_value" in latest_row and pd.notna(latest_row["portfolio_value"]):
+            kpi_cards.append(_account_kpi_card("Portfolio Value", latest_row.get("portfolio_value"), color="success"))
+
+    status_badge = _account_status_badge(latest_row.get("status") if latest_row is not None else None)
+    timestamp_badges = _timestamp_badges(taken_at if isinstance(taken_at, pd.Timestamp) else None)
+
+    series_section: list[Any] = []
+    if not series_df.empty:
+        logger.info("[INFO] Account tab loaded %s points", len(series_df))
+        series_section = [
+            dbc.Row(
+                [
+                    dbc.Col(_account_timeseries_fig(series_df, "equity", "Equity (last 7 days)"), md=4),
+                    dbc.Col(_account_timeseries_fig(series_df, "cash", "Cash (last 7 days)"), md=4),
+                    dbc.Col(_account_timeseries_fig(series_df, "buying_power", "Buying Power (last 7 days)"), md=4),
+                ],
+                className="mb-3",
+            ),
+            dbc.Row([dbc.Col(_account_drawdown_fig(series_df), md=12)], className="mb-3"),
+        ]
+
+    table_section = []
+    if not recent_df.empty:
+        table_section.append(html.H5("Recent Snapshots (latest 25)", className="mt-3"))
+        table_section.append(_account_table(recent_df))
+
+    header = dbc.Row(
+        [
+            dbc.Col(html.H4("Account Overview", className="mb-2 text-light"), width="auto"),
+            dbc.Col(
+                html.Div(
+                    [badge for badge in [status_badge, *timestamp_badges] if badge],
+                    className="d-flex align-items-center",
+                ),
+                width=True,
+            ),
+        ],
+        className="mb-2",
+    )
+
+    kpi_row = dbc.Row(kpi_cards, className="mb-2") if kpi_cards else html.Div()
+
+    return dbc.Container(
+        alerts
+        + [
+            header,
+            kpi_row,
+            *series_section,
+            *table_section,
+        ],
+        fluid=True,
+    )
 
 
 def load_last_premarket_run() -> tuple[dict[str, Any], dbc.Alert | None]:
@@ -3528,149 +3801,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         return dbc.Container(components, fluid=True)
 
     elif tab == "tab-account":
-        paper_mode = _is_paper_mode()
-        components: list[Any] = []
-        alerts: list[Any] = []
-
-        trades_df: pd.DataFrame | None = None
-        if not paper_mode:
-            trades_df, trade_alert = load_csv(
-                trades_log_real_path,
-                ["symbol", "entry_price", "exit_price", "qty", "net_pnl"],
-                alert_prefix="Real trades",
-            )
-            if trade_alert:
-                alerts.append(trade_alert)
-
-        equity_df, equity_alert = load_account_equity()
-        if equity_alert:
-            alerts.append(equity_alert)
-
-        if alerts:
-            components.extend(alerts)
-
-        latest_cash = None
-        latest_bp = None
-        if equity_df is not None and not equity_df.empty:
-            if "timestamp" not in equity_df.columns and "date" in equity_df.columns:
-                equity_df["timestamp"] = equity_df["date"]
-            if "cash" in equity_df.columns:
-                latest_cash = pd.to_numeric(equity_df["cash"], errors="coerce").dropna()
-                latest_cash = latest_cash.iloc[-1] if not latest_cash.empty else None
-            if "buying_power" in equity_df.columns:
-                latest_bp = pd.to_numeric(
-                    equity_df["buying_power"], errors="coerce"
-                ).dropna()
-                latest_bp = latest_bp.iloc[-1] if not latest_bp.empty else None
-            equity_fig = px.line(
-                equity_df,
-                x="timestamp",
-                y="equity",
-                title="Account Equity Over Time",
-                template="plotly_dark",
-            )
-            last_updated = format_time(get_file_mtime(account_equity_path))
-            graphs: list[dbc.Col] = [dbc.Col(dcc.Graph(figure=equity_fig), md=6)]
-        else:
-            graphs = []
-            last_updated = None
-
-        if latest_cash is not None or latest_bp is not None:
-            kpi_cards = []
-            if latest_cash is not None:
-                kpi_cards.append(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Cash"),
-                            dbc.CardBody(f"${latest_cash:,.2f}"),
-                        ],
-                        className="mb-3",
-                    )
-                )
-            if latest_bp is not None:
-                kpi_cards.append(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Buying Power"),
-                            dbc.CardBody(f"${latest_bp:,.2f}"),
-                        ],
-                        className="mb-3",
-                    )
-                )
-            graphs.insert(0, dbc.Col(kpi_cards, md=3))
-
-        monthly_fig = None
-        top_trades_table = None
-        if not paper_mode and trades_df is not None and not trades_df.empty:
-            exit_times = None
-            if "exit_time" in trades_df.columns:
-                exit_times = pd.to_datetime(trades_df["exit_time"], errors="coerce")
-                trades_df = trades_df.assign(exit_time=exit_times)
-            trades_df["pct_profit"] = (
-                trades_df["net_pnl"]
-                / (trades_df["entry_price"] * trades_df["qty"])
-            ) * 100
-            trades_df["pct_profit"].replace([np.inf, -np.inf], 0, inplace=True)
-            top_trades = trades_df[trades_df["net_pnl"] > 0].nlargest(
-                10, "pct_profit"
-            )
-
-            if exit_times is not None:
-                monthly_series = trades_df.dropna(subset=["exit_time"]).copy()
-                if not monthly_series.empty:
-                    monthly_series["month"] = (
-                        monthly_series["exit_time"].dt.to_period("M").astype(str)
-                    )
-                    monthly_pnl = (
-                        monthly_series.groupby("month")["net_pnl"].sum().reset_index()
-                    )
-                    if not monthly_pnl.empty:
-                        monthly_fig = px.bar(
-                            monthly_pnl,
-                            x="month",
-                            y="net_pnl",
-                            title="Monthly Profit/Loss",
-                            template="plotly_dark",
-                        )
-
-            top_trades_table = dash_table.DataTable(
-                data=top_trades.to_dict("records"),
-                columns=[
-                    {"name": i.title(), "id": i}
-                    for i in [
-                        "symbol",
-                        "entry_price",
-                        "exit_price",
-                        "pct_profit",
-                        "net_pnl",
-                    ]
-                ],
-                style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
-                style_data_conditional=[
-                    {"if": {"filter_query": "{net_pnl} > 0"}, "color": "green"},
-                    {"if": {"filter_query": "{net_pnl} < 0"}, "color": "red"},
-                ],
-            )
-
-        if last_updated:
-            components.append(html.Div(f"Last Updated: {last_updated}"))
-        if graphs:
-            if monthly_fig is not None:
-                graphs.append(dbc.Col(dcc.Graph(figure=monthly_fig), md=6))
-            components.append(dbc.Row(graphs))
-
-        if paper_mode:
-            components.append(
-                dbc.Alert(
-                    "Paper mode: real-trades feed is intentionally disabled.",
-                    color="info",
-                    className="mb-3",
-                )
-            )
-        elif top_trades_table is not None:
-            components.append(dbc.Row([dbc.Col(top_trades_table, width=12)]))
-
-        return dbc.Container(components, fluid=True)
+        return render_account_tab()
 
     elif tab == "tab-monitor":
         # Load open positions
