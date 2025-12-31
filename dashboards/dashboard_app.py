@@ -829,100 +829,111 @@ def _account_table(df: pd.DataFrame) -> dash_table.DataTable:
     )
 
 
+account_table = _account_table
+
+
 def render_account_tab() -> dbc.Container:
-    alerts: list[dbc.Alert] = []
-    latest_df, latest_alerts = _load_account_latest()
-    series_df, series_alerts = _load_account_series()
-    recent_df, recent_alerts = _load_account_recent()
+    try:
+        alerts: list[dbc.Alert] = []
+        latest_df, latest_alerts = _load_account_latest()
+        series_df, series_alerts = _load_account_series()
+        recent_df, recent_alerts = _load_account_recent()
 
-    alerts.extend(latest_alerts)
-    alerts.extend(series_alerts)
-    alerts.extend(recent_alerts)
+        alerts.extend(latest_alerts)
+        alerts.extend(series_alerts)
+        alerts.extend(recent_alerts)
 
-    if alerts:
-        deduped = []
-        seen: set[str] = set()
-        for alert in alerts:
-            content = getattr(alert, "children", "")
-            key = str(content)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(alert)
-        alerts = deduped
+        if alerts:
+            deduped = []
+            seen: set[str] = set()
+            for alert in alerts:
+                content = getattr(alert, "children", "")
+                key = str(content)
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(alert)
+            alerts = deduped
 
-    if series_df.empty and recent_df.empty and latest_df.empty:
-        empty_state = dbc.Alert(
-            "No account snapshots yet. Run python -m scripts.fetch_account_snapshot or wait for the scheduled task.",
-            color="info",
-            className="mb-3",
-        )
-        return dbc.Container(alerts + [empty_state], fluid=True)
-
-    latest_row = latest_df.iloc[0] if not latest_df.empty else None
-    taken_at = latest_row["taken_at"] if latest_row is not None else None
-
-    kpi_cards: list[dbc.Col] = []
-    if latest_row is not None:
-        kpi_cards.extend(
-            [
-                _account_kpi_card("Equity", latest_row.get("equity"), color="primary"),
-                _account_kpi_card("Cash", latest_row.get("cash"), color="info"),
-                _account_kpi_card("Buying Power", latest_row.get("buying_power"), color="secondary"),
-            ]
-        )
-        if "portfolio_value" in latest_row and pd.notna(latest_row["portfolio_value"]):
-            kpi_cards.append(_account_kpi_card("Portfolio Value", latest_row.get("portfolio_value"), color="success"))
-
-    status_badge = _account_status_badge(latest_row.get("status") if latest_row is not None else None)
-    timestamp_badges = _timestamp_badges(taken_at if isinstance(taken_at, pd.Timestamp) else None)
-
-    series_section: list[Any] = []
-    if not series_df.empty:
-        logger.info("[INFO] Account tab loaded %s points", len(series_df))
-        series_section = [
-            dbc.Row(
-                [
-                    dbc.Col(_account_timeseries_fig(series_df, "equity", "Equity (last 7 days)"), md=4),
-                    dbc.Col(_account_timeseries_fig(series_df, "cash", "Cash (last 7 days)"), md=4),
-                    dbc.Col(_account_timeseries_fig(series_df, "buying_power", "Buying Power (last 7 days)"), md=4),
-                ],
+        if series_df.empty and recent_df.empty and latest_df.empty:
+            empty_state = dbc.Alert(
+                "No account snapshots yet. Run python -m scripts.fetch_account_snapshot or wait for the scheduled task.",
+                color="info",
                 className="mb-3",
-            ),
-            dbc.Row([dbc.Col(_account_drawdown_fig(series_df), md=12)], className="mb-3"),
-        ]
+            )
+            return dbc.Container(alerts + [empty_state], fluid=True)
 
-    table_section = []
-    if not recent_df.empty:
-        table_section.append(html.H5("Recent Snapshots (latest 25)", className="mt-3"))
-        table_section.append(_account_table(recent_df))
+        latest_row = latest_df.iloc[0] if not latest_df.empty else None
+        taken_at = latest_row["taken_at"] if latest_row is not None else None
 
-    header = dbc.Row(
-        [
-            dbc.Col(html.H4("Account Overview", className="mb-2 text-light"), width="auto"),
-            dbc.Col(
-                html.Div(
-                    [badge for badge in [status_badge, *timestamp_badges] if badge],
-                    className="d-flex align-items-center",
+        kpi_cards: list[dbc.Col] = []
+        if latest_row is not None:
+            kpi_cards.extend(
+                [
+                    _account_kpi_card("Equity", latest_row.get("equity"), color="primary"),
+                    _account_kpi_card("Cash", latest_row.get("cash"), color="info"),
+                    _account_kpi_card("Buying Power", latest_row.get("buying_power"), color="secondary"),
+                ]
+            )
+            if "portfolio_value" in latest_row and pd.notna(latest_row["portfolio_value"]):
+                kpi_cards.append(_account_kpi_card("Portfolio Value", latest_row.get("portfolio_value"), color="success"))
+
+        status_badge = _account_status_badge(latest_row.get("status") if latest_row is not None else None)
+        timestamp_badges = _timestamp_badges(taken_at if isinstance(taken_at, pd.Timestamp) else None)
+
+        series_section: list[Any] = []
+        if not series_df.empty:
+            logger.info("[INFO] Account tab loaded %s points", len(series_df))
+            series_section = [
+                dbc.Row(
+                    [
+                        dbc.Col(_account_timeseries_fig(series_df, "equity", "Equity (last 7 days)"), md=4),
+                        dbc.Col(_account_timeseries_fig(series_df, "cash", "Cash (last 7 days)"), md=4),
+                        dbc.Col(_account_timeseries_fig(series_df, "buying_power", "Buying Power (last 7 days)"), md=4),
+                    ],
+                    className="mb-3",
                 ),
-                width=True,
-            ),
-        ],
-        className="mb-2",
-    )
+                dbc.Row([dbc.Col(_account_drawdown_fig(series_df), md=12)], className="mb-3"),
+            ]
 
-    kpi_row = dbc.Row(kpi_cards, className="mb-2") if kpi_cards else html.Div()
+        table_section = []
+        if not recent_df.empty:
+            table_section.append(html.H5("Recent Snapshots (latest 25)", className="mt-3"))
+            table_section.append(_account_table(recent_df))
 
-    return dbc.Container(
-        alerts
-        + [
-            header,
-            kpi_row,
-            *series_section,
-            *table_section,
-        ],
-        fluid=True,
-    )
+        header = dbc.Row(
+            [
+                dbc.Col(html.H4("Account Overview", className="mb-2 text-light"), width="auto"),
+                dbc.Col(
+                    html.Div(
+                        [badge for badge in [status_badge, *timestamp_badges] if badge],
+                        className="d-flex align-items-center",
+                    ),
+                    width=True,
+                ),
+            ],
+            className="mb-2",
+        )
+
+        kpi_row = dbc.Row(kpi_cards, className="mb-2") if kpi_cards else html.Div()
+
+        return dbc.Container(
+            alerts
+            + [
+                header,
+                kpi_row,
+                *series_section,
+                *table_section,
+            ],
+            fluid=True,
+        )
+    except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
+        logger.exception("Failed to render account tab")
+        message = f"Account tab failed: {type(exc).__name__}: {exc}"
+        return dbc.Container(
+            [dbc.Alert(message, color="danger", className="mb-3")],
+            fluid=True,
+        )
 
 
 def load_last_premarket_run() -> tuple[dict[str, Any], dbc.Alert | None]:
