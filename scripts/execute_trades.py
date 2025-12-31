@@ -1884,7 +1884,9 @@ class ExecutorConfig:
     chase_enabled: bool = False
     diagnostic: bool = False
     reconcile_only: bool = False
-    reconcile_lookback_days: int = 7
+    reconcile_auto: bool = True
+    reconcile_lookback_days: int = 14
+    reconcile_limit: int = 500
 
 
 @dataclass
@@ -2465,7 +2467,7 @@ class TradeExecutor:
         self._prev_close_cache: Dict[str, Optional[float]] = {}
         self._ranking_key: str = "score"
 
-    def reconcile_closed_trades(self) -> None:
+    def reconcile_closed_trades(self, *, lookback_days: int | None = None, limit: int | None = None) -> None:
         if not db.db_enabled():
             return
         engine = db.get_engine()
@@ -2473,10 +2475,19 @@ class TradeExecutor:
             return
 
         try:
-            lookback_days = int(getattr(self.config, "reconcile_lookback_days", 7))
+            lookback_days = int(
+                lookback_days
+                if lookback_days is not None
+                else getattr(self.config, "reconcile_lookback_days", 7)
+            )
         except Exception:
             lookback_days = 7
         lookback_days = max(0, lookback_days)
+        try:
+            limit = int(limit if limit is not None else getattr(self.config, "reconcile_limit", 500))
+        except Exception:
+            limit = 500
+        limit = max(1, limit)
         now_utc = datetime.now(timezone.utc)
         after_time = now_utc - timedelta(days=lookback_days)
         decorate_window_days = min(2, max(1, lookback_days or 0))
@@ -2491,7 +2502,7 @@ class TradeExecutor:
             if orders_cache.get("error"):
                 return []
             try:
-                orders = alpaca_list_orders_http(lookback_days=lookback_days, limit=500)
+                orders = alpaca_list_orders_http(lookback_days=lookback_days, limit=limit)
                 orders_cache["orders"] = orders or []
                 LOGGER.info(
                     "[INFO] RECONCILE_FETCH after=%s fetched_orders=%s",
@@ -5145,10 +5156,22 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Run reconciliation of closed trades and exit without placing new orders",
     )
     parser.add_argument(
+        "--reconcile-auto",
+        type=lambda s: s.lower() in {"1", "true", "yes", "y"},
+        default=ExecutorConfig.reconcile_auto,
+        help="Automatically reconcile closed trades at start and end of executor run (default: true)",
+    )
+    parser.add_argument(
         "--reconcile-lookback-days",
         type=int,
         default=ExecutorConfig.reconcile_lookback_days,
-        help="Lookback window in days for reconciliation queries (default 7)",
+        help="Lookback window in days for reconciliation queries (default 14)",
+    )
+    parser.add_argument(
+        "--reconcile-limit",
+        type=int,
+        default=ExecutorConfig.reconcile_limit,
+        help="Maximum number of orders fetched during reconciliation (default 500)",
     )
     parser.add_argument(
         "--time-window",
@@ -5203,8 +5226,12 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         max_chase_gap_pct=args.max_chase_gap_pct,
         chase_enabled=args.chase_enabled,
         diagnostic=bool(getattr(args, "diagnostic", False)),
+        reconcile_auto=bool(getattr(args, "reconcile_auto", True)),
         reconcile_only=bool(getattr(args, "reconcile_only", False)),
-        reconcile_lookback_days=int(getattr(args, "reconcile_lookback_days", ExecutorConfig.reconcile_lookback_days)),
+        reconcile_lookback_days=int(
+            getattr(args, "reconcile_lookback_days", ExecutorConfig.reconcile_lookback_days)
+        ),
+        reconcile_limit=int(getattr(args, "reconcile_limit", ExecutorConfig.reconcile_limit)),
     )
 
 
@@ -5233,6 +5260,34 @@ def _seed_initial_metrics(metrics: ExecutionMetrics, config: ExecutorConfig) -> 
         LOGGER.debug("INITIAL_METRICS_WRITE_FAILED", exc_info=True)
 
 
+_RECONCILE_DB_DISABLED_LOGGED = False
+
+
+def _run_auto_reconcile(executor: TradeExecutor, config: ExecutorConfig, stage: str) -> None:
+    global _RECONCILE_DB_DISABLED_LOGGED
+    if not getattr(config, "reconcile_auto", True):
+        return
+    if not db.db_enabled():
+        if not _RECONCILE_DB_DISABLED_LOGGED:
+            LOGGER.info("[INFO] RECONCILE_AUTO_SKIP reason=db_disabled")
+            _RECONCILE_DB_DISABLED_LOGGED = True
+        return
+    lookback_days = getattr(config, "reconcile_lookback_days", 7)
+    limit = getattr(config, "reconcile_limit", 500)
+    LOGGER.info(
+        "[INFO] RECONCILE_AUTO_START stage=%s lookback_days=%s limit=%s",
+        stage,
+        lookback_days,
+        limit,
+    )
+    try:
+        executor.reconcile_closed_trades(lookback_days=lookback_days, limit=limit)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s err=%s", stage, exc)
+    finally:
+        LOGGER.info("[INFO] RECONCILE_AUTO_END stage=%s", stage)
+
+
 def run_executor(
     config: ExecutorConfig,
     *,
@@ -5247,16 +5302,20 @@ def run_executor(
     _seed_initial_metrics(metrics, config)
     diagnostic_mode = bool(getattr(config, "diagnostic", False))
     loader = TradeExecutor(config, client, metrics)
-    if config.dry_run:
-        banner = "=" * 72
-        LOGGER.info(banner)
-        LOGGER.info(
-            "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
-        )
-        LOGGER.info(banner)
-    if getattr(config, "reconcile_only", False):
-        account_payload: Optional[Mapping[str, Any]] = None
-        clock_payload: Optional[Mapping[str, Any]] = None
+    auto_reconcile_enabled = bool(getattr(config, "reconcile_auto", True)) and not getattr(config, "reconcile_only", False)
+    if auto_reconcile_enabled:
+        _run_auto_reconcile(loader, config, stage="start")
+    try:
+        if config.dry_run:
+            banner = "=" * 72
+            LOGGER.info(banner)
+            LOGGER.info(
+                "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
+            )
+            LOGGER.info(banner)
+        if getattr(config, "reconcile_only", False):
+            account_payload: Optional[Mapping[str, Any]] = None
+            clock_payload: Optional[Mapping[str, Any]] = None
         if client is not None:
             trading_client = client
             base_url = os.getenv("APCA_API_BASE_URL", "")
@@ -5479,16 +5538,19 @@ def run_executor(
             loader.persist_metrics()
             return 2
 
-    executor = TradeExecutor(
-        config,
-        trading_client,
-        metrics,
-        base_url=base_url or "",
-        account_snapshot=account_payload,
-        clock_snapshot=clock_payload,
-    )
-    executor._ranking_key = loader._ranking_key
-    return executor.execute(candidates_df, prefiltered=filtered)
+        executor = TradeExecutor(
+            config,
+            trading_client,
+            metrics,
+            base_url=base_url or "",
+            account_snapshot=account_payload,
+            clock_snapshot=clock_payload,
+        )
+        executor._ranking_key = loader._ranking_key
+        return executor.execute(candidates_df, prefiltered=filtered)
+    finally:
+        if auto_reconcile_enabled:
+            _run_auto_reconcile(loader, config, stage="end")
 
 
 def load_candidates(path: Path) -> pd.DataFrame:
