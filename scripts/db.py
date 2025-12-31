@@ -164,6 +164,58 @@ def _log_write_result(ok: bool, table: str, rows: int, err: Exception | None = N
         logger.warning("[WARN] DB_WRITE_FAILED table=%s err=%s", table, err)
 
 
+def get_reconcile_state(engine: Optional[Engine] = None) -> dict[str, Any]:
+    db_engine = engine or _engine_or_none()
+    if db_engine is None:
+        return {}
+
+    stmt = text("SELECT last_after, last_ran_at FROM reconcile_state WHERE id=1")
+    try:
+        with db_engine.connect() as connection:
+            row = connection.execute(stmt).mappings().first()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_RECONCILE_STATE_FETCH err=%s", exc)
+        return {}
+
+    if not row:
+        return {}
+
+    last_after = normalize_ts(row.get("last_after"), field="last_after")
+    last_ran_at = normalize_ts(row.get("last_ran_at"), field="last_ran_at")
+    return {"last_after": last_after, "last_ran_at": last_ran_at}
+
+
+def set_reconcile_state(
+    engine: Optional[Engine], last_after: datetime | None, last_ran_at: datetime | None
+) -> bool:
+    db_engine = engine or _engine_or_none()
+    if db_engine is None:
+        logger.warning("[WARN] DB_RECONCILE_STATE_WRITE_FAILED err=%s", "db_disabled")
+        return False
+
+    payload = {
+        "last_after": normalize_ts(last_after, field="last_after"),
+        "last_ran_at": normalize_ts(last_ran_at, field="last_ran_at"),
+    }
+    stmt = text(
+        """
+        INSERT INTO reconcile_state (id, last_after, last_ran_at)
+        VALUES (1, :last_after, :last_ran_at)
+        ON CONFLICT (id) DO UPDATE SET
+            last_after=EXCLUDED.last_after,
+            last_ran_at=EXCLUDED.last_ran_at,
+            updated_at=now()
+        """
+    )
+    try:
+        with db_engine.begin() as connection:
+            connection.execute(stmt, payload)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_RECONCILE_STATE_WRITE_FAILED err=%s", exc)
+        return False
+
+
 def upsert_pipeline_run(
     run_date: Any,
     started_at: datetime | None,

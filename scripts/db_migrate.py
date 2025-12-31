@@ -10,6 +10,14 @@ logger = logging.getLogger(__name__)
 
 TABLE_STATEMENTS = [
     """
+    CREATE TABLE IF NOT EXISTS reconcile_state (
+        id INTEGER PRIMARY KEY,
+        last_after TIMESTAMPTZ,
+        last_ran_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS pipeline_runs (
         run_date DATE PRIMARY KEY,
         started_at TIMESTAMPTZ,
@@ -133,6 +141,12 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_trades_exit_time ON trades(exit_time);",
 ]
 
+RECONCILE_STATE_SEED = """
+INSERT INTO reconcile_state (id, last_after, last_ran_at)
+VALUES (1, NULL, NULL)
+ON CONFLICT (id) DO NOTHING;
+"""
+
 
 def _execute_statement(engine, statement: str) -> bool:
     try:
@@ -156,6 +170,8 @@ def run_upgrade(engine) -> bool:
     for ddl in TABLE_STATEMENTS + INDEX_STATEMENTS:
         if not _execute_statement(engine, ddl):
             return False
+    if not _execute_statement(engine, RECONCILE_STATE_SEED):
+        return False
     return True
 
 
