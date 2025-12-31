@@ -646,16 +646,14 @@ FROM v_account_latest
 LIMIT 1
 """
 
-_ACCOUNT_SERIES_SQL = """
-SELECT taken_at, equity, cash, buying_power, portfolio_value, status
-FROM v_account_equity_curve
-WHERE taken_at >= (NOW() AT TIME ZONE 'utc') - INTERVAL '7 days'
-ORDER BY taken_at DESC
-LIMIT 500
+_ACCOUNT_LATEST_SQL_NO_PORTFOLIO = """
+SELECT taken_at, account_id, status, equity, cash, buying_power
+FROM v_account_latest
+LIMIT 1
 """
 
-_ACCOUNT_SERIES_FALLBACK_SQL = """
-SELECT taken_at, equity, cash, buying_power, portfolio_value, status
+_ACCOUNT_SERIES_SQL = """
+SELECT taken_at, equity, cash, buying_power
 FROM alpaca_account_snapshots
 WHERE taken_at >= (NOW() AT TIME ZONE 'utc') - INTERVAL '7 days'
 ORDER BY taken_at DESC
@@ -663,7 +661,7 @@ LIMIT 500
 """
 
 _ACCOUNT_RECENT_SQL = """
-SELECT taken_at, equity, cash, buying_power, status
+SELECT taken_at, equity, cash, buying_power
 FROM alpaca_account_snapshots
 ORDER BY taken_at DESC
 LIMIT 25
@@ -695,11 +693,29 @@ def _account_query_with_fallback(
     return pd.DataFrame(), alerts
 
 
-def _normalize_account_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+def _account_missing_columns_alert(context: str, missing: set[str]) -> dbc.Alert:
+    missing_list = ", ".join(sorted(missing))
+    logger.warning("[WARN] ACCOUNT_MISSING_COLUMNS context=%s missing=%s", context, sorted(missing))
+    return dbc.Alert(
+        f"Account data is missing expected column(s) ({missing_list}) for {context}.",
+        color="warning",
+        className="mb-3",
+    )
+
+
+def _normalize_account_frame(
+    df: pd.DataFrame | None, *, context: str, required: set[str]
+) -> tuple[pd.DataFrame, list[dbc.Alert]]:
+    alerts: list[dbc.Alert] = []
     if df is None or df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), alerts
 
     frame = df.copy()
+    missing = {col for col in required if col not in frame.columns}
+    if missing:
+        alerts.append(_account_missing_columns_alert(context, missing))
+        return pd.DataFrame(), alerts
+
     frame["taken_at"] = pd.to_datetime(frame["taken_at"], utc=True, errors="coerce")
     frame = frame.dropna(subset=["taken_at"])
 
@@ -709,27 +725,52 @@ def _normalize_account_frame(df: pd.DataFrame | None) -> pd.DataFrame:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
     if "status" in frame.columns:
         frame["status"] = frame["status"].astype(str)
-    return frame
+    return frame, alerts
 
 
 def _load_account_latest() -> tuple[pd.DataFrame, list[dbc.Alert]]:
     latest_df, alerts = _account_query_with_fallback(_ACCOUNT_LATEST_SQL)
-    normalized = _normalize_account_frame(latest_df).head(1)
-    return normalized, alerts
+    normalized, normalize_alerts = _normalize_account_frame(
+        latest_df,
+        context="latest account snapshot",
+        required={"taken_at", "equity", "cash", "buying_power"},
+    )
+    alerts.extend(normalize_alerts)
+
+    if normalized.empty and latest_df is None:
+        fallback_df, fallback_alerts = _account_query_with_fallback(_ACCOUNT_LATEST_SQL_NO_PORTFOLIO)
+        alerts.extend(fallback_alerts)
+        normalized, normalize_alerts = _normalize_account_frame(
+            fallback_df,
+            context="latest account snapshot",
+            required={"taken_at", "equity", "cash", "buying_power"},
+        )
+        alerts.extend(normalize_alerts)
+
+    return normalized.head(1), alerts
 
 
 def _load_account_series() -> tuple[pd.DataFrame, list[dbc.Alert]]:
-    series_df, alerts = _account_query_with_fallback(
-        _ACCOUNT_SERIES_SQL, _ACCOUNT_SERIES_FALLBACK_SQL
+    series_df, alerts = _account_query_with_fallback(_ACCOUNT_SERIES_SQL)
+    normalized, normalize_alerts = _normalize_account_frame(
+        series_df,
+        context="account history",
+        required={"taken_at", "equity", "cash", "buying_power"},
     )
-    normalized = _normalize_account_frame(series_df).sort_values("taken_at")
+    alerts.extend(normalize_alerts)
+    normalized = normalized.sort_values("taken_at")
     return normalized, alerts
 
 
 def _load_account_recent() -> tuple[pd.DataFrame, list[dbc.Alert]]:
     recent_df, alert = db_query_df(_ACCOUNT_RECENT_SQL)
     alerts = [alert] if alert else []
-    normalized = _normalize_account_frame(recent_df)
+    normalized, normalize_alerts = _normalize_account_frame(
+        recent_df,
+        context="recent account snapshots",
+        required={"taken_at", "equity", "cash", "buying_power"},
+    )
+    alerts.extend(normalize_alerts)
     return normalized, alerts
 
 
@@ -807,7 +848,7 @@ def _account_drawdown_fig(df: pd.DataFrame) -> dcc.Graph:
 
 
 def _account_table(df: pd.DataFrame) -> dash_table.DataTable:
-    required = {"taken_at", "equity", "cash", "buying_power", "status"}
+    required = {"taken_at", "equity", "cash", "buying_power"}
     if df is None or df.empty or not required.issubset(df.columns):
         return dbc.Alert("No recent account snapshots to display.", color="info", className="mb-3")
 
@@ -818,8 +859,9 @@ def _account_table(df: pd.DataFrame) -> dash_table.DataTable:
         {"name": "Equity", "id": "equity", "type": "numeric", "format": Format(precision=2, scheme=Scheme.fixed)},
         {"name": "Cash", "id": "cash", "type": "numeric", "format": Format(precision=2, scheme=Scheme.fixed)},
         {"name": "Buying Power", "id": "buying_power", "type": "numeric", "format": Format(precision=2, scheme=Scheme.fixed)},
-        {"name": "Status", "id": "status"},
     ]
+    if "status" in display_df.columns:
+        columns.append({"name": "Status", "id": "status"})
     return dash_table.DataTable(
         data=display_df.to_dict("records"),
         columns=columns,
