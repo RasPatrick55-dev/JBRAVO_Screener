@@ -1,3 +1,13 @@
+"""
+DEPRECATED
+
+weekly_summary.py is no longer used.
+All reporting/metrics are derived from PostgreSQL tables:
+- trades
+- order_events
+- metrics_daily
+"""
+
 # weekly_summary.py - Generate weekly trade summary from CSVs and logs
 
 import os

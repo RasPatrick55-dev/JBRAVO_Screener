@@ -1,5 +1,25 @@
 # Operations Runbook
 
+## PostgreSQL is the single source of truth
+
+* Authoritative tables for analytics and reporting: `screener_candidates`, `backtest_results`, `metrics_daily`, `pipeline_runs`, `order_events`, `trades`, and `reconcile_state`.
+* CSV policy: local CSVs are non-authoritative and only used as a parachute or for ad-hoc debugging. The only supported parachute is `data/latest_candidates.csv`; exports to other CSVs are optional debugging aids and must not be used for dashboards or reporting.
+* `scripts/weekly_summary.py` is deprecated and retained for historical reference; all weekly and intraday summaries should query PostgreSQL directly.
+* Sample weekly metrics rollup (PostgreSQL):
+
+```sql
+SELECT
+  date_trunc('week', traded_at) AS week,
+  COUNT(*) AS trades,
+  ROUND(SUM(pnl), 2) AS net_pnl,
+  ROUND(AVG(pnl), 2) AS expectancy,
+  ROUND(100.0 * SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(*), 0), 2) AS win_rate
+FROM trades
+WHERE traded_at >= date_trunc('week', now()) - INTERVAL '12 weeks'
+GROUP BY 1
+ORDER BY 1 DESC;
+```
+
 ## Nightly pipeline
 
 * Use `python -m scripts.run_pipeline --steps screener,backtest,metrics,ranker_eval` in scheduled tasks. Pass additional screener flags via `--screener-args "..."` when you need to tweak liquidity thresholds without editing the wrapper script.
