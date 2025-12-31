@@ -11,13 +11,15 @@ import logging.handlers
 import math
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 import json
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from scripts import db
 from utils import logger_utils
@@ -701,6 +703,9 @@ def run_backtest(
     max_symbols: Optional[int] = None,
     max_days: Optional[int] = None,
     quick: bool = False,
+    run_date: Optional[date] = None,
+    export_csv: bool = True,
+    enable_db: bool = True,
 ) -> dict:
     QUICK_MAX_SYMBOLS = 20
     QUICK_MAX_DAYS = 120
@@ -810,10 +815,11 @@ def run_backtest(
                 .reset_index()
             )
             reason_stats["win_rate"] = reason_stats["win_rate"] * 100
-            write_csv_atomic(
-                os.path.join(BASE_DIR, "data", "exit_reason_metrics.csv"),
-                reason_stats,
-            )
+            if export_csv:
+                write_csv_atomic(
+                    os.path.join(BASE_DIR, "data", "exit_reason_metrics.csv"),
+                    reason_stats,
+                )
 
         # Aggregate per-symbol metrics from the trades log
         if not trades_df.empty:
@@ -908,6 +914,8 @@ def run_backtest(
 
         summary_df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
         summary_df["symbols_tested"] = len(symbols)
+        backtest_run_date = run_date or datetime.now(timezone.utc).date()
+        summary_df["run_date"] = backtest_run_date
 
         for _, row in summary_df.iterrows():
             logger.info(
@@ -917,14 +925,32 @@ def run_backtest(
                 row.net_pnl,
             )
 
-        write_csv_atomic(trades_path, trades_df)
-        write_csv_atomic(equity_path, equity_df.reset_index())
-        write_csv_atomic(metrics_path, summary_df)
-        try:
-            db.insert_backtest_results(datetime.now(timezone.utc).date(), summary_df)
-        except Exception as exc:  # pragma: no cover - defensive guard
-            logger.warning("[WARN] DB_WRITE_FAILED table=backtest_results err=%s", exc)
-        logger.info(f"Trades log successfully updated with net_pnl at {trades_path}.")
+        if enable_db:
+            try:
+                inserted = db.insert_backtest_results(backtest_run_date, summary_df)
+                if inserted:
+                    logger.info(
+                        "BACKTEST_DB_OK run_date=%s rows=%s",
+                        backtest_run_date,
+                        len(summary_df),
+                    )
+                else:
+                    logger.warning(
+                        "BACKTEST_DB_FAIL run_date=%s err=%s",
+                        backtest_run_date,
+                        "noop_or_error",
+                    )
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.warning("BACKTEST_DB_FAIL run_date=%s err=%s", backtest_run_date, exc)
+
+        if export_csv:
+            write_csv_atomic(trades_path, trades_df)
+            write_csv_atomic(equity_path, equity_df.reset_index())
+            write_csv_atomic(metrics_path, summary_df)
+        if export_csv:
+            logger.info(f"Trades log successfully updated with net_pnl at {trades_path}.")
+        else:
+            logger.info("Trades log generated in-memory; CSV export disabled.")
 
     except Exception as e:
         logger.error(f"Error during backtest trades log generation: {e}", exc_info=True)
@@ -969,6 +995,18 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Limit number of most recent trading days to use (defaults to 120 in quick mode)",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit number of candidates fetched from the database (default: 15)",
+    )
+    parser.add_argument(
+        "--export-csv",
+        choices=["true", "false"],
+        default=None,
+        help="Export CSV outputs (default: true if DB disabled, false if DB enabled)",
+    )
     return parser.parse_args(argv if argv is not None else None)
 
 
@@ -992,10 +1030,84 @@ def _load_symbols(source_csv: Path) -> List[str]:
     return [symbol for symbol in series.tolist() if symbol]
 
 
+def _db_engine_if_available() -> Optional[Engine]:
+    if not db.db_enabled():
+        return None
+    engine = db.get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.info("BACKTEST_DB_SKIP reason=connect_test err=%s", exc)
+        return None
+    return engine
+
+
+def _determine_run_date(engine: Optional[Engine]) -> date:
+    if engine is None:
+        return datetime.utcnow().date()
+    try:
+        with engine.connect() as connection:
+            latest = connection.execute(text("SELECT MAX(run_date) FROM screener_candidates")).scalar()
+        if latest:
+            return latest
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.info("BACKTEST_DB_RUN_DATE_FALLBACK err=%s", exc)
+    return datetime.utcnow().date()
+
+
+def _load_symbols_db(engine: Optional[Engine], run_date: date, limit: int) -> List[str]:
+    if engine is None:
+        return []
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text(
+                    """
+                    SELECT symbol
+                    FROM screener_candidates
+                    WHERE run_date = :run_date
+                    ORDER BY score DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"run_date": run_date, "limit": limit},
+            )
+            rows = result.fetchall()
+        symbols = [row[0] for row in rows if row and row[0]]
+        logger.info("BACKTEST_DB_CANDIDATES_OK run_date=%s rows=%s", run_date, len(symbols))
+        return symbols
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.info("BACKTEST_DB_CANDIDATES_FALLBACK err=%s", exc)
+        return []
+
+
+def _parse_bool_flag(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    return value.lower() == "true"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv or [])
-    source_csv = Path(args.source).expanduser()
-    symbols = _load_symbols(source_csv)
+    engine = _db_engine_if_available()
+    export_default = False if engine else True
+    export_csv = _parse_bool_flag(args.export_csv, export_default)
+    run_date = _determine_run_date(engine)
+    candidate_limit = args.limit if args.limit is not None else 15
+
+    symbols: List[str] = []
+    if engine:
+        symbols = _load_symbols_db(engine, run_date, candidate_limit)
+
+    if len(symbols) == 0:
+        logger.info("BACKTEST_CANDIDATES_FALLBACK reason=%s", "csv" if engine else "db_disabled")
+        source_csv = Path(args.source).expanduser()
+        symbols = _load_symbols(source_csv)
+    else:
+        source_csv = Path("database:screener_candidates")
 
     if len(symbols) == 0:
         logger.info("Backtest: no candidates today — skipping.")
@@ -1011,6 +1123,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             max_symbols=args.max_symbols,
             max_days=args.max_days,
             quick=args.quick,
+            run_date=run_date,
+            export_csv=export_csv,
+            enable_db=bool(engine),
         )
         logger.info("Backtest script finished")
     except Exception as exc:
