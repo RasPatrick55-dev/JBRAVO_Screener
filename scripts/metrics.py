@@ -3,18 +3,21 @@ import sys
 import os
 import json
 import csv
+from typing import Optional
 
 # Ensure project root is on ``sys.path`` before third-party imports
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
 from collections import Counter
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 from scripts import db
 from utils import write_csv_atomic
 from utils.screener_metrics import ensure_canonical_metrics, write_screener_metrics_json
@@ -89,6 +92,72 @@ _TRADES_LOG_WARNED = False
 
 def _summary_path() -> Path:
     return Path(BASE_DIR) / "data" / "metrics_summary.csv"
+
+
+def _coerce_run_date(value: object) -> Optional[date]:
+    if value is None:
+        return None
+    try:
+        ts = pd.to_datetime(value)
+    except Exception:
+        return None
+    if pd.isna(ts):  # type: ignore[arg-type]
+        return None
+    return ts.date()
+
+
+def _resolve_run_date(engine: Optional[Engine]) -> date:
+    default = datetime.now(timezone.utc).date()
+    if engine is None:
+        return default
+
+    stmt = text(
+        "SELECT run_date FROM pipeline_runs ORDER BY run_date DESC LIMIT 1"
+    )
+    try:
+        with engine.connect() as connection:
+            run_date = connection.execute(stmt).scalar()
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] METRICS_RUN_DATE_LOOKUP_FAILED err=%s", exc)
+        return default
+
+    return _coerce_run_date(run_date) or default
+
+
+def _load_trades_from_db(engine: Optional[Engine]) -> Optional[pd.DataFrame]:
+    if engine is None:
+        return None
+
+    stmt = text(
+        """
+        SELECT trade_id, symbol, qty, entry_price, exit_price, realized_pnl, entry_time, exit_time
+        FROM trades
+        WHERE status='CLOSED' AND exit_time IS NOT NULL AND entry_time IS NOT NULL
+        ORDER BY exit_time DESC
+        """
+    )
+
+    try:
+        with engine.connect() as connection:
+            df = pd.read_sql_query(stmt, connection)
+    except Exception as exc:
+        logger.warning("[WARN] METRICS_DB_LOAD_FAILED err=%s", exc)
+        return None
+
+    if df.empty:
+        return df
+
+    renamed = df.rename(columns={"realized_pnl": "net_pnl"})
+    renamed["symbol"] = renamed["symbol"].astype(str).str.upper()
+    renamed["pnl"] = pd.to_numeric(renamed["net_pnl"], errors="coerce")
+    for column in ("qty", "entry_price", "exit_price"):
+        if column in renamed.columns:
+            renamed[column] = pd.to_numeric(renamed[column], errors="coerce")
+    for column in ("entry_time", "exit_time"):
+        if column in renamed.columns:
+            renamed[column] = pd.to_datetime(renamed[column], errors="coerce", utc=True)
+
+    return renamed
 
 
 def load_trades_log(file_path: Path) -> pd.DataFrame:
@@ -304,19 +373,45 @@ def save_metrics_summary(metrics_summary, symbols, output_file="metrics_summary.
     write_csv_atomic(str(csv_path), metrics_summary_df)
     logger.info(f"Successfully updated metrics_summary.csv: {csv_path}")
 
-# Full execution of metrics calculation, ranking, and summary
+def _write_exit_reason_placeholder(base_dir: Path) -> None:
+    path = base_dir / "data" / "exit_reason_summary.csv"
+    frame = pd.DataFrame(columns=["exit_reason", "trades", "total_pnl", "avg_pnl"])
+    write_csv_atomic(str(path), frame)
+
+
 def main():
     results_df = load_results()
 
     trades_path = Path(BASE_DIR) / "data" / "trades_log.csv"
     metrics_summary_file = _summary_path()
 
-    try:
-        trades_df = load_trades_log(trades_path)
-    except FileNotFoundError:
-        logger.warning("No trades_log.csv; writing zeroed metrics_summary.csv")
-        write_zero_metrics_summary(metrics_summary_file)
-        return 0
+    use_db = False
+    engine: Engine | None = None
+    if db.db_enabled():
+        engine = db.get_engine()
+        if engine is not None:
+            try:
+                with engine.connect() as connection:
+                    connection.execute(text("SELECT 1"))
+                use_db = True
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.warning("[WARN] METRICS_DB_UNAVAILABLE err=%s", exc)
+
+    trades_df: pd.DataFrame
+    if use_db:
+        db_trades = _load_trades_from_db(engine)
+        if db_trades is None:
+            use_db = False
+            trades_df = pd.DataFrame(columns=_TRADES_CANONICAL_COLUMNS)
+        else:
+            trades_df = db_trades
+    else:
+        try:
+            trades_df = load_trades_log(trades_path)
+        except FileNotFoundError:
+            logger.warning("No trades_log.csv; writing zeroed metrics_summary.csv")
+            write_zero_metrics_summary(metrics_summary_file)
+            return 0
 
     # Detect missing symbol-level metrics and compute from trades_log.csv
     if "net_pnl" not in results_df.columns:
@@ -391,19 +486,29 @@ def main():
             logger.info(
                 "Exit reason breakdown saved to %s", breakdown_path
             )
+    elif use_db:
+        _write_exit_reason_placeholder(Path(BASE_DIR))
 
     try:
         write_csv_atomic(str(metrics_summary_file), metrics_summary)
         logger.info(
             f"Metrics summary CSV successfully updated: {metrics_summary_file}"
         )
-        try:
-            db.upsert_metrics_daily(
-                datetime.now(timezone.utc).date(),
-                summary_metrics,
-            )
-        except Exception as exc:  # pragma: no cover - defensive guard
-            logger.warning("[WARN] DB_WRITE_FAILED table=metrics_daily err=%s", exc)
+        if use_db:
+            try:
+                run_date = _resolve_run_date(engine)
+                db.upsert_metrics_daily(
+                    run_date,
+                    summary_metrics,
+                )
+                logger.info(
+                    "[INFO] METRICS_DB_OK run_date=%s total_trades=%s net_pnl=%s",
+                    run_date,
+                    summary_metrics.get("total_trades"),
+                    summary_metrics.get("net_pnl"),
+                )
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.warning("[WARN] DB_WRITE_FAILED table=metrics_daily err=%s", exc)
     except Exception as e:
         logger.error(f"Failed to write metrics_summary.csv: {e}")
         return 1
