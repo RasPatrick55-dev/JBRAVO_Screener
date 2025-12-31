@@ -572,7 +572,12 @@ def _order_snapshot(order: Any) -> Dict[str, Any]:
     return {key: value for key, value in snapshot.items() if value not in (None, "", [], {}, ())}
 
 
-def alpaca_list_orders_http(lookback_days: int, limit: int = 500) -> list[dict]:
+def alpaca_list_orders_http(
+    lookback_days: int | None = None,
+    limit: int = 500,
+    *,
+    after_iso: str | None = None,
+) -> list[dict]:
     """
     Return orders from Alpaca REST /v2/orders using APCA_API_BASE_URL.
     Must work in paper mode. No alpaca-py dependency.
@@ -584,10 +589,12 @@ def alpaca_list_orders_http(lookback_days: int, limit: int = 500) -> list[dict]:
     if not api_key or not api_secret:
         raise ValueError("missing APCA_API_KEY_ID or APCA_API_SECRET_KEY")
     url = f"{(base_url or '').rstrip('/')}/v2/orders"
-    after_iso = (datetime.now(timezone.utc) - timedelta(days=max(0, lookback_days))).isoformat()
+    computed_after = after_iso
+    if computed_after is None:
+        computed_after = (datetime.now(timezone.utc) - timedelta(days=max(0, lookback_days or 0))).isoformat()
     params = {
         "status": "all",
-        "after": after_iso,
+        "after": computed_after,
         "direction": "desc",
         "limit": limit,
         "nested": "true",
@@ -1887,6 +1894,8 @@ class ExecutorConfig:
     reconcile_auto: bool = True
     reconcile_lookback_days: int = 14
     reconcile_limit: int = 500
+    reconcile_use_watermark: bool = True
+    reconcile_overlap_secs: int = 300
 
 
 @dataclass
@@ -2468,10 +2477,15 @@ class TradeExecutor:
         self._ranking_key: str = "score"
 
     def reconcile_closed_trades(self, *, lookback_days: int | None = None, limit: int | None = None) -> None:
+        watermark_enabled = bool(getattr(self.config, "reconcile_use_watermark", True))
         if not db.db_enabled():
+            if watermark_enabled:
+                LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=db_unavailable")
             return
         engine = db.get_engine()
         if engine is None:
+            if watermark_enabled:
+                LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=db_unavailable")
             return
 
         try:
@@ -2488,12 +2502,40 @@ class TradeExecutor:
         except Exception:
             limit = 500
         limit = max(1, limit)
+        try:
+            overlap_secs = int(getattr(self.config, "reconcile_overlap_secs", 300))
+        except Exception:
+            overlap_secs = 300
+        overlap_secs = max(0, overlap_secs)
         now_utc = datetime.now(timezone.utc)
         after_time = now_utc - timedelta(days=lookback_days)
         decorate_window_days = min(2, max(1, lookback_days or 0))
         decorate_after_time = now_utc - timedelta(days=decorate_window_days)
         orders_cache: Dict[str, Any] = {"orders": None, "error": False}
-        after_iso = after_time.isoformat()
+        fetch_after_dt = after_time
+        fetch_after_iso = fetch_after_dt.isoformat()
+
+        if watermark_enabled:
+            try:
+                reconcile_state = db.get_reconcile_state(engine)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=db_error err=%s", exc)
+                reconcile_state = {}
+                watermark_enabled = False
+            if watermark_enabled:
+                last_after = (
+                    db.normalize_ts(reconcile_state.get("last_after"), field="last_after")
+                    if reconcile_state
+                    else None
+                )
+                if last_after is not None:
+                    fetch_after_dt = last_after
+                else:
+                    fetch_after_dt = after_time
+                fetch_after_iso = fetch_after_dt.isoformat()
+            else:
+                fetch_after_dt = after_time
+                fetch_after_iso = fetch_after_dt.isoformat()
 
         def _fetch_orders() -> list[dict]:
             cached = orders_cache.get("orders")
@@ -2502,13 +2544,24 @@ class TradeExecutor:
             if orders_cache.get("error"):
                 return []
             try:
-                orders = alpaca_list_orders_http(lookback_days=lookback_days, limit=limit)
-                orders_cache["orders"] = orders or []
-                LOGGER.info(
-                    "[INFO] RECONCILE_FETCH after=%s fetched_orders=%s",
-                    after_iso,
-                    len(orders_cache["orders"]),
+                orders = alpaca_list_orders_http(
+                    lookback_days=lookback_days,
+                    limit=limit,
+                    after_iso=fetch_after_iso if watermark_enabled else None,
                 )
+                orders_cache["orders"] = orders or []
+                if watermark_enabled:
+                    LOGGER.info(
+                        "[INFO] RECONCILE_WATERMARK after=%s fetched_orders=%s",
+                        fetch_after_iso,
+                        len(orders_cache["orders"]),
+                    )
+                else:
+                    LOGGER.info(
+                        "[INFO] RECONCILE_FETCH after=%s fetched_orders=%s",
+                        fetch_after_iso,
+                        len(orders_cache["orders"]),
+                    )
                 return orders_cache["orders"]
             except requests.HTTPError as exc:
                 response = getattr(exc, "response", None)
@@ -2528,9 +2581,16 @@ class TradeExecutor:
             orders_cache["orders"] = []
             return []
 
+        def _best_order_timestamp(order: Mapping[str, Any]) -> datetime | None:
+            for field in ("updated_at", "filled_at", "submitted_at", "created_at"):
+                ts = db.normalize_ts(order.get(field), field=field)
+                if ts is not None:
+                    return ts
+            return None
+
         def _latest_filled_sell_order(symbol: str) -> tuple[Any | None, datetime | None, Dict[str, Any]]:
             stats: Dict[str, Any] = {
-                "after_iso": after_iso,
+                "after_iso": fetch_after_iso,
                 "fetched_orders": 0,
                 "symbol_sells": 0,
                 "filled_sells": 0,
@@ -2838,6 +2898,27 @@ class TradeExecutor:
                     symbol,
                     "decorate_failed",
                 )
+        if watermark_enabled:
+            if orders_cache.get("orders") is None and not orders_cache.get("error"):
+                _fetch_orders()
+            orders_for_watermark = orders_cache.get("orders") or []
+            max_ts: datetime | None = None
+            for order in orders_for_watermark:
+                ts = _best_order_timestamp(order)
+                if ts is None:
+                    continue
+                if max_ts is None or ts > max_ts:
+                    max_ts = ts
+            new_last_after = fetch_after_dt
+            if max_ts is not None:
+                new_last_after = max_ts - timedelta(seconds=overlap_secs)
+            try:
+                updated = db.set_reconcile_state(engine, new_last_after, now_utc)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=write_failed err=%s", exc)
+                updated = False
+            if updated:
+                LOGGER.info("[INFO] RECONCILE_WATERMARK_UPDATE last_after=%s", new_last_after.isoformat())
         LOGGER.info("[INFO] RECONCILE_END closed=%s decorated=%s", closed_count, decorated_count)
 
     def log_info(self, event: str, **payload: Any) -> None:
@@ -5174,6 +5255,18 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Maximum number of orders fetched during reconciliation (default 500)",
     )
     parser.add_argument(
+        "--reconcile-use-watermark",
+        type=lambda s: s.lower() in {"1", "true", "yes", "y"},
+        default=ExecutorConfig.reconcile_use_watermark,
+        help="Use reconcile watermark stored in DB to fetch incremental orders (default: true)",
+    )
+    parser.add_argument(
+        "--reconcile-overlap-secs",
+        type=int,
+        default=ExecutorConfig.reconcile_overlap_secs,
+        help="Seconds of overlap when advancing reconcile watermark (default 300)",
+    )
+    parser.add_argument(
         "--time-window",
         choices=("premarket", "regular", "any", "auto"),
         default=ExecutorConfig.time_window,
@@ -5232,6 +5325,10 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
             getattr(args, "reconcile_lookback_days", ExecutorConfig.reconcile_lookback_days)
         ),
         reconcile_limit=int(getattr(args, "reconcile_limit", ExecutorConfig.reconcile_limit)),
+        reconcile_use_watermark=bool(getattr(args, "reconcile_use_watermark", ExecutorConfig.reconcile_use_watermark)),
+        reconcile_overlap_secs=int(
+            getattr(args, "reconcile_overlap_secs", ExecutorConfig.reconcile_overlap_secs)
+        ),
     )
 
 
@@ -5355,188 +5452,188 @@ def run_executor(
         executor.persist_metrics()
         executor.log_summary()
         return 0
-    try:
-        frame = loader.load_candidates(rank=False)
-    except CandidateLoadError as exc:
-        LOGGER.error("%s", exc)
-        metrics.api_failures += 1
-        metrics.record_skip("DATA_MISSING", count=1)
-        metrics.record_error(
-            "candidate_load_error",
-            detail=str(exc),
-            exception=exc.__class__.__name__,
+        try:
+            frame = loader.load_candidates(rank=False)
+        except CandidateLoadError as exc:
+            LOGGER.error("%s", exc)
+            metrics.api_failures += 1
+            metrics.record_skip("DATA_MISSING", count=1)
+            metrics.record_error(
+                "candidate_load_error",
+                detail=str(exc),
+                exception=exc.__class__.__name__,
+            )
+            loader.persist_metrics()
+            return 1
+
+        candidates_df = loader._rank_candidates(frame)
+
+        try:
+            base_alloc_pct = float(config.allocation_pct)
+        except (TypeError, ValueError):
+            base_alloc_pct = 0.0
+        base_alloc_pct = max(0.0, base_alloc_pct)
+        try:
+            configured_max_positions = int(config.max_positions)
+        except (TypeError, ValueError):
+            configured_max_positions = 0
+        configured_max_positions = max(1, configured_max_positions)
+        metrics.max_total_positions = configured_max_positions
+        metrics.configured_max_positions = configured_max_positions
+        metrics.risk_limited_max_positions = configured_max_positions
+
+        loader._log_top_candidates(
+            candidates_df.to_dict(orient="records"),
+            max_positions=configured_max_positions,
+            base_alloc_pct=base_alloc_pct,
+            source_df=candidates_df,
         )
-        loader.persist_metrics()
-        return 1
 
-    candidates_df = loader._rank_candidates(frame)
-
-    try:
-        base_alloc_pct = float(config.allocation_pct)
-    except (TypeError, ValueError):
-        base_alloc_pct = 0.0
-    base_alloc_pct = max(0.0, base_alloc_pct)
-    try:
-        configured_max_positions = int(config.max_positions)
-    except (TypeError, ValueError):
-        configured_max_positions = 0
-    configured_max_positions = max(1, configured_max_positions)
-    metrics.max_total_positions = configured_max_positions
-    metrics.configured_max_positions = configured_max_positions
-    metrics.risk_limited_max_positions = configured_max_positions
-
-    loader._log_top_candidates(
-        candidates_df.to_dict(orient="records"),
-        max_positions=configured_max_positions,
-        base_alloc_pct=base_alloc_pct,
-        source_df=candidates_df,
-    )
-
-    _wait_until_submit_at(config.submit_at_ny)
-    configured_window = config.time_window or "auto"
-    win, in_window, now_ny = _resolve_time_window(configured_window)
-    trading_probe = client if client is not None else None
-    clock_hhmm = now_ny.strftime("%H:%M")
-    clock_window = win if win in {"premarket", "regular", "any"} else configured_window
-    if trading_probe is not None and hasattr(trading_probe, "get_clock"):
-        clock_allowed, hhmm = _clock_is_in_window(trading_probe, clock_window)
-        if hhmm != "00:00":
-            clock_hhmm = hhmm
-        if clock_window == "any":
-            in_window = clock_allowed
-        elif clock_window in {"premarket", "regular"}:
-            in_window = bool(in_window) and clock_allowed
+        _wait_until_submit_at(config.submit_at_ny)
+        configured_window = config.time_window or "auto"
+        win, in_window, now_ny = _resolve_time_window(configured_window)
+        trading_probe = client if client is not None else None
+        clock_hhmm = now_ny.strftime("%H:%M")
+        clock_window = win if win in {"premarket", "regular", "any"} else configured_window
+        if trading_probe is not None and hasattr(trading_probe, "get_clock"):
+            clock_allowed, hhmm = _clock_is_in_window(trading_probe, clock_window)
+            if hhmm != "00:00":
+                clock_hhmm = hhmm
+            if clock_window == "any":
+                in_window = clock_allowed
+            elif clock_window in {"premarket", "regular"}:
+                in_window = bool(in_window) and clock_allowed
+            else:
+                in_window = bool(in_window) and clock_allowed
+            if hhmm == "00:00":
+                log_info(
+                    "MARKET_TIME",
+                    ny_now=now_ny.isoformat(),
+                    window=clock_window,
+                    in_window=bool(in_window),
+                )
         else:
-            in_window = bool(in_window) and clock_allowed
-        if hhmm == "00:00":
             log_info(
                 "MARKET_TIME",
                 ny_now=now_ny.isoformat(),
                 window=clock_window,
                 in_window=bool(in_window),
             )
-    else:
+
         log_info(
-            "MARKET_TIME",
+            "EXEC_START",
+            dry_run=bool(config.dry_run),
+            diagnostic=bool(config.diagnostic),
+            time_window=configured_window,
+            resolved=win,
             ny_now=now_ny.isoformat(),
-            window=clock_window,
+            hhmm=clock_hhmm,
             in_window=bool(in_window),
+            candidates=len(candidates_df),
+            submit_at_ny=str(config.submit_at_ny or ""),
+        )
+        probe_auth_ok, probe_bp_display = _log_account_probe(creds_snapshot)
+        acc = None
+        acc_err = None
+        if trading_probe is not None and hasattr(trading_probe, "get_account"):
+            acc, acc_err = _log_call("get_account", trading_probe.get_account)
+        buying_power = 0.0
+        auth_ok = False
+        if acc and hasattr(acc, "buying_power") and acc_err is None:
+            try:
+                buying_power = float(acc.buying_power or 0)
+                auth_ok = True
+            except Exception:
+                buying_power = 0.0
+        if not auth_ok:
+            if probe_auth_ok:
+                auth_ok = True
+            candidate_bp = str(probe_bp_display).replace(",", "")
+            try:
+                buying_power = float(Decimal(candidate_bp))
+            except (InvalidOperation, ValueError, TypeError):
+                if not auth_ok:
+                    buying_power = 0.0
+        log_info(
+            "AUTH_STATUS",
+            auth_ok=bool(auth_ok),
+            buying_power=f"{buying_power:.2f}",
         )
 
-    log_info(
-        "EXEC_START",
-        dry_run=bool(config.dry_run),
-        diagnostic=bool(config.diagnostic),
-        time_window=configured_window,
-        resolved=win,
-        ny_now=now_ny.isoformat(),
-        hhmm=clock_hhmm,
-        in_window=bool(in_window),
-        candidates=len(candidates_df),
-        submit_at_ny=str(config.submit_at_ny or ""),
-    )
-    probe_auth_ok, probe_bp_display = _log_account_probe(creds_snapshot)
-    acc = None
-    acc_err = None
-    if trading_probe is not None and hasattr(trading_probe, "get_account"):
-        acc, acc_err = _log_call("get_account", trading_probe.get_account)
-    buying_power = 0.0
-    auth_ok = False
-    if acc and hasattr(acc, "buying_power") and acc_err is None:
-        try:
-            buying_power = float(acc.buying_power or 0)
-            auth_ok = True
-        except Exception:
-            buying_power = 0.0
-    if not auth_ok:
-        if probe_auth_ok:
-            auth_ok = True
-        candidate_bp = str(probe_bp_display).replace(",", "")
-        try:
-            buying_power = float(Decimal(candidate_bp))
-        except (InvalidOperation, ValueError, TypeError):
-            if not auth_ok:
-                buying_power = 0.0
-    log_info(
-        "AUTH_STATUS",
-        auth_ok=bool(auth_ok),
-        buying_power=f"{buying_power:.2f}",
-    )
+        metrics.auth_ok = bool(auth_ok)
+        metrics.auth_reason = None
+        if not auth_ok:
+            metrics.auth_reason = str(probe_bp_display or "auth_probe_failed")
+            metrics.status = "auth_error"
+            metrics.record_error("auth_check_failed", detail=metrics.auth_reason)
 
-    metrics.auth_ok = bool(auth_ok)
-    metrics.auth_reason = None
-    if not auth_ok:
-        metrics.auth_reason = str(probe_bp_display or "auth_probe_failed")
-        metrics.status = "auth_error"
-        metrics.record_error("auth_check_failed", detail=metrics.auth_reason)
+        metrics.in_window = bool(in_window)
+        if not in_window:
+            start_str, end_str = _premarket_bounds_strings()
+            if not diagnostic_mode:
+                loader.record_skip_reason(
+                    "TIME_WINDOW",
+                    count=len(candidates_df) if len(candidates_df) > 0 else 1,
+                    detail=f"{start_str}-{end_str}",
+                )
+            metrics.exit_reason = "TIME_WINDOW"
+            if not diagnostic_mode:
+                metrics.flush()
+                loader.persist_metrics()
+                LOGGER.info(
+                    "EXECUTE_SKIP reason=TIME_WINDOW count=%s",
+                    len(candidates_df),
+                )
+                loader.log_summary()
+                return 0
 
-    metrics.in_window = bool(in_window)
-    if not in_window:
-        start_str, end_str = _premarket_bounds_strings()
-        if not diagnostic_mode:
-            loader.record_skip_reason(
-                "TIME_WINDOW",
-                count=len(candidates_df) if len(candidates_df) > 0 else 1,
-                detail=f"{start_str}-{end_str}",
-            )
-        metrics.exit_reason = "TIME_WINDOW"
-        if not diagnostic_mode:
-            metrics.flush()
+        if candidates_df.empty:
+            loader.record_skip_reason("NO_CANDIDATES", count=1)
+            metrics.exit_reason = "NO_CANDIDATES"
             loader.persist_metrics()
-            LOGGER.info(
-                "EXECUTE_SKIP reason=TIME_WINDOW count=%s",
-                len(candidates_df),
-            )
+            LOGGER.info("EXECUTE_SKIP reason=NO_CANDIDATES")
             loader.log_summary()
             return 0
 
-    if candidates_df.empty:
-        loader.record_skip_reason("NO_CANDIDATES", count=1)
-        metrics.exit_reason = "NO_CANDIDATES"
-        loader.persist_metrics()
-        LOGGER.info("EXECUTE_SKIP reason=NO_CANDIDATES")
-        loader.log_summary()
-        return 0
+        records = loader.hydrate_candidates(candidates_df)
+        filtered = loader.guard_candidates(records)
 
-    records = loader.hydrate_candidates(candidates_df)
-    filtered = loader.guard_candidates(records)
-
-    account_payload: Optional[Mapping[str, Any]] = None
-    clock_payload: Optional[Mapping[str, Any]] = None
-    if client is not None:
-        trading_client = client
-        base_url = os.getenv("APCA_API_BASE_URL", "")
-        paper_mode = None
-    else:
-        skip_trading_client = config.dry_run and not diagnostic_mode
-        skip_trading_client = skip_trading_client or (not filtered and not diagnostic_mode)
-        if skip_trading_client:
-            trading_client = None
-            base_url = ""
+        account_payload: Optional[Mapping[str, Any]] = None
+        clock_payload: Optional[Mapping[str, Any]] = None
+        if client is not None:
+            trading_client = client
+            base_url = os.getenv("APCA_API_BASE_URL", "")
             paper_mode = None
         else:
-            trading_client, base_url, paper_mode, forced_mode = _create_trading_client()
-            forced_label = forced_mode if forced_mode is not None else "auto"
-            LOGGER.info(
-                "[INFO] TRADING_MODE base=%s paper_mode=%s forced=%s",
-                base_url or "",
-                bool(paper_mode),
-                forced_label,
-            )
-    _paper_only_guard(trading_client, base_url)
-    if trading_client is not None and client is None:
-        try:
-            account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
-        except AlpacaAuthFailure:
-            metrics.api_failures += 1
-            metrics.record_skip("API_FAIL", count=max(1, len(candidates_df)))
-            metrics.record_error(
-                "auth_failure",
-                stage="ensure_trading_auth",
-                base_url=base_url or "",
-            )
-            loader.persist_metrics()
-            return 2
+            skip_trading_client = config.dry_run and not diagnostic_mode
+            skip_trading_client = skip_trading_client or (not filtered and not diagnostic_mode)
+            if skip_trading_client:
+                trading_client = None
+                base_url = ""
+                paper_mode = None
+            else:
+                trading_client, base_url, paper_mode, forced_mode = _create_trading_client()
+                forced_label = forced_mode if forced_mode is not None else "auto"
+                LOGGER.info(
+                    "[INFO] TRADING_MODE base=%s paper_mode=%s forced=%s",
+                    base_url or "",
+                    bool(paper_mode),
+                    forced_label,
+                )
+        _paper_only_guard(trading_client, base_url)
+        if trading_client is not None and client is None:
+            try:
+                account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
+            except AlpacaAuthFailure:
+                metrics.api_failures += 1
+                metrics.record_skip("API_FAIL", count=max(1, len(candidates_df)))
+                metrics.record_error(
+                    "auth_failure",
+                    stage="ensure_trading_auth",
+                    base_url=base_url or "",
+                )
+                loader.persist_metrics()
+                return 2
 
         executor = TradeExecutor(
             config,
