@@ -24,9 +24,10 @@ logger = logging.getLogger(__name__)
 WATERMARK_KEY = "alpaca_activities_watermark"
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
-DEFAULT_PAGE_SIZE = 200
+DEFAULT_PAGE_SIZE = 100
 DEFAULT_CHUNK_DAYS = 30
 DEFAULT_MAX_PAGES = 2000
+MAX_PAGE_SIZE = 100
 
 
 def _parse_decimal(value: Any) -> Optional[Decimal]:
@@ -298,6 +299,18 @@ def validate_env() -> None:
         raise EnvironmentError(f"missing_env {' '.join(missing)}")
 
 
+def _normalize_page_size(requested: int) -> int:
+    try:
+        sanitized = max(1, int(requested))
+    except Exception:
+        sanitized = 1
+
+    if sanitized > MAX_PAGE_SIZE:
+        logger.warning("[WARN] ACT_PAGE_SIZE_CLAMP requested=%s using=%s", sanitized, MAX_PAGE_SIZE)
+        return MAX_PAGE_SIZE
+    return sanitized
+
+
 def fetch_activities(
     base_url: str,
     after: str | None,
@@ -308,8 +321,9 @@ def fetch_activities(
     direction: str = "asc",
 ) -> List[Dict[str, Any]]:
     max_pages = max(1, int(max_pages))
+    page_size = _normalize_page_size(page_size)
     params: Dict[str, Any] = {
-        "page_size": max(1, int(page_size)),
+        "page_size": page_size,
         "direction": direction,
     }
     if after:
@@ -359,7 +373,7 @@ def _is_newer_watermark(candidate: Optional[str], current: Optional[str]) -> boo
 def _run_incremental(args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]) -> None:
     since_iso, origin = compute_since(args.since_ts, watermark, args.lookback_days)
     max_pages = max(1, int(args.max_pages))
-    page_size = max(1, int(args.page_size))
+    page_size = _normalize_page_size(args.page_size)
 
     logger.info(
         "[INFO] ACT_START base_url=%s since=%s lookback_days=%s origin=%s page_size=%s max_pages=%s",
@@ -415,7 +429,7 @@ def _run_backfill(args: argparse.Namespace, base_url: str, engine, watermark: Op
     end_ts = _parse_timestamp(args.to_ts)
     backfill_all = bool(args.backfill_all and not (start_ts and end_ts))
     chunk_days = max(1, int(args.chunk_days))
-    page_size = max(1, int(args.page_size))
+    page_size = _normalize_page_size(args.page_size)
     max_pages = max(1, int(args.max_pages))
     logger.info(
         "[INFO] ACT_BACKFILL_START from=%s to=%s chunk_days=%s page_size=%s max_pages=%s backfill_all=%s",
@@ -535,7 +549,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="When set, walk backwards in chunked windows until no more data is returned.",
     )
-    parser.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE, help="API page size (default 200).")
+    parser.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE, help="API page size (default 100).")
     parser.add_argument("--chunk-days", type=int, default=DEFAULT_CHUNK_DAYS, help="Days per backfill chunk.")
     parser.add_argument(
         "--max-pages",
