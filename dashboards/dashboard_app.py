@@ -648,6 +648,23 @@ ORDER BY transaction_time DESC
 LIMIT 200
 """
 
+_TRADE_PNL_RECENT_SQL = """
+SELECT exit_time, symbol, trade_side, profit_loss_usd
+FROM v_trade_pnl
+ORDER BY exit_time DESC
+LIMIT 50;
+"""
+
+_TRADE_PNL_DAILY_SQL = """
+SELECT
+  (exit_time AT TIME ZONE 'America/New_York')::date AS trade_day,
+  SUM(profit_loss_usd) AS daily_pnl
+FROM v_trade_pnl
+WHERE exit_time >= now() - interval '30 days'
+GROUP BY trade_day
+ORDER BY trade_day;
+"""
+
 
 def load_recent_fills() -> tuple[pd.DataFrame, list[dbc.Alert]]:
     df, alert = db_query_df(_FILLS_RECENT_SQL)
@@ -671,6 +688,49 @@ def load_recent_fills() -> tuple[pd.DataFrame, list[dbc.Alert]]:
         frame["order_id"] = frame["order_id"].astype(str)
     if "order_id" in frame.columns and "order_id_short" not in frame.columns:
         frame["order_id_short"] = frame["order_id"].str.slice(0, 8)
+    return frame, alerts
+
+
+def _load_recent_trade_pnl() -> tuple[pd.DataFrame | None, list[dbc.Alert]]:
+    df, alert = db_query_df(_TRADE_PNL_RECENT_SQL)
+    alerts = [alert] if alert else []
+    if df is None:
+        return None, alerts
+
+    frame = df.copy()
+    if frame.empty:
+        return frame, alerts
+
+    if "exit_time" in frame.columns:
+        frame["exit_time"] = pd.to_datetime(frame["exit_time"], errors="coerce", utc=True)
+        frame = frame.dropna(subset=["exit_time"])
+        frame = frame.sort_values("exit_time", ascending=False)
+        frame["exit_time"] = frame["exit_time"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    if "symbol" in frame.columns:
+        frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    if "trade_side" in frame.columns:
+        frame["trade_side"] = frame["trade_side"].astype(str).str.upper()
+    if "profit_loss_usd" in frame.columns:
+        frame["profit_loss_usd"] = pd.to_numeric(frame["profit_loss_usd"], errors="coerce")
+
+    return frame, alerts
+
+
+def _load_daily_trade_pnl() -> tuple[pd.DataFrame | None, list[dbc.Alert]]:
+    df, alert = db_query_df(_TRADE_PNL_DAILY_SQL)
+    alerts = [alert] if alert else []
+    if df is None:
+        return None, alerts
+
+    frame = df.copy()
+    if frame.empty:
+        return frame, alerts
+
+    if "trade_day" in frame.columns:
+        frame["trade_day"] = pd.to_datetime(frame["trade_day"], errors="coerce").dt.date
+    if "daily_pnl" in frame.columns:
+        frame["daily_pnl"] = pd.to_numeric(frame["daily_pnl"], errors="coerce")
+
     return frame, alerts
 
 
@@ -1345,6 +1405,92 @@ def make_trades_exits_layout():
     else:
         eff_bar = html.Div("No exit_efficiency data available yet.")
 
+    def _trade_pnl_section() -> Any:
+        table_df, table_alerts = _load_recent_trade_pnl()
+        daily_df, daily_alerts = _load_daily_trade_pnl()
+        alerts = table_alerts + daily_alerts
+
+        if table_df is None and daily_df is None and alerts:
+            return html.Div(alerts)
+
+        if table_df is None or table_df.empty:
+            table_component: Any = dbc.Alert("No completed trades yet.", color="info")
+        else:
+            table_component = dash_table.DataTable(
+                id="trade-pnl-recent-table",
+                columns=[
+                    {"name": "Exit Time", "id": "exit_time"},
+                    {"name": "Symbol", "id": "symbol"},
+                    {"name": "Side", "id": "trade_side"},
+                    {
+                        "name": "Profit / Loss (USD)",
+                        "id": "profit_loss_usd",
+                        "type": "numeric",
+                        "format": Format(precision=2, scheme=Scheme.fixed),
+                    },
+                ],
+                data=table_df.to_dict("records"),
+                sort_action="native",
+                sort_by=[{"column_id": "exit_time", "direction": "desc"}],
+                page_size=10,
+                style_table={"overflowX": "auto"},
+                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
+                style_data_conditional=[
+                    {
+                        "if": {"filter_query": "{profit_loss_usd} > 0", "column_id": "profit_loss_usd"},
+                        "color": "#28a745",
+                    },
+                    {
+                        "if": {"filter_query": "{profit_loss_usd} < 0", "column_id": "profit_loss_usd"},
+                        "color": "#dc3545",
+                    },
+                ],
+            )
+
+        if daily_df is None or daily_df.empty:
+            chart_component: Any = dbc.Alert("No completed trades yet.", color="info")
+        else:
+            colors = [
+                "#28a745" if (val or 0) >= 0 else "#dc3545"
+                for val in daily_df["daily_pnl"].tolist()
+            ]
+            fig = go.Figure(
+                data=[
+                    go.Bar(
+                        x=daily_df["trade_day"],
+                        y=daily_df["daily_pnl"],
+                        marker_color=colors,
+                    )
+                ]
+            )
+            fig.update_layout(
+                title="30-Day Daily P&L",
+                xaxis_title="Trade Day (ET)",
+                yaxis_title="Daily P&L (USD)",
+                template="plotly_dark",
+                margin=dict(l=10, r=10, t=40, b=40),
+            )
+            chart_component = dcc.Graph(figure=fig, id="trade-pnl-daily-chart")
+
+        return dbc.Card(
+            [
+                dbc.CardHeader("Trade Performance (Realized P/L)", className="fw-bold"),
+                dbc.CardBody(
+                    [
+                        html.Div(alerts),
+                        dbc.Row(
+                            [
+                                dbc.Col(table_component, md=5, className="mb-3"),
+                                dbc.Col(chart_component, md=7, className="mb-3"),
+                            ],
+                            className="g-3",
+                        ),
+                    ]
+                ),
+            ],
+            className="bg-dark text-light mb-4",
+        )
+
     return html.Div(
         [
             html.H3("Trades & Exit Analytics"),
@@ -1352,6 +1498,7 @@ def make_trades_exits_layout():
                 "Review how well each exit rule captures profit, using exit_reason and exit_efficiency from trades_log.csv."
             ),
             (dbc.Row(summary_cards, className="g-3 mb-3") if summary_cards else html.Div()),
+            _trade_pnl_section(),
             dbc.Card(
                 [
                     dbc.CardHeader(
@@ -3912,11 +4059,11 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 className="m-2",
             )
 
-        app.logger.info(
-            "Loaded %d trades for symbol performance from %s",
-            len(trades_df),
-            symbol_source_path,
-        )
+    app.logger.info(
+        "Loaded %d trades for symbol performance from %s",
+        len(trades_df),
+        symbol_source_path,
+    )
 
         grouped = trades_df.groupby("symbol")["net_pnl"]
         avg_pnl = grouped.mean()
