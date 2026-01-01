@@ -640,6 +640,40 @@ def load_executed_trades() -> tuple[pd.DataFrame, dbc.Alert | None]:
     return _safe_csv_with_message(Path(executed_trades_path))
 
 
+_FILLS_RECENT_SQL = """
+SELECT activity_type, transaction_time, symbol, side, qty, price, order_id
+FROM v_fills_recent
+WHERE transaction_time >= now() - interval '7 days'
+ORDER BY transaction_time DESC
+LIMIT 200
+"""
+
+
+def load_recent_fills() -> tuple[pd.DataFrame, list[dbc.Alert]]:
+    df, alert = db_query_df(_FILLS_RECENT_SQL)
+    alerts = [alert] if alert else []
+    if df is None:
+        return pd.DataFrame(), alerts
+
+    frame = df.copy()
+    if "transaction_time" in frame.columns:
+        frame["transaction_time"] = pd.to_datetime(frame["transaction_time"], utc=True, errors="coerce")
+        frame = frame.dropna(subset=["transaction_time"])
+        frame = frame.sort_values("transaction_time", ascending=False)
+    for col in ("qty", "price"):
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    if "symbol" in frame.columns:
+        frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    if "side" in frame.columns:
+        frame["side"] = frame["side"].astype(str).str.upper()
+    if "order_id" in frame.columns:
+        frame["order_id"] = frame["order_id"].astype(str)
+    if "order_id" in frame.columns and "order_id_short" not in frame.columns:
+        frame["order_id_short"] = frame["order_id"].str.slice(0, 8)
+    return frame, alerts
+
+
 _ACCOUNT_LATEST_SQL = """
 SELECT taken_at, account_id, status, equity, cash, buying_power, portfolio_value
 FROM v_account_latest
@@ -2365,6 +2399,14 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 className="custom-tab",
             ),
             dbc.Tab(
+                label="Activities",
+                tab_id="tab-activities",
+                id="tab-activities",
+                tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
+                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                className="custom-tab",
+            ),
+            dbc.Tab(
                 label="Account",
                 tab_id="tab-account",
                 id="tab-account",
@@ -2483,6 +2525,8 @@ _TAB_HASH_MAP = {
     "tab-screener": "tab-screener",
     "execute": "tab-execute",
     "tab-execute": "tab-execute",
+    "activities": "tab-activities",
+    "tab-activities": "tab-activities",
     "account": "tab-account",
     "tab-account": "tab-account",
     "symbol-performance": "tab-symbol-performance",
@@ -2501,6 +2545,7 @@ _TAB_IDS = {
     "tab-screener-health",
     "tab-screener",
     "tab-execute",
+    "tab-activities",
     "tab-account",
     "tab-symbol-performance",
     "tab-monitor",
@@ -3744,6 +3789,72 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 )
             )
         components.append(metrics_view)
+        return dbc.Container(components, fluid=True)
+
+
+    elif tab == "tab-activities":
+        fills_df, fills_alerts = load_recent_fills()
+        components: list[Any] = [
+            html.H4("Recent Fills (Alpaca Activities)", className="text-light"),
+            html.Div(
+                "Latest fills from v_fills_recent (7 days, max 200).",
+                className="text-muted small mb-2",
+            ),
+        ]
+        if fills_alerts:
+            components.extend(fills_alerts)
+
+        last_updated_value = None
+        if not fills_df.empty and "transaction_time" in fills_df.columns:
+            last_updated_value = fills_df["transaction_time"].max()
+        if last_updated_value is None:
+            last_updated_value = datetime.now(timezone.utc)
+        last_updated_display = last_updated_value.strftime("%Y-%m-%d %H:%M:%S UTC")
+        components.append(
+            html.Div(f"Last updated: {last_updated_display}", className="text-muted mb-3")
+        )
+
+        if fills_df.empty:
+            components.append(
+                dbc.Alert(
+                    "No Alpaca fills in the last 7 days. Recent bot activity will appear here.",
+                    color="info",
+                    className="mb-0",
+                )
+            )
+            return dbc.Container(components, fluid=True)
+
+        display_df = fills_df.copy()
+        if "transaction_time" in display_df.columns:
+            display_df["transaction_time"] = display_df["transaction_time"].dt.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        order_column = "order_id_short" if "order_id_short" in display_df.columns else "order_id"
+        table_columns = [
+            {"name": "Time (UTC)", "id": "transaction_time"},
+            {"name": "Symbol", "id": "symbol"},
+            {"name": "Side", "id": "side"},
+            {"name": "Qty", "id": "qty", "type": "numeric"},
+            {
+                "name": "Price",
+                "id": "price",
+                "type": "numeric",
+                "format": Format(precision=2, scheme=Scheme.fixed),
+            },
+        ]
+        if order_column in display_df.columns:
+            table_columns.append({"name": "Order ID", "id": order_column})
+        display_df = display_df[[col["id"] for col in table_columns if col["id"] in display_df.columns]]
+
+        table = dash_table.DataTable(
+            data=display_df.to_dict("records"),
+            columns=table_columns,
+            page_size=25,
+            style_table={"overflowX": "auto"},
+            style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
+            style_header={"fontWeight": "bold"},
+        )
+        components.append(table)
         return dbc.Container(components, fluid=True)
 
 
