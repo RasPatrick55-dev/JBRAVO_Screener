@@ -665,6 +665,24 @@ GROUP BY trade_day
 ORDER BY trade_day;
 """
 
+_TRADE_PNL_KPI_SQL = """
+SELECT
+  COUNT(*) AS trades,
+  AVG((profit_loss_usd > 0)::int)::numeric AS win_rate,
+  AVG(CASE WHEN profit_loss_usd > 0 THEN profit_loss_usd END) AS avg_win,
+  AVG(CASE WHEN profit_loss_usd < 0 THEN profit_loss_usd END) AS avg_loss,
+  (
+    AVG(CASE WHEN profit_loss_usd > 0 THEN profit_loss_usd END)
+    * AVG((profit_loss_usd > 0)::int)::numeric
+  ) +
+  (
+    AVG(CASE WHEN profit_loss_usd < 0 THEN profit_loss_usd END)
+    * (1 - AVG((profit_loss_usd > 0)::int)::numeric)
+  ) AS expectancy
+FROM v_trade_pnl
+WHERE exit_time >= now() - interval '30 days';
+"""
+
 
 def load_recent_fills() -> tuple[pd.DataFrame, list[dbc.Alert]]:
     df, alert = db_query_df(_FILLS_RECENT_SQL)
@@ -732,6 +750,55 @@ def _load_daily_trade_pnl() -> tuple[pd.DataFrame | None, list[dbc.Alert]]:
         frame["daily_pnl"] = pd.to_numeric(frame["daily_pnl"], errors="coerce")
 
     return frame, alerts
+
+
+def _load_trade_pnl_kpis() -> tuple[dict[str, Any] | None, list[dbc.Alert]]:
+    df, alert = db_query_df(_TRADE_PNL_KPI_SQL)
+    alerts = [alert] if alert else []
+    if df is None:
+        return None, alerts
+
+    defaults: dict[str, Any] = {
+        "trades": 0,
+        "win_rate": 0.0,
+        "avg_win": None,
+        "avg_loss": None,
+        "expectancy": None,
+    }
+
+    if df.empty:
+        return defaults, alerts
+
+    row = df.iloc[0]
+
+    def _safe_float(value: Any) -> float | None:
+        try:
+            result = float(value)
+            if math.isnan(result):
+                return None
+            return result
+        except (TypeError, ValueError):
+            return None
+
+    def _safe_int(value: Any) -> int:
+        try:
+            if value is None:
+                return 0
+            if isinstance(value, float) and math.isnan(value):
+                return 0
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    metrics = {
+        "trades": _safe_int(row.get("trades")),
+        "win_rate": _safe_float(row.get("win_rate")) or 0.0,
+        "avg_win": _safe_float(row.get("avg_win")),
+        "avg_loss": _safe_float(row.get("avg_loss")),
+        "expectancy": _safe_float(row.get("expectancy")),
+    }
+
+    return metrics, alerts
 
 
 _ACCOUNT_LATEST_SQL = """
@@ -1406,12 +1473,78 @@ def make_trades_exits_layout():
         eff_bar = html.Div("No exit_efficiency data available yet.")
 
     def _trade_pnl_section() -> Any:
+        kpi_metrics, kpi_alerts = _load_trade_pnl_kpis()
         table_df, table_alerts = _load_recent_trade_pnl()
         daily_df, daily_alerts = _load_daily_trade_pnl()
-        alerts = table_alerts + daily_alerts
+        alerts = kpi_alerts + table_alerts + daily_alerts
 
         if table_df is None and daily_df is None and alerts:
             return html.Div(alerts)
+
+        def _format_pct(value: Any) -> str:
+            try:
+                return f"{float(value) * 100:.1f}%"
+            except Exception:
+                return "0.0%"
+
+        def _format_currency(value: Any) -> str:
+            try:
+                number = float(value)
+                if math.isnan(number):
+                    raise ValueError
+                return f"${number:,.2f}"
+            except Exception:
+                return "N/A"
+
+        def _trade_pnl_kpi_cards(metrics: Mapping[str, Any] | None) -> Any:
+            if metrics is None:
+                return html.Div()
+
+            trades = metrics.get("trades", 0)
+            win_rate = metrics.get("win_rate", 0.0)
+            avg_win = metrics.get("avg_win")
+            avg_loss = metrics.get("avg_loss")
+            expectancy = metrics.get("expectancy")
+
+            card_data = [
+                ("Trades", f"{_coerce_int_value(trades)}"),
+                ("Win rate", _format_pct(win_rate)),
+                ("Avg win", _format_currency(avg_win)),
+                ("Avg loss", _format_currency(avg_loss)),
+                ("Expectancy", _format_currency(expectancy)),
+            ]
+
+            return html.Div(
+                [
+                    html.H5("Last 30 Days", className="mb-3"),
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                dbc.Card(
+                                    [
+                                        dbc.CardHeader(label, className="fw-semibold"),
+                                        dbc.CardBody(
+                                            html.H4(value, className="card-title mb-0"),
+                                            className="py-3",
+                                        ),
+                                    ],
+                                    className="h-100",
+                                    color="dark",
+                                    outline=True,
+                                    style={"borderColor": "var(--bs-primary)"},
+                                ),
+                                md=2,
+                                sm=6,
+                                className="mb-3",
+                            )
+                            for label, value in card_data
+                        ],
+                        className="g-3",
+                        justify="start",
+                    ),
+                ],
+                className="mb-4",
+            )
 
         if table_df is None or table_df.empty:
             table_component: Any = dbc.Alert("No completed trades yet.", color="info")
@@ -1478,6 +1611,7 @@ def make_trades_exits_layout():
                 dbc.CardBody(
                     [
                         html.Div(alerts),
+                        _trade_pnl_kpi_cards(kpi_metrics),
                         dbc.Row(
                             [
                                 dbc.Col(table_component, md=5, className="mb-3"),
