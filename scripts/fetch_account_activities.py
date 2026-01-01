@@ -17,17 +17,16 @@ from scripts import db
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_PATH = os.path.join(BASE_DIR, "logs", "activities_ingestor.log")
+BACKFILL_LOG_PATH = os.path.join(BASE_DIR, "logs", "activities_backfill.log")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s",
-    handlers=[logging.FileHandler(LOG_PATH), logging.StreamHandler(sys.stdout)],
-)
 logger = logging.getLogger(__name__)
 
 WATERMARK_KEY = "alpaca_activities_watermark"
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
+DEFAULT_PAGE_SIZE = 200
+DEFAULT_CHUNK_DAYS = 30
+DEFAULT_MAX_PAGES = 2000
 
 
 def _parse_decimal(value: Any) -> Optional[Decimal]:
@@ -141,6 +140,16 @@ def save_watermark(engine, value: str) -> bool:
     return False
 
 
+def _configure_logging(mode: str) -> None:
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    log_file = BACKFILL_LOG_PATH if mode == "backfill" else LOG_PATH
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)],
+    )
+
+
 def _build_headers() -> Dict[str, str]:
     return {
         "APCA-API-KEY-ID": os.getenv("APCA_API_KEY_ID", ""),
@@ -169,37 +178,26 @@ def _pagination_token(response: requests.Response, payload: Any) -> Optional[str
     return None
 
 
-def fetch_activities(base_url: str, since_iso: str | None) -> List[Dict[str, Any]]:
+def _request_activity_page(base_url: str, params: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     base = base_url.rstrip("/")
     url = f"{base}/v2/account/activities"
     headers = _build_headers()
-    params: Dict[str, Any] = {"page_size": 100, "direction": "asc"}
-    if since_iso:
-        params["after"] = since_iso
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    if not resp.ok:
+        raise RuntimeError(f"activities_request_failed status={resp.status_code} body={resp.text}")
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        raise RuntimeError(f"invalid_json_response err={exc}") from exc
 
     activities: List[Dict[str, Any]] = []
-    while True:
-        resp = requests.get(url, headers=headers, params=params, timeout=30)
-        if not resp.ok:
-            raise RuntimeError(f"activities_request_failed status={resp.status_code} body={resp.text}")
-        try:
-            payload = resp.json()
-        except Exception as exc:
-            raise RuntimeError(f"invalid_json_response err={exc}") from exc
+    if isinstance(payload, list):
+        activities.extend(payload)
+    elif isinstance(payload, dict) and "activities" in payload and isinstance(payload["activities"], list):
+        activities.extend(payload["activities"])
 
-        if isinstance(payload, list):
-            activities.extend(payload)
-        elif isinstance(payload, dict) and "activities" in payload and isinstance(payload["activities"], list):
-            activities.extend(payload["activities"])
-        else:
-            break
-
-        token = _pagination_token(resp, payload)
-        if not token:
-            break
-        params["page_token"] = token
-
-    return activities
+    token = _pagination_token(resp, payload)
+    return activities, token
 
 
 def _normalize_activity(activity: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -232,9 +230,10 @@ def _normalize_activity(activity: Dict[str, Any]) -> Tuple[Dict[str, Any], Optio
     return normalized, watermark_candidate
 
 
-def insert_activities(engine, activities: Iterable[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
+def insert_activities(engine, activities: Iterable[Dict[str, Any]]) -> Tuple[int, Optional[str], Optional[str]]:
     normalized_rows: List[Dict[str, Any]] = []
     watermark: Optional[str] = None
+    earliest_ts: Optional[datetime] = None
 
     for activity in activities:
         normalized, wm = _normalize_activity(activity)
@@ -243,9 +242,14 @@ def insert_activities(engine, activities: Iterable[Dict[str, Any]]) -> Tuple[int
         normalized_rows.append(normalized)
         if wm:
             watermark = wm
+        if normalized.get("transaction_time"):
+            candidate_ts = normalized["transaction_time"]
+            if earliest_ts is None or (candidate_ts is not None and candidate_ts < earliest_ts):
+                earliest_ts = candidate_ts
 
     if not normalized_rows:
-        return 0, watermark
+        earliest_iso = earliest_ts.isoformat() if earliest_ts else None
+        return 0, watermark, earliest_iso
 
     stmt = text(
         """
@@ -263,7 +267,8 @@ def insert_activities(engine, activities: Iterable[Dict[str, Any]]) -> Tuple[int
     try:
         with engine.begin() as connection:
             connection.execute(stmt, normalized_rows)
-        return len(normalized_rows), watermark
+        earliest_iso = earliest_ts.isoformat() if earliest_ts else None
+        return len(normalized_rows), watermark, earliest_iso
     except Exception as exc:
         raise RuntimeError(f"db_insert_failed err={exc}") from exc
 
@@ -293,23 +298,255 @@ def validate_env() -> None:
         raise EnvironmentError(f"missing_env {' '.join(missing)}")
 
 
+def fetch_activities(
+    base_url: str,
+    after: str | None,
+    until: str | None,
+    page_size: int,
+    max_pages: int,
+    *,
+    direction: str = "asc",
+) -> List[Dict[str, Any]]:
+    max_pages = max(1, int(max_pages))
+    params: Dict[str, Any] = {
+        "page_size": max(1, int(page_size)),
+        "direction": direction,
+    }
+    if after:
+        params["after"] = after
+    if until:
+        params["until"] = until
+
+    activities: List[Dict[str, Any]] = []
+    page_count = 0
+    while True:
+        page_count += 1
+        if page_count > max_pages:
+            logger.warning(
+                "[WARN] ACT_MAX_PAGES_REACHED page_count=%s max_pages=%s after=%s until=%s",
+                page_count - 1,
+                max_pages,
+                after or "",
+                until or "",
+            )
+            break
+        results, token = _request_activity_page(base_url, params)
+        activities.extend(results)
+        if not token:
+            break
+        params["page_token"] = token
+
+    return activities
+
+
+def _is_newer_watermark(candidate: Optional[str], current: Optional[str]) -> bool:
+    if not candidate:
+        return False
+    candidate_ts = _parse_timestamp(candidate)
+    current_ts = _parse_timestamp(current) if current else None
+
+    if candidate_ts and current_ts:
+        return candidate_ts > current_ts
+    if candidate_ts and not current_ts:
+        return True
+    if not candidate_ts and current_ts:
+        return False
+    if current is None:
+        return True
+    return str(candidate) > str(current)
+
+
+def _run_incremental(args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]) -> None:
+    since_iso, origin = compute_since(args.since_ts, watermark, args.lookback_days)
+    max_pages = max(1, int(args.max_pages))
+    page_size = max(1, int(args.page_size))
+
+    logger.info(
+        "[INFO] ACT_START base_url=%s since=%s lookback_days=%s origin=%s page_size=%s max_pages=%s",
+        base_url,
+        since_iso,
+        args.lookback_days,
+        origin,
+        page_size,
+        max_pages,
+    )
+
+    activities = fetch_activities(base_url, since_iso, None, page_size, max_pages)
+    logger.info("[INFO] ACT_FETCH_OK count=%s", len(activities))
+
+    inserted, watermark_candidate, _ = insert_activities(engine, activities)
+    logger.info("[INFO] ACT_DB_OK inserted=%s", inserted)
+
+    if watermark_candidate:
+        if save_watermark(engine, watermark_candidate):
+            logger.info("[INFO] ACT_WATERMARK_OK value=%s", watermark_candidate)
+        else:
+            logger.error("[ERROR] ACT_WATERMARK_FAIL value=%s", watermark_candidate)
+
+
+def _build_backfill_windows(
+    start_ts: Optional[datetime], end_ts: Optional[datetime], chunk_days: int, backfill_all: bool
+) -> Iterable[Tuple[datetime, datetime]]:
+    chunk = max(1, int(chunk_days))
+    now_ts = datetime.now(timezone.utc)
+    effective_end = end_ts or now_ts
+    effective_start = start_ts
+    if effective_start is None:
+        effective_start = effective_end - timedelta(days=chunk)
+    if end_ts is None and start_ts is not None:
+        effective_end = now_ts
+    if end_ts is not None and start_ts is None:
+        effective_start = end_ts - timedelta(days=chunk)
+
+    if not backfill_all:
+        yield effective_start, effective_end
+        return
+
+    current_end = effective_end
+    current_start = effective_start
+    while current_start < current_end:
+        yield current_start, current_end
+        current_end = current_start
+        current_start = current_end - timedelta(days=chunk)
+
+
+def _run_backfill(args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]) -> None:
+    start_ts = _parse_timestamp(args.from_ts)
+    end_ts = _parse_timestamp(args.to_ts)
+    backfill_all = bool(args.backfill_all and not (start_ts and end_ts))
+    chunk_days = max(1, int(args.chunk_days))
+    page_size = max(1, int(args.page_size))
+    max_pages = max(1, int(args.max_pages))
+    logger.info(
+        "[INFO] ACT_BACKFILL_START from=%s to=%s chunk_days=%s page_size=%s max_pages=%s backfill_all=%s",
+        start_ts.isoformat() if start_ts else "",
+        end_ts.isoformat() if end_ts else "",
+        chunk_days,
+        page_size,
+        max_pages,
+        backfill_all,
+    )
+
+    total_inserted = 0
+    earliest_seen_dt: Optional[datetime] = None
+    watermark_candidate: Optional[str] = None
+
+    for window_start, window_end in _build_backfill_windows(start_ts, end_ts, chunk_days, backfill_all):
+        if window_start >= window_end:
+            logger.warning(
+                "[WARN] ACT_SKIP_WINDOW reason=ambiguous_range window_start=%s window_end=%s",
+                window_start.isoformat(),
+                window_end.isoformat(),
+            )
+            continue
+
+        params: Dict[str, Any] = {
+            "after": window_start.isoformat(),
+            "until": window_end.isoformat(),
+            "page_size": page_size,
+            "direction": "asc",
+        }
+        page_count = 0
+        window_had_results = False
+        page_token: Optional[str] = None
+
+        while True:
+            page_count += 1
+            if page_count > max_pages:
+                logger.warning(
+                    "[WARN] ACT_MAX_PAGES_REACHED page_count=%s max_pages=%s window_start=%s window_end=%s",
+                    page_count - 1,
+                    max_pages,
+                    window_start.isoformat(),
+                    window_end.isoformat(),
+                )
+                break
+
+            if page_token:
+                params["page_token"] = page_token
+            elif "page_token" in params:
+                params.pop("page_token", None)
+
+            page_results, token = _request_activity_page(base_url, params)
+            inserted, wm_candidate, earliest_iso = insert_activities(engine, page_results)
+            window_had_results = window_had_results or bool(page_results)
+            total_inserted += inserted
+
+            if earliest_iso:
+                parsed_earliest = _parse_timestamp(earliest_iso)
+                if parsed_earliest and (earliest_seen_dt is None or parsed_earliest < earliest_seen_dt):
+                    earliest_seen_dt = parsed_earliest
+
+            if wm_candidate and _is_newer_watermark(wm_candidate, watermark_candidate):
+                watermark_candidate = wm_candidate
+
+            logger.info(
+                "[INFO] ACT_BACKFILL_PAGE fetched=%s inserted=%s window_start=%s window_end=%s",
+                len(page_results),
+                inserted,
+                window_start.isoformat(),
+                window_end.isoformat(),
+            )
+
+            if not token:
+                break
+            page_token = token
+
+        if backfill_all and not window_had_results:
+            break
+
+    earliest_seen = earliest_seen_dt.isoformat() if earliest_seen_dt else ""
+    logger.info(
+        "[INFO] ACT_BACKFILL_DONE total_inserted=%s earliest_seen=%s", total_inserted, earliest_seen
+    )
+
+    if watermark_candidate and _is_newer_watermark(watermark_candidate, watermark):
+        if save_watermark(engine, watermark_candidate):
+            logger.info("[INFO] ACT_WATERMARK_OK value=%s", watermark_candidate)
+        else:
+            logger.error("[ERROR] ACT_WATERMARK_FAIL value=%s", watermark_candidate)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Fetch Alpaca account activities into Postgres.")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="incremental",
+        choices=["incremental", "backfill"],
+        help="Ingestion mode: incremental (default) or backfill.",
+    )
     parser.add_argument(
         "--lookback-days",
         type=int,
         default=DEFAULT_LOOKBACK_DAYS,
-        help="Number of days to look back when no watermark exists.",
+        help="Number of days to look back when no watermark exists (incremental mode).",
     )
     parser.add_argument(
         "--since-ts",
         type=str,
         default=None,
-        help="ISO-8601 timestamp to start fetching from (overrides lookback when provided).",
+        help="ISO-8601 timestamp to start fetching from (overrides lookback when provided, incremental mode).",
+    )
+    parser.add_argument("--from-ts", type=str, default=None, help="Backfill start timestamp (ISO-8601).")
+    parser.add_argument("--to-ts", type=str, default=None, help="Backfill end timestamp (ISO-8601).")
+    parser.add_argument(
+        "--backfill-all",
+        action="store_true",
+        help="When set, walk backwards in chunked windows until no more data is returned.",
+    )
+    parser.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE, help="API page size (default 200).")
+    parser.add_argument("--chunk-days", type=int, default=DEFAULT_CHUNK_DAYS, help="Days per backfill chunk.")
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=DEFAULT_MAX_PAGES,
+        help="Maximum pages to request per window (safety cap).",
     )
     args = parser.parse_args(argv)
 
     try:
+        _configure_logging(args.mode)
         load_dotenv()
         validate_env()
         base_url = os.getenv("APCA_API_BASE_URL", DEFAULT_BASE_URL)
@@ -318,27 +555,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             raise RuntimeError("db_unavailable")
 
         watermark = load_watermark(engine)
-        since_iso, origin = compute_since(args.since_ts, watermark, args.lookback_days)
 
-        logger.info(
-            "[INFO] ACT_START base_url=%s since=%s lookback_days=%s origin=%s",
-            base_url,
-            since_iso,
-            args.lookback_days,
-            origin,
-        )
-
-        activities = fetch_activities(base_url, since_iso)
-        logger.info("[INFO] ACT_FETCH_OK count=%s", len(activities))
-
-        inserted, watermark_candidate = insert_activities(engine, activities)
-        logger.info("[INFO] ACT_DB_OK inserted=%s", inserted)
-
-        if watermark_candidate:
-            if save_watermark(engine, watermark_candidate):
-                logger.info("[INFO] ACT_WATERMARK_OK value=%s", watermark_candidate)
-            else:
-                logger.error("[ERROR] ACT_WATERMARK_FAIL value=%s", watermark_candidate)
+        if args.mode == "backfill":
+            _run_backfill(args, base_url, engine, watermark)
+        else:
+            _run_incremental(args, base_url, engine, watermark)
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("[ERROR] ACT_FAIL %s", exc)
         return 1
