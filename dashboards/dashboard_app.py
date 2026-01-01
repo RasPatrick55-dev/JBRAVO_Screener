@@ -4059,11 +4059,11 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 className="m-2",
             )
 
-    app.logger.info(
-        "Loaded %d trades for symbol performance from %s",
-        len(trades_df),
-        symbol_source_path,
-    )
+        app.logger.info(
+            "Loaded %d trades for symbol performance from %s",
+            len(trades_df),
+            symbol_source_path,
+        )
 
         grouped = trades_df.groupby("symbol")["net_pnl"]
         avg_pnl = grouped.mean()
