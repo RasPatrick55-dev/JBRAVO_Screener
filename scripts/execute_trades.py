@@ -25,8 +25,8 @@ from dateutil.parser import isoparse
 NY = ZoneInfo("America/New_York")
 
 import pandas as pd
+import psycopg2
 import requests
-from sqlalchemy import text
 
 from scripts import db
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
@@ -1734,6 +1734,48 @@ class CandidateLoadError(RuntimeError):
     """Raised when candidate data cannot be loaded or validated."""
 
 
+def load_candidates_from_db() -> list[Dict[str, Any]]:
+    """Load the latest screener candidates from PostgreSQL."""
+
+    LOGGER.info("Loading candidates from DB")
+    host = os.getenv("JBRAVO_DB_HOST")
+    port = os.getenv("JBRAVO_DB_PORT", "5432")
+    name = os.getenv("JBRAVO_DB_NAME")
+    user = os.getenv("JBRAVO_DB_USER")
+    password = os.getenv("JBRAVO_DB_PASS")
+    missing = [key for key, value in (("JBRAVO_DB_HOST", host), ("JBRAVO_DB_NAME", name), ("JBRAVO_DB_USER", user), ("JBRAVO_DB_PASS", password)) if not value]
+    if missing:
+        raise CandidateLoadError(f"Missing database configuration: {', '.join(missing)}")
+    connection = None
+    try:
+        connection = psycopg2.connect(
+            host=host,
+            port=port,
+            dbname=name,
+            user=user,
+            password=password,
+        )
+        query = """
+            SELECT
+                run_date, symbol, score, exchange, close, volume,
+                universe_count, score_breakdown, entry_price, adv20, atrp, source
+            FROM screener_candidates
+            WHERE timestamp = (SELECT MAX(timestamp) FROM screener_candidates);
+        """
+        df = pd.read_sql_query(query, connection)
+    except Exception as exc:
+        raise CandidateLoadError(f"Failed to load candidates from database: {exc}") from exc
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                LOGGER.debug("Failed to close DB connection", exc_info=True)
+    records = df.to_dict(orient="records")
+    LOGGER.info("Loaded %d candidates from DB", len(records))
+    return records
+
+
 class AlpacaAuthFailure(RuntimeError):
     """Raised when Alpaca auth probes fail."""
 
@@ -3288,35 +3330,17 @@ class TradeExecutor:
         return allowed, message, resolved_window
 
     def _load_latest_candidates_from_db(self) -> tuple[pd.DataFrame, Optional[str]]:
-        engine = db.get_engine()
-        if engine is None:
-            raise CandidateLoadError("DATABASE_URL not configured")
-        with engine.connect() as connection:
-            latest_run_date = connection.execute(text("SELECT MAX(run_date) FROM screener_candidates")).scalar()
-        if not latest_run_date:
-            LOGGER.info("[INFO] DB_CANDIDATES rows=0")
-            return pd.DataFrame(), None
-        with engine.connect() as connection:
-            result = connection.execute(
-                text(
-                    """
-                    SELECT
-                        run_date, timestamp, symbol, score, exchange, close, volume,
-                        universe_count, score_breakdown, entry_price, adv20, atrp, source
-                    FROM screener_candidates
-                    WHERE run_date = :run_date
-                    ORDER BY score DESC NULLS LAST
-                    """
-                ),
-                {"run_date": latest_run_date},
-            )
-            rows = result.fetchall()
-            columns = result.keys()
-        df = pd.DataFrame(rows, columns=columns)
+        records = load_candidates_from_db()
+        df = pd.DataFrame(records)
         if "symbol" in df.columns:
             df["symbol"] = df["symbol"].astype("string").str.upper()
-        run_label = str(latest_run_date)
-        LOGGER.info("[INFO] DB_CANDIDATES rows=%s run_date=%s", len(df), run_label)
+        run_label: Optional[str] = None
+        if "run_date" in df.columns and not df["run_date"].isna().all():
+            try:
+                run_label = str(df["run_date"].dropna().iloc[0])
+            except Exception:
+                run_label = None
+        LOGGER.info("[INFO] DB_CANDIDATES rows=%s", len(df))
         return df, run_label
 
     def load_candidates(self, *, rank: bool = True) -> pd.DataFrame:
@@ -3324,13 +3348,9 @@ class TradeExecutor:
         df: pd.DataFrame
         base_dir: Path | None = None
         if source_type == "db":
-            try:
-                df, _ = self._load_latest_candidates_from_db()
-                base_dir = Path.cwd()
-            except Exception as exc:
-                LOGGER.warning("[WARN] DB_READ_FAILED err=%s -> falling back to CSV", exc)
-                source_type = "csv"
-        if source_type != "db":
+            df, _ = self._load_latest_candidates_from_db()
+            base_dir = Path.cwd()
+        elif source_type == "csv":
             path = self.config.source_path
             if not path.exists():
                 raise CandidateLoadError(f"Candidate file not found: {path}")
@@ -3339,6 +3359,8 @@ class TradeExecutor:
                 base_dir = path.resolve().parent.parent
             except Exception:
                 base_dir = Path.cwd()
+        else:
+            raise CandidateLoadError(f"Unknown candidate source: {source_type}")
         raw_columns = list(df.columns)
         LOGGER.info("[INFO] CANDIDATE_COLUMNS raw=%s", raw_columns)
         normalized_columns = [str(column).strip() for column in raw_columns]
