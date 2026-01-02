@@ -4281,22 +4281,15 @@ class TradeExecutor:
             return None
         return numeric
 
-    @staticmethod
-    def _req(request: Any) -> Any:
-        """Compatibility shim for Alpaca request payloads (request object first)."""
-
-        if isinstance(request, Mapping):
-            return dict(request)
-        return request
-
     def _get_orders(self, request: Any) -> Any:
-        request_payload = self._req(request)
         try:
-            return self.client.get_orders(filter=request_payload)
+            if request is None:
+                return self.client.get_orders()
+            return self.client.get_orders(filter=request)
         except TypeError:
-            if isinstance(request_payload, Mapping):
-                return self.client.get_orders(filter=request_payload)
-            raise
+            if request is None:
+                return self.client.get_orders()
+            return self.client.get_orders(filter=request)
 
     def fetch_open_order_symbols(self) -> tuple[set[str], int, int]:
         symbols: set[str] = set()
@@ -4305,7 +4298,7 @@ class TradeExecutor:
         if self.client is None:
             return symbols, open_buy_orders, total_orders
         try:
-            request = self._req(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+            request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
             log_info("alpaca.get_orders", status=getattr(request, "status", ""))
             orders = self._get_orders(request)
             for order in orders or []:
@@ -4914,13 +4907,10 @@ class TradeExecutor:
         )
 
     def _submit_order(self, request: Any) -> Any:
-        request_payload = self._req(request)
         try:
-            return self.client.submit_order(order_data=request_payload)
+            return self.client.submit_order(order_data=request)
         except TypeError:
-            if isinstance(request_payload, Mapping):
-                return self.client.submit_order(order_data=request_payload)
-            raise
+            return self.client.submit_order(order_data=request)
 
     def submit_with_retries(self, request: Any) -> Optional[Any]:
         if getattr(self.config, "diagnostic", False):
@@ -4981,12 +4971,12 @@ class TradeExecutor:
                     delay *= backoff
                     continue
                 self.metrics.api_failures += 1
-                _warn_context("alpaca.submit_order", f"failed: {exc}")
+                _warn_context("alpaca.submit_order failed", str(exc))
             except Exception as exc:
                 last_error = exc
                 if isinstance(exc, AttributeError):
                     self.metrics.api_failures += 1
-                    _warn_context("alpaca.submit_order", f"failed: {exc}")
+                    _warn_context("alpaca.submit_order failed", str(exc))
                     break
                 if attempt < attempts:
                     self.metrics.api_retries += 1
@@ -4995,7 +4985,7 @@ class TradeExecutor:
                     delay *= backoff
                     continue
                 self.metrics.api_failures += 1
-                _warn_context("alpaca.submit_order", f"failed: {exc}")
+                _warn_context("alpaca.submit_order failed", str(exc))
         if last_error is not None:
             self.log_info("API_FAILURE", error=str(last_error))
         return None
