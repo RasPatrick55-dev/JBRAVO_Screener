@@ -4284,14 +4284,12 @@ class TradeExecutor:
     def _get_orders(self, request: Any) -> Any:
         filter_request = request if request is not None else None
         try:
-            # Alpaca-py expects request objects to be passed via the filter kwarg
-            if filter_request is None:
-                return self.client.get_orders()
+            # Use alpaca-py signature: pass request as filter=
             return self.client.get_orders(filter=filter_request)
         except TypeError:
             if filter_request is None:
                 return self.client.get_orders()
-            return self.client.get_orders(filter_request)
+            return self.client.get_orders(filter=filter_request)
 
     def fetch_open_order_symbols(self) -> tuple[set[str], int, int]:
         symbols: set[str] = set()
@@ -4910,7 +4908,7 @@ class TradeExecutor:
 
     def _submit_order(self, request: Any) -> Any:
         try:
-            # Alpaca-py >=0.43 expects the request object as order_data
+            # Use alpaca-py signature: pass request as order_data=
             return self.client.submit_order(order_data=request)
         except TypeError:
             return self.client.submit_order(order_data=request)
