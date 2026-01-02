@@ -18,7 +18,7 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP, ROUND_HALF_
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 from zoneinfo import ZoneInfo
 from dateutil.parser import isoparse
@@ -1776,9 +1776,10 @@ def load_candidates_from_db(
             port = str(parsed.port or "5432")
             name = (parsed.path or "").lstrip("/")
             user = parsed.username
-            password = parsed.password
+            password = unquote(parsed.password or "")
             if host and name and user and password:
                 config_source = "DATABASE_URL"
+                LOGGER.info("[INFO] DB_PASSWORD decoded_from_url=true")
 
     if not config_source:
         return _record_missing_config()
@@ -1817,6 +1818,14 @@ def load_candidates_from_db(
             user=user,
             password=password,
         )
+        if diagnostic:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("select 1")
+                    cursor.fetchone()
+                LOGGER.info("DB_PING ok=true")
+            except Exception as exc:  # pragma: no cover - diagnostic logging
+                LOGGER.info("DB_PING ok=false err=%s", exc)
         LOGGER.info("[INFO] DB_QUERY max_timestamp")
         max_df = pd.read_sql_query(
             "SELECT MAX(timestamp) AS max_ts FROM screener_candidates;",
