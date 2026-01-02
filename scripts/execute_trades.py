@@ -4292,10 +4292,10 @@ class TradeExecutor:
     def _get_orders(self, request: Any) -> Any:
         request_payload = self._req(request)
         try:
-            return self.client.get_orders(request_payload)
+            return self.client.get_orders(filter=request_payload)
         except TypeError:
             if isinstance(request_payload, Mapping):
-                return self.client.get_orders(**request_payload)
+                return self.client.get_orders(filter=request_payload)
             raise
 
     def fetch_open_order_symbols(self) -> tuple[set[str], int, int]:
@@ -4916,10 +4916,10 @@ class TradeExecutor:
     def _submit_order(self, request: Any) -> Any:
         request_payload = self._req(request)
         try:
-            return self.client.submit_order(request_payload)
+            return self.client.submit_order(order_data=request_payload)
         except TypeError:
             if isinstance(request_payload, Mapping):
-                return self.client.submit_order(**request_payload)
+                return self.client.submit_order(order_data=request_payload)
             raise
 
     def submit_with_retries(self, request: Any) -> Optional[Any]:
