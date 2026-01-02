@@ -7,16 +7,38 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-env_path = ROOT / ".env"
+PROJECT_HOME = Path("/home/RasPatrick/jbravo_screener")
+os.environ.setdefault("PROJECT_HOME", str(PROJECT_HOME))
+if str(PROJECT_HOME) not in sys.path:
+    sys.path.insert(0, str(PROJECT_HOME))
+
+env_path = Path.home() / ".config" / "jbravo" / ".env"
 if env_path.exists():
-    load_dotenv(env_path)
+    try:
+        with env_path.open("r", encoding="utf-8") as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key and key not in os.environ:
+                    os.environ.setdefault(key, value)
+    except OSError:
+        pass
+
+print(
+    "WSGI_ENV_LOADED",
+    str(env_path),
+    "DATABASE_URL_SET",
+    bool(os.getenv("DATABASE_URL")),
+)
 
 os.environ.setdefault("JBRAVO_HOME", str(ROOT))
 
