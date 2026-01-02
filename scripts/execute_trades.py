@@ -5104,19 +5104,9 @@ def _ensure_trading_auth(
             payload = {}
         return payload if isinstance(payload, Mapping) else {}
 
-    try:
-        account_payload = fetch("/v2/account")
-        clock_payload = fetch("/v2/clock")
-        return account_payload, clock_payload
-    except AlpacaAuthFailure as exc:
-        status_hint = str(exc) or "unknown"
-        LOGGER.error(
-            "[ERROR] TRADING_AUTH_FAILED base_url=%s status=%s", resolved_base, status_hint
-        )
-        LOGGER.error(
-            "Reload ~/.config/jbravo/.env or export APCA_API_KEY_ID/APCA_API_SECRET_KEY"
-        )
-        raise SystemExit(2) from exc
+    account_payload = fetch("/v2/account")
+    clock_payload = fetch("/v2/clock")
+    return account_payload, clock_payload
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -5499,49 +5489,8 @@ def run_executor(
                 "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
             )
             LOGGER.info(banner)
-        if getattr(config, "reconcile_only", False):
-            account_payload: Optional[Mapping[str, Any]] = None
-            clock_payload: Optional[Mapping[str, Any]] = None
-        if client is not None:
-            trading_client = client
-            base_url = os.getenv("APCA_API_BASE_URL", "")
-        else:
-            trading_client, base_url, paper_mode, forced_mode = _create_trading_client()
-            forced_label = forced_mode if forced_mode is not None else "auto"
-            LOGGER.info(
-                "[INFO] TRADING_MODE base=%s paper_mode=%s forced=%s",
-                base_url or "",
-                bool(paper_mode),
-                forced_label,
-            )
-        _paper_only_guard(trading_client, base_url)
-        if trading_client is not None and client is None:
-            try:
-                account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
-            except AlpacaAuthFailure:
-                metrics.api_failures += 1
-                metrics.record_skip("API_FAIL", count=1)
-                metrics.record_error(
-                    "auth_failure",
-                    stage="ensure_trading_auth",
-                    base_url=base_url or "",
-                )
-                loader.persist_metrics()
-                return 2
-        executor = TradeExecutor(
-            config,
-            trading_client,
-            metrics,
-            base_url=base_url or "",
-            account_snapshot=account_payload,
-            clock_snapshot=clock_payload,
-        )
-        metrics.exit_reason = "RECONCILE_ONLY"
-        executor.reconcile_closed_trades()
-        executor.persist_metrics()
-        executor.log_summary()
-        return 0
         try:
+            LOGGER.info("[INFO] CANDIDATE_SOURCE %s", str(config.source_type or "csv"))
             frame = loader.load_candidates(rank=False)
         except CandidateLoadError as exc:
             LOGGER.error("%s", exc)
@@ -5554,6 +5503,13 @@ def run_executor(
             )
             loader.persist_metrics()
             return 1
+        if str(config.source_type or "").lower() == "db":
+            max_ts = ""
+            if not frame.empty and "timestamp" in frame.columns:
+                ts_series = frame["timestamp"].dropna().astype("string")
+                if not ts_series.empty:
+                    max_ts = ts_series.max()
+            LOGGER.info("[INFO] DB_CANDIDATES_LOADED count=%s max_timestamp=%s", len(frame), max_ts)
 
         candidates_df = loader._rank_candidates(frame)
 
@@ -5621,40 +5577,86 @@ def run_executor(
             candidates=len(candidates_df),
             submit_at_ny=str(config.submit_at_ny or ""),
         )
-        probe_auth_ok, probe_bp_display = _log_account_probe(creds_snapshot)
-        acc = None
-        acc_err = None
-        if trading_probe is not None and hasattr(trading_probe, "get_account"):
-            acc, acc_err = _log_call("get_account", trading_probe.get_account)
-        buying_power = 0.0
-        auth_ok = False
-        if acc and hasattr(acc, "buying_power") and acc_err is None:
-            try:
-                buying_power = float(acc.buying_power or 0)
-                auth_ok = True
-            except Exception:
-                buying_power = 0.0
-        if not auth_ok:
-            if probe_auth_ok:
-                auth_ok = True
-            candidate_bp = str(probe_bp_display).replace(",", "")
-            try:
-                buying_power = float(Decimal(candidate_bp))
-            except (InvalidOperation, ValueError, TypeError):
-                if not auth_ok:
-                    buying_power = 0.0
-        log_info(
-            "AUTH_STATUS",
-            auth_ok=bool(auth_ok),
-            buying_power=f"{buying_power:.2f}",
+
+        reconcile_exit_mode = bool(
+            getattr(config, "reconcile_only", False)
+            or (
+                getattr(config, "reconcile_auto", True)
+                and str(configured_window).lower() != "any"
+            )
         )
 
+        account_payload: Optional[Mapping[str, Any]] = None
+        clock_payload: Optional[Mapping[str, Any]] = None
+        skip_trading_client = False
+        if client is not None:
+            trading_client = client
+            base_url = os.getenv("APCA_API_BASE_URL", "")
+            paper_mode = None
+        else:
+            skip_trading_client = config.dry_run and not diagnostic_mode and not reconcile_exit_mode
+            skip_trading_client = skip_trading_client or (
+                not reconcile_exit_mode and not diagnostic_mode and candidates_df.empty
+            )
+            if skip_trading_client:
+                trading_client = None
+                base_url = ""
+                paper_mode = None
+            else:
+                trading_client, base_url, paper_mode, forced_mode = _create_trading_client()
+                forced_label = forced_mode if forced_mode is not None else "auto"
+                LOGGER.info(
+                    "[INFO] TRADING_MODE base=%s paper_mode=%s forced=%s",
+                    base_url or "",
+                    bool(paper_mode),
+                    forced_label,
+                )
+        _paper_only_guard(trading_client, base_url)
+        auth_ok = trading_client is None and skip_trading_client
+        auth_reason = "ok"
+        if trading_client is not None and client is None:
+            try:
+                account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
+                auth_ok = True
+            except AlpacaAuthFailure as exc:
+                auth_ok = False
+                auth_reason = str(exc) or "auth_failed"
+        elif trading_client is not None:
+            auth_ok = True
         metrics.auth_ok = bool(auth_ok)
-        metrics.auth_reason = None
+        metrics.auth_reason = None if auth_ok else f"auth_failed:{auth_reason}"
+        LOGGER.info("[INFO] AUTH_RESULT ok=%s reason=%s", bool(auth_ok), auth_reason)
         if not auth_ok:
-            metrics.auth_reason = str(probe_bp_display or "auth_probe_failed")
-            metrics.status = "auth_error"
-            metrics.record_error("auth_check_failed", detail=metrics.auth_reason)
+            LOGGER.warning("[WARN] AUTH_FAIL detail=%s", auth_reason)
+            metrics.exit_reason = "AUTH_FAIL"
+            metrics.api_failures += 1
+            metrics.record_skip("API_FAIL", count=max(1, len(candidates_df)))
+            metrics.record_error(
+                "auth_failure",
+                stage="ensure_trading_auth",
+                base_url=base_url or "",
+                detail=auth_reason,
+            )
+            loader.persist_metrics()
+            loader.log_summary()
+            return 2
+
+        executor = TradeExecutor(
+            config,
+            trading_client,
+            metrics,
+            base_url=base_url or "",
+            account_snapshot=account_payload,
+            clock_snapshot=clock_payload,
+        )
+        executor._ranking_key = loader._ranking_key
+
+        if reconcile_exit_mode:
+            metrics.exit_reason = "RECONCILE_ONLY"
+            executor.reconcile_closed_trades()
+            executor.persist_metrics()
+            executor.log_summary()
+            return 0
 
         metrics.in_window = bool(in_window)
         if not in_window:
@@ -5687,55 +5689,8 @@ def run_executor(
             loader.log_summary()
             return 0
 
-        records = loader.hydrate_candidates(candidates_df)
-        filtered = loader.guard_candidates(records)
-
-        account_payload: Optional[Mapping[str, Any]] = None
-        clock_payload: Optional[Mapping[str, Any]] = None
-        if client is not None:
-            trading_client = client
-            base_url = os.getenv("APCA_API_BASE_URL", "")
-            paper_mode = None
-        else:
-            skip_trading_client = config.dry_run and not diagnostic_mode
-            skip_trading_client = skip_trading_client or (not filtered and not diagnostic_mode)
-            if skip_trading_client:
-                trading_client = None
-                base_url = ""
-                paper_mode = None
-            else:
-                trading_client, base_url, paper_mode, forced_mode = _create_trading_client()
-                forced_label = forced_mode if forced_mode is not None else "auto"
-                LOGGER.info(
-                    "[INFO] TRADING_MODE base=%s paper_mode=%s forced=%s",
-                    base_url or "",
-                    bool(paper_mode),
-                    forced_label,
-                )
-        _paper_only_guard(trading_client, base_url)
-        if trading_client is not None and client is None:
-            try:
-                account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
-            except AlpacaAuthFailure:
-                metrics.api_failures += 1
-                metrics.record_skip("API_FAIL", count=max(1, len(candidates_df)))
-                metrics.record_error(
-                    "auth_failure",
-                    stage="ensure_trading_auth",
-                    base_url=base_url or "",
-                )
-                loader.persist_metrics()
-                return 2
-
-        executor = TradeExecutor(
-            config,
-            trading_client,
-            metrics,
-            base_url=base_url or "",
-            account_snapshot=account_payload,
-            clock_snapshot=clock_payload,
-        )
-        executor._ranking_key = loader._ranking_key
+        records = executor.hydrate_candidates(candidates_df)
+        filtered = executor.guard_candidates(records)
         return executor.execute(candidates_df, prefiltered=filtered)
     finally:
         if auto_reconcile_enabled:
