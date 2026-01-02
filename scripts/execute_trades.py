@@ -4282,14 +4282,16 @@ class TradeExecutor:
         return numeric
 
     def _get_orders(self, request: Any) -> Any:
+        filter_request = request if request is not None else None
         try:
-            if request is None:
+            # Alpaca-py expects request objects to be passed via the filter kwarg
+            if filter_request is None:
                 return self.client.get_orders()
-            return self.client.get_orders(filter=request)
+            return self.client.get_orders(filter=filter_request)
         except TypeError:
-            if request is None:
+            if filter_request is None:
                 return self.client.get_orders()
-            return self.client.get_orders(filter=request)
+            return self.client.get_orders(filter_request)
 
     def fetch_open_order_symbols(self) -> tuple[set[str], int, int]:
         symbols: set[str] = set()
@@ -4310,7 +4312,7 @@ class TradeExecutor:
                 if str(side).lower() == "buy":
                     open_buy_orders += 1
         except Exception as exc:
-            _warn_context("alpaca.get_orders", str(exc))
+            _warn_context("alpaca.get_orders failed", str(exc))
         return symbols, open_buy_orders, total_orders
 
     def fetch_buying_power(self) -> float:
@@ -4908,6 +4910,7 @@ class TradeExecutor:
 
     def _submit_order(self, request: Any) -> Any:
         try:
+            # Alpaca-py >=0.43 expects the request object as order_data
             return self.client.submit_order(order_data=request)
         except TypeError:
             return self.client.submit_order(order_data=request)
