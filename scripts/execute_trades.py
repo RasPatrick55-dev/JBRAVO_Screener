@@ -4281,6 +4281,27 @@ class TradeExecutor:
             return None
         return numeric
 
+    @staticmethod
+    def _as_request(request: Any) -> Any:
+        """Compatibility shim for Alpaca request payloads."""
+
+        return request
+
+    @staticmethod
+    def _request_kwargs(request: Any) -> Dict[str, Any]:
+        if isinstance(request, Mapping):
+            return dict(request)
+        if hasattr(request, "__dict__"):
+            return {key: value for key, value in vars(request).items() if not key.startswith("_")}
+        return {}
+
+    def _get_orders(self, request: Any) -> Any:
+        try:
+            return self.client.get_orders(request)
+        except TypeError:
+            kwargs = self._request_kwargs(request)
+            return self.client.get_orders(**kwargs)
+
     def fetch_open_order_symbols(self) -> tuple[set[str], int, int]:
         symbols: set[str] = set()
         open_buy_orders = 0
@@ -4288,9 +4309,9 @@ class TradeExecutor:
         if self.client is None:
             return symbols, open_buy_orders, total_orders
         try:
-            request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+            request = self._as_request(GetOrdersRequest(status=QueryOrderStatus.OPEN))
             log_info("alpaca.get_orders", status=request.status)
-            orders = self.client.get_orders(request)
+            orders = self._get_orders(request)
             for order in orders or []:
                 total_orders += 1
                 symbol = getattr(order, "symbol", "")
@@ -4896,6 +4917,13 @@ class TradeExecutor:
             parent_order_id,
         )
 
+    def _submit_order(self, request: Any) -> Any:
+        try:
+            return self.client.submit_order(request)
+        except TypeError:
+            kwargs = self._request_kwargs(request)
+            return self.client.submit_order(**kwargs)
+
     def submit_with_retries(self, request: Any) -> Optional[Any]:
         if getattr(self.config, "diagnostic", False):
             request_type = getattr(request, "__class__", type("")).__name__
@@ -4911,10 +4939,7 @@ class TradeExecutor:
             try:
                 log_info("alpaca.submit_order", attempt=attempt)
                 _enforce_order_price_ticks(request)
-                if isinstance(request, LimitOrderRequest):
-                    result = self.client.submit_order(request)
-                else:
-                    result = self.client.submit_order(request)
+                result = self._submit_order(request)
                 if attempt > 1:
                     self.log_info("API_RETRY_SUCCESS", attempt=attempt)
                 return result
