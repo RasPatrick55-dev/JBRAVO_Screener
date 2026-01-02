@@ -18,6 +18,7 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP, ROUND_HALF_
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 from zoneinfo import ZoneInfo
 from dateutil.parser import isoparse
@@ -1743,22 +1744,56 @@ def load_candidates_from_db(
     """Load the latest screener candidates from PostgreSQL."""
 
     LOGGER.info("Loading candidates from DB")
+
+    def _record_missing_config() -> list[Dict[str, Any]]:
+        LOGGER.error("[ERROR] Missing DB config: set JBRAVO_DB_* or DATABASE_URL")
+        if metrics is not None:
+            metrics.auth_ok = False
+            metrics.auth_reason = "candidate_load_error"
+            metrics.record_skip("DATA_MISSING", count=1)
+        if record_skip is not None:
+            try:
+                record_skip("DATA_MISSING", count=1, detail="missing_db_config")
+            except TypeError:
+                record_skip("DATA_MISSING", count=1)
+        return []
+
     host = os.getenv("JBRAVO_DB_HOST")
-    port = os.getenv("JBRAVO_DB_PORT", "5432")
+    port = os.getenv("JBRAVO_DB_PORT")
     name = os.getenv("JBRAVO_DB_NAME")
     user = os.getenv("JBRAVO_DB_USER")
     password = os.getenv("JBRAVO_DB_PASS")
-    missing = [key for key, value in (("JBRAVO_DB_HOST", host), ("JBRAVO_DB_NAME", name), ("JBRAVO_DB_USER", user), ("JBRAVO_DB_PASS", password)) if not value]
-    if missing:
-        raise CandidateLoadError(f"Missing database configuration: {', '.join(missing)}")
+    database_url = os.getenv("DATABASE_URL")
+
+    config_source = None
+    if host and name and user and password:
+        config_source = "JBRAVO_DB_*"
+        port = port or "5432"
+    elif database_url:
+        parsed = urlparse(database_url)
+        if parsed.scheme.startswith("postgresql"):
+            host = parsed.hostname
+            port = str(parsed.port or "5432")
+            name = (parsed.path or "").lstrip("/")
+            user = parsed.username
+            password = parsed.password
+            if host and name and user and password:
+                config_source = "DATABASE_URL"
+
+    if not config_source:
+        return _record_missing_config()
+
     connection = None
     masked_user = (user or "")[:1] + "***" if user else "***"
+    masked_pass = "***" if not password else "***"
+    LOGGER.info("[INFO] DB_CONFIG source=%s", config_source)
     LOGGER.info(
-        "[INFO] DB_CONNECT target=host=%s port=%s db=%s user=%s",
+        "[INFO] DB_CONNECT target=host=%s port=%s db=%s user=%s pass=%s",
         host,
-        port,
+        port or "5432",
         name,
         masked_user,
+        masked_pass,
     )
 
     def _record_no_db_candidates(detail: str) -> None:
@@ -1777,7 +1812,7 @@ def load_candidates_from_db(
     try:
         connection = psycopg2.connect(
             host=host,
-            port=port,
+            port=port or "5432",
             dbname=name,
             user=user,
             password=password,
