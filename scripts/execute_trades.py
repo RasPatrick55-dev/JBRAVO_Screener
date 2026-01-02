@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone, time as dtime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP, ROUND_HALF_UP
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from zoneinfo import ZoneInfo
 from dateutil.parser import isoparse
@@ -1734,7 +1734,12 @@ class CandidateLoadError(RuntimeError):
     """Raised when candidate data cannot be loaded or validated."""
 
 
-def load_candidates_from_db() -> list[Dict[str, Any]]:
+def load_candidates_from_db(
+    *,
+    metrics: ExecutionMetrics | None = None,
+    record_skip: Optional[Callable[..., Any]] = None,
+    diagnostic: bool = False,
+) -> list[Dict[str, Any]]:
     """Load the latest screener candidates from PostgreSQL."""
 
     LOGGER.info("Loading candidates from DB")
@@ -1747,6 +1752,28 @@ def load_candidates_from_db() -> list[Dict[str, Any]]:
     if missing:
         raise CandidateLoadError(f"Missing database configuration: {', '.join(missing)}")
     connection = None
+    masked_user = (user or "")[:1] + "***" if user else "***"
+    LOGGER.info(
+        "[INFO] DB_CONNECT target=host=%s port=%s db=%s user=%s",
+        host,
+        port,
+        name,
+        masked_user,
+    )
+
+    def _record_no_db_candidates(detail: str) -> None:
+        LOGGER.info("[INFO] NO_DB_CANDIDATES %s", detail)
+        if record_skip is not None:
+            try:
+                record_skip("NO_CANDIDATES", count=1, detail=detail)
+            except TypeError:
+                record_skip("NO_CANDIDATES", count=1)
+        if metrics is not None:
+            metrics.record_skip("NO_CANDIDATES", count=1)
+            if metrics.exit_reason is None:
+                metrics.exit_reason = "NO_CANDIDATES"
+
+    max_timestamp_value: Any = None
     try:
         connection = psycopg2.connect(
             host=host,
@@ -1755,14 +1782,33 @@ def load_candidates_from_db() -> list[Dict[str, Any]]:
             user=user,
             password=password,
         )
+        LOGGER.info("[INFO] DB_QUERY max_timestamp")
+        max_df = pd.read_sql_query(
+            "SELECT MAX(timestamp) AS max_ts FROM screener_candidates;",
+            connection,
+        )
+        if not max_df.empty and "max_ts" in max_df.columns:
+            max_timestamp_value = max_df["max_ts"].iloc[0]
+        max_ts_display = (
+            max_timestamp_value.isoformat()
+            if hasattr(max_timestamp_value, "isoformat")
+            else (str(max_timestamp_value) if max_timestamp_value is not None else "NULL")
+        )
+        LOGGER.info("[INFO] DB_MAX_TIMESTAMP %s", max_ts_display)
+        if max_timestamp_value is None or pd.isna(max_timestamp_value):
+            LOGGER.info("[INFO] DB_CANDIDATES_LOADED count=0 max_timestamp=%s", max_ts_display)
+            _record_no_db_candidates("max_timestamp_null")
+            return []
+        LOGGER.info("[INFO] DB_QUERY latest_batch order=score_desc")
         query = """
             SELECT
                 run_date, symbol, score, exchange, close, volume,
-                universe_count, score_breakdown, entry_price, adv20, atrp, source
+                universe_count, score_breakdown, entry_price, adv20, atrp, source, timestamp
             FROM screener_candidates
-            WHERE timestamp = (SELECT MAX(timestamp) FROM screener_candidates);
+            WHERE timestamp = %s
+            ORDER BY score DESC;
         """
-        df = pd.read_sql_query(query, connection)
+        df = pd.read_sql_query(query, connection, params=(max_timestamp_value,))
     except Exception as exc:
         raise CandidateLoadError(f"Failed to load candidates from database: {exc}") from exc
     finally:
@@ -1772,7 +1818,22 @@ def load_candidates_from_db() -> list[Dict[str, Any]]:
             except Exception:
                 LOGGER.debug("Failed to close DB connection", exc_info=True)
     records = df.to_dict(orient="records")
-    LOGGER.info("Loaded %d candidates from DB", len(records))
+    max_ts_display = (
+        max_timestamp_value.isoformat()
+        if hasattr(max_timestamp_value, "isoformat")
+        else (str(max_timestamp_value) if max_timestamp_value is not None else "NULL")
+    )
+    LOGGER.info(
+        "[INFO] DB_CANDIDATES_LOADED count=%s max_timestamp=%s",
+        len(records),
+        max_ts_display,
+    )
+    if not records:
+        _record_no_db_candidates("latest_batch_empty")
+        return []
+    if diagnostic:
+        sample = [{"symbol": rec.get("symbol"), "score": rec.get("score")} for rec in records[:5]]
+        LOGGER.info("[DIAGNOSTIC] DB_SAMPLE symbols_scores=%s", sample)
     return records
 
 
@@ -3330,7 +3391,11 @@ class TradeExecutor:
         return allowed, message, resolved_window
 
     def _load_latest_candidates_from_db(self) -> tuple[pd.DataFrame, Optional[str]]:
-        records = load_candidates_from_db()
+        records = load_candidates_from_db(
+            metrics=self.metrics,
+            record_skip=self.record_skip_reason,
+            diagnostic=bool(getattr(self.config, "diagnostic", False)),
+        )
         df = pd.DataFrame(records)
         if "symbol" in df.columns:
             df["symbol"] = df["symbol"].astype("string").str.upper()
@@ -3345,6 +3410,8 @@ class TradeExecutor:
 
     def load_candidates(self, *, rank: bool = True) -> pd.DataFrame:
         source_type = (self.config.source_type or "csv").strip().lower()
+        if source_type == "db":
+            LOGGER.info("[INFO] CANDIDATE_SOURCE db")
         df: pd.DataFrame
         base_dir: Path | None = None
         if source_type == "db":
@@ -5610,7 +5677,10 @@ def run_executor(
                 return 0
 
         if candidates_df.empty:
-            loader.record_skip_reason("NO_CANDIDATES", count=1)
+            if str(config.source_type).lower() == "db":
+                LOGGER.info("SKIP NO_CANDIDATES source=db")
+            if metrics.skipped_reasons.get("NO_CANDIDATES", 0) <= 0:
+                loader.record_skip_reason("NO_CANDIDATES", count=1)
             metrics.exit_reason = "NO_CANDIDATES"
             loader.persist_metrics()
             LOGGER.info("EXECUTE_SKIP reason=NO_CANDIDATES")
