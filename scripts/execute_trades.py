@@ -280,9 +280,14 @@ def _enforce_order_price_ticks(request: Any) -> None:
         "trail_price",
     )
     for field in price_fields:
-        if not hasattr(request, field):
+        if isinstance(request, Mapping):
+            has_field = field in request
+            value = request.get(field)
+        else:
+            has_field = hasattr(request, field)
+            value = getattr(request, field, None)
+        if not has_field:
             continue
-        value = getattr(request, field)
         if value in (None, ""):
             continue
         try:
@@ -290,7 +295,10 @@ def _enforce_order_price_ticks(request: Any) -> None:
         except (TypeError, ValueError):
             continue
         rounded = round_to_tick(numeric)
-        setattr(request, field, rounded)
+        if isinstance(request, Mapping):
+            request[field] = rounded
+        else:
+            setattr(request, field, rounded)
 
 
 def normalize_price_for_alpaca(price: float, side: str) -> float:
@@ -573,6 +581,112 @@ def _order_snapshot(order: Any) -> Dict[str, Any]:
     return {key: value for key, value in snapshot.items() if value not in (None, "", [], {}, ())}
 
 
+def _alpaca_headers() -> Dict[str, str]:
+    load_env()
+    api_key = os.getenv("APCA_API_KEY_ID")
+    api_secret = os.getenv("APCA_API_SECRET_KEY")
+    if not api_key or not api_secret:
+        raise AlpacaCredentialsError("missing APCA_API_KEY_ID or APCA_API_SECRET_KEY")
+    return {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": api_secret,
+    }
+
+
+def _alpaca_url(path: str) -> str:
+    base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets") or ""
+    base_url = base_url.rstrip("/")
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    return f"{base_url}{normalized_path}"
+
+
+def alpaca_http_get(path: str, *, params: Mapping[str, Any] | None = None, timeout: int = 15) -> requests.Response:
+    url = _alpaca_url(path)
+    headers = _alpaca_headers()
+    return requests.get(url, headers=headers, params=params, timeout=timeout)
+
+
+def alpaca_http_post(
+    path: str,
+    *,
+    json: Mapping[str, Any] | None = None,
+    timeout: int = 15,
+) -> requests.Response:
+    url = _alpaca_url(path)
+    headers = _alpaca_headers()
+    return requests.post(url, headers=headers, json=json, timeout=timeout)
+
+
+def _extract_request_field(request: Any, field: str, default: Any = None) -> Any:
+    if isinstance(request, Mapping):
+        return request.get(field, default)
+    return getattr(request, field, default)
+
+
+def _assign_request_field(request: Any, field: str, value: Any) -> None:
+    if isinstance(request, Mapping):
+        request[field] = value
+    else:
+        setattr(request, field, value)
+
+
+def _order_payload_from_request(request: Any) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    symbol = _extract_request_field(request, "symbol")
+    if symbol:
+        payload["symbol"] = str(symbol)
+
+    qty = _extract_request_field(request, "qty")
+    if qty not in (None, ""):
+        qty = getattr(qty, "value", qty)
+        try:
+            payload["qty"] = str(int(qty))
+        except (TypeError, ValueError):
+            payload["qty"] = str(qty)
+
+    for field in ("side", "type", "time_in_force", "order_class", "client_order_id"):
+        value = _extract_request_field(request, field)
+        if value in (None, ""):
+            continue
+        value = getattr(value, "value", value)
+        text_value = str(value)
+        if field in ("side", "type", "time_in_force"):
+            text_value = text_value.lower()
+        payload[field] = text_value
+
+    price_fields = (
+        "limit_price",
+        "stop_price",
+        "stop_limit_price",
+        "take_profit_price",
+        "trail_price",
+    )
+    for field in price_fields:
+        value = _extract_request_field(request, field)
+        if value in (None, ""):
+            continue
+        value = getattr(value, "value", value)
+        try:
+            payload[field] = str(round_to_tick(float(value)))
+        except (TypeError, ValueError):
+            payload[field] = str(value)
+
+    trail_percent = _extract_request_field(request, "trail_percent")
+    if trail_percent not in (None, ""):
+        trail_percent = getattr(trail_percent, "value", trail_percent)
+        payload["trail_percent"] = str(trail_percent)
+
+    extended_hours = _extract_request_field(request, "extended_hours")
+    if extended_hours not in (None, ""):
+        extended_hours = getattr(extended_hours, "value", extended_hours)
+        payload["extended_hours"] = bool(extended_hours)
+
+    if ("trail_price" in payload or "trail_percent" in payload) and "type" not in payload:
+        payload["type"] = "trailing_stop"
+
+    return payload
+
+
 def alpaca_list_orders_http(
     lookback_days: int | None = None,
     limit: int = 500,
@@ -584,12 +698,7 @@ def alpaca_list_orders_http(
     Must work in paper mode. No alpaca-py dependency.
     """
     load_env()
-    base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
-    api_key = os.getenv("APCA_API_KEY_ID")
-    api_secret = os.getenv("APCA_API_SECRET_KEY")
-    if not api_key or not api_secret:
-        raise ValueError("missing APCA_API_KEY_ID or APCA_API_SECRET_KEY")
-    url = f"{(base_url or '').rstrip('/')}/v2/orders"
+    url = _alpaca_url("/v2/orders")
     computed_after = after_iso
     if computed_after is None:
         computed_after = (datetime.now(timezone.utc) - timedelta(days=max(0, lookback_days or 0))).isoformat()
@@ -600,11 +709,7 @@ def alpaca_list_orders_http(
         "limit": limit,
         "nested": "true",
     }
-    headers = {
-        "APCA-API-KEY-ID": api_key,
-        "APCA-API-SECRET-KEY": api_secret,
-    }
-    response = requests.get(url, headers=headers, params=params, timeout=15)
+    response = alpaca_http_get("/v2/orders", params=params, timeout=15)
     if response.status_code != 200:
         response.raise_for_status()
     payload = response.json()
@@ -4295,20 +4400,31 @@ class TradeExecutor:
         symbols: set[str] = set()
         open_buy_orders = 0
         total_orders = 0
-        if self.client is None:
-            return symbols, open_buy_orders, total_orders
         try:
-            request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
-            log_info("alpaca.get_orders", status=getattr(request, "status", ""))
-            orders = self._get_orders(request)
-            for order in orders or []:
+            log_info("alpaca.http_get_orders", status="open")
+            response = alpaca_http_get("/v2/orders", params={"status": "open"}, timeout=15)
+            if response.status_code != 200:
+                response.raise_for_status()
+            payload = response.json()
+            orders = payload if isinstance(payload, list) else []
+            for order in orders:
                 total_orders += 1
-                symbol = getattr(order, "symbol", "")
+                symbol = order.get("symbol", "")
                 if symbol:
-                    symbols.add(symbol.upper())
-                side = getattr(order, "side", "")
+                    symbols.add(str(symbol).upper())
+                side = order.get("side", "")
                 if str(side).lower() == "buy":
                     open_buy_orders += 1
+        except requests.HTTPError as exc:
+            resp = getattr(exc, "response", None)
+            status = getattr(resp, "status_code", "ERR")
+            body = getattr(resp, "text", "") or str(exc)
+            LOGGER.warning(
+                "[WARN] ALPACA_HTTP_FAIL action=get_orders status=%s err=%s",
+                status,
+                body.strip()[:500],
+            )
+            _warn_context("alpaca.get_orders failed", str(exc))
         except Exception as exc:
             _warn_context("alpaca.get_orders failed", str(exc))
         return symbols, open_buy_orders, total_orders
@@ -4907,11 +5023,14 @@ class TradeExecutor:
         )
 
     def _submit_order(self, request: Any) -> Any:
-        try:
-            # Use alpaca-py signature: pass request as order_data=
-            return self.client.submit_order(order_data=request)
-        except TypeError:
-            return self.client.submit_order(order_data=request)
+        payload = _order_payload_from_request(request)
+        response = alpaca_http_post("/v2/orders", json=payload, timeout=15)
+        if response.status_code >= 400:
+            response.raise_for_status()
+        data = response.json()
+        if isinstance(data, Mapping):
+            return SimpleNamespace(**data)
+        return data
 
     def submit_with_retries(self, request: Any) -> Optional[Any]:
         if getattr(self.config, "diagnostic", False):
@@ -4926,37 +5045,45 @@ class TradeExecutor:
         last_error: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
             try:
-                log_info("alpaca.submit_order", attempt=attempt)
+                log_info("alpaca.submit_order_http", attempt=attempt)
                 _enforce_order_price_ticks(request)
                 result = self._submit_order(request)
                 if attempt > 1:
                     self.log_info("API_RETRY_SUCCESS", attempt=attempt)
                 return result
-            except APIError as exc:
+            except requests.HTTPError as exc:
                 last_error = exc
-                error_message = str(exc)
-                code = getattr(exc, "code", None)
-                side_value = str(getattr(request, "side", "")).lower()
+                response = getattr(exc, "response", None)
+                status = getattr(response, "status_code", "ERR")
+                body = getattr(response, "text", "") or str(exc)
+                error_message = body
+                side_value = str(_extract_request_field(request, "side", "")).lower()
+                normalized_limit = bool(_extract_request_field(request, "_normalized_limit", False))
+                retry_tick_applied = bool(_extract_request_field(request, "_retry_tick_applied", False))
+                limit_price = _extract_request_field(request, "limit_price", 0.0) or 0.0
+                if isinstance(limit_price, str):
+                    try:
+                        limit_price = float(limit_price)
+                    except (TypeError, ValueError):
+                        limit_price = 0.0
                 if (
                     attempt < attempts
-                    and code == 42210000
+                    and status == 422
                     and "sub-penny increment" in error_message.lower()
-                    and getattr(request, "_normalized_limit", False)
-                    and not getattr(request, "_retry_tick_applied", False)
-                    and hasattr(request, "limit_price")
+                    and normalized_limit
+                    and not retry_tick_applied
                 ):
-                    current_limit = float(getattr(request, "limit_price") or 0.0)
-                    step = float(_mpv_step(current_limit or 0.0))
+                    step = float(_mpv_step(limit_price or 0.0))
                     step = step if step > 0 else 0.01
                     canonical_side = "buy" if side_value == "buy" else "sell"
                     if canonical_side == "buy":
-                        adjusted_seed = max(current_limit - step, step)
+                        adjusted_seed = max(limit_price - step, step)
                     else:
-                        adjusted_seed = current_limit + step
+                        adjusted_seed = limit_price + step
                     new_limit = normalize_price_for_alpaca(adjusted_seed, canonical_side)
                     new_limit = _round_limit_price(new_limit)
-                    request.limit_price = new_limit
-                    setattr(request, "_retry_tick_applied", True)
+                    _assign_request_field(request, "limit_price", new_limit)
+                    _assign_request_field(request, "_retry_tick_applied", True)
                     LOGGER.warning("[RETRY_TICK] side=%s new_limit=%.4f", canonical_side, new_limit)
                     self.log_info(
                         "RETRY_TICK",
@@ -4972,6 +5099,11 @@ class TradeExecutor:
                     delay *= backoff
                     continue
                 self.metrics.api_failures += 1
+                LOGGER.warning(
+                    "[WARN] ALPACA_HTTP_FAIL action=submit_order status=%s err=%s",
+                    status,
+                    body.strip()[:500],
+                )
                 _warn_context("alpaca.submit_order failed", str(exc))
             except Exception as exc:
                 last_error = exc
