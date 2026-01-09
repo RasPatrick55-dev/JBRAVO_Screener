@@ -25683,3 +25683,90 @@
 2025-07-07 09:31:00 INFO Screener completed
 2025-07-07 09:31:10 ERROR Failed to fetch data
 >>>>>>> 8154046be1fd401171e40e8f847805d526c1202e
+2026-01-08 21:13:47,599 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-08 21:13:47,917 - screener - INFO - [STAGE] fetch start
+2026-01-08 21:13:48,786 - screener - INFO - Asset meta ready: 12066 symbols (tradable US equities)
+2026-01-08 21:13:48,800 - screener - INFO - Asset metrics: total=13124 tradable_equities=12332 after_filters=12066
+2026-01-08 21:13:48,801 - screener - INFO - Asset sample: BFH.PRA:NYSE, NATH:NASDAQ, WIW:NYSE, NAT:NYSE, NAGE:NASDAQ
+2026-01-08 21:13:48,834 - screener - INFO - Universe sample size: 5881 (of 12066 tradable equities)
+2026-01-08 21:13:48,904 - screener - INFO - Universe prefix counts: {'C': 45, 'A': 45, 'S': 43, 'B': 27, 'E': 21, 'F': 21, 'M': 19, 'N': 19, 'P': 19, 'T': 17, 'G': 17, 'H': 17, 'R': 17, 'O': 16, 'D': 15, 'I': 14, 'V': 14, 'W': 13, 'K': 13, 'L': 10, 'Z': 9, 'J': 5, 'U': 5, 'X': 4, 'Y': 3, 'Q': 2}
+2026-01-08 21:13:50,883 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-08 21:13:50,883 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~35639 elapsed=1.9s cache=miss
+2026-01-08 21:13:52,605 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-08 21:13:52,605 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32595 elapsed=1.7s cache=miss
+2026-01-08 21:13:54,389 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-08 21:13:54,389 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33019 elapsed=1.8s cache=miss
+2026-01-08 21:13:56,120 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-08 21:13:56,121 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32445 elapsed=1.7s cache=miss
+2026-01-08 21:13:57,906 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-08 21:13:57,906 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~33720 elapsed=1.8s cache=miss
+2026-01-08 21:13:59,654 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-08 21:13:59,654 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~32593 elapsed=1.7s cache=miss
+2026-01-08 21:14:03,030 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-08 21:14:03,030 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34896 elapsed=3.4s cache=miss
+2026-01-08 21:14:05,401 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-08 21:14:05,401 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~32847 elapsed=2.4s cache=miss
+2026-01-08 21:14:07,063 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-08 21:14:07,064 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~33545 elapsed=1.7s cache=miss
+2026-01-08 21:14:07,435 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=301299 symbols_with_bars=414
+2026-01-08 21:14:07,436 - screener - INFO - Symbols without bars (sample): ['CMDB', 'KCHV', 'DYOR', 'PELIR', 'SZZLR', 'ALUB', 'JBS', 'KCHVR', 'QSEA', 'SLGB']
+2026-01-08 21:14:07,436 - screener - INFO - Symbols dropped for insufficient history: 27
+2026-01-08 21:14:09,171 - screener - INFO - [STAGE] fetch end (rows=301299, elapsed=21.25s)
+2026-01-08 21:14:10,621 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=301299 symbols=423
+2026-01-08 21:14:10,623 - screener - WARNING - PyYAML unavailable; using built-in ranker defaults.
+2026-01-08 21:14:10,661 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-08 21:14:10,931 - screener - WARNING - PyYAML unavailable; using built-in ranker defaults.
+2026-01-08 21:14:10,932 - screener - INFO - [STAGE] coarse features start
+2026-01-08 21:16:01,820 - screener - INFO - [STAGE] coarse features end (rows=301299)
+2026-01-08 21:16:01,820 - screener - INFO - [STAGE] coarse rank start
+2026-01-08 21:16:01,934 - screener - INFO - [STAGE] coarse rank end (rows=423)
+2026-01-08 21:16:01,941 - screener - INFO - [STAGE] shortlist written: data\tmp\shortlist.csv (rows=423)
+2026-01-08 21:16:01,962 - screener - INFO - [STAGE] full features start (shortlist=423)
+2026-01-08 21:17:51,529 - screener - INFO - [STAGE] full features end (rows=301299)
+2026-01-08 21:17:51,664 - screener - INFO - [STAGE] finalize candidates pruned rows=301299 -> 264852
+2026-01-08 21:17:51,664 - screener - INFO - [STAGE] full rank start
+2026-01-08 21:17:51,783 - screener - INFO - [STAGE] full rank end (rows=423)
+2026-01-08 21:17:51,783 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=423 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-09
+2026-01-08 21:17:51,784 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-08 21:17:51,785 - screener - INFO - [STAGE] quality filters pruned rows=423 -> 77
+2026-01-08 21:17:51,787 - screener - INFO - [STAGE] gates start
+2026-01-08 21:17:51,795 - screener - INFO - [STAGE] gates end (candidates=0)
+2026-01-08 21:17:54,983 - screener - INFO - No candidates passed ranking gates; sample rejections: [{"reason": "INSUFFICIENT_HISTORY", "symbol": "KCHV"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "CMDB"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "PELIR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "ALUB"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "DYOR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "SZZLR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "JBS"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "KCHVR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "SLGB"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "QSEA"}]
+2026-01-08 21:17:55,071 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-09.csv (top_n=77)
+2026-01-08 21:17:55,083 - screener - INFO - Screener complete: 7577 symbols examined, 0 candidates.

@@ -206,10 +206,14 @@ _PROBE_SYMBOLS = ("SPY", "AAPL")
 def _alpaca_headers() -> dict[str, str]:
     key, secret, _, _ = get_alpaca_creds()
     headers: dict[str, str] = {}
-    if key:
-        headers["APCA-API-KEY-ID"] = key.strip()
-    if secret:
-        headers["APCA-API-SECRET-KEY"] = secret.strip()
+    if isinstance(key, str):
+        key = key.strip()
+        if key:
+            headers["APCA-API-KEY-ID"] = key
+    if isinstance(secret, str):
+        secret = secret.strip()
+        if secret:
+            headers["APCA-API-SECRET-KEY"] = secret
     return headers
 
 
@@ -362,6 +366,16 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
 
 
 DEFAULT_REQUIRED_BARS = 250
+
+def _coerce_symbol(value: object) -> str:
+    """Return a safe uppercase symbol string."""
+
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip().upper()
+    return str(value).strip().upper()
+
 
 
 def compose_metrics_from_artifacts(
@@ -916,7 +930,7 @@ def _enrich_candidates_with_ranker(
     *,
     score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
     target_column: str = DEFAULT_RANKER_TARGET_COLUMN,
-) -> None:
+) -> tuple[int, int] | None:
     base = _resolve_base_dir(base_dir)
     candidates_path = base / "data" / "latest_candidates.csv"
     predictions_path = _find_latest_predictions_path(base)
@@ -1665,7 +1679,11 @@ def _load_top_candidates() -> pd.DataFrame:
 
 def _write_latest_from_frame(frame: pd.DataFrame, *, source: str = "screener") -> int:
     normalized = normalize_candidate_df(frame)
-    normalized["source"] = normalized.get("source", "").astype("string").fillna("")
+    if "source" in normalized.columns:
+        source_series = normalized["source"].astype("string").fillna("")
+    else:
+        source_series = pd.Series("", index=normalized.index, dtype="string")
+    normalized["source"] = source_series
     normalized.loc[normalized["source"].str.strip() == "", "source"] = source
     normalized = normalized[list(CANONICAL_COLUMNS)]
     write_csv_atomic(str(LATEST_CANDIDATES), normalized)
@@ -1777,7 +1795,8 @@ def ingest_artifacts_to_db(run_date: date) -> None:
         _log_fail("all", "engine_unavailable")
         return
 
-    run_date_value = run_date.isoformat() if hasattr(run_date, "isoformat") else run_date
+    run_date_value: str
+    run_date_value = run_date.isoformat() if isinstance(run_date, date) else str(run_date)
     score_breakdown_raw: list[Any] = []
 
     try:
@@ -1792,7 +1811,7 @@ def ingest_artifacts_to_db(run_date: date) -> None:
         rows: list[dict[str, Any]] = []
         for _, row in candidates_df.iterrows():
             record = row.to_dict() if isinstance(row, Mapping) else dict(row)
-            symbol = (record.get("symbol") or "").upper()
+            symbol = _coerce_symbol(record.get("symbol"))
             score_breakdown_raw_value = record.get("score_breakdown")
             normalized_score_breakdown = db.normalize_score_breakdown(score_breakdown_raw_value, symbol=symbol)
             if normalized_score_breakdown is None:
@@ -1875,7 +1894,7 @@ def ingest_artifacts_to_db(run_date: date) -> None:
             payload_bt = {"run_date": run_date_value}
             for col in columns:
                 payload_bt[col] = record.get(col)
-            payload_bt["symbol"] = (payload_bt.get("symbol") or "").upper()
+            payload_bt["symbol"] = _coerce_symbol(payload_bt.get("symbol"))
             rows_bt.append(payload_bt)
         stmt_bt = text(
             """

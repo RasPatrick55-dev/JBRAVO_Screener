@@ -3,3 +3,1114 @@
 2025-07-09 01:13:51,195 [INFO] Backtesting complete. Results saved to /home/RasPatrick/jbravo_screener/data/backtest_results.csv
 2025-07-07 09:32:00 INFO Backtest started
 2025-07-07 09:33:00 INFO Backtest completed
+2026-01-08 20:32:13,712 - scripts.backtest - INFO - Script started
+2026-01-08 20:32:13,712 - scripts.backtest - ERROR - Missing Alpaca credentials; data client unavailable.
+2026-01-08 21:13:46,746 - scripts.backtest - INFO - Script started
+2026-01-08 21:13:47,595 - scripts.backtest - INFO - Script started
+2026-01-08 21:17:56,162 - __main__ - INFO - Script started
+2026-01-08 21:17:56,163 - __main__ - INFO - BACKTEST_CANDIDATES_FALLBACK reason=db_disabled
+2026-01-08 21:17:56,166 - __main__ - INFO - Loaded 1 symbols from C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\top_candidates.csv
+2026-01-08 21:17:56,166 - __main__ - INFO - Fetching data for VSCO
+2026-01-08 21:18:04,243 - __main__ - INFO - Opened VSCO @ 17.57 (170 shares)
+2026-01-08 21:18:04,243 - __main__ - INFO - Scaled out VSCO: sold 85 @ 18.68 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,243 - __main__ - INFO - Closed VSCO @ 18.31 reason=TRAIL_STOP
+2026-01-08 21:18:04,243 - __main__ - INFO - Opened VSCO @ 18.68 (160 shares)
+2026-01-08 21:18:04,244 - __main__ - INFO - Closed VSCO @ 19.46 reason=TRAIL_STOP
+2026-01-08 21:18:04,244 - __main__ - INFO - Opened VSCO @ 19.58 (153 shares)
+2026-01-08 21:18:04,244 - __main__ - INFO - Closed VSCO @ 19.33 reason=TRAIL_STOP
+2026-01-08 21:18:04,244 - __main__ - INFO - Opened VSCO @ 19.55 (153 shares)
+2026-01-08 21:18:04,244 - __main__ - INFO - Closed VSCO @ 19.33 reason=TRAIL_STOP
+2026-01-08 21:18:04,244 - __main__ - INFO - Opened VSCO @ 18.81 (159 shares)
+2026-01-08 21:18:04,244 - __main__ - INFO - Closed VSCO @ 18.73 reason=TRAIL_STOP
+2026-01-08 21:18:04,244 - __main__ - INFO - Opened VSCO @ 18.11 (165 shares)
+2026-01-08 21:18:04,244 - __main__ - INFO - Closed VSCO @ 18.69 reason=TRAIL_STOP
+2026-01-08 21:18:04,245 - __main__ - INFO - Opened VSCO @ 18.43 (163 shares)
+2026-01-08 21:18:04,245 - __main__ - INFO - Scaled out VSCO: sold 81 @ 19.59 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,245 - __main__ - INFO - Closed VSCO @ 18.58 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,245 - __main__ - INFO - Opened VSCO @ 19.59 (153 shares)
+2026-01-08 21:18:04,245 - __main__ - INFO - Closed VSCO @ 18.58 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,245 - __main__ - INFO - Opened VSCO @ 18.77 (160 shares)
+2026-01-08 21:18:04,245 - __main__ - INFO - Scaled out VSCO: sold 80 @ 20.21 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,245 - __main__ - INFO - Closed VSCO @ 19.81 reason=TRAIL_STOP
+2026-01-08 21:18:04,245 - __main__ - INFO - Opened VSCO @ 20.21 (149 shares)
+2026-01-08 21:18:04,245 - __main__ - INFO - Closed VSCO @ 20.93 reason=TRAIL_STOP
+2026-01-08 21:18:04,245 - __main__ - INFO - Opened VSCO @ 20.92 (144 shares)
+2026-01-08 21:18:04,246 - __main__ - INFO - Closed VSCO @ 19.80 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,246 - __main__ - INFO - Opened VSCO @ 20.32 (148 shares)
+2026-01-08 21:18:04,246 - __main__ - INFO - Scaled out VSCO: sold 74 @ 21.46 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,246 - __main__ - INFO - Closed VSCO @ 21.03 reason=TRAIL_STOP
+2026-01-08 21:18:04,246 - __main__ - INFO - Opened VSCO @ 21.46 (140 shares)
+2026-01-08 21:18:04,246 - __main__ - INFO - Closed VSCO @ 20.91 reason=TRAIL_STOP
+2026-01-08 21:18:04,246 - __main__ - INFO - Opened VSCO @ 20.93 (144 shares)
+2026-01-08 21:18:04,246 - __main__ - INFO - Closed VSCO @ 20.61 reason=TRAIL_STOP
+2026-01-08 21:18:04,246 - __main__ - INFO - Opened VSCO @ 21.12 (142 shares)
+2026-01-08 21:18:04,246 - __main__ - INFO - Closed VSCO @ 20.94 reason=TRAIL_STOP
+2026-01-08 21:18:04,246 - __main__ - INFO - Opened VSCO @ 21.09 (142 shares)
+2026-01-08 21:18:04,247 - __main__ - INFO - Closed VSCO @ 20.94 reason=TRAIL_STOP
+2026-01-08 21:18:04,247 - __main__ - INFO - Opened VSCO @ 21.22 (141 shares)
+2026-01-08 21:18:04,247 - __main__ - INFO - Closed VSCO @ 21.17 reason=TRAIL_STOP
+2026-01-08 21:18:04,247 - __main__ - INFO - Opened VSCO @ 21.48 (140 shares)
+2026-01-08 21:18:04,247 - __main__ - INFO - Closed VSCO @ 21.21 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,247 - __main__ - INFO - Opened VSCO @ 22.32 (134 shares)
+2026-01-08 21:18:04,247 - __main__ - INFO - Scaled out VSCO: sold 67 @ 23.58 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,247 - __main__ - INFO - Closed VSCO @ 23.11 reason=TRAIL_STOP
+2026-01-08 21:18:04,247 - __main__ - INFO - Opened VSCO @ 23.58 (127 shares)
+2026-01-08 21:18:04,247 - __main__ - INFO - Scaled out VSCO: sold 63 @ 26.96 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,247 - __main__ - INFO - Closed VSCO @ 25.56 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,247 - __main__ - INFO - Opened VSCO @ 26.96 (112 shares)
+2026-01-08 21:18:04,248 - __main__ - INFO - Scaled out VSCO: sold 56 @ 28.52 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,248 - __main__ - INFO - Closed VSCO @ 27.08 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,248 - __main__ - INFO - Opened VSCO @ 28.52 (106 shares)
+2026-01-08 21:18:04,248 - __main__ - INFO - Closed VSCO @ 27.08 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,248 - __main__ - INFO - Opened VSCO @ 27.15 (111 shares)
+2026-01-08 21:18:04,248 - __main__ - INFO - Closed VSCO @ 25.66 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,248 - __main__ - INFO - Opened VSCO @ 26.01 (115 shares)
+2026-01-08 21:18:04,249 - __main__ - INFO - Closed VSCO @ 25.76 reason=TRAIL_STOP
+2026-01-08 21:18:04,249 - __main__ - INFO - Opened VSCO @ 26.16 (115 shares)
+2026-01-08 21:18:04,249 - __main__ - INFO - Closed VSCO @ 26.54 reason=TRAIL_STOP
+2026-01-08 21:18:04,249 - __main__ - INFO - Opened VSCO @ 26.75 (112 shares)
+2026-01-08 21:18:04,249 - __main__ - INFO - Closed VSCO @ 26.54 reason=TRAIL_STOP
+2026-01-08 21:18:04,249 - __main__ - INFO - Opened VSCO @ 26.25 (114 shares)
+2026-01-08 21:18:04,249 - __main__ - INFO - Closed VSCO @ 26.38 reason=TRAIL_STOP
+2026-01-08 21:18:04,249 - __main__ - INFO - Opened VSCO @ 26.35 (114 shares)
+2026-01-08 21:18:04,249 - __main__ - INFO - Closed VSCO @ 24.92 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,249 - __main__ - INFO - Opened VSCO @ 25.50 (118 shares)
+2026-01-08 21:18:04,250 - __main__ - INFO - Closed VSCO @ 25.96 reason=TRAIL_STOP
+2026-01-08 21:18:04,250 - __main__ - INFO - Opened VSCO @ 26.64 (113 shares)
+2026-01-08 21:18:04,250 - __main__ - INFO - Closed VSCO @ 26.96 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,250 - __main__ - INFO - Opened VSCO @ 26.81 (112 shares)
+2026-01-08 21:18:04,250 - __main__ - INFO - Closed VSCO @ 26.96 reason=TRAIL_STOP
+2026-01-08 21:18:04,250 - __main__ - INFO - Opened VSCO @ 25.87 (116 shares)
+2026-01-08 21:18:04,250 - __main__ - INFO - Closed VSCO @ 26.26 reason=TRAIL_STOP
+2026-01-08 21:18:04,250 - __main__ - INFO - Opened VSCO @ 25.20 (119 shares)
+2026-01-08 21:18:04,250 - __main__ - INFO - Scaled out VSCO: sold 59 @ 27.09 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,250 - __main__ - INFO - Closed VSCO @ 25.50 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,251 - __main__ - INFO - Opened VSCO @ 27.09 (111 shares)
+2026-01-08 21:18:04,251 - __main__ - INFO - Closed VSCO @ 26.49 reason=TRAIL_STOP
+2026-01-08 21:18:04,251 - __main__ - INFO - Opened VSCO @ 26.14 (115 shares)
+2026-01-08 21:18:04,251 - __main__ - INFO - Scaled out VSCO: sold 57 @ 27.93 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,251 - __main__ - INFO - Closed VSCO @ 26.55 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,251 - __main__ - INFO - Opened VSCO @ 27.93 (108 shares)
+2026-01-08 21:18:04,251 - __main__ - INFO - Closed VSCO @ 27.65 reason=TRAIL_STOP
+2026-01-08 21:18:04,251 - __main__ - INFO - Opened VSCO @ 27.94 (108 shares)
+2026-01-08 21:18:04,251 - __main__ - INFO - Closed VSCO @ 27.56 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,251 - __main__ - INFO - Opened VSCO @ 27.62 (109 shares)
+2026-01-08 21:18:04,252 - __main__ - INFO - Closed VSCO @ 27.87 reason=TRAIL_STOP
+2026-01-08 21:18:04,252 - __main__ - INFO - Opened VSCO @ 27.03 (111 shares)
+2026-01-08 21:18:04,252 - __main__ - INFO - Closed VSCO @ 26.68 reason=TRAIL_STOP
+2026-01-08 21:18:04,252 - __main__ - INFO - Opened VSCO @ 26.56 (113 shares)
+2026-01-08 21:18:04,252 - __main__ - INFO - Closed VSCO @ 26.33 reason=TRAIL_STOP
+2026-01-08 21:18:04,252 - __main__ - INFO - Opened VSCO @ 27.10 (111 shares)
+2026-01-08 21:18:04,252 - __main__ - INFO - Closed VSCO @ 25.80 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,252 - __main__ - INFO - Opened VSCO @ 24.89 (121 shares)
+2026-01-08 21:18:04,253 - __main__ - INFO - Closed VSCO @ 26.21 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,253 - __main__ - INFO - Opened VSCO @ 24.46 (123 shares)
+2026-01-08 21:18:04,253 - __main__ - INFO - Closed VSCO @ 24.59 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,253 - __main__ - INFO - Opened VSCO @ 24.98 (120 shares)
+2026-01-08 21:18:04,253 - __main__ - INFO - Closed VSCO @ 24.95 reason=EMA20_BREAK
+2026-01-08 21:18:04,253 - __main__ - INFO - Opened VSCO @ 24.95 (121 shares)
+2026-01-08 21:18:04,253 - __main__ - INFO - Closed VSCO @ 23.71 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,253 - __main__ - INFO - Opened VSCO @ 23.50 (128 shares)
+2026-01-08 21:18:04,253 - __main__ - INFO - Closed VSCO @ 24.44 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,253 - __main__ - INFO - Opened VSCO @ 23.92 (126 shares)
+2026-01-08 21:18:04,253 - __main__ - INFO - Closed VSCO @ 23.53 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,254 - __main__ - INFO - Opened VSCO @ 24.25 (124 shares)
+2026-01-08 21:18:04,254 - __main__ - INFO - Closed VSCO @ 23.88 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,254 - __main__ - INFO - Opened VSCO @ 23.75 (127 shares)
+2026-01-08 21:18:04,254 - __main__ - INFO - Closed VSCO @ 23.88 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,254 - __main__ - INFO - Opened VSCO @ 23.31 (129 shares)
+2026-01-08 21:18:04,254 - __main__ - INFO - Closed VSCO @ 23.48 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,254 - __main__ - INFO - Opened VSCO @ 23.16 (130 shares)
+2026-01-08 21:18:04,254 - __main__ - INFO - Closed VSCO @ 23.34 reason=EMA20_BREAK
+2026-01-08 21:18:04,254 - __main__ - INFO - Opened VSCO @ 23.34 (129 shares)
+2026-01-08 21:18:04,254 - __main__ - INFO - Closed VSCO @ 23.12 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,255 - __main__ - INFO - Opened VSCO @ 23.45 (128 shares)
+2026-01-08 21:18:04,255 - __main__ - INFO - Closed VSCO @ 23.44 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,255 - __main__ - INFO - Opened VSCO @ 24.48 (123 shares)
+2026-01-08 21:18:04,255 - __main__ - INFO - Closed VSCO @ 24.43 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,255 - __main__ - INFO - Opened VSCO @ 24.13 (125 shares)
+2026-01-08 21:18:04,255 - __main__ - INFO - Closed VSCO @ 24.43 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,255 - __main__ - INFO - Opened VSCO @ 24.11 (125 shares)
+2026-01-08 21:18:04,255 - __main__ - INFO - Closed VSCO @ 23.99 reason=TRAIL_STOP
+2026-01-08 21:18:04,255 - __main__ - INFO - Opened VSCO @ 24.62 (122 shares)
+2026-01-08 21:18:04,255 - __main__ - INFO - Scaled out VSCO: sold 61 @ 25.95 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,255 - __main__ - INFO - Closed VSCO @ 25.44 reason=TRAIL_STOP
+2026-01-08 21:18:04,256 - __main__ - INFO - Opened VSCO @ 25.95 (116 shares)
+2026-01-08 21:18:04,256 - __main__ - INFO - Closed VSCO @ 25.36 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,256 - __main__ - INFO - Opened VSCO @ 26.36 (114 shares)
+2026-01-08 21:18:04,256 - __main__ - INFO - Closed VSCO @ 26.24 reason=TRAIL_STOP
+2026-01-08 21:18:04,256 - __main__ - INFO - Opened VSCO @ 26.05 (115 shares)
+2026-01-08 21:18:04,256 - __main__ - INFO - Closed VSCO @ 25.63 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,256 - __main__ - INFO - Opened VSCO @ 26.66 (113 shares)
+2026-01-08 21:18:04,256 - __main__ - INFO - Closed VSCO @ 25.95 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,256 - __main__ - INFO - Opened VSCO @ 27.05 (111 shares)
+2026-01-08 21:18:04,257 - __main__ - INFO - Closed VSCO @ 25.95 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,257 - __main__ - INFO - Opened VSCO @ 26.88 (112 shares)
+2026-01-08 21:18:04,257 - __main__ - INFO - Closed VSCO @ 26.38 reason=TRAIL_STOP
+2026-01-08 21:18:04,257 - __main__ - INFO - Opened VSCO @ 26.30 (114 shares)
+2026-01-08 21:18:04,257 - __main__ - INFO - Closed VSCO @ 26.38 reason=TRAIL_STOP
+2026-01-08 21:18:04,257 - __main__ - INFO - Opened VSCO @ 26.32 (114 shares)
+2026-01-08 21:18:04,257 - __main__ - INFO - Scaled out VSCO: sold 57 @ 27.95 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,257 - __main__ - INFO - Closed VSCO @ 27.39 reason=TRAIL_STOP
+2026-01-08 21:18:04,257 - __main__ - INFO - Opened VSCO @ 27.95 (107 shares)
+2026-01-08 21:18:04,257 - __main__ - INFO - Closed VSCO @ 28.02 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,257 - __main__ - INFO - Opened VSCO @ 29.25 (103 shares)
+2026-01-08 21:18:04,258 - __main__ - INFO - Closed VSCO @ 29.27 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,258 - __main__ - INFO - Opened VSCO @ 30.51 (98 shares)
+2026-01-08 21:18:04,258 - __main__ - INFO - Closed VSCO @ 29.27 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,258 - __main__ - INFO - Opened VSCO @ 28.93 (104 shares)
+2026-01-08 21:18:04,258 - __main__ - INFO - Closed VSCO @ 29.24 reason=TRAIL_STOP;MAX_HOLD
+2026-01-08 21:18:04,258 - __main__ - INFO - Opened VSCO @ 29.17 (103 shares)
+2026-01-08 21:18:04,259 - __main__ - INFO - Closed VSCO @ 28.46 reason=TRAIL_STOP
+2026-01-08 21:18:04,259 - __main__ - INFO - Opened VSCO @ 28.32 (106 shares)
+2026-01-08 21:18:04,259 - __main__ - INFO - Closed VSCO @ 28.85 reason=TRAIL_STOP
+2026-01-08 21:18:04,259 - __main__ - INFO - Opened VSCO @ 29.47 (102 shares)
+2026-01-08 21:18:04,259 - __main__ - INFO - Closed VSCO @ 29.28 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,259 - __main__ - INFO - Opened VSCO @ 28.84 (104 shares)
+2026-01-08 21:18:04,259 - __main__ - INFO - Closed VSCO @ 29.28 reason=TRAIL_STOP
+2026-01-08 21:18:04,259 - __main__ - INFO - Opened VSCO @ 29.03 (103 shares)
+2026-01-08 21:18:04,259 - __main__ - INFO - Closed VSCO @ 28.54 reason=TRAIL_STOP
+2026-01-08 21:18:04,259 - __main__ - INFO - Opened VSCO @ 28.56 (105 shares)
+2026-01-08 21:18:04,260 - __main__ - INFO - Closed VSCO @ 28.45 reason=TRAIL_STOP
+2026-01-08 21:18:04,260 - __main__ - INFO - Opened VSCO @ 28.43 (105 shares)
+2026-01-08 21:18:04,260 - __main__ - INFO - Closed VSCO @ 27.35 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,260 - __main__ - INFO - Opened VSCO @ 26.21 (114 shares)
+2026-01-08 21:18:04,260 - __main__ - INFO - Closed VSCO @ 27.64 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,260 - __main__ - INFO - Opened VSCO @ 26.65 (113 shares)
+2026-01-08 21:18:04,260 - __main__ - INFO - Closed VSCO @ 25.56 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,260 - __main__ - INFO - Opened VSCO @ 25.60 (117 shares)
+2026-01-08 21:18:04,260 - __main__ - INFO - Closed VSCO @ 24.44 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,260 - __main__ - INFO - Opened VSCO @ 18.00 (166 shares)
+2026-01-08 21:18:04,261 - __main__ - INFO - Closed VSCO @ 18.96 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,261 - __main__ - INFO - Opened VSCO @ 18.13 (165 shares)
+2026-01-08 21:18:04,261 - __main__ - INFO - Closed VSCO @ 18.75 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,261 - __main__ - INFO - Opened VSCO @ 19.03 (158 shares)
+2026-01-08 21:18:04,261 - __main__ - INFO - Closed VSCO @ 18.70 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,261 - __main__ - INFO - Opened VSCO @ 18.66 (161 shares)
+2026-01-08 21:18:04,261 - __main__ - INFO - Closed VSCO @ 19.55 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,261 - __main__ - INFO - Opened VSCO @ 19.42 (155 shares)
+2026-01-08 21:18:04,261 - __main__ - INFO - Closed VSCO @ 19.35 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,261 - __main__ - INFO - Opened VSCO @ 18.95 (159 shares)
+2026-01-08 21:18:04,262 - __main__ - INFO - Closed VSCO @ 19.07 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,262 - __main__ - INFO - Opened VSCO @ 18.34 (164 shares)
+2026-01-08 21:18:04,262 - __main__ - INFO - Closed VSCO @ 18.39 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,262 - __main__ - INFO - Opened VSCO @ 18.20 (165 shares)
+2026-01-08 21:18:04,262 - __main__ - INFO - Closed VSCO @ 18.68 reason=EMA20_BREAK
+2026-01-08 21:18:04,262 - __main__ - INFO - Opened VSCO @ 18.68 (161 shares)
+2026-01-08 21:18:04,262 - __main__ - INFO - Closed VSCO @ 18.99 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,262 - __main__ - INFO - Opened VSCO @ 19.56 (154 shares)
+2026-01-08 21:18:04,262 - __main__ - INFO - Closed VSCO @ 19.66 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,262 - __main__ - INFO - Opened VSCO @ 20.03 (150 shares)
+2026-01-08 21:18:04,263 - __main__ - INFO - Closed VSCO @ 19.81 reason=EMA20_BREAK
+2026-01-08 21:18:04,263 - __main__ - INFO - Opened VSCO @ 19.81 (152 shares)
+2026-01-08 21:18:04,263 - __main__ - INFO - Closed VSCO @ 19.46 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,263 - __main__ - INFO - Opened VSCO @ 18.42 (163 shares)
+2026-01-08 21:18:04,263 - __main__ - INFO - Closed VSCO @ 19.48 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,263 - __main__ - INFO - Opened VSCO @ 18.50 (163 shares)
+2026-01-08 21:18:04,263 - __main__ - INFO - Closed VSCO @ 18.95 reason=EMA20_BREAK
+2026-01-08 21:18:04,263 - __main__ - INFO - Opened VSCO @ 18.95 (159 shares)
+2026-01-08 21:18:04,263 - __main__ - INFO - Closed VSCO @ 19.39 reason=EMA20_BREAK
+2026-01-08 21:18:04,263 - __main__ - INFO - Opened VSCO @ 19.39 (156 shares)
+2026-01-08 21:18:04,264 - __main__ - INFO - Closed VSCO @ 18.56 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,264 - __main__ - INFO - Opened VSCO @ 18.52 (163 shares)
+2026-01-08 21:18:04,264 - __main__ - INFO - Closed VSCO @ 17.71 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,264 - __main__ - INFO - Opened VSCO @ 17.48 (172 shares)
+2026-01-08 21:18:04,264 - __main__ - INFO - Closed VSCO @ 17.73 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,264 - __main__ - INFO - Opened VSCO @ 17.41 (173 shares)
+2026-01-08 21:18:04,264 - __main__ - INFO - Closed VSCO @ 18.02 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,265 - __main__ - INFO - Opened VSCO @ 18.00 (167 shares)
+2026-01-08 21:18:04,265 - __main__ - INFO - Closed VSCO @ 18.22 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,265 - __main__ - INFO - Opened VSCO @ 18.47 (163 shares)
+2026-01-08 21:18:04,265 - __main__ - INFO - Scaled out VSCO: sold 81 @ 19.78 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,265 - __main__ - INFO - Closed VSCO @ 18.95 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,265 - __main__ - INFO - Opened VSCO @ 19.78 (153 shares)
+2026-01-08 21:18:04,265 - __main__ - INFO - Closed VSCO @ 18.95 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,265 - __main__ - INFO - Opened VSCO @ 19.06 (158 shares)
+2026-01-08 21:18:04,265 - __main__ - INFO - Closed VSCO @ 19.29 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,265 - __main__ - INFO - Opened VSCO @ 18.64 (162 shares)
+2026-01-08 21:18:04,265 - __main__ - INFO - Closed VSCO @ 18.80 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,266 - __main__ - INFO - Opened VSCO @ 18.89 (160 shares)
+2026-01-08 21:18:04,266 - __main__ - INFO - Closed VSCO @ 18.02 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,266 - __main__ - INFO - Opened VSCO @ 17.93 (168 shares)
+2026-01-08 21:18:04,266 - __main__ - INFO - Closed VSCO @ 18.21 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,266 - __main__ - INFO - Opened VSCO @ 17.47 (173 shares)
+2026-01-08 21:18:04,266 - __main__ - INFO - Closed VSCO @ 18.02 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,266 - __main__ - INFO - Opened VSCO @ 17.09 (177 shares)
+2026-01-08 21:18:04,266 - __main__ - INFO - Closed VSCO @ 16.97 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,266 - __main__ - INFO - Opened VSCO @ 16.76 (180 shares)
+2026-01-08 21:18:04,266 - __main__ - INFO - Closed VSCO @ 16.82 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,267 - __main__ - INFO - Opened VSCO @ 17.22 (175 shares)
+2026-01-08 21:18:04,267 - __main__ - INFO - Closed VSCO @ 17.29 reason=EMA20_BREAK
+2026-01-08 21:18:04,267 - __main__ - INFO - Opened VSCO @ 17.29 (175 shares)
+2026-01-08 21:18:04,267 - __main__ - INFO - Closed VSCO @ 17.17 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,267 - __main__ - INFO - Opened VSCO @ 17.02 (177 shares)
+2026-01-08 21:18:04,267 - __main__ - INFO - Closed VSCO @ 17.09 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,267 - __main__ - INFO - Opened VSCO @ 17.56 (172 shares)
+2026-01-08 21:18:04,267 - __main__ - INFO - Closed VSCO @ 17.56 reason=EMA20_BREAK
+2026-01-08 21:18:04,267 - __main__ - INFO - Opened VSCO @ 17.56 (172 shares)
+2026-01-08 21:18:04,268 - __main__ - INFO - Closed VSCO @ 16.77 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,268 - __main__ - INFO - Opened VSCO @ 17.02 (177 shares)
+2026-01-08 21:18:04,268 - __main__ - INFO - Closed VSCO @ 17.16 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,268 - __main__ - INFO - Opened VSCO @ 17.43 (173 shares)
+2026-01-08 21:18:04,268 - __main__ - INFO - Closed VSCO @ 17.76 reason=EMA20_BREAK
+2026-01-08 21:18:04,268 - __main__ - INFO - Opened VSCO @ 17.76 (170 shares)
+2026-01-08 21:18:04,268 - __main__ - INFO - Closed VSCO @ 17.62 reason=EMA20_BREAK
+2026-01-08 21:18:04,268 - __main__ - INFO - Opened VSCO @ 17.62 (171 shares)
+2026-01-08 21:18:04,268 - __main__ - INFO - Closed VSCO @ 17.36 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,268 - __main__ - INFO - Opened VSCO @ 17.46 (173 shares)
+2026-01-08 21:18:04,268 - __main__ - INFO - Closed VSCO @ 17.73 reason=EMA20_BREAK
+2026-01-08 21:18:04,269 - __main__ - INFO - Opened VSCO @ 17.73 (170 shares)
+2026-01-08 21:18:04,269 - __main__ - INFO - Closed VSCO @ 17.97 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,269 - __main__ - INFO - Opened VSCO @ 17.59 (172 shares)
+2026-01-08 21:18:04,269 - __main__ - INFO - Closed VSCO @ 17.32 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,269 - __main__ - INFO - Opened VSCO @ 17.98 (168 shares)
+2026-01-08 21:18:04,269 - __main__ - INFO - Closed VSCO @ 17.38 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,269 - __main__ - INFO - Opened VSCO @ 18.03 (167 shares)
+2026-01-08 21:18:04,269 - __main__ - INFO - Closed VSCO @ 17.94 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,269 - __main__ - INFO - Opened VSCO @ 18.61 (162 shares)
+2026-01-08 21:18:04,270 - __main__ - INFO - Scaled out VSCO: sold 81 @ 19.57 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,270 - __main__ - INFO - Closed VSCO @ 19.57 reason=TRAIL_STOP
+2026-01-08 21:18:04,270 - __main__ - INFO - Opened VSCO @ 19.57 (154 shares)
+2026-01-08 21:18:04,270 - __main__ - INFO - Scaled out VSCO: sold 77 @ 21.64 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,270 - __main__ - INFO - Closed VSCO @ 20.76 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,270 - __main__ - INFO - Opened VSCO @ 21.64 (140 shares)
+2026-01-08 21:18:04,270 - __main__ - INFO - Closed VSCO @ 22.34 reason=TRAIL_STOP
+2026-01-08 21:18:04,270 - __main__ - INFO - Opened VSCO @ 22.05 (137 shares)
+2026-01-08 21:18:04,270 - __main__ - INFO - Closed VSCO @ 22.11 reason=TRAIL_STOP
+2026-01-08 21:18:04,270 - __main__ - INFO - Opened VSCO @ 21.59 (140 shares)
+2026-01-08 21:18:04,270 - __main__ - INFO - Closed VSCO @ 21.82 reason=TRAIL_STOP
+2026-01-08 21:18:04,270 - __main__ - INFO - Opened VSCO @ 21.70 (139 shares)
+2026-01-08 21:18:04,271 - __main__ - INFO - Closed VSCO @ 21.71 reason=TRAIL_STOP
+2026-01-08 21:18:04,271 - __main__ - INFO - Opened VSCO @ 22.16 (137 shares)
+2026-01-08 21:18:04,271 - __main__ - INFO - Closed VSCO @ 21.71 reason=TRAIL_STOP
+2026-01-08 21:18:04,271 - __main__ - INFO - Opened VSCO @ 21.34 (142 shares)
+2026-01-08 21:18:04,271 - __main__ - INFO - Closed VSCO @ 20.37 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,271 - __main__ - INFO - Opened VSCO @ 20.54 (147 shares)
+2026-01-08 21:18:04,271 - __main__ - INFO - Closed VSCO @ 21.18 reason=TRAIL_STOP
+2026-01-08 21:18:04,271 - __main__ - INFO - Opened VSCO @ 20.88 (145 shares)
+2026-01-08 21:18:04,272 - __main__ - INFO - Closed VSCO @ 20.53 reason=TRAIL_STOP
+2026-01-08 21:18:04,272 - __main__ - INFO - Opened VSCO @ 20.51 (147 shares)
+2026-01-08 21:18:04,272 - __main__ - INFO - Scaled out VSCO: sold 73 @ 21.59 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,272 - __main__ - INFO - Closed VSCO @ 21.16 reason=TRAIL_STOP;MAX_HOLD
+2026-01-08 21:18:04,272 - __main__ - INFO - Opened VSCO @ 21.59 (140 shares)
+2026-01-08 21:18:04,272 - __main__ - INFO - Scaled out VSCO: sold 70 @ 22.84 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,272 - __main__ - INFO - Closed VSCO @ 21.90 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,272 - __main__ - INFO - Opened VSCO @ 22.84 (133 shares)
+2026-01-08 21:18:04,272 - __main__ - INFO - Closed VSCO @ 23.51 reason=TRAIL_STOP
+2026-01-08 21:18:04,273 - __main__ - INFO - Opened VSCO @ 23.33 (130 shares)
+2026-01-08 21:18:04,273 - __main__ - INFO - Closed VSCO @ 22.48 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,273 - __main__ - INFO - Opened VSCO @ 22.36 (135 shares)
+2026-01-08 21:18:04,273 - __main__ - INFO - Closed VSCO @ 22.17 reason=TRAIL_STOP
+2026-01-08 21:18:04,273 - __main__ - INFO - Opened VSCO @ 22.61 (134 shares)
+2026-01-08 21:18:04,273 - __main__ - INFO - Closed VSCO @ 21.78 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,273 - __main__ - INFO - Opened VSCO @ 21.16 (143 shares)
+2026-01-08 21:18:04,273 - __main__ - INFO - Closed VSCO @ 20.25 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,273 - __main__ - INFO - Opened VSCO @ 20.19 (150 shares)
+2026-01-08 21:18:04,273 - __main__ - INFO - Closed VSCO @ 19.22 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,274 - __main__ - INFO - Opened VSCO @ 18.32 (165 shares)
+2026-01-08 21:18:04,274 - __main__ - INFO - Closed VSCO @ 20.28 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,274 - __main__ - INFO - Opened VSCO @ 18.14 (167 shares)
+2026-01-08 21:18:04,274 - __main__ - INFO - Closed VSCO @ 18.78 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,274 - __main__ - INFO - Opened VSCO @ 17.91 (169 shares)
+2026-01-08 21:18:04,274 - __main__ - INFO - Closed VSCO @ 18.78 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,274 - __main__ - INFO - Opened VSCO @ 17.55 (173 shares)
+2026-01-08 21:18:04,274 - __main__ - INFO - Closed VSCO @ 17.37 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,274 - __main__ - INFO - Opened VSCO @ 17.73 (171 shares)
+2026-01-08 21:18:04,274 - __main__ - INFO - Scaled out VSCO: sold 85 @ 19.21 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,274 - __main__ - INFO - Closed VSCO @ 18.07 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,275 - __main__ - INFO - Opened VSCO @ 19.21 (158 shares)
+2026-01-08 21:18:04,275 - __main__ - INFO - Closed VSCO @ 18.84 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,275 - __main__ - INFO - Opened VSCO @ 18.81 (161 shares)
+2026-01-08 21:18:04,275 - __main__ - INFO - Closed VSCO @ 18.71 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,275 - __main__ - INFO - Opened VSCO @ 18.24 (166 shares)
+2026-01-08 21:18:04,275 - __main__ - INFO - Closed VSCO @ 18.50 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,275 - __main__ - INFO - Opened VSCO @ 17.73 (171 shares)
+2026-01-08 21:18:04,275 - __main__ - INFO - Closed VSCO @ 17.70 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,275 - __main__ - INFO - Opened VSCO @ 17.56 (173 shares)
+2026-01-08 21:18:04,275 - __main__ - INFO - Closed VSCO @ 17.57 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,275 - __main__ - INFO - Opened VSCO @ 17.98 (169 shares)
+2026-01-08 21:18:04,276 - __main__ - INFO - Closed VSCO @ 17.66 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,276 - __main__ - INFO - Opened VSCO @ 18.12 (168 shares)
+2026-01-08 21:18:04,276 - __main__ - INFO - Closed VSCO @ 17.66 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,276 - __main__ - INFO - Opened VSCO @ 18.09 (168 shares)
+2026-01-08 21:18:04,276 - __main__ - INFO - Closed VSCO @ 17.77 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,276 - __main__ - INFO - Opened VSCO @ 17.67 (172 shares)
+2026-01-08 21:18:04,276 - __main__ - INFO - Closed VSCO @ 16.78 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,276 - __main__ - INFO - Opened VSCO @ 16.02 (189 shares)
+2026-01-08 21:18:04,276 - __main__ - INFO - Closed VSCO @ 17.68 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,276 - __main__ - INFO - Opened VSCO @ 16.20 (188 shares)
+2026-01-08 21:18:04,277 - __main__ - INFO - Closed VSCO @ 15.96 reason=EMA20_BREAK
+2026-01-08 21:18:04,277 - __main__ - INFO - Opened VSCO @ 15.96 (190 shares)
+2026-01-08 21:18:04,277 - __main__ - INFO - Scaled out VSCO: sold 95 @ 17.38 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,277 - __main__ - INFO - Closed VSCO @ 16.50 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,277 - __main__ - INFO - Opened VSCO @ 17.38 (175 shares)
+2026-01-08 21:18:04,277 - __main__ - INFO - Closed VSCO @ 17.53 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,277 - __main__ - INFO - Opened VSCO @ 17.80 (171 shares)
+2026-01-08 21:18:04,277 - __main__ - INFO - Closed VSCO @ 17.63 reason=TRAIL_STOP
+2026-01-08 21:18:04,277 - __main__ - INFO - Opened VSCO @ 18.11 (168 shares)
+2026-01-08 21:18:04,277 - __main__ - INFO - Closed VSCO @ 18.18 reason=TRAIL_STOP
+2026-01-08 21:18:04,277 - __main__ - INFO - Opened VSCO @ 18.73 (162 shares)
+2026-01-08 21:18:04,278 - __main__ - INFO - Scaled out VSCO: sold 81 @ 19.88 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,278 - __main__ - INFO - Closed VSCO @ 19.48 reason=TRAIL_STOP
+2026-01-08 21:18:04,278 - __main__ - INFO - Opened VSCO @ 19.88 (153 shares)
+2026-01-08 21:18:04,278 - __main__ - INFO - Closed VSCO @ 18.98 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,278 - __main__ - INFO - Opened VSCO @ 18.99 (160 shares)
+2026-01-08 21:18:04,278 - __main__ - INFO - Closed VSCO @ 18.06 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,278 - __main__ - INFO - Opened VSCO @ 18.05 (168 shares)
+2026-01-08 21:18:04,278 - __main__ - INFO - Closed VSCO @ 18.77 reason=TRAIL_STOP
+2026-01-08 21:18:04,278 - __main__ - INFO - Opened VSCO @ 18.64 (163 shares)
+2026-01-08 21:18:04,278 - __main__ - INFO - Closed VSCO @ 18.75 reason=TRAIL_STOP
+2026-01-08 21:18:04,278 - __main__ - INFO - Opened VSCO @ 19.04 (160 shares)
+2026-01-08 21:18:04,279 - __main__ - INFO - Closed VSCO @ 19.03 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,279 - __main__ - INFO - Opened VSCO @ 18.14 (168 shares)
+2026-01-08 21:18:04,279 - __main__ - INFO - Closed VSCO @ 19.23 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,279 - __main__ - INFO - Opened VSCO @ 18.32 (166 shares)
+2026-01-08 21:18:04,279 - __main__ - INFO - Closed VSCO @ 17.90 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,279 - __main__ - INFO - Opened VSCO @ 18.20 (167 shares)
+2026-01-08 21:18:04,279 - __main__ - INFO - Closed VSCO @ 18.00 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,279 - __main__ - INFO - Opened VSCO @ 18.24 (167 shares)
+2026-01-08 21:18:04,279 - __main__ - INFO - Closed VSCO @ 18.00 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,279 - __main__ - INFO - Opened VSCO @ 17.95 (170 shares)
+2026-01-08 21:18:04,280 - __main__ - INFO - Closed VSCO @ 17.86 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,280 - __main__ - INFO - Opened VSCO @ 18.20 (167 shares)
+2026-01-08 21:18:04,280 - __main__ - INFO - Closed VSCO @ 18.17 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,280 - __main__ - INFO - Opened VSCO @ 18.09 (168 shares)
+2026-01-08 21:18:04,280 - __main__ - INFO - Closed VSCO @ 17.86 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,280 - __main__ - INFO - Opened VSCO @ 17.55 (173 shares)
+2026-01-08 21:18:04,280 - __main__ - INFO - Closed VSCO @ 17.76 reason=EMA20_BREAK;MACD_CROSS
+2026-01-08 21:18:04,280 - __main__ - INFO - Opened VSCO @ 17.76 (171 shares)
+2026-01-08 21:18:04,281 - __main__ - INFO - Closed VSCO @ 16.94 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,281 - __main__ - INFO - Opened VSCO @ 16.77 (181 shares)
+2026-01-08 21:18:04,281 - __main__ - INFO - Closed VSCO @ 17.50 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,281 - __main__ - INFO - Opened VSCO @ 16.16 (188 shares)
+2026-01-08 21:18:04,281 - __main__ - INFO - Scaled out VSCO: sold 94 @ 17.08 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,281 - __main__ - INFO - Closed VSCO @ 16.20 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,281 - __main__ - INFO - Opened VSCO @ 17.08 (178 shares)
+2026-01-08 21:18:04,281 - __main__ - INFO - Closed VSCO @ 17.26 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,281 - __main__ - INFO - Opened VSCO @ 17.77 (171 shares)
+2026-01-08 21:18:04,281 - __main__ - INFO - Closed VSCO @ 17.95 reason=TRAIL_STOP
+2026-01-08 21:18:04,282 - __main__ - INFO - Opened VSCO @ 17.93 (170 shares)
+2026-01-08 21:18:04,282 - __main__ - INFO - Scaled out VSCO: sold 85 @ 19.07 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,282 - __main__ - INFO - Closed VSCO @ 18.69 reason=TRAIL_STOP
+2026-01-08 21:18:04,282 - __main__ - INFO - Opened VSCO @ 19.07 (160 shares)
+2026-01-08 21:18:04,282 - __main__ - INFO - Closed VSCO @ 19.69 reason=TRAIL_STOP
+2026-01-08 21:18:04,282 - __main__ - INFO - Opened VSCO @ 19.75 (155 shares)
+2026-01-08 21:18:04,282 - __main__ - INFO - Closed VSCO @ 18.86 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,282 - __main__ - INFO - Opened VSCO @ 18.64 (164 shares)
+2026-01-08 21:18:04,282 - __main__ - INFO - Closed VSCO @ 19.48 reason=TRAIL_STOP
+2026-01-08 21:18:04,282 - __main__ - INFO - Opened VSCO @ 19.07 (160 shares)
+2026-01-08 21:18:04,282 - __main__ - INFO - Scaled out VSCO: sold 80 @ 22.20 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,283 - __main__ - INFO - Closed VSCO @ 21.98 reason=TRAIL_STOP
+2026-01-08 21:18:04,283 - __main__ - INFO - Opened VSCO @ 22.20 (138 shares)
+2026-01-08 21:18:04,283 - __main__ - INFO - Scaled out VSCO: sold 69 @ 24.37 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,283 - __main__ - INFO - Closed VSCO @ 23.07 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,283 - __main__ - INFO - Opened VSCO @ 24.37 (126 shares)
+2026-01-08 21:18:04,283 - __main__ - INFO - Closed VSCO @ 24.25 reason=TRAIL_STOP
+2026-01-08 21:18:04,283 - __main__ - INFO - Opened VSCO @ 24.33 (126 shares)
+2026-01-08 21:18:04,283 - __main__ - INFO - Closed VSCO @ 24.25 reason=TRAIL_STOP
+2026-01-08 21:18:04,283 - __main__ - INFO - Opened VSCO @ 23.75 (129 shares)
+2026-01-08 21:18:04,284 - __main__ - INFO - Closed VSCO @ 24.17 reason=TRAIL_STOP
+2026-01-08 21:18:04,284 - __main__ - INFO - Opened VSCO @ 23.21 (132 shares)
+2026-01-08 21:18:04,284 - __main__ - INFO - Closed VSCO @ 23.36 reason=TRAIL_STOP
+2026-01-08 21:18:04,284 - __main__ - INFO - Opened VSCO @ 23.41 (131 shares)
+2026-01-08 21:18:04,284 - __main__ - INFO - Closed VSCO @ 23.83 reason=TRAIL_STOP
+2026-01-08 21:18:04,284 - __main__ - INFO - Opened VSCO @ 24.21 (127 shares)
+2026-01-08 21:18:04,284 - __main__ - INFO - Closed VSCO @ 24.00 reason=TRAIL_STOP
+2026-01-08 21:18:04,284 - __main__ - INFO - Opened VSCO @ 24.73 (124 shares)
+2026-01-08 21:18:04,284 - __main__ - INFO - Closed VSCO @ 24.31 reason=TRAIL_STOP
+2026-01-08 21:18:04,284 - __main__ - INFO - Opened VSCO @ 24.87 (124 shares)
+2026-01-08 21:18:04,285 - __main__ - INFO - Closed VSCO @ 23.64 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,285 - __main__ - INFO - Opened VSCO @ 23.96 (128 shares)
+2026-01-08 21:18:04,285 - __main__ - INFO - Closed VSCO @ 22.63 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,285 - __main__ - INFO - Opened VSCO @ 23.43 (131 shares)
+2026-01-08 21:18:04,285 - __main__ - INFO - Closed VSCO @ 23.44 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,285 - __main__ - INFO - Opened VSCO @ 23.41 (131 shares)
+2026-01-08 21:18:04,285 - __main__ - INFO - Closed VSCO @ 23.44 reason=TRAIL_STOP
+2026-01-08 21:18:04,285 - __main__ - INFO - Opened VSCO @ 22.72 (135 shares)
+2026-01-08 21:18:04,285 - __main__ - INFO - Closed VSCO @ 22.67 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,285 - __main__ - INFO - Opened VSCO @ 23.80 (129 shares)
+2026-01-08 21:18:04,286 - __main__ - INFO - Closed VSCO @ 23.64 reason=TRAIL_STOP
+2026-01-08 21:18:04,286 - __main__ - INFO - Opened VSCO @ 24.05 (127 shares)
+2026-01-08 21:18:04,286 - __main__ - INFO - Closed VSCO @ 23.64 reason=TRAIL_STOP
+2026-01-08 21:18:04,286 - __main__ - INFO - Opened VSCO @ 23.11 (132 shares)
+2026-01-08 21:18:04,286 - __main__ - INFO - Closed VSCO @ 21.91 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,286 - __main__ - INFO - Opened VSCO @ 21.77 (140 shares)
+2026-01-08 21:18:04,286 - __main__ - INFO - Closed VSCO @ 22.54 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,286 - __main__ - INFO - Opened VSCO @ 21.22 (144 shares)
+2026-01-08 21:18:04,286 - __main__ - INFO - Closed VSCO @ 21.92 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,286 - __main__ - INFO - Opened VSCO @ 22.21 (138 shares)
+2026-01-08 21:18:04,286 - __main__ - INFO - Scaled out VSCO: sold 69 @ 23.52 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,287 - __main__ - INFO - Closed VSCO @ 23.05 reason=TRAIL_STOP
+2026-01-08 21:18:04,287 - __main__ - INFO - Opened VSCO @ 23.52 (130 shares)
+2026-01-08 21:18:04,287 - __main__ - INFO - Closed VSCO @ 23.39 reason=TRAIL_STOP
+2026-01-08 21:18:04,287 - __main__ - INFO - Opened VSCO @ 23.57 (130 shares)
+2026-01-08 21:18:04,287 - __main__ - INFO - Closed VSCO @ 23.93 reason=TRAIL_STOP
+2026-01-08 21:18:04,287 - __main__ - INFO - Opened VSCO @ 24.28 (126 shares)
+2026-01-08 21:18:04,287 - __main__ - INFO - Closed VSCO @ 25.34 reason=TRAIL_STOP
+2026-01-08 21:18:04,287 - __main__ - INFO - Opened VSCO @ 25.15 (122 shares)
+2026-01-08 21:18:04,287 - __main__ - INFO - Closed VSCO @ 25.53 reason=TRAIL_STOP
+2026-01-08 21:18:04,287 - __main__ - INFO - Opened VSCO @ 26.00 (118 shares)
+2026-01-08 21:18:04,287 - __main__ - INFO - Closed VSCO @ 25.55 reason=TRAIL_STOP
+2026-01-08 21:18:04,288 - __main__ - INFO - Opened VSCO @ 25.58 (120 shares)
+2026-01-08 21:18:04,288 - __main__ - INFO - Closed VSCO @ 25.55 reason=TRAIL_STOP
+2026-01-08 21:18:04,288 - __main__ - INFO - Opened VSCO @ 26.18 (117 shares)
+2026-01-08 21:18:04,288 - __main__ - INFO - Closed VSCO @ 26.26 reason=TRAIL_STOP
+2026-01-08 21:18:04,288 - __main__ - INFO - Opened VSCO @ 27.02 (114 shares)
+2026-01-08 21:18:04,288 - __main__ - INFO - Closed VSCO @ 25.81 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,288 - __main__ - INFO - Opened VSCO @ 25.85 (119 shares)
+2026-01-08 21:18:04,288 - __main__ - INFO - Closed VSCO @ 26.09 reason=TRAIL_STOP
+2026-01-08 21:18:04,288 - __main__ - INFO - Opened VSCO @ 25.79 (119 shares)
+2026-01-08 21:18:04,288 - __main__ - INFO - Closed VSCO @ 25.56 reason=TRAIL_STOP
+2026-01-08 21:18:04,289 - __main__ - INFO - Opened VSCO @ 26.02 (118 shares)
+2026-01-08 21:18:04,289 - __main__ - INFO - Closed VSCO @ 25.43 reason=TRAIL_STOP
+2026-01-08 21:18:04,289 - __main__ - INFO - Opened VSCO @ 25.70 (119 shares)
+2026-01-08 21:18:04,289 - __main__ - INFO - Closed VSCO @ 25.29 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,289 - __main__ - INFO - Opened VSCO @ 25.14 (122 shares)
+2026-01-08 21:18:04,289 - __main__ - INFO - Closed VSCO @ 24.84 reason=TRAIL_STOP
+2026-01-08 21:18:04,289 - __main__ - INFO - Opened VSCO @ 25.39 (121 shares)
+2026-01-08 21:18:04,289 - __main__ - INFO - Closed VSCO @ 24.31 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,289 - __main__ - INFO - Opened VSCO @ 24.08 (127 shares)
+2026-01-08 21:18:04,289 - __main__ - INFO - Closed VSCO @ 25.30 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,290 - __main__ - INFO - Opened VSCO @ 24.28 (126 shares)
+2026-01-08 21:18:04,290 - __main__ - INFO - Closed VSCO @ 23.16 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,290 - __main__ - INFO - Opened VSCO @ 24.18 (127 shares)
+2026-01-08 21:18:04,290 - __main__ - INFO - Closed VSCO @ 24.57 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,290 - __main__ - INFO - Opened VSCO @ 24.53 (125 shares)
+2026-01-08 21:18:04,290 - __main__ - INFO - Closed VSCO @ 24.57 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,290 - __main__ - INFO - Opened VSCO @ 24.58 (125 shares)
+2026-01-08 21:18:04,290 - __main__ - INFO - Closed VSCO @ 24.90 reason=TRAIL_STOP
+2026-01-08 21:18:04,290 - __main__ - INFO - Opened VSCO @ 25.09 (122 shares)
+2026-01-08 21:18:04,291 - __main__ - INFO - Closed VSCO @ 25.83 reason=TRAIL_STOP
+2026-01-08 21:18:04,291 - __main__ - INFO - Opened VSCO @ 26.06 (118 shares)
+2026-01-08 21:18:04,291 - __main__ - INFO - Closed VSCO @ 26.16 reason=TRAIL_STOP
+2026-01-08 21:18:04,291 - __main__ - INFO - Opened VSCO @ 26.47 (116 shares)
+2026-01-08 21:18:04,291 - __main__ - INFO - Closed VSCO @ 26.80 reason=TRAIL_STOP;PATTERN_SHOOTING_STAR
+2026-01-08 21:18:04,291 - __main__ - INFO - Opened VSCO @ 26.42 (116 shares)
+2026-01-08 21:18:04,291 - __main__ - INFO - Scaled out VSCO: sold 58 @ 28.18 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,291 - __main__ - INFO - Closed VSCO @ 26.93 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,291 - __main__ - INFO - Opened VSCO @ 28.18 (109 shares)
+2026-01-08 21:18:04,291 - __main__ - INFO - Closed VSCO @ 28.05 reason=TRAIL_STOP
+2026-01-08 21:18:04,291 - __main__ - INFO - Opened VSCO @ 27.63 (111 shares)
+2026-01-08 21:18:04,292 - __main__ - INFO - Closed VSCO @ 28.05 reason=TRAIL_STOP
+2026-01-08 21:18:04,292 - __main__ - INFO - Opened VSCO @ 27.48 (112 shares)
+2026-01-08 21:18:04,292 - __main__ - INFO - Closed VSCO @ 28.30 reason=TRAIL_STOP
+2026-01-08 21:18:04,292 - __main__ - INFO - Opened VSCO @ 28.58 (107 shares)
+2026-01-08 21:18:04,292 - __main__ - INFO - Closed VSCO @ 29.00 reason=TRAIL_STOP
+2026-01-08 21:18:04,292 - __main__ - INFO - Opened VSCO @ 29.37 (105 shares)
+2026-01-08 21:18:04,292 - __main__ - INFO - Closed VSCO @ 29.00 reason=TRAIL_STOP
+2026-01-08 21:18:04,292 - __main__ - INFO - Opened VSCO @ 29.16 (105 shares)
+2026-01-08 21:18:04,292 - __main__ - INFO - Closed VSCO @ 28.60 reason=TRAIL_STOP
+2026-01-08 21:18:04,292 - __main__ - INFO - Opened VSCO @ 28.59 (107 shares)
+2026-01-08 21:18:04,293 - __main__ - INFO - Closed VSCO @ 28.60 reason=TRAIL_STOP
+2026-01-08 21:18:04,293 - __main__ - INFO - Opened VSCO @ 28.37 (108 shares)
+2026-01-08 21:18:04,293 - __main__ - INFO - Closed VSCO @ 28.66 reason=TRAIL_STOP
+2026-01-08 21:18:04,293 - __main__ - INFO - Opened VSCO @ 29.42 (104 shares)
+2026-01-08 21:18:04,293 - __main__ - INFO - Closed VSCO @ 28.66 reason=TRAIL_STOP
+2026-01-08 21:18:04,293 - __main__ - INFO - Opened VSCO @ 28.49 (108 shares)
+2026-01-08 21:18:04,293 - __main__ - INFO - Closed VSCO @ 28.59 reason=TRAIL_STOP
+2026-01-08 21:18:04,293 - __main__ - INFO - Opened VSCO @ 28.98 (106 shares)
+2026-01-08 21:18:04,293 - __main__ - INFO - Closed VSCO @ 30.39 reason=TRAIL_STOP
+2026-01-08 21:18:04,293 - __main__ - INFO - Opened VSCO @ 30.26 (102 shares)
+2026-01-08 21:18:04,294 - __main__ - INFO - Closed VSCO @ 30.58 reason=TRAIL_STOP
+2026-01-08 21:18:04,294 - __main__ - INFO - Opened VSCO @ 31.52 (98 shares)
+2026-01-08 21:18:04,294 - __main__ - INFO - Closed VSCO @ 32.46 reason=TRAIL_STOP
+2026-01-08 21:18:04,294 - __main__ - INFO - Opened VSCO @ 32.47 (95 shares)
+2026-01-08 21:18:04,294 - __main__ - INFO - Closed VSCO @ 32.13 reason=TRAIL_STOP
+2026-01-08 21:18:04,294 - __main__ - INFO - Opened VSCO @ 32.38 (95 shares)
+2026-01-08 21:18:04,294 - __main__ - INFO - Closed VSCO @ 32.55 reason=TRAIL_STOP
+2026-01-08 21:18:04,294 - __main__ - INFO - Opened VSCO @ 33.13 (93 shares)
+2026-01-08 21:18:04,294 - __main__ - INFO - Scaled out VSCO: sold 46 @ 35.82 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,294 - __main__ - INFO - Closed VSCO @ 34.43 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,295 - __main__ - INFO - Opened VSCO @ 35.82 (86 shares)
+2026-01-08 21:18:04,295 - __main__ - INFO - Closed VSCO @ 35.00 reason=TRAIL_STOP
+2026-01-08 21:18:04,295 - __main__ - INFO - Opened VSCO @ 34.97 (88 shares)
+2026-01-08 21:18:04,295 - __main__ - INFO - Closed VSCO @ 34.90 reason=TRAIL_STOP
+2026-01-08 21:18:04,295 - __main__ - INFO - Opened VSCO @ 34.97 (88 shares)
+2026-01-08 21:18:04,295 - __main__ - INFO - Closed VSCO @ 36.80 reason=TRAIL_STOP
+2026-01-08 21:18:04,296 - __main__ - INFO - Opened VSCO @ 35.76 (86 shares)
+2026-01-08 21:18:04,296 - __main__ - INFO - Closed VSCO @ 36.80 reason=TRAIL_STOP
+2026-01-08 21:18:04,296 - __main__ - INFO - Opened VSCO @ 35.97 (86 shares)
+2026-01-08 21:18:04,296 - __main__ - INFO - Closed VSCO @ 35.75 reason=TRAIL_STOP
+2026-01-08 21:18:04,296 - __main__ - INFO - Opened VSCO @ 36.67 (84 shares)
+2026-01-08 21:18:04,296 - __main__ - INFO - Closed VSCO @ 36.53 reason=TRAIL_STOP
+2026-01-08 21:18:04,296 - __main__ - INFO - Opened VSCO @ 36.59 (84 shares)
+2026-01-08 21:18:04,296 - __main__ - INFO - Closed VSCO @ 36.53 reason=TRAIL_STOP
+2026-01-08 21:18:04,297 - __main__ - INFO - Opened VSCO @ 36.24 (85 shares)
+2026-01-08 21:18:04,297 - __main__ - INFO - Closed VSCO @ 34.73 reason=ATR_STOP;TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,297 - __main__ - INFO - Opened VSCO @ 34.98 (88 shares)
+2026-01-08 21:18:04,297 - __main__ - INFO - Scaled out VSCO: sold 44 @ 37.08 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,297 - __main__ - INFO - Closed VSCO @ 35.56 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,297 - __main__ - INFO - Opened VSCO @ 37.08 (83 shares)
+2026-01-08 21:18:04,297 - __main__ - INFO - Closed VSCO @ 38.50 reason=TRAIL_STOP;PATTERN_SHOOTING_STAR
+2026-01-08 21:18:04,298 - __main__ - INFO - Opened VSCO @ 37.45 (82 shares)
+2026-01-08 21:18:04,298 - __main__ - INFO - Closed VSCO @ 38.11 reason=TRAIL_STOP
+2026-01-08 21:18:04,298 - __main__ - INFO - Opened VSCO @ 37.43 (82 shares)
+2026-01-08 21:18:04,298 - __main__ - INFO - Closed VSCO @ 37.34 reason=TRAIL_STOP
+2026-01-08 21:18:04,298 - __main__ - INFO - Opened VSCO @ 38.01 (81 shares)
+2026-01-08 21:18:04,298 - __main__ - INFO - Scaled out VSCO: sold 40 @ 41.91 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,298 - __main__ - INFO - Closed VSCO @ 40.26 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,298 - __main__ - INFO - Opened VSCO @ 41.91 (74 shares)
+2026-01-08 21:18:04,298 - __main__ - INFO - Closed VSCO @ 41.64 reason=TRAIL_STOP
+2026-01-08 21:18:04,298 - __main__ - INFO - Opened VSCO @ 41.94 (74 shares)
+2026-01-08 21:18:04,299 - __main__ - INFO - Closed VSCO @ 42.20 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,299 - __main__ - INFO - Opened VSCO @ 43.90 (70 shares)
+2026-01-08 21:18:04,299 - __main__ - INFO - Closed VSCO @ 43.07 reason=TRAIL_STOP
+2026-01-08 21:18:04,299 - __main__ - INFO - Opened VSCO @ 43.01 (72 shares)
+2026-01-08 21:18:04,299 - __main__ - INFO - Scaled out VSCO: sold 36 @ 48.01 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,299 - __main__ - INFO - Closed VSCO @ 45.96 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,299 - __main__ - INFO - Opened VSCO @ 48.01 (64 shares)
+2026-01-08 21:18:04,299 - __main__ - INFO - Closed VSCO @ 47.17 reason=TRAIL_STOP
+2026-01-08 21:18:04,299 - __main__ - INFO - Opened VSCO @ 47.21 (66 shares)
+2026-01-08 21:18:04,299 - __main__ - INFO - Closed VSCO @ 45.08 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,299 - __main__ - INFO - Opened VSCO @ 46.64 (66 shares)
+2026-01-08 21:18:04,300 - __main__ - INFO - Closed VSCO @ 46.61 reason=TRAIL_STOP
+2026-01-08 21:18:04,300 - __main__ - INFO - Opened VSCO @ 47.23 (65 shares)
+2026-01-08 21:18:04,300 - __main__ - INFO - Closed VSCO @ 46.16 reason=TRAIL_STOP
+2026-01-08 21:18:04,300 - __main__ - INFO - Opened VSCO @ 46.77 (66 shares)
+2026-01-08 21:18:04,300 - __main__ - INFO - Closed VSCO @ 47.26 reason=TRAIL_STOP
+2026-01-08 21:18:04,300 - __main__ - INFO - Opened VSCO @ 48.70 (63 shares)
+2026-01-08 21:18:04,300 - __main__ - INFO - Closed VSCO @ 46.41 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,300 - __main__ - INFO - Opened VSCO @ 45.87 (67 shares)
+2026-01-08 21:18:04,300 - __main__ - INFO - Closed VSCO @ 47.65 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,300 - __main__ - INFO - Opened VSCO @ 44.76 (69 shares)
+2026-01-08 21:18:04,300 - __main__ - INFO - Closed VSCO @ 44.78 reason=TRAIL_STOP
+2026-01-08 21:18:04,300 - __main__ - INFO - Opened VSCO @ 43.34 (71 shares)
+2026-01-08 21:18:04,301 - __main__ - INFO - Closed VSCO @ 44.77 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,301 - __main__ - INFO - Opened VSCO @ 42.43 (73 shares)
+2026-01-08 21:18:04,301 - __main__ - INFO - Scaled out VSCO: sold 36 @ 44.93 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,301 - __main__ - INFO - Closed VSCO @ 42.43 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,301 - __main__ - INFO - Opened VSCO @ 44.93 (69 shares)
+2026-01-08 21:18:04,301 - __main__ - INFO - Closed VSCO @ 44.47 reason=TRAIL_STOP
+2026-01-08 21:18:04,301 - __main__ - INFO - Opened VSCO @ 43.28 (72 shares)
+2026-01-08 21:18:04,301 - __main__ - INFO - Closed VSCO @ 43.06 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,301 - __main__ - INFO - Opened VSCO @ 41.68 (74 shares)
+2026-01-08 21:18:04,301 - __main__ - INFO - Closed VSCO @ 41.26 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,301 - __main__ - INFO - Opened VSCO @ 41.73 (74 shares)
+2026-01-08 21:18:04,302 - __main__ - INFO - Closed VSCO @ 42.28 reason=EMA20_BREAK
+2026-01-08 21:18:04,302 - __main__ - INFO - Opened VSCO @ 42.28 (73 shares)
+2026-01-08 21:18:04,302 - __main__ - INFO - Closed VSCO @ 41.49 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,302 - __main__ - INFO - Opened VSCO @ 41.90 (74 shares)
+2026-01-08 21:18:04,302 - __main__ - INFO - Closed VSCO @ 41.49 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,302 - __main__ - INFO - Opened VSCO @ 41.41 (75 shares)
+2026-01-08 21:18:04,302 - __main__ - INFO - Closed VSCO @ 40.96 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,302 - __main__ - INFO - Opened VSCO @ 40.38 (77 shares)
+2026-01-08 21:18:04,302 - __main__ - INFO - Closed VSCO @ 40.78 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,302 - __main__ - INFO - Opened VSCO @ 41.76 (74 shares)
+2026-01-08 21:18:04,303 - __main__ - INFO - Closed VSCO @ 39.78 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,303 - __main__ - INFO - Opened VSCO @ 39.70 (78 shares)
+2026-01-08 21:18:04,303 - __main__ - INFO - Closed VSCO @ 40.96 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,303 - __main__ - INFO - Opened VSCO @ 39.15 (79 shares)
+2026-01-08 21:18:04,303 - __main__ - INFO - Closed VSCO @ 40.45 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,303 - __main__ - INFO - Opened VSCO @ 38.48 (80 shares)
+2026-01-08 21:18:04,303 - __main__ - INFO - Closed VSCO @ 37.96 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,303 - __main__ - INFO - Opened VSCO @ 37.62 (82 shares)
+2026-01-08 21:18:04,303 - __main__ - INFO - Closed VSCO @ 35.81 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,303 - __main__ - INFO - Opened VSCO @ 35.83 (86 shares)
+2026-01-08 21:18:04,303 - __main__ - INFO - Closed VSCO @ 37.04 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,304 - __main__ - INFO - Opened VSCO @ 35.47 (87 shares)
+2026-01-08 21:18:04,304 - __main__ - INFO - Closed VSCO @ 37.04 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,304 - __main__ - INFO - Opened VSCO @ 36.24 (86 shares)
+2026-01-08 21:18:04,304 - __main__ - INFO - Closed VSCO @ 35.73 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,304 - __main__ - INFO - Opened VSCO @ 36.35 (85 shares)
+2026-01-08 21:18:04,304 - __main__ - INFO - Closed VSCO @ 36.46 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,304 - __main__ - INFO - Opened VSCO @ 37.11 (83 shares)
+2026-01-08 21:18:04,304 - __main__ - INFO - Closed VSCO @ 37.80 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,304 - __main__ - INFO - Opened VSCO @ 38.70 (80 shares)
+2026-01-08 21:18:04,304 - __main__ - INFO - Closed VSCO @ 38.27 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,305 - __main__ - INFO - Opened VSCO @ 38.61 (80 shares)
+2026-01-08 21:18:04,305 - __main__ - INFO - Closed VSCO @ 38.27 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,305 - __main__ - INFO - Opened VSCO @ 38.34 (81 shares)
+2026-01-08 21:18:04,305 - __main__ - INFO - Closed VSCO @ 38.80 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,305 - __main__ - INFO - Opened VSCO @ 37.77 (82 shares)
+2026-01-08 21:18:04,305 - __main__ - INFO - Closed VSCO @ 39.20 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,305 - __main__ - INFO - Opened VSCO @ 37.34 (83 shares)
+2026-01-08 21:18:04,305 - __main__ - INFO - Closed VSCO @ 38.82 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,305 - __main__ - INFO - Opened VSCO @ 37.87 (82 shares)
+2026-01-08 21:18:04,305 - __main__ - INFO - Closed VSCO @ 36.19 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,305 - __main__ - INFO - Opened VSCO @ 36.17 (86 shares)
+2026-01-08 21:18:04,306 - __main__ - INFO - Closed VSCO @ 35.94 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,306 - __main__ - INFO - Opened VSCO @ 36.76 (84 shares)
+2026-01-08 21:18:04,306 - __main__ - INFO - Closed VSCO @ 35.98 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,306 - __main__ - INFO - Opened VSCO @ 36.33 (85 shares)
+2026-01-08 21:18:04,306 - __main__ - INFO - Closed VSCO @ 35.98 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,306 - __main__ - INFO - Opened VSCO @ 34.89 (89 shares)
+2026-01-08 21:18:04,306 - __main__ - INFO - Closed VSCO @ 35.07 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,306 - __main__ - INFO - Opened VSCO @ 34.15 (91 shares)
+2026-01-08 21:18:04,306 - __main__ - INFO - Closed VSCO @ 34.05 reason=EMA20_BREAK
+2026-01-08 21:18:04,306 - __main__ - INFO - Opened VSCO @ 34.05 (91 shares)
+2026-01-08 21:18:04,307 - __main__ - INFO - Closed VSCO @ 33.95 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,307 - __main__ - INFO - Opened VSCO @ 33.64 (92 shares)
+2026-01-08 21:18:04,307 - __main__ - INFO - Closed VSCO @ 33.95 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,307 - __main__ - INFO - Opened VSCO @ 32.13 (97 shares)
+2026-01-08 21:18:04,307 - __main__ - INFO - Closed VSCO @ 32.58 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,307 - __main__ - INFO - Opened VSCO @ 32.80 (95 shares)
+2026-01-08 21:18:04,307 - __main__ - INFO - Closed VSCO @ 32.58 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,307 - __main__ - INFO - Opened VSCO @ 32.61 (95 shares)
+2026-01-08 21:18:04,307 - __main__ - INFO - Closed VSCO @ 32.01 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,307 - __main__ - INFO - Opened VSCO @ 32.59 (95 shares)
+2026-01-08 21:18:04,308 - __main__ - INFO - Closed VSCO @ 32.45 reason=EMA20_BREAK
+2026-01-08 21:18:04,308 - __main__ - INFO - Opened VSCO @ 32.45 (96 shares)
+2026-01-08 21:18:04,308 - __main__ - INFO - Closed VSCO @ 32.20 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,308 - __main__ - INFO - Opened VSCO @ 32.79 (95 shares)
+2026-01-08 21:18:04,308 - __main__ - INFO - Closed VSCO @ 31.31 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,308 - __main__ - INFO - Opened VSCO @ 31.24 (99 shares)
+2026-01-08 21:18:04,308 - __main__ - INFO - Closed VSCO @ 29.79 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,308 - __main__ - INFO - Opened VSCO @ 30.03 (103 shares)
+2026-01-08 21:18:04,308 - __main__ - INFO - Closed VSCO @ 30.02 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,308 - __main__ - INFO - Opened VSCO @ 29.34 (105 shares)
+2026-01-08 21:18:04,308 - __main__ - INFO - Closed VSCO @ 28.04 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,309 - __main__ - INFO - Opened VSCO @ 27.89 (111 shares)
+2026-01-08 21:18:04,309 - __main__ - INFO - Closed VSCO @ 29.80 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,309 - __main__ - INFO - Opened VSCO @ 28.62 (108 shares)
+2026-01-08 21:18:04,309 - __main__ - INFO - Closed VSCO @ 29.10 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,309 - __main__ - INFO - Opened VSCO @ 28.46 (109 shares)
+2026-01-08 21:18:04,309 - __main__ - INFO - Closed VSCO @ 29.40 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,309 - __main__ - INFO - Opened VSCO @ 28.34 (109 shares)
+2026-01-08 21:18:04,309 - __main__ - INFO - Closed VSCO @ 26.87 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,309 - __main__ - INFO - Opened VSCO @ 26.83 (115 shares)
+2026-01-08 21:18:04,309 - __main__ - INFO - Closed VSCO @ 27.61 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,309 - __main__ - INFO - Opened VSCO @ 26.73 (116 shares)
+2026-01-08 21:18:04,310 - __main__ - INFO - Closed VSCO @ 25.28 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,310 - __main__ - INFO - Opened VSCO @ 24.00 (129 shares)
+2026-01-08 21:18:04,310 - __main__ - INFO - Closed VSCO @ 27.18 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,310 - __main__ - INFO - Opened VSCO @ 23.38 (133 shares)
+2026-01-08 21:18:04,310 - __main__ - INFO - Closed VSCO @ 21.73 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,310 - __main__ - INFO - Opened VSCO @ 22.19 (140 shares)
+2026-01-08 21:18:04,310 - __main__ - INFO - Closed VSCO @ 20.46 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,310 - __main__ - INFO - Opened VSCO @ 20.42 (152 shares)
+2026-01-08 21:18:04,310 - __main__ - INFO - Closed VSCO @ 18.54 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,310 - __main__ - INFO - Opened VSCO @ 19.05 (162 shares)
+2026-01-08 21:18:04,311 - __main__ - INFO - Closed VSCO @ 17.12 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,311 - __main__ - INFO - Opened VSCO @ 16.77 (184 shares)
+2026-01-08 21:18:04,311 - __main__ - INFO - Closed VSCO @ 18.32 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,311 - __main__ - INFO - Opened VSCO @ 16.25 (190 shares)
+2026-01-08 21:18:04,311 - __main__ - INFO - Scaled out VSCO: sold 95 @ 17.20 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,311 - __main__ - INFO - Closed VSCO @ 16.86 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,311 - __main__ - INFO - Opened VSCO @ 17.20 (180 shares)
+2026-01-08 21:18:04,311 - __main__ - INFO - Closed VSCO @ 17.51 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,311 - __main__ - INFO - Opened VSCO @ 17.64 (175 shares)
+2026-01-08 21:18:04,312 - __main__ - INFO - Scaled out VSCO: sold 87 @ 18.57 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,312 - __main__ - INFO - Closed VSCO @ 18.20 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,312 - __main__ - INFO - Opened VSCO @ 18.57 (167 shares)
+2026-01-08 21:18:04,312 - __main__ - INFO - Scaled out VSCO: sold 83 @ 20.03 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,312 - __main__ - INFO - Closed VSCO @ 19.63 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,312 - __main__ - INFO - Opened VSCO @ 20.03 (155 shares)
+2026-01-08 21:18:04,312 - __main__ - INFO - Closed VSCO @ 19.85 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,312 - __main__ - INFO - Opened VSCO @ 20.41 (152 shares)
+2026-01-08 21:18:04,312 - __main__ - INFO - Scaled out VSCO: sold 76 @ 21.67 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,312 - __main__ - INFO - Closed VSCO @ 21.24 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,312 - __main__ - INFO - Opened VSCO @ 21.67 (143 shares)
+2026-01-08 21:18:04,313 - __main__ - INFO - Closed VSCO @ 22.00 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,313 - __main__ - INFO - Opened VSCO @ 21.77 (143 shares)
+2026-01-08 21:18:04,313 - __main__ - INFO - Closed VSCO @ 22.00 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,313 - __main__ - INFO - Opened VSCO @ 20.93 (148 shares)
+2026-01-08 21:18:04,313 - __main__ - INFO - Closed VSCO @ 20.90 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,313 - __main__ - INFO - Opened VSCO @ 21.38 (145 shares)
+2026-01-08 21:18:04,313 - __main__ - INFO - Closed VSCO @ 20.90 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,314 - __main__ - INFO - Opened VSCO @ 20.60 (151 shares)
+2026-01-08 21:18:04,314 - __main__ - INFO - Closed VSCO @ 20.52 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,314 - __main__ - INFO - Opened VSCO @ 19.55 (159 shares)
+2026-01-08 21:18:04,314 - __main__ - INFO - Closed VSCO @ 19.91 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,314 - __main__ - INFO - Opened VSCO @ 19.52 (159 shares)
+2026-01-08 21:18:04,314 - __main__ - INFO - Closed VSCO @ 18.21 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,314 - __main__ - INFO - Opened VSCO @ 18.32 (169 shares)
+2026-01-08 21:18:04,314 - __main__ - INFO - Closed VSCO @ 18.95 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,314 - __main__ - INFO - Opened VSCO @ 18.57 (167 shares)
+2026-01-08 21:18:04,314 - __main__ - INFO - Closed VSCO @ 18.39 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,315 - __main__ - INFO - Opened VSCO @ 18.36 (169 shares)
+2026-01-08 21:18:04,315 - __main__ - INFO - Closed VSCO @ 19.04 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,315 - __main__ - INFO - Opened VSCO @ 19.24 (162 shares)
+2026-01-08 21:18:04,315 - __main__ - INFO - Closed VSCO @ 18.06 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,315 - __main__ - INFO - Opened VSCO @ 14.86 (209 shares)
+2026-01-08 21:18:04,315 - __main__ - INFO - Scaled out VSCO: sold 104 @ 16.94 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,315 - __main__ - INFO - Closed VSCO @ 15.40 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,315 - __main__ - INFO - Opened VSCO @ 16.94 (184 shares)
+2026-01-08 21:18:04,315 - __main__ - INFO - Closed VSCO @ 17.49 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,315 - __main__ - INFO - Opened VSCO @ 17.25 (181 shares)
+2026-01-08 21:18:04,315 - __main__ - INFO - Closed VSCO @ 17.49 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,315 - __main__ - INFO - Opened VSCO @ 16.85 (185 shares)
+2026-01-08 21:18:04,316 - __main__ - INFO - Scaled out VSCO: sold 92 @ 20.01 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,316 - __main__ - INFO - Closed VSCO @ 18.16 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,316 - __main__ - INFO - Opened VSCO @ 20.01 (156 shares)
+2026-01-08 21:18:04,316 - __main__ - INFO - Closed VSCO @ 18.16 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,316 - __main__ - INFO - Opened VSCO @ 17.58 (177 shares)
+2026-01-08 21:18:04,316 - __main__ - INFO - Closed VSCO @ 18.90 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,316 - __main__ - INFO - Opened VSCO @ 17.11 (183 shares)
+2026-01-08 21:18:04,316 - __main__ - INFO - Closed VSCO @ 17.67 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,316 - __main__ - INFO - Opened VSCO @ 16.27 (192 shares)
+2026-01-08 21:18:04,316 - __main__ - INFO - Closed VSCO @ 17.85 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,316 - __main__ - INFO - Opened VSCO @ 15.92 (197 shares)
+2026-01-08 21:18:04,317 - __main__ - INFO - Closed VSCO @ 16.16 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,317 - __main__ - INFO - Opened VSCO @ 15.64 (201 shares)
+2026-01-08 21:18:04,317 - __main__ - INFO - Closed VSCO @ 15.72 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,317 - __main__ - INFO - Opened VSCO @ 16.02 (196 shares)
+2026-01-08 21:18:04,317 - __main__ - INFO - Closed VSCO @ 16.00 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,317 - __main__ - INFO - Opened VSCO @ 16.37 (192 shares)
+2026-01-08 21:18:04,317 - __main__ - INFO - Scaled out VSCO: sold 96 @ 17.28 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,317 - __main__ - INFO - Closed VSCO @ 16.93 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,317 - __main__ - INFO - Opened VSCO @ 17.28 (182 shares)
+2026-01-08 21:18:04,317 - __main__ - INFO - Closed VSCO @ 18.23 reason=TRAIL_STOP
+2026-01-08 21:18:04,317 - __main__ - INFO - Opened VSCO @ 18.06 (174 shares)
+2026-01-08 21:18:04,318 - __main__ - INFO - Closed VSCO @ 18.15 reason=TRAIL_STOP
+2026-01-08 21:18:04,318 - __main__ - INFO - Opened VSCO @ 18.53 (170 shares)
+2026-01-08 21:18:04,318 - __main__ - INFO - Closed VSCO @ 18.48 reason=TRAIL_STOP
+2026-01-08 21:18:04,318 - __main__ - INFO - Opened VSCO @ 18.97 (166 shares)
+2026-01-08 21:18:04,318 - __main__ - INFO - Closed VSCO @ 18.48 reason=TRAIL_STOP
+2026-01-08 21:18:04,318 - __main__ - INFO - Opened VSCO @ 18.77 (168 shares)
+2026-01-08 21:18:04,318 - __main__ - INFO - Closed VSCO @ 17.60 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,318 - __main__ - INFO - Opened VSCO @ 18.79 (167 shares)
+2026-01-08 21:18:04,318 - __main__ - INFO - Closed VSCO @ 19.09 reason=TRAIL_STOP
+2026-01-08 21:18:04,319 - __main__ - INFO - Opened VSCO @ 19.15 (164 shares)
+2026-01-08 21:18:04,319 - __main__ - INFO - Closed VSCO @ 19.43 reason=TRAIL_STOP
+2026-01-08 21:18:04,319 - __main__ - INFO - Opened VSCO @ 19.59 (160 shares)
+2026-01-08 21:18:04,319 - __main__ - INFO - Closed VSCO @ 19.43 reason=TRAIL_STOP
+2026-01-08 21:18:04,319 - __main__ - INFO - Opened VSCO @ 19.26 (163 shares)
+2026-01-08 21:18:04,319 - __main__ - INFO - Closed VSCO @ 19.19 reason=TRAIL_STOP
+2026-01-08 21:18:04,319 - __main__ - INFO - Opened VSCO @ 19.00 (165 shares)
+2026-01-08 21:18:04,319 - __main__ - INFO - Closed VSCO @ 18.93 reason=TRAIL_STOP
+2026-01-08 21:18:04,319 - __main__ - INFO - Opened VSCO @ 19.22 (163 shares)
+2026-01-08 21:18:04,319 - __main__ - INFO - Closed VSCO @ 19.88 reason=TRAIL_STOP
+2026-01-08 21:18:04,320 - __main__ - INFO - Opened VSCO @ 19.72 (159 shares)
+2026-01-08 21:18:04,320 - __main__ - INFO - Closed VSCO @ 19.68 reason=TRAIL_STOP
+2026-01-08 21:18:04,320 - __main__ - INFO - Opened VSCO @ 19.25 (163 shares)
+2026-01-08 21:18:04,320 - __main__ - INFO - Scaled out VSCO: sold 81 @ 21.93 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,320 - __main__ - INFO - Closed VSCO @ 21.71 reason=TRAIL_STOP
+2026-01-08 21:18:04,320 - __main__ - INFO - Opened VSCO @ 21.93 (144 shares)
+2026-01-08 21:18:04,320 - __main__ - INFO - Closed VSCO @ 22.14 reason=TRAIL_STOP
+2026-01-08 21:18:04,320 - __main__ - INFO - Opened VSCO @ 22.75 (139 shares)
+2026-01-08 21:18:04,320 - __main__ - INFO - Closed VSCO @ 22.71 reason=TRAIL_STOP
+2026-01-08 21:18:04,320 - __main__ - INFO - Opened VSCO @ 22.78 (139 shares)
+2026-01-08 21:18:04,320 - __main__ - INFO - Closed VSCO @ 22.71 reason=TRAIL_STOP
+2026-01-08 21:18:04,321 - __main__ - INFO - Opened VSCO @ 23.20 (136 shares)
+2026-01-08 21:18:04,321 - __main__ - INFO - Closed VSCO @ 23.02 reason=TRAIL_STOP
+2026-01-08 21:18:04,321 - __main__ - INFO - Opened VSCO @ 23.57 (134 shares)
+2026-01-08 21:18:04,321 - __main__ - INFO - Closed VSCO @ 22.56 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,321 - __main__ - INFO - Opened VSCO @ 22.80 (138 shares)
+2026-01-08 21:18:04,321 - __main__ - INFO - Closed VSCO @ 23.11 reason=TRAIL_STOP
+2026-01-08 21:18:04,321 - __main__ - INFO - Opened VSCO @ 23.53 (134 shares)
+2026-01-08 21:18:04,321 - __main__ - INFO - Closed VSCO @ 22.48 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,321 - __main__ - INFO - Opened VSCO @ 22.26 (141 shares)
+2026-01-08 21:18:04,321 - __main__ - INFO - Closed VSCO @ 22.29 reason=TRAIL_STOP
+2026-01-08 21:18:04,322 - __main__ - INFO - Opened VSCO @ 22.82 (138 shares)
+2026-01-08 21:18:04,322 - __main__ - INFO - Closed VSCO @ 22.29 reason=TRAIL_STOP
+2026-01-08 21:18:04,322 - __main__ - INFO - Opened VSCO @ 22.26 (141 shares)
+2026-01-08 21:18:04,322 - __main__ - INFO - Closed VSCO @ 22.10 reason=TRAIL_STOP
+2026-01-08 21:18:04,322 - __main__ - INFO - Opened VSCO @ 22.50 (140 shares)
+2026-01-08 21:18:04,322 - __main__ - INFO - Closed VSCO @ 21.41 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,322 - __main__ - INFO - Opened VSCO @ 20.98 (150 shares)
+2026-01-08 21:18:04,322 - __main__ - INFO - Closed VSCO @ 21.63 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,322 - __main__ - INFO - Opened VSCO @ 20.69 (152 shares)
+2026-01-08 21:18:04,322 - __main__ - INFO - Closed VSCO @ 20.92 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,322 - __main__ - INFO - Opened VSCO @ 21.20 (148 shares)
+2026-01-08 21:18:04,323 - __main__ - INFO - Closed VSCO @ 20.92 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,323 - __main__ - INFO - Opened VSCO @ 20.82 (151 shares)
+2026-01-08 21:18:04,323 - __main__ - INFO - Closed VSCO @ 20.85 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,323 - __main__ - INFO - Opened VSCO @ 20.27 (155 shares)
+2026-01-08 21:18:04,323 - __main__ - INFO - Closed VSCO @ 21.06 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,323 - __main__ - INFO - Opened VSCO @ 20.49 (154 shares)
+2026-01-08 21:18:04,323 - __main__ - INFO - Closed VSCO @ 20.67 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,323 - __main__ - INFO - Opened VSCO @ 20.89 (151 shares)
+2026-01-08 21:18:04,323 - __main__ - INFO - Scaled out VSCO: sold 75 @ 22.14 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,323 - __main__ - INFO - Closed VSCO @ 21.70 reason=TRAIL_STOP
+2026-01-08 21:18:04,323 - __main__ - INFO - Opened VSCO @ 22.14 (142 shares)
+2026-01-08 21:18:04,324 - __main__ - INFO - Closed VSCO @ 22.80 reason=TRAIL_STOP
+2026-01-08 21:18:04,324 - __main__ - INFO - Opened VSCO @ 22.73 (139 shares)
+2026-01-08 21:18:04,324 - __main__ - INFO - Closed VSCO @ 22.57 reason=TRAIL_STOP
+2026-01-08 21:18:04,324 - __main__ - INFO - Opened VSCO @ 22.20 (142 shares)
+2026-01-08 21:18:04,324 - __main__ - INFO - Closed VSCO @ 21.06 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,324 - __main__ - INFO - Opened VSCO @ 21.02 (150 shares)
+2026-01-08 21:18:04,324 - __main__ - INFO - Closed VSCO @ 19.86 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,324 - __main__ - INFO - Opened VSCO @ 19.82 (159 shares)
+2026-01-08 21:18:04,324 - __main__ - INFO - Closed VSCO @ 18.62 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,324 - __main__ - INFO - Opened VSCO @ 18.19 (173 shares)
+2026-01-08 21:18:04,325 - __main__ - INFO - Closed VSCO @ 18.91 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,325 - __main__ - INFO - Opened VSCO @ 18.62 (169 shares)
+2026-01-08 21:18:04,325 - __main__ - INFO - Closed VSCO @ 18.42 reason=EMA20_BREAK;TRAIL_STOP;PATTERN_SHOOTING_STAR
+2026-01-08 21:18:04,325 - __main__ - INFO - Opened VSCO @ 18.36 (171 shares)
+2026-01-08 21:18:04,325 - __main__ - INFO - Closed VSCO @ 18.40 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,325 - __main__ - INFO - Opened VSCO @ 18.39 (171 shares)
+2026-01-08 21:18:04,325 - __main__ - INFO - Closed VSCO @ 18.84 reason=EMA20_BREAK
+2026-01-08 21:18:04,325 - __main__ - INFO - Opened VSCO @ 18.84 (167 shares)
+2026-01-08 21:18:04,325 - __main__ - INFO - Closed VSCO @ 18.46 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,325 - __main__ - INFO - Opened VSCO @ 18.61 (169 shares)
+2026-01-08 21:18:04,325 - __main__ - INFO - Closed VSCO @ 19.30 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,326 - __main__ - INFO - Opened VSCO @ 19.52 (161 shares)
+2026-01-08 21:18:04,326 - __main__ - INFO - Closed VSCO @ 19.10 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,326 - __main__ - INFO - Opened VSCO @ 18.90 (166 shares)
+2026-01-08 21:18:04,326 - __main__ - INFO - Closed VSCO @ 19.05 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,326 - __main__ - INFO - Opened VSCO @ 18.91 (166 shares)
+2026-01-08 21:18:04,326 - __main__ - INFO - Closed VSCO @ 19.12 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,326 - __main__ - INFO - Opened VSCO @ 19.32 (163 shares)
+2026-01-08 21:18:04,326 - __main__ - INFO - Closed VSCO @ 19.12 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,326 - __main__ - INFO - Opened VSCO @ 18.53 (170 shares)
+2026-01-08 21:18:04,326 - __main__ - INFO - Scaled out VSCO: sold 85 @ 19.55 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,326 - __main__ - INFO - Closed VSCO @ 18.54 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,327 - __main__ - INFO - Opened VSCO @ 19.55 (161 shares)
+2026-01-08 21:18:04,327 - __main__ - INFO - Closed VSCO @ 19.41 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,327 - __main__ - INFO - Opened VSCO @ 20.41 (154 shares)
+2026-01-08 21:18:04,327 - __main__ - INFO - Closed VSCO @ 20.46 reason=TRAIL_STOP
+2026-01-08 21:18:04,327 - __main__ - INFO - Opened VSCO @ 20.57 (153 shares)
+2026-01-08 21:18:04,327 - __main__ - INFO - Closed VSCO @ 20.50 reason=TRAIL_STOP
+2026-01-08 21:18:04,327 - __main__ - INFO - Opened VSCO @ 20.47 (154 shares)
+2026-01-08 21:18:04,327 - __main__ - INFO - Closed VSCO @ 20.50 reason=TRAIL_STOP
+2026-01-08 21:18:04,328 - __main__ - INFO - Opened VSCO @ 20.00 (157 shares)
+2026-01-08 21:18:04,328 - __main__ - INFO - Closed VSCO @ 19.89 reason=TRAIL_STOP
+2026-01-08 21:18:04,328 - __main__ - INFO - Opened VSCO @ 19.99 (157 shares)
+2026-01-08 21:18:04,328 - __main__ - INFO - Closed VSCO @ 19.99 reason=TRAIL_STOP
+2026-01-08 21:18:04,328 - __main__ - INFO - Opened VSCO @ 20.17 (156 shares)
+2026-01-08 21:18:04,328 - __main__ - INFO - Closed VSCO @ 19.24 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,328 - __main__ - INFO - Opened VSCO @ 19.14 (164 shares)
+2026-01-08 21:18:04,328 - __main__ - INFO - Closed VSCO @ 19.37 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,328 - __main__ - INFO - Opened VSCO @ 18.95 (166 shares)
+2026-01-08 21:18:04,329 - __main__ - INFO - Closed VSCO @ 18.00 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,329 - __main__ - INFO - Opened VSCO @ 18.28 (172 shares)
+2026-01-08 21:18:04,329 - __main__ - INFO - Closed VSCO @ 18.43 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,329 - __main__ - INFO - Opened VSCO @ 17.71 (177 shares)
+2026-01-08 21:18:04,329 - __main__ - INFO - Closed VSCO @ 18.01 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,329 - __main__ - INFO - Opened VSCO @ 18.39 (171 shares)
+2026-01-08 21:18:04,329 - __main__ - INFO - Closed VSCO @ 19.03 reason=EMA20_BREAK
+2026-01-08 21:18:04,329 - __main__ - INFO - Opened VSCO @ 19.03 (165 shares)
+2026-01-08 21:18:04,329 - __main__ - INFO - Closed VSCO @ 19.78 reason=TRAIL_STOP
+2026-01-08 21:18:04,329 - __main__ - INFO - Opened VSCO @ 19.90 (158 shares)
+2026-01-08 21:18:04,330 - __main__ - INFO - Scaled out VSCO: sold 79 @ 21.16 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,330 - __main__ - INFO - Closed VSCO @ 20.74 reason=TRAIL_STOP
+2026-01-08 21:18:04,330 - __main__ - INFO - Opened VSCO @ 21.16 (149 shares)
+2026-01-08 21:18:04,330 - __main__ - INFO - Closed VSCO @ 21.52 reason=TRAIL_STOP
+2026-01-08 21:18:04,330 - __main__ - INFO - Opened VSCO @ 21.64 (146 shares)
+2026-01-08 21:18:04,330 - __main__ - INFO - Closed VSCO @ 21.52 reason=TRAIL_STOP
+2026-01-08 21:18:04,330 - __main__ - INFO - Opened VSCO @ 20.82 (152 shares)
+2026-01-08 21:18:04,330 - __main__ - INFO - Closed VSCO @ 20.83 reason=TRAIL_STOP
+2026-01-08 21:18:04,330 - __main__ - INFO - Opened VSCO @ 21.46 (147 shares)
+2026-01-08 21:18:04,330 - __main__ - INFO - Closed VSCO @ 20.52 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,330 - __main__ - INFO - Opened VSCO @ 20.80 (151 shares)
+2026-01-08 21:18:04,330 - __main__ - INFO - Closed VSCO @ 19.83 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,331 - __main__ - INFO - Opened VSCO @ 19.92 (158 shares)
+2026-01-08 21:18:04,331 - __main__ - INFO - Closed VSCO @ 20.53 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,331 - __main__ - INFO - Opened VSCO @ 19.53 (161 shares)
+2026-01-08 21:18:04,331 - __main__ - INFO - Closed VSCO @ 18.52 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,331 - __main__ - INFO - Opened VSCO @ 18.80 (167 shares)
+2026-01-08 21:18:04,331 - __main__ - INFO - Closed VSCO @ 18.89 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,331 - __main__ - INFO - Opened VSCO @ 18.68 (168 shares)
+2026-01-08 21:18:04,331 - __main__ - INFO - Scaled out VSCO: sold 84 @ 20.56 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,331 - __main__ - INFO - Closed VSCO @ 19.46 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,331 - __main__ - INFO - Opened VSCO @ 20.56 (153 shares)
+2026-01-08 21:18:04,331 - __main__ - INFO - Closed VSCO @ 19.46 reason=EMA20_BREAK;ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,332 - __main__ - INFO - Opened VSCO @ 19.73 (160 shares)
+2026-01-08 21:18:04,332 - __main__ - INFO - Closed VSCO @ 19.34 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,332 - __main__ - INFO - Opened VSCO @ 20.50 (153 shares)
+2026-01-08 21:18:04,332 - __main__ - INFO - Scaled out VSCO: sold 76 @ 21.70 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,332 - __main__ - INFO - Closed VSCO @ 21.27 reason=TRAIL_STOP
+2026-01-08 21:18:04,332 - __main__ - INFO - Opened VSCO @ 21.70 (145 shares)
+2026-01-08 21:18:04,332 - __main__ - INFO - Closed VSCO @ 21.23 reason=TRAIL_STOP
+2026-01-08 21:18:04,332 - __main__ - INFO - Opened VSCO @ 21.14 (149 shares)
+2026-01-08 21:18:04,332 - __main__ - INFO - Closed VSCO @ 20.83 reason=TRAIL_STOP
+2026-01-08 21:18:04,332 - __main__ - INFO - Opened VSCO @ 21.33 (147 shares)
+2026-01-08 21:18:04,332 - __main__ - INFO - Closed VSCO @ 21.72 reason=TRAIL_STOP
+2026-01-08 21:18:04,333 - __main__ - INFO - Opened VSCO @ 22.23 (142 shares)
+2026-01-08 21:18:04,333 - __main__ - INFO - Closed VSCO @ 22.11 reason=TRAIL_STOP
+2026-01-08 21:18:04,333 - __main__ - INFO - Opened VSCO @ 22.64 (139 shares)
+2026-01-08 21:18:04,333 - __main__ - INFO - Closed VSCO @ 22.11 reason=TRAIL_STOP
+2026-01-08 21:18:04,333 - __main__ - INFO - Opened VSCO @ 22.44 (140 shares)
+2026-01-08 21:18:04,333 - __main__ - INFO - Closed VSCO @ 22.15 reason=TRAIL_STOP
+2026-01-08 21:18:04,333 - __main__ - INFO - Opened VSCO @ 22.75 (138 shares)
+2026-01-08 21:18:04,333 - __main__ - INFO - Closed VSCO @ 22.55 reason=TRAIL_STOP
+2026-01-08 21:18:04,333 - __main__ - INFO - Opened VSCO @ 22.40 (140 shares)
+2026-01-08 21:18:04,334 - __main__ - INFO - Closed VSCO @ 22.55 reason=TRAIL_STOP
+2026-01-08 21:18:04,334 - __main__ - INFO - Opened VSCO @ 22.02 (143 shares)
+2026-01-08 21:18:04,334 - __main__ - INFO - Closed VSCO @ 21.77 reason=TRAIL_STOP
+2026-01-08 21:18:04,334 - __main__ - INFO - Opened VSCO @ 21.36 (147 shares)
+2026-01-08 21:18:04,334 - __main__ - INFO - Closed VSCO @ 22.15 reason=TRAIL_STOP
+2026-01-08 21:18:04,334 - __main__ - INFO - Opened VSCO @ 22.16 (142 shares)
+2026-01-08 21:18:04,334 - __main__ - INFO - Closed VSCO @ 21.92 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,334 - __main__ - INFO - Opened VSCO @ 21.76 (145 shares)
+2026-01-08 21:18:04,334 - __main__ - INFO - Closed VSCO @ 21.69 reason=TRAIL_STOP
+2026-01-08 21:18:04,334 - __main__ - INFO - Opened VSCO @ 22.02 (143 shares)
+2026-01-08 21:18:04,334 - __main__ - INFO - Closed VSCO @ 22.33 reason=TRAIL_STOP
+2026-01-08 21:18:04,335 - __main__ - INFO - Opened VSCO @ 22.79 (138 shares)
+2026-01-08 21:18:04,335 - __main__ - INFO - Closed VSCO @ 25.22 reason=TRAIL_STOP
+2026-01-08 21:18:04,335 - __main__ - INFO - Opened VSCO @ 22.70 (139 shares)
+2026-01-08 21:18:04,335 - __main__ - INFO - Closed VSCO @ 25.22 reason=TRAIL_STOP
+2026-01-08 21:18:04,335 - __main__ - INFO - Opened VSCO @ 23.00 (138 shares)
+2026-01-08 21:18:04,335 - __main__ - INFO - Closed VSCO @ 22.72 reason=TRAIL_STOP
+2026-01-08 21:18:04,335 - __main__ - INFO - Opened VSCO @ 22.39 (141 shares)
+2026-01-08 21:18:04,335 - __main__ - INFO - Closed VSCO @ 22.67 reason=TRAIL_STOP
+2026-01-08 21:18:04,335 - __main__ - INFO - Opened VSCO @ 22.97 (138 shares)
+2026-01-08 21:18:04,335 - __main__ - INFO - Scaled out VSCO: sold 69 @ 25.66 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,335 - __main__ - INFO - Closed VSCO @ 24.45 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,336 - __main__ - INFO - Opened VSCO @ 25.66 (124 shares)
+2026-01-08 21:18:04,336 - __main__ - INFO - Closed VSCO @ 25.93 reason=TRAIL_STOP
+2026-01-08 21:18:04,336 - __main__ - INFO - Opened VSCO @ 26.24 (121 shares)
+2026-01-08 21:18:04,336 - __main__ - INFO - Closed VSCO @ 25.93 reason=TRAIL_STOP
+2026-01-08 21:18:04,336 - __main__ - INFO - Opened VSCO @ 25.68 (124 shares)
+2026-01-08 21:18:04,336 - __main__ - INFO - Closed VSCO @ 25.19 reason=TRAIL_STOP
+2026-01-08 21:18:04,336 - __main__ - INFO - Opened VSCO @ 25.54 (124 shares)
+2026-01-08 21:18:04,336 - __main__ - INFO - Scaled out VSCO: sold 62 @ 27.05 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,336 - __main__ - INFO - Closed VSCO @ 26.51 reason=TRAIL_STOP
+2026-01-08 21:18:04,336 - __main__ - INFO - Opened VSCO @ 27.05 (117 shares)
+2026-01-08 21:18:04,337 - __main__ - INFO - Closed VSCO @ 26.29 reason=TRAIL_STOP
+2026-01-08 21:18:04,337 - __main__ - INFO - Opened VSCO @ 26.45 (120 shares)
+2026-01-08 21:18:04,337 - __main__ - INFO - Closed VSCO @ 27.49 reason=TRAIL_STOP
+2026-01-08 21:18:04,337 - __main__ - INFO - Opened VSCO @ 27.76 (114 shares)
+2026-01-08 21:18:04,337 - __main__ - INFO - Closed VSCO @ 26.43 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,337 - __main__ - INFO - Opened VSCO @ 26.29 (121 shares)
+2026-01-08 21:18:04,337 - __main__ - INFO - Closed VSCO @ 27.33 reason=TRAIL_STOP
+2026-01-08 21:18:04,337 - __main__ - INFO - Opened VSCO @ 27.04 (117 shares)
+2026-01-08 21:18:04,337 - __main__ - INFO - Closed VSCO @ 27.05 reason=TRAIL_STOP
+2026-01-08 21:18:04,337 - __main__ - INFO - Opened VSCO @ 27.51 (115 shares)
+2026-01-08 21:18:04,338 - __main__ - INFO - Closed VSCO @ 26.26 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,338 - __main__ - INFO - Opened VSCO @ 26.62 (119 shares)
+2026-01-08 21:18:04,338 - __main__ - INFO - Closed VSCO @ 26.57 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,338 - __main__ - INFO - Opened VSCO @ 25.56 (124 shares)
+2026-01-08 21:18:04,338 - __main__ - INFO - Closed VSCO @ 25.70 reason=TRAIL_STOP
+2026-01-08 21:18:04,338 - __main__ - INFO - Opened VSCO @ 25.71 (123 shares)
+2026-01-08 21:18:04,338 - __main__ - INFO - Closed VSCO @ 25.43 reason=TRAIL_STOP
+2026-01-08 21:18:04,338 - __main__ - INFO - Opened VSCO @ 25.66 (124 shares)
+2026-01-08 21:18:04,338 - __main__ - INFO - Closed VSCO @ 25.22 reason=TRAIL_STOP
+2026-01-08 21:18:04,338 - __main__ - INFO - Opened VSCO @ 25.59 (124 shares)
+2026-01-08 21:18:04,339 - __main__ - INFO - Scaled out VSCO: sold 62 @ 27.16 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,339 - __main__ - INFO - Closed VSCO @ 26.62 reason=TRAIL_STOP
+2026-01-08 21:18:04,339 - __main__ - INFO - Opened VSCO @ 27.16 (117 shares)
+2026-01-08 21:18:04,339 - __main__ - INFO - Scaled out VSCO: sold 58 @ 29.38 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,339 - __main__ - INFO - Closed VSCO @ 28.21 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,339 - __main__ - INFO - Opened VSCO @ 29.38 (108 shares)
+2026-01-08 21:18:04,339 - __main__ - INFO - Closed VSCO @ 29.01 reason=TRAIL_STOP
+2026-01-08 21:18:04,339 - __main__ - INFO - Opened VSCO @ 29.21 (109 shares)
+2026-01-08 21:18:04,339 - __main__ - INFO - Closed VSCO @ 29.01 reason=TRAIL_STOP
+2026-01-08 21:18:04,340 - __main__ - INFO - Opened VSCO @ 29.16 (109 shares)
+2026-01-08 21:18:04,340 - __main__ - INFO - Closed VSCO @ 28.90 reason=TRAIL_STOP
+2026-01-08 21:18:04,340 - __main__ - INFO - Opened VSCO @ 29.21 (109 shares)
+2026-01-08 21:18:04,340 - __main__ - INFO - Closed VSCO @ 28.14 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,340 - __main__ - INFO - Opened VSCO @ 28.47 (111 shares)
+2026-01-08 21:18:04,340 - __main__ - INFO - Scaled out VSCO: sold 55 @ 30.26 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,340 - __main__ - INFO - Closed VSCO @ 29.16 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,340 - __main__ - INFO - Opened VSCO @ 30.26 (105 shares)
+2026-01-08 21:18:04,340 - __main__ - INFO - Closed VSCO @ 29.48 reason=TRAIL_STOP
+2026-01-08 21:18:04,340 - __main__ - INFO - Opened VSCO @ 29.58 (107 shares)
+2026-01-08 21:18:04,340 - __main__ - INFO - Closed VSCO @ 28.48 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,340 - __main__ - INFO - Opened VSCO @ 28.25 (112 shares)
+2026-01-08 21:18:04,341 - __main__ - INFO - Closed VSCO @ 29.49 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,341 - __main__ - INFO - Opened VSCO @ 29.06 (109 shares)
+2026-01-08 21:18:04,341 - __main__ - INFO - Closed VSCO @ 28.24 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,341 - __main__ - INFO - Opened VSCO @ 29.48 (108 shares)
+2026-01-08 21:18:04,341 - __main__ - INFO - Closed VSCO @ 30.51 reason=TRAIL_STOP
+2026-01-08 21:18:04,341 - __main__ - INFO - Opened VSCO @ 30.39 (104 shares)
+2026-01-08 21:18:04,341 - __main__ - INFO - Closed VSCO @ 30.39 reason=TRAIL_STOP
+2026-01-08 21:18:04,341 - __main__ - INFO - Opened VSCO @ 30.19 (105 shares)
+2026-01-08 21:18:04,341 - __main__ - INFO - Closed VSCO @ 30.39 reason=TRAIL_STOP
+2026-01-08 21:18:04,341 - __main__ - INFO - Opened VSCO @ 30.28 (105 shares)
+2026-01-08 21:18:04,342 - __main__ - INFO - Closed VSCO @ 31.33 reason=TRAIL_STOP
+2026-01-08 21:18:04,342 - __main__ - INFO - Opened VSCO @ 31.36 (101 shares)
+2026-01-08 21:18:04,342 - __main__ - INFO - Closed VSCO @ 31.01 reason=TRAIL_STOP
+2026-01-08 21:18:04,342 - __main__ - INFO - Opened VSCO @ 31.10 (102 shares)
+2026-01-08 21:18:04,342 - __main__ - INFO - Scaled out VSCO: sold 51 @ 32.75 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,342 - __main__ - INFO - Closed VSCO @ 31.39 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,342 - __main__ - INFO - Opened VSCO @ 32.75 (97 shares)
+2026-01-08 21:18:04,342 - __main__ - INFO - Closed VSCO @ 33.17 reason=TRAIL_STOP;PATTERN_SHOOTING_STAR
+2026-01-08 21:18:04,342 - __main__ - INFO - Opened VSCO @ 33.16 (96 shares)
+2026-01-08 21:18:04,343 - __main__ - INFO - Scaled out VSCO: sold 48 @ 34.88 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,343 - __main__ - INFO - Closed VSCO @ 34.18 reason=TRAIL_STOP
+2026-01-08 21:18:04,343 - __main__ - INFO - Opened VSCO @ 34.88 (91 shares)
+2026-01-08 21:18:04,343 - __main__ - INFO - Closed VSCO @ 37.24 reason=TRAIL_STOP
+2026-01-08 21:18:04,343 - __main__ - INFO - Opened VSCO @ 36.27 (88 shares)
+2026-01-08 21:18:04,343 - __main__ - INFO - Closed VSCO @ 34.72 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,343 - __main__ - INFO - Opened VSCO @ 33.86 (94 shares)
+2026-01-08 21:18:04,343 - __main__ - INFO - Closed VSCO @ 33.61 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,343 - __main__ - INFO - Opened VSCO @ 35.27 (90 shares)
+2026-01-08 21:18:04,344 - __main__ - INFO - Closed VSCO @ 35.55 reason=TRAIL_STOP
+2026-01-08 21:18:04,344 - __main__ - INFO - Opened VSCO @ 36.00 (88 shares)
+2026-01-08 21:18:04,344 - __main__ - INFO - Closed VSCO @ 35.55 reason=TRAIL_STOP
+2026-01-08 21:18:04,344 - __main__ - INFO - Opened VSCO @ 35.38 (90 shares)
+2026-01-08 21:18:04,344 - __main__ - INFO - Scaled out VSCO: sold 45 @ 37.44 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,344 - __main__ - INFO - Closed VSCO @ 35.67 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,344 - __main__ - INFO - Opened VSCO @ 37.44 (85 shares)
+2026-01-08 21:18:04,344 - __main__ - INFO - Closed VSCO @ 35.67 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,344 - __main__ - INFO - Opened VSCO @ 36.28 (88 shares)
+2026-01-08 21:18:04,344 - __main__ - INFO - Closed VSCO @ 36.24 reason=TRAIL_STOP
+2026-01-08 21:18:04,344 - __main__ - INFO - Opened VSCO @ 35.09 (91 shares)
+2026-01-08 21:18:04,345 - __main__ - INFO - Closed VSCO @ 34.81 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,345 - __main__ - INFO - Opened VSCO @ 34.97 (91 shares)
+2026-01-08 21:18:04,345 - __main__ - INFO - Closed VSCO @ 34.98 reason=TRAIL_STOP
+2026-01-08 21:18:04,345 - __main__ - INFO - Opened VSCO @ 34.96 (91 shares)
+2026-01-08 21:18:04,345 - __main__ - INFO - Closed VSCO @ 35.23 reason=TRAIL_STOP
+2026-01-08 21:18:04,345 - __main__ - INFO - Opened VSCO @ 35.73 (89 shares)
+2026-01-08 21:18:04,346 - __main__ - INFO - Closed VSCO @ 35.23 reason=TRAIL_STOP
+2026-01-08 21:18:04,346 - __main__ - INFO - Opened VSCO @ 35.10 (91 shares)
+2026-01-08 21:18:04,346 - __main__ - INFO - Closed VSCO @ 34.95 reason=TRAIL_STOP
+2026-01-08 21:18:04,346 - __main__ - INFO - Opened VSCO @ 34.56 (92 shares)
+2026-01-08 21:18:04,346 - __main__ - INFO - Closed VSCO @ 34.36 reason=TRAIL_STOP
+2026-01-08 21:18:04,346 - __main__ - INFO - Opened VSCO @ 34.80 (91 shares)
+2026-01-08 21:18:04,346 - __main__ - INFO - Closed VSCO @ 35.00 reason=EMA20_BREAK;TRAIL_STOP
+2026-01-08 21:18:04,346 - __main__ - INFO - Opened VSCO @ 33.74 (94 shares)
+2026-01-08 21:18:04,346 - __main__ - INFO - Scaled out VSCO: sold 47 @ 36.68 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,346 - __main__ - INFO - Closed VSCO @ 34.90 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,346 - __main__ - INFO - Opened VSCO @ 36.68 (87 shares)
+2026-01-08 21:18:04,347 - __main__ - INFO - Closed VSCO @ 36.30 reason=TRAIL_STOP
+2026-01-08 21:18:04,347 - __main__ - INFO - Opened VSCO @ 36.70 (87 shares)
+2026-01-08 21:18:04,347 - __main__ - INFO - Closed VSCO @ 38.39 reason=TRAIL_STOP
+2026-01-08 21:18:04,347 - __main__ - INFO - Opened VSCO @ 38.16 (84 shares)
+2026-01-08 21:18:04,347 - __main__ - INFO - Scaled out VSCO: sold 42 @ 40.18 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,347 - __main__ - INFO - Closed VSCO @ 39.38 reason=TRAIL_STOP
+2026-01-08 21:18:04,347 - __main__ - INFO - Opened VSCO @ 40.18 (79 shares)
+2026-01-08 21:18:04,347 - __main__ - INFO - Closed VSCO @ 40.32 reason=TRAIL_STOP
+2026-01-08 21:18:04,347 - __main__ - INFO - Opened VSCO @ 41.32 (77 shares)
+2026-01-08 21:18:04,347 - __main__ - INFO - Scaled out VSCO: sold 38 @ 44.14 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,347 - __main__ - INFO - Closed VSCO @ 42.19 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,348 - __main__ - INFO - Opened VSCO @ 44.14 (72 shares)
+2026-01-08 21:18:04,348 - __main__ - INFO - Closed VSCO @ 42.19 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,348 - __main__ - INFO - Opened VSCO @ 41.99 (76 shares)
+2026-01-08 21:18:04,348 - __main__ - INFO - Closed VSCO @ 42.68 reason=TRAIL_STOP
+2026-01-08 21:18:04,348 - __main__ - INFO - Opened VSCO @ 42.50 (75 shares)
+2026-01-08 21:18:04,348 - __main__ - INFO - Closed VSCO @ 41.90 reason=TRAIL_STOP
+2026-01-08 21:18:04,348 - __main__ - INFO - Opened VSCO @ 41.59 (77 shares)
+2026-01-08 21:18:04,348 - __main__ - INFO - Scaled out VSCO: sold 38 @ 49.05 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,348 - __main__ - INFO - Closed VSCO @ 46.46 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,348 - __main__ - INFO - Opened VSCO @ 49.05 (65 shares)
+2026-01-08 21:18:04,349 - __main__ - INFO - Closed VSCO @ 47.86 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,349 - __main__ - INFO - Opened VSCO @ 50.67 (63 shares)
+2026-01-08 21:18:04,349 - __main__ - INFO - Closed VSCO @ 51.34 reason=TRAIL_STOP
+2026-01-08 21:18:04,349 - __main__ - INFO - Opened VSCO @ 52.30 (61 shares)
+2026-01-08 21:18:04,349 - __main__ - INFO - Closed VSCO @ 51.67 reason=TRAIL_STOP
+2026-01-08 21:18:04,349 - __main__ - INFO - Opened VSCO @ 52.03 (61 shares)
+2026-01-08 21:18:04,349 - __main__ - INFO - Closed VSCO @ 54.10 reason=TRAIL_STOP
+2026-01-08 21:18:04,349 - __main__ - INFO - Opened VSCO @ 54.39 (59 shares)
+2026-01-08 21:18:04,349 - __main__ - INFO - Closed VSCO @ 54.53 reason=TRAIL_STOP
+2026-01-08 21:18:04,350 - __main__ - INFO - Opened VSCO @ 54.77 (58 shares)
+2026-01-08 21:18:04,350 - __main__ - INFO - Closed VSCO @ 54.53 reason=TRAIL_STOP
+2026-01-08 21:18:04,350 - __main__ - INFO - Opened VSCO @ 53.72 (60 shares)
+2026-01-08 21:18:04,350 - __main__ - INFO - Closed VSCO @ 53.70 reason=TRAIL_STOP
+2026-01-08 21:18:04,350 - __main__ - INFO - Opened VSCO @ 53.09 (60 shares)
+2026-01-08 21:18:04,350 - __main__ - INFO - Closed VSCO @ 53.30 reason=TRAIL_STOP
+2026-01-08 21:18:04,350 - __main__ - INFO - Opened VSCO @ 54.53 (59 shares)
+2026-01-08 21:18:04,350 - __main__ - INFO - Closed VSCO @ 55.21 reason=TRAIL_STOP
+2026-01-08 21:18:04,350 - __main__ - INFO - Opened VSCO @ 56.70 (56 shares)
+2026-01-08 21:18:04,351 - __main__ - INFO - Closed VSCO @ 53.93 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,351 - __main__ - INFO - Opened VSCO @ 55.26 (58 shares)
+2026-01-08 21:18:04,351 - __main__ - INFO - Closed VSCO @ 54.85 reason=TRAIL_STOP
+2026-01-08 21:18:04,351 - __main__ - INFO - Opened VSCO @ 54.59 (59 shares)
+2026-01-08 21:18:04,351 - __main__ - INFO - Closed VSCO @ 54.48 reason=TRAIL_STOP;MACD_CROSS
+2026-01-08 21:18:04,351 - __main__ - INFO - Opened VSCO @ 54.27 (59 shares)
+2026-01-08 21:18:04,351 - __main__ - INFO - Closed VSCO @ 52.96 reason=TRAIL_STOP
+2026-01-08 21:18:04,351 - __main__ - INFO - Opened VSCO @ 53.83 (59 shares)
+2026-01-08 21:18:04,351 - __main__ - INFO - Closed VSCO @ 53.91 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,351 - __main__ - INFO - Opened VSCO @ 56.05 (57 shares)
+2026-01-08 21:18:04,352 - __main__ - INFO - Closed VSCO @ 54.74 reason=TRAIL_STOP
+2026-01-08 21:18:04,352 - __main__ - INFO - Opened VSCO @ 54.74 (58 shares)
+2026-01-08 21:18:04,352 - __main__ - INFO - Closed VSCO @ 54.17 reason=TRAIL_STOP
+2026-01-08 21:18:04,352 - __main__ - INFO - Opened VSCO @ 54.17 (59 shares)
+2026-01-08 21:18:04,352 - __main__ - INFO - Closed VSCO @ 52.20 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,352 - __main__ - INFO - Opened VSCO @ 53.34 (60 shares)
+2026-01-08 21:18:04,352 - __main__ - INFO - Closed VSCO @ 53.04 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,352 - __main__ - INFO - Opened VSCO @ 55.16 (58 shares)
+2026-01-08 21:18:04,352 - __main__ - INFO - Scaled out VSCO: sold 29 @ 58.41 reason=PARTIAL_5PCT
+2026-01-08 21:18:04,352 - __main__ - INFO - Closed VSCO @ 56.14 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,353 - __main__ - INFO - Opened VSCO @ 58.41 (55 shares)
+2026-01-08 21:18:04,353 - __main__ - INFO - Closed VSCO @ 58.65 reason=ATR_STOP;TRAIL_STOP
+2026-01-08 21:18:04,353 - __main__ - INFO - Opened VSCO @ 60.95 (52 shares)
+2026-01-08 21:18:04,353 - __main__ - INFO - Closed VSCO @ 61.86 reason=TRAIL_STOP
+2026-01-08 21:18:04,353 - __main__ - INFO - Opened VSCO @ 62.76 (51 shares)
+2026-01-08 21:18:04,380 - __main__ - INFO - Backtest VSCO win_rate=55.73% net_pnl=7325.80
+2026-01-08 21:18:04,396 - __main__ - INFO - Trades log successfully updated with net_pnl at C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\trades_log.csv.
+2026-01-08 21:18:04,396 - __main__ - INFO - Processed 1 symbols, 1 tested, 0 skipped
+2026-01-08 21:18:04,396 - __main__ - INFO - Backtest complete. Results saved to data directory
+2026-01-08 21:18:04,396 - __main__ - INFO - Backtest script finished
+2026-01-08 21:18:04,396 - __main__ - INFO - Script finished in 0:00:08.234610

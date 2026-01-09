@@ -90,11 +90,37 @@ def fetch_with_backoff(
 
 
 def _normalize_pnl(df: pd.DataFrame) -> pd.DataFrame:
-    for candidate in ("net_pnl", "pnl", "netPnL", "net_pnl_usd"):
+    """Normalize pnl column name without creating duplicates."""
+
+    if "pnl" in df.columns:
+        return df
+    for candidate in ("net_pnl", "netPnL", "net_pnl_usd"):
         if candidate in df.columns:
-            if candidate != "pnl":
-                df = df.rename(columns={candidate: "pnl"})
-            break
+            return df.rename(columns={candidate: "pnl"})
+    return df
+
+
+def _coalesce_pnl_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Coalesce duplicate pnl columns into a single numeric series."""
+
+    pnl_aliases = {"pnl", "net_pnl", "netpnl", "net_pnl_usd"}
+    series_list: list[pd.Series] = []
+    for idx, col in enumerate(df.columns):
+        if str(col).strip().lower() in pnl_aliases:
+            series_list.append(pd.to_numeric(df.iloc[:, idx], errors="coerce"))
+
+    if not series_list:
+        return df
+
+    if len(series_list) > 1:
+        logger.warning(
+            "Trades log has multiple pnl columns; coalescing %d columns", len(series_list)
+        )
+
+    combined = pd.concat(series_list, axis=1).bfill(axis=1).iloc[:, 0]
+    drop_cols = [col for col in df.columns if str(col).strip().lower() in pnl_aliases]
+    df = df.drop(columns=drop_cols)
+    df["pnl"] = combined
     return df
 
 
@@ -111,37 +137,49 @@ def load_trades_log(base_dir: Path | str | None = None) -> pd.DataFrame:
         logger.warning("Unable to read trades log at %s", path, exc_info=True)
         return pd.DataFrame()
 
-    df = _normalize_pnl(df)
-    if "symbol" in df.columns:
-        df["symbol"] = (
-            df["symbol"].astype("string").str.upper().str.strip().fillna("")
-        )
-    for col in ("entry_time", "exit_time"):
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
-    for price_col in ("entry_price", "exit_price"):
-        if price_col in df.columns:
-            df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
-    if "qty" in df.columns:
-        df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
-    if "pnl" not in df.columns and {"qty", "entry_price", "exit_price"}.issubset(df.columns):
-        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["qty"]
-    if "pnl" in df.columns:
-        df["pnl"] = pd.to_numeric(df["pnl"], errors="coerce")
-    if "return_pct" not in df.columns and {"entry_price", "exit_price"}.issubset(df.columns):
-        entry_price = pd.to_numeric(df["entry_price"], errors="coerce")
-        exit_price = pd.to_numeric(df["exit_price"], errors="coerce")
-        df["return_pct"] = np.where(
-            entry_price > 0,
-            (exit_price / entry_price - 1) * 100,
-            0.0,
-        )
-    elif "return_pct" in df.columns:
-        df["return_pct"] = pd.to_numeric(df["return_pct"], errors="coerce")
-    df = df.dropna(subset=["symbol"])
-    if "exit_time" in df.columns:
-        df = df.dropna(subset=["exit_time"])
-    return df
+    try:
+        df = _normalize_pnl(df)
+        df = _coalesce_pnl_columns(df)
+
+        if "symbol" not in df.columns:
+            logger.warning("Trades log missing symbol column at %s", path)
+            return pd.DataFrame()
+
+        df["symbol"] = df["symbol"].astype("string").str.upper().str.strip().fillna("")
+        for col in ("entry_time", "exit_time"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
+        for price_col in ("entry_price", "exit_price"):
+            if price_col in df.columns:
+                df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
+        if "qty" in df.columns:
+            df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
+        if "pnl" not in df.columns and {"qty", "entry_price", "exit_price"}.issubset(
+            df.columns
+        ):
+            df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["qty"]
+        if "pnl" in df.columns:
+            df["pnl"] = pd.to_numeric(df["pnl"], errors="coerce")
+        if "return_pct" not in df.columns and {"entry_price", "exit_price"}.issubset(
+            df.columns
+        ):
+            entry_price = pd.to_numeric(df["entry_price"], errors="coerce")
+            exit_price = pd.to_numeric(df["exit_price"], errors="coerce")
+            df["return_pct"] = np.where(
+                entry_price > 0,
+                (exit_price / entry_price - 1) * 100,
+                0.0,
+            )
+        elif "return_pct" in df.columns:
+            df["return_pct"] = pd.to_numeric(df["return_pct"], errors="coerce")
+        df = df.dropna(subset=["symbol"])
+        if "exit_time" in df.columns:
+            df = df.dropna(subset=["exit_time"])
+        return df
+    except Exception:
+        logger.warning("Trades log malformed at %s; returning empty frame", path, exc_info=True)
+        return pd.DataFrame()
+
 
 
 def _normalize_bars_frame(df: pd.DataFrame) -> pd.DataFrame:
