@@ -1114,3 +1114,7 @@
 2026-01-08 21:18:04,396 - __main__ - INFO - Backtest complete. Results saved to data directory
 2026-01-08 21:18:04,396 - __main__ - INFO - Backtest script finished
 2026-01-08 21:18:04,396 - __main__ - INFO - Script finished in 0:00:08.234610
+2026-01-10 12:38:35,628 - scripts.backtest - INFO - Script started
+2026-01-10 12:53:46,882 - scripts.backtest - INFO - Script started
+2026-01-10 12:54:43,993 - scripts.backtest - INFO - Script started
+2026-01-10 12:56:21,361 - scripts.backtest - INFO - Script started

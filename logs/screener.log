@@ -25770,3 +25770,199 @@ Trying to import the above resulted in these errors:
 2026-01-08 21:17:54,983 - screener - INFO - No candidates passed ranking gates; sample rejections: [{"reason": "INSUFFICIENT_HISTORY", "symbol": "KCHV"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "CMDB"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "PELIR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "ALUB"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "DYOR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "SZZLR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "JBS"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "KCHVR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "SLGB"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "QSEA"}]
 2026-01-08 21:17:55,071 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-09.csv (top_n=77)
 2026-01-08 21:17:55,083 - screener - INFO - Screener complete: 7577 symbols examined, 0 candidates.
+2026-01-10 12:38:35,655 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-10 12:38:36,095 - screener - INFO - [STAGE] fetch start
+2026-01-10 12:38:36,805 - screener - INFO - Asset meta ready: 12064 symbols (tradable US equities)
+2026-01-10 12:38:36,820 - screener - INFO - Asset metrics: total=13125 tradable_equities=12330 after_filters=12064
+2026-01-10 12:38:36,821 - screener - INFO - Asset sample: YMT:NASDAQ, YNOT:NASDAQ, YOKE:NASDAQ, YOUL:NASDAQ, YQ:NASDAQ
+2026-01-10 12:38:36,840 - screener - INFO - Universe sample size: 5878 (of 12064 tradable equities)
+2026-01-10 12:38:36,909 - screener - INFO - Universe hygiene filtered 5878 -> 4937 symbols
+2026-01-10 12:38:36,915 - screener - INFO - Universe prefix counts: {'A': 47, 'C': 38, 'S': 33, 'B': 30, 'N': 25, 'P': 23, 'G': 23, 'T': 21, 'E': 20, 'M': 20, 'I': 19, 'H': 17, 'L': 16, 'R': 16, 'F': 15, 'W': 13, 'O': 13, 'U': 12, 'D': 11, 'V': 10, 'J': 8, 'K': 8, 'Q': 5, 'Z': 4, 'Y': 2, 'X': 1}
+2026-01-10 12:38:37,027 - screener - INFO - Requesting 750 trading days ending 2026-01-09 (2023-01-12T00:00:00Z -> 2026-01-09T23:59:59Z)
+2026-01-10 12:38:39,266 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-10 12:38:39,266 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32845 elapsed=2.2s cache=miss
+2026-01-10 12:38:41,515 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-10 12:38:41,516 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~33157 elapsed=2.2s cache=miss
+2026-01-10 12:38:43,746 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-10 12:38:43,746 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~32339 elapsed=2.2s cache=miss
+2026-01-10 12:38:45,944 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-10 12:38:45,944 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~31745 elapsed=2.2s cache=miss
+2026-01-10 12:38:47,723 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-10 12:38:47,723 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=3 rows=~27719 elapsed=1.8s cache=miss
+2026-01-10 12:38:50,200 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-10 12:38:50,200 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~30726 elapsed=2.5s cache=miss
+2026-01-10 12:38:52,195 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-10 12:38:52,195 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~30234 elapsed=2.0s cache=miss
+2026-01-10 12:38:54,459 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-10 12:38:54,460 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~30259 elapsed=2.3s cache=miss
+2026-01-10 12:38:56,872 - screener - WARNING - Failed to persist batch cache data\cache\bars_1d_iex\2026-01-09\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-10 12:38:56,872 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~33565 elapsed=2.4s cache=miss
+2026-01-10 12:38:57,277 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=35 rows=282247 symbols_with_bars=394
+2026-01-10 12:38:57,277 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-10 12:38:57,277 - screener - INFO - Symbols without bars (sample): ['GIWWR', 'BETA', 'GLIBA', 'TGEN', 'IPCX', 'CV', 'PXED', 'PTRN', 'PTN', 'ELOG']
+2026-01-10 12:38:57,277 - screener - INFO - Symbols dropped for insufficient history: 48
+2026-01-10 12:38:58,951 - screener - INFO - [STAGE] fetch end (rows=282247, elapsed=22.86s)
+2026-01-10 12:38:59,080 - screener - WARNING - PyYAML unavailable; using built-in ranker defaults.
+2026-01-10 12:38:59,121 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-10 12:38:59,387 - screener - WARNING - PyYAML unavailable; using built-in ranker defaults.
+2026-01-10 12:38:59,387 - screener - INFO - [STAGE] coarse features start
+2026-01-10 12:40:43,000 - screener - INFO - [STAGE] coarse features end (rows=282247)
+2026-01-10 12:40:43,000 - screener - INFO - [STAGE] coarse rank start
+2026-01-10 12:40:43,123 - screener - INFO - [STAGE] coarse rank end (rows=402)
+2026-01-10 12:40:43,133 - screener - INFO - [STAGE] shortlist written: data\tmp\shortlist.csv (rows=402)
+2026-01-10 12:40:43,155 - screener - INFO - [STAGE] full features start (shortlist=402)
+2026-01-10 12:42:23,977 - screener - INFO - [STAGE] full features end (rows=282247)
+2026-01-10 12:42:24,089 - screener - INFO - [STAGE] finalize candidates pruned rows=282247 -> 249545
+2026-01-10 12:42:24,090 - screener - INFO - [STAGE] full rank start
+2026-01-10 12:42:24,192 - screener - INFO - [STAGE] full rank end (rows=402)
+2026-01-10 12:42:24,192 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=402 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-10
+2026-01-10 12:42:24,193 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-10 12:42:24,194 - screener - INFO - [STAGE] quality filters pruned rows=402 -> 70
+2026-01-10 12:42:24,196 - screener - INFO - [STAGE] gates start
+2026-01-10 12:42:24,205 - screener - INFO - [STAGE] gates end (candidates=1)
+2026-01-10 12:42:26,953 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-10.csv (top_n=70)
+2026-01-10 12:42:26,965 - screener - INFO - Screener complete: 7577 symbols examined, 1 candidates.
+2026-01-10 12:53:46,887 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-10 12:53:47,151 - screener - INFO - [STAGE] fetch start
+2026-01-10 12:53:47,880 - screener - INFO - Asset meta ready: 12064 symbols (tradable US equities)
+2026-01-10 12:53:47,894 - screener - INFO - Asset metrics: total=13125 tradable_equities=12330 after_filters=12064
+2026-01-10 12:53:47,895 - screener - INFO - Asset sample: YMT:NASDAQ, YNOT:NASDAQ, YOKE:NASDAQ, YOUL:NASDAQ, YQ:NASDAQ
+2026-01-10 12:53:47,913 - screener - INFO - Universe sample size: 5878 (of 12064 tradable equities)
+2026-01-10 12:53:47,975 - screener - INFO - Universe hygiene filtered 5878 -> 4937 symbols
+2026-01-10 12:53:47,980 - screener - INFO - Universe prefix counts: {'B': 12, 'A': 9, 'C': 9, 'N': 7, 'G': 7, 'L': 6, 'T': 5, 'S': 5, 'P': 5, 'R': 4, 'M': 4, 'I': 4, 'E': 3, 'U': 3, 'D': 3, 'O': 3, 'F': 3, 'H': 2, 'W': 2, 'V': 1, 'J': 1, 'K': 1, 'Q': 1}
+2026-01-10 12:53:48,084 - screener - INFO - Requesting 750 trading days ending 2026-01-09 (2023-01-12T00:00:00Z -> 2026-01-09T23:59:59Z)
+2026-01-10 12:53:50,016 - screener - INFO - [INFO] bars: batch 01/02 syms=50 pages=4 rows=~32845 elapsed=1.9s cache=miss
+2026-01-10 12:53:51,974 - screener - INFO - [INFO] bars: batch 02/02 syms=50 pages=4 rows=~33157 elapsed=2.0s cache=miss
+2026-01-10 12:53:52,059 - screener - INFO - Bars fetch metrics: batches=2 paged=2 pages=8 rows=65918 symbols_with_bars=90
+2026-01-10 12:53:52,060 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-10 12:53:52,060 - screener - INFO - Symbols without bars (sample): ['GIWWR', 'BETA', 'GLIBA', 'TGEN', 'IPCX', 'CV', 'PXED', 'PTRN']
+2026-01-10 12:53:52,060 - screener - INFO - Symbols dropped for insufficient history: 8
+2026-01-10 12:53:52,423 - screener - INFO - [STAGE] fetch end (rows=65918, elapsed=5.27s)
+2026-01-10 12:53:52,457 - screener - WARNING - PyYAML unavailable; using built-in ranker defaults.
+2026-01-10 12:53:52,466 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-10 12:53:52,533 - screener - WARNING - PyYAML unavailable; using built-in ranker defaults.
+2026-01-10 12:53:52,533 - screener - INFO - [STAGE] coarse features start
+2026-01-10 12:54:16,046 - screener - INFO - [STAGE] coarse features end (rows=65918)
+2026-01-10 12:54:16,046 - screener - INFO - [STAGE] coarse rank start
+2026-01-10 12:54:16,075 - screener - INFO - [STAGE] coarse rank end (rows=92)
+2026-01-10 12:54:16,083 - screener - INFO - [STAGE] shortlist written: data\tmp\shortlist.csv (rows=92)
+2026-01-10 12:54:16,087 - screener - INFO - [STAGE] full features start (shortlist=92)
+2026-01-10 12:54:38,696 - screener - INFO - [STAGE] full features end (rows=65918)
+2026-01-10 12:54:38,726 - screener - INFO - [STAGE] finalize candidates pruned rows=65918 -> 56844
+2026-01-10 12:54:38,726 - screener - INFO - [STAGE] full rank start
+2026-01-10 12:54:38,759 - screener - INFO - [STAGE] full rank end (rows=92)
+2026-01-10 12:54:38,759 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=92 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-10
+2026-01-10 12:54:38,760 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-10 12:54:38,761 - screener - INFO - [STAGE] quality filters pruned rows=92 -> 14
+2026-01-10 12:54:38,763 - screener - INFO - [STAGE] gates start
+2026-01-10 12:54:38,766 - screener - INFO - [STAGE] gates end (candidates=0)
+2026-01-10 12:54:38,908 - screener - INFO - No candidates passed ranking gates; sample rejections: [{"reason": "INSUFFICIENT_HISTORY", "symbol": "BETA"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "GIWWR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "GLIBA"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "IPCX"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "TGEN"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "PTRN"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "PXED"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "CV"}, {"reason": "FUND_LIKE", "symbol": "AAA"}, {"reason": "FUND_LIKE", "symbol": "AAAA"}]
+2026-01-10 12:54:38,947 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-10.csv (top_n=14)
+2026-01-10 12:54:38,959 - screener - INFO - Screener complete: 7227 symbols examined, 0 candidates.
+2026-01-10 12:54:43,997 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-10 12:54:44,164 - screener - INFO - [STAGE] fetch start
+2026-01-10 12:54:44,884 - screener - INFO - Asset meta ready: 12064 symbols (tradable US equities)
+2026-01-10 12:54:44,898 - screener - INFO - Asset metrics: total=13125 tradable_equities=12330 after_filters=12064
+2026-01-10 12:54:44,899 - screener - INFO - Asset sample: YMT:NASDAQ, YNOT:NASDAQ, YOKE:NASDAQ, YOUL:NASDAQ, YQ:NASDAQ
+2026-01-10 12:54:44,916 - screener - INFO - Universe sample size: 5878 (of 12064 tradable equities)
+2026-01-10 12:54:44,978 - screener - INFO - Universe hygiene filtered 5878 -> 4937 symbols
+2026-01-10 12:54:44,982 - screener - INFO - Universe prefix counts: {'B': 12, 'A': 9, 'C': 9, 'N': 7, 'G': 7, 'L': 6, 'T': 5, 'S': 5, 'P': 5, 'R': 4, 'M': 4, 'I': 4, 'E': 3, 'U': 3, 'D': 3, 'O': 3, 'F': 3, 'H': 2, 'W': 2, 'V': 1, 'J': 1, 'K': 1, 'Q': 1}
+2026-01-10 12:54:45,079 - screener - INFO - Requesting 750 trading days ending 2026-01-09 (2023-01-12T00:00:00Z -> 2026-01-09T23:59:59Z)
+2026-01-10 12:54:45,181 - screener - INFO - [INFO] bars: batch 01/02 syms=50 pages=4 rows=~32845 elapsed=0.1s cache=hit
+2026-01-10 12:54:45,226 - screener - INFO - [INFO] bars: batch 02/02 syms=50 pages=4 rows=~33157 elapsed=0.0s cache=hit
+2026-01-10 12:54:45,301 - screener - INFO - Bars fetch metrics: batches=2 paged=2 pages=8 rows=65918 symbols_with_bars=90
+2026-01-10 12:54:45,301 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-10 12:54:45,301 - screener - INFO - Symbols without bars (sample): ['GIWWR', 'BETA', 'GLIBA', 'TGEN', 'IPCX', 'CV', 'PXED', 'PTRN']
+2026-01-10 12:54:45,301 - screener - INFO - Symbols dropped for insufficient history: 8
+2026-01-10 12:54:45,659 - screener - INFO - [STAGE] fetch end (rows=65918, elapsed=1.50s)
+2026-01-10 12:54:45,693 - screener - WARNING - PyYAML unavailable; using built-in ranker defaults.
+2026-01-10 12:54:45,700 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-10 12:54:45,763 - screener - WARNING - PyYAML unavailable; using built-in ranker defaults.
+2026-01-10 12:54:45,764 - screener - INFO - [STAGE] coarse features start
+2026-01-10 12:55:08,298 - screener - INFO - [STAGE] coarse features end (rows=65918)
+2026-01-10 12:55:08,298 - screener - INFO - [STAGE] coarse rank start
+2026-01-10 12:55:08,329 - screener - INFO - [STAGE] coarse rank end (rows=92)
+2026-01-10 12:55:08,335 - screener - INFO - [STAGE] shortlist written: data\tmp\shortlist.csv (rows=92)
+2026-01-10 12:55:08,340 - screener - INFO - [STAGE] full features start (shortlist=92)
+2026-01-10 12:55:30,942 - screener - INFO - [STAGE] full features end (rows=65918)
+2026-01-10 12:55:30,980 - screener - INFO - [STAGE] finalize candidates pruned rows=65918 -> 56844
+2026-01-10 12:55:30,980 - screener - INFO - [STAGE] full rank start
+2026-01-10 12:55:31,014 - screener - INFO - [STAGE] full rank end (rows=92)
+2026-01-10 12:55:31,014 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=92 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-10
+2026-01-10 12:55:31,015 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-10 12:55:31,016 - screener - INFO - [STAGE] quality filters pruned rows=92 -> 14
+2026-01-10 12:55:31,018 - screener - INFO - [STAGE] gates start
+2026-01-10 12:55:31,021 - screener - INFO - [STAGE] gates end (candidates=0)
+2026-01-10 12:55:31,158 - screener - INFO - No candidates passed ranking gates; sample rejections: [{"reason": "INSUFFICIENT_HISTORY", "symbol": "GLIBA"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "IPCX"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "BETA"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "GIWWR"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "TGEN"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "CV"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "PTRN"}, {"reason": "INSUFFICIENT_HISTORY", "symbol": "PXED"}, {"reason": "FUND_LIKE", "symbol": "AAA"}, {"reason": "FUND_LIKE", "symbol": "AAAA"}]
+2026-01-10 12:55:31,193 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-10.csv (top_n=14)
+2026-01-10 12:55:31,206 - screener - INFO - Screener complete: 7227 symbols examined, 0 candidates.
+2026-01-10 12:56:21,365 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-10 12:56:21,573 - screener - INFO - [STAGE] fetch start
+2026-01-10 12:56:22,306 - screener - INFO - Asset meta ready: 12064 symbols (tradable US equities)
+2026-01-10 12:56:22,320 - screener - INFO - Asset metrics: total=13125 tradable_equities=12330 after_filters=12064
+2026-01-10 12:56:22,322 - screener - INFO - Asset sample: YMT:NASDAQ, YNOT:NASDAQ, YOKE:NASDAQ, YOUL:NASDAQ, YQ:NASDAQ
+2026-01-10 12:56:22,339 - screener - INFO - Universe sample size: 5878 (of 12064 tradable equities)
+2026-01-10 12:56:22,403 - screener - INFO - Universe hygiene filtered 5878 -> 4937 symbols
+2026-01-10 12:56:22,408 - screener - INFO - Universe prefix counts: {'B': 12, 'A': 9, 'C': 9, 'N': 7, 'G': 7, 'L': 6, 'T': 5, 'S': 5, 'P': 5, 'R': 4, 'M': 4, 'I': 4, 'E': 3, 'U': 3, 'D': 3, 'O': 3, 'F': 3, 'H': 2, 'W': 2, 'V': 1, 'J': 1, 'K': 1, 'Q': 1}
+2026-01-10 12:56:22,513 - screener - INFO - Requesting 750 trading days ending 2026-01-09 (2023-01-12T00:00:00Z -> 2026-01-09T23:59:59Z)
+2026-01-10 12:56:22,563 - screener - INFO - [INFO] bars: batch 01/02 syms=50 pages=4 rows=~32845 elapsed=0.1s cache=hit
+2026-01-10 12:56:22,585 - screener - INFO - [INFO] bars: batch 02/02 syms=50 pages=4 rows=~33157 elapsed=0.0s cache=hit
+2026-01-10 12:56:22,663 - screener - INFO - Bars fetch metrics: batches=2 paged=2 pages=8 rows=65918 symbols_with_bars=90
+2026-01-10 12:56:22,663 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-10 12:56:22,663 - screener - INFO - Symbols without bars (sample): ['GIWWR', 'BETA', 'GLIBA', 'TGEN', 'IPCX', 'CV', 'PXED', 'PTRN']
+2026-01-10 12:56:22,663 - screener - INFO - Symbols dropped for insufficient history: 8
+2026-01-10 12:56:23,032 - screener - INFO - [STAGE] fetch end (rows=65918, elapsed=1.46s)
+2026-01-10 12:56:23,107 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-10 12:56:23,169 - screener - INFO - [STAGE] coarse features start
+2026-01-10 12:56:45,293 - screener - INFO - [STAGE] coarse features end (rows=65918)
+2026-01-10 12:56:45,293 - screener - INFO - [STAGE] coarse rank start
+2026-01-10 12:56:45,352 - screener - INFO - [STAGE] coarse rank end (rows=92)
+2026-01-10 12:56:45,358 - screener - INFO - [STAGE] shortlist written: data\tmp\shortlist.csv (rows=92)
+2026-01-10 12:56:45,363 - screener - INFO - [STAGE] full features start (shortlist=92)
+2026-01-10 12:57:08,202 - screener - INFO - [STAGE] full features end (rows=65918)
+2026-01-10 12:57:08,239 - screener - INFO - [STAGE] finalize candidates pruned rows=65918 -> 56844
+2026-01-10 12:57:08,239 - screener - INFO - [STAGE] full rank start
+2026-01-10 12:57:08,296 - screener - INFO - [STAGE] full rank end (rows=92)
+2026-01-10 12:57:08,296 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=92 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-10
+2026-01-10 12:57:08,297 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-10 12:57:08,299 - screener - INFO - [STAGE] quality filters pruned rows=92 -> 14
+2026-01-10 12:57:08,301 - screener - INFO - [STAGE] gates start
+2026-01-10 12:57:08,306 - screener - INFO - [STAGE] gates end (candidates=6)
+2026-01-10 12:57:08,506 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-10.csv (top_n=14)
+2026-01-10 12:57:08,520 - screener - INFO - Screener complete: 7227 symbols examined, 6 candidates.

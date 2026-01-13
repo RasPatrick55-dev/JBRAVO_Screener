@@ -129,7 +129,7 @@ def _apply_universe_hygiene(df: Optional[pd.DataFrame], asset_meta: Mapping[str,
     if filtered.empty:
         LOGGER.warning("Universe hygiene removed all rows; retaining original %d symbols", before)
         return df.copy()
-    LOGGER.info("Universe hygiene filtered %d → %d symbols", before, int(filtered.shape[0]))
+    LOGGER.info("Universe hygiene filtered %d -> %d symbols", before, int(filtered.shape[0]))
     return filtered.reset_index(drop=True)
 
 
@@ -2277,13 +2277,13 @@ def _load_alpaca_universe(
             )
             start_iso, end_iso, last_day = _fallback_daily_window(window_days)
             LOGGER.info(
-                "Using fallback trading window for %d days (%s → %s)",
+                "Using fallback trading window for %d days (%s -> %s)",
                 window_days,
                 start_iso,
                 end_iso,
             )
         LOGGER.info(
-            "Requesting %d trading days ending %s (%s → %s)",
+            "Requesting %d trading days ending %s (%s -> %s)",
             window_days,
             last_day,
             start_iso,
@@ -2360,7 +2360,7 @@ def _load_alpaca_universe(
         int(agg_metrics.get("symbols_with_bars", 0)),
     )
     LOGGER.info(
-        "Bars window attempts: %s → used=%d",
+        "Bars window attempts: %s -> used=%d",
         window_attempts or ["<none>"],
         final_window,
     )
@@ -3859,7 +3859,7 @@ def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
         LOGGER.warning("Delta update fallback window failed: %s", exc)
         start_iso, end_iso, last_day = _fallback_daily_window(1)
 
-    LOGGER.info("[DELTA] Requesting %s (%s → %s)", last_day, start_iso, end_iso)
+    LOGGER.info("[DELTA] Requesting %s (%s -> %s)", last_day, start_iso, end_iso)
 
     symbols, _, asset_metrics = _fetch_assets_via_http(exclude_otc=False)
     unique_symbols = list(dict.fromkeys(symbols))
