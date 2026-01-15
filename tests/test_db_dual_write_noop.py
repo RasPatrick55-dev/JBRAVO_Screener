@@ -9,6 +9,7 @@ from scripts import db
 @pytest.mark.alpaca_optional
 def test_dual_write_noop_without_database(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DB_DISABLED", "1")
     assert db.db_enabled() is False
 
     today = date(2024, 1, 1)

@@ -1,8 +1,6 @@
 import argparse
 import logging
 
-from sqlalchemy import text
-
 from scripts import db
 
 logger = logging.getLogger(__name__)
@@ -150,17 +148,15 @@ ON CONFLICT (id) DO NOTHING;
 
 def _execute_statement(engine, statement: str) -> bool:
     try:
-        execute_fn = getattr(engine, "execute", None)
-        if callable(execute_fn):
-            execute_fn(text(statement))
-        else:
-            with engine.begin() as connection:
-                connection.execute(text(statement))
+        if engine is None:
+            return False
+        with engine:
+            with engine.cursor() as cursor:
+                cursor.execute(statement)
+        return True
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_MIGRATE %s", exc)
         return False
-
-    return True
 
 
 def run_upgrade(engine) -> bool:
@@ -177,44 +173,47 @@ def run_upgrade(engine) -> bool:
 
 def _repair_screener_candidates_schema(engine) -> bool:
     try:
-        with engine.begin() as connection:
-            table_exists = connection.execute(
-                text("SELECT to_regclass('public.screener_candidates')")
-            ).scalar()
-            if not table_exists:
-                return True
-
-            columns = {
-                row[0]
-                for row in connection.execute(
-                    text(
-                        """
-                        SELECT column_name
-                        FROM information_schema.columns
-                        WHERE table_schema=current_schema()
-                          AND table_name='screener_candidates'
-                        """
-                    )
-                )
-            }
-
-            if "run_date" in columns:
-                return True
-
-            if "run date" in columns:
-                connection.execute(text('ALTER TABLE screener_candidates RENAME COLUMN "run date" TO run_date'))
-                return True
-
-            rowcount = connection.execute(text("SELECT COUNT(*) FROM screener_candidates")).scalar() or 0
-            if rowcount == 0:
-                logger.warning("[WARN] DB_MIGRATE screener_candidates missing run_date; recreating empty table")
-                connection.execute(text("DROP TABLE screener_candidates"))
-                return True
-
-            logger.warning(
-                "[WARN] DB_MIGRATE screener_candidates missing run_date with existing data; manual repair required"
-            )
+        if engine is None:
             return False
+        with engine:
+            with engine.cursor() as cursor:
+                cursor.execute("SELECT to_regclass('public.screener_candidates')")
+                row = cursor.fetchone()
+                table_exists = row[0] if row else None
+                if not table_exists:
+                    return True
+
+                cursor.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema=current_schema()
+                      AND table_name='screener_candidates'
+                    """
+                )
+                columns = {row[0] for row in cursor.fetchall()}
+
+                if "run_date" in columns:
+                    return True
+
+                if "run date" in columns:
+                    cursor.execute('ALTER TABLE screener_candidates RENAME COLUMN "run date" TO run_date')
+                    return True
+
+                cursor.execute("SELECT COUNT(*) FROM screener_candidates")
+                row = cursor.fetchone()
+                rowcount = row[0] if row else 0
+                if rowcount == 0:
+                    logger.warning(
+                        "[WARN] DB_MIGRATE screener_candidates missing run_date; recreating empty table"
+                    )
+                    cursor.execute("DROP TABLE screener_candidates")
+                    return True
+
+                logger.warning(
+                    "[WARN] DB_MIGRATE screener_candidates missing run_date with existing data; manual repair required"
+                )
+                return False
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_MIGRATE_SCHEMA_CHECK %s", exc)
         return False
@@ -228,20 +227,26 @@ def main() -> None:
 
     try:
         if not db.db_enabled():
-            logger.warning("[WARN] DB_MIGRATE DATABASE_URL not set; skipping")
+            logger.warning("[WARN] DB_MIGRATE db_disabled; skipping")
             return
 
-        engine = db.get_engine()
-        if engine is None:
-            logger.warning("[WARN] DB_MIGRATE Engine unavailable; skipping")
+        conn = db.get_db_conn()
+        if conn is None:
+            logger.warning("[WARN] DB_MIGRATE connection unavailable; skipping")
             return
 
-        if args.action == "upgrade":
-            success = run_upgrade(engine)
-            if success:
-                logger.info("Database migration upgrade completed.")
-            else:
-                logger.warning("[WARN] DB_MIGRATE Upgrade encountered issues")
+        try:
+            if args.action == "upgrade":
+                success = run_upgrade(conn)
+                if success:
+                    logger.info("Database migration upgrade completed.")
+                else:
+                    logger.warning("[WARN] DB_MIGRATE Upgrade encountered issues")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_MIGRATE_MAIN %s", exc)
 

@@ -20,7 +20,6 @@ import zoneinfo
 
 import pandas as pd
 import requests
-from sqlalchemy import text
 
 from scripts import db
 from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
@@ -1778,21 +1777,14 @@ def _reload_dashboard(enabled: bool) -> None:
 def ingest_artifacts_to_db(run_date: date) -> None:
     """Ingest CSV artifacts into the database for durability."""
 
-    from scripts.db import db_enabled, get_engine
-
     def _log_ok(table: str, rows: int) -> None:
         logger.info("[INFO] DB_INGEST_OK table=%s rows=%s", table, rows)
 
     def _log_fail(table: str, err: Exception | str) -> None:
         logger.warning("[WARN] DB_INGEST_FAILED table=%s err=%s", table, err)
 
-    if not db_enabled():
+    if not db.db_enabled():
         _log_fail("all", "db_disabled")
-        return
-
-    engine = get_engine()
-    if engine is None:
-        _log_fail("all", "engine_unavailable")
         return
 
     run_date_value: str
@@ -1808,7 +1800,6 @@ def ingest_artifacts_to_db(run_date: date) -> None:
         candidates_df = pd.DataFrame()
 
     if not candidates_df.empty:
-        rows: list[dict[str, Any]] = []
         for _, row in candidates_df.iterrows():
             record = row.to_dict() if isinstance(row, Mapping) else dict(row)
             symbol = _coerce_symbol(record.get("symbol"))
@@ -1821,50 +1812,9 @@ def ingest_artifacts_to_db(run_date: date) -> None:
                     is_empty_score = score_breakdown_raw_value in (None, "")
                 if not is_empty_score:
                     score_breakdown_raw.append(score_breakdown_raw_value)
-            payload = {
-                "run_date": run_date_value,
-                "timestamp": record.get("timestamp"),
-                "symbol": symbol,
-                "score": record.get("score"),
-                "exchange": record.get("exchange"),
-                "close": record.get("close"),
-                "volume": record.get("volume"),
-                "universe_count": record.get("universe_count"),
-                "score_breakdown": normalized_score_breakdown,
-                "entry_price": record.get("entry_price"),
-                "adv20": record.get("adv20"),
-                "atrp": record.get("atrp"),
-                "source": record.get("source"),
-            }
-            rows.append(payload)
-        stmt = text(
-            """
-            INSERT INTO screener_candidates (
-                run_date, timestamp, symbol, score, exchange, close, volume,
-                universe_count, score_breakdown, entry_price, adv20, atrp, source
-            )
-            VALUES (
-                :run_date, :timestamp, :symbol, :score, :exchange, :close, :volume,
-                :universe_count, CAST(:score_breakdown AS JSONB), :entry_price, :adv20, :atrp, :source
-            )
-            ON CONFLICT (run_date, symbol) DO UPDATE SET
-                timestamp=EXCLUDED.timestamp,
-                score=EXCLUDED.score,
-                exchange=EXCLUDED.exchange,
-                close=EXCLUDED.close,
-                volume=EXCLUDED.volume,
-                universe_count=EXCLUDED.universe_count,
-                score_breakdown=EXCLUDED.score_breakdown,
-                entry_price=EXCLUDED.entry_price,
-                adv20=EXCLUDED.adv20,
-                atrp=EXCLUDED.atrp,
-                source=EXCLUDED.source
-            """
-        )
         try:
-            with engine.begin() as connection:
-                connection.execute(stmt, rows)
-            _log_ok("screener_candidates", len(rows))
+            db.insert_screener_candidates(run_date_value, candidates_df)
+            _log_ok("screener_candidates", int(candidates_df.shape[0]))
         except Exception as exc:
             _log_fail("screener_candidates", exc)
 
@@ -1877,50 +1827,12 @@ def ingest_artifacts_to_db(run_date: date) -> None:
         backtest_df = pd.DataFrame()
 
     if not backtest_df.empty:
-        rows_bt: list[dict[str, Any]] = []
-        columns = {
-            "symbol",
-            "trades",
-            "win_rate",
-            "net_pnl",
-            "expectancy",
-            "profit_factor",
-            "max_drawdown",
-            "sharpe",
-            "sortino",
-        }
-        for _, row in backtest_df.iterrows():
-            record = row.to_dict() if isinstance(row, Mapping) else dict(row)
-            payload_bt = {"run_date": run_date_value}
-            for col in columns:
-                payload_bt[col] = record.get(col)
-            payload_bt["symbol"] = _coerce_symbol(payload_bt.get("symbol"))
-            rows_bt.append(payload_bt)
-        stmt_bt = text(
-            """
-            INSERT INTO backtest_results (
-                run_date, symbol, trades, win_rate, net_pnl, expectancy,
-                profit_factor, max_drawdown, sharpe, sortino
-            )
-            VALUES (
-                :run_date, :symbol, :trades, :win_rate, :net_pnl, :expectancy,
-                :profit_factor, :max_drawdown, :sharpe, :sortino
-            )
-            ON CONFLICT (run_date, symbol) DO UPDATE SET
-                trades=EXCLUDED.trades,
-                win_rate=EXCLUDED.win_rate,
-                net_pnl=EXCLUDED.net_pnl,
-                expectancy=EXCLUDED.expectancy,
-                profit_factor=EXCLUDED.profit_factor,
-                max_drawdown=EXCLUDED.max_drawdown,
-                sharpe=EXCLUDED.sharpe,
-                sortino=EXCLUDED.sortino
-            """
-        )
         try:
-            with engine.begin() as connection:
-                connection.execute(stmt_bt, rows_bt)
-            _log_ok("backtest_results", len(rows_bt))
+            ok = db.insert_backtest_results(run_date_value, backtest_df)
+            if ok:
+                _log_ok("backtest_results", int(backtest_df.shape[0]))
+            else:
+                _log_fail("backtest_results", "write_failed")
         except Exception as exc:
             _log_fail("backtest_results", exc)
 
@@ -1945,30 +1857,8 @@ def ingest_artifacts_to_db(run_date: date) -> None:
             "sharpe": latest_row.get("sharpe"),
             "sortino": latest_row.get("sortino"),
         }
-        stmt_metrics = text(
-            """
-            INSERT INTO metrics_daily (
-                run_date, total_trades, win_rate, net_pnl, expectancy,
-                profit_factor, max_drawdown, sharpe, sortino
-            )
-            VALUES (
-                :run_date, :total_trades, :win_rate, :net_pnl, :expectancy,
-                :profit_factor, :max_drawdown, :sharpe, :sortino
-            )
-            ON CONFLICT (run_date) DO UPDATE SET
-                total_trades=EXCLUDED.total_trades,
-                win_rate=EXCLUDED.win_rate,
-                net_pnl=EXCLUDED.net_pnl,
-                expectancy=EXCLUDED.expectancy,
-                profit_factor=EXCLUDED.profit_factor,
-                max_drawdown=EXCLUDED.max_drawdown,
-                sharpe=EXCLUDED.sharpe,
-                sortino=EXCLUDED.sortino
-            """
-        )
         try:
-            with engine.begin() as connection:
-                connection.execute(stmt_metrics, payload_metrics)
+            db.upsert_metrics_daily(run_date_value, payload_metrics)
             _log_ok("metrics_daily", 1)
         except Exception as exc:
             _log_fail("metrics_daily", exc)
@@ -1987,17 +1877,6 @@ def ingest_artifacts_to_db(run_date: date) -> None:
             except Exception:
                 return "{}"
 
-    stmt_pipeline = text(
-        """
-        INSERT INTO pipeline_runs (run_date, started_at, ended_at, rc, summary)
-        VALUES (:run_date, :started_at, :ended_at, :rc, CAST(:summary AS JSONB))
-        ON CONFLICT (run_date) DO UPDATE
-        SET started_at=EXCLUDED.started_at,
-            ended_at=EXCLUDED.ended_at,
-            rc=EXCLUDED.rc,
-            summary=EXCLUDED.summary
-        """
-    )
     payload_pipeline = {
         "run_date": run_date_value,
         "started_at": _PIPELINE_STARTED_AT,
@@ -2006,8 +1885,13 @@ def ingest_artifacts_to_db(run_date: date) -> None:
         "summary": _dump_summary(summary_payload),
     }
     try:
-        with engine.begin() as connection:
-            connection.execute(stmt_pipeline, payload_pipeline)
+        db.upsert_pipeline_run(
+            payload_pipeline["run_date"],
+            payload_pipeline["started_at"],
+            payload_pipeline["ended_at"],
+            payload_pipeline["rc"],
+            summary_payload,
+        )
         _log_ok("pipeline_runs", 1)
     except Exception as exc:
         _log_fail("pipeline_runs", exc)

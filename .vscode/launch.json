@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: Current File (env)",
+      "type": "python",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env.vscode"
+    },
+    {
+      "name": "Screener: Module (safe debug)",
+      "type": "python",
+      "request": "launch",
+      "module": "scripts.screener",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env.vscode",
+      "args": [
+        "--mode", "screener",
+        "--feed", "iex",
+        "--dollar-vol-min", "2000000",
+        "--reuse-cache", "true",
+        "--skip-fetch", "true"
+      ]
+    }
+  ]
+}

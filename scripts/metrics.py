@@ -3,7 +3,7 @@ import sys
 import os
 import json
 import csv
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 # Ensure project root is on ``sys.path`` before third-party imports
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,8 +16,7 @@ from collections import Counter
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from psycopg2.extensions import connection as PGConnection
 from scripts import db
 from utils import write_csv_atomic
 from utils.screener_metrics import ensure_canonical_metrics, write_screener_metrics_json
@@ -106,17 +105,26 @@ def _coerce_run_date(value: object) -> Optional[date]:
     return ts.date()
 
 
-def _resolve_run_date(engine: Optional[Engine]) -> date:
+def _fetch_dataframe(
+    conn: PGConnection, query: str, params: Mapping[str, Any] | None = None
+) -> pd.DataFrame:
+    with conn.cursor() as cursor:
+        cursor.execute(query, params or {})
+        rows = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _resolve_run_date(conn: Optional[PGConnection]) -> date:
     default = datetime.now(timezone.utc).date()
-    if engine is None:
+    if conn is None:
         return default
 
-    stmt = text(
-        "SELECT run_date FROM pipeline_runs ORDER BY run_date DESC LIMIT 1"
-    )
     try:
-        with engine.connect() as connection:
-            run_date = connection.execute(stmt).scalar()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT run_date FROM pipeline_runs ORDER BY run_date DESC LIMIT 1")
+            row = cursor.fetchone()
+            run_date = row[0] if row else None
     except Exception as exc:  # pragma: no cover - defensive guard
         logger.warning("[WARN] METRICS_RUN_DATE_LOOKUP_FAILED err=%s", exc)
         return default
@@ -124,22 +132,20 @@ def _resolve_run_date(engine: Optional[Engine]) -> date:
     return _coerce_run_date(run_date) or default
 
 
-def _load_trades_from_db(engine: Optional[Engine]) -> Optional[pd.DataFrame]:
-    if engine is None:
+def _load_trades_from_db(conn: Optional[PGConnection]) -> Optional[pd.DataFrame]:
+    if conn is None:
         return None
 
-    stmt = text(
-        """
-        SELECT trade_id, symbol, qty, entry_price, exit_price, realized_pnl, entry_time, exit_time
-        FROM trades
-        WHERE status='CLOSED' AND exit_time IS NOT NULL AND entry_time IS NOT NULL
-        ORDER BY exit_time DESC
-        """
-    )
-
     try:
-        with engine.connect() as connection:
-            df = pd.read_sql_query(stmt, connection)
+        df = _fetch_dataframe(
+            conn,
+            """
+            SELECT trade_id, symbol, qty, entry_price, exit_price, realized_pnl, entry_time, exit_time
+            FROM trades
+            WHERE status='CLOSED' AND exit_time IS NOT NULL AND entry_time IS NOT NULL
+            ORDER BY exit_time DESC
+            """,
+        )
     except Exception as exc:
         logger.warning("[WARN] METRICS_DB_LOAD_FAILED err=%s", exc)
         return None
@@ -386,25 +392,36 @@ def main():
     metrics_summary_file = _summary_path()
 
     use_db = False
-    engine: Engine | None = None
+    conn: PGConnection | None = None
     if db.db_enabled():
-        engine = db.get_engine()
-        if engine is not None:
+        conn = db.get_db_conn()
+        if conn is not None:
             try:
-                with engine.connect() as connection:
-                    connection.execute(text("SELECT 1"))
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
                 use_db = True
             except Exception as exc:  # pragma: no cover - defensive guard
                 logger.warning("[WARN] METRICS_DB_UNAVAILABLE err=%s", exc)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = None
 
     trades_df: pd.DataFrame
     if use_db:
-        db_trades = _load_trades_from_db(engine)
+        db_trades = _load_trades_from_db(conn)
         if db_trades is None:
             use_db = False
             trades_df = pd.DataFrame(columns=_TRADES_CANONICAL_COLUMNS)
         else:
             trades_df = db_trades
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn = None
     else:
         try:
             trades_df = load_trades_log(trades_path)
@@ -496,11 +513,16 @@ def main():
         )
         if use_db:
             try:
-                run_date = _resolve_run_date(engine)
-                db.upsert_metrics_daily(
-                    run_date,
-                    summary_metrics,
-                )
+                run_date_conn = db.get_db_conn()
+                try:
+                    run_date = _resolve_run_date(run_date_conn)
+                finally:
+                    if run_date_conn is not None:
+                        try:
+                            run_date_conn.close()
+                        except Exception:
+                            pass
+                db.upsert_metrics_daily(run_date, summary_metrics)
                 logger.info(
                     "[INFO] METRICS_DB_OK run_date=%s total_trades=%s net_pnl=%s",
                     run_date,

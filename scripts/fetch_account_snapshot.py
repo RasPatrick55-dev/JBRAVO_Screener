@@ -18,9 +18,8 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping
 
 import requests
-from sqlalchemy import text
 
-from scripts.db import get_engine
+from scripts import db
 from scripts.utils.env import load_env, trading_base_url
 
 LOG_PATH = Path(__file__).resolve().parents[1] / "logs" / "account_snapshot.log"
@@ -127,53 +126,59 @@ def _build_insert_payload(snapshot: Mapping[str, Any]) -> MutableMapping[str, An
 
 
 def _persist_snapshot(payload: Mapping[str, Any], logger: logging.Logger) -> bool:
-    engine = get_engine()
-    if engine is None:
-        logger.error("[ERROR] ACCT_SNAP_FAIL step=db err=%s", "missing DATABASE_URL or engine setup failed")
+    conn = db.get_db_conn()
+    if conn is None:
+        logger.error("[ERROR] ACCT_SNAP_FAIL step=db err=%s", "db_disabled")
         return False
 
-    stmt = text(
-        """
-        INSERT INTO alpaca_account_snapshots (
-            taken_at,
-            account_id,
-            status,
-            cash,
-            cash_withdrawable,
-            portfolio_value,
-            equity,
-            buying_power,
-            effective_buying_power,
-            maintenance_margin,
-            daytrading_buying_power,
-            multiplier,
-            default_currency,
-            raw
-        )
-        VALUES (
-            :taken_at,
-            :account_id,
-            :status,
-            :cash,
-            :cash_withdrawable,
-            :portfolio_value,
-            :equity,
-            :buying_power,
-            :effective_buying_power,
-            :maintenance_margin,
-            :daytrading_buying_power,
-            :multiplier,
-            :default_currency,
-            CAST(:raw AS JSONB)
-        )
-        """
-    )
     try:
-        with engine.begin() as connection:
-            connection.execute(stmt, payload)
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO alpaca_account_snapshots (
+                        taken_at,
+                        account_id,
+                        status,
+                        cash,
+                        cash_withdrawable,
+                        portfolio_value,
+                        equity,
+                        buying_power,
+                        effective_buying_power,
+                        maintenance_margin,
+                        daytrading_buying_power,
+                        multiplier,
+                        default_currency,
+                        raw
+                    )
+                    VALUES (
+                        %(taken_at)s,
+                        %(account_id)s,
+                        %(status)s,
+                        %(cash)s,
+                        %(cash_withdrawable)s,
+                        %(portfolio_value)s,
+                        %(equity)s,
+                        %(buying_power)s,
+                        %(effective_buying_power)s,
+                        %(maintenance_margin)s,
+                        %(daytrading_buying_power)s,
+                        %(multiplier)s,
+                        %(default_currency)s,
+                        CAST(%(raw)s AS JSONB)
+                    )
+                    """,
+                    payload,
+                )
     except Exception as exc:
         logger.error("[ERROR] ACCT_SNAP_FAIL step=db err=%s", exc)
         return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     logger.info(
         "[INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=%s equity=%s cash=%s buying_power=%s",
@@ -188,7 +193,7 @@ def _persist_snapshot(payload: Mapping[str, Any], logger: logging.Logger) -> boo
 
 def main() -> int:
     logger = _setup_logger()
-    _, missing = load_env(required_keys=("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_API_BASE_URL", "DATABASE_URL"))
+    _, missing = load_env(required_keys=("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_API_BASE_URL"))
     if missing:
         logger.error("[ERROR] ACCT_SNAP_FAIL step=env missing=%s", ",".join(missing))
         return 1

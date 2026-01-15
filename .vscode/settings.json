@@ -1,0 +1,8 @@
+{
+  "python.envFile": "${workspaceFolder}/.env.vscode",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}"
+  ],
+  "python.analysis.typeCheckingMode": "basic",
+  "python-envs.pythonProjects": []
+}

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
-from sqlalchemy import text
 
 from scripts import db
 
@@ -22,72 +21,83 @@ REPORTS_DIR = BASE_DIR / "reports"
 logger = logging.getLogger(__name__)
 
 
-def _db_engine() -> Optional[Any]:
+def _db_conn() -> Optional[Any]:
     if not db.db_enabled():
         logger.warning("DASH_DB_READ_FALLBACK table=trades err=db_disabled")
         return None
-    engine = db.get_engine()
-    if engine is None:
-        logger.warning("DASH_DB_READ_FALLBACK table=trades err=db_engine_none")
-    return engine
+    conn = db.get_db_conn()
+    if conn is None:
+        logger.warning("DASH_DB_READ_FALLBACK table=trades err=db_conn_none")
+    return conn
+
+
+def _fetch_dataframe(conn, query: str, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    with conn.cursor() as cursor:
+        cursor.execute(query, params or {})
+        rows = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+    return pd.DataFrame(rows, columns=columns)
 
 
 def load_trades_db(limit: int = 500) -> pd.DataFrame:
     """Return trades from the database ordered by lifecycle recency."""
 
-    engine = _db_engine()
-    if engine is None:
+    conn = _db_conn()
+    if conn is None:
         return pd.DataFrame()
 
-    stmt = text(
-        """
-        select trade_id, symbol, qty, status, entry_time, entry_price,
-               exit_time, exit_price, realized_pnl, exit_reason, created_at, updated_at
-        from trades
-        order by coalesce(exit_time, entry_time) desc
-        limit :limit
-        """
-    )
     try:
-        with engine.connect() as connection:
-            result = connection.execute(stmt, {"limit": int(limit)})
-            rows = result.fetchall()
-            columns = result.keys()
-        df = pd.DataFrame(rows, columns=columns)
+        df = _fetch_dataframe(
+            conn,
+            """
+            select trade_id, symbol, qty, status, entry_time, entry_price,
+                   exit_time, exit_price, realized_pnl, exit_reason, created_at, updated_at
+            from trades
+            order by coalesce(exit_time, entry_time) desc
+            limit %(limit)s
+            """,
+            {"limit": int(limit)},
+        )
         logger.info("DASH_DB_READ_OK table=trades rows=%d", len(df))
         return df
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("DASH_DB_READ_FALLBACK table=trades err=%s", exc)
         return pd.DataFrame()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def load_open_trades_db() -> pd.DataFrame:
     """Return OPEN trades ordered by entry_time desc."""
 
-    engine = _db_engine()
-    if engine is None:
+    conn = _db_conn()
+    if conn is None:
         return pd.DataFrame()
 
-    stmt = text(
-        """
-        select trade_id, symbol, qty, status, entry_time, entry_price,
-               exit_time, exit_price, realized_pnl, exit_reason, created_at, updated_at
-        from trades
-        where status = 'OPEN'
-        order by entry_time desc
-        """
-    )
     try:
-        with engine.connect() as connection:
-            result = connection.execute(stmt)
-            rows = result.fetchall()
-            columns = result.keys()
-        df = pd.DataFrame(rows, columns=columns)
+        df = _fetch_dataframe(
+            conn,
+            """
+            select trade_id, symbol, qty, status, entry_time, entry_price,
+                   exit_time, exit_price, realized_pnl, exit_reason, created_at, updated_at
+            from trades
+            where status = 'OPEN'
+            order by entry_time desc
+            """,
+        )
         logger.info("DASH_DB_READ_OK table=trades rows=%d", len(df))
         return df
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("DASH_DB_READ_FALLBACK table=trades err=%s", exc)
         return pd.DataFrame()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _read_json_safe(path: Path) -> Dict[str, Any]:
@@ -481,33 +491,31 @@ def screener_table() -> Tuple[pd.DataFrame, str, str]:
     def _db_candidates() -> tuple[pd.DataFrame, Optional[str]]:
         if not db.db_enabled():
             return pd.DataFrame(), None
-        engine = db.get_engine()
-        if engine is None:
+        conn = db.get_db_conn()
+        if conn is None:
             return pd.DataFrame(), None
         try:
-            with engine.connect() as connection:
-                latest_run_date = connection.execute(
-                    text("SELECT MAX(run_date) FROM screener_candidates")
-                ).scalar()
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT MAX(run_date) FROM screener_candidates")
+                row = cursor.fetchone()
+                latest_run_date = row[0] if row else None
             if not latest_run_date:
                 logger.info("DASH_DB_READ_OK table=screener_candidates rows=0")
                 return pd.DataFrame(), None
-            with engine.connect() as connection:
-                result = connection.execute(
-                    text(
-                        """
-                        SELECT
-                            run_date, timestamp, symbol, score, exchange, close, volume,
-                            universe_count, score_breakdown, entry_price, adv20, atrp, source
-                        FROM screener_candidates
-                        WHERE run_date = :run_date
-                        ORDER BY score DESC NULLS LAST
-                        """
-                    ),
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        run_date, timestamp, symbol, score, exchange, close, volume,
+                        universe_count, score_breakdown, entry_price, adv20, atrp, source
+                    FROM screener_candidates
+                    WHERE run_date = %(run_date)s
+                    ORDER BY score DESC NULLS LAST
+                    """,
                     {"run_date": latest_run_date},
                 )
-                rows = result.fetchall()
-                columns = result.keys()
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
             df_db = pd.DataFrame(rows, columns=columns)
             run_label = str(latest_run_date)
             logger.info(
@@ -519,6 +527,11 @@ def screener_table() -> Tuple[pd.DataFrame, str, str]:
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.info("DASH_DB_READ_FALLBACK reason=%s", exc)
             return pd.DataFrame(), None
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     db_df, run_label = _db_candidates()
     if not db_df.empty or run_label is not None:
@@ -555,43 +568,46 @@ def metrics_summary_snapshot() -> Dict[str, Any]:
     """Return the latest metrics summary row from ``data/metrics_summary.csv``."""
 
     if db.db_enabled():
-        engine = db.get_engine()
-        if engine is not None:
+        conn = db.get_db_conn()
+        if conn is not None:
             try:
-                with engine.connect() as connection:
-                    latest_run_date = connection.execute(
-                        text("SELECT MAX(run_date) FROM metrics_daily")
-                    ).scalar()
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT MAX(run_date) FROM metrics_daily")
+                    row = cursor.fetchone()
+                    latest_run_date = row[0] if row else None
                 if latest_run_date:
-                    with engine.connect() as connection:
-                        result = connection.execute(
-                            text(
-                                """
-                                SELECT run_date, total_trades, win_rate, net_pnl, expectancy,
-                                       profit_factor, max_drawdown, sharpe, sortino
-                                FROM metrics_daily
-                                WHERE run_date = :run_date
-                                LIMIT 1
-                                """
-                            ),
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            """
+                            SELECT run_date, total_trades, win_rate, net_pnl, expectancy,
+                                   profit_factor, max_drawdown, sharpe, sortino
+                            FROM metrics_daily
+                            WHERE run_date = %(run_date)s
+                            LIMIT 1
+                            """,
                             {"run_date": latest_run_date},
                         )
-                        row = result.mappings().first()
-                    if row:
-                        logger.info("DASH_DB_READ_OK table=metrics_daily run_date=%s", latest_run_date)
-                        return {
-                            "profit_factor": row.get("profit_factor"),
-                            "expectancy": row.get("expectancy"),
-                            "win_rate": row.get("win_rate"),
-                            "net_pnl": row.get("net_pnl"),
-                            "max_drawdown": row.get("max_drawdown"),
-                            "sharpe": row.get("sharpe"),
-                            "sortino": row.get("sortino"),
-                            "last_run_utc": str(row.get("run_date")),
-                        }
+                        row = cursor.fetchone()
+                        if row:
+                            logger.info("DASH_DB_READ_OK table=metrics_daily run_date=%s", latest_run_date)
+                            return {
+                                "profit_factor": row[5],
+                                "expectancy": row[4],
+                                "win_rate": row[2],
+                                "net_pnl": row[3],
+                                "max_drawdown": row[6],
+                                "sharpe": row[7],
+                                "sortino": row[8],
+                                "last_run_utc": str(row[0]),
+                            }
                 logger.info("DASH_DB_READ_OK table=metrics_daily rows=0")
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.info("DASH_DB_READ_FALLBACK reason=%s", exc)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         else:
             logger.info("DASH_DB_READ_FALLBACK reason=db_disabled")
     else:

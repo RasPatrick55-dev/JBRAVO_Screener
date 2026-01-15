@@ -1,25 +1,24 @@
 from datetime import date
 
 import pandas as pd
-import pytest
-
-pytest.importorskip("sqlalchemy")
 
 from scripts import db
 
 
-class _FakeResult:
-    def __init__(self, value):
-        self._value = value
-
-    def scalar(self):
-        return self._value
-
-
-class _FakeConnection:
-    def __init__(self, sql_capture):
+class _DummyCursor:
+    def __init__(self, sql_capture: list[str]):
         self.sql_capture = sql_capture
-        self.last_params = None
+        self._fetchone = None
+
+    def execute(self, stmt, params=None):
+        self.sql_capture.append(stmt)
+        if "information_schema.columns" in stmt:
+            self._fetchone = (1,)
+        else:
+            self._fetchone = None
+
+    def fetchone(self):
+        return self._fetchone
 
     def __enter__(self):
         return self
@@ -27,49 +26,33 @@ class _FakeConnection:
     def __exit__(self, exc_type, exc_val, exc_tb):
         return False
 
-    def execute(self, stmt, params=None):
-        # schema check should return a truthy scalar
-        if isinstance(stmt, str) and "information_schema.columns" in stmt:
-            self.sql_capture.append(stmt)
-            return _FakeResult(1)
 
-        self.sql_capture.append(stmt)
-        self.last_params = params
-        return _FakeResult(None)
+class _DummyConn:
+    def __init__(self, sql_capture: list[str]):
+        self.sql_capture = sql_capture
 
-
-class _FakeBegin:
-    def __init__(self, connection):
-        self.connection = connection
+    def cursor(self):
+        return _DummyCursor(self.sql_capture)
 
     def __enter__(self):
-        return self.connection
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         return False
 
-
-class _FakeEngine:
-    def __init__(self, sql_capture):
-        self.connection = _FakeConnection(sql_capture)
-
-    def connect(self):
-        return self.connection
-
-    def begin(self):
-        return _FakeBegin(self.connection)
+    def close(self):
+        return None
 
 
 def test_insert_screener_candidates_uses_run_date_column(monkeypatch):
     sql_capture: list[str] = []
 
-    def fake_text(sql):
-        sql_capture.append(sql)
-        return sql
+    def fake_execute_batch(cursor, stmt, rows, page_size=200):
+        sql_capture.append(stmt)
 
-    fake_engine = _FakeEngine(sql_capture)
-    monkeypatch.setattr(db, "_engine_or_none", lambda: fake_engine)
-    monkeypatch.setattr(db, "text", fake_text)
+    fake_conn = _DummyConn(sql_capture)
+    monkeypatch.setattr(db, "_conn_or_none", lambda: fake_conn)
+    monkeypatch.setattr(db.extras, "execute_batch", fake_execute_batch)
 
     payload = pd.DataFrame([{"symbol": "ABC", "timestamp": "2024-01-01T00:00:00Z"}])
     db.insert_screener_candidates(date(2024, 1, 1), payload)

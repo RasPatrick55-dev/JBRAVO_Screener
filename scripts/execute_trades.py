@@ -2734,7 +2734,7 @@ class TradeExecutor:
             if watermark_enabled:
                 LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=db_unavailable")
             return
-        engine = db.get_engine()
+        engine = db.get_db_conn()
         if engine is None:
             if watermark_enabled:
                 LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=db_unavailable")

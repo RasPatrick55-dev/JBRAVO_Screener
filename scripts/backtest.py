@@ -18,8 +18,7 @@ import json
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from psycopg2.extensions import connection as PGConnection
 
 from scripts import db
 from utils import logger_utils
@@ -1030,27 +1029,33 @@ def _load_symbols(source_csv: Path) -> List[str]:
     return [symbol for symbol in series.tolist() if symbol]
 
 
-def _db_engine_if_available() -> Optional[Engine]:
+def _db_engine_if_available() -> Optional[PGConnection]:
     if not db.db_enabled():
         return None
-    engine = db.get_engine()
-    if engine is None:
+    conn = db.get_db_conn()
+    if conn is None:
         return None
     try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT 1")
     except Exception as exc:  # pragma: no cover - defensive guard
         logger.info("BACKTEST_DB_SKIP reason=connect_test err=%s", exc)
+        try:
+            conn.close()
+        except Exception:
+            pass
         return None
-    return engine
+    return conn
 
 
-def _determine_run_date(engine: Optional[Engine]) -> date:
-    if engine is None:
+def _determine_run_date(conn: Optional[PGConnection]) -> date:
+    if conn is None:
         return datetime.utcnow().date()
     try:
-        with engine.connect() as connection:
-            latest = connection.execute(text("SELECT MAX(run_date) FROM screener_candidates")).scalar()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT MAX(run_date) FROM screener_candidates")
+            row = cursor.fetchone()
+            latest = row[0] if row else None
         if latest:
             return latest
     except Exception as exc:  # pragma: no cover - defensive guard
@@ -1058,24 +1063,22 @@ def _determine_run_date(engine: Optional[Engine]) -> date:
     return datetime.utcnow().date()
 
 
-def _load_symbols_db(engine: Optional[Engine], run_date: date, limit: int) -> List[str]:
-    if engine is None:
+def _load_symbols_db(conn: Optional[PGConnection], run_date: date, limit: int) -> List[str]:
+    if conn is None:
         return []
     try:
-        with engine.connect() as connection:
-            result = connection.execute(
-                text(
-                    """
-                    SELECT symbol
-                    FROM screener_candidates
-                    WHERE run_date = :run_date
-                    ORDER BY score DESC
-                    LIMIT :limit
-                    """
-                ),
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT symbol
+                FROM screener_candidates
+                WHERE run_date = %(run_date)s
+                ORDER BY score DESC
+                LIMIT %(limit)s
+                """,
                 {"run_date": run_date, "limit": limit},
             )
-            rows = result.fetchall()
+            rows = cursor.fetchall()
         symbols = [row[0] for row in rows if row and row[0]]
         logger.info("BACKTEST_DB_CANDIDATES_OK run_date=%s rows=%s", run_date, len(symbols))
         return symbols
@@ -1092,18 +1095,22 @@ def _parse_bool_flag(value: Optional[str], default: bool) -> bool:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv or [])
-    engine = _db_engine_if_available()
-    export_default = False if engine else True
+    conn = _db_engine_if_available()
+    export_default = False if conn else True
     export_csv = _parse_bool_flag(args.export_csv, export_default)
-    run_date = _determine_run_date(engine)
+    run_date = _determine_run_date(conn)
     candidate_limit = args.limit if args.limit is not None else 15
 
     symbols: List[str] = []
-    if engine:
-        symbols = _load_symbols_db(engine, run_date, candidate_limit)
+    if conn:
+        symbols = _load_symbols_db(conn, run_date, candidate_limit)
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     if len(symbols) == 0:
-        logger.info("BACKTEST_CANDIDATES_FALLBACK reason=%s", "csv" if engine else "db_disabled")
+        logger.info("BACKTEST_CANDIDATES_FALLBACK reason=%s", "csv" if conn else "db_disabled")
         source_csv = Path(args.source).expanduser()
         symbols = _load_symbols(source_csv)
     else:
@@ -1125,7 +1132,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             quick=args.quick,
             run_date=run_date,
             export_csv=export_csv,
-            enable_db=bool(engine),
+            enable_db=bool(conn),
         )
         logger.info("Backtest script finished")
     except Exception as exc:

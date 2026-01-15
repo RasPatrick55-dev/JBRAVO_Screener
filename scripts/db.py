@@ -1,52 +1,177 @@
 import json
 import logging
 import os
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional
+from urllib.parse import parse_qs, unquote, urlparse
 
 import pandas as pd
+import psycopg2
 from dateutil import parser
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from psycopg2 import extras
+from psycopg2.extensions import connection as PGConnection
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_DB_HOST = "localhost"
+DEFAULT_DB_PORT = 9999
+DEFAULT_DB_NAME = "jbravo"
+DEFAULT_DB_USER = "super"
+DEFAULT_CONNECT_TIMEOUT = 10
 
-def db_enabled() -> bool:
-    """Return True if DATABASE_URL is present."""
+_EXPLICIT_ENV_KEYS = (
+    "DB_HOST",
+    "DB_PORT",
+    "DB_NAME",
+    "DB_USER",
+    "DB_USERNAME",
+    "DB_PASSWORD",
+    "DB_PASS",
+    "DB_SSLMODE",
+)
 
-    return bool(os.environ.get("DATABASE_URL"))
+
+def _env_truthy(key: str) -> bool:
+    value = os.environ.get(key)
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def get_engine() -> Optional[Engine]:
-    """Return SQLAlchemy engine with pool_pre_ping=True."""
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _parse_database_url(database_url: str) -> dict[str, Any]:
+    parsed = urlparse(database_url)
+    query = parse_qs(parsed.query or "")
+    return {
+        "host": parsed.hostname,
+        "port": parsed.port,
+        "dbname": parsed.path.lstrip("/") if parsed.path else None,
+        "user": unquote(parsed.username) if parsed.username else None,
+        "password": unquote(parsed.password) if parsed.password else None,
+        "sslmode": (query.get("sslmode", [None]) or [None])[0],
+    }
+
+
+def _resolve_db_config() -> Optional[dict[str, Any]]:
+    if _env_truthy("DB_DISABLED"):
+        return None
+
+    has_explicit = any(os.environ.get(key) for key in _EXPLICIT_ENV_KEYS)
+    if has_explicit:
+        return {
+            "host": os.environ.get("DB_HOST", DEFAULT_DB_HOST),
+            "port": _coerce_int(os.environ.get("DB_PORT"), DEFAULT_DB_PORT),
+            "dbname": os.environ.get("DB_NAME", DEFAULT_DB_NAME),
+            "user": os.environ.get("DB_USER") or os.environ.get("DB_USERNAME") or DEFAULT_DB_USER,
+            "password": os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS"),
+            "sslmode": os.environ.get("DB_SSLMODE"),
+            "connect_timeout": _coerce_int(
+                os.environ.get("DB_CONNECT_TIMEOUT"), DEFAULT_CONNECT_TIMEOUT
+            ),
+        }
 
     database_url = os.environ.get("DATABASE_URL")
-    if not database_url:
-        logger.warning("[WARN] DB_DISABLED Missing DATABASE_URL")
+    if database_url:
+        parsed = _parse_database_url(database_url)
+        return {
+            "host": parsed.get("host") or DEFAULT_DB_HOST,
+            "port": _coerce_int(parsed.get("port"), DEFAULT_DB_PORT),
+            "dbname": parsed.get("dbname") or DEFAULT_DB_NAME,
+            "user": parsed.get("user") or DEFAULT_DB_USER,
+            "password": parsed.get("password"),
+            "sslmode": parsed.get("sslmode"),
+            "connect_timeout": _coerce_int(
+                os.environ.get("DB_CONNECT_TIMEOUT"), DEFAULT_CONNECT_TIMEOUT
+            ),
+        }
+
+    return {
+        "host": DEFAULT_DB_HOST,
+        "port": DEFAULT_DB_PORT,
+        "dbname": DEFAULT_DB_NAME,
+        "user": DEFAULT_DB_USER,
+        "password": os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS"),
+        "sslmode": os.environ.get("DB_SSLMODE"),
+        "connect_timeout": _coerce_int(
+            os.environ.get("DB_CONNECT_TIMEOUT"), DEFAULT_CONNECT_TIMEOUT
+        ),
+    }
+
+
+def db_enabled() -> bool:
+    """Return True if database access is enabled."""
+
+    return _resolve_db_config() is not None
+
+
+def get_db_conn() -> Optional[PGConnection]:
+    """Return a psycopg2 connection using resolved environment config."""
+
+    config = _resolve_db_config()
+    if config is None:
+        logger.warning("[WARN] DB_DISABLED via DB_DISABLED")
         return None
 
     try:
-        return create_engine(database_url, pool_pre_ping=True)
+        connect_kwargs = {
+            "host": config.get("host"),
+            "port": config.get("port"),
+            "dbname": config.get("dbname"),
+            "user": config.get("user"),
+            "connect_timeout": config.get("connect_timeout", DEFAULT_CONNECT_TIMEOUT),
+        }
+        password = config.get("password")
+        if password:
+            connect_kwargs["password"] = password
+        sslmode = config.get("sslmode")
+        if sslmode:
+            connect_kwargs["sslmode"] = sslmode
+        return psycopg2.connect(**connect_kwargs)
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("[WARN] DB_ENGINE %s", exc)
+        logger.warning(
+            "[WARN] DB_CONNECT_FAIL host=%s port=%s dbname=%s user=%s err=%s",
+            config.get("host"),
+            config.get("port"),
+            config.get("dbname"),
+            config.get("user"),
+            exc,
+        )
         return None
 
 
-def safe_connect_test() -> bool:
+def get_engine() -> Optional[PGConnection]:
+    """Compatibility alias for get_db_conn (psycopg2 connection)."""
+
+    return get_db_conn()
+
+
+def check_db_connection() -> bool:
     """Return True if DB reachable, else False (log warning)."""
 
     try:
-        engine = get_engine()
-        if engine is None:
+        conn = get_db_conn()
+        if conn is None:
             return False
 
         try:
-            with engine.connect() as connection:
-                connection.execute(text("SELECT 1"))
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_CONNECT_TEST %s", exc)
             return False
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_CONNECT_TEST_SETUP %s", exc)
         return False
@@ -54,10 +179,33 @@ def safe_connect_test() -> bool:
     return True
 
 
-def _engine_or_none() -> Optional[Engine]:
+def safe_connect_test() -> bool:
+    return check_db_connection()
+
+
+@contextmanager
+def _maybe_conn(engine: Optional[PGConnection]) -> Iterator[Optional[PGConnection]]:
+    if engine is not None:
+        yield engine
+        return
+
+    conn = get_db_conn() if db_enabled() else None
+    if conn is None:
+        yield None
+        return
+    try:
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _conn_or_none() -> Optional[PGConnection]:
     if not db_enabled():
         return None
-    return get_engine()
+    return get_db_conn()
 
 
 def _coerce_date(run_date: Any) -> str:
@@ -164,18 +312,17 @@ def _log_write_result(ok: bool, table: str, rows: int, err: Exception | None = N
         logger.warning("[WARN] DB_WRITE_FAILED table=%s err=%s", table, err)
 
 
-def get_reconcile_state(engine: Optional[Engine] = None) -> dict[str, Any]:
-    db_engine = engine or _engine_or_none()
-    if db_engine is None:
-        return {}
-
-    stmt = text("SELECT last_after, last_ran_at FROM reconcile_state WHERE id=1")
-    try:
-        with db_engine.connect() as connection:
-            row = connection.execute(stmt).mappings().first()
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("[WARN] DB_RECONCILE_STATE_FETCH err=%s", exc)
-        return {}
+def get_reconcile_state(engine: Optional[PGConnection] = None) -> dict[str, Any]:
+    with _maybe_conn(engine) as conn:
+        if conn is None:
+            return {}
+        try:
+            with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
+                cursor.execute("SELECT last_after, last_ran_at FROM reconcile_state WHERE id=1")
+                row = cursor.fetchone()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("[WARN] DB_RECONCILE_STATE_FETCH err=%s", exc)
+            return {}
 
     if not row:
         return {}
@@ -186,34 +333,33 @@ def get_reconcile_state(engine: Optional[Engine] = None) -> dict[str, Any]:
 
 
 def set_reconcile_state(
-    engine: Optional[Engine], last_after: datetime | None, last_ran_at: datetime | None
+    engine: Optional[PGConnection], last_after: datetime | None, last_ran_at: datetime | None
 ) -> bool:
-    db_engine = engine or _engine_or_none()
-    if db_engine is None:
-        logger.warning("[WARN] DB_RECONCILE_STATE_WRITE_FAILED err=%s", "db_disabled")
-        return False
+    with _maybe_conn(engine) as conn:
+        if conn is None:
+            logger.warning("[WARN] DB_RECONCILE_STATE_WRITE_FAILED err=%s", "db_disabled")
+            return False
 
-    payload = {
-        "last_after": normalize_ts(last_after, field="last_after"),
-        "last_ran_at": normalize_ts(last_ran_at, field="last_ran_at"),
-    }
-    stmt = text(
+        payload = {
+            "last_after": normalize_ts(last_after, field="last_after"),
+            "last_ran_at": normalize_ts(last_ran_at, field="last_ran_at"),
+        }
+        stmt = """
+            INSERT INTO reconcile_state (id, last_after, last_ran_at)
+            VALUES (1, %(last_after)s, %(last_ran_at)s)
+            ON CONFLICT (id) DO UPDATE SET
+                last_after=EXCLUDED.last_after,
+                last_ran_at=EXCLUDED.last_ran_at,
+                updated_at=now()
         """
-        INSERT INTO reconcile_state (id, last_after, last_ran_at)
-        VALUES (1, :last_after, :last_ran_at)
-        ON CONFLICT (id) DO UPDATE SET
-            last_after=EXCLUDED.last_after,
-            last_ran_at=EXCLUDED.last_ran_at,
-            updated_at=now()
-        """
-    )
-    try:
-        with db_engine.begin() as connection:
-            connection.execute(stmt, payload)
-        return True
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("[WARN] DB_RECONCILE_STATE_WRITE_FAILED err=%s", exc)
-        return False
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(stmt, payload)
+            return True
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("[WARN] DB_RECONCILE_STATE_WRITE_FAILED err=%s", exc)
+            return False
 
 
 def upsert_pipeline_run(
@@ -223,8 +369,8 @@ def upsert_pipeline_run(
     rc: int,
     summary_dict: Mapping[str, Any] | None,
 ) -> None:
-    engine = _engine_or_none()
-    if engine is None:
+    conn = _conn_or_none()
+    if conn is None:
         return
 
     payload = {
@@ -234,50 +380,62 @@ def upsert_pipeline_run(
         "rc": int(rc),
         "summary": _json_dumps_or_none(summary_dict or {}),
     }
-    stmt = text(
-        """
+    stmt = """
         INSERT INTO pipeline_runs (run_date, started_at, ended_at, rc, summary)
-        VALUES (:run_date, :started_at, :ended_at, :rc, CAST(:summary AS JSONB))
+        VALUES (%(run_date)s, %(started_at)s, %(ended_at)s, %(rc)s, CAST(%(summary)s AS JSONB))
         ON CONFLICT (run_date) DO UPDATE
         SET started_at=EXCLUDED.started_at,
             ended_at=EXCLUDED.ended_at,
             rc=EXCLUDED.rc,
             summary=EXCLUDED.summary
-        """
-    )
+    """
     try:
-        with engine.begin() as connection:
-            connection.execute(stmt, payload)
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(stmt, payload)
         _log_write_result(True, "pipeline_runs", 1)
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "pipeline_runs", 0, exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None) -> None:
     if df_candidates is None or df_candidates.empty:
         return
-    engine = _engine_or_none()
-    if engine is None:
+    conn = _conn_or_none()
+    if conn is None:
         return
 
-    schema_stmt = text(
-        """
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'screener_candidates'
-          AND column_name = 'run_date'
-        LIMIT 1
-        """
-    )
     try:
-        with engine.connect() as connection:
-            has_run_date = connection.execute(schema_stmt).scalar() is not None
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'screener_candidates'
+                  AND column_name = 'run_date'
+                LIMIT 1
+                """
+            )
+            has_run_date = cursor.fetchone() is not None
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_INGEST_FAILED table=screener_candidates err=%s", exc)
+        try:
+            conn.close()
+        except Exception:
+            pass
         return
 
     if not has_run_date:
         logger.warning("[WARN] DB_SCHEMA_MISMATCH screener_candidates missing run_date")
+        try:
+            conn.close()
+        except Exception:
+            pass
         return
 
     normalized = df_candidates.copy()
@@ -318,43 +476,52 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
         }
         rows.append(payload)
 
-    stmt = text(
-        """
-        INSERT INTO screener_candidates (
-            run_date, timestamp, symbol, score, exchange, close, volume,
-            universe_count, score_breakdown, entry_price, adv20, atrp, source
-        )
-        VALUES (
-            :run_date, :timestamp, :symbol, :score, :exchange, :close, :volume,
-            :universe_count, CAST(:score_breakdown AS JSONB), :entry_price, :adv20, :atrp, :source
-        )
-        ON CONFLICT (run_date, symbol) DO UPDATE SET
-            timestamp=EXCLUDED.timestamp,
-            score=EXCLUDED.score,
-            exchange=EXCLUDED.exchange,
-            close=EXCLUDED.close,
-            volume=EXCLUDED.volume,
-            universe_count=EXCLUDED.universe_count,
-            score_breakdown=EXCLUDED.score_breakdown,
-            entry_price=EXCLUDED.entry_price,
-            adv20=EXCLUDED.adv20,
-            atrp=EXCLUDED.atrp,
-            source=EXCLUDED.source
-        """
-    )
     try:
-        with engine.begin() as connection:
-            connection.execute(stmt, rows)
+        with conn:
+            with conn.cursor() as cursor:
+                extras.execute_batch(
+                    cursor,
+                    """
+                    INSERT INTO screener_candidates (
+                        run_date, timestamp, symbol, score, exchange, close, volume,
+                        universe_count, score_breakdown, entry_price, adv20, atrp, source
+                    )
+                    VALUES (
+                        %(run_date)s, %(timestamp)s, %(symbol)s, %(score)s, %(exchange)s, %(close)s, %(volume)s,
+                        %(universe_count)s, CAST(%(score_breakdown)s AS JSONB), %(entry_price)s, %(adv20)s,
+                        %(atrp)s, %(source)s
+                    )
+                    ON CONFLICT (run_date, symbol) DO UPDATE SET
+                        timestamp=EXCLUDED.timestamp,
+                        score=EXCLUDED.score,
+                        exchange=EXCLUDED.exchange,
+                        close=EXCLUDED.close,
+                        volume=EXCLUDED.volume,
+                        universe_count=EXCLUDED.universe_count,
+                        score_breakdown=EXCLUDED.score_breakdown,
+                        entry_price=EXCLUDED.entry_price,
+                        adv20=EXCLUDED.adv20,
+                        atrp=EXCLUDED.atrp,
+                        source=EXCLUDED.source
+                    """,
+                    rows,
+                    page_size=200,
+                )
         logger.info("[INFO] DB_INGEST_OK table=screener_candidates rows=%s", len(rows))
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_INGEST_FAILED table=screener_candidates err=%s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> bool:
     if df_results is None or df_results.empty:
         return False
-    engine = _engine_or_none()
-    if engine is None:
+    conn = _conn_or_none()
+    if conn is None:
         return False
 
     rows: list[dict[str, Any]] = []
@@ -373,42 +540,50 @@ def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> b
         }
         rows.append(payload)
 
-    stmt = text(
-        """
-        INSERT INTO backtest_results (
-            run_date, symbol, trades, win_rate, net_pnl, expectancy,
-            profit_factor, max_drawdown, sharpe, sortino
-        )
-        VALUES (
-            :run_date, :symbol, :trades, :win_rate, :net_pnl, :expectancy,
-            :profit_factor, :max_drawdown, :sharpe, :sortino
-        )
-        ON CONFLICT (run_date, symbol) DO UPDATE SET
-            trades=EXCLUDED.trades,
-            win_rate=EXCLUDED.win_rate,
-            net_pnl=EXCLUDED.net_pnl,
-            expectancy=EXCLUDED.expectancy,
-            profit_factor=EXCLUDED.profit_factor,
-            max_drawdown=EXCLUDED.max_drawdown,
-            sharpe=EXCLUDED.sharpe,
-            sortino=EXCLUDED.sortino
-        """
-    )
     try:
-        with engine.begin() as connection:
-            connection.execute(stmt, rows)
+        with conn:
+            with conn.cursor() as cursor:
+                extras.execute_batch(
+                    cursor,
+                    """
+                    INSERT INTO backtest_results (
+                        run_date, symbol, trades, win_rate, net_pnl, expectancy,
+                        profit_factor, max_drawdown, sharpe, sortino
+                    )
+                    VALUES (
+                        %(run_date)s, %(symbol)s, %(trades)s, %(win_rate)s, %(net_pnl)s, %(expectancy)s,
+                        %(profit_factor)s, %(max_drawdown)s, %(sharpe)s, %(sortino)s
+                    )
+                    ON CONFLICT (run_date, symbol) DO UPDATE SET
+                        trades=EXCLUDED.trades,
+                        win_rate=EXCLUDED.win_rate,
+                        net_pnl=EXCLUDED.net_pnl,
+                        expectancy=EXCLUDED.expectancy,
+                        profit_factor=EXCLUDED.profit_factor,
+                        max_drawdown=EXCLUDED.max_drawdown,
+                        sharpe=EXCLUDED.sharpe,
+                        sortino=EXCLUDED.sortino
+                    """,
+                    rows,
+                    page_size=200,
+                )
         _log_write_result(True, "backtest_results", len(rows))
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "backtest_results", 0, exc)
         return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def upsert_metrics_daily(run_date: Any, summary_metrics_dict: Mapping[str, Any] | None) -> None:
     if not summary_metrics_dict:
         return
-    engine = _engine_or_none()
-    if engine is None:
+    conn = _conn_or_none()
+    if conn is None:
         return
 
     payload = {
@@ -422,42 +597,48 @@ def upsert_metrics_daily(run_date: Any, summary_metrics_dict: Mapping[str, Any] 
         "sharpe": summary_metrics_dict.get("sharpe"),
         "sortino": summary_metrics_dict.get("sortino"),
     }
-    stmt = text(
-        """
-        INSERT INTO metrics_daily (
-            run_date, total_trades, win_rate, net_pnl, expectancy,
-            profit_factor, max_drawdown, sharpe, sortino
-        )
-        VALUES (
-            :run_date, :total_trades, :win_rate, :net_pnl, :expectancy,
-            :profit_factor, :max_drawdown, :sharpe, :sortino
-        )
-        ON CONFLICT (run_date) DO UPDATE SET
-            total_trades=EXCLUDED.total_trades,
-            win_rate=EXCLUDED.win_rate,
-            net_pnl=EXCLUDED.net_pnl,
-            expectancy=EXCLUDED.expectancy,
-            profit_factor=EXCLUDED.profit_factor,
-            max_drawdown=EXCLUDED.max_drawdown,
-            sharpe=EXCLUDED.sharpe,
-            sortino=EXCLUDED.sortino
-        """
-    )
     try:
-        with engine.begin() as connection:
-            connection.execute(stmt, payload)
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO metrics_daily (
+                        run_date, total_trades, win_rate, net_pnl, expectancy,
+                        profit_factor, max_drawdown, sharpe, sortino
+                    )
+                    VALUES (
+                        %(run_date)s, %(total_trades)s, %(win_rate)s, %(net_pnl)s, %(expectancy)s,
+                        %(profit_factor)s, %(max_drawdown)s, %(sharpe)s, %(sortino)s
+                    )
+                    ON CONFLICT (run_date) DO UPDATE SET
+                        total_trades=EXCLUDED.total_trades,
+                        win_rate=EXCLUDED.win_rate,
+                        net_pnl=EXCLUDED.net_pnl,
+                        expectancy=EXCLUDED.expectancy,
+                        profit_factor=EXCLUDED.profit_factor,
+                        max_drawdown=EXCLUDED.max_drawdown,
+                        sharpe=EXCLUDED.sharpe,
+                        sortino=EXCLUDED.sortino
+                    """,
+                    payload,
+                )
         _log_write_result(True, "metrics_daily", 1)
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "metrics_daily", 0, exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
     if not row_dict:
         return False
-    engine = _engine_or_none()
+    conn = _conn_or_none()
     event_label = (row_dict.get("event_type") or row_dict.get("status") or row_dict.get("order_status") or "").upper()
     order_id = row_dict.get("order_id")
-    if engine is None:
+    if conn is None:
         logger.warning(
             "[WARN] DB_WRITE_FAILED table=executed_trades event=%s order_id=%s err=%s",
             event_label,
@@ -483,21 +664,22 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
         "status": row_dict.get("order_status") or row_dict.get("status"),
         "raw": _json_dumps_or_none(row_dict),
     }
-    stmt = text(
-        """
-        INSERT INTO executed_trades (
-            symbol, qty, entry_time, entry_price, exit_time, exit_price,
-            pnl, net_pnl, order_id, status, raw
-        )
-        VALUES (
-            :symbol, :qty, :entry_time, :entry_price, :exit_time, :exit_price,
-            :pnl, :net_pnl, :order_id, :status, CAST(:raw AS JSONB)
-        )
-        """
-    )
     try:
-        with engine.begin() as connection:
-            connection.execute(stmt, payload)
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO executed_trades (
+                        symbol, qty, entry_time, entry_price, exit_time, exit_price,
+                        pnl, net_pnl, order_id, status, raw
+                    )
+                    VALUES (
+                        %(symbol)s, %(qty)s, %(entry_time)s, %(entry_price)s, %(exit_time)s, %(exit_price)s,
+                        %(pnl)s, %(net_pnl)s, %(order_id)s, %(status)s, CAST(%(raw)s AS JSONB)
+                    )
+                    """,
+                    payload,
+                )
         logger.info(
             "[INFO] DB_WRITE_OK table=executed_trades event=%s order_id=%s symbol=%s",
             event_label or "",
@@ -515,12 +697,17 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
         )
         _log_write_result(False, "executed_trades", 0, exc)
         return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def insert_order_event(
     event: Mapping[str, Any] | None = None,
     *,
-    engine: Optional[Engine] = None,
+    engine: Optional[PGConnection] = None,
     event_type: str | None = None,
     symbol: str | None = None,
     qty: Any | None = None,
@@ -546,203 +733,203 @@ def insert_order_event(
         payload.setdefault("event_time", event_time)
     payload.setdefault("event_type", "UNKNOWN")
 
-    db_engine = engine or _engine_or_none()
     event_label = (payload.get("event_type") or "").upper()
     order_id_value = payload.get("order_id")
-    if db_engine is None:
-        logger.warning(
-            "[WARN] DB_WRITE_FAILED table=order_events event=%s order_id=%s err=%s",
-            event_label,
-            order_id_value or "",
-            "disabled",
-        )
-        _log_write_result(False, "order_events", 0, RuntimeError("db_disabled"))
-        return False
+    with _maybe_conn(engine) as conn:
+        if conn is None:
+            logger.warning(
+                "[WARN] DB_WRITE_FAILED table=order_events event=%s order_id=%s err=%s",
+                event_label,
+                order_id_value or "",
+                "disabled",
+            )
+            _log_write_result(False, "order_events", 0, RuntimeError("db_disabled"))
+            return False
 
-    normalized_event_time = normalize_ts(payload.get("event_time"), field="event_time") or datetime.now(timezone.utc)
-    raw_payload = raw if raw is not None else payload
-    stmt_payload = {
-        "symbol": (payload.get("symbol") or "").upper(),
-        "qty": payload.get("qty"),
-        "order_id": order_id_value,
-        "status": payload.get("status"),
-        "event_type": payload.get("event_type") or "UNKNOWN",
-        "event_time": normalized_event_time,
-        "raw": _json_dumps_or_none(raw_payload),
-    }
-    stmt = text(
-        """
-        INSERT INTO order_events (
-            symbol, qty, order_id, status, event_type, event_time, raw
-        )
-        VALUES (
-            :symbol, :qty, :order_id, :status, :event_type, :event_time, CAST(:raw AS JSONB)
-        )
-        """
-    )
-    try:
-        with db_engine.begin() as connection:
-            connection.execute(stmt, stmt_payload)
-        _log_write_result(True, "order_events", 1)
-        return True
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning(
-            "[WARN] DB_WRITE_FAILED table=order_events event=%s order_id=%s err=%s",
-            event_label,
-            order_id_value or "",
-            exc,
-        )
-        _log_write_result(False, "order_events", 0, exc)
-        return False
+        normalized_event_time = normalize_ts(payload.get("event_time"), field="event_time") or datetime.now(timezone.utc)
+        raw_payload = raw if raw is not None else payload
+        stmt_payload = {
+            "symbol": (payload.get("symbol") or "").upper(),
+            "qty": payload.get("qty"),
+            "order_id": order_id_value,
+            "status": payload.get("status"),
+            "event_type": payload.get("event_type") or "UNKNOWN",
+            "event_time": normalized_event_time,
+            "raw": _json_dumps_or_none(raw_payload),
+        }
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO order_events (
+                            symbol, qty, order_id, status, event_type, event_time, raw
+                        )
+                        VALUES (
+                            %(symbol)s, %(qty)s, %(order_id)s, %(status)s, %(event_type)s,
+                            %(event_time)s, CAST(%(raw)s AS JSONB)
+                        )
+                        """,
+                        stmt_payload,
+                    )
+            _log_write_result(True, "order_events", 1)
+            return True
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "[WARN] DB_WRITE_FAILED table=order_events event=%s order_id=%s err=%s",
+                event_label,
+                order_id_value or "",
+                exc,
+            )
+            _log_write_result(False, "order_events", 0, exc)
+            return False
 
 
-def get_open_trades(engine: Optional[Engine] = None, limit: int = 200) -> list[dict[str, Any]]:
-    db_engine = engine or _engine_or_none()
-    if db_engine is None:
-        return []
+def get_open_trades(engine: Optional[PGConnection] = None, limit: int = 200) -> list[dict[str, Any]]:
     limit = max(1, int(limit or 0))
-    stmt = text(
-        """
-        SELECT trade_id, symbol, qty, entry_time, entry_price, entry_order_id
-        FROM trades
-        WHERE status='OPEN'
-        ORDER BY entry_time DESC NULLS LAST, trade_id DESC
-        LIMIT :limit
-        """
-    )
-    try:
-        with db_engine.connect() as connection:
-            rows = connection.execute(stmt, {"limit": limit}).mappings().all()
-            return [dict(row) for row in rows]
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
-        return []
+    with _maybe_conn(engine) as conn:
+        if conn is None:
+            return []
+        try:
+            with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_id, symbol, qty, entry_time, entry_price, entry_order_id
+                    FROM trades
+                    WHERE status='OPEN'
+                    ORDER BY entry_time DESC NULLS LAST, trade_id DESC
+                    LIMIT %(limit)s
+                    """,
+                    {"limit": limit},
+                )
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
+            return []
 
 
 def get_closed_trades_missing_exit(
-    engine: Optional[Engine], updated_after: datetime, limit: int = 200
+    engine: Optional[PGConnection], updated_after: datetime, limit: int = 200
 ) -> list[dict[str, Any]]:
-    db_engine = engine or _engine_or_none()
-    if db_engine is None:
-        return []
     limit = max(1, int(limit or 0))
-    try:
-        with db_engine.connect() as connection:
-            rows = connection.execute(
-                text(
+    with _maybe_conn(engine) as conn:
+        if conn is None:
+            return []
+        try:
+            with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
+                cursor.execute(
                     """
                     SELECT trade_id, symbol, qty, entry_price, exit_price, exit_order_id, exit_time, realized_pnl
                     FROM trades
                     WHERE status='CLOSED'
                       AND (exit_price IS NULL OR exit_order_id IS NULL OR realized_pnl IS NULL)
-                      AND updated_at >= :updated_after
+                      AND updated_at >= %(updated_after)s
                     ORDER BY updated_at DESC NULLS LAST, trade_id DESC
-                    LIMIT :limit
-                    """
-                ),
-                {"updated_after": updated_after, "limit": limit},
-            ).mappings().all()
-            return [dict(row) for row in rows]
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
-        return []
+                    LIMIT %(limit)s
+                    """,
+                    {"updated_after": updated_after, "limit": limit},
+                )
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
+            return []
 
 
 def close_trade(
-    engine: Optional[Engine],
+    engine: Optional[PGConnection],
     trade_id: Any,
     exit_order_id: str | None,
     exit_time: Any,
     exit_price: Any,
     exit_reason: str | None,
 ) -> bool:
-    db_engine = engine or _engine_or_none()
-    if db_engine is None:
-        logger.warning(
-            "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
-            trade_id,
-            exit_order_id or "",
-            "disabled",
-        )
-        return False
-
-    normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
-    try:
-        with db_engine.begin() as connection:
-            row = connection.execute(
-                text(
-                    """
-                    SELECT status, qty, entry_price
-                    FROM trades
-                    WHERE trade_id=:trade_id
-                    """
-                ),
-                {"trade_id": trade_id},
-            ).fetchone()
-            if row is None:
-                logger.warning(
-                    "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
-                    trade_id,
-                    exit_order_id or "",
-                    "trade_not_found",
-                )
-                return False
-            status_value = (row[0] or "").upper()
-            if status_value == "CLOSED":
-                logger.info(
-                    "[INFO] DB_TRADE_CLOSE_SKIPPED trade_id=%s exit_order_id=%s reason=%s",
-                    trade_id,
-                    exit_order_id or "",
-                    "status_closed",
-                )
-                return False
-            qty_value = row[1]
-            entry_price_value = row[2]
-            realized_pnl = None
-            try:
-                if exit_price is not None and entry_price_value is not None:
-                    realized_pnl = float(exit_price) - float(entry_price_value)
-                    if qty_value is not None:
-                        realized_pnl *= float(qty_value)
-            except Exception:
-                realized_pnl = None
-            connection.execute(
-                text(
-                    """
-                    UPDATE trades
-                    SET exit_order_id=:exit_order_id,
-                        exit_time=:exit_time,
-                        exit_price=:exit_price,
-                        realized_pnl=:realized_pnl,
-                        exit_reason=:exit_reason,
-                        status='CLOSED',
-                        updated_at=now()
-                    WHERE trade_id=:trade_id
-                    """
-                ),
-                {
-                    "exit_order_id": exit_order_id,
-                    "exit_time": normalized_exit_time,
-                    "exit_price": exit_price,
-                    "realized_pnl": realized_pnl,
-                    "exit_reason": exit_reason,
-                    "trade_id": trade_id,
-                },
+    with _maybe_conn(engine) as conn:
+        if conn is None:
+            logger.warning(
+                "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                trade_id,
+                exit_order_id or "",
+                "disabled",
             )
-        _log_write_result(True, "trades", 1)
-        return True
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning(
-            "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
-            trade_id,
-            exit_order_id or "",
-            exc,
-        )
-        return False
+            return False
+
+        normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT status, qty, entry_price
+                        FROM trades
+                        WHERE trade_id=%(trade_id)s
+                        """,
+                        {"trade_id": trade_id},
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        logger.warning(
+                            "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                            trade_id,
+                            exit_order_id or "",
+                            "trade_not_found",
+                        )
+                        return False
+                    status_value = (row[0] or "").upper()
+                    if status_value == "CLOSED":
+                        logger.info(
+                            "[INFO] DB_TRADE_CLOSE_SKIPPED trade_id=%s exit_order_id=%s reason=%s",
+                            trade_id,
+                            exit_order_id or "",
+                            "status_closed",
+                        )
+                        return False
+                    qty_value = row[1]
+                    entry_price_value = row[2]
+                    realized_pnl = None
+                    try:
+                        if exit_price is not None and entry_price_value is not None:
+                            realized_pnl = float(exit_price) - float(entry_price_value)
+                            if qty_value is not None:
+                                realized_pnl *= float(qty_value)
+                    except Exception:
+                        realized_pnl = None
+                    cursor.execute(
+                        """
+                        UPDATE trades
+                        SET exit_order_id=%(exit_order_id)s,
+                            exit_time=%(exit_time)s,
+                            exit_price=%(exit_price)s,
+                            realized_pnl=%(realized_pnl)s,
+                            exit_reason=%(exit_reason)s,
+                            status='CLOSED',
+                            updated_at=now()
+                        WHERE trade_id=%(trade_id)s
+                        """,
+                        {
+                            "exit_order_id": exit_order_id,
+                            "exit_time": normalized_exit_time,
+                            "exit_price": exit_price,
+                            "realized_pnl": realized_pnl,
+                            "exit_reason": exit_reason,
+                            "trade_id": trade_id,
+                        },
+                    )
+            _log_write_result(True, "trades", 1)
+            return True
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "[WARN] DB_TRADE_CLOSE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                trade_id,
+                exit_order_id or "",
+                exc,
+            )
+            return False
 
 
 def update_trade_exit_fields(
-    engine: Optional[Engine],
+    engine: Optional[PGConnection],
     trade_id: Any,
     *,
     exit_order_id: str | None = None,
@@ -750,109 +937,107 @@ def update_trade_exit_fields(
     exit_price: Any | None = None,
     exit_reason: str | None = None,
 ) -> bool:
-    db_engine = engine or _engine_or_none()
-    if db_engine is None:
-        logger.warning(
-            "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
-            trade_id,
-            exit_order_id or "",
-            "disabled",
-        )
-        return False
-
-    normalized_exit_time = None
-    if exit_time is not None:
-        normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
-
-    try:
-        with db_engine.begin() as connection:
-            row = connection.execute(
-                text(
-                    """
-                    SELECT status, qty, entry_price, exit_price, realized_pnl
-                    FROM trades
-                    WHERE trade_id=:trade_id
-                    """
-                ),
-                {"trade_id": trade_id},
-            ).fetchone()
-            if row is None:
-                logger.warning(
-                    "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
-                    trade_id,
-                    exit_order_id or "",
-                    "trade_not_found",
-                )
-                return False
-
-            status_value = (row[0] or "").upper()
-            qty_value = row[1]
-            entry_price_value = row[2]
-            existing_exit_price = row[3]
-            existing_realized_pnl = row[4]
-            final_exit_price = exit_price if exit_price is not None else existing_exit_price
-
-            realized_pnl = existing_realized_pnl
-            try:
-                if final_exit_price is not None and entry_price_value is not None:
-                    realized_pnl = float(final_exit_price) - float(entry_price_value)
-                    if qty_value is not None:
-                        realized_pnl *= float(qty_value)
-            except Exception:
-                realized_pnl = existing_realized_pnl
-
-            should_skip = (
-                status_value == "CLOSED"
-                and exit_order_id is None
-                and normalized_exit_time is None
-                and exit_price is None
-                and exit_reason is None
+    with _maybe_conn(engine) as conn:
+        if conn is None:
+            logger.warning(
+                "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                trade_id,
+                exit_order_id or "",
+                "disabled",
             )
-            if should_skip:
-                logger.info(
-                    "[INFO] DB_TRADE_EXIT_UPDATE_SKIPPED trade_id=%s reason=%s",
-                    trade_id,
-                    "no_fields",
-                )
-                return False
+            return False
 
-            connection.execute(
-                text(
-                    """
-                    UPDATE trades
-                    SET exit_order_id=COALESCE(:exit_order_id, exit_order_id),
-                        exit_time=COALESCE(:exit_time, exit_time),
-                        exit_price=COALESCE(:exit_price, exit_price),
-                        realized_pnl=:realized_pnl,
-                        exit_reason=COALESCE(:exit_reason, exit_reason),
-                        status='CLOSED',
-                        updated_at=now()
-                    WHERE trade_id=:trade_id
-                    """
-                ),
-                {
-                    "exit_order_id": exit_order_id,
-                    "exit_time": normalized_exit_time,
-                    "exit_price": exit_price,
-                    "realized_pnl": realized_pnl,
-                    "exit_reason": exit_reason,
-                    "trade_id": trade_id,
-                },
+        normalized_exit_time = None
+        if exit_time is not None:
+            normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
+
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT status, qty, entry_price, exit_price, realized_pnl
+                        FROM trades
+                        WHERE trade_id=%(trade_id)s
+                        """,
+                        {"trade_id": trade_id},
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        logger.warning(
+                            "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                            trade_id,
+                            exit_order_id or "",
+                            "trade_not_found",
+                        )
+                        return False
+
+                    status_value = (row[0] or "").upper()
+                    qty_value = row[1]
+                    entry_price_value = row[2]
+                    existing_exit_price = row[3]
+                    existing_realized_pnl = row[4]
+                    final_exit_price = exit_price if exit_price is not None else existing_exit_price
+
+                    realized_pnl = existing_realized_pnl
+                    try:
+                        if final_exit_price is not None and entry_price_value is not None:
+                            realized_pnl = float(final_exit_price) - float(entry_price_value)
+                            if qty_value is not None:
+                                realized_pnl *= float(qty_value)
+                    except Exception:
+                        realized_pnl = existing_realized_pnl
+
+                    should_skip = (
+                        status_value == "CLOSED"
+                        and exit_order_id is None
+                        and normalized_exit_time is None
+                        and exit_price is None
+                        and exit_reason is None
+                    )
+                    if should_skip:
+                        logger.info(
+                            "[INFO] DB_TRADE_EXIT_UPDATE_SKIPPED trade_id=%s reason=%s",
+                            trade_id,
+                            "no_fields",
+                        )
+                        return False
+
+                    cursor.execute(
+                        """
+                        UPDATE trades
+                        SET exit_order_id=COALESCE(%(exit_order_id)s, exit_order_id),
+                            exit_time=COALESCE(%(exit_time)s, exit_time),
+                            exit_price=COALESCE(%(exit_price)s, exit_price),
+                            realized_pnl=%(realized_pnl)s,
+                            exit_reason=COALESCE(%(exit_reason)s, exit_reason),
+                            status='CLOSED',
+                            updated_at=now()
+                        WHERE trade_id=%(trade_id)s
+                        """,
+                        {
+                            "exit_order_id": exit_order_id,
+                            "exit_time": normalized_exit_time,
+                            "exit_price": exit_price,
+                            "realized_pnl": realized_pnl,
+                            "exit_reason": exit_reason,
+                            "trade_id": trade_id,
+                        },
+                    )
+            _log_write_result(True, "trades", 1)
+            return True
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                trade_id,
+                exit_order_id or "",
+                exc,
             )
-        _log_write_result(True, "trades", 1)
-        return True
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning(
-            "[WARN] DB_TRADE_EXIT_UPDATE_FAILED trade_id=%s exit_order_id=%s err=%s",
-            trade_id,
-            exit_order_id or "",
-            exc,
-        )
-        return False
+            return False
 
 
 def decorate_trade_exit(
-    engine: Optional[Engine],
+    engine: Optional[PGConnection],
     trade_id: Any,
     *,
     exit_order_id: str | None,
@@ -861,82 +1046,80 @@ def decorate_trade_exit(
     exit_reason: str | None,
     realized_pnl: Any | None = None,
 ) -> bool:
-    db_engine = engine or _engine_or_none()
-    if db_engine is None:
-        logger.warning(
-            "[WARN] DB_TRADE_EXIT_DECORATE_FAILED trade_id=%s exit_order_id=%s err=%s",
-            trade_id,
-            exit_order_id or "",
-            "disabled",
-        )
-        return False
-
-    normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
-    try:
-        with db_engine.begin() as connection:
-            row = connection.execute(
-                text(
-                    """
-                    SELECT qty, entry_price
-                    FROM trades
-                    WHERE trade_id=:trade_id
-                    """
-                ),
-                {"trade_id": trade_id},
-            ).fetchone()
-            if row is None:
-                logger.warning(
-                    "[WARN] DB_TRADE_EXIT_DECORATE_FAILED trade_id=%s exit_order_id=%s err=%s",
-                    trade_id,
-                    exit_order_id or "",
-                    "trade_not_found",
-                )
-                return False
-
-            qty_value = row[0]
-            entry_price_value = row[1]
-            computed_realized = realized_pnl
-            try:
-                if exit_price is not None and entry_price_value is not None:
-                    computed_realized = float(exit_price) - float(entry_price_value)
-                    if qty_value is not None:
-                        computed_realized *= float(qty_value)
-            except Exception:
-                pass
-
-            connection.execute(
-                text(
-                    """
-                    UPDATE trades
-                    SET exit_order_id=:exit_order_id,
-                        exit_time=:exit_time,
-                        exit_price=:exit_price,
-                        realized_pnl=:realized_pnl,
-                        exit_reason=:exit_reason,
-                        status='CLOSED',
-                        updated_at=now()
-                    WHERE trade_id=:trade_id
-                    """
-                ),
-                {
-                    "exit_order_id": exit_order_id,
-                    "exit_time": normalized_exit_time,
-                    "exit_price": exit_price,
-                    "realized_pnl": computed_realized,
-                    "exit_reason": exit_reason,
-                    "trade_id": trade_id,
-                },
+    with _maybe_conn(engine) as conn:
+        if conn is None:
+            logger.warning(
+                "[WARN] DB_TRADE_EXIT_DECORATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                trade_id,
+                exit_order_id or "",
+                "disabled",
             )
-        _log_write_result(True, "trades", 1)
-        return True
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning(
-            "[WARN] DB_TRADE_EXIT_DECORATE_FAILED trade_id=%s exit_order_id=%s err=%s",
-            trade_id,
-            exit_order_id or "",
-            exc,
-        )
-        return False
+            return False
+
+        normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT qty, entry_price
+                        FROM trades
+                        WHERE trade_id=%(trade_id)s
+                        """,
+                        {"trade_id": trade_id},
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        logger.warning(
+                            "[WARN] DB_TRADE_EXIT_DECORATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                            trade_id,
+                            exit_order_id or "",
+                            "trade_not_found",
+                        )
+                        return False
+
+                    qty_value = row[0]
+                    entry_price_value = row[1]
+                    computed_realized = realized_pnl
+                    try:
+                        if exit_price is not None and entry_price_value is not None:
+                            computed_realized = float(exit_price) - float(entry_price_value)
+                            if qty_value is not None:
+                                computed_realized *= float(qty_value)
+                    except Exception:
+                        pass
+
+                    cursor.execute(
+                        """
+                        UPDATE trades
+                        SET exit_order_id=%(exit_order_id)s,
+                            exit_time=%(exit_time)s,
+                            exit_price=%(exit_price)s,
+                            realized_pnl=%(realized_pnl)s,
+                            exit_reason=%(exit_reason)s,
+                            status='CLOSED',
+                            updated_at=now()
+                        WHERE trade_id=%(trade_id)s
+                        """,
+                        {
+                            "exit_order_id": exit_order_id,
+                            "exit_time": normalized_exit_time,
+                            "exit_price": exit_price,
+                            "realized_pnl": computed_realized,
+                            "exit_reason": exit_reason,
+                            "trade_id": trade_id,
+                        },
+                    )
+            _log_write_result(True, "trades", 1)
+            return True
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "[WARN] DB_TRADE_EXIT_DECORATE_FAILED trade_id=%s exit_order_id=%s err=%s",
+                trade_id,
+                exit_order_id or "",
+                exc,
+            )
+            return False
 
 
 def upsert_trade_on_buy_fill(
@@ -946,8 +1129,8 @@ def upsert_trade_on_buy_fill(
     entry_time: Any,
     entry_price: Any,
 ) -> bool:
-    engine = _engine_or_none()
-    if engine is None:
+    conn = _conn_or_none()
+    if conn is None:
         logger.warning(
             "[WARN] DB_TRADE_UPSERT_FAILED symbol=%s entry_order_id=%s err=%s",
             symbol or "",
@@ -964,26 +1147,27 @@ def upsert_trade_on_buy_fill(
         "entry_time": normalized_entry_time,
         "entry_price": entry_price,
     }
-    stmt = text(
-        """
-        INSERT INTO trades (
-            symbol, qty, entry_order_id, entry_time, entry_price, status, updated_at
-        )
-        VALUES (
-            :symbol, :qty, :entry_order_id, :entry_time, :entry_price, 'OPEN', now()
-        )
-        ON CONFLICT (entry_order_id) DO UPDATE SET
-            symbol=EXCLUDED.symbol,
-            qty=EXCLUDED.qty,
-            entry_time=EXCLUDED.entry_time,
-            entry_price=EXCLUDED.entry_price,
-            status='OPEN',
-            updated_at=now()
-        """
-    )
     try:
-        with engine.begin() as connection:
-            connection.execute(stmt, payload)
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO trades (
+                        symbol, qty, entry_order_id, entry_time, entry_price, status, updated_at
+                    )
+                    VALUES (
+                        %(symbol)s, %(qty)s, %(entry_order_id)s, %(entry_time)s, %(entry_price)s, 'OPEN', now()
+                    )
+                    ON CONFLICT (entry_order_id) DO UPDATE SET
+                        symbol=EXCLUDED.symbol,
+                        qty=EXCLUDED.qty,
+                        entry_time=EXCLUDED.entry_time,
+                        entry_price=EXCLUDED.entry_price,
+                        status='OPEN',
+                        updated_at=now()
+                    """,
+                    payload,
+                )
         _log_write_result(True, "trades", 1)
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
@@ -994,6 +1178,11 @@ def upsert_trade_on_buy_fill(
             exc,
         )
         return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def close_trade_on_sell_fill(
@@ -1003,8 +1192,8 @@ def close_trade_on_sell_fill(
     exit_price: Any,
     exit_reason: str | None = None,
 ) -> bool:
-    engine = _engine_or_none()
-    if engine is None:
+    conn = _conn_or_none()
+    if conn is None:
         logger.warning(
             "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s exit_order_id=%s err=%s",
             symbol or "",
@@ -1016,61 +1205,59 @@ def close_trade_on_sell_fill(
     normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
     symbol_value = (symbol or "").upper()
     try:
-        with engine.begin() as connection:
-            row = connection.execute(
-                text(
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
                     """
                     SELECT trade_id, qty, entry_price
                     FROM trades
-                    WHERE symbol=:symbol AND status='OPEN'
+                    WHERE symbol=%(symbol)s AND status='OPEN'
                     ORDER BY entry_time DESC NULLS LAST, trade_id DESC
                     LIMIT 1
-                    """
-                ),
-                {"symbol": symbol_value},
-            ).fetchone()
-            if row is None:
-                logger.warning(
-                    "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s exit_order_id=%s err=%s",
-                    symbol_value,
-                    exit_order_id or "",
-                    "no_open_trade",
+                    """,
+                    {"symbol": symbol_value},
                 )
-                return False
-            trade_id = row[0]
-            qty_value = row[1]
-            entry_price_value = row[2]
-            realized_pnl = None
-            try:
-                if exit_price is not None and entry_price_value is not None:
-                    realized_pnl = float(exit_price) - float(entry_price_value)
-                    if qty_value is not None:
-                        realized_pnl *= float(qty_value)
-            except Exception:
+                row = cursor.fetchone()
+                if row is None:
+                    logger.warning(
+                        "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s exit_order_id=%s err=%s",
+                        symbol_value,
+                        exit_order_id or "",
+                        "no_open_trade",
+                    )
+                    return False
+                trade_id = row[0]
+                qty_value = row[1]
+                entry_price_value = row[2]
                 realized_pnl = None
-            connection.execute(
-                text(
+                try:
+                    if exit_price is not None and entry_price_value is not None:
+                        realized_pnl = float(exit_price) - float(entry_price_value)
+                        if qty_value is not None:
+                            realized_pnl *= float(qty_value)
+                except Exception:
+                    realized_pnl = None
+                cursor.execute(
                     """
                     UPDATE trades
-                    SET exit_order_id=:exit_order_id,
-                        exit_time=:exit_time,
-                        exit_price=:exit_price,
-                        realized_pnl=:realized_pnl,
-                        exit_reason=:exit_reason,
+                    SET exit_order_id=%(exit_order_id)s,
+                        exit_time=%(exit_time)s,
+                        exit_price=%(exit_price)s,
+                        realized_pnl=%(realized_pnl)s,
+                        exit_reason=%(exit_reason)s,
                         status='CLOSED',
                         updated_at=now()
-                    WHERE trade_id=:trade_id
-                    """
-                ),
-                {
-                    "exit_order_id": exit_order_id,
-                    "exit_time": normalized_exit_time,
-                    "exit_price": exit_price,
-                    "realized_pnl": realized_pnl,
-                    "exit_reason": exit_reason,
-                    "trade_id": trade_id,
-                },
-            )
+                    WHERE trade_id=%(trade_id)s
+                    """,
+                    {
+                        "exit_order_id": exit_order_id,
+                        "exit_time": normalized_exit_time,
+                        "exit_price": exit_price,
+                        "realized_pnl": realized_pnl,
+                        "exit_reason": exit_reason,
+                        "trade_id": trade_id,
+                    },
+                )
         _log_write_result(True, "trades", 1)
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
@@ -1081,11 +1268,16 @@ def close_trade_on_sell_fill(
             exc,
         )
         return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def count_open_trades(symbol: str | None = None) -> int:
-    engine = _engine_or_none()
-    if engine is None:
+    conn = _conn_or_none()
+    if conn is None:
         return 0
     try:
         query = """
@@ -1094,11 +1286,17 @@ def count_open_trades(symbol: str | None = None) -> int:
         """
         params: dict[str, Any] = {}
         if symbol:
-            query += " AND symbol=:symbol"
+            query += " AND symbol=%(symbol)s"
             params["symbol"] = symbol.upper()
-        with engine.connect() as connection:
-            result = connection.execute(text(query), params).scalar()
-            return int(result or 0)
+        with conn.cursor() as cursor:
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            return int(result[0] if result else 0)
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_TRADE_COUNT_FAILED symbol=%s err=%s", symbol or "", exc)
         return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

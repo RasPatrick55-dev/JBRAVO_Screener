@@ -22,31 +22,36 @@ def test_normalize_ts_handles_dates_and_naive_datetimes():
 def test_insert_executed_trade_normalizes_and_logs(monkeypatch, caplog):
     executed: list[dict] = []
 
-    class DummyConnection:
+    class DummyCursor:
         def __init__(self, bucket: list[dict]):
             self.bucket = bucket
 
         def execute(self, stmt, payload):
             self.bucket.append(payload)
 
-    class DummyBegin:
-        def __init__(self, bucket: list[dict]):
-            self.bucket = bucket
-
         def __enter__(self):
-            return DummyConnection(self.bucket)
+            return self
 
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    class DummyEngine:
+    class DummyConn:
         def __init__(self, bucket: list[dict]):
             self.bucket = bucket
 
-        def begin(self):
-            return DummyBegin(self.bucket)
+        def cursor(self):
+            return DummyCursor(self.bucket)
 
-    monkeypatch.setattr(db, "_engine_or_none", lambda: DummyEngine(executed))
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(db, "_conn_or_none", lambda: DummyConn(executed))
 
     caplog.set_level(logging.INFO)
     db.insert_executed_trade(
