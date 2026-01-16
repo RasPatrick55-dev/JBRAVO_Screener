@@ -4123,26 +4123,43 @@ def _fallback_coarse_score_from_z(frame: pd.DataFrame) -> pd.DataFrame:
     if frame is None or frame.empty:
         return pd.DataFrame()
 
-    latest = frame.copy()
-    if "timestamp" in latest.columns:
-        latest["timestamp"] = pd.to_datetime(latest["timestamp"], utc=True, errors="coerce")
-        latest = latest.dropna(subset=["symbol", "timestamp"]).copy()
-        latest.sort_values(["symbol", "timestamp"], inplace=True)
-        latest = latest.groupby("symbol", as_index=False).tail(1).copy()
-    else:
-        latest = latest.dropna(subset=["symbol"]).copy()
+    if "symbol" not in frame.columns:
+        return pd.DataFrame()
 
-    z_cols = [col for col in latest.columns if col.endswith("_z")]
+    working = frame.copy()
+    working["symbol"] = (
+        working["symbol"].astype("string").fillna("").str.strip().str.upper()
+    )
+    working = working.loc[working["symbol"].str.len() > 0].copy()
+    if working.empty:
+        return pd.DataFrame()
+
+    z_cols = [col for col in working.columns if col.endswith("_z")]
     if not z_cols:
         return pd.DataFrame()
 
-    z_frame = latest[z_cols].apply(pd.to_numeric, errors="coerce")
-    valid_counts = z_frame.notna().sum(axis=1)
-    score = z_frame.sum(axis=1).div(valid_counts.where(valid_counts > 0))
-    latest["Score"] = score
-    latest["coarse_valid_components"] = valid_counts
-    latest = latest.loc[valid_counts > 0].copy()
-    return latest
+    z_frame = working[z_cols].apply(pd.to_numeric, errors="coerce")
+    symbol_series = working["symbol"]
+    z_counts = z_frame.notna().groupby(symbol_series).sum()
+    z_sums = z_frame.fillna(0.0).groupby(symbol_series).sum()
+    z_means = z_sums.div(z_counts.where(z_counts > 0))
+    valid_components = z_means.notna().sum(axis=1)
+    score = z_means.sum(axis=1).div(valid_components.where(valid_components > 0))
+
+    result = pd.DataFrame(
+        {
+            "symbol": z_means.index.astype("string"),
+            "Score": score,
+            "coarse_valid_components": valid_components,
+        }
+    )
+    result = result.loc[result["coarse_valid_components"] > 0].copy()
+
+    if "timestamp" in working.columns and not result.empty:
+        ts = pd.to_datetime(working["timestamp"], utc=True, errors="coerce")
+        latest_ts = ts.groupby(symbol_series).max()
+        result["timestamp"] = result["symbol"].map(latest_ts)
+    return result
 
 
 def run_coarse_features(
@@ -4244,6 +4261,26 @@ def run_coarse_features(
                 "[INFO] Coarse score computed with partial features; rows_out=%d",
                 int(coarse_scored.shape[0]),
             )
+    if isinstance(coarse_scored, pd.DataFrame) and not coarse_scored.empty:
+        score_series = pd.to_numeric(coarse_scored.get("Score"), errors="coerce")
+        non_null_scores = int(score_series.notna().sum())
+        if non_null_scores:
+            min_score = score_series.min()
+            median_score = score_series.median()
+            max_score = score_series.max()
+        else:
+            min_score = None
+            median_score = None
+            max_score = None
+        LOGGER.info(
+            "[INFO] Coarse score stats eligible=%d rows_out=%d score_non_null=%d min=%s median=%s max=%s",
+            len(symbols),
+            int(coarse_scored.shape[0]),
+            non_null_scores,
+            min_score,
+            median_score,
+            max_score,
+        )
     if not coarse_scored.empty and "coarse_rank" not in coarse_scored.columns:
         coarse_scored["coarse_rank"] = np.arange(1, coarse_scored.shape[0] + 1, dtype=int)
     coarse_scored.rename(columns={"Score": "Score_coarse"}, inplace=True)
