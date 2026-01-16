@@ -2,6 +2,7 @@ import argparse
 import logging
 
 from scripts import db
+from scripts.utils.env import load_env
 
 logger = logging.getLogger(__name__)
 
@@ -276,6 +277,7 @@ def _repair_screener_candidates_schema(engine) -> bool:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    load_env()
     parser = argparse.ArgumentParser(description="Database migration utility")
     parser.add_argument("--action", choices=["upgrade"], default="upgrade")
     args = parser.parse_args()
