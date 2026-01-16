@@ -182,7 +182,7 @@ def _apply_quality_filters(scored_df: pd.DataFrame, cfg: Optional[Mapping[str, o
     working = scored_df.copy()
     thresholds = cfg.get("thresholds") if isinstance(cfg, Mapping) and isinstance(cfg.get("thresholds"), Mapping) else {}
     gates_cfg = cfg.get("gates") if isinstance(cfg, Mapping) and isinstance(cfg.get("gates"), Mapping) else {}
-    min_price = _coerce_float(thresholds.get("min_price"), 5.0)
+    min_price = _coerce_float(thresholds.get("min_price"), 0.25)
     adv_min = _coerce_float(thresholds.get("adv20_min"))
     if adv_min is None:
         adv_min = _coerce_float(gates_cfg.get("dollar_vol_min"))
