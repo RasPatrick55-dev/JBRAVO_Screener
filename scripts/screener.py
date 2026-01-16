@@ -4207,7 +4207,8 @@ def run_coarse_features(
     if not symbols:
         LOGGER.warning("No eligible symbols after ADV20 filter; coarse features will be empty.")
 
-    days = max(int(getattr(args, "prefilter_days", 120) or 120), 1)
+    min_history = int(getattr(args, "min_history", DEFAULT_MIN_HISTORY) or DEFAULT_MIN_HISTORY)
+    days = max(int(getattr(args, "prefilter_days", 120) or 120), min_history, 1)
     reuse_cache = _as_bool(getattr(args, "reuse_cache", True), True)
     feed = getattr(args, "feed", DEFAULT_FEED)
     bars_df = _load_local_bars(
@@ -4224,7 +4225,7 @@ def run_coarse_features(
         _load_ranker_config(ranker_path),
         preset_key=str(getattr(args, "gate_preset", "standard") or "standard"),
         relax_mode=str(getattr(args, "relax_gates", "none") or "none"),
-        min_history=int(getattr(args, "min_history", DEFAULT_MIN_HISTORY) or DEFAULT_MIN_HISTORY),
+        min_history=min_history,
     )
     dollar_override = getattr(args, "dollar_vol_min", None)
     if dollar_override is not None:
@@ -4895,10 +4896,10 @@ def run_screener(
             if not sym:
                 continue
             exchange = _safe_str(exch_raw).strip().upper()
-            reason: str | None
             if not exchange:
-                reason = "UNKNOWN_EXCHANGE"
-            elif exchange in allowed_exchanges:
+                continue
+            reason: str | None
+            if exchange in allowed_exchanges:
                 reason = None
             elif exchange.startswith("OTC"):
                 reason = "NON_EQUITY"
@@ -4976,6 +4977,63 @@ def run_screener(
     coarse_rank_timer = T()
     LOGGER.info("[STAGE] coarse rank start")
     coarse_scored = score_universe(coarse_enriched, ranker_cfg)
+    if not coarse_scored.empty:
+        coarse_scored = coarse_scored.copy()
+        rename_map: dict[str, str] = {}
+        for col in coarse_scored.columns:
+            if not isinstance(col, str):
+                continue
+            stripped = col.strip()
+            if stripped and stripped != col:
+                rename_map[col] = stripped
+        if rename_map:
+            coarse_scored = coarse_scored.rename(columns=rename_map)
+        lower_cols = {str(col).lower(): col for col in coarse_scored.columns}
+        if "symbol" not in coarse_scored.columns and "symbol" in lower_cols:
+            coarse_scored = coarse_scored.rename(
+                columns={lower_cols["symbol"]: "symbol"}
+            )
+        if "symbol" in coarse_scored.columns:
+            coarse_scored["symbol"] = (
+                coarse_scored["symbol"]
+                .astype("string")
+                .str.strip()
+                .str.upper()
+            )
+        score_source = None
+        if "coarse_score" not in coarse_scored.columns or coarse_scored[
+            "coarse_score"
+        ].isna().all():
+            if "coarse score" in lower_cols:
+                score_source = lower_cols["coarse score"]
+            elif "Score" in coarse_scored.columns:
+                score_source = "Score"
+            elif "score" in coarse_scored.columns:
+                score_source = "score"
+            elif "score_coarse" in lower_cols:
+                score_source = lower_cols["score_coarse"]
+            elif "Score_coarse" in coarse_scored.columns:
+                score_source = "Score_coarse"
+            if score_source:
+                coarse_scored["coarse_score"] = coarse_scored[score_source]
+        if "coarse_score" in coarse_scored.columns:
+            coarse_scored["coarse_score"] = pd.to_numeric(
+                coarse_scored["coarse_score"], errors="coerce"
+            )
+            coarse_scored = coarse_scored.loc[
+                coarse_scored["coarse_score"].notna()
+            ].copy()
+    score_non_null = (
+        int(coarse_scored["coarse_score"].notna().sum())
+        if "coarse_score" in coarse_scored.columns
+        else 0
+    )
+    LOGGER.info(
+        "[INFO] Coarse rank rows_in=%d score_non_null=%d cols=%s",
+        int(coarse_scored.shape[0]),
+        score_non_null,
+        ",".join([str(col) for col in coarse_scored.columns]),
+    )
     LOGGER.info(
         "[STAGE] coarse rank end (rows=%d)", int(coarse_scored.shape[0])
     )
@@ -4985,9 +5043,26 @@ def run_screener(
 
     if not coarse_scored.empty:
         coarse_scored = coarse_scored.copy()
-        coarse_scored["coarse_rank"] = np.arange(
-            1, coarse_scored.shape[0] + 1, dtype=int
-        )
+        if "coarse_rank" not in coarse_scored.columns or coarse_scored[
+            "coarse_rank"
+        ].isna().all():
+            if "coarse_score" in coarse_scored.columns and coarse_scored[
+                "coarse_score"
+            ].notna().any():
+                coarse_scored = coarse_scored.sort_values(
+                    "coarse_score", ascending=False, na_position="last"
+                ).reset_index(drop=True)
+            elif "Score" in coarse_scored.columns and coarse_scored[
+                "Score"
+            ].notna().any():
+                coarse_scored = coarse_scored.sort_values(
+                    "Score", ascending=False, na_position="last"
+                ).reset_index(drop=True)
+            else:
+                coarse_scored = coarse_scored.reset_index(drop=True)
+            coarse_scored["coarse_rank"] = np.arange(
+                1, coarse_scored.shape[0] + 1, dtype=int
+            )
     else:
         coarse_scored["coarse_rank"] = pd.Series(dtype="int64")
 
