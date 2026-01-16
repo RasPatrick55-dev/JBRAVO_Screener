@@ -580,36 +580,63 @@ def _coerce_canonical(df_scored: Optional[pd.DataFrame], df_top: Optional[pd.Dat
         if column in base.columns:
             base[column] = pd.to_numeric(base[column], errors="coerce")
 
-    if df_scored is not None and not df_scored.empty and "symbol" in df_scored.columns:
-        join_cols = [
-            col
-            for col in ("symbol", "close", "exchange", "volume", "adv20")
-            if col in df_scored.columns
-        ]
-        if join_cols:
-            joinable = df_scored[join_cols].drop_duplicates("symbol")
-            base = base.merge(joinable, on="symbol", how="left", suffixes=("", "_scored"))
-            for col in ("close", "exchange", "volume", "adv20"):
-                scored_col = f"{col}_scored"
-                if scored_col not in base.columns:
-                    continue
-                if col == "exchange":
-                    existing = (
-                        base[col].astype("string").fillna("") if col in base.columns else pd.Series("", index=base.index)
-                    )
-                    fallback = base[scored_col].astype("string").fillna("")
-                    base[col] = existing.where(existing.str.strip() != "", fallback)
-                else:
-                    if col not in base.columns:
-                        base[col] = pd.NA
-                    series = base[col]
-                    mask_missing = series.isna()
-                    if col in {"volume", "adv20"}:
-                        numeric_series = pd.to_numeric(series, errors="coerce")
-                        mask_missing = numeric_series.isna()
-                        base[col] = numeric_series
-                    base.loc[mask_missing, col] = base.loc[mask_missing, scored_col]
-                base.drop(columns=[scored_col], inplace=True)
+    if df_scored is not None and not df_scored.empty:
+        scored = df_scored.copy()
+        scored.columns = [str(col).strip().lower() for col in scored.columns]
+        scored = scored.loc[:, ~scored.columns.duplicated()]
+        if "symbol" in scored.columns:
+            scored["symbol"] = (
+                scored["symbol"].astype("string").fillna("").str.strip().str.upper()
+            )
+            merge_cols = [
+                col
+                for col in (
+                    "symbol",
+                    "close",
+                    "exchange",
+                    "volume",
+                    "adv20",
+                    "sma9",
+                    "ema20",
+                    "sma180",
+                    "rsi14",
+                    "passed_gates",
+                    "gates_passed",
+                    "gate_fail_reason",
+                )
+                if col in scored.columns
+            ]
+            if len(merge_cols) > 1:
+                joinable = scored[merge_cols].drop_duplicates("symbol")
+                base = base.merge(joinable, on="symbol", how="left", suffixes=("", "_scored"))
+                for col in merge_cols:
+                    if col == "symbol":
+                        continue
+                    scored_col = f"{col}_scored"
+                    if scored_col not in base.columns:
+                        continue
+                    if col == "exchange":
+                        existing = (
+                            base[col].astype("string").fillna("")
+                            if col in base.columns
+                            else pd.Series("", index=base.index)
+                        )
+                        fallback = base[scored_col].astype("string").fillna("")
+                        base[col] = existing.where(existing.str.strip() != "", fallback)
+                    else:
+                        if col not in base.columns:
+                            base[col] = pd.NA
+                        series = base[col]
+                        mask_missing = series.isna()
+                        if col in {"volume", "adv20", "sma9", "ema20", "sma180", "rsi14"}:
+                            numeric_series = pd.to_numeric(series, errors="coerce")
+                            mask_missing = numeric_series.isna()
+                            base[col] = numeric_series
+                        if col == "gate_fail_reason":
+                            text_series = series.astype("string").fillna("")
+                            mask_missing |= text_series.str.strip() == ""
+                        base.loc[mask_missing, col] = base.loc[mask_missing, scored_col]
+                    base.drop(columns=[scored_col], inplace=True)
 
     if "close" not in base.columns:
         base["close"] = pd.NA
