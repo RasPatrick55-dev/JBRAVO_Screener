@@ -4260,11 +4260,30 @@ def run_coarse_features(args: argparse.Namespace, base_dir: Path) -> int:
 def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
     LOGGER.info("[MODE] full-nightly start")
     coarse_path = base_dir / "data" / "tmp" / "coarse_rank.csv"
-    if not coarse_path.exists():
-        LOGGER.error("Missing coarse rank file at %s; run coarse-features first.", coarse_path)
-        return 1
+    coarse_df: pd.DataFrame | None = None
+    needs_regen = not coarse_path.exists()
+    if not needs_regen:
+        try:
+            coarse_df = pd.read_csv(coarse_path)
+            if coarse_df.empty:
+                needs_regen = True
+        except Exception as exc:
+            LOGGER.error("Failed to read coarse rank file %s: %s", coarse_path, exc)
+            needs_regen = True
+    if needs_regen:
+        LOGGER.info("[INFO] Coarse rank empty; regenerating coarse features")
+        regen_rc = run_coarse_features(args, base_dir)
+        if regen_rc != 0:
+            LOGGER.error("Coarse features regeneration failed; aborting full-nightly.")
+            return regen_rc or 1
+        try:
+            coarse_df = pd.read_csv(coarse_path)
+        except Exception as exc:
+            LOGGER.error("Failed to read coarse rank file %s: %s", coarse_path, exc)
+            return 1
     try:
-        coarse_df = pd.read_csv(coarse_path)
+        if coarse_df is None:
+            coarse_df = pd.read_csv(coarse_path)
     except Exception as exc:
         LOGGER.error("Failed to read coarse rank file %s: %s", coarse_path, exc)
         return 1
