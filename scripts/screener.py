@@ -4941,7 +4941,7 @@ def run_screener(
     if not candidates_df.empty:
         candidates_df["gates_passed"] = True
         candidates_df["passed_gates"] = True
-        candidates_df["gate_fail_reason"] = [[] for _ in range(int(candidates_df.shape[0]))]
+        candidates_df["gate_fail_reason"] = None
         if "coarse_score" in candidates_df.columns:
             candidates_df["coarse_score"] = pd.to_numeric(
                 candidates_df["coarse_score"], errors="coerce"
@@ -4973,17 +4973,18 @@ def run_screener(
         scored_df["passed_gates"] = scored_df["gates_passed"].fillna(False).astype(bool)
         try:
             gate_fail_series = compute_gate_fail_reasons(scored_df, ranker_cfg)
+            gate_fail_series = gate_fail_series.apply(db.normalize_gate_fail_reason)
         except Exception as exc:  # pragma: no cover - telemetry should not break flow
             LOGGER.warning("Gate fail reason computation failed: %s", exc)
             gate_fail_series = pd.Series(
-                [[] for _ in range(int(scored_df.shape[0]))], index=scored_df.index
+                [None for _ in range(int(scored_df.shape[0]))],
+                index=scored_df.index,
+                dtype="object",
             )
         scored_df["gate_fail_reason"] = gate_fail_series
         passed_mask = scored_df["passed_gates"]
         if passed_mask.any():
-            scored_df.loc[passed_mask, "gate_fail_reason"] = [
-                [] for _ in range(int(passed_mask.sum()))
-            ]
+            scored_df.loc[passed_mask, "gate_fail_reason"] = None
 
     stats["candidates_out"] = int(candidates_df.shape[0])
 
