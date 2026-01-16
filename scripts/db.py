@@ -257,7 +257,7 @@ def _coerce_bool(value: Any) -> Optional[bool]:
     return None
 
 
-def normalize_gate_fail_reason(value: Any) -> Optional[list[str]]:
+def normalize_gate_fail_reason(value: Any) -> Optional[str]:
     if value is None:
         return None
     try:
@@ -267,7 +267,7 @@ def normalize_gate_fail_reason(value: Any) -> Optional[list[str]]:
         pass
     if isinstance(value, (list, tuple, set)):
         cleaned = [str(item).strip() for item in value if str(item).strip()]
-        return cleaned or None
+        return ",".join(cleaned) if cleaned else None
     if isinstance(value, str):
         text = value.strip()
         if not text:
@@ -278,15 +278,16 @@ def normalize_gate_fail_reason(value: Any) -> Optional[list[str]]:
             parsed = None
         if isinstance(parsed, list):
             cleaned = [str(item).strip() for item in parsed if str(item).strip()]
-            return cleaned or None
+            return ",".join(cleaned) if cleaned else None
         raw = text
         if raw.startswith("[") and raw.endswith("]"):
             raw = raw[1:-1]
         parts = [
             part.strip().strip("\"'") for part in raw.split(",") if part.strip().strip("\"'")
         ]
-        return parts or None
-    return [str(value)]
+        return ",".join(parts) if parts else text
+    rendered = str(value).strip()
+    return rendered or None
 
 
 def normalize_ts(value: Any, field: str | None = None) -> datetime | None:
@@ -541,14 +542,16 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
     def _row_value(row: Mapping[str, Any], key: str) -> Any:
         for alias in aliases.get(key, (key,)):
             if alias in row:
-                return row.get(alias)
-        return row.get(key)
+                return row.get(alias) if hasattr(row, "get") else row[alias]
+        if hasattr(row, "get"):
+            return row.get(key)
+        return row[key] if key in row else None
 
     rows: list[dict[str, Any]] = []
     for _, row in normalized.iterrows():
         record = {}
         for key in columns:
-            record[key] = _row_value(row, key) if isinstance(row, Mapping) else row[key] if key in row else None
+            record[key] = _row_value(row, key)
         symbol = (record.get("symbol") or "").upper()
         payload = {
             "run_date": _coerce_date(run_date),
