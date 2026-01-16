@@ -606,6 +606,22 @@ def _resolve_float(value: object) -> Optional[float]:
     return parsed
 
 
+def _first_notna(row: pd.Series, *keys: str) -> Optional[object]:
+    for key in keys:
+        if key not in row:
+            continue
+        value = row.get(key)
+        if value is None:
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except Exception:
+            pass
+        return value
+    return None
+
+
 def _series_by_aliases(frame: pd.DataFrame, *names: str) -> pd.Series:
     for name in names:
         if name in frame.columns:
@@ -1026,21 +1042,21 @@ def _compute_gate_fail_reasons_v2(df: pd.DataFrame, cfg: Mapping[str, object]) -
     for _, row in df.iterrows():
         row_reasons: list[str] = []
         if rel_vol_min is not None:
-            rel_val = _resolve_float(row.get("rel_vol") or row.get("REL_VOLUME"))
+            rel_val = _resolve_float(_first_notna(row, "rel_vol", "REL_VOLUME"))
             if rel_val is None or rel_val + FLOAT_TOL < rel_vol_min:
                 row_reasons.append("REL_VOL")
         if adx_min is not None:
-            adx_val = _resolve_float(row.get("adx") or row.get("ADX"))
+            adx_val = _resolve_float(_first_notna(row, "adx", "ADX"))
             if adx_val is None or adx_val + FLOAT_TOL < adx_min:
                 row_reasons.append("ADX")
         if atr_pct_min is not None or atr_pct_max is not None:
-            atr_val = _resolve_float(row.get("atr_pct") or row.get("ATR_pct") or row.get("ATR_PCT"))
+            atr_val = _resolve_float(_first_notna(row, "atr_pct", "ATR_pct", "ATR_PCT"))
             lower = atr_pct_min if atr_pct_min is not None else -np.inf
             upper = atr_pct_max if atr_pct_max is not None else np.inf
             if atr_val is None or atr_val + FLOAT_TOL < lower or atr_val - FLOAT_TOL > upper:
                 row_reasons.append("ATR")
         if wk52_min is not None:
-            wk_val = _resolve_float(row.get("wk52_prox") or row.get("WK52_PROX"))
+            wk_val = _resolve_float(_first_notna(row, "wk52_prox", "WK52_PROX"))
             if wk_val is None or wk_val + FLOAT_TOL < wk52_min:
                 row_reasons.append("WK52")
         reasons.append(row_reasons)
@@ -1083,27 +1099,27 @@ def _compute_gate_fail_reasons_v1(df: pd.DataFrame, cfg: Mapping[str, object]) -
             row_reasons.append("HISTORY")
 
         if min_score is not None:
-            score_val = _resolve_float(row.get("Score") or row.get("score"))
+            score_val = _resolve_float(_first_notna(row, "Score", "score"))
             if score_val is None or score_val + FLOAT_TOL < min_score:
                 row_reasons.append("SCORE")
 
         if dollar_vol_min is not None:
-            adv_val = _resolve_float(row.get("ADV20") or row.get("adv20"))
+            adv_val = _resolve_float(_first_notna(row, "ADV20", "adv20"))
             if adv_val is None or adv_val + FLOAT_TOL < dollar_vol_min:
                 row_reasons.append("LIQUIDITY")
 
         if require_sma_stack:
-            sma9 = _resolve_float(row.get("SMA9") or row.get("sma9"))
-            ema20 = _resolve_float(row.get("EMA20") or row.get("ema20"))
-            sma50 = _resolve_float(row.get("SMA50") or row.get("sma50"))
-            sma100 = _resolve_float(row.get("SMA100") or row.get("sma100"))
+            sma9 = _resolve_float(_first_notna(row, "SMA9", "sma9"))
+            ema20 = _resolve_float(_first_notna(row, "EMA20", "ema20"))
+            sma50 = _resolve_float(_first_notna(row, "SMA50", "sma50"))
+            sma100 = _resolve_float(_first_notna(row, "SMA100", "sma100"))
             if any(v is None for v in (sma9, ema20, sma50, sma100)):
                 row_reasons.append("MA_STACK")
             elif not (sma9 > ema20 > sma50 > sma100):
                 row_reasons.append("MA_STACK")
 
         if min_rsi is not None or max_rsi is not None:
-            rsi_val = _resolve_float(row.get("RSI") or row.get("rsi") or row.get("RSI14") or row.get("rsi14"))
+            rsi_val = _resolve_float(_first_notna(row, "RSI", "rsi", "RSI14", "rsi14"))
             if rsi_val is None:
                 row_reasons.append("RSI")
             else:
@@ -1113,40 +1129,40 @@ def _compute_gate_fail_reasons_v1(df: pd.DataFrame, cfg: Mapping[str, object]) -
                     row_reasons.append("RSI")
 
         if min_adx is not None:
-            adx_val = _resolve_float(row.get("ADX") or row.get("adx"))
+            adx_val = _resolve_float(_first_notna(row, "ADX", "adx"))
             if adx_val is None or adx_val + FLOAT_TOL < min_adx:
                 row_reasons.append("ADX")
 
         if min_aroon is not None:
-            aroon_val = _resolve_float(row.get("AROON_UP") or row.get("AROON") or row.get("aroon_up"))
+            aroon_val = _resolve_float(_first_notna(row, "AROON_UP", "AROON", "aroon_up"))
             if aroon_val is None or aroon_val + FLOAT_TOL < min_aroon:
                 row_reasons.append("AROON")
 
         if min_macd_hist is not None:
-            macd_val = _resolve_float(row.get("MACD_HIST") or row.get("macd_hist"))
+            macd_val = _resolve_float(_first_notna(row, "MACD_HIST", "macd_hist"))
             if macd_val is None or macd_val + FLOAT_TOL < min_macd_hist:
                 row_reasons.append("MACD")
 
         if min_volexp is not None:
-            volexp_val = _resolve_float(row.get("VOLexp") or row.get("volexp"))
+            volexp_val = _resolve_float(_first_notna(row, "VOLexp", "volexp"))
             if volexp_val is None or volexp_val + FLOAT_TOL < min_volexp:
                 row_reasons.append("VOLEXP")
 
         if max_gap is not None:
-            gap_val = _resolve_float(row.get("GAPpen") or row.get("gappen"))
+            gap_val = _resolve_float(_first_notna(row, "GAPpen", "gappen"))
             if gap_val is None or gap_val - FLOAT_TOL > max_gap:
                 row_reasons.append("GAP")
 
         if max_liq_pen is not None:
-            liq_val = _resolve_float(row.get("LIQpen") or row.get("liqpen"))
+            liq_val = _resolve_float(_first_notna(row, "LIQpen", "liqpen"))
             if liq_val is None or liq_val - FLOAT_TOL > max_liq_pen:
                 row_reasons.append("LIQUIDITY")
 
         if atr_min is not None or atr_max is not None:
-            atr_val = _resolve_float(row.get("atrp") or row.get("ATR_pct") or row.get("ATR_PCT"))
+            atr_val = _resolve_float(_first_notna(row, "atrp", "ATR_pct", "ATR_PCT"))
             if atr_val is None:
-                atr14 = _resolve_float(row.get("ATR14") or row.get("atr14"))
-                close = _resolve_float(row.get("close") or row.get("Close"))
+                atr14 = _resolve_float(_first_notna(row, "ATR14", "atr14"))
+                close = _resolve_float(_first_notna(row, "close", "Close"))
                 if atr14 is not None and close:
                     atr_val = atr14 / close
             lower = atr_min if atr_min is not None else -np.inf

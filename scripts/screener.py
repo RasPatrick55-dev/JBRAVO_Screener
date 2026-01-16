@@ -4847,6 +4847,7 @@ def run_screener(
         shortlist_prepared,
         ranker_cfg,
         timings=timing_info,
+        include_intermediate=True,
         benchmark_df=benchmark_bars,
     )
     LOGGER.info("[STAGE] full features end (rows=%d)", int(enriched.shape[0]))
