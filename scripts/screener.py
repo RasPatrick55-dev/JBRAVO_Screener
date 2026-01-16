@@ -4119,6 +4119,32 @@ def _prepare_coarse_rank_export(frame: pd.DataFrame) -> pd.DataFrame:
     return ordered
 
 
+def _fallback_coarse_score_from_z(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+
+    latest = frame.copy()
+    if "timestamp" in latest.columns:
+        latest["timestamp"] = pd.to_datetime(latest["timestamp"], utc=True, errors="coerce")
+        latest = latest.dropna(subset=["symbol", "timestamp"]).copy()
+        latest.sort_values(["symbol", "timestamp"], inplace=True)
+        latest = latest.groupby("symbol", as_index=False).tail(1).copy()
+    else:
+        latest = latest.dropna(subset=["symbol"]).copy()
+
+    z_cols = [col for col in latest.columns if col.endswith("_z")]
+    if not z_cols:
+        return pd.DataFrame()
+
+    z_frame = latest[z_cols].apply(pd.to_numeric, errors="coerce")
+    valid_counts = z_frame.notna().sum(axis=1)
+    score = z_frame.sum(axis=1).div(valid_counts.where(valid_counts > 0))
+    latest["Score"] = score
+    latest["coarse_valid_components"] = valid_counts
+    latest = latest.loc[valid_counts > 0].copy()
+    return latest
+
+
 def run_coarse_features(
     args: argparse.Namespace,
     base_dir: Path,
@@ -4207,6 +4233,17 @@ def run_coarse_features(
     rank_timer = T()
     coarse_scored = score_universe(coarse_enriched, ranker_cfg)
     coarse_rank_elapsed = rank_timer.lap("coarse_rank_secs")
+    if coarse_scored.empty or (
+        "Score" in coarse_scored.columns
+        and not pd.to_numeric(coarse_scored["Score"], errors="coerce").notna().any()
+    ):
+        fallback_scored = _fallback_coarse_score_from_z(coarse_enriched)
+        if not fallback_scored.empty:
+            coarse_scored = fallback_scored
+            LOGGER.info(
+                "[INFO] Coarse score computed with partial features; rows_out=%d",
+                int(coarse_scored.shape[0]),
+            )
     if not coarse_scored.empty and "coarse_rank" not in coarse_scored.columns:
         coarse_scored["coarse_rank"] = np.arange(1, coarse_scored.shape[0] + 1, dtype=int)
     coarse_scored.rename(columns={"Score": "Score_coarse"}, inplace=True)
