@@ -51,6 +51,22 @@ TABLE_STATEMENTS = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS screener_outcomes (
+        run_date DATE NOT NULL,
+        symbol TEXT NOT NULL,
+        rank INTEGER,
+        score NUMERIC,
+        close_at_entry NUMERIC,
+        ret_1d NUMERIC,
+        ret_5d NUMERIC,
+        ret_10d NUMERIC,
+        max_drawdown_10d NUMERIC,
+        max_runup_10d NUMERIC,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        PRIMARY KEY (run_date, symbol)
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS backtest_results (
         run_date DATE NOT NULL,
         symbol TEXT NOT NULL,
@@ -133,6 +149,8 @@ TABLE_STATEMENTS = [
 INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS screener_candidates_symbol_idx ON screener_candidates (symbol);",
     "CREATE INDEX IF NOT EXISTS screener_candidates_run_date_idx ON screener_candidates (run_date);",
+    "CREATE INDEX IF NOT EXISTS screener_outcomes_symbol_idx ON screener_outcomes (symbol);",
+    "CREATE INDEX IF NOT EXISTS screener_outcomes_run_date_idx ON screener_outcomes (run_date);",
     "CREATE INDEX IF NOT EXISTS executed_trades_symbol_idx ON executed_trades (symbol);",
     "CREATE INDEX IF NOT EXISTS executed_trades_entry_time_idx ON executed_trades (entry_time);",
     "CREATE INDEX IF NOT EXISTS executed_trades_exit_time_idx ON executed_trades (exit_time);",
