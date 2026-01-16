@@ -2272,8 +2272,21 @@ class ExecutionMetrics:
 
 
 def compute_limit_price(row: Dict[str, Any], buffer_bps: int = 75) -> float:
-    base_price = row.get("entry_price") if row.get("entry_price") not in (None, "") else row.get("close")
-    if base_price is None or pd.isna(base_price):
+    def _is_missing(value: Any) -> bool:
+        if value is None:
+            return True
+        try:
+            if pd.isna(value):
+                return True
+        except Exception:
+            pass
+        if isinstance(value, str) and not value.strip():
+            return True
+        return False
+
+    entry_price = row.get("entry_price")
+    base_price = entry_price if not _is_missing(entry_price) else row.get("close")
+    if _is_missing(base_price):
         raise ValueError("Row must contain either entry_price or close")
     base_price_f = float(base_price)
     limit = base_price_f * (1 + buffer_bps / 10_000)

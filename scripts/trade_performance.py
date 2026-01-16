@@ -48,6 +48,33 @@ def _safe_to_float(value: Any) -> float | None:
         return None
 
 
+def _safe_str(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value)
+
+
+def _first_notna(row: Mapping[str, Any], *keys: str) -> Any | None:
+    for key in keys:
+        if key not in row:
+            continue
+        value = row.get(key)
+        if value is None:
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except Exception:
+            pass
+        return value
+    return None
+
+
 def _ensure_number(value: Any) -> float:
     try:
         if value is None:
@@ -364,16 +391,14 @@ def compute_trade_excursions(
     post_exit_peaks: list[float | None] = []
 
     for _, row in frame.iterrows():
-        symbol = str(row.get("symbol") or "").upper()
+        symbol = _safe_str(row.get("symbol")).upper()
         entry_ts = row.get("entry_time")
         exit_ts = row.get("exit_time")
         entry_price = _safe_to_float(row.get("entry_price"))
         exit_price = _safe_to_float(row.get("exit_price"))
         exit_reason = _infer_exit_reason(row)
         trailing_pct = _safe_to_float(
-            row.get("trailing_pct")
-            or row.get("trailing_percent")
-            or row.get("trailing_stop_pct")
+            _first_notna(row, "trailing_pct", "trailing_percent", "trailing_stop_pct")
         )
         estimated_peak = exit_price / 0.97 if exit_reason == "TrailingStop" and trailing_pct == 3.0 and exit_price else None
 
@@ -434,8 +459,8 @@ def compute_trade_excursions(
 
 
 def _infer_exit_reason(row: Mapping[str, Any]) -> str:
-    raw_reason = row.get("exit_reason") or row.get("reason")
-    if isinstance(raw_reason, str) and raw_reason.strip():
+    raw_reason = _safe_str(_first_notna(row, "exit_reason", "reason"))
+    if raw_reason.strip():
         return raw_reason.strip()
 
     haystack_parts: list[str] = []
@@ -463,14 +488,12 @@ def _normalize_trailing_pct(value: Any) -> float | None:
 
 
 def _is_trailing_stop_exit(row: Mapping[str, Any], *, tolerance: float = DEFAULT_TRAILING_STOP_TOLERANCE) -> bool:
-    reason = (row.get("exit_reason") or row.get("reason") or "").strip()
+    reason = _safe_str(_first_notna(row, "exit_reason", "reason")).strip()
     if reason == "TrailingStop":
         return True
 
     trailing_pct = _normalize_trailing_pct(
-        row.get("trailing_pct")
-        or row.get("trailing_percent")
-        or row.get("trailing_stop_pct")
+        _first_notna(row, "trailing_pct", "trailing_percent", "trailing_stop_pct")
     )
     peak_price = _safe_to_float(row.get("peak_price"))
     exit_price = _safe_to_float(row.get("exit_price"))
@@ -692,9 +715,16 @@ def compute_rebound_metrics(
     rebound_flags: list[bool] = [False] * len(frame.index)
 
     for idx, row in frame.iterrows():
-        if not bool(row.get("is_stop_exit")):
+        stop_exit = row.get("is_stop_exit")
+        try:
+            if stop_exit is None or pd.isna(stop_exit):
+                continue
+        except Exception:
+            if stop_exit is None:
+                continue
+        if not bool(stop_exit):
             continue
-        symbol = str(row.get("symbol") or "").upper()
+        symbol = _safe_str(row.get("symbol")).upper()
         exit_ts = row.get("exit_time")
         exit_price = _safe_to_float(row.get("exit_price"))
         if not symbol or exit_price is None or not isinstance(exit_ts, pd.Timestamp):

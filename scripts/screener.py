@@ -66,6 +66,41 @@ def _to_symbol_list(obj: Iterable[object] | pd.Series | pd.DataFrame | None) -> 
     return unique
 
 
+def _safe_str(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value)
+
+
+def _first_text(row: Mapping[str, object], *keys: str) -> str:
+    for key in keys:
+        if key not in row:
+            continue
+        text = _safe_str(row.get(key)).strip()
+        if text:
+            return text
+    return ""
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _coerce_float(value: object, default: Optional[float] = None) -> Optional[float]:
     if value is None:
         return default
@@ -78,10 +113,10 @@ def _coerce_float(value: object, default: Optional[float] = None) -> Optional[fl
 
 
 def _is_common_stock_like(row) -> bool:
-    ex = (row.get("exchange") or "").strip().upper()
-    asset_type = (row.get("asset_type") or row.get("class") or row.get("asset_class") or "").strip().upper()
-    name = (row.get("name") or "").strip().upper()
-    sym = (row.get("symbol") or "").strip().upper()
+    ex = _first_text(row, "exchange").upper()
+    asset_type = _first_text(row, "asset_type", "class", "asset_class").upper()
+    name = _first_text(row, "name").upper()
+    sym = _first_text(row, "symbol").upper()
 
     fundish_kw = (
         "ETF",
@@ -1846,8 +1881,8 @@ def merge_asset_metadata(bars_df: pd.DataFrame, asset_meta: Dict[str, dict]) -> 
         result["name"] = result["name"].fillna("").astype(str)
 
     def _kind_from_row(row: pd.Series) -> str:
-        exchange = str(row.get("exchange", "") or "").strip().upper()
-        asset_class = str(row.get("asset_class", "") or "").strip().upper()
+        exchange = _safe_str(row.get("exchange", "")).strip().upper()
+        asset_class = _safe_str(row.get("asset_class", "")).strip().upper()
         if exchange in KNOWN_EQUITY:
             return "EQUITY"
         if not exchange and asset_class in {"US_EQUITY", "EQUITY"}:
@@ -1983,7 +2018,7 @@ def _load_alpaca_universe(
         if "exchange" in df.columns:
             fallback_meta = {
                 row["symbol"]: {
-                    "exchange": str(row.get("exchange", "")).strip().upper(),
+                    "exchange": _safe_str(row.get("exchange", "")).strip().upper(),
                     "tradable": True,
                     "asset_class": "US_EQUITY",
                 }
@@ -3567,8 +3602,8 @@ def _load_coverage_table(path: Path) -> dict[str, dict[str, object]]:
         coverage[symbol] = {
             "last_ok_utc": row.get("last_ok_utc"),
             "last_miss_utc": row.get("last_miss_utc"),
-            "ok_count": int(row.get("ok_count", 0) or 0),
-            "miss_count": int(row.get("miss_count", 0) or 0),
+            "ok_count": _safe_int(row.get("ok_count", 0)),
+            "miss_count": _safe_int(row.get("miss_count", 0)),
         }
     return coverage
 

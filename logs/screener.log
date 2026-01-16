@@ -25966,3 +25966,37 @@ Trying to import the above resulted in these errors:
 2026-01-10 12:57:08,306 - screener - INFO - [STAGE] gates end (candidates=6)
 2026-01-10 12:57:08,506 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-10.csv (top_n=14)
 2026-01-10 12:57:08,520 - screener - INFO - Screener complete: 7227 symbols examined, 6 candidates.
+2026-01-16 10:34:25,252 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-16 10:34:27,268 - screener - INFO - [MODE] full-nightly start
+2026-01-16 10:34:27,268 - screener - ERROR - Missing coarse rank file at C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\tmp\coarse_rank.csv; run coarse-features first.
+2026-01-16 10:35:12,129 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-16 10:35:12,129 - screener - INFO - [MODE] coarse-features start
+2026-01-16 10:35:12,129 - screener - ERROR - Missing symbol stats at C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\registry\symbol_stats.csv; run build-symbol-stats first.
+2026-01-16 10:35:41,956 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-16 10:35:41,956 - screener - INFO - [MODE] build-symbol-stats start
+2026-01-16 10:35:42,187 - screener - INFO - Symbol stats written to C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\registry\symbol_stats.csv (rows=92, elapsed=0.219s)
+2026-01-16 10:35:54,558 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-16 10:35:54,558 - screener - INFO - [MODE] coarse-features start
+2026-01-16 10:35:54,764 - screener - INFO - Coarse features complete: eligible=30 symbols=30 rows=3600 features=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\features\1d\coarse_2026-01-09.parquet
+2026-01-16 10:36:15,954 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-16 10:36:16,183 - screener - INFO - [MODE] full-nightly start
+2026-01-16 10:36:16,194 - screener - WARNING - Shortlist is empty; final ranking will have no candidates.
+2026-01-16 10:36:16,218 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-16 10:36:16,219 - screener - INFO - [STAGE] coarse features start
+2026-01-16 10:36:16,220 - screener - INFO - [STAGE] coarse features end (rows=0)
+2026-01-16 10:36:16,220 - screener - INFO - [STAGE] coarse rank start
+2026-01-16 10:36:16,220 - screener - INFO - [STAGE] coarse rank end (rows=0)
+2026-01-16 10:36:16,227 - screener - INFO - [STAGE] shortlist written: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\tmp\coarse_rank.csv (rows=0)
+2026-01-16 10:36:16,228 - screener - INFO - [STAGE] full features start (shortlist=0)
+2026-01-16 10:36:16,229 - screener - INFO - [STAGE] full features end (rows=0)
+2026-01-16 10:36:16,229 - screener - INFO - [STAGE] full rank start
+2026-01-16 10:36:16,229 - screener - INFO - [STAGE] full rank end (rows=0)
+2026-01-16 10:36:16,229 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=0 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-16
+2026-01-16 10:36:16,230 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-16 10:36:16,231 - screener - INFO - [STAGE] gates start
+2026-01-16 10:36:16,231 - screener - INFO - [STAGE] gates end (candidates=0)
+2026-01-16 10:36:16,233 - screener - INFO - No candidates passed ranking gates.
+2026-01-16 10:36:16,251 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-16.csv (top_n=0)
+2026-01-16 10:36:16,267 - screener - INFO - Full nightly outputs written to C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\screener_metrics.json
+2026-01-16 10:41:46,976 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-16 10:41:47,196 - screener - INFO - [MODE] full-nightly start
