@@ -4737,7 +4737,7 @@ def run_screener(
     stats["backtest_target"] = backtest_limit
 
     prefiltered_map = {
-        str(sym or "").strip().upper(): str(reason or "").strip().upper()
+        _safe_str(sym).strip().upper(): _safe_str(reason).strip().upper()
         for sym, reason in (prefiltered_skips or {}).items()
     }
 
@@ -4745,10 +4745,10 @@ def run_screener(
         allowed_exchanges = set(ALLOWED_EQUITY_EXCHANGES)
         auto_prefilter: dict[str, str] = {}
         for sym_raw, exch_raw in prepared[["symbol", "exchange"]].itertuples(index=False):
-            sym = str(sym_raw or "").strip().upper()
+            sym = _safe_str(sym_raw).strip().upper()
             if not sym:
                 continue
-            exchange = str(exch_raw or "").strip().upper()
+            exchange = _safe_str(exch_raw).strip().upper()
             reason: str | None
             if not exchange:
                 reason = "UNKNOWN_EXCHANGE"
