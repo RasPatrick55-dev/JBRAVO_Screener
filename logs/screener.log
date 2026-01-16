@@ -26177,3 +26177,32 @@ Trying to import the above resulted in these errors:
 2026-01-16 15:49:42,993 - screener - INFO - [STAGE] gates end (candidates=6)
 2026-01-16 15:49:43,121 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-16.csv (top_n=18)
 2026-01-16 15:49:43,135 - screener - INFO - Full nightly outputs written to C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\screener_metrics.json
+2026-01-16 16:26:41,183 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-16 16:26:41,402 - screener - INFO - [MODE] full-nightly start
+2026-01-16 16:26:41,402 - screener - INFO - [MODE] coarse-features start
+2026-01-16 16:26:45,706 - screener - INFO - [INFO] Coarse score stats eligible=30 rows_out=30 score_non_null=30 min=0.0 median=0.275 max=0.475
+2026-01-16 16:26:45,708 - screener - INFO - [INFO] Coarse export df rows=30 coarse_score_non_null=30 cols=symbol,coarse_score,coarse_rank,ADX_z,AROON_z,BP_z,GAPpen_z,LIQpen_z,MH_z,MS_z,PT_z,RSI_z,TS_z,VCP_z,VOLexp_z
+2026-01-16 16:26:45,714 - screener - INFO - [INFO] Coarse rank export rows=30 path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\tmp\coarse_rank.csv
+2026-01-16 16:26:45,742 - screener - INFO - Coarse features complete: eligible=30 symbols=30 rows=10650 features=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\features\1d\coarse_2026-01-16.parquet
+2026-01-16 16:26:45,743 - screener - INFO - [INFO] Coarse ranking using in-memory dataframe rows=30
+2026-01-16 16:26:45,762 - screener - INFO - [INFO] bars: batch 01/01 syms=30 pages=3 rows=~20951 elapsed=0.0s cache=hit
+2026-01-16 16:26:45,793 - screener - INFO - Universe prefix counts: {'C': 4, 'N': 3, 'A': 2, 'I': 2, 'O': 2, 'D': 2, 'L': 2, 'S': 2, 'B': 2, 'G': 2, 'R': 1, 'H': 1, 'P': 1, 'J': 1, 'U': 1, 'F': 1, 'M': 1}
+2026-01-16 16:26:45,801 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-16 16:26:45,831 - screener - INFO - [STAGE] coarse features start
+2026-01-16 16:26:53,636 - screener - INFO - [STAGE] coarse features end (rows=20951)
+2026-01-16 16:26:53,636 - screener - INFO - [STAGE] coarse rank start
+2026-01-16 16:26:53,668 - screener - INFO - [INFO] Coarse rank rows_in=30 score_non_null=30 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-16 16:26:53,668 - screener - INFO - [STAGE] coarse rank end (rows=30)
+2026-01-16 16:26:53,676 - screener - INFO - [STAGE] shortlist written: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\tmp\shortlist.csv (rows=30)
+2026-01-16 16:26:53,678 - screener - INFO - [STAGE] full features start (shortlist=30)
+2026-01-16 16:27:01,596 - screener - INFO - [STAGE] full features end (rows=20951)
+2026-01-16 16:27:01,606 - screener - INFO - [STAGE] finalize candidates pruned rows=20951 -> 20949
+2026-01-16 16:27:01,606 - screener - INFO - [STAGE] full rank start
+2026-01-16 16:27:01,634 - screener - INFO - [STAGE] full rank end (rows=30)
+2026-01-16 16:27:01,634 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=30 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-16
+2026-01-16 16:27:01,635 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-16 16:27:01,637 - screener - INFO - [STAGE] quality filters pruned rows=30 -> 18
+2026-01-16 16:27:01,639 - screener - INFO - [STAGE] gates start
+2026-01-16 16:27:01,644 - screener - INFO - [STAGE] gates end (candidates=6)
+2026-01-16 16:27:01,773 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-16.csv (top_n=18)
+2026-01-16 16:27:01,785 - screener - INFO - Full nightly outputs written to C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\screener_metrics.json

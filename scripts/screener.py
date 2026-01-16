@@ -4962,6 +4962,7 @@ def run_screener(
     coarse_rank_timer = T()
     LOGGER.info("[STAGE] coarse rank start")
     coarse_scored = score_universe(coarse_enriched, ranker_cfg)
+    rows_in = int(coarse_scored.shape[0])
     if not coarse_scored.empty:
         coarse_scored = coarse_scored.copy()
         rename_map: dict[str, str] = {}
@@ -5005,9 +5006,10 @@ def run_screener(
             coarse_scored["coarse_score"] = pd.to_numeric(
                 coarse_scored["coarse_score"], errors="coerce"
             )
-            coarse_scored = coarse_scored.loc[
-                coarse_scored["coarse_score"].notna()
-            ].copy()
+            if coarse_scored["coarse_score"].notna().any():
+                coarse_scored = coarse_scored.loc[
+                    coarse_scored["coarse_score"].notna()
+                ].copy()
     score_non_null = (
         int(coarse_scored["coarse_score"].notna().sum())
         if "coarse_score" in coarse_scored.columns
@@ -5015,7 +5017,7 @@ def run_screener(
     )
     LOGGER.info(
         "[INFO] Coarse rank rows_in=%d score_non_null=%d cols=%s",
-        int(coarse_scored.shape[0]),
+        rows_in,
         score_non_null,
         ",".join([str(col) for col in coarse_scored.columns]),
     )
