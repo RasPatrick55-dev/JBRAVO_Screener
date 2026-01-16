@@ -511,6 +511,12 @@ def load_latest_candidates():
         "adv20",
         "atrp",
         "source",
+        "sma9",
+        "ema20",
+        "sma180",
+        "rsi14",
+        "passed_gates",
+        "gate_fail_reason",
     ]
     path = latest_candidates_path
     if not os.path.exists(path):

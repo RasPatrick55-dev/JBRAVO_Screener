@@ -998,10 +998,172 @@ def apply_gates(
     return candidates_df, gate_counts, reject_samples
 
 
+def compute_gate_fail_reasons(
+    df: pd.DataFrame,
+    cfg: Optional[Mapping[str, object]] = None,
+) -> pd.Series:
+    """Return a list of gate failure labels for each row (telemetry only)."""
+
+    if df is None or df.empty:
+        return pd.Series([], index=df.index if isinstance(df, pd.DataFrame) else None, dtype="object")
+
+    cfg = cfg or {}
+    if _config_version(cfg) >= 2:
+        return _compute_gate_fail_reasons_v2(df, cfg)
+    return _compute_gate_fail_reasons_v1(df, cfg)
+
+
+def _compute_gate_fail_reasons_v2(df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.Series:
+    thresholds = cfg.get("thresholds") if isinstance(cfg.get("thresholds"), Mapping) else {}
+
+    rel_vol_min = _resolve_float(thresholds.get("rel_vol_min")) if thresholds else None
+    adx_min = _resolve_float(thresholds.get("adx_min")) if thresholds else None
+    atr_pct_min = _resolve_float(thresholds.get("atr_pct_min")) if thresholds else None
+    atr_pct_max = _resolve_float(thresholds.get("atr_pct_max")) if thresholds else None
+    wk52_min = _resolve_float(thresholds.get("wk52_min")) if thresholds else None
+
+    reasons: list[list[str]] = []
+    for _, row in df.iterrows():
+        row_reasons: list[str] = []
+        if rel_vol_min is not None:
+            rel_val = _resolve_float(row.get("rel_vol") or row.get("REL_VOLUME"))
+            if rel_val is None or rel_val + FLOAT_TOL < rel_vol_min:
+                row_reasons.append("REL_VOL")
+        if adx_min is not None:
+            adx_val = _resolve_float(row.get("adx") or row.get("ADX"))
+            if adx_val is None or adx_val + FLOAT_TOL < adx_min:
+                row_reasons.append("ADX")
+        if atr_pct_min is not None or atr_pct_max is not None:
+            atr_val = _resolve_float(row.get("atr_pct") or row.get("ATR_pct") or row.get("ATR_PCT"))
+            lower = atr_pct_min if atr_pct_min is not None else -np.inf
+            upper = atr_pct_max if atr_pct_max is not None else np.inf
+            if atr_val is None or atr_val + FLOAT_TOL < lower or atr_val - FLOAT_TOL > upper:
+                row_reasons.append("ATR")
+        if wk52_min is not None:
+            wk_val = _resolve_float(row.get("wk52_prox") or row.get("WK52_PROX"))
+            if wk_val is None or wk_val + FLOAT_TOL < wk52_min:
+                row_reasons.append("WK52")
+        reasons.append(row_reasons)
+
+    return pd.Series(reasons, index=df.index, dtype="object")
+
+
+def _compute_gate_fail_reasons_v1(df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.Series:
+    gates_cfg = dict(DEFAULT_GATES)
+    gates_cfg.update({key: cfg.get("gates", {}).get(key, gates_cfg.get(key)) for key in gates_cfg})
+    thresholds = cfg.get("thresholds") if isinstance(cfg.get("thresholds"), Mapping) else {}
+
+    history_col = str(gates_cfg.get("history_column") or "history")
+    min_history = _resolve_float(gates_cfg.get("min_history")) or 0.0
+    require_sma_stack = bool(gates_cfg.get("require_sma_stack", True))
+    min_rsi = _resolve_float(gates_cfg.get("min_rsi"))
+    max_rsi = _resolve_float(gates_cfg.get("max_rsi"))
+    rsi_tolerance = _resolve_float(gates_cfg.get("rsi_tolerance"))
+    if rsi_tolerance is None or not np.isfinite(rsi_tolerance):
+        rsi_tolerance = 0.0
+    else:
+        rsi_tolerance = max(rsi_tolerance, 0.0)
+    min_adx = _resolve_float(gates_cfg.get("min_adx"))
+    min_aroon = _resolve_float(gates_cfg.get("min_aroon"))
+    min_macd_hist = _resolve_float(gates_cfg.get("min_macd_hist"))
+    min_volexp = _resolve_float(gates_cfg.get("min_volexp"))
+    max_gap = _resolve_float(gates_cfg.get("max_gap"))
+    max_liq_pen = _resolve_float(gates_cfg.get("max_liq_penalty"))
+    dollar_vol_min = _resolve_float(gates_cfg.get("dollar_vol_min"))
+    min_score = _resolve_float(gates_cfg.get("min_score"))
+
+    atr_min = _resolve_float(thresholds.get("atr_min")) if thresholds else None
+    atr_max = _resolve_float(thresholds.get("atr_max")) if thresholds else None
+
+    reasons: list[list[str]] = []
+    for _, row in df.iterrows():
+        row_reasons: list[str] = []
+        history_val = _resolve_float(row.get(history_col))
+        if min_history and (history_val is None or history_val + FLOAT_TOL < min_history):
+            row_reasons.append("HISTORY")
+
+        if min_score is not None:
+            score_val = _resolve_float(row.get("Score") or row.get("score"))
+            if score_val is None or score_val + FLOAT_TOL < min_score:
+                row_reasons.append("SCORE")
+
+        if dollar_vol_min is not None:
+            adv_val = _resolve_float(row.get("ADV20") or row.get("adv20"))
+            if adv_val is None or adv_val + FLOAT_TOL < dollar_vol_min:
+                row_reasons.append("LIQUIDITY")
+
+        if require_sma_stack:
+            sma9 = _resolve_float(row.get("SMA9") or row.get("sma9"))
+            ema20 = _resolve_float(row.get("EMA20") or row.get("ema20"))
+            sma50 = _resolve_float(row.get("SMA50") or row.get("sma50"))
+            sma100 = _resolve_float(row.get("SMA100") or row.get("sma100"))
+            if any(v is None for v in (sma9, ema20, sma50, sma100)):
+                row_reasons.append("MA_STACK")
+            elif not (sma9 > ema20 > sma50 > sma100):
+                row_reasons.append("MA_STACK")
+
+        if min_rsi is not None or max_rsi is not None:
+            rsi_val = _resolve_float(row.get("RSI") or row.get("rsi") or row.get("RSI14") or row.get("rsi14"))
+            if rsi_val is None:
+                row_reasons.append("RSI")
+            else:
+                if min_rsi is not None and rsi_val + FLOAT_TOL < (min_rsi - rsi_tolerance):
+                    row_reasons.append("RSI")
+                if max_rsi is not None and rsi_val - FLOAT_TOL > (max_rsi + rsi_tolerance):
+                    row_reasons.append("RSI")
+
+        if min_adx is not None:
+            adx_val = _resolve_float(row.get("ADX") or row.get("adx"))
+            if adx_val is None or adx_val + FLOAT_TOL < min_adx:
+                row_reasons.append("ADX")
+
+        if min_aroon is not None:
+            aroon_val = _resolve_float(row.get("AROON_UP") or row.get("AROON") or row.get("aroon_up"))
+            if aroon_val is None or aroon_val + FLOAT_TOL < min_aroon:
+                row_reasons.append("AROON")
+
+        if min_macd_hist is not None:
+            macd_val = _resolve_float(row.get("MACD_HIST") or row.get("macd_hist"))
+            if macd_val is None or macd_val + FLOAT_TOL < min_macd_hist:
+                row_reasons.append("MACD")
+
+        if min_volexp is not None:
+            volexp_val = _resolve_float(row.get("VOLexp") or row.get("volexp"))
+            if volexp_val is None or volexp_val + FLOAT_TOL < min_volexp:
+                row_reasons.append("VOLEXP")
+
+        if max_gap is not None:
+            gap_val = _resolve_float(row.get("GAPpen") or row.get("gappen"))
+            if gap_val is None or gap_val - FLOAT_TOL > max_gap:
+                row_reasons.append("GAP")
+
+        if max_liq_pen is not None:
+            liq_val = _resolve_float(row.get("LIQpen") or row.get("liqpen"))
+            if liq_val is None or liq_val - FLOAT_TOL > max_liq_pen:
+                row_reasons.append("LIQUIDITY")
+
+        if atr_min is not None or atr_max is not None:
+            atr_val = _resolve_float(row.get("atrp") or row.get("ATR_pct") or row.get("ATR_PCT"))
+            if atr_val is None:
+                atr14 = _resolve_float(row.get("ATR14") or row.get("atr14"))
+                close = _resolve_float(row.get("close") or row.get("Close"))
+                if atr14 is not None and close:
+                    atr_val = atr14 / close
+            lower = atr_min if atr_min is not None else -np.inf
+            upper = atr_max if atr_max is not None else np.inf
+            if atr_val is None or atr_val + FLOAT_TOL < lower or atr_val - FLOAT_TOL > upper:
+                row_reasons.append("ATR")
+
+        reasons.append(row_reasons)
+
+    return pd.Series(reasons, index=df.index, dtype="object")
+
+
 __all__ = [
     "score_universe",
     "apply_gates",
     "apply_final_gates",
+    "compute_gate_fail_reasons",
     "PRESETS",
     "DEFAULT_COMPONENT_MAP",
     "DEFAULT_WEIGHTS",

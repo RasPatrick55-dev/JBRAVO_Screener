@@ -26,6 +26,13 @@ CANON = {
     "ADV20": "adv20",
     "atr%": "atrp",
     "ATR%": "atrp",
+    "SMA9": "sma9",
+    "EMA20": "ema20",
+    "SMA180": "sma180",
+    "RSI14": "rsi14",
+    "gates_passed": "passed_gates",
+    "passed_gates": "passed_gates",
+    "gate_fail_reason": "gate_fail_reason",
 }
 
 CANONICAL_COLUMNS: Sequence[str] = (
@@ -41,6 +48,12 @@ CANONICAL_COLUMNS: Sequence[str] = (
     "adv20",
     "atrp",
     "source",
+    "sma9",
+    "ema20",
+    "sma180",
+    "rsi14",
+    "passed_gates",
+    "gate_fail_reason",
 )
 
 CANONICAL = list(CANONICAL_COLUMNS)
@@ -51,7 +64,19 @@ LATEST_CANDIDATES = DATA_DIR / "latest_candidates.csv"
 SCORED_CANDIDATES = DATA_DIR / "scored_candidates.csv"
 PREDICTIONS_DIR = DATA_DIR / "predictions"
 
-_NUMERIC_COLUMNS = ("score", "close", "volume", "universe_count", "entry_price", "adv20", "atrp")
+_NUMERIC_COLUMNS = (
+    "score",
+    "close",
+    "volume",
+    "universe_count",
+    "entry_price",
+    "adv20",
+    "atrp",
+    "sma9",
+    "ema20",
+    "sma180",
+    "rsi14",
+)
 _RENAME_MAP = {
     "Score": "score",
     "Composite Score": "score",
@@ -89,6 +114,13 @@ _RENAME_MAP = {
     "Entry": "entry_price",
     "entry": "entry_price",
     "source": "source",
+    "SMA9": "sma9",
+    "EMA20": "ema20",
+    "SMA180": "sma180",
+    "RSI14": "rsi14",
+    "gates_passed": "passed_gates",
+    "passed_gates": "passed_gates",
+    "gate_fail_reason": "gate_fail_reason",
 }
 
 _DEFAULT_ROW = {
@@ -104,6 +136,12 @@ _DEFAULT_ROW = {
     "adv20": 0.0,
     "atrp": 0.0,
     "source": "fallback",
+    "sma9": 0.0,
+    "ema20": 0.0,
+    "sma180": 0.0,
+    "rsi14": 0.0,
+    "passed_gates": True,
+    "gate_fail_reason": "[]",
 }
 
 _STATIC_FALLBACK_ROWS = [
@@ -120,6 +158,12 @@ _STATIC_FALLBACK_ROWS = [
         "adv20": 60_000_000.0,
         "atrp": 0.02,
         "source": "fallback",
+        "sma9": 0.0,
+        "ema20": 0.0,
+        "sma180": 0.0,
+        "rsi14": 0.0,
+        "passed_gates": True,
+        "gate_fail_reason": "[]",
     },
     {
         "timestamp": "",
@@ -134,6 +178,12 @@ _STATIC_FALLBACK_ROWS = [
         "adv20": 90_000_000.0,
         "atrp": 0.015,
         "source": "fallback",
+        "sma9": 0.0,
+        "ema20": 0.0,
+        "sma180": 0.0,
+        "rsi14": 0.0,
+        "passed_gates": True,
+        "gate_fail_reason": "[]",
     },
     {
         "timestamp": "",
@@ -148,6 +198,12 @@ _STATIC_FALLBACK_ROWS = [
         "adv20": 45_000_000.0,
         "atrp": 0.018,
         "source": "fallback",
+        "sma9": 0.0,
+        "ema20": 0.0,
+        "sma180": 0.0,
+        "rsi14": 0.0,
+        "passed_gates": True,
+        "gate_fail_reason": "[]",
     },
 ]
 
@@ -158,9 +214,9 @@ def _write_static_three(path):
     # three liquid tickers as a safety net
     now = datetime.utcnow().isoformat()
     rows = [
-      [now,"AAPL",0.0,"NASDAQ",190.00,0,0,"{}",190.00,0.0,0.0,"fallback:static"],
-      [now,"SPY", 0.0,"NYSEARCA",520.00,0,0,"{}",520.00,0.0,0.0,"fallback:static"],
-      [now,"QQQ", 0.0,"NASDAQ",460.00,0,0,"{}",460.00,0.0,0.0,"fallback:static"],
+      [now,"AAPL",0.0,"NASDAQ",190.00,0,0,"{}",190.00,0.0,0.0,"fallback:static",0.0,0.0,0.0,0.0,True,"[]"],
+      [now,"SPY", 0.0,"NYSEARCA",520.00,0,0,"{}",520.00,0.0,0.0,"fallback:static",0.0,0.0,0.0,0.0,True,"[]"],
+      [now,"QQQ", 0.0,"NASDAQ",460.00,0,0,"{}",460.00,0.0,0.0,"fallback:static",0.0,0.0,0.0,0.0,True,"[]"],
     ]
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -266,6 +322,13 @@ def _canonical_frame(df: Optional[pd.DataFrame], now_ts: Optional[str] = None) -
         )
         out[column] = out[column].fillna(_DEFAULT_ROW[column])
 
+    for column in ("sma9", "ema20", "sma180", "rsi14"):
+        values = source_frame.get(column)
+        out[column] = pd.to_numeric(values, errors="coerce") if values is not None else pd.Series(
+            _DEFAULT_ROW[column], index=out.index
+        )
+        out[column] = out[column].fillna(_DEFAULT_ROW[column])
+
     out["volume"] = out["volume"].clip(lower=0)
     out["universe_count"] = out["universe_count"].clip(lower=0)
 
@@ -282,6 +345,20 @@ def _canonical_frame(df: Optional[pd.DataFrame], now_ts: Optional[str] = None) -
 
     out["adv20"] = out["adv20"].clip(lower=0)
     out["atrp"] = out["atrp"].clip(lower=0)
+
+    passed_series = source_frame.get("passed_gates")
+    if passed_series is None:
+        passed_series = source_frame.get("gates_passed")
+    if passed_series is not None:
+        out["passed_gates"] = passed_series
+    else:
+        out["passed_gates"] = _DEFAULT_ROW["passed_gates"]
+
+    fail_series = source_frame.get("gate_fail_reason")
+    if fail_series is not None:
+        out["gate_fail_reason"] = fail_series
+    else:
+        out["gate_fail_reason"] = _DEFAULT_ROW["gate_fail_reason"]
 
     source_series = source_frame.get("source")
     if source_series is not None:

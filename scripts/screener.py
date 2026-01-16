@@ -316,6 +316,7 @@ try:  # pragma: no cover - preferred module execution path
         apply_gates,
         score_universe,
         DEFAULT_COMPONENT_MAP,
+        compute_gate_fail_reasons,
     )
     from .backtest import compute_recent_performance
 except Exception:  # pragma: no cover - fallback for direct script execution
@@ -346,6 +347,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
         apply_gates,
         score_universe,
         DEFAULT_COMPONENT_MAP,
+        compute_gate_fail_reasons,
     )
     from scripts.backtest import compute_recent_performance  # type: ignore
 
@@ -532,6 +534,7 @@ TOP_CANDIDATE_COLUMNS = [
     "ATR_pct",
     "score_breakdown",
     "RSI",
+    "RSI14",
     "ADX",
     "AROON",
     "VOLexp",
@@ -540,8 +543,11 @@ TOP_CANDIDATE_COLUMNS = [
     "EMA20",
     "SMA50",
     "SMA100",
+    "SMA180",
     "ATR14",
     "universe_count",
+    "gates_passed",
+    "gate_fail_reason",
 ]
 
 SKIP_KEYS = [
@@ -4934,6 +4940,8 @@ def run_screener(
 
     if not candidates_df.empty:
         candidates_df["gates_passed"] = True
+        candidates_df["passed_gates"] = True
+        candidates_df["gate_fail_reason"] = [[] for _ in range(int(candidates_df.shape[0]))]
         if "coarse_score" in candidates_df.columns:
             candidates_df["coarse_score"] = pd.to_numeric(
                 candidates_df["coarse_score"], errors="coerce"
@@ -4960,6 +4968,22 @@ def run_screener(
         passed_index = set(_gate_key(candidates_df))
         scored_df_keys = _gate_key(scored_df)
         scored_df["gates_passed"] = scored_df_keys.isin(passed_index)
+
+    if not scored_df.empty:
+        scored_df["passed_gates"] = scored_df["gates_passed"].fillna(False).astype(bool)
+        try:
+            gate_fail_series = compute_gate_fail_reasons(scored_df, ranker_cfg)
+        except Exception as exc:  # pragma: no cover - telemetry should not break flow
+            LOGGER.warning("Gate fail reason computation failed: %s", exc)
+            gate_fail_series = pd.Series(
+                [[] for _ in range(int(scored_df.shape[0]))], index=scored_df.index
+            )
+        scored_df["gate_fail_reason"] = gate_fail_series
+        passed_mask = scored_df["passed_gates"]
+        if passed_mask.any():
+            scored_df.loc[passed_mask, "gate_fail_reason"] = [
+                [] for _ in range(int(passed_mask.sum()))
+            ]
 
     stats["candidates_out"] = int(candidates_df.shape[0])
 

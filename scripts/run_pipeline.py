@@ -554,6 +554,9 @@ def _coerce_canonical(df_scored: Optional[pd.DataFrame], df_top: Optional[pd.Dat
     base.columns = [str(col).strip().lower() for col in base.columns]
     base = base.loc[:, ~base.columns.duplicated()]
 
+    if "gates_passed" in base.columns and "passed_gates" not in base.columns:
+        base["passed_gates"] = base["gates_passed"]
+
     if "symbol" not in base.columns or "score" not in base.columns:
         return pd.DataFrame(columns=REQUIRED_CAND_COLS)
 

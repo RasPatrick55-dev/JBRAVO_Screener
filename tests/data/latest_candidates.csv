@@ -1,3 +1,3 @@
-timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entry_price,adv20,atrp,source
-2024-07-01T12:00:00Z,AAPL,0.91,NASDAQ,195.1,1000000,10,"{}",195.1,5000000,0.75,pipeline
-2024-07-01T12:00:00Z,BETA,0.75,NYSE,22.3,250000,10,"{}",22.3,1500000,1.25,pipeline
+timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entry_price,adv20,atrp,source,sma9,ema20,sma180,rsi14,passed_gates,gate_fail_reason
+2024-07-01T12:00:00Z,AAPL,0.91,NASDAQ,195.1,1000000,10,"{}",195.1,5000000,0.75,pipeline,194.9,193.8,150.2,58.0,True,"[]"
+2024-07-01T12:00:00Z,BETA,0.75,NYSE,22.3,250000,10,"{}",22.3,1500000,1.25,pipeline,22.1,21.9,18.4,52.0,True,"[]"

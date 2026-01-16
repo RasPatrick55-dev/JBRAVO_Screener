@@ -231,6 +231,64 @@ def _json_dumps_or_none(payload: Any) -> Optional[str]:
             return None
 
 
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):  # type: ignore[arg-type]
+            return None
+    except Exception:
+        pass
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return bool(int(value))
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return None
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return None
+
+
+def normalize_gate_fail_reason(value: Any) -> Optional[list[str]]:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):  # type: ignore[arg-type]
+            return None
+    except Exception:
+        pass
+    if isinstance(value, (list, tuple, set)):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return cleaned or None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            cleaned = [str(item).strip() for item in parsed if str(item).strip()]
+            return cleaned or None
+        raw = text
+        if raw.startswith("[") and raw.endswith("]"):
+            raw = raw[1:-1]
+        parts = [
+            part.strip().strip("\"'") for part in raw.split(",") if part.strip().strip("\"'")
+        ]
+        return parts or None
+    return [str(value)]
+
+
 def normalize_ts(value: Any, field: str | None = None) -> datetime | None:
     """Return a timezone-aware datetime parsed from ``value`` or None on failure."""
 
@@ -452,12 +510,45 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
         "adv20": None,
         "atrp": None,
         "source": None,
+        "sma9": None,
+        "ema20": None,
+        "sma180": None,
+        "rsi14": None,
+        "passed_gates": None,
+        "gate_fail_reason": None,
     }
+    aliases = {
+        "timestamp": ("timestamp",),
+        "symbol": ("symbol",),
+        "score": ("score", "Score"),
+        "exchange": ("exchange", "Exchange"),
+        "close": ("close", "Close", "price", "last"),
+        "volume": ("volume", "Volume"),
+        "universe_count": ("universe_count", "Universe Count", "universe count"),
+        "score_breakdown": ("score_breakdown", "Score Breakdown", "score breakdown"),
+        "entry_price": ("entry_price", "Entry", "entry"),
+        "adv20": ("adv20", "ADV20", "adv_20"),
+        "atrp": ("atrp", "ATR_pct", "ATR%", "atr_percent", "ATR"),
+        "source": ("source",),
+        "sma9": ("sma9", "SMA9"),
+        "ema20": ("ema20", "EMA20"),
+        "sma180": ("sma180", "SMA180"),
+        "rsi14": ("rsi14", "RSI14"),
+        "passed_gates": ("passed_gates", "gates_passed"),
+        "gate_fail_reason": ("gate_fail_reason",),
+    }
+
+    def _row_value(row: Mapping[str, Any], key: str) -> Any:
+        for alias in aliases.get(key, (key,)):
+            if alias in row:
+                return row.get(alias)
+        return row.get(key)
+
     rows: list[dict[str, Any]] = []
     for _, row in normalized.iterrows():
         record = {}
         for key in columns:
-            record[key] = row.get(key) if isinstance(row, Mapping) else row[key] if key in row else None
+            record[key] = _row_value(row, key) if isinstance(row, Mapping) else row[key] if key in row else None
         symbol = (record.get("symbol") or "").upper()
         payload = {
             "run_date": _coerce_date(run_date),
@@ -473,6 +564,12 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
             "adv20": record.get("adv20"),
             "atrp": record.get("atrp"),
             "source": record.get("source"),
+            "sma9": record.get("sma9"),
+            "ema20": record.get("ema20"),
+            "sma180": record.get("sma180"),
+            "rsi14": record.get("rsi14"),
+            "passed_gates": _coerce_bool(record.get("passed_gates")),
+            "gate_fail_reason": normalize_gate_fail_reason(record.get("gate_fail_reason")),
         }
         rows.append(payload)
 
@@ -484,12 +581,14 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
                     """
                     INSERT INTO screener_candidates (
                         run_date, timestamp, symbol, score, exchange, close, volume,
-                        universe_count, score_breakdown, entry_price, adv20, atrp, source
+                        universe_count, score_breakdown, entry_price, adv20, atrp, source,
+                        sma9, ema20, sma180, rsi14, passed_gates, gate_fail_reason
                     )
                     VALUES (
                         %(run_date)s, %(timestamp)s, %(symbol)s, %(score)s, %(exchange)s, %(close)s, %(volume)s,
                         %(universe_count)s, CAST(%(score_breakdown)s AS JSONB), %(entry_price)s, %(adv20)s,
-                        %(atrp)s, %(source)s
+                        %(atrp)s, %(source)s, %(sma9)s, %(ema20)s, %(sma180)s, %(rsi14)s, %(passed_gates)s,
+                        %(gate_fail_reason)s
                     )
                     ON CONFLICT (run_date, symbol) DO UPDATE SET
                         timestamp=EXCLUDED.timestamp,
@@ -502,7 +601,13 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
                         entry_price=EXCLUDED.entry_price,
                         adv20=EXCLUDED.adv20,
                         atrp=EXCLUDED.atrp,
-                        source=EXCLUDED.source
+                        source=EXCLUDED.source,
+                        sma9=EXCLUDED.sma9,
+                        ema20=EXCLUDED.ema20,
+                        sma180=EXCLUDED.sma180,
+                        rsi14=EXCLUDED.rsi14,
+                        passed_gates=EXCLUDED.passed_gates,
+                        gate_fail_reason=EXCLUDED.gate_fail_reason
                     """,
                     rows,
                     page_size=200,

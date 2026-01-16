@@ -40,6 +40,12 @@ TABLE_STATEMENTS = [
         adv20 BIGINT,
         atrp NUMERIC,
         source TEXT,
+        sma9 DOUBLE PRECISION,
+        ema20 DOUBLE PRECISION,
+        sma180 DOUBLE PRECISION,
+        rsi14 DOUBLE PRECISION,
+        passed_gates BOOLEAN,
+        gate_fail_reason TEXT,
         created_at TIMESTAMPTZ DEFAULT now(),
         PRIMARY KEY (run_date, symbol)
     );
@@ -139,6 +145,15 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_trades_exit_time ON trades(exit_time);",
 ]
 
+SCREENER_CANDIDATES_ALTER_STATEMENTS = [
+    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS sma9 DOUBLE PRECISION;",
+    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS ema20 DOUBLE PRECISION;",
+    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS sma180 DOUBLE PRECISION;",
+    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS rsi14 DOUBLE PRECISION;",
+    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS passed_gates BOOLEAN;",
+    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS gate_fail_reason TEXT;",
+]
+
 RECONCILE_STATE_SEED = """
 INSERT INTO reconcile_state (id, last_after, last_ran_at)
 VALUES (1, NULL, NULL)
@@ -160,15 +175,33 @@ def _execute_statement(engine, statement: str) -> bool:
 
 
 def run_upgrade(engine) -> bool:
-    if not _repair_screener_candidates_schema(engine):
-        return False
+    _repair_screener_candidates_schema(engine)
 
     for ddl in TABLE_STATEMENTS + INDEX_STATEMENTS:
+        if not _execute_statement(engine, ddl):
+            return False
+    for ddl in SCREENER_CANDIDATES_ALTER_STATEMENTS:
+        logger.info("[INFO] DB_MIGRATE %s", ddl)
         if not _execute_statement(engine, ddl):
             return False
     if not _execute_statement(engine, RECONCILE_STATE_SEED):
         return False
     return True
+
+
+def _ensure_screener_candidates_columns(cursor, columns: set[str]) -> None:
+    required = {
+        "sma9": "DOUBLE PRECISION",
+        "ema20": "DOUBLE PRECISION",
+        "sma180": "DOUBLE PRECISION",
+        "rsi14": "DOUBLE PRECISION",
+        "passed_gates": "BOOLEAN",
+        "gate_fail_reason": "TEXT",
+    }
+    for name, ddl in required.items():
+        if name in columns:
+            continue
+        cursor.execute(f"ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS {name} {ddl}")
 
 
 def _repair_screener_candidates_schema(engine) -> bool:
@@ -194,10 +227,14 @@ def _repair_screener_candidates_schema(engine) -> bool:
                 columns = {row[0] for row in cursor.fetchall()}
 
                 if "run_date" in columns:
+                    _ensure_screener_candidates_columns(cursor, columns)
                     return True
 
                 if "run date" in columns:
                     cursor.execute('ALTER TABLE screener_candidates RENAME COLUMN "run date" TO run_date')
+                    columns.discard("run date")
+                    columns.add("run_date")
+                    _ensure_screener_candidates_columns(cursor, columns)
                     return True
 
                 cursor.execute("SELECT COUNT(*) FROM screener_candidates")
@@ -225,30 +262,22 @@ def main() -> None:
     parser.add_argument("--action", choices=["upgrade"], default="upgrade")
     args = parser.parse_args()
 
+    conn = db.get_db_conn()
+    if conn is None:
+        raise RuntimeError("DB_MIGRATE connection unavailable")
+
     try:
-        if not db.db_enabled():
-            logger.warning("[WARN] DB_MIGRATE db_disabled; skipping")
-            return
-
-        conn = db.get_db_conn()
-        if conn is None:
-            logger.warning("[WARN] DB_MIGRATE connection unavailable; skipping")
-            return
-
+        if args.action == "upgrade":
+            success = run_upgrade(conn)
+            if success:
+                logger.info("Database migration upgrade completed.")
+            else:
+                raise RuntimeError("DB_MIGRATE Upgrade encountered issues")
+    finally:
         try:
-            if args.action == "upgrade":
-                success = run_upgrade(conn)
-                if success:
-                    logger.info("Database migration upgrade completed.")
-                else:
-                    logger.warning("[WARN] DB_MIGRATE Upgrade encountered issues")
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("[WARN] DB_MIGRATE_MAIN %s", exc)
+            conn.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

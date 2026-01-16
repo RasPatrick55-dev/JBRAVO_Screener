@@ -135,6 +135,8 @@ def _canonicalize_candidate_header(
         "avgdollarvol20d": "adv20",
         "atrp_14": "atrp",
         "scorebreakdown": "score_breakdown",
+        "gates_passed": "passed_gates",
+        "gate_fail_reason": "gate_fail_reason",
     }
     for key, value in rename_map.items():
         if key in frame.columns and value not in frame.columns:
