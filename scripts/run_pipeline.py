@@ -1754,7 +1754,7 @@ def _write_refresh_metrics(metrics_path: Path) -> None:
 
 def ensure_candidates(min_rows: int = 1) -> int:
     current = _count_rows(LATEST_CANDIDATES)
-    if current >= min_rows:
+    if current > 0:
         return current
     frame, _ = build_latest_candidates(PROJECT_ROOT, max_rows=max(1, min_rows))
     normalized = normalize_candidate_df(frame)
