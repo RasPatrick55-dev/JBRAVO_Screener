@@ -4405,11 +4405,12 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         if coarse_df is None or coarse_df.empty:
             LOGGER.error("Coarse features regeneration failed; aborting full-nightly.")
             return 1
-    try:
-        if coarse_df is None:
-            coarse_df = pd.read_csv(coarse_path)
-    except Exception as exc:
-        LOGGER.error("Failed to read coarse rank file %s: %s", coarse_path, exc)
+        LOGGER.info(
+            "[INFO] Using in-memory coarse dataframe rows=%d",
+            int(coarse_df.shape[0]),
+        )
+    if coarse_df is None:
+        LOGGER.error("Coarse features unavailable; aborting full-nightly.")
         return 1
 
     coarse_df["symbol"] = coarse_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
