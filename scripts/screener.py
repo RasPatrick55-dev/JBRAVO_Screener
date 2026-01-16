@@ -4101,13 +4101,16 @@ def run_build_symbol_stats(args: argparse.Namespace, base_dir: Path) -> int:
 
 
 def _prepare_coarse_rank_export(frame: pd.DataFrame) -> pd.DataFrame:
-    columns = ["symbol", "Score_coarse", "coarse_rank"]
+    columns = ["symbol", "coarse_score", "coarse_rank"]
     if frame is None or frame.empty:
         return pd.DataFrame(columns=columns)
     df = frame.copy()
     df["symbol"] = df["symbol"].astype("string").str.upper()
-    if "Score_coarse" not in df.columns and "Score" in df.columns:
-        df.rename(columns={"Score": "Score_coarse"}, inplace=True)
+    if "coarse_score" not in df.columns:
+        if "Score_coarse" in df.columns:
+            df["coarse_score"] = df["Score_coarse"]
+        elif "Score" in df.columns:
+            df["coarse_score"] = df["Score"]
     if "coarse_rank" not in df.columns:
         df["coarse_rank"] = np.arange(1, df.shape[0] + 1, dtype=int)
     z_cols = sorted(col for col in df.columns if col.endswith("_z"))
@@ -4284,7 +4287,25 @@ def run_coarse_features(
             max_score,
         )
     coarse_rank_df = coarse_scored
-    if not coarse_rank_df.empty and "coarse_rank" not in coarse_rank_df.columns:
+    if "coarse_score" not in coarse_rank_df.columns:
+        if "Score" in coarse_rank_df.columns:
+            coarse_rank_df["coarse_score"] = coarse_rank_df["Score"]
+        elif "Score_coarse" in coarse_rank_df.columns:
+            coarse_rank_df["coarse_score"] = coarse_rank_df["Score_coarse"]
+    if "coarse_score" in coarse_rank_df.columns:
+        coarse_rank_df["coarse_score"] = pd.to_numeric(
+            coarse_rank_df["coarse_score"], errors="coerce"
+        )
+        coarse_rank_df = coarse_rank_df.loc[
+            coarse_rank_df["coarse_score"].notna()
+        ].copy()
+    if not coarse_rank_df.empty and (
+        "coarse_rank" not in coarse_rank_df.columns
+        or coarse_rank_df["coarse_rank"].isna().all()
+    ):
+        coarse_rank_df = coarse_rank_df.sort_values(
+            "coarse_score", ascending=False, na_position="last"
+        ).reset_index(drop=True)
         coarse_rank_df["coarse_rank"] = np.arange(1, coarse_rank_df.shape[0] + 1, dtype=int)
     if "Score" in coarse_rank_df.columns and "Score_coarse" not in coarse_rank_df.columns:
         coarse_rank_df = coarse_rank_df.rename(columns={"Score": "Score_coarse"})
@@ -4297,6 +4318,17 @@ def run_coarse_features(
     coarse_output = _prepare_coarse_rank_export(coarse_rank_df)
     coarse_path = base_dir / "data" / "tmp" / "coarse_rank.csv"
     coarse_path.parent.mkdir(parents=True, exist_ok=True)
+    coarse_non_null = (
+        int(coarse_output["coarse_score"].notna().sum())
+        if "coarse_score" in coarse_output.columns
+        else 0
+    )
+    LOGGER.info(
+        "[INFO] Coarse export df rows=%d coarse_score_non_null=%d cols=%s",
+        int(coarse_output.shape[0]) if coarse_output is not None else 0,
+        coarse_non_null,
+        ",".join(list(coarse_output.columns)) if coarse_output is not None else "",
+    )
     _write_csv_atomic(coarse_path, coarse_output)
     LOGGER.info(
         "[INFO] Coarse rank export rows=%d path=%s",
@@ -4380,7 +4412,9 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
 
     coarse_df["symbol"] = coarse_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
     if "Score_coarse" not in coarse_df.columns:
-        if "Score" in coarse_df.columns:
+        if "coarse_score" in coarse_df.columns:
+            coarse_df = coarse_df.rename(columns={"coarse_score": "Score_coarse"})
+        elif "Score" in coarse_df.columns:
             coarse_df = coarse_df.rename(columns={"Score": "Score_coarse"})
         elif "score" in coarse_df.columns:
             coarse_df = coarse_df.rename(columns={"score": "Score_coarse"})
