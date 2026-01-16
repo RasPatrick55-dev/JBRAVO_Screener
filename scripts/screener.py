@@ -4119,17 +4119,23 @@ def _prepare_coarse_rank_export(frame: pd.DataFrame) -> pd.DataFrame:
     return ordered
 
 
-def run_coarse_features(args: argparse.Namespace, base_dir: Path) -> int:
+def run_coarse_features(
+    args: argparse.Namespace,
+    base_dir: Path,
+    *,
+    return_frame: bool = False,
+) -> int | pd.DataFrame:
     LOGGER.info("[MODE] coarse-features start")
+    empty_frame = pd.DataFrame(columns=["symbol", "Score_coarse", "coarse_rank"])
     stats_path = base_dir / "data" / "registry" / "symbol_stats.csv"
     if not stats_path.exists():
         LOGGER.error("Missing symbol stats at %s; run build-symbol-stats first.", stats_path)
-        return 1
+        return empty_frame if return_frame else 1
     try:
         stats_df = pd.read_csv(stats_path)
     except Exception as exc:
         LOGGER.error("Failed to read %s: %s", stats_path, exc)
-        return 1
+        return empty_frame if return_frame else 1
 
     stats_df["symbol"] = stats_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
     stats_df["ADV20"] = pd.to_numeric(stats_df.get("ADV20"), errors="coerce")
@@ -4254,7 +4260,7 @@ def run_coarse_features(args: argparse.Namespace, base_dir: Path) -> int:
     )
     if bars_df.empty:
         LOGGER.warning("No bars available for coarse features; downstream stages may be empty.")
-    return 0
+    return coarse_output if return_frame else 0
 
 
 def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
@@ -4271,15 +4277,11 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
             LOGGER.error("Failed to read coarse rank file %s: %s", coarse_path, exc)
             needs_regen = True
     if needs_regen:
-        LOGGER.info("[INFO] Coarse rank empty; regenerating coarse features")
-        regen_rc = run_coarse_features(args, base_dir)
-        if regen_rc != 0:
+        LOGGER.info("[INFO] Coarse rank empty; rebuilding via coarse-features")
+        regenerated = run_coarse_features(args, base_dir, return_frame=True)
+        coarse_df = regenerated if isinstance(regenerated, pd.DataFrame) else None
+        if coarse_df is None or coarse_df.empty:
             LOGGER.error("Coarse features regeneration failed; aborting full-nightly.")
-            return regen_rc or 1
-        try:
-            coarse_df = pd.read_csv(coarse_path)
-        except Exception as exc:
-            LOGGER.error("Failed to read coarse rank file %s: %s", coarse_path, exc)
             return 1
     try:
         if coarse_df is None:
