@@ -4266,6 +4266,8 @@ def run_coarse_features(
                 "[INFO] Coarse score computed with partial features; rows_out=%d",
                 int(coarse_scored.shape[0]),
             )
+    if "coarse score" in coarse_scored.columns and "coarse_score" not in coarse_scored.columns:
+        coarse_scored = coarse_scored.rename(columns={"coarse score": "coarse_score"})
     if isinstance(coarse_scored, pd.DataFrame) and not coarse_scored.empty:
         score_series = pd.to_numeric(coarse_scored.get("Score"), errors="coerce")
         non_null_scores = int(score_series.notna().sum())
