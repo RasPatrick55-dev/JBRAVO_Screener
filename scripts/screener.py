@@ -4389,30 +4389,15 @@ def run_coarse_features(
 def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
     LOGGER.info("[MODE] full-nightly start")
     coarse_path = base_dir / "data" / "tmp" / "coarse_rank.csv"
-    coarse_df: pd.DataFrame | None = None
-    needs_regen = not coarse_path.exists()
-    if not needs_regen:
-        try:
-            coarse_df = pd.read_csv(coarse_path)
-            if coarse_df.empty:
-                needs_regen = True
-        except Exception as exc:
-            LOGGER.error("Failed to read coarse rank file %s: %s", coarse_path, exc)
-            needs_regen = True
-    if needs_regen:
-        LOGGER.info("[INFO] Coarse rank empty; rebuilding via coarse-features")
-        regenerated = run_coarse_features(args, base_dir, return_frame=True)
-        coarse_df = regenerated if isinstance(regenerated, pd.DataFrame) else None
-        if coarse_df is None or coarse_df.empty:
-            LOGGER.error("Coarse features regeneration failed; aborting full-nightly.")
-            return 1
-        LOGGER.info(
-            "[INFO] Using in-memory coarse dataframe rows=%d",
-            int(coarse_df.shape[0]),
-        )
-    if coarse_df is None:
+    regenerated = run_coarse_features(args, base_dir, return_frame=True)
+    coarse_df = regenerated if isinstance(regenerated, pd.DataFrame) else None
+    if coarse_df is None or coarse_df.empty:
         LOGGER.error("Coarse features unavailable; aborting full-nightly.")
         return 1
+    LOGGER.info(
+        "[INFO] Coarse ranking using in-memory dataframe rows=%d",
+        int(coarse_df.shape[0]),
+    )
 
     coarse_df["symbol"] = coarse_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
     if "Score_coarse" not in coarse_df.columns:
@@ -4542,7 +4527,7 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         dollar_vol_min=getattr(args, "dollar_vol_min", None),
         ranker_config=base_ranker_cfg,
         shortlist_size=shortlist_size,
-        shortlist_path=coarse_path,
+        shortlist_path=base_dir / "data" / "tmp" / "shortlist.csv",
     )
     timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(float(fetch_elapsed), 3)
 
