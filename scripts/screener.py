@@ -4270,15 +4270,26 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         return 1
 
     coarse_df["symbol"] = coarse_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    if "Score_coarse" not in coarse_df.columns:
+        if "Score" in coarse_df.columns:
+            coarse_df = coarse_df.rename(columns={"Score": "Score_coarse"})
+        elif "score" in coarse_df.columns:
+            coarse_df = coarse_df.rename(columns={"score": "Score_coarse"})
+        else:
+            coarse_df["Score_coarse"] = pd.NA
     if "coarse_rank" not in coarse_df.columns:
-        coarse_df = coarse_df.sort_values("Score_coarse", ascending=False).reset_index(drop=True)
+        if coarse_df["Score_coarse"].notna().any():
+            coarse_df = coarse_df.sort_values("Score_coarse", ascending=False).reset_index(drop=True)
+        else:
+            coarse_df = coarse_df.reset_index(drop=True)
         coarse_df["coarse_rank"] = np.arange(1, coarse_df.shape[0] + 1, dtype=int)
     shortlist_size = max(int(getattr(args, "prefilter_top", DEFAULT_SHORTLIST_SIZE) or DEFAULT_SHORTLIST_SIZE), 0)
-    shortlist_df = (
-        coarse_df.sort_values(["coarse_rank", "Score_coarse"], ascending=[True, False])
-        .head(shortlist_size)
-        .copy()
-    )
+    sort_cols = ["coarse_rank"]
+    ascending = [True]
+    if "Score_coarse" in coarse_df.columns and coarse_df["Score_coarse"].notna().any():
+        sort_cols.append("Score_coarse")
+        ascending.append(False)
+    shortlist_df = coarse_df.sort_values(sort_cols, ascending=ascending).head(shortlist_size).copy()
 
     limit = getattr(args, "limit", None)
     if limit:
