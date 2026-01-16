@@ -4250,6 +4250,7 @@ def run_coarse_features(
     rank_timer = T()
     coarse_scored = score_universe(coarse_enriched, ranker_cfg)
     coarse_rank_elapsed = rank_timer.lap("coarse_rank_secs")
+    using_fallback = False
     if coarse_scored.empty or (
         "Score" in coarse_scored.columns
         and not pd.to_numeric(coarse_scored["Score"], errors="coerce").notna().any()
@@ -4257,6 +4258,7 @@ def run_coarse_features(
         fallback_scored = _fallback_coarse_score_from_z(coarse_enriched)
         if not fallback_scored.empty:
             coarse_scored = fallback_scored
+            using_fallback = True
             LOGGER.info(
                 "[INFO] Coarse score computed with partial features; rows_out=%d",
                 int(coarse_scored.shape[0]),
@@ -4281,14 +4283,26 @@ def run_coarse_features(
             median_score,
             max_score,
         )
-    if not coarse_scored.empty and "coarse_rank" not in coarse_scored.columns:
-        coarse_scored["coarse_rank"] = np.arange(1, coarse_scored.shape[0] + 1, dtype=int)
-    coarse_scored.rename(columns={"Score": "Score_coarse"}, inplace=True)
+    coarse_rank_df = coarse_scored
+    if not coarse_rank_df.empty and "coarse_rank" not in coarse_rank_df.columns:
+        coarse_rank_df["coarse_rank"] = np.arange(1, coarse_rank_df.shape[0] + 1, dtype=int)
+    if "Score" in coarse_rank_df.columns and "Score_coarse" not in coarse_rank_df.columns:
+        coarse_rank_df = coarse_rank_df.rename(columns={"Score": "Score_coarse"})
+    if using_fallback and not coarse_rank_df.empty:
+        LOGGER.info(
+            "[INFO] Using fallback coarse_scored for coarse_rank export rows=%d",
+            int(coarse_rank_df.shape[0]),
+        )
 
-    coarse_output = _prepare_coarse_rank_export(coarse_scored)
+    coarse_output = _prepare_coarse_rank_export(coarse_rank_df)
     coarse_path = base_dir / "data" / "tmp" / "coarse_rank.csv"
     coarse_path.parent.mkdir(parents=True, exist_ok=True)
     _write_csv_atomic(coarse_path, coarse_output)
+    LOGGER.info(
+        "[INFO] Coarse rank export rows=%d path=%s",
+        int(coarse_output.shape[0]) if coarse_output is not None else 0,
+        coarse_path,
+    )
 
     symbols_total = int(eligible["symbol"].nunique()) if not eligible.empty else 0
     prefix_counts = (
