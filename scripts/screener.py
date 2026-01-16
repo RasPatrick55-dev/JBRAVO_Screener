@@ -5016,7 +5016,7 @@ def run_screener(
         else 0
     )
     LOGGER.info(
-        "[INFO] Coarse rank rows_in=%d score_non_null=%d cols=%s",
+        "[INFO] Coarse rank boundary rows_in=%d score_non_null=%d cols=%s",
         rows_in,
         score_non_null,
         ",".join([str(col) for col in coarse_scored.columns]),
