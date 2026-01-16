@@ -40,7 +40,7 @@ def _load_missing_candidates(
             c.score,
             c.close
         FROM screener_candidates c
-        LEFT JOIN screener_outcomes o
+        LEFT JOIN screener_outcomes_app o
           ON o.run_date = c.run_date
          AND o.symbol = c.symbol
         WHERE o.symbol IS NULL
@@ -196,7 +196,7 @@ def _insert_outcomes(conn, rows: list[tuple]) -> int:
     if not rows:
         return 0
     insert_sql = """
-        INSERT INTO screener_outcomes (
+        INSERT INTO screener_outcomes_app (
             run_date,
             symbol,
             rank,
@@ -216,6 +216,28 @@ def _insert_outcomes(conn, rows: list[tuple]) -> int:
     return len(rows)
 
 
+def _ensure_outcomes_table(conn) -> None:
+    ddl = """
+        CREATE TABLE IF NOT EXISTS screener_outcomes_app (
+            run_date DATE NOT NULL,
+            symbol TEXT NOT NULL,
+            rank INTEGER,
+            score NUMERIC,
+            close_at_entry NUMERIC,
+            ret_1d NUMERIC,
+            ret_5d NUMERIC,
+            ret_10d NUMERIC,
+            max_drawdown_10d NUMERIC,
+            max_runup_10d NUMERIC,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            PRIMARY KEY (run_date, symbol)
+        );
+    """
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(ddl)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compute forward outcomes for screener candidates.")
     parser.add_argument("--run-date", type=str, default=None, help="Run date (YYYY-MM-DD) to process.")
@@ -229,6 +251,7 @@ def main() -> int:
     conn = db.get_db_conn()
     if conn is None:
         raise RuntimeError("DB connection unavailable")
+    _ensure_outcomes_table(conn)
 
     run_date = _parse_date(args.run_date)
     window_days = max(int(args.window_days), 12)
