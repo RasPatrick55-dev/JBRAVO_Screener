@@ -911,6 +911,33 @@ def run_backtest(
                 ]
             )
 
+        if valid_symbols:
+            base_symbols = pd.DataFrame({"symbol": valid_symbols})
+            summary_df = base_symbols.merge(summary_df, on="symbol", how="left", sort=False)
+            summary_df["trades"] = (
+                pd.to_numeric(summary_df["trades"], errors="coerce").fillna(0).astype(int)
+            )
+            summary_df["wins"] = (
+                pd.to_numeric(summary_df["wins"], errors="coerce").fillna(0).astype(int)
+            )
+            summary_df["losses"] = (
+                pd.to_numeric(summary_df["losses"], errors="coerce").fillna(0).astype(int)
+            )
+            for col in [
+                "net_pnl",
+                "expectancy",
+                "profit_factor",
+                "max_drawdown",
+                "sharpe",
+                "sortino",
+            ]:
+                summary_df[col] = pd.to_numeric(summary_df[col], errors="coerce").fillna(0.0)
+            summary_df["win_rate"] = np.where(
+                summary_df["trades"] > 0,
+                summary_df["wins"] / summary_df["trades"] * 100,
+                0.0,
+            )
+
         summary_df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
         summary_df["symbols_tested"] = len(symbols)
         backtest_run_date = run_date or datetime.now(timezone.utc).date()
@@ -933,6 +960,7 @@ def run_backtest(
                         backtest_run_date,
                         len(summary_df),
                     )
+                    logger.info("BACKTEST_RESULTS_INSERTED rows=%d", len(summary_df))
                 else:
                     logger.warning(
                         "BACKTEST_DB_FAIL run_date=%s err=%s",
@@ -974,8 +1002,8 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the JBRAVO backtest")
     parser.add_argument(
         "--source",
-        default=os.path.join(BASE_DIR, "data", "top_candidates.csv"),
-        help="CSV file containing candidate symbols (default: data/top_candidates.csv)",
+        default=os.path.join(BASE_DIR, "data", "latest_candidates.csv"),
+        help="CSV file containing candidate symbols (default: data/latest_candidates.csv)",
     )
     parser.add_argument(
         "--quick",
@@ -1063,28 +1091,56 @@ def _determine_run_date(conn: Optional[PGConnection]) -> date:
     return datetime.utcnow().date()
 
 
-def _load_symbols_db(conn: Optional[PGConnection], run_date: date, limit: int) -> List[str]:
-    if conn is None:
-        return []
+def _validate_candidates_schema(conn: PGConnection) -> bool:
+    required_columns = {"run_date", "symbol", "score", "exchange", "entry_price"}
     try:
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT symbol
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'screener_candidates'
+                """
+            )
+            available = {row[0] for row in cursor.fetchall()}
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.info("BACKTEST_DB_CANDIDATES_SCHEMA_FAIL err=%s", exc)
+        return False
+
+    missing = sorted(required_columns - available)
+    if missing:
+        logger.info("BACKTEST_DB_CANDIDATES_SCHEMA_MISSING cols=%s", ",".join(missing))
+        return False
+    return True
+
+
+def _load_symbols_db(conn: Optional[PGConnection], limit: int) -> tuple[List[str], Optional[date]]:
+    if conn is None:
+        return [], None
+    if not _validate_candidates_schema(conn):
+        return [], None
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT symbol, run_date
                 FROM screener_candidates
-                WHERE run_date = %(run_date)s
-                ORDER BY score DESC
+                WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
+                ORDER BY score DESC NULLS LAST
                 LIMIT %(limit)s
                 """,
-                {"run_date": run_date, "limit": limit},
+                {"limit": limit},
             )
             rows = cursor.fetchall()
         symbols = [row[0] for row in rows if row and row[0]]
-        logger.info("BACKTEST_DB_CANDIDATES_OK run_date=%s rows=%s", run_date, len(symbols))
-        return symbols
+        run_date = rows[0][1] if rows and rows[0] else None
+        logger.info("CANDIDATES_LOADED db_count=%d", len(symbols))
+        if run_date:
+            logger.info("BACKTEST_DB_CANDIDATES_OK run_date=%s rows=%s", run_date, len(symbols))
+        return symbols, run_date
     except Exception as exc:  # pragma: no cover - defensive guard
         logger.info("BACKTEST_DB_CANDIDATES_FALLBACK err=%s", exc)
-        return []
+        return [], None
 
 
 def _parse_bool_flag(value: Optional[str], default: bool) -> bool:
@@ -1096,35 +1152,44 @@ def _parse_bool_flag(value: Optional[str], default: bool) -> bool:
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv or [])
     conn = _db_engine_if_available()
-    export_default = False if conn else True
+    export_default = True
     export_csv = _parse_bool_flag(args.export_csv, export_default)
-    run_date = _determine_run_date(conn)
     candidate_limit = args.limit if args.limit is not None else 15
 
     symbols: List[str] = []
-    if conn:
-        symbols = _load_symbols_db(conn, run_date, candidate_limit)
-        try:
-            conn.close()
-        except Exception:
-            pass
+    run_date: Optional[date] = None
+    symbols_source: Optional[str] = None
 
-    if len(symbols) == 0:
-        logger.info("BACKTEST_CANDIDATES_FALLBACK reason=%s", "csv" if conn else "db_disabled")
+    if conn:
+        symbols, run_date = _load_symbols_db(conn, candidate_limit)
+        if symbols:
+            symbols_source = "screener_candidates"
+
+    if not symbols:
         source_csv = Path(args.source).expanduser()
         symbols = _load_symbols(source_csv)
-    else:
-        source_csv = Path("database:screener_candidates")
+        if symbols:
+            symbols_source = str(source_csv)
+            logger.info("CANDIDATES_LOADED csv_count=%d", len(symbols))
+
+    run_date = run_date or _determine_run_date(conn)
 
     if len(symbols) == 0:
-        logger.info("Backtest: no candidates today — skipping.")
+        logger.info("BACKTEST_CANDIDATES_FALLBACK reason=%s", "empty_or_missing")
+        logger.info("Backtest: no candidates today - skipping.")
         end_time = datetime.utcnow()
         elapsed_time = end_time - start_time
         logger.info("Script finished in %s", elapsed_time)
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
         return 0
 
     try:
-        logger.info("Loaded %d symbols from %s", len(symbols), source_csv)
+        if symbols_source:
+            logger.info("Loaded %d symbols from %s", len(symbols), symbols_source)
         run_backtest(
             symbols,
             max_symbols=args.max_symbols,

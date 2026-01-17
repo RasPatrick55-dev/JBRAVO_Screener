@@ -867,12 +867,14 @@ def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> b
     if conn is None:
         return False
 
-    rows: list[dict[str, Any]] = []
+    rows_payloads: list[dict[str, Any]] = []
     for _, row in df_results.iterrows():
         payload = {
             "run_date": _coerce_date(run_date),
             "symbol": (row.get("symbol") or "").upper(),
             "trades": row.get("trades"),
+            "wins": row.get("wins"),
+            "losses": row.get("losses"),
             "win_rate": row.get("win_rate"),
             "net_pnl": row.get("net_pnl"),
             "expectancy": row.get("expectancy"),
@@ -881,32 +883,80 @@ def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> b
             "sharpe": row.get("sharpe"),
             "sortino": row.get("sortino"),
         }
-        rows.append(payload)
+        if payload["symbol"]:
+            rows_payloads.append(payload)
 
     try:
         with conn:
             with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS backtest_results (
+                        run_date DATE NOT NULL,
+                        symbol TEXT NOT NULL,
+                        trades INTEGER,
+                        wins INTEGER,
+                        losses INTEGER,
+                        win_rate NUMERIC,
+                        net_pnl NUMERIC,
+                        expectancy NUMERIC,
+                        profit_factor NUMERIC,
+                        max_drawdown NUMERIC,
+                        sharpe NUMERIC,
+                        sortino NUMERIC,
+                        created_at TIMESTAMPTZ DEFAULT now(),
+                        PRIMARY KEY (run_date, symbol)
+                    );
+                    """
+                )
+                cursor.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'backtest_results'
+                    """
+                )
+                available_cols = {row[0] for row in cursor.fetchall()}
+                column_order = [
+                    "run_date",
+                    "symbol",
+                    "trades",
+                    "wins",
+                    "losses",
+                    "win_rate",
+                    "net_pnl",
+                    "expectancy",
+                    "profit_factor",
+                    "max_drawdown",
+                    "sharpe",
+                    "sortino",
+                ]
+                insert_cols = [col for col in column_order if col in available_cols]
+                if "run_date" not in insert_cols or "symbol" not in insert_cols:
+                    _log_write_result(False, "backtest_results", 0, "missing_keys")
+                    return False
+                update_cols = [col for col in insert_cols if col not in ("run_date", "symbol")]
+                values_sql = ", ".join([f"%({col})s" for col in insert_cols])
+                insert_sql = (
+                    f"INSERT INTO backtest_results ({', '.join(insert_cols)}) "
+                    f"VALUES ({values_sql}) "
+                )
+                if update_cols:
+                    updates_sql = ", ".join([f"{col}=EXCLUDED.{col}" for col in update_cols])
+                    insert_sql += f"ON CONFLICT (run_date, symbol) DO UPDATE SET {updates_sql}"
+                else:
+                    insert_sql += "ON CONFLICT (run_date, symbol) DO NOTHING"
+
+                rows = [
+                    {col: payload.get(col) for col in insert_cols}
+                    for payload in rows_payloads
+                ]
+                if not rows:
+                    _log_write_result(False, "backtest_results", 0, "no_rows")
+                    return False
                 extras.execute_batch(
                     cursor,
-                    """
-                    INSERT INTO backtest_results (
-                        run_date, symbol, trades, win_rate, net_pnl, expectancy,
-                        profit_factor, max_drawdown, sharpe, sortino
-                    )
-                    VALUES (
-                        %(run_date)s, %(symbol)s, %(trades)s, %(win_rate)s, %(net_pnl)s, %(expectancy)s,
-                        %(profit_factor)s, %(max_drawdown)s, %(sharpe)s, %(sortino)s
-                    )
-                    ON CONFLICT (run_date, symbol) DO UPDATE SET
-                        trades=EXCLUDED.trades,
-                        win_rate=EXCLUDED.win_rate,
-                        net_pnl=EXCLUDED.net_pnl,
-                        expectancy=EXCLUDED.expectancy,
-                        profit_factor=EXCLUDED.profit_factor,
-                        max_drawdown=EXCLUDED.max_drawdown,
-                        sharpe=EXCLUDED.sharpe,
-                        sortino=EXCLUDED.sortino
-                    """,
+                    insert_sql,
                     rows,
                     page_size=200,
                 )
