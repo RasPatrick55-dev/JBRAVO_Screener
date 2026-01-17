@@ -38,7 +38,9 @@ def _load_missing_candidates(
             c.run_date,
             c.symbol,
             c.score,
-            c.close
+            c.close,
+            c.passed_gates,
+            c.gate_fail_reason
         FROM screener_candidates c
         LEFT JOIN screener_outcomes_app o
           ON o.run_date = c.run_date
@@ -64,6 +66,8 @@ def _load_missing_candidates(
     frame["symbol"] = frame["symbol"].astype("string").str.upper()
     frame["score"] = pd.to_numeric(frame.get("score"), errors="coerce")
     frame["close"] = pd.to_numeric(frame.get("close"), errors="coerce")
+    if "passed_gates" in frame.columns:
+        frame["passed_gates"] = frame["passed_gates"].astype("boolean")
     frame["rank"] = (
         frame.groupby("run_date")["score"]
         .rank(method="first", ascending=False)
@@ -156,6 +160,10 @@ def _compute_outcomes(
         entry_close = getattr(row, "close", None)
         if entry_close is not None and pd.isna(entry_close):
             entry_close = None
+        passed_gates = getattr(row, "passed_gates", None)
+        gate_fail_reason = getattr(row, "gate_fail_reason", None)
+        if isinstance(gate_fail_reason, float) and pd.isna(gate_fail_reason):
+            gate_fail_reason = None
 
         series = bars_by_symbol.get(symbol)
         if series is not None and not series.empty:
@@ -187,6 +195,8 @@ def _compute_outcomes(
                 ret_10d,
                 max_drawdown,
                 max_runup,
+                bool(passed_gates) if passed_gates is not None else None,
+                str(gate_fail_reason) if gate_fail_reason is not None else None,
             )
         )
     return results
@@ -206,7 +216,9 @@ def _insert_outcomes(conn, rows: list[tuple]) -> int:
             ret_5d,
             ret_10d,
             max_drawdown_10d,
-            max_runup_10d
+            max_runup_10d,
+            passed_gates,
+            gate_fail_reason
         ) VALUES %s
         ON CONFLICT (run_date, symbol) DO NOTHING
     """
@@ -229,13 +241,21 @@ def _ensure_outcomes_table(conn) -> None:
             ret_10d NUMERIC,
             max_drawdown_10d NUMERIC,
             max_runup_10d NUMERIC,
+            passed_gates BOOLEAN,
+            gate_fail_reason TEXT,
             created_at TIMESTAMPTZ DEFAULT now(),
             PRIMARY KEY (run_date, symbol)
         );
     """
+    alters = [
+        "ALTER TABLE screener_outcomes_app ADD COLUMN IF NOT EXISTS passed_gates BOOLEAN;",
+        "ALTER TABLE screener_outcomes_app ADD COLUMN IF NOT EXISTS gate_fail_reason TEXT;",
+    ]
     with conn:
         with conn.cursor() as cur:
             cur.execute(ddl)
+            for statement in alters:
+                cur.execute(statement)
 
 
 def main() -> int:
