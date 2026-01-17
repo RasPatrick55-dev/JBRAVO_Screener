@@ -70,6 +70,29 @@ TABLE_STATEMENTS = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS daily_bars (
+        symbol TEXT NOT NULL,
+        date DATE NOT NULL,
+        open NUMERIC,
+        high NUMERIC,
+        low NUMERIC,
+        close NUMERIC,
+        volume BIGINT,
+        PRIMARY KEY (symbol, date)
+    );
+    """,
+    """
+    CREATE OR REPLACE VIEW daily_bars_full_750 AS
+    SELECT db.*
+    FROM daily_bars db
+    WHERE db.symbol IN (
+        SELECT symbol
+        FROM daily_bars
+        GROUP BY symbol
+        HAVING COUNT(*) >= 750
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS backtest_results (
         run_date DATE NOT NULL,
         symbol TEXT NOT NULL,
