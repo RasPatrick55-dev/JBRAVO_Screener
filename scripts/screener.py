@@ -5442,6 +5442,18 @@ def run_screener(
         else:
             LOGGER.info("No candidates passed ranking gates.")
 
+    fallback_used = bool(stats.get("fallback_used", False))
+    if stats["candidates_out"] == 0 and not fallback_used:
+        LOGGER.error("[WARN] INTEGRITY_CHECK no candidates and no fallback usage recorded")
+    LOGGER.info(
+        "[SUMMARY]\nuniverse=%s\ncoarse=%s\nshortlist=%s\ngated=%s\nfallback_used=%s",
+        stats.get("symbols_in", 0),
+        stats.get("coarse_ranked", 0),
+        stats.get("shortlist_candidates", 0),
+        stats.get("candidates_out", 0),
+        str(fallback_used).lower(),
+    )
+
     _write_stage_snapshot(
         "screener_stage_post.json",
         {
@@ -5765,6 +5777,18 @@ def write_outputs(
             pd.DataFrame([row]).to_csv(hist_path, mode="w", header=True, index=False)
     except Exception as exc:
         LOGGER.warning("Could not append metrics history: %s", exc)
+
+    pipeline_health = {
+        "run_date": now.date().isoformat(),
+        "real_candidate_count": int(stats.get("candidates_out", 0)),
+        "fallback_used": bool(stats.get("fallback_used", False)),
+        "gate_count": int(
+            gate_counts.get("gate_total_passed", stats.get("candidates_out", 0))
+            if gate_counts
+            else stats.get("candidates_out", 0)
+        ),
+    }
+    _write_json_atomic(data_dir / "pipeline_health.json", pipeline_health)
 
     return metrics_path
 
