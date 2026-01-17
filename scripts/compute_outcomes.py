@@ -249,6 +249,10 @@ def _ensure_outcomes_table(conn) -> None:
             max_runup_10d NUMERIC,
             passed_gates BOOLEAN,
             gate_fail_reason TEXT,
+            base_rank INTEGER,
+            ml_rank INTEGER,
+            ml_prob_up DOUBLE PRECISION,
+            used_ml BOOLEAN,
             created_at TIMESTAMPTZ DEFAULT now(),
             PRIMARY KEY (run_date, symbol)
         );
@@ -256,6 +260,10 @@ def _ensure_outcomes_table(conn) -> None:
     alters = [
         "ALTER TABLE screener_outcomes_app ADD COLUMN IF NOT EXISTS passed_gates BOOLEAN;",
         "ALTER TABLE screener_outcomes_app ADD COLUMN IF NOT EXISTS gate_fail_reason TEXT;",
+        "ALTER TABLE screener_outcomes_app ADD COLUMN IF NOT EXISTS base_rank INTEGER;",
+        "ALTER TABLE screener_outcomes_app ADD COLUMN IF NOT EXISTS ml_rank INTEGER;",
+        "ALTER TABLE screener_outcomes_app ADD COLUMN IF NOT EXISTS ml_prob_up DOUBLE PRECISION;",
+        "ALTER TABLE screener_outcomes_app ADD COLUMN IF NOT EXISTS used_ml BOOLEAN;",
     ]
     with conn:
         with conn.cursor() as cur:
@@ -279,6 +287,72 @@ def _backfill_gate_telemetry(conn) -> int:
     with conn:
         with conn.cursor() as cur:
             cur.execute(update_sql)
+            updated = cur.rowcount or 0
+    return int(updated)
+
+
+def _table_columns(conn, table_name: str) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = %s
+            """,
+            (table_name,),
+        )
+        return {row[0] for row in cur.fetchall()}
+
+
+def _backfill_rank_metadata(conn) -> int:
+    outcome_cols = _table_columns(conn, "screener_outcomes_app")
+    if not {"base_rank", "ml_rank", "ml_prob_up", "used_ml"}.issubset(outcome_cols):
+        return 0
+    candidate_cols = _table_columns(conn, "screener_candidates")
+    ml_score_col = "ml_adjusted_score" if "ml_adjusted_score" in candidate_cols else "score"
+    prob_col = None
+    if "prob_up" in candidate_cols:
+        prob_col = "prob_up"
+    elif "ml_prob_up" in candidate_cols:
+        prob_col = "ml_prob_up"
+
+    prob_expr = f"c.{prob_col}" if prob_col else "NULL"
+    ranked_sql = f"""
+        WITH ranked AS (
+            SELECT
+                c.run_date,
+                c.symbol,
+                row_number() OVER (
+                    PARTITION BY c.run_date
+                    ORDER BY c.score DESC NULLS LAST
+                ) AS base_rank,
+                row_number() OVER (
+                    PARTITION BY c.run_date
+                    ORDER BY c.{ml_score_col} DESC NULLS LAST
+                ) AS ml_rank,
+                {prob_expr} AS ml_prob_up
+            FROM screener_candidates c
+        )
+        UPDATE screener_outcomes_app o
+        SET
+            base_rank = CASE WHEN o.base_rank IS NULL THEN ranked.base_rank ELSE o.base_rank END,
+            ml_rank = CASE WHEN o.ml_rank IS NULL THEN ranked.ml_rank ELSE o.ml_rank END,
+            ml_prob_up = CASE WHEN o.ml_prob_up IS NULL THEN ranked.ml_prob_up ELSE o.ml_prob_up END,
+            used_ml = CASE WHEN o.used_ml IS NULL THEN TRUE ELSE o.used_ml END
+        FROM ranked
+        WHERE o.run_date = ranked.run_date
+          AND o.symbol = ranked.symbol
+          AND (
+            o.base_rank IS NULL
+            OR o.ml_rank IS NULL
+            OR o.ml_prob_up IS NULL
+            OR o.used_ml IS NULL
+          )
+    """
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(ranked_sql)
             updated = cur.rowcount or 0
     return int(updated)
 
@@ -329,6 +403,10 @@ def main() -> int:
     updated = _backfill_gate_telemetry(conn)
     if updated:
         LOGGER.info("[INFO] Outcomes gate backfill updated=%d", updated)
+
+    ranked_updated = _backfill_rank_metadata(conn)
+    if ranked_updated:
+        LOGGER.info("[INFO] Outcomes rank metadata backfill updated=%d", ranked_updated)
 
     LOGGER.info("[INFO] Outcomes complete inserted=%d", total_inserted)
     return 0
