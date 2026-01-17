@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         all_ok &= gates_count <= candidate_count
 
     pipeline_ok = pipeline_row is not None
-    _print_check("pipeline_health_latest", pipeline_ok)
+    _print_check("pipeline_health_app_latest", pipeline_ok)
     if pipeline_ok and has_latest:
         (
             ph_run_date,
@@ -191,12 +191,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         expected_fallback = candidate_count == 0
         match_fallback = bool(ph_fallback_used) == expected_fallback
-        _print_check(
-            "pipeline_health_match",
-            match_run_date and match_counts and match_fallback,
-            f"run_date_match={match_run_date} counts_match={match_counts} fallback_match={match_fallback}",
+        match_ok = match_run_date and match_counts and match_fallback
+        detail = (
+            f"run_date_match={match_run_date} counts_match={match_counts} fallback_match={match_fallback}"
         )
-        all_ok &= match_run_date and match_counts and match_fallback
+        if not match_ok:
+            detail = f"pipeline_health_app mismatch - {detail}"
+        _print_check("pipeline_health_app_match", match_ok, detail)
+        all_ok &= match_ok
 
     outcomes_ok = outcomes_total is not None and outcomes_ret5 is not None
     detail = ""
