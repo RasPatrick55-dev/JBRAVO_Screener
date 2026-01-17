@@ -625,6 +625,89 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
             pass
 
 
+def insert_pipeline_health(record: Mapping[str, Any]) -> None:
+    if not record:
+        return
+    conn = _conn_or_none()
+    if conn is None:
+        return
+
+    def _coerce_ts(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
+
+    payload = {
+        "run_date": _coerce_date(record.get("run_date")),
+        "run_ts_utc": _coerce_ts(record.get("run_ts_utc")),
+        "mode": record.get("mode"),
+        "symbols_in": record.get("symbols_in"),
+        "with_bars": record.get("with_bars"),
+        "coarse_rows": record.get("coarse_rows"),
+        "shortlist_rows": record.get("shortlist_rows"),
+        "final_rows": record.get("final_rows"),
+        "gated_rows": record.get("gated_rows"),
+        "fallback_used": record.get("fallback_used"),
+        "db_ingest_rows": record.get("db_ingest_rows"),
+        "notes": record.get("notes"),
+    }
+    create_stmt = """
+        CREATE TABLE IF NOT EXISTS pipeline_health (
+            run_date DATE,
+            run_ts_utc TIMESTAMPTZ,
+            mode TEXT,
+            symbols_in INT,
+            with_bars INT,
+            coarse_rows INT,
+            shortlist_rows INT,
+            final_rows INT,
+            gated_rows INT,
+            fallback_used BOOLEAN,
+            db_ingest_rows INT,
+            notes TEXT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            PRIMARY KEY (run_ts_utc, mode)
+        )
+    """
+    insert_stmt = """
+        INSERT INTO pipeline_health (
+            run_date, run_ts_utc, mode, symbols_in, with_bars, coarse_rows, shortlist_rows,
+            final_rows, gated_rows, fallback_used, db_ingest_rows, notes
+        )
+        VALUES (
+            %(run_date)s, %(run_ts_utc)s, %(mode)s, %(symbols_in)s, %(with_bars)s, %(coarse_rows)s,
+            %(shortlist_rows)s, %(final_rows)s, %(gated_rows)s, %(fallback_used)s,
+            %(db_ingest_rows)s, %(notes)s
+        )
+        ON CONFLICT (run_ts_utc, mode) DO UPDATE SET
+            run_date=EXCLUDED.run_date,
+            symbols_in=EXCLUDED.symbols_in,
+            with_bars=EXCLUDED.with_bars,
+            coarse_rows=EXCLUDED.coarse_rows,
+            shortlist_rows=EXCLUDED.shortlist_rows,
+            final_rows=EXCLUDED.final_rows,
+            gated_rows=EXCLUDED.gated_rows,
+            fallback_used=EXCLUDED.fallback_used,
+            db_ingest_rows=EXCLUDED.db_ingest_rows,
+            notes=EXCLUDED.notes
+    """
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(create_stmt)
+                cursor.execute(insert_stmt, payload)
+        _log_write_result(True, "pipeline_health", 1)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        _log_write_result(False, "pipeline_health", 0, exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> bool:
     if df_results is None or df_results.empty:
         return False

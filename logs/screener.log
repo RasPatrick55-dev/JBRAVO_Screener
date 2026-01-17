@@ -26235,3 +26235,75 @@ Trying to import the above resulted in these errors:
 2026-01-16 17:05:07,849 - screener - INFO - [STAGE] gates end (candidates=6)
 2026-01-16 17:05:07,980 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-16.csv (top_n=19)
 2026-01-16 17:05:07,993 - screener - INFO - Full nightly outputs written to C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\screener_metrics.json
+2026-01-16 19:08:29,037 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-16 19:08:31,086 - screener - INFO - [STAGE] fetch start
+2026-01-16 19:08:33,140 - screener - WARNING - SDK assets fetch failed (HTTPSConnectionPool(host='paper-api.alpaca.markets', port=443): Max retries exceeded with url: /v2/assets?status=active&asset_class=us_equity (Caused by ProxyError('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x000001BB041360D0>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it')))); falling back to HTTP
+2026-01-16 19:08:35,162 - screener - WARNING - Raw Alpaca asset fetch failed: HTTPSConnectionPool(host='paper-api.alpaca.markets', port=443): Max retries exceeded with url: /v2/assets?status=active&asset_class=us_equity (Caused by ProxyError('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x000001BB04136990>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it')))
+2026-01-16 19:08:35,166 - screener - WARNING - Using cached Alpaca assets (12064 symbols) after validation failure.
+2026-01-16 19:08:35,166 - screener - INFO - Asset metrics: total=0 tradable_equities=0 after_filters=0
+2026-01-16 19:08:35,170 - screener - INFO - Universe sample size: 0 (of 12064 tradable equities)
+2026-01-16 19:08:35,170 - screener - ERROR - Fallback fetch_symbols failed (empty Alpaca asset universe): alpaca_trade_api is required to fetch symbols
+2026-01-16 19:08:35,171 - screener - INFO - [STAGE] fetch end (rows=0, elapsed=4.08s)
+2026-01-16 19:08:35,199 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-16 19:08:35,199 - screener - INFO - [STAGE] coarse features start
+2026-01-16 19:08:35,200 - screener - INFO - [STAGE] coarse features end (rows=0)
+2026-01-16 19:08:35,200 - screener - INFO - [STAGE] coarse rank start
+2026-01-16 19:08:35,201 - screener - INFO - [INFO] Coarse rank boundary rows_in=0 score_non_null=0 cols=symbol,timestamp,Score,score_breakdown
+2026-01-16 19:08:35,201 - screener - INFO - [STAGE] coarse rank end (rows=0)
+2026-01-16 19:08:35,209 - screener - INFO - [STAGE] shortlist written: data\tmp\shortlist.csv (rows=0)
+2026-01-16 19:08:35,210 - screener - INFO - [STAGE] full features start (shortlist=0)
+2026-01-16 19:08:35,211 - screener - INFO - [STAGE] full features end (rows=0)
+2026-01-16 19:08:35,211 - screener - INFO - [STAGE] full rank start
+2026-01-16 19:08:35,211 - screener - INFO - [STAGE] full rank end (rows=0)
+2026-01-16 19:08:35,211 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=0 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-17
+2026-01-16 19:08:35,211 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-16 19:08:35,212 - screener - INFO - [STAGE] gates start
+2026-01-16 19:08:35,213 - screener - INFO - [STAGE] gates end (candidates=0)
+2026-01-16 19:08:35,214 - screener - INFO - No candidates passed ranking gates.
+2026-01-16 19:08:35,214 - screener - INFO - [SUMMARY] run_ts=2026-01-17T01:08:31Z mode=screener symbols_in=0 with_bars=0 coarse_rows=0 shortlist_rows=0 final_rows=0 gated_rows=0 fallback_used=true db_ingest_rows=0
+2026-01-16 19:08:35,231 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-17.csv (top_n=0)
+2026-01-16 19:08:37,798 - screener - WARNING - [WARN] FALLBACK_DIAGNOSTICS coarse_rows=0 gate_rows=0 top_gate=none top_reasons=[]
+2026-01-16 19:08:37,806 - screener - INFO - Screener complete: 0 symbols examined, 0 candidates.
+2026-01-16 19:09:44,933 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-16 19:09:45,631 - screener - INFO - [STAGE] fetch start
+2026-01-16 19:09:46,625 - screener - INFO - Asset meta ready: 12095 symbols (tradable US equities)
+2026-01-16 19:09:46,639 - screener - INFO - Asset metrics: total=13154 tradable_equities=12361 after_filters=12095
+2026-01-16 19:09:46,640 - screener - INFO - Asset sample: RMD:NYSE, PHM:NYSE, KYMR:NASDAQ, KYN:NYSE, GS.PRC:NYSE
+2026-01-16 19:09:46,680 - screener - INFO - Universe sample size: 5881 (of 12095 tradable equities)
+2026-01-16 19:09:46,776 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-16 19:09:46,782 - screener - INFO - Universe prefix counts: {'A': 42, 'P': 35, 'C': 30, 'B': 30, 'S': 29, 'N': 28, 'M': 27, 'T': 26, 'G': 23, 'L': 19, 'E': 19, 'I': 18, 'R': 16, 'H': 15, 'F': 15, 'W': 15, 'O': 13, 'V': 10, 'K': 9, 'D': 9, 'U': 9, 'J': 7, 'Z': 3, 'X': 1, 'Y': 1, 'Q': 1}
+2026-01-16 19:09:46,891 - screener - INFO - Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+2026-01-16 19:09:46,985 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=3 rows=~20951 elapsed=0.1s cache=hit
+2026-01-16 19:09:49,215 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32311 elapsed=2.2s cache=miss
+2026-01-16 19:09:50,854 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~30383 elapsed=1.6s cache=miss
+2026-01-16 19:09:52,735 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33076 elapsed=1.9s cache=miss
+2026-01-16 19:09:54,587 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31569 elapsed=1.9s cache=miss
+2026-01-16 19:09:56,324 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~32381 elapsed=1.7s cache=miss
+2026-01-16 19:09:58,279 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34839 elapsed=2.0s cache=miss
+2026-01-16 19:10:00,141 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~35132 elapsed=1.9s cache=miss
+2026-01-16 19:10:02,192 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~35590 elapsed=2.1s cache=miss
+2026-01-16 19:10:02,534 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=35 rows=285942 symbols_with_bars=391
+2026-01-16 19:10:02,534 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-16 19:10:02,534 - screener - INFO - Symbols without bars (sample): ['LAKE', 'PBA', 'BR', 'BCML', 'CHCI', 'WEST', 'CRSR', 'BEPC', 'ONDS', 'INGN']
+2026-01-16 19:10:02,534 - screener - INFO - Symbols dropped for insufficient history: 30
+2026-01-16 19:10:04,362 - screener - INFO - [STAGE] fetch end (rows=285942, elapsed=18.73s)
+2026-01-16 19:10:04,549 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-16 19:10:04,912 - screener - INFO - [STAGE] coarse features start
+2026-01-16 19:11:51,699 - screener - INFO - [STAGE] coarse features end (rows=285942)
+2026-01-16 19:11:51,699 - screener - INFO - [STAGE] coarse rank start
+2026-01-16 19:11:51,902 - screener - INFO - [INFO] Coarse rank boundary rows_in=400 score_non_null=400 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-16 19:11:51,902 - screener - INFO - [STAGE] coarse rank end (rows=400)
+2026-01-16 19:11:51,914 - screener - INFO - [STAGE] shortlist written: data\tmp\shortlist.csv (rows=400)
+2026-01-16 19:11:51,933 - screener - INFO - [STAGE] full features start (shortlist=400)
+2026-01-16 19:13:36,356 - screener - INFO - [STAGE] full features end (rows=285942)
+2026-01-16 19:13:36,477 - screener - INFO - [STAGE] finalize candidates pruned rows=285942 -> 250505
+2026-01-16 19:13:36,477 - screener - INFO - [STAGE] full rank start
+2026-01-16 19:13:36,651 - screener - INFO - [STAGE] full rank end (rows=400)
+2026-01-16 19:13:36,651 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=400 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-17
+2026-01-16 19:13:36,652 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-16 19:13:36,654 - screener - INFO - [STAGE] quality filters pruned rows=400 -> 73
+2026-01-16 19:13:36,656 - screener - INFO - [STAGE] gates start
+2026-01-16 19:13:36,661 - screener - INFO - [STAGE] gates end (candidates=6)
+2026-01-16 19:13:39,768 - screener - INFO - [SUMMARY] run_ts=2026-01-17T01:09:45Z mode=screener symbols_in=7635 with_bars=400 coarse_rows=400 shortlist_rows=400 final_rows=6 gated_rows=6 fallback_used=false db_ingest_rows=6
+2026-01-16 19:13:39,853 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-17.csv (top_n=73)
+2026-01-16 19:13:42,319 - screener - INFO - Screener complete: 7635 symbols examined, 6 candidates.

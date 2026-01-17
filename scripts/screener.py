@@ -353,6 +353,7 @@ try:  # pragma: no cover - preferred module execution path
         DEFAULT_COMPONENT_MAP,
         compute_gate_fail_reasons,
     )
+    from .apply_rank_model import apply_rank_model
     from .backtest import compute_recent_performance
 except Exception:  # pragma: no cover - fallback for direct script execution
     import os as _os
@@ -384,6 +385,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
         DEFAULT_COMPONENT_MAP,
         compute_gate_fail_reasons,
     )
+    from scripts.apply_rank_model import apply_rank_model  # type: ignore
     from scripts.backtest import compute_recent_performance  # type: ignore
 
 from scripts.health_check import probe_trading_only
@@ -541,6 +543,8 @@ TOP_CANDIDATE_COLUMNS = [
     "symbol",
     "Score",
     "score",
+    "prob_up",
+    "ml_adjusted_score",
     "coarse_score",
     "coarse_rank",
     "backtest_expectancy",
@@ -3032,6 +3036,18 @@ def _prepare_top_frame(candidates_df: pd.DataFrame, top_n: int) -> pd.DataFrame:
     return subset
 
 
+def _best_score_column(frame: pd.DataFrame) -> str:
+    if frame is None or frame.empty:
+        return "Score"
+    if "ml_adjusted_score" in frame.columns:
+        series = pd.to_numeric(frame["ml_adjusted_score"], errors="coerce")
+        if series.notna().any():
+            return "ml_adjusted_score"
+    if "Score" in frame.columns:
+        return "Score"
+    return "score"
+
+
 def _normalise_timestamp(series: pd.Series) -> pd.Series:
     parsed = pd.to_datetime(series, errors="coerce", utc=True)
     formatted = parsed.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -4528,6 +4544,7 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         ranker_config=base_ranker_cfg,
         shortlist_size=shortlist_size,
         shortlist_path=base_dir / "data" / "tmp" / "shortlist.csv",
+        mode="full-nightly",
     )
     timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(float(fetch_elapsed), 3)
 
@@ -4545,6 +4562,7 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         asset_metrics={},
         ranker_cfg=ranker_cfg,
         timings=timing_info,
+        mode="full-nightly",
     )
     LOGGER.info("Full nightly outputs written to %s", output_path)
 
@@ -4798,6 +4816,7 @@ def run_screener(
     backtest_top_k: Optional[int] = None,
     backtest_lookback: Optional[int] = None,
     debug_no_gates: bool = False,
+    mode: str = "screener",
 ) -> Tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -5135,6 +5154,8 @@ def run_screener(
     else:
         scored_df = _apply_quality_filters(scored_df, ranker_cfg)
 
+    scored_df = apply_rank_model(scored_df)
+
     if not scored_df.empty:
         scored_df = scored_df.copy()
         scored_df["rank"] = np.arange(1, scored_df.shape[0] + 1, dtype=int)
@@ -5242,12 +5263,14 @@ def run_screener(
             scored_df.loc[passed_mask, "gate_fail_reason"] = None
 
     stats["candidates_out"] = int(candidates_df.shape[0])
+    stats["fallback_used"] = stats["candidates_out"] == 0
 
     backtest_timer = T()
     backtest_rows: list[dict[str, object]] = []
     if backtest_limit and not scored_df.empty and not shortlist_prepared.empty:
+        score_col = _best_score_column(scored_df)
         ranked_symbols = (
-            scored_df.sort_values("Score", ascending=False)["symbol"]
+            scored_df.sort_values(score_col, ascending=False)["symbol"]
             .astype(str)
             .str.upper()
             .tolist()
@@ -5390,12 +5413,14 @@ def run_screener(
     _augment_breakdown(candidates_df)
 
     if not scored_df.empty:
-        scored_df.sort_values("Score", ascending=False, inplace=True)
+        score_col = _best_score_column(scored_df)
+        scored_df.sort_values(score_col, ascending=False, inplace=True)
         scored_df.reset_index(drop=True, inplace=True)
         scored_df["rank"] = np.arange(1, scored_df.shape[0] + 1, dtype=int)
 
     if not candidates_df.empty:
-        candidates_df.sort_values("Score", ascending=False, inplace=True)
+        score_col = _best_score_column(candidates_df)
+        candidates_df.sort_values(score_col, ascending=False, inplace=True)
         candidates_df.reset_index(drop=True, inplace=True)
         candidates_df["rank"] = np.arange(1, candidates_df.shape[0] + 1, dtype=int)
 
@@ -5443,15 +5468,30 @@ def run_screener(
             LOGGER.info("No candidates passed ranking gates.")
 
     fallback_used = bool(stats.get("fallback_used", False))
+    with_bars = _symbol_count(prepared)
+    final_rows = int(top_df.shape[0]) if isinstance(top_df, pd.DataFrame) else 0
+    gated_rows = int(candidates_df.shape[0]) if isinstance(candidates_df, pd.DataFrame) else 0
+    db_ingest_rows = _coerce_int(stats.get("db_ingest_rows", gated_rows))
+    stats["with_bars"] = with_bars
+    stats["final_rows"] = final_rows
+    stats["gated_rows"] = gated_rows
+    stats["db_ingest_rows"] = db_ingest_rows
+
     if stats["candidates_out"] == 0 and not fallback_used:
         LOGGER.error("[WARN] INTEGRITY_CHECK no candidates and no fallback usage recorded")
     LOGGER.info(
-        "[SUMMARY]\nuniverse=%s\ncoarse=%s\nshortlist=%s\ngated=%s\nfallback_used=%s",
+        "[SUMMARY] run_ts=%s mode=%s symbols_in=%s with_bars=%s coarse_rows=%s "
+        "shortlist_rows=%s final_rows=%s gated_rows=%s fallback_used=%s db_ingest_rows=%s",
+        _format_timestamp(now),
+        str(mode or "screener"),
         stats.get("symbols_in", 0),
+        with_bars,
         stats.get("coarse_ranked", 0),
         stats.get("shortlist_candidates", 0),
-        stats.get("candidates_out", 0),
+        final_rows,
+        gated_rows,
         str(fallback_used).lower(),
+        db_ingest_rows,
     )
 
     _write_stage_snapshot(
@@ -5501,6 +5541,7 @@ def write_outputs(
     asset_metrics: Optional[dict[str, Any]] = None,
     ranker_cfg: Optional[Mapping[str, object]] = None,
     timings: Optional[Mapping[str, float]] = None,
+    mode: str = "screener",
 ) -> Path:
     now = now or datetime.now(timezone.utc)
     data_dir = base_dir / "data"
@@ -5789,6 +5830,71 @@ def write_outputs(
         ),
     }
     _write_json_atomic(data_dir / "pipeline_health.json", pipeline_health)
+
+    def _artifact_ts(path: Path) -> Optional[str]:
+        try:
+            ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except Exception:
+            return None
+        return _format_timestamp(ts)
+
+    notes_payload = {
+        "top_candidates": _artifact_ts(top_path),
+        "scored_candidates": _artifact_ts(scored_path),
+        "screener_metrics": _artifact_ts(metrics_path),
+    }
+    db.insert_pipeline_health(
+        {
+            "run_date": now.date().isoformat(),
+            "run_ts_utc": _format_timestamp(now),
+            "mode": str(mode or "screener"),
+            "symbols_in": int(stats.get("symbols_in", 0)),
+            "with_bars": int(stats.get("with_bars", 0)),
+            "coarse_rows": int(stats.get("coarse_ranked", 0)),
+            "shortlist_rows": int(stats.get("shortlist_candidates", 0)),
+            "final_rows": int(stats.get("final_rows", 0)),
+            "gated_rows": int(stats.get("gated_rows", stats.get("candidates_out", 0))),
+            "fallback_used": bool(stats.get("fallback_used", False)),
+            "db_ingest_rows": int(stats.get("db_ingest_rows", 0)),
+            "notes": json.dumps(notes_payload, sort_keys=True),
+        }
+    )
+
+    if pipeline_health["fallback_used"]:
+        meta_keys = {"gate_preset", "gate_relax_mode", "gate_policy_tier", "debug_no_gates"}
+        rejection_counts: dict[str, int] = {}
+        for key, value in gate_counts.items():
+            if not isinstance(value, int):
+                continue
+            if key.startswith("gate_total") or key in meta_keys:
+                continue
+            if value <= 0:
+                continue
+            rejection_counts[key] = value
+        top_reasons = sorted(rejection_counts.items(), key=lambda item: item[1], reverse=True)
+        top_gate = top_reasons[0][0] if top_reasons else None
+        coarse_rows = int(stats.get("coarse_ranked", 0))
+        gate_rows = scored_count
+        top_payload = [{"gate": key, "count": count} for key, count in top_reasons[:5]]
+        LOGGER.warning(
+            "[WARN] FALLBACK_DIAGNOSTICS coarse_rows=%d gate_rows=%d top_gate=%s top_reasons=%s",
+            coarse_rows,
+            gate_rows,
+            top_gate or "none",
+            json.dumps(top_payload, sort_keys=True),
+        )
+        fallback_diagnostics = {
+            "run_date": run_date,
+            "coarse_rows": coarse_rows,
+            "gate_rows": gate_rows,
+            "rejection_counts_by_gate": rejection_counts,
+            "top_gate": top_gate,
+            "top_reasons": top_payload,
+        }
+        _write_json_atomic(
+            diagnostics_dir / f"fallback_diagnostics_{run_date}.json",
+            fallback_diagnostics,
+        )
 
     return metrics_path
 
@@ -6188,6 +6294,7 @@ def main(
             dollar_vol_min=args.dollar_vol_min,
             ranker_config=base_ranker_cfg,
             debug_no_gates=bool(args.debug_no_gates),
+            mode=mode,
         )
         timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(fetch_elapsed, 3)
         write_outputs(
@@ -6204,6 +6311,7 @@ def main(
             asset_metrics=asset_metrics,
             ranker_cfg=ranker_cfg,
             timings=timing_info,
+            mode=mode,
         )
         LOGGER.info(
             "Screener complete: %d symbols examined, %d candidates.",
