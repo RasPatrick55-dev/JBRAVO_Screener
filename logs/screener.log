@@ -26399,3 +26399,113 @@ Trying to import the above resulted in these errors:
 2026-01-16 22:40:52,967 - screener - INFO - [SUMMARY] run_ts=2026-01-17T04:36:23Z mode=screener symbols_in=7731 with_bars=443 coarse_rows=443 shortlist_rows=443 final_rows=6 gated_rows=6 fallback_used=false db_ingest_rows=6
 2026-01-16 22:40:53,081 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-17.csv (top_n=122)
 2026-01-16 22:40:55,563 - screener - INFO - Screener complete: 7731 symbols examined, 6 candidates.
+2026-01-17 12:27:48,551 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-17 12:27:48,811 - screener - INFO - [STAGE] fetch start
+2026-01-17 12:27:49,485 - screener - INFO - Asset meta ready: 12088 symbols (tradable US equities)
+2026-01-17 12:27:49,498 - screener - INFO - Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+2026-01-17 12:27:49,500 - screener - INFO - Asset sample: LIAM:BATS, LIAU:BATS, LIBD:BATS, LICN:NASDAQ, NUWE:NASDAQ
+2026-01-17 12:27:49,536 - screener - INFO - Universe sample size: 5875 (of 12088 tradable equities)
+2026-01-17 12:27:49,634 - screener - INFO - Universe hygiene filtered 5875 -> 4934 symbols
+2026-01-17 12:27:49,643 - screener - INFO - Universe prefix counts: {'A': 42, 'S': 38, 'M': 30, 'N': 30, 'C': 29, 'B': 26, 'F': 25, 'P': 23, 'T': 21, 'R': 19, 'L': 18, 'E': 18, 'I': 15, 'G': 14, 'D': 14, 'W': 13, 'O': 13, 'U': 12, 'V': 10, 'H': 10, 'J': 8, 'Z': 7, 'K': 7, 'Q': 4, 'Y': 3, 'X': 1}
+2026-01-17 12:27:49,747 - screener - INFO - Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+2026-01-17 12:27:49,919 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=3 rows=~20951 elapsed=0.2s cache=hit
+2026-01-17 12:27:49,954 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32311 elapsed=0.0s cache=hit
+2026-01-17 12:27:50,001 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~30383 elapsed=0.0s cache=hit
+2026-01-17 12:27:50,035 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33076 elapsed=0.0s cache=hit
+2026-01-17 12:27:50,069 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31569 elapsed=0.0s cache=hit
+2026-01-17 12:27:50,118 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~32381 elapsed=0.0s cache=hit
+2026-01-17 12:27:50,163 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34839 elapsed=0.0s cache=hit
+2026-01-17 12:27:50,207 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~35132 elapsed=0.0s cache=hit
+2026-01-17 12:27:50,256 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~35590 elapsed=0.0s cache=hit
+2026-01-17 12:27:50,617 - screener - INFO - [BARS_ACCEPT] accepted=400 dropped_missing=50
+2026-01-17 12:28:13,151 - screener - INFO - [BARS_RETRY] retried=362 recovered=336
+2026-01-17 12:28:14,448 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-17 12:28:14,456 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=35 rows=285942 symbols_with_bars=391
+2026-01-17 12:28:14,456 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-17 12:28:14,456 - screener - INFO - Symbols without bars (sample): ['ANTA', 'VACI', 'ASIC', 'BGL', 'BRBI', 'MSGY', 'FOFO', 'APAD', 'FLY', 'INAC']
+2026-01-17 12:28:14,456 - screener - INFO - Fallback batches invoked: 1
+2026-01-17 12:28:14,456 - screener - INFO - Symbols dropped for insufficient history: 27
+2026-01-17 12:28:16,824 - screener - INFO - [STAGE] fetch end (rows=360041, elapsed=28.01s)
+2026-01-17 12:28:16,825 - screener - INFO - [BARS_DIAG] feed=iex requested=838 with_bars=400 missing=438 examples=[ANTA,VACI,ASIC,BGL,BRBI,MSGY,FOFO,APAD,FLY,INAC]
+2026-01-17 12:28:19,567 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-17 12:28:20,016 - screener - INFO - [STAGE] coarse features start
+2026-01-17 12:30:26,465 - screener - INFO - [STAGE] coarse features end (rows=320787)
+2026-01-17 12:30:26,465 - screener - INFO - [STAGE] coarse rank start
+2026-01-17 12:30:26,689 - screener - INFO - [INFO] Coarse rank boundary rows_in=443 score_non_null=443 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-17 12:30:26,689 - screener - INFO - [STAGE] coarse rank end (rows=443)
+2026-01-17 12:30:26,698 - screener - INFO - [STAGE] shortlist written: data\tmp\shortlist.csv (rows=443)
+2026-01-17 12:30:26,719 - screener - INFO - [STAGE] full features start (shortlist=443)
+2026-01-17 12:32:29,971 - screener - INFO - [STAGE] full features end (rows=320787)
+2026-01-17 12:32:30,131 - screener - INFO - [STAGE] finalize candidates pruned rows=320787 -> 311516
+2026-01-17 12:32:30,131 - screener - INFO - [STAGE] full rank start
+2026-01-17 12:32:30,365 - screener - INFO - [STAGE] full rank end (rows=443)
+2026-01-17 12:32:30,365 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=443 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-17
+2026-01-17 12:32:30,367 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-17 12:32:30,368 - screener - INFO - [STAGE] quality filters pruned rows=443 -> 122
+2026-01-17 12:32:31,182 - screener - INFO - [STAGE] gates start
+2026-01-17 12:32:31,187 - screener - INFO - [STAGE] gates end (candidates=6)
+2026-01-17 12:32:36,803 - screener - INFO - [SUMMARY] run_ts=2026-01-17T18:27:48Z mode=screener symbols_in=7731 with_bars=443 coarse_rows=443 shortlist_rows=443 final_rows=6 gated_rows=6 fallback_used=false db_ingest_rows=6
+2026-01-17 12:32:36,909 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-17.csv (top_n=122)
+2026-01-17 12:32:39,359 - screener - INFO - Screener complete: 7731 symbols examined, 6 candidates.
+2026-01-17 12:41:20,545 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-17 12:41:20,806 - screener - INFO - [MODE] full-nightly start
+2026-01-17 12:41:20,806 - screener - INFO - [MODE] coarse-features start
+2026-01-17 12:41:25,274 - screener - INFO - [INFO] Coarse score stats eligible=30 rows_out=30 score_non_null=30 min=0.0 median=0.275 max=0.475
+2026-01-17 12:41:25,276 - screener - INFO - [INFO] Coarse export df rows=30 coarse_score_non_null=30 cols=symbol,coarse_score,coarse_rank,ADX_z,AROON_z,BP_z,GAPpen_z,LIQpen_z,MH_z,MS_z,PT_z,RSI_z,TS_z,VCP_z,VOLexp_z
+2026-01-17 12:41:25,281 - screener - INFO - [INFO] Coarse rank export rows=30 path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\tmp\coarse_rank.csv
+2026-01-17 12:41:25,314 - screener - INFO - Coarse features complete: eligible=30 symbols=30 rows=10650 features=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\features\1d\coarse_2026-01-16.parquet
+2026-01-17 12:41:25,316 - screener - INFO - [INFO] Coarse ranking using in-memory dataframe rows=30
+2026-01-17 12:41:25,335 - screener - INFO - [INFO] bars: batch 01/01 syms=30 pages=3 rows=~20951 elapsed=0.0s cache=hit
+2026-01-17 12:41:25,361 - screener - INFO - [BARS_ACCEPT] accepted=30 dropped_missing=0
+2026-01-17 12:41:25,366 - screener - INFO - Universe prefix counts: {'C': 4, 'N': 3, 'A': 2, 'I': 2, 'O': 2, 'D': 2, 'L': 2, 'S': 2, 'B': 2, 'G': 2, 'R': 1, 'H': 1, 'P': 1, 'J': 1, 'U': 1, 'F': 1, 'M': 1}
+2026-01-17 12:41:27,779 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-17 12:41:27,809 - screener - INFO - [STAGE] coarse features start
+2026-01-17 12:41:35,482 - screener - INFO - [STAGE] coarse features end (rows=20951)
+2026-01-17 12:41:35,482 - screener - INFO - [STAGE] coarse rank start
+2026-01-17 12:41:35,514 - screener - INFO - [INFO] Coarse rank boundary rows_in=30 score_non_null=30 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-17 12:41:35,514 - screener - INFO - [STAGE] coarse rank end (rows=30)
+2026-01-17 12:41:35,522 - screener - INFO - [STAGE] shortlist written: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\tmp\shortlist.csv (rows=30)
+2026-01-17 12:41:35,524 - screener - INFO - [STAGE] full features start (shortlist=30)
+2026-01-17 12:41:43,197 - screener - INFO - [STAGE] full features end (rows=20951)
+2026-01-17 12:41:43,207 - screener - INFO - [STAGE] finalize candidates pruned rows=20951 -> 20949
+2026-01-17 12:41:43,207 - screener - INFO - [STAGE] full rank start
+2026-01-17 12:41:43,235 - screener - INFO - [STAGE] full rank end (rows=30)
+2026-01-17 12:41:43,236 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=30 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-17
+2026-01-17 12:41:43,236 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-17 12:41:43,238 - screener - INFO - [STAGE] quality filters pruned rows=30 -> 19
+2026-01-17 12:41:43,679 - screener - INFO - [STAGE] gates start
+2026-01-17 12:41:43,684 - screener - INFO - [STAGE] gates end (candidates=6)
+2026-01-17 12:41:43,793 - screener - INFO - [SUMMARY] run_ts=2026-01-17T18:41:25Z mode=full-nightly symbols_in=30 with_bars=30 coarse_rows=30 shortlist_rows=30 final_rows=6 gated_rows=6 fallback_used=false db_ingest_rows=6
+2026-01-17 12:41:43,819 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-17.csv (top_n=19)
+2026-01-17 12:41:46,275 - screener - INFO - Full nightly outputs written to C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\screener_metrics.json
+2026-01-17 12:43:18,506 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-17 12:43:18,670 - screener - INFO - [MODE] full-nightly start
+2026-01-17 12:43:18,670 - screener - INFO - [MODE] coarse-features start
+2026-01-17 12:43:22,944 - screener - INFO - [INFO] Coarse score stats eligible=30 rows_out=30 score_non_null=30 min=0.0 median=0.275 max=0.475
+2026-01-17 12:43:22,947 - screener - INFO - [INFO] Coarse export df rows=30 coarse_score_non_null=30 cols=symbol,coarse_score,coarse_rank,ADX_z,AROON_z,BP_z,GAPpen_z,LIQpen_z,MH_z,MS_z,PT_z,RSI_z,TS_z,VCP_z,VOLexp_z
+2026-01-17 12:43:22,953 - screener - INFO - [INFO] Coarse rank export rows=30 path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\tmp\coarse_rank.csv
+2026-01-17 12:43:22,978 - screener - INFO - Coarse features complete: eligible=30 symbols=30 rows=10650 features=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\features\1d\coarse_2026-01-16.parquet
+2026-01-17 12:43:22,980 - screener - INFO - [INFO] Coarse ranking using in-memory dataframe rows=30
+2026-01-17 12:43:22,998 - screener - INFO - [INFO] bars: batch 01/01 syms=30 pages=3 rows=~20951 elapsed=0.0s cache=hit
+2026-01-17 12:43:23,022 - screener - INFO - [BARS_ACCEPT] accepted=30 dropped_missing=0
+2026-01-17 12:43:23,028 - screener - INFO - Universe prefix counts: {'C': 4, 'N': 3, 'A': 2, 'I': 2, 'O': 2, 'D': 2, 'L': 2, 'S': 2, 'B': 2, 'G': 2, 'R': 1, 'H': 1, 'P': 1, 'J': 1, 'U': 1, 'F': 1, 'M': 1}
+2026-01-17 12:43:25,477 - screener - INFO - [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+2026-01-17 12:43:25,505 - screener - INFO - [STAGE] coarse features start
+2026-01-17 12:43:33,075 - screener - INFO - [STAGE] coarse features end (rows=20951)
+2026-01-17 12:43:33,075 - screener - INFO - [STAGE] coarse rank start
+2026-01-17 12:43:33,105 - screener - INFO - [INFO] Coarse rank boundary rows_in=30 score_non_null=30 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-17 12:43:33,105 - screener - INFO - [STAGE] coarse rank end (rows=30)
+2026-01-17 12:43:33,113 - screener - INFO - [STAGE] shortlist written: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\tmp\shortlist.csv (rows=30)
+2026-01-17 12:43:33,115 - screener - INFO - [STAGE] full features start (shortlist=30)
+2026-01-17 12:43:40,723 - screener - INFO - [STAGE] full features end (rows=20951)
+2026-01-17 12:43:40,733 - screener - INFO - [STAGE] finalize candidates pruned rows=20951 -> 20949
+2026-01-17 12:43:40,733 - screener - INFO - [STAGE] full rank start
+2026-01-17 12:43:40,761 - screener - INFO - [STAGE] full rank end (rows=30)
+2026-01-17 12:43:40,761 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=30 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-17
+2026-01-17 12:43:40,761 - screener - INFO - [INFO] SENTIMENT_FETCH skipped reason=disabled
+2026-01-17 12:43:40,763 - screener - INFO - [STAGE] quality filters pruned rows=30 -> 19
+2026-01-17 12:43:41,175 - screener - INFO - [STAGE] gates start
+2026-01-17 12:43:41,180 - screener - INFO - [STAGE] gates end (candidates=6)
+2026-01-17 12:43:41,289 - screener - INFO - [SUMMARY] run_ts=2026-01-17T18:43:23Z mode=full-nightly symbols_in=30 with_bars=30 coarse_rows=30 shortlist_rows=30 final_rows=6 gated_rows=6 fallback_used=false db_ingest_rows=6
+2026-01-17 12:43:41,313 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-17.csv (top_n=19)
+2026-01-17 12:43:43,756 - screener - INFO - Full nightly outputs written to C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\screener_metrics.json

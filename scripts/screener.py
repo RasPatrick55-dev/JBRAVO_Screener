@@ -4728,6 +4728,8 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         shortlist_size=shortlist_size,
         shortlist_path=base_dir / "data" / "tmp" / "shortlist.csv",
         mode="full-nightly",
+        local_validate=_as_bool(os.getenv("LOCAL_VALIDATE"), False)
+        or bool(getattr(args, "local_validate", False)),
     )
     timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(float(fetch_elapsed), 3)
 
@@ -5000,6 +5002,7 @@ def run_screener(
     backtest_lookback: Optional[int] = None,
     debug_no_gates: bool = False,
     mode: str = "screener",
+    local_validate: bool = False,
 ) -> Tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -5677,6 +5680,25 @@ def run_screener(
         db_ingest_rows,
     )
 
+    if local_validate:
+        failures: list[str] = []
+        if with_bars <= 0:
+            failures.append("with_bars=0")
+        if fallback_used:
+            failures.append("fallback_used=true")
+        frame_for_indicators = scored_df if isinstance(scored_df, pd.DataFrame) and not scored_df.empty else candidates_df
+        sma9_series = None
+        if isinstance(frame_for_indicators, pd.DataFrame) and not frame_for_indicators.empty:
+            if "sma9" in frame_for_indicators.columns:
+                sma9_series = pd.to_numeric(frame_for_indicators["sma9"], errors="coerce")
+            elif "SMA9" in frame_for_indicators.columns:
+                sma9_series = pd.to_numeric(frame_for_indicators["SMA9"], errors="coerce")
+        sma9_count = int(sma9_series.notna().sum()) if sma9_series is not None else 0
+        if sma9_count < 1:
+            failures.append("sma9_not_null=0")
+        if failures:
+            raise RuntimeError("[LOCAL_VALIDATE] " + ", ".join(failures))
+
     _write_stage_snapshot(
         "screener_stage_post.json",
         {
@@ -6124,6 +6146,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default=RANKER_CONFIG_PATH,
         help="Path to the ranker configuration file (default: configs/ranker_v2.yml)",
     )
+    parser.add_argument(
+        "--local-validate",
+        action="store_true",
+        help="Fail fast locally if bars/indicators missing or fallback is used",
+    )
     parser.add_argument("--days", type=int, default=750, help="Number of trading days to request")
     parser.add_argument(
         "--prefilter-days",
@@ -6340,6 +6367,9 @@ def main(
 
     def _run() -> int:
         mode = getattr(args, "mode", "screener")
+        local_validate = _as_bool(os.getenv("LOCAL_VALIDATE"), False) or bool(
+            getattr(args, "local_validate", False)
+        )
 
         if "fetch_symbols" not in globals():
             raise RuntimeError("fetch_symbols helper missing or not imported correctly")
@@ -6497,6 +6527,7 @@ def main(
             ranker_config=base_ranker_cfg,
             debug_no_gates=bool(args.debug_no_gates),
             mode=mode,
+            local_validate=local_validate,
         )
         timing_info["fetch_secs"] = timing_info.get("fetch_secs", 0.0) + round(fetch_elapsed, 3)
         write_outputs(

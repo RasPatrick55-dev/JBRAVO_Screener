@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from pathlib import Path
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Any, Iterator, Mapping, Optional
@@ -13,6 +14,8 @@ from psycopg2 import extras
 from psycopg2.extensions import connection as PGConnection
 
 logger = logging.getLogger(__name__)
+
+_DUMPED_CANDIDATES = False
 
 DEFAULT_DB_HOST = "localhost"
 DEFAULT_DB_PORT = 9999
@@ -465,6 +468,30 @@ def upsert_pipeline_run(
 def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None) -> None:
     if df_candidates is None or df_candidates.empty:
         return
+    global _DUMPED_CANDIDATES
+    if _env_truthy("DEBUG_DUMP_CANDIDATES") and not _DUMPED_CANDIDATES:
+        try:
+            diagnostics_dir = Path("data") / "diagnostics"
+            diagnostics_dir.mkdir(parents=True, exist_ok=True)
+            dump_cols = [
+                "timestamp",
+                "symbol",
+                "score",
+                "sma9",
+                "ema20",
+                "sma180",
+                "rsi14",
+                "passed_gates",
+                "gate_fail_reason",
+                "source",
+            ]
+            dump_frame = df_candidates.reindex(columns=dump_cols, fill_value=pd.NA)
+            dump_path = diagnostics_dir / f"candidates_insert_{_coerce_date(run_date)}.csv"
+            dump_frame.to_csv(dump_path, index=False)
+            logger.info("[INFO] DEBUG_DUMP_CANDIDATES path=%s rows=%d", dump_path, len(dump_frame))
+            _DUMPED_CANDIDATES = True
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            logger.warning("[WARN] DEBUG_DUMP_CANDIDATES_FAILED err=%s", exc)
     conn = _conn_or_none()
     if conn is None:
         return

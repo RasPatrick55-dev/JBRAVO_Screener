@@ -89,40 +89,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with conn.cursor() as cur:
-            row = _fetch_one(cur, "SELECT max(run_date) FROM screener_candidates")
-            latest_run_date = row[0] if row else None
-
-            if latest_run_date is not None:
-                row = _fetch_one(
-                    cur,
-                    "SELECT count(*) FROM screener_candidates WHERE run_date = %s",
-                    (latest_run_date,),
-                )
-                candidate_count = int(row[0]) if row else 0
-                row = _fetch_one(
-                    cur,
-                    "SELECT count(*) FROM screener_candidates WHERE run_date = %s AND sma9 IS NOT NULL",
-                    (latest_run_date,),
-                )
-                sma9_count = int(row[0]) if row else 0
-                row = _fetch_one(
-                    cur,
-                    "SELECT count(*) FROM screener_candidates WHERE run_date = %s AND passed_gates IS NOT NULL",
-                    (latest_run_date,),
-                )
-                gates_count = int(row[0]) if row else 0
-                source_counts = _fetch_all(
-                    cur,
-                    """
-                    SELECT COALESCE(source, '') AS source, count(*)
-                    FROM screener_candidates
-                    WHERE run_date = %s
-                    GROUP BY COALESCE(source, '')
-                    ORDER BY count(*) DESC
-                    """,
-                    (latest_run_date,),
-                )
-
             pipeline_row = _fetch_one(
                 cur,
                 """
@@ -133,6 +99,62 @@ def main(argv: list[str] | None = None) -> int:
                 LIMIT 1
                 """,
             )
+            # NOTE: run_date is not unique; use run_ts_utc as canonical run identifier.
+            if pipeline_row:
+                latest_run_date = pipeline_row[0]
+                run_ts = pipeline_row[1]
+            else:
+                latest_run_date = None
+                run_ts = None
+
+            if run_ts is not None:
+                row = _fetch_one(
+                    cur,
+                    """
+                    SELECT count(*)
+                    FROM screener_candidates
+                    WHERE timestamp >= %s
+                      AND timestamp < (%s + interval '30 minutes')
+                    """,
+                    (run_ts, run_ts),
+                )
+                candidate_count = int(row[0]) if row else 0
+                row = _fetch_one(
+                    cur,
+                    """
+                    SELECT count(*)
+                    FROM screener_candidates
+                    WHERE timestamp >= %s
+                      AND timestamp < (%s + interval '30 minutes')
+                      AND sma9 IS NOT NULL
+                    """,
+                    (run_ts, run_ts),
+                )
+                sma9_count = int(row[0]) if row else 0
+                row = _fetch_one(
+                    cur,
+                    """
+                    SELECT count(*)
+                    FROM screener_candidates
+                    WHERE timestamp >= %s
+                      AND timestamp < (%s + interval '30 minutes')
+                      AND passed_gates IS NOT NULL
+                    """,
+                    (run_ts, run_ts),
+                )
+                gates_count = int(row[0]) if row else 0
+                source_counts = _fetch_all(
+                    cur,
+                    """
+                    SELECT COALESCE(source, '') AS source, count(*)
+                    FROM screener_candidates
+                    WHERE timestamp >= %s
+                      AND timestamp < (%s + interval '30 minutes')
+                    GROUP BY COALESCE(source, '')
+                    ORDER BY count(*) DESC
+                    """,
+                    (run_ts, run_ts),
+                )
 
             outcomes_row = _fetch_one(
                 cur,
