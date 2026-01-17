@@ -6,6 +6,23 @@ dashboard built with Plotly Dash.  It visualizes trade performance, recent
 pipeline runs and multiple log files.  Example CSVs and logs can be found under
 `data/` and `logs/`.
 
+## Production Status and Validation
+
+The screener is production-ready (post Phase V) and approved for daily pipeline
+runs, backtesting, and downstream execution.
+
+By design:
+- Bars fetch via IEX (primary) with a single retry; SIP fallback covers missing bars only.
+- Partial bar coverage is accepted; fallback is used only on true no-signal days.
+- Every candidate written has indicators populated and gates evaluated (passed_gates TRUE/FALSE).
+- run_date is not a unique run identifier; pipeline_health_app.run_ts_utc is canonical.
+- screener_run_map_app maps symbols to run_ts_utc for validation, backtesting, and metrics.
+- Each run emits a [SUMMARY] log line; scripts/verify_e2e.py enforces end-to-end correctness.
+- Zero-candidate fallback days are valid PASS cases when recorded in pipeline_health_app.
+- ML assists ranking only, never creates candidates, and never overrides gates.
+  Training is guarded by minimum sample thresholds; ML can be disabled without
+  changing baseline screener behavior.
+
 To launch the dashboard locally run:
 
 ```

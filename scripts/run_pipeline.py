@@ -1,3 +1,9 @@
+"""Daily pipeline runner for JBRAVO (production-ready post Phase V).
+
+The pipeline relies on the screener summary line for observability and uses
+pipeline_health_app.run_ts_utc plus screener_run_map_app for run scoping.
+Fallback candidates are used only when the screener produces zero real rows.
+"""
 import argparse
 import csv
 import json

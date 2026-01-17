@@ -1,4 +1,9 @@
-"""Verify end-to-end screener health after a run."""
+"""Verify end-to-end screener health after a run.
+
+Uses pipeline_health_app.run_ts_utc as the canonical run id and scopes
+candidates through screener_run_map_app (run_date is not unique).
+Zero-candidate fallback days are valid PASS cases when recorded as such.
+"""
 from __future__ import annotations
 
 import argparse

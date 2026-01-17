@@ -661,6 +661,7 @@ def insert_screener_candidates(
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_INGEST_FAILED table=screener_candidates err=%s", exc)
 
+    # Run scoping is stored in screener_run_map_app because screener_candidates is owned by super.
     if inserted and run_ts_utc is not None:
         normalized_run_ts = normalize_ts(run_ts_utc, field="run_ts_utc")
         if normalized_run_ts is not None:

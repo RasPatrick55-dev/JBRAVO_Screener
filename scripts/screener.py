@@ -1,3 +1,14 @@
+"""JBRAVO screener pipeline (production-ready post Phase V).
+
+By design:
+- Bars fetch via IEX (primary) with a single retry; SIP fallback covers missing bars only.
+- Partial bar coverage is accepted; fallback is used only on true no-signal days.
+- Every written candidate includes indicators and gate telemetry (passed_gates TRUE/FALSE).
+- run_date is not unique; pipeline_health_app.run_ts_utc is the canonical run id.
+- screener_run_map_app maps symbols to run_ts_utc for validation/backtests.
+- Each run emits a [SUMMARY] line; verify_e2e enforces end-to-end correctness.
+- ML assists ranking only; it never creates candidates or overrides gates.
+"""
 from __future__ import annotations
 
 import argparse
