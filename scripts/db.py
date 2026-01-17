@@ -654,7 +654,7 @@ def insert_pipeline_health(record: Mapping[str, Any]) -> None:
         "notes": record.get("notes"),
     }
     create_stmt = """
-        CREATE TABLE IF NOT EXISTS pipeline_health (
+        CREATE TABLE IF NOT EXISTS pipeline_health_app (
             run_date DATE,
             run_ts_utc TIMESTAMPTZ,
             mode TEXT,
@@ -672,7 +672,7 @@ def insert_pipeline_health(record: Mapping[str, Any]) -> None:
         )
     """
     insert_stmt = """
-        INSERT INTO pipeline_health (
+        INSERT INTO pipeline_health_app (
             run_date, run_ts_utc, mode, symbols_in, with_bars, coarse_rows, shortlist_rows,
             final_rows, gated_rows, fallback_used, db_ingest_rows, notes
         )

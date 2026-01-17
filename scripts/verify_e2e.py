@@ -128,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
                 """
                 SELECT run_date, run_ts_utc, mode, symbols_in, with_bars, coarse_rows,
                        shortlist_rows, final_rows, gated_rows, fallback_used, db_ingest_rows
-                FROM pipeline_health
+                FROM pipeline_health_app
                 ORDER BY run_ts_utc DESC NULLS LAST
                 LIMIT 1
                 """,
