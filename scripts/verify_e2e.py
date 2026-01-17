@@ -99,7 +99,8 @@ def main(argv: list[str] | None = None) -> int:
                 LIMIT 1
                 """,
             )
-            # NOTE: run_date is not unique; use run_ts_utc as canonical run identifier.
+            # NOTE: run_date is not unique; run_ts_utc is the screener run identifier.
+            # screener_candidates.timestamp is the bar timestamp, not the run timestamp.
             if pipeline_row:
                 latest_run_date = pipeline_row[0]
                 run_ts = pipeline_row[1]
@@ -113,10 +114,9 @@ def main(argv: list[str] | None = None) -> int:
                     """
                     SELECT count(*)
                     FROM screener_candidates
-                    WHERE timestamp >= %s
-                      AND timestamp < (%s + interval '30 minutes')
+                    WHERE run_ts_utc = %s
                     """,
-                    (run_ts, run_ts),
+                    (run_ts,),
                 )
                 candidate_count = int(row[0]) if row else 0
                 row = _fetch_one(
@@ -124,11 +124,10 @@ def main(argv: list[str] | None = None) -> int:
                     """
                     SELECT count(*)
                     FROM screener_candidates
-                    WHERE timestamp >= %s
-                      AND timestamp < (%s + interval '30 minutes')
+                    WHERE run_ts_utc = %s
                       AND sma9 IS NOT NULL
                     """,
-                    (run_ts, run_ts),
+                    (run_ts,),
                 )
                 sma9_count = int(row[0]) if row else 0
                 row = _fetch_one(
@@ -136,11 +135,10 @@ def main(argv: list[str] | None = None) -> int:
                     """
                     SELECT count(*)
                     FROM screener_candidates
-                    WHERE timestamp >= %s
-                      AND timestamp < (%s + interval '30 minutes')
+                    WHERE run_ts_utc = %s
                       AND passed_gates IS NOT NULL
                     """,
-                    (run_ts, run_ts),
+                    (run_ts,),
                 )
                 gates_count = int(row[0]) if row else 0
                 source_counts = _fetch_all(
@@ -148,12 +146,11 @@ def main(argv: list[str] | None = None) -> int:
                     """
                     SELECT COALESCE(source, '') AS source, count(*)
                     FROM screener_candidates
-                    WHERE timestamp >= %s
-                      AND timestamp < (%s + interval '30 minutes')
+                    WHERE run_ts_utc = %s
                     GROUP BY COALESCE(source, '')
                     ORDER BY count(*) DESC
                     """,
-                    (run_ts, run_ts),
+                    (run_ts,),
                 )
 
             outcomes_row = _fetch_one(

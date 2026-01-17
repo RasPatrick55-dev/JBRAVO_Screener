@@ -465,7 +465,12 @@ def upsert_pipeline_run(
             pass
 
 
-def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None) -> None:
+def insert_screener_candidates(
+    run_date: Any,
+    df_candidates: pd.DataFrame | None,
+    *,
+    run_ts_utc: Any | None = None,
+) -> None:
     if df_candidates is None or df_candidates.empty:
         return
     global _DUMPED_CANDIDATES
@@ -526,6 +531,7 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
 
     normalized = df_candidates.copy()
     columns = {
+        "run_ts_utc": None,
         "timestamp": None,
         "symbol": None,
         "score": None,
@@ -586,6 +592,7 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
         symbol = (record.get("symbol") or "").upper()
         payload = {
             "run_date": _coerce_date(run_date),
+            "run_ts_utc": run_ts_utc,
             "timestamp": record.get("timestamp"),
             "symbol": symbol,
             "score": record.get("score"),
@@ -616,17 +623,18 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
                     cursor,
                     """
                     INSERT INTO screener_candidates (
-                        run_date, timestamp, symbol, score, final_score, exchange, close, volume,
+                        run_date, run_ts_utc, timestamp, symbol, score, final_score, exchange, close, volume,
                         universe_count, score_breakdown, entry_price, adv20, atrp, source,
                         sma9, ema20, sma180, rsi14, passed_gates, gate_fail_reason, ml_weight_used
                     )
                     VALUES (
-                        %(run_date)s, %(timestamp)s, %(symbol)s, %(score)s, %(final_score)s, %(exchange)s, %(close)s, %(volume)s,
+                        %(run_date)s, %(run_ts_utc)s, %(timestamp)s, %(symbol)s, %(score)s, %(final_score)s, %(exchange)s, %(close)s, %(volume)s,
                         %(universe_count)s, CAST(%(score_breakdown)s AS JSONB), %(entry_price)s, %(adv20)s,
                         %(atrp)s, %(source)s, %(sma9)s, %(ema20)s, %(sma180)s, %(rsi14)s, %(passed_gates)s,
                         %(gate_fail_reason)s, %(ml_weight_used)s
                     )
                     ON CONFLICT (run_date, symbol) DO UPDATE SET
+                        run_ts_utc=EXCLUDED.run_ts_utc,
                         timestamp=EXCLUDED.timestamp,
                         score=EXCLUDED.score,
                         final_score=EXCLUDED.final_score,
@@ -789,6 +797,31 @@ def insert_bar_coverage(record: Mapping[str, Any]) -> None:
         _log_write_result(True, "bar_coverage_app", 1)
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "bar_coverage_app", 0, exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def get_latest_pipeline_health_run_ts() -> Optional[datetime]:
+    conn = _conn_or_none()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT run_ts_utc
+                FROM pipeline_health_app
+                ORDER BY run_ts_utc DESC NULLS LAST
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+    except Exception:  # pragma: no cover - defensive guard
+        return None
     finally:
         try:
             conn.close()

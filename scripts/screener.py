@@ -4763,14 +4763,15 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         except Exception as exc:  # pragma: no cover - copy failures unexpected
             LOGGER.warning("Failed to refresh latest candidates: %s", exc)
 
-    if latest_candidates_df is not None:
-        try:
-            db.insert_screener_candidates(
-                datetime.now(timezone.utc).date(),
-                latest_candidates_df,
-            )
-        except Exception as exc:  # pragma: no cover - defensive guard
-            LOGGER.warning("[WARN] DB_WRITE_FAILED table=screener_candidates err=%s", exc)
+        if latest_candidates_df is not None:
+            try:
+                db.insert_screener_candidates(
+                    datetime.now(timezone.utc).date(),
+                    latest_candidates_df,
+                    run_ts_utc=now,
+                )
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning("[WARN] DB_WRITE_FAILED table=screener_candidates err=%s", exc)
 
     _update_metrics_file(
         base_dir,

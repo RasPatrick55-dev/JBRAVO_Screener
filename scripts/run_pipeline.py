@@ -1843,7 +1843,14 @@ def ingest_artifacts_to_db(run_date: date) -> None:
                 if not is_empty_score:
                     score_breakdown_raw.append(score_breakdown_raw_value)
         try:
-            db.insert_screener_candidates(run_date_value, candidates_df)
+            run_ts_utc = summary_payload.get("run_ts_utc") if summary_payload else None
+            if run_ts_utc is None:
+                run_ts_utc = db.get_latest_pipeline_health_run_ts()
+            db.insert_screener_candidates(
+                run_date_value,
+                candidates_df,
+                run_ts_utc=run_ts_utc,
+            )
             _log_ok("screener_candidates", int(candidates_df.shape[0]))
         except Exception as exc:
             _log_fail("screener_candidates", exc)
