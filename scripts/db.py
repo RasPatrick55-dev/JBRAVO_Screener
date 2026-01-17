@@ -708,6 +708,59 @@ def insert_pipeline_health(record: Mapping[str, Any]) -> None:
             pass
 
 
+def insert_bar_coverage(record: Mapping[str, Any]) -> None:
+    if not record:
+        return
+    conn = _conn_or_none()
+    if conn is None:
+        return
+
+    payload = {
+        "run_ts": record.get("run_ts"),
+        "run_date": _coerce_date(record.get("run_date")),
+        "mode": record.get("mode"),
+        "feed": record.get("feed"),
+        "symbols_requested": record.get("symbols_requested"),
+        "symbols_with_bars": record.get("symbols_with_bars"),
+        "symbols_missing": record.get("symbols_missing"),
+    }
+    create_stmt = """
+        CREATE TABLE IF NOT EXISTS bar_coverage_app (
+            run_ts TIMESTAMPTZ,
+            run_date DATE,
+            mode TEXT,
+            feed TEXT,
+            symbols_requested INT,
+            symbols_with_bars INT,
+            symbols_missing INT,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    """
+    insert_stmt = """
+        INSERT INTO bar_coverage_app (
+            run_ts, run_date, mode, feed, symbols_requested,
+            symbols_with_bars, symbols_missing
+        )
+        VALUES (
+            %(run_ts)s, %(run_date)s, %(mode)s, %(feed)s, %(symbols_requested)s,
+            %(symbols_with_bars)s, %(symbols_missing)s
+        )
+    """
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(create_stmt)
+                cursor.execute(insert_stmt, payload)
+        _log_write_result(True, "bar_coverage_app", 1)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        _log_write_result(False, "bar_coverage_app", 0, exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> bool:
     if df_results is None or df_results.empty:
         return False

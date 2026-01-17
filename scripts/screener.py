@@ -663,6 +663,49 @@ def summarize_bar_history_counts(history: Optional[pd.DataFrame], *, required_ba
     return {"any": any_count, "required": required_count}
 
 
+def _normalize_symbol_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip().upper()] if value.strip() else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip().upper() for item in value if str(item).strip()]
+    return []
+
+
+def _record_bar_coverage(
+    *,
+    run_ts: datetime,
+    mode: str,
+    feed: str,
+    symbols_requested: int,
+    symbols_with_bars: int,
+    missing_examples: list[str],
+) -> None:
+    missing_count = max(int(symbols_requested) - int(symbols_with_bars), 0)
+    if int(symbols_with_bars) == 0 or missing_count > 0:
+        examples = ",".join(missing_examples[:10])
+        LOGGER.info(
+            "[BARS_DIAG] feed=%s requested=%d with_bars=%d missing=%d examples=[%s]",
+            feed,
+            int(symbols_requested),
+            int(symbols_with_bars),
+            missing_count,
+            examples,
+        )
+    db.insert_bar_coverage(
+        {
+            "run_ts": _format_timestamp(run_ts),
+            "run_date": run_ts.date().isoformat(),
+            "mode": mode,
+            "feed": feed,
+            "symbols_requested": int(symbols_requested),
+            "symbols_with_bars": int(symbols_with_bars),
+            "symbols_missing": missing_count,
+        }
+    )
+
+
 def _export_daily_bars_csv(
     frame: Optional[pd.DataFrame], export_path: Path, base_dir: Path
 ) -> Optional[Path]:
@@ -4527,6 +4570,25 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
     )
 
     now = datetime.now(timezone.utc)
+    symbols_requested = int(fetch_metrics.get("symbols_in", 0) or len(symbols))
+    symbols_with_bars = int(
+        fetch_metrics.get("symbols_with_any_bars")
+        or fetch_metrics.get("symbols_with_bars")
+        or _symbol_count(bars_df)
+    )
+    missing_examples = _normalize_symbol_list(
+        fetch_metrics.get("symbols_no_bars_sample")
+        or fetch_metrics.get("symbols_no_bars")
+        or []
+    )
+    _record_bar_coverage(
+        run_ts=now,
+        mode="full-nightly",
+        feed=str(feed or DEFAULT_FEED),
+        symbols_requested=symbols_requested,
+        symbols_with_bars=symbols_with_bars,
+        missing_examples=missing_examples,
+    )
     ranker_path = getattr(args, "ranker_config", RANKER_CONFIG_PATH)
     base_ranker_cfg = _load_ranker_config(ranker_path)
 
@@ -6254,6 +6316,25 @@ def main(
                 int(frame.shape[0]) if hasattr(frame, "shape") else 0,
                 fetch_elapsed,
             )
+        symbols_requested = int(fetch_metrics.get("symbols_in", 0) or _symbol_count(frame))
+        symbols_with_bars = int(
+            fetch_metrics.get("symbols_with_any_bars")
+            or fetch_metrics.get("symbols_with_bars")
+            or _symbol_count(frame)
+        )
+        missing_examples = _normalize_symbol_list(
+            fetch_metrics.get("symbols_no_bars_sample")
+            or fetch_metrics.get("symbols_no_bars")
+            or []
+        )
+        _record_bar_coverage(
+            run_ts=now,
+            mode=mode,
+            feed=str(getattr(args, "feed", DEFAULT_FEED) or DEFAULT_FEED),
+            symbols_requested=symbols_requested,
+            symbols_with_bars=symbols_with_bars,
+            missing_examples=missing_examples,
+        )
         _write_stage_snapshot(
             "screener_stage_fetch.json",
             {
