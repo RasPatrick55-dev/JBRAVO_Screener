@@ -107,13 +107,48 @@ def compute_recent_performance(
     }
 
 
-def get_data(symbol: str, days: int = 800) -> pd.DataFrame:
-    if data_client is None:
-        logger.error("Data client not initialized. Returning empty DataFrame.")
-        return pd.DataFrame()
+def load_bars_from_db(symbol: str) -> Optional[pd.DataFrame]:
+    if not db.db_enabled():
+        logger.warning("BAR_CACHE_MISS symbol=%s reason=db_disabled", symbol)
+        return None
 
-    df = cache_bars(symbol, data_client, os.path.join(BASE_DIR, "data", "history_cache"), days)
-    return df[["open", "high", "low", "close", "volume"]] if not df.empty else pd.DataFrame()
+    conn = db.get_db_conn()
+    if conn is None:
+        logger.warning("BAR_CACHE_MISS symbol=%s reason=db_connect_failed", symbol)
+        return None
+
+    symbol_key = symbol.strip().upper()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT date, open, high, low, close, volume
+                FROM daily_bars
+                WHERE symbol = %(symbol)s
+                ORDER BY date ASC
+                """,
+                {"symbol": symbol_key},
+            )
+            rows = cursor.fetchall()
+        if not rows:
+            return pd.DataFrame()
+        frame = pd.DataFrame(
+            rows, columns=["date", "open", "high", "low", "close", "volume"]
+        )
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+        frame = frame.dropna(subset=["date"]).set_index("date").sort_index()
+        for col in ["open", "high", "low", "close", "volume"]:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        frame = frame.dropna(subset=["open", "high", "low", "close", "volume"])
+        return frame
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("BAR_CACHE_MISS symbol=%s reason=db_query_failed err=%s", symbol_key, exc)
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -734,8 +769,12 @@ def run_backtest(
     lookback_days = max_days if max_days else 800
     for sym in valid_symbols:
         logger.info("Fetching data for %s", sym)
-        df = get_data(sym, days=lookback_days)
-        if df.empty or len(df) < 250:
+        df = load_bars_from_db(sym)
+        if df is None or len(df) < 750:
+            logger.warning("BAR_CACHE_MISS symbol=%s reason=not_enough_bars", sym)
+            continue
+        logger.info("BARS_LOADED_FROM_DB symbol=%s rows=%d", sym, len(df))
+        if len(df) < 250:
             logger.warning("Skipping %s: insufficient data", sym)
             continue
         df = compute_indicators(df)
