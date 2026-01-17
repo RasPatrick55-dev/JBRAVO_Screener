@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import json
 import numpy as np
 import pandas as pd
 
@@ -37,9 +38,10 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-DEFAULT_MODEL_PATH = BASE_DIR / "data" / "models" / "rank_model.joblib"
+DEFAULT_MODEL_DIR = BASE_DIR / "data" / "models"
 DEFAULT_TRAIN_WINDOW_DAYS = 60
 MIN_TRAIN_SAMPLES = 30
+MIN_SAMPLES_10D = 60
 
 FEATURE_COLUMNS = [
     "score",
@@ -178,8 +180,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=DEFAULT_MODEL_PATH,
-        help="Path to write model artifact",
+        default=None,
+        help="Path to write model artifact (default: data/models/rank_model_<YYYYMMDD>.joblib)",
     )
     parser.add_argument(
         "--limit",
@@ -229,6 +231,16 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.warning("No training rows after applying %d-day window; skipping.", window_days)
         return 0
 
+    recent = _select_window(training_df, 10)
+    samples_10d = int(recent.shape[0])
+    if samples_10d < MIN_SAMPLES_10D:
+        LOGGER.warning(
+            "Insufficient 10-day samples (%d < %d); skipping training.",
+            samples_10d,
+            MIN_SAMPLES_10D,
+        )
+        return 0
+
     if len(training_df) < MIN_TRAIN_SAMPLES:
         LOGGER.warning(
             "Insufficient samples (%d < %d); skipping training.",
@@ -248,29 +260,33 @@ def main(argv: list[str] | None = None) -> int:
         coeffs = {name: float(value) for name, value in zip(FEATURE_COLUMNS, model.coef_[0])}
         coeffs = dict(sorted(coeffs.items(), key=lambda item: abs(item[1]), reverse=True))
 
-    output_path = args.output
+    trained_at = datetime.now(timezone.utc)
+    model_date = trained_at.strftime("%Y%m%d")
+    model_version = f"rank_model_{model_date}"
+    output_path = args.output or (DEFAULT_MODEL_DIR / f"{model_version}.joblib")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    trained_at = datetime.now(timezone.utc).isoformat()
-    model_version = f"mlrank-{trained_at}"
     payload = {
         "model": model,
         "scaler": scaler,
         "features": FEATURE_COLUMNS,
-        "trained_at": trained_at,
+        "trained_at": trained_at.isoformat(),
         "model_version": model_version,
         "window_days": int(window_days),
         "rows": int(features.shape[0]),
         "pos_rate": float(target.mean()),
         "val_auc": val_auc,
         "val_accuracy": val_acc,
+        "samples_used": int(features.shape[0]),
+        "features_used": FEATURE_COLUMNS,
     }
     joblib.dump(payload, output_path)
     LOGGER.info(
-        "Model saved: %s (rows=%d pos_rate=%.3f window_days=%d)",
+        "Model saved: %s (samples_used=%d pos_rate=%.3f window_days=%d model_version=%s)",
         output_path,
         int(features.shape[0]),
         float(target.mean()),
         int(window_days),
+        model_version,
     )
     LOGGER.info(
         "Validation: auc=%s accuracy=%s",
@@ -279,6 +295,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     if coeffs:
         LOGGER.info("Feature coefficients: %s", coeffs)
+    metadata_path = DEFAULT_MODEL_DIR / f"{model_version}.json"
+    try:
+        DEFAULT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        metadata_payload = {
+            "model_version": model_version,
+            "trained_at": trained_at.isoformat(),
+            "samples_used": int(features.shape[0]),
+            "samples_10d": samples_10d,
+            "features_used": FEATURE_COLUMNS,
+            "val_auc": val_auc,
+            "val_accuracy": val_acc,
+            "window_days": int(window_days),
+        }
+        metadata_path.write_text(
+            json.dumps(metadata_payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    except Exception as exc:  # pragma: no cover - non-fatal
+        LOGGER.warning("Failed to write model metadata %s: %s", metadata_path, exc)
     return 0
 
 
