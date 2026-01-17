@@ -305,44 +305,137 @@ def _table_columns(conn, table_name: str) -> set[str]:
         return {row[0] for row in cur.fetchall()}
 
 
+def _safe_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _backfill_rank_metadata(conn) -> int:
     outcome_cols = _table_columns(conn, "screener_outcomes_app")
     if not {"base_rank", "ml_rank", "ml_prob_up", "used_ml"}.issubset(outcome_cols):
         return 0
     candidate_cols = _table_columns(conn, "screener_candidates")
     ml_score_col = "ml_adjusted_score" if "ml_adjusted_score" in candidate_cols else "score"
-    prob_col = None
-    if "prob_up" in candidate_cols:
-        prob_col = "prob_up"
-    elif "ml_prob_up" in candidate_cols:
-        prob_col = "ml_prob_up"
+    prob_col = "prob_up" if "prob_up" in candidate_cols else "ml_prob_up" if "ml_prob_up" in candidate_cols else None
 
-    prob_expr = f"c.{prob_col}" if prob_col else "NULL"
-    ranked_sql = f"""
-        WITH ranked AS (
-            SELECT
-                c.run_date,
-                c.symbol,
-                row_number() OVER (
-                    PARTITION BY c.run_date
-                    ORDER BY c.score DESC NULLS LAST
-                ) AS base_rank,
-                row_number() OVER (
-                    PARTITION BY c.run_date
-                    ORDER BY c.{ml_score_col} DESC NULLS LAST
-                ) AS ml_rank,
-                {prob_expr} AS ml_prob_up
-            FROM screener_candidates c
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT run_date
+            FROM screener_outcomes_app
+            WHERE base_rank IS NULL
+               OR ml_rank IS NULL
+               OR ml_prob_up IS NULL
+               OR used_ml IS NULL
+            """
         )
+        run_dates = [row[0] for row in cur.fetchall() if row and row[0] is not None]
+    if not run_dates:
+        LOGGER.info("[ML_META_BACKFILL] updated=0 skipped=0")
+        return 0
+
+    select_cols = ["run_date", "symbol", "score"]
+    if ml_score_col not in select_cols:
+        select_cols.append(ml_score_col)
+    if prob_col and prob_col not in select_cols:
+        select_cols.append(prob_col)
+    select_sql = f"""
+        SELECT {", ".join(select_cols)}
+        FROM screener_candidates
+        WHERE run_date = ANY(%s)
+    """
+    with conn.cursor() as cur:
+        cur.execute(select_sql, (run_dates,))
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+    if not rows:
+        LOGGER.info("[ML_META_BACKFILL] updated=0 skipped=0")
+        return 0
+
+    candidates = pd.DataFrame(rows, columns=columns)
+    candidates["score"] = pd.to_numeric(candidates.get("score"), errors="coerce")
+    if ml_score_col in candidates.columns:
+        candidates[ml_score_col] = pd.to_numeric(candidates[ml_score_col], errors="coerce")
+    ml_score_series = (
+        candidates[ml_score_col] if ml_score_col in candidates.columns else candidates["score"]
+    )
+    candidates["base_rank"] = (
+        candidates.groupby("run_date")["score"]
+        .rank(method="first", ascending=False)
+    )
+    candidates["ml_rank"] = (
+        candidates.groupby("run_date")[ml_score_series.name]
+        .rank(method="first", ascending=False)
+    )
+    if prob_col and prob_col in candidates.columns:
+        candidates["ml_prob_up"] = pd.to_numeric(candidates[prob_col], errors="coerce")
+    else:
+        candidates["ml_prob_up"] = pd.Series(pd.NA, index=candidates.index, dtype="Float64")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT run_date, symbol
+            FROM screener_outcomes_app
+            WHERE run_date = ANY(%s)
+            """,
+            (run_dates,),
+        )
+        outcome_keys = {(row[0], row[1]) for row in cur.fetchall()}
+
+    update_rows: list[tuple] = []
+    for _, row in candidates.iterrows():
+        key = (row.get("run_date"), row.get("symbol"))
+        if key not in outcome_keys:
+            continue
+        update_rows.append(
+            (
+                row.get("run_date"),
+                row.get("symbol"),
+                _safe_int(row.get("base_rank")),
+                _safe_int(row.get("ml_rank")),
+                _safe_float(row.get("ml_prob_up")),
+                True,
+            )
+        )
+
+    if not update_rows:
+        LOGGER.info("[ML_META_BACKFILL] updated=0 skipped=0")
+        return 0
+
+    update_sql = """
         UPDATE screener_outcomes_app o
         SET
-            base_rank = CASE WHEN o.base_rank IS NULL THEN ranked.base_rank ELSE o.base_rank END,
-            ml_rank = CASE WHEN o.ml_rank IS NULL THEN ranked.ml_rank ELSE o.ml_rank END,
-            ml_prob_up = CASE WHEN o.ml_prob_up IS NULL THEN ranked.ml_prob_up ELSE o.ml_prob_up END,
-            used_ml = CASE WHEN o.used_ml IS NULL THEN TRUE ELSE o.used_ml END
-        FROM ranked
-        WHERE o.run_date = ranked.run_date
-          AND o.symbol = ranked.symbol
+            base_rank = COALESCE(o.base_rank, v.base_rank),
+            ml_rank = COALESCE(o.ml_rank, v.ml_rank),
+            ml_prob_up = COALESCE(o.ml_prob_up, v.ml_prob_up),
+            used_ml = COALESCE(o.used_ml, v.used_ml)
+        FROM (VALUES %s) AS v(run_date, symbol, base_rank, ml_rank, ml_prob_up, used_ml)
+        WHERE o.run_date = v.run_date
+          AND o.symbol = v.symbol
           AND (
             o.base_rank IS NULL
             OR o.ml_rank IS NULL
@@ -352,8 +445,11 @@ def _backfill_rank_metadata(conn) -> int:
     """
     with conn:
         with conn.cursor() as cur:
-            cur.execute(ranked_sql)
+            extras.execute_values(cur, update_sql, update_rows, page_size=500)
             updated = cur.rowcount or 0
+    total = len(update_rows)
+    skipped = max(total - int(updated), 0) if updated >= 0 else total
+    LOGGER.info("[ML_META_BACKFILL] updated=%d skipped=%d", int(updated), skipped)
     return int(updated)
 
 
