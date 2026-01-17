@@ -29,7 +29,6 @@ TABLE_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS screener_candidates (
         run_date DATE NOT NULL,
-        run_ts_utc TIMESTAMPTZ,
         timestamp TIMESTAMPTZ,
         symbol TEXT NOT NULL,
         score NUMERIC,
@@ -168,7 +167,6 @@ INDEX_STATEMENTS = [
 ]
 
 SCREENER_CANDIDATES_ALTER_STATEMENTS = [
-    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS run_ts_utc TIMESTAMPTZ;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS sma9 DOUBLE PRECISION;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS ema20 DOUBLE PRECISION;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS sma180 DOUBLE PRECISION;",
@@ -216,7 +214,6 @@ def run_upgrade(engine) -> bool:
 
 def _ensure_screener_candidates_columns(cursor, columns: set[str]) -> None:
     required = {
-        "run_ts_utc": "TIMESTAMPTZ",
         "sma9": "DOUBLE PRECISION",
         "ema20": "DOUBLE PRECISION",
         "sma180": "DOUBLE PRECISION",

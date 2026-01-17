@@ -531,7 +531,6 @@ def insert_screener_candidates(
 
     normalized = df_candidates.copy()
     columns = {
-        "run_ts_utc": None,
         "timestamp": None,
         "symbol": None,
         "score": None,
@@ -592,7 +591,6 @@ def insert_screener_candidates(
         symbol = (record.get("symbol") or "").upper()
         payload = {
             "run_date": _coerce_date(run_date),
-            "run_ts_utc": run_ts_utc,
             "timestamp": record.get("timestamp"),
             "symbol": symbol,
             "score": record.get("score"),
@@ -616,6 +614,7 @@ def insert_screener_candidates(
         }
         rows.append(payload)
 
+    inserted = False
     try:
         with conn:
             with conn.cursor() as cursor:
@@ -623,18 +622,17 @@ def insert_screener_candidates(
                     cursor,
                     """
                     INSERT INTO screener_candidates (
-                        run_date, run_ts_utc, timestamp, symbol, score, final_score, exchange, close, volume,
+                        run_date, timestamp, symbol, score, final_score, exchange, close, volume,
                         universe_count, score_breakdown, entry_price, adv20, atrp, source,
                         sma9, ema20, sma180, rsi14, passed_gates, gate_fail_reason, ml_weight_used
                     )
                     VALUES (
-                        %(run_date)s, %(run_ts_utc)s, %(timestamp)s, %(symbol)s, %(score)s, %(final_score)s, %(exchange)s, %(close)s, %(volume)s,
+                        %(run_date)s, %(timestamp)s, %(symbol)s, %(score)s, %(final_score)s, %(exchange)s, %(close)s, %(volume)s,
                         %(universe_count)s, CAST(%(score_breakdown)s AS JSONB), %(entry_price)s, %(adv20)s,
                         %(atrp)s, %(source)s, %(sma9)s, %(ema20)s, %(sma180)s, %(rsi14)s, %(passed_gates)s,
                         %(gate_fail_reason)s, %(ml_weight_used)s
                     )
                     ON CONFLICT (run_date, symbol) DO UPDATE SET
-                        run_ts_utc=EXCLUDED.run_ts_utc,
                         timestamp=EXCLUDED.timestamp,
                         score=EXCLUDED.score,
                         final_score=EXCLUDED.final_score,
@@ -658,14 +656,46 @@ def insert_screener_candidates(
                     rows,
                     page_size=200,
                 )
+        inserted = True
         logger.info("[INFO] DB_INGEST_OK table=screener_candidates rows=%s", len(rows))
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_INGEST_FAILED table=screener_candidates err=%s", exc)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+
+    if inserted and run_ts_utc is not None:
+        normalized_run_ts = normalize_ts(run_ts_utc, field="run_ts_utc")
+        if normalized_run_ts is not None:
+            normalized_run_ts = normalized_run_ts.replace(microsecond=0)
+            map_rows = [
+                {"run_ts_utc": normalized_run_ts, "symbol": row.get("symbol")}
+                for row in rows
+                if row.get("symbol")
+            ]
+            create_stmt = """
+                CREATE TABLE IF NOT EXISTS screener_run_map_app (
+                    run_ts_utc TIMESTAMPTZ,
+                    symbol TEXT,
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (run_ts_utc, symbol)
+                )
+            """
+            insert_stmt = """
+                INSERT INTO screener_run_map_app (run_ts_utc, symbol)
+                VALUES (%(run_ts_utc)s, %(symbol)s)
+                ON CONFLICT (run_ts_utc, symbol) DO NOTHING
+            """
+            try:
+                with conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(create_stmt)
+                        extras.execute_batch(cursor, insert_stmt, map_rows, page_size=200)
+                _log_write_result(True, "screener_run_map_app", len(map_rows))
+            except Exception as exc:  # pragma: no cover - defensive logging
+                _log_write_result(False, "screener_run_map_app", 0, exc)
+
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 
 def insert_pipeline_health(record: Mapping[str, Any]) -> None:

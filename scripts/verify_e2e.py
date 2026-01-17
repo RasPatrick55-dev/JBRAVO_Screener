@@ -100,7 +100,8 @@ def main(argv: list[str] | None = None) -> int:
                 """,
             )
             # NOTE: run_date is not unique; run_ts_utc is the screener run identifier.
-            # screener_candidates.timestamp is the bar timestamp, not the run timestamp.
+            # screener_candidates.timestamp is the bar timestamp.
+            # screener_run_map_app.run_ts_utc is the run identity.
             if pipeline_row:
                 latest_run_date = pipeline_row[0]
                 run_ts = pipeline_row[1]
@@ -108,49 +109,61 @@ def main(argv: list[str] | None = None) -> int:
                 latest_run_date = None
                 run_ts = None
 
-            if run_ts is not None:
+            if run_ts is not None and latest_run_date is not None:
                 row = _fetch_one(
                     cur,
                     """
                     SELECT count(*)
-                    FROM screener_candidates
-                    WHERE run_ts_utc = %s
+                    FROM screener_candidates c
+                    JOIN screener_run_map_app m
+                      ON UPPER(c.symbol) = m.symbol
+                    WHERE m.run_ts_utc = %s
+                      AND c.run_date = %s
                     """,
-                    (run_ts,),
+                    (run_ts, latest_run_date),
                 )
                 candidate_count = int(row[0]) if row else 0
                 row = _fetch_one(
                     cur,
                     """
                     SELECT count(*)
-                    FROM screener_candidates
-                    WHERE run_ts_utc = %s
-                      AND sma9 IS NOT NULL
+                    FROM screener_candidates c
+                    JOIN screener_run_map_app m
+                      ON UPPER(c.symbol) = m.symbol
+                    WHERE m.run_ts_utc = %s
+                      AND c.run_date = %s
+                      AND c.sma9 IS NOT NULL
                     """,
-                    (run_ts,),
+                    (run_ts, latest_run_date),
                 )
                 sma9_count = int(row[0]) if row else 0
                 row = _fetch_one(
                     cur,
                     """
                     SELECT count(*)
-                    FROM screener_candidates
-                    WHERE run_ts_utc = %s
-                      AND passed_gates IS NOT NULL
+                    FROM screener_candidates c
+                    JOIN screener_run_map_app m
+                      ON UPPER(c.symbol) = m.symbol
+                    WHERE m.run_ts_utc = %s
+                      AND c.run_date = %s
+                      AND c.passed_gates IS NOT NULL
                     """,
-                    (run_ts,),
+                    (run_ts, latest_run_date),
                 )
                 gates_count = int(row[0]) if row else 0
                 source_counts = _fetch_all(
                     cur,
                     """
                     SELECT COALESCE(source, '') AS source, count(*)
-                    FROM screener_candidates
-                    WHERE run_ts_utc = %s
+                    FROM screener_candidates c
+                    JOIN screener_run_map_app m
+                      ON UPPER(c.symbol) = m.symbol
+                    WHERE m.run_ts_utc = %s
+                      AND c.run_date = %s
                     GROUP BY COALESCE(source, '')
                     ORDER BY count(*) DESC
                     """,
-                    (run_ts,),
+                    (run_ts, latest_run_date),
                 )
 
             outcomes_row = _fetch_one(
