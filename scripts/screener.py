@@ -602,6 +602,7 @@ SKIP_KEYS = [
 DEFAULT_TOP_N = 15
 DEFAULT_MIN_HISTORY = 180
 BARS_REQUIRED_FOR_INDICATORS = 250
+MIN_BAR_SYMBOLS = 5
 ASSET_CACHE_RELATIVE = Path("data") / "reference" / "assets_cache.json"
 ASSET_HTTP_TIMEOUT = 15
 BARS_BATCH_SIZE = 200
@@ -1303,11 +1304,12 @@ def _fetch_daily_bars(
             LOGGER.debug("Could not write parse debug artifacts: %s", exc)
 
     def fetch_single_collection(
-        target_symbols: List[str], *, use_http: bool
+        target_symbols: List[str], *, use_http: bool, feed_override: Optional[str] = None
     ) -> Tuple[pd.DataFrame, int, Dict[str, str], dict[str, int]]:
         local_frames: list[pd.DataFrame] = []
         local_prescreened: dict[str, str] = {}
         token_bucket = TokenBucket(200) if not use_http else None
+        local_feed = (feed_override or feed).strip().lower() if feed_override or feed else feed
         local_metrics: dict[str, int] = {
             "symbols_in": 0,
             "rate_limited": 0,
@@ -1333,7 +1335,7 @@ def _fetch_daily_bars(
                     start_iso,
                     end_iso,
                     timeframe="1Day",
-                    feed=feed,
+                    feed=local_feed,
                     verify_hook=hook,
                 )
                 raw_bars_count = len(raw)
@@ -1398,7 +1400,7 @@ def _fetch_daily_bars(
                 "timeframe": TimeFrame.Day,
                 "start": start_dt,
                 "end": end_dt,
-                "feed": _resolve_feed(feed),
+                "feed": _resolve_feed(local_feed),
                 "adjustment": "raw",
                 "limit": days,
             }
@@ -1847,6 +1849,16 @@ def _fetch_daily_bars(
     else:
         keep = set(hist["symbol"].tolist()) if not hist.empty else set()
         insufficient = set()
+    accepted_count = len(keep)
+    dropped_missing = max(len(unique_symbols) - accepted_count, 0)
+    LOGGER.info(
+        "[BARS_ACCEPT] accepted=%d dropped_missing=%d",
+        accepted_count,
+        dropped_missing,
+    )
+    if accepted_count < MIN_BAR_SYMBOLS:
+        keep = set()
+        coverage_counts = {"any": 0, "required": 0}
     symbols_with_history = keep
     existing_insufficient = {
         sym for sym, reason in prescreened.items() if reason == "INSUFFICIENT_HISTORY"
@@ -1879,6 +1891,109 @@ def _fetch_daily_bars(
     )
     missing = [sym for sym in unique_symbols if sym not in keep]
     metrics["symbols_no_bars_sample"] = missing[:10]
+    if missing:
+        retry_frame, retry_pages, retry_prescreened, retry_metrics = fetch_single_collection(
+            missing,
+            use_http=(source == "http"),
+        )
+        recovered = 0
+        if not retry_frame.empty:
+            retry_frame = _normalize_bars_frame(retry_frame)
+            retry_frame = ensure_symbol_column(retry_frame)
+            retry_frame = retry_frame.dropna(subset=["timestamp"]) if not retry_frame.empty else retry_frame
+            if not retry_frame.empty:
+                retry_frame = (
+                    retry_frame.sort_values("timestamp")
+                    .groupby("symbol", as_index=False, group_keys=False)
+                    .tail(days)
+                )
+                retry_frame = ensure_symbol_column(retry_frame).reset_index(drop=True)
+                retry_hist = (
+                    retry_frame.groupby("symbol", as_index=False)["timestamp"]
+                    .size()
+                    .rename(columns={"size": "n"})
+                )
+                if min_history > 0 and not retry_hist.empty:
+                    retry_keep = set(
+                        retry_hist.loc[retry_hist["n"] >= min_history, "symbol"].tolist()
+                    )
+                else:
+                    retry_keep = set(retry_hist["symbol"].tolist()) if not retry_hist.empty else set()
+                if retry_keep:
+                    recovered = len(retry_keep)
+                    combined = pd.concat(
+                        [
+                            combined,
+                            retry_frame[retry_frame["symbol"].isin(retry_keep)],
+                        ],
+                        ignore_index=True,
+                    )
+                    keep.update(retry_keep)
+        LOGGER.info(
+            "[BARS_RETRY] retried=%d recovered=%d",
+            len(missing),
+            recovered,
+        )
+        metrics["fallback_batches"] = metrics.get("fallback_batches", 0) + int(
+            bool(len(missing))
+        )
+        for key, value in (retry_metrics or {}).items():
+            if not isinstance(value, int):
+                continue
+            metrics[key] = metrics.get(key, 0) + int(value)
+        prescreened.update(retry_prescreened or {})
+        missing = [sym for sym in unique_symbols if sym not in keep]
+        metrics["symbols_no_bars_sample"] = missing[:10]
+    if missing and (feed or "").strip().lower() == "iex":
+        sip_frame, sip_pages, sip_prescreened, sip_metrics = fetch_single_collection(
+            missing,
+            use_http=(source == "http"),
+            feed_override="sip",
+        )
+        sip_recovered = 0
+        if not sip_frame.empty:
+            sip_frame = _normalize_bars_frame(sip_frame)
+            sip_frame = ensure_symbol_column(sip_frame)
+            sip_frame = sip_frame.dropna(subset=["timestamp"]) if not sip_frame.empty else sip_frame
+            if not sip_frame.empty:
+                sip_frame = (
+                    sip_frame.sort_values("timestamp")
+                    .groupby("symbol", as_index=False, group_keys=False)
+                    .tail(days)
+                )
+                sip_frame = ensure_symbol_column(sip_frame).reset_index(drop=True)
+                sip_hist = (
+                    sip_frame.groupby("symbol", as_index=False)["timestamp"]
+                    .size()
+                    .rename(columns={"size": "n"})
+                )
+                if min_history > 0 and not sip_hist.empty:
+                    sip_keep = set(
+                        sip_hist.loc[sip_hist["n"] >= min_history, "symbol"].tolist()
+                    )
+                else:
+                    sip_keep = set(sip_hist["symbol"].tolist()) if not sip_hist.empty else set()
+                if sip_keep:
+                    sip_recovered = len(sip_keep)
+                    combined = pd.concat(
+                        [
+                            combined,
+                            sip_frame[sip_frame["symbol"].isin(sip_keep)],
+                        ],
+                        ignore_index=True,
+                    )
+                    keep.update(sip_keep)
+        LOGGER.info(
+            "[BARS_FEED_FALLBACK] from=iex to=sip recovered=%d",
+            sip_recovered,
+        )
+        for key, value in (sip_metrics or {}).items():
+            if not isinstance(value, int):
+                continue
+            metrics[key] = metrics.get(key, 0) + int(value)
+        prescreened.update(sip_prescreened or {})
+        missing = [sym for sym in unique_symbols if sym not in keep]
+        metrics["symbols_no_bars_sample"] = missing[:10]
     for sym in missing:
         if sym in insufficient:
             continue
