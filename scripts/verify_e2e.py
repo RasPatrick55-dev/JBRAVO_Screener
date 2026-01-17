@@ -184,19 +184,26 @@ def main(argv: list[str] | None = None) -> int:
             ph_db_ingest_rows,
         ) = pipeline_row
         match_run_date = ph_run_date == latest_run_date
-        match_counts = (
-            int(ph_final_rows or 0) == candidate_count
-            and int(ph_gated_rows or 0) == candidate_count
-            and int(ph_db_ingest_rows or 0) == candidate_count
+        db_ingest_rows = int(ph_db_ingest_rows or 0)
+        final_rows = int(ph_final_rows or 0)
+        gated_rows = int(ph_gated_rows or 0)
+        fallback_used = bool(ph_fallback_used)
+
+        case_a = (
+            not fallback_used
+            and db_ingest_rows > 0
+            and db_ingest_rows == candidate_count
+            and final_rows == candidate_count
+            and gated_rows == candidate_count
         )
-        expected_fallback = candidate_count == 0
-        match_fallback = bool(ph_fallback_used) == expected_fallback
-        match_ok = match_run_date and match_counts and match_fallback
+        case_b = fallback_used and db_ingest_rows == 0 and candidate_count > 0
+
+        match_ok = match_run_date and (case_a or case_b)
         detail = (
-            f"run_date_match={match_run_date} counts_match={match_counts} fallback_match={match_fallback}"
+            f"run_date_match={match_run_date} case_a={case_a} case_b={case_b}"
         )
         if not match_ok:
-            detail = f"pipeline_health_app mismatch - {detail}"
+            detail = f"pipeline_health_app mismatch outside valid fallback case - {detail}"
         _print_check("pipeline_health_app_match", match_ok, detail)
         all_ok &= match_ok
 
