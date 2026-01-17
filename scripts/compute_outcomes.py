@@ -258,6 +258,25 @@ def _ensure_outcomes_table(conn) -> None:
                 cur.execute(statement)
 
 
+def _backfill_gate_telemetry(conn) -> int:
+    update_sql = """
+        UPDATE screener_outcomes_app o
+        SET
+            passed_gates = c.passed_gates,
+            gate_fail_reason = c.gate_fail_reason
+        FROM screener_candidates c
+        WHERE o.run_date = c.run_date
+          AND o.symbol = c.symbol
+          AND o.passed_gates IS NULL
+          AND c.passed_gates IS NOT NULL
+    """
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(update_sql)
+            updated = cur.rowcount or 0
+    return int(updated)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compute forward outcomes for screener candidates.")
     parser.add_argument("--run-date", type=str, default=None, help="Run date (YYYY-MM-DD) to process.")
@@ -300,6 +319,10 @@ def main() -> int:
             inserted,
             len(symbols),
         )
+
+    updated = _backfill_gate_telemetry(conn)
+    if updated:
+        LOGGER.info("[INFO] Outcomes gate backfill updated=%d", updated)
 
     LOGGER.info("[INFO] Outcomes complete inserted=%d", total_inserted)
     return 0
