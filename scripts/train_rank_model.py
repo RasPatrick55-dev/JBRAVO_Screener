@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,10 +19,13 @@ from utils.env import load_env  # noqa: E402
 
 try:  # pragma: no cover - environment dependent
     from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import accuracy_score, roc_auc_score
     from sklearn.preprocessing import StandardScaler
     import joblib
 except Exception:  # pragma: no cover - environment dependent
     LogisticRegression = None
+    accuracy_score = None
+    roc_auc_score = None
     StandardScaler = None
     joblib = None
 
@@ -34,6 +38,8 @@ logging.basicConfig(
 )
 
 DEFAULT_MODEL_PATH = BASE_DIR / "data" / "models" / "rank_model.joblib"
+DEFAULT_TRAIN_WINDOW_DAYS = 60
+MIN_TRAIN_SAMPLES = 30
 
 FEATURE_COLUMNS = [
     "score",
@@ -102,10 +108,28 @@ def _load_training_data(conn, limit: int | None = None) -> pd.DataFrame:
     frame = pd.DataFrame(rows, columns=columns)
     frame["symbol"] = frame["symbol"].astype("string").str.upper()
     frame["ret_5d"] = pd.to_numeric(frame["ret_5d"], errors="coerce")
+    frame["run_date"] = pd.to_datetime(frame["run_date"], errors="coerce").dt.date
     return frame
 
 
-def _train_model(df: pd.DataFrame) -> tuple[object, object, pd.DataFrame, pd.Series]:
+def _select_window(df: pd.DataFrame, window_days: int) -> pd.DataFrame:
+    if window_days <= 0 or df.empty:
+        return df
+    dates = pd.to_datetime(df["run_date"], errors="coerce")
+    unique_dates = (
+        pd.Series(dates.dropna().unique())
+        .sort_values()
+        .tolist()
+    )
+    if not unique_dates:
+        return df.iloc[0:0].copy()
+    window_dates = set(unique_dates[-window_days:])
+    return df.loc[dates.isin(window_dates)].copy()
+
+
+def _train_model(
+    df: pd.DataFrame,
+) -> tuple[object, object, pd.DataFrame, pd.Series, float | None, float | None]:
     if LogisticRegression is None or StandardScaler is None or joblib is None:
         raise RuntimeError("scikit-learn/joblib not available; install requirements.txt")
 
@@ -118,11 +142,35 @@ def _train_model(df: pd.DataFrame) -> tuple[object, object, pd.DataFrame, pd.Ser
     if features.empty:
         raise RuntimeError("No training rows after filtering missing features.")
 
+    dates = pd.to_datetime(df.loc[features.index, "run_date"], errors="coerce")
+    order = dates.sort_values().index if dates.notna().any() else features.index
+    features = features.loc[order]
+    target = target.loc[order]
+    split_idx = max(1, int(len(features) * 0.8))
+    if split_idx >= len(features):
+        split_idx = max(len(features) - 1, 1)
+    X_train = features.iloc[:split_idx]
+    y_train = target.iloc[:split_idx]
+    X_val = features.iloc[split_idx:]
+    y_val = target.iloc[split_idx:]
+
     scaler = StandardScaler()
-    X = scaler.fit_transform(features)
+    X = scaler.fit_transform(X_train)
     model = LogisticRegression(max_iter=200, solver="lbfgs")
-    model.fit(X, target)
-    return model, scaler, features, target
+    model.fit(X, y_train)
+    val_auc = None
+    val_acc = None
+    if not X_val.empty and accuracy_score is not None:
+        X_val_scaled = scaler.transform(X_val)
+        preds = model.predict(X_val_scaled)
+        val_acc = float(accuracy_score(y_val, preds))
+        if roc_auc_score is not None:
+            try:
+                probas = model.predict_proba(X_val_scaled)[:, 1]
+                val_auc = float(roc_auc_score(y_val, probas))
+            except Exception:
+                val_auc = None
+    return model, scaler, features, target, val_auc, val_acc
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -139,12 +187,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Limit the number of training rows (most recent first)",
     )
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=None,
+        help="Rolling training window (trading days). Default 60.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     load_env()
     args = parse_args(argv or sys.argv[1:])
+    env_window = os.getenv("TRAIN_WINDOW_DAYS")
+    try:
+        window_days = int(args.window_days) if args.window_days is not None else int(env_window or 0)
+    except (TypeError, ValueError):
+        window_days = 0
+    if window_days <= 0:
+        window_days = DEFAULT_TRAIN_WINDOW_DAYS
 
     conn = db.get_db_conn()
     if conn is None:
@@ -163,29 +224,61 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error("No training data found in screener_outcomes_app")
         return 1
 
+    training_df = _select_window(training_df, window_days)
+    if training_df.empty:
+        LOGGER.warning("No training rows after applying %d-day window; skipping.", window_days)
+        return 0
+
+    if len(training_df) < MIN_TRAIN_SAMPLES:
+        LOGGER.warning(
+            "Insufficient samples (%d < %d); skipping training.",
+            len(training_df),
+            MIN_TRAIN_SAMPLES,
+        )
+        return 0
+
     try:
-        model, scaler, features, target = _train_model(training_df)
+        model, scaler, features, target, val_auc, val_acc = _train_model(training_df)
     except Exception as exc:
         LOGGER.error("Training failed: %s", exc)
         return 1
 
+    coeffs = None
+    if hasattr(model, "coef_"):
+        coeffs = {name: float(value) for name, value in zip(FEATURE_COLUMNS, model.coef_[0])}
+        coeffs = dict(sorted(coeffs.items(), key=lambda item: abs(item[1]), reverse=True))
+
     output_path = args.output
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    trained_at = datetime.now(timezone.utc).isoformat()
+    model_version = f"mlrank-{trained_at}"
     payload = {
         "model": model,
         "scaler": scaler,
         "features": FEATURE_COLUMNS,
-        "trained_utc": datetime.now(timezone.utc).isoformat(),
+        "trained_at": trained_at,
+        "model_version": model_version,
+        "window_days": int(window_days),
         "rows": int(features.shape[0]),
         "pos_rate": float(target.mean()),
+        "val_auc": val_auc,
+        "val_accuracy": val_acc,
     }
     joblib.dump(payload, output_path)
     LOGGER.info(
-        "Model saved: %s (rows=%d pos_rate=%.3f)",
+        "Model saved: %s (rows=%d pos_rate=%.3f window_days=%d)",
         output_path,
         int(features.shape[0]),
         float(target.mean()),
+        int(window_days),
     )
+    LOGGER.info(
+        "Validation: auc=%s accuracy=%s",
+        f"{val_auc:.4f}" if isinstance(val_auc, float) else "n/a",
+        f"{val_acc:.4f}" if isinstance(val_acc, float) else "n/a",
+    )
+    if coeffs:
+        LOGGER.info("Feature coefficients: %s", coeffs)
     return 0
 
 

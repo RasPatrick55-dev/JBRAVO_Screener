@@ -29,6 +29,8 @@ logging.basicConfig(
 )
 
 DEFAULT_MODEL_PATH = Path("data") / "models" / "rank_model.joblib"
+DEFAULT_ML_WEIGHT = 0.3
+MAX_ML_WEIGHT = 0.5
 
 FEATURE_COLUMNS = [
     "score",
@@ -79,6 +81,19 @@ def _load_model(path: Path) -> tuple[object, object | None, list[str]]:
     return model, scaler, list(features)
 
 
+def _resolve_ml_weight() -> float:
+    raw = os.getenv("ML_WEIGHT")
+    try:
+        weight = float(raw) if raw is not None else DEFAULT_ML_WEIGHT
+    except (TypeError, ValueError):
+        weight = DEFAULT_ML_WEIGHT
+    if weight < 0.0:
+        weight = 0.0
+    if weight > MAX_ML_WEIGHT:
+        weight = MAX_ML_WEIGHT
+    return weight
+
+
 def _predict_proba(model, features: np.ndarray | pd.DataFrame) -> np.ndarray:
     if hasattr(model, "predict_proba"):
         return model.predict_proba(features)[:, -1]
@@ -92,45 +107,56 @@ def apply_rank_model(frame: pd.DataFrame, model_path: Path | None = None) -> pd.
     if frame is None or frame.empty:
         return frame
 
+    ml_weight = _resolve_ml_weight()
     model_path = model_path or Path(os.getenv("RANK_MODEL_PATH", str(DEFAULT_MODEL_PATH)))
-    if not model_path.exists():
-        LOGGER.info("Rank model not found at %s; skipping ML ranking", model_path)
-        return frame
-
-    try:
-        model, scaler, feature_names = _load_model(model_path)
-    except Exception as exc:
-        LOGGER.warning("Rank model load failed (%s); skipping ML ranking", exc)
-        return frame
-    features = _build_features(frame).reindex(columns=feature_names)
-    valid_mask = features.notna().all(axis=1)
-
-    prob_up = pd.Series(np.nan, index=frame.index, dtype="float64")
-    if valid_mask.any():
-        X = features.loc[valid_mask]
-        if scaler is not None:
-            X = scaler.transform(X)
-        prob_up.loc[valid_mask] = _predict_proba(model, X)
-
     output = frame.copy()
-    output["prob_up"] = prob_up
-
     score_series = pd.to_numeric(
         output.get("Score", output.get("score", pd.Series(np.nan, index=output.index))),
         errors="coerce",
     )
-    adjusted = score_series * 0.7 + prob_up * 0.3
+    prob_up = pd.Series(np.nan, index=output.index, dtype="float64")
+
+    if model_path.exists():
+        try:
+            model, scaler, feature_names = _load_model(model_path)
+            features = _build_features(output).reindex(columns=feature_names)
+            valid_mask = features.notna().all(axis=1)
+            if valid_mask.any():
+                X = features.loc[valid_mask]
+                if scaler is not None:
+                    X = scaler.transform(X)
+                prob_up.loc[valid_mask] = _predict_proba(model, X)
+        except Exception as exc:
+            LOGGER.warning("Rank model load failed (%s); skipping ML ranking", exc)
+    else:
+        LOGGER.info("Rank model not found at %s; skipping ML ranking", model_path)
+
+    adjusted = score_series * (1.0 - ml_weight) + prob_up * ml_weight
     adjusted.loc[prob_up.isna()] = score_series.loc[prob_up.isna()]
+    output["prob_up"] = prob_up
     output["ml_adjusted_score"] = adjusted
+    output["final_score"] = adjusted
+    output["ml_weight_used"] = ml_weight
+
+    base_rank = score_series.rank(method="first", ascending=False)
+    ml_rank = adjusted.rank(method="first", ascending=False)
+    mask = base_rank.notna() & ml_rank.notna()
+    if mask.sum() >= 2:
+        rank_corr = float(base_rank[mask].corr(ml_rank[mask], method="spearman"))
+    else:
+        rank_corr = 1.0 if mask.sum() == 1 else None
 
     prob_non_null = int(prob_up.notna().sum())
     prob_mean = float(prob_up.mean()) if prob_non_null else 0.0
     adj_mean = float(adjusted.mean()) if adjusted.notna().any() else 0.0
     LOGGER.info(
-        "[INFO] ML_RANK applied rows=%d prob_up_non_null=%d prob_up_mean=%.4f ml_score_mean=%.4f model=%s",
+        "[INFO] ML_RANK weight=%.2f rows=%d prob_up_non_null=%d prob_up_mean=%.4f "
+        "rank_corr=%s final_score_mean=%.4f model=%s",
+        ml_weight,
         int(output.shape[0]),
         prob_non_null,
         prob_mean,
+        f"{rank_corr:.4f}" if isinstance(rank_corr, float) else "n/a",
         adj_mean,
         model_path,
     )

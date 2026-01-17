@@ -32,6 +32,7 @@ TABLE_STATEMENTS = [
         timestamp TIMESTAMPTZ,
         symbol TEXT NOT NULL,
         score NUMERIC,
+        final_score NUMERIC,
         exchange TEXT,
         close NUMERIC,
         volume BIGINT,
@@ -47,6 +48,7 @@ TABLE_STATEMENTS = [
         rsi14 DOUBLE PRECISION,
         passed_gates BOOLEAN,
         gate_fail_reason TEXT,
+        ml_weight_used DOUBLE PRECISION,
         created_at TIMESTAMPTZ DEFAULT now(),
         PRIMARY KEY (run_date, symbol)
     );
@@ -171,6 +173,8 @@ SCREENER_CANDIDATES_ALTER_STATEMENTS = [
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS rsi14 DOUBLE PRECISION;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS passed_gates BOOLEAN;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS gate_fail_reason TEXT;",
+    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS final_score NUMERIC;",
+    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS ml_weight_used DOUBLE PRECISION;",
 ]
 
 RECONCILE_STATE_SEED = """
@@ -216,6 +220,8 @@ def _ensure_screener_candidates_columns(cursor, columns: set[str]) -> None:
         "rsi14": "DOUBLE PRECISION",
         "passed_gates": "BOOLEAN",
         "gate_fail_reason": "TEXT",
+        "final_score": "NUMERIC",
+        "ml_weight_used": "DOUBLE PRECISION",
     }
     for name, ddl in required.items():
         if name in columns:

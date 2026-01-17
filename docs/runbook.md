@@ -68,3 +68,9 @@ ALPACA_DATA_FEED
 
 Set those variables once and keep the files readable by the automation user so
 every scheduled task starts with a consistent environment.
+
+Optional ranking control:
+
+```
+ML_WEIGHT=0.3  # Range 0.0-0.5; 0 disables ML influence.
+```

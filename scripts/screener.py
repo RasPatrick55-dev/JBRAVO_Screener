@@ -545,6 +545,8 @@ TOP_CANDIDATE_COLUMNS = [
     "score",
     "prob_up",
     "ml_adjusted_score",
+    "final_score",
+    "ml_weight_used",
     "coarse_score",
     "coarse_rank",
     "backtest_expectancy",
@@ -3197,6 +3199,10 @@ def _prepare_top_frame(candidates_df: pd.DataFrame, top_n: int) -> pd.DataFrame:
 def _best_score_column(frame: pd.DataFrame) -> str:
     if frame is None or frame.empty:
         return "Score"
+    if "final_score" in frame.columns:
+        series = pd.to_numeric(frame["final_score"], errors="coerce")
+        if series.notna().any():
+            return "final_score"
     if "ml_adjusted_score" in frame.columns:
         series = pd.to_numeric(frame["ml_adjusted_score"], errors="coerce")
         if series.notna().any():

@@ -502,6 +502,7 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
         "timestamp": None,
         "symbol": None,
         "score": None,
+        "final_score": None,
         "exchange": None,
         "close": None,
         "volume": None,
@@ -517,11 +518,13 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
         "rsi14": None,
         "passed_gates": None,
         "gate_fail_reason": None,
+        "ml_weight_used": None,
     }
     aliases = {
         "timestamp": ("timestamp",),
         "symbol": ("symbol",),
         "score": ("score", "Score"),
+        "final_score": ("final_score", "ml_adjusted_score", "Final Score"),
         "exchange": ("exchange", "Exchange"),
         "close": ("close", "Close", "price", "last"),
         "volume": ("volume", "Volume"),
@@ -537,6 +540,7 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
         "rsi14": ("rsi14", "RSI14"),
         "passed_gates": ("passed_gates", "gates_passed"),
         "gate_fail_reason": ("gate_fail_reason",),
+        "ml_weight_used": ("ml_weight_used", "ML_WEIGHT"),
     }
 
     def _row_value(row: Mapping[str, Any], key: str) -> Any:
@@ -558,6 +562,7 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
             "timestamp": record.get("timestamp"),
             "symbol": symbol,
             "score": record.get("score"),
+            "final_score": record.get("final_score"),
             "exchange": record.get("exchange"),
             "close": record.get("close"),
             "volume": record.get("volume"),
@@ -573,6 +578,7 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
             "rsi14": record.get("rsi14"),
             "passed_gates": _coerce_bool(record.get("passed_gates")),
             "gate_fail_reason": normalize_gate_fail_reason(record.get("gate_fail_reason")),
+            "ml_weight_used": record.get("ml_weight_used"),
         }
         rows.append(payload)
 
@@ -583,19 +589,20 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
                     cursor,
                     """
                     INSERT INTO screener_candidates (
-                        run_date, timestamp, symbol, score, exchange, close, volume,
+                        run_date, timestamp, symbol, score, final_score, exchange, close, volume,
                         universe_count, score_breakdown, entry_price, adv20, atrp, source,
-                        sma9, ema20, sma180, rsi14, passed_gates, gate_fail_reason
+                        sma9, ema20, sma180, rsi14, passed_gates, gate_fail_reason, ml_weight_used
                     )
                     VALUES (
-                        %(run_date)s, %(timestamp)s, %(symbol)s, %(score)s, %(exchange)s, %(close)s, %(volume)s,
+                        %(run_date)s, %(timestamp)s, %(symbol)s, %(score)s, %(final_score)s, %(exchange)s, %(close)s, %(volume)s,
                         %(universe_count)s, CAST(%(score_breakdown)s AS JSONB), %(entry_price)s, %(adv20)s,
                         %(atrp)s, %(source)s, %(sma9)s, %(ema20)s, %(sma180)s, %(rsi14)s, %(passed_gates)s,
-                        %(gate_fail_reason)s
+                        %(gate_fail_reason)s, %(ml_weight_used)s
                     )
                     ON CONFLICT (run_date, symbol) DO UPDATE SET
                         timestamp=EXCLUDED.timestamp,
                         score=EXCLUDED.score,
+                        final_score=EXCLUDED.final_score,
                         exchange=EXCLUDED.exchange,
                         close=EXCLUDED.close,
                         volume=EXCLUDED.volume,
@@ -610,7 +617,8 @@ def insert_screener_candidates(run_date: Any, df_candidates: pd.DataFrame | None
                         sma180=EXCLUDED.sma180,
                         rsi14=EXCLUDED.rsi14,
                         passed_gates=EXCLUDED.passed_gates,
-                        gate_fail_reason=EXCLUDED.gate_fail_reason
+                        gate_fail_reason=EXCLUDED.gate_fail_reason,
+                        ml_weight_used=EXCLUDED.ml_weight_used
                     """,
                     rows,
                     page_size=200,
