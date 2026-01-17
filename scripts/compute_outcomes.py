@@ -162,6 +162,12 @@ def _compute_outcomes(
             entry_close = None
         passed_gates = getattr(row, "passed_gates", None)
         gate_fail_reason = getattr(row, "gate_fail_reason", None)
+        if passed_gates is not None:
+            try:
+                if pd.isna(passed_gates):
+                    passed_gates = None
+            except Exception:
+                pass
         if isinstance(gate_fail_reason, float) and pd.isna(gate_fail_reason):
             gate_fail_reason = None
 
@@ -195,7 +201,7 @@ def _compute_outcomes(
                 ret_10d,
                 max_drawdown,
                 max_runup,
-                bool(passed_gates) if passed_gates is not None else None,
+                True if passed_gates is True else False if passed_gates is False else None,
                 str(gate_fail_reason) if gate_fail_reason is not None else None,
             )
         )
