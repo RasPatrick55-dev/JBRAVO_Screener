@@ -46,6 +46,8 @@ API_KEY, API_SECRET, _, _ = get_alpaca_creds()
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
     if API_KEY and API_SECRET:
         data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
     else:
@@ -107,7 +109,134 @@ def compute_recent_performance(
     }
 
 
-def load_bars_from_db(symbol: str) -> Optional[pd.DataFrame]:
+def _resolve_int_env(key: str, fallback: int) -> int:
+    raw = os.getenv(key)
+    if raw is None:
+        return fallback
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _resolve_lookback_days(max_days: Optional[int]) -> int:
+    if max_days is not None:
+        return int(max_days)
+    env_value = _resolve_int_env("BACKTEST_LOOKBACK_DAYS", 0)
+    if env_value > 0:
+        return env_value
+    cfg_value = CONFIG.get("backtest_lookback_days")
+    try:
+        if cfg_value:
+            return int(cfg_value)
+    except (TypeError, ValueError):
+        pass
+    return 1500
+
+
+def _resolve_min_history_bars(lookback_days: int) -> int:
+    env_value = _resolve_int_env("BACKTEST_MIN_HISTORY_BARS", 0)
+    if env_value > 0:
+        return env_value
+    cfg_value = CONFIG.get("backtest_min_history_bars")
+    try:
+        if cfg_value:
+            return int(cfg_value)
+    except (TypeError, ValueError):
+        pass
+    return min(max(lookback_days, 0), 250) or 250
+
+
+def _normalize_api_bars(symbol: str, bars: pd.DataFrame) -> pd.DataFrame:
+    if bars.empty:
+        return pd.DataFrame()
+    working = bars.copy()
+    if isinstance(working.index, pd.MultiIndex):
+        if "symbol" in working.index.names:
+            try:
+                working = working.xs(symbol, level="symbol")
+            except Exception:
+                working = working.droplevel("symbol")
+        else:
+            working = working.droplevel(0)
+    if "timestamp" in working.columns:
+        working["date"] = pd.to_datetime(working["timestamp"], utc=True, errors="coerce").dt.date
+    else:
+        working = working.reset_index()
+        if "timestamp" in working.columns:
+            working["date"] = (
+                pd.to_datetime(working["timestamp"], utc=True, errors="coerce").dt.date
+            )
+        elif "index" in working.columns:
+            working["date"] = pd.to_datetime(working["index"], utc=True, errors="coerce").dt.date
+    working["symbol"] = symbol
+    columns = ["symbol", "date", "open", "high", "low", "close", "volume"]
+    missing = [col for col in columns if col not in working.columns]
+    if missing:
+        logger.warning("API bars missing columns=%s symbol=%s", ",".join(missing), symbol)
+        return pd.DataFrame()
+    normalized = working[columns].copy()
+    normalized["symbol"] = normalized["symbol"].astype("string").str.upper()
+    return normalized.dropna(subset=["symbol", "date"])
+
+
+def _fetch_bars_from_api(symbol: str, end_date: date, lookback_days: int) -> pd.DataFrame:
+    if data_client is None:
+        return pd.DataFrame()
+    end_dt = datetime.combine(end_date, datetime.min.time(), tzinfo=timezone.utc) + timedelta(
+        hours=23, minutes=59, seconds=59
+    )
+    start_dt = end_dt - timedelta(days=max(lookback_days, 1) * 2)
+    allow_sip = os.getenv("BACKTEST_SIP_FALLBACK", "true").strip().lower() != "false"
+    for feed in ("iex", "sip"):
+        if feed == "sip" and not allow_sip:
+            continue
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                timeframe=TimeFrame.Day,
+                start=start_dt,
+                end=end_dt,
+                feed=feed,
+            )
+            bars = data_client.get_stock_bars(request).df
+            normalized = _normalize_api_bars(symbol, bars)
+            if not normalized.empty:
+                if feed != "iex":
+                    logger.info("BACKTEST_BARS_FALLBACK feed=%s symbol=%s rows=%s", feed, symbol, len(normalized))
+                return normalized
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("API_BARS_FETCH_FAILED symbol=%s feed=%s err=%s", symbol, feed, exc)
+            if feed == "iex" and allow_sip:
+                continue
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def _maybe_backfill_bars(
+    symbol: str,
+    *,
+    end_date: date,
+    lookback_days: int,
+    existing: Optional[pd.DataFrame],
+) -> Optional[pd.DataFrame]:
+    current = existing if existing is not None else pd.DataFrame()
+    if lookback_days <= 0 or (not current.empty and len(current) >= lookback_days):
+        return current
+    api_frame = _fetch_bars_from_api(symbol, end_date, lookback_days)
+    if api_frame.empty:
+        return current
+    inserted = db.upsert_daily_bars_frame(api_frame)
+    logger.info(
+        "BACKTEST_BARS_BACKFILL symbol=%s rows=%s",
+        symbol,
+        inserted,
+    )
+    refreshed = load_bars_from_db(symbol, end_date=end_date)
+    return refreshed if refreshed is not None else current
+
+
+def load_bars_from_db(symbol: str, *, end_date: Optional[date] = None) -> Optional[pd.DataFrame]:
     if not db.db_enabled():
         logger.warning("BAR_CACHE_MISS symbol=%s reason=db_disabled", symbol)
         return None
@@ -120,15 +249,26 @@ def load_bars_from_db(symbol: str) -> Optional[pd.DataFrame]:
     symbol_key = symbol.strip().upper()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT date, open, high, low, close, volume
-                FROM daily_bars
-                WHERE symbol = %(symbol)s
-                ORDER BY date ASC
-                """,
-                {"symbol": symbol_key},
-            )
+            if end_date:
+                cursor.execute(
+                    """
+                    SELECT date, open, high, low, close, volume
+                    FROM daily_bars
+                    WHERE symbol = %(symbol)s AND date <= %(end_date)s
+                    ORDER BY date ASC
+                    """,
+                    {"symbol": symbol_key, "end_date": end_date},
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT date, open, high, low, close, volume
+                    FROM daily_bars
+                    WHERE symbol = %(symbol)s
+                    ORDER BY date ASC
+                    """,
+                    {"symbol": symbol_key},
+                )
             rows = cursor.fetchall()
         if not rows:
             return pd.DataFrame()
@@ -738,6 +878,8 @@ def run_backtest(
     max_days: Optional[int] = None,
     quick: bool = False,
     run_date: Optional[date] = None,
+    lookback_days: Optional[int] = None,
+    min_history_bars: Optional[int] = None,
     export_csv: bool = True,
     enable_db: bool = True,
 ) -> dict:
@@ -766,21 +908,53 @@ def run_backtest(
         logger.info("Universe limited to first %d symbols", len(valid_symbols))
 
     data = {}
-    lookback_days = max_days if max_days else 800
+    resolved_lookback = (
+        int(lookback_days)
+        if lookback_days is not None
+        else _resolve_lookback_days(max_days)
+    )
+    resolved_min_history = (
+        int(min_history_bars)
+        if min_history_bars is not None
+        else _resolve_min_history_bars(resolved_lookback)
+    )
+    end_date = run_date or datetime.now(timezone.utc).date()
+    logger.info(
+        "BACKTEST_LOOKBACK resolved_days=%s min_history=%s",
+        resolved_lookback,
+        resolved_min_history,
+    )
     for sym in valid_symbols:
         logger.info("Fetching data for %s", sym)
-        df = load_bars_from_db(sym)
-        if df is None or len(df) < 750:
-            logger.warning("BAR_CACHE_MISS symbol=%s reason=not_enough_bars", sym)
+        df = load_bars_from_db(sym, end_date=end_date)
+        if df is None or df.empty or (resolved_lookback and len(df) < resolved_lookback):
+            df = _maybe_backfill_bars(
+                sym,
+                end_date=end_date,
+                lookback_days=resolved_lookback,
+                existing=df,
+            )
+        if df is None or df.empty:
+            logger.warning("BAR_CACHE_MISS symbol=%s reason=missing_bars", sym)
+            continue
+        if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+            df = df.tz_convert(None)
+        df = df.loc[df.index <= pd.Timestamp(end_date)]
+        if resolved_lookback:
+            df = df.tail(resolved_lookback)
+        if len(df) < resolved_min_history:
+            logger.warning(
+                "BAR_CACHE_MISS symbol=%s reason=insufficient_bars rows=%s min_required=%s",
+                sym,
+                len(df),
+                resolved_min_history,
+            )
             continue
         logger.info("BARS_LOADED_FROM_DB symbol=%s rows=%d", sym, len(df))
-        if len(df) < 250:
-            logger.warning("Skipping %s: insufficient data", sym)
-            continue
         df = compute_indicators(df)
         df["score"] = composite_score(df)
-        if max_days:
-            df = df.tail(max_days)
+        if resolved_lookback:
+            df = df.tail(resolved_lookback)
         df = prepare_series(df)
         if df.empty:
             logger.warning("Skipping %s: insufficient aligned data", sym)
@@ -1068,6 +1242,24 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Limit number of candidates fetched from the database (default: 15)",
     )
     parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=None,
+        help=(
+            "Number of trading days to load per symbol (default: env BACKTEST_LOOKBACK_DAYS "
+            "or 1500)."
+        ),
+    )
+    parser.add_argument(
+        "--min-history-bars",
+        type=int,
+        default=None,
+        help=(
+            "Minimum bars required to backtest a symbol (default: env "
+            "BACKTEST_MIN_HISTORY_BARS or 250)."
+        ),
+    )
+    parser.add_argument(
         "--export-csv",
         choices=["true", "false"],
         default=None,
@@ -1288,6 +1480,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             max_days=args.max_days,
             quick=args.quick,
             run_date=run_date,
+            lookback_days=args.lookback_days,
+            min_history_bars=args.min_history_bars,
             export_csv=export_csv,
             enable_db=bool(conn),
         )

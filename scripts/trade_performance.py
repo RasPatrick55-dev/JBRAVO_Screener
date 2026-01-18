@@ -714,7 +714,8 @@ def compute_rebound_metrics(
     rebound_pcts: list[float | None] = [np.nan] * len(frame.index)
     rebound_flags: list[bool] = [False] * len(frame.index)
 
-    for idx, row in frame.iterrows():
+    for pos, row in enumerate(frame.itertuples(index=False)):
+        row = row._asdict()
         stop_exit = row.get("is_stop_exit")
         try:
             if stop_exit is None or pd.isna(stop_exit):
@@ -751,11 +752,11 @@ def compute_rebound_metrics(
         if highs.empty:
             continue
         post_high = highs.max()
-        post_exit_highs[idx] = post_high
+        post_exit_highs[pos] = post_high
         if exit_price and not pd.isna(post_high):
             pct = (post_high - exit_price) / exit_price * 100
-            rebound_pcts[idx] = pct
-            rebound_flags[idx] = pct >= rebound_threshold_pct
+            rebound_pcts[pos] = pct
+            rebound_flags[pos] = pct >= rebound_threshold_pct
 
     frame["post_exit_high"] = post_exit_highs
     frame["rebound_pct"] = rebound_pcts

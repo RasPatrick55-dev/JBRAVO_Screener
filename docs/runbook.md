@@ -31,19 +31,11 @@ running on cron-like systems.
 
 ## Pipeline & Dashboard Guarantees
 
-* `PIPELINE_START`, `PIPELINE_SUMMARY`, and `PIPELINE_END rc=<code>` are emitted
-  on every run regardless of downstream warnings. A missing
-  `data/trades_log.csv` no longer blocks metrics generation; an empty
-  `data/metrics_summary.csv` is written with the warning
-  `[WARN] no trades_log.csv -> writing empty metrics_summary`.
-* Dashboard reloads prefer the `pa_reload_webapp` CLI. If it is not installed,
-  the pipeline touches the configured WSGI file and logs
-  `[INFO] DASH RELOAD method=touch local rc=<code> path=<path>`.
-* Trade execution validates credentials by calling `/v2/account` before
-  computing order sizes. HTTP 401 responses emit
-  `[ERROR] TRADING_AUTH_FAILED … tip="Reload ~/.config/jbravo/.env"` and exit
-  with status `2`. Trailing stops log `TRAIL_SUBMIT … route=trailing_stop` and
-  `TRAIL_CONFIRMED …` so the dashboard keeps consistent tokens.
+* `PIPELINE_START`, `PIPELINE_SUMMARY`, and `PIPELINE_END rc=<code>` are emitted on every run regardless of downstream warnings. A missing `data/trades_log.csv` no longer blocks metrics generation; an empty `data/metrics_summary.csv` is written with the warning `[WARN] no trades_log.csv -> writing empty metrics_summary`.
+* Final outputs for dashboards live in DB views `latest_screener_candidates` and `latest_top_candidates`. Candidate CSVs are optional and only written when `JBR_WRITE_CANDIDATE_CSVS=true`.
+* Backtest coverage expands via API backfill into `daily_bars` when DB history is short. Set `BACKTEST_LOOKBACK_DAYS`, `BACKTEST_MIN_HISTORY_BARS`, and `BACKTEST_SIP_FALLBACK` as needed.
+* Dashboard reloads prefer the `pa_reload_webapp` CLI. If it is not installed, the pipeline touches the configured WSGI file and logs `[INFO] DASH RELOAD method=touch local rc=<code> path=<path>`.
+* Trade execution validates credentials by calling `/v2/account` before computing order sizes. HTTP 401 responses emit `[ERROR] TRADING_AUTH_FAILED ... tip="Reload ~/.config/jbravo/.env"` and exit with status `2`. Trailing stops log `TRAIL_SUBMIT ... route=trailing_stop` and `TRAIL_CONFIRMED ...` so the dashboard keeps consistent tokens.
 
 ## ML data pipeline (Stage 0–2)
 

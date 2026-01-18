@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from scripts import db
 
 REQUIRED_COLUMNS = {"symbol", "timestamp", "close"}
 RUN_TZ = ZoneInfo("America/New_York")
@@ -118,6 +119,13 @@ def add_labels(
 
 
 def load_bars(path: Path) -> pd.DataFrame:
+    if db.db_enabled():
+        bars_df = db.load_ml_artifact_csv("daily_bars")
+        if bars_df.empty:
+            raise FileNotFoundError("Bars data not found in DB (ml_artifacts: daily_bars).")
+        if "timestamp" in bars_df.columns:
+            bars_df["timestamp"] = pd.to_datetime(bars_df["timestamp"], utc=True, errors="coerce")
+        return bars_df
     if not path.exists():
         raise FileNotFoundError(f"Bars file not found: {path}")
 
@@ -177,6 +185,18 @@ def main() -> None:
 
     labeled.to_csv(output_path, index=False)
     logging.info("[INFO] LABELS_WRITTEN path=%s rows=%d", output_path, int(labeled.shape[0]))
+    if db.db_enabled():
+        ok = db.upsert_ml_artifact_frame(
+            "labels",
+            run_date,
+            labeled,
+            source="label_generator",
+            file_name=output_path.name,
+        )
+        if ok:
+            logging.info("[INFO] LABELS_DB_WRITTEN run_date=%s rows=%d", run_date, int(labeled.shape[0]))
+        else:
+            logging.warning("[WARN] LABELS_DB_WRITE_FAILED run_date=%s", run_date)
 
 
 if __name__ == "__main__":

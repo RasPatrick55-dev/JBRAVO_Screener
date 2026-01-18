@@ -2,8 +2,8 @@
 
 ## PostgreSQL is the single source of truth
 
-* Authoritative tables for analytics and reporting: `screener_candidates`, `backtest_results`, `metrics_daily`, `pipeline_runs`, `order_events`, `trades`, and `reconcile_state`.
-* CSV policy: local CSVs are non-authoritative and only used as a parachute or for ad-hoc debugging. The only supported parachute is `data/latest_candidates.csv`; exports to other CSVs are optional debugging aids and must not be used for dashboards or reporting.
+* Authoritative tables for analytics and reporting: `screener_candidates`, `backtest_results`, `metrics_daily`, `pipeline_runs`, `order_events`, `trades`, and `reconcile_state`. Use DB views `latest_screener_candidates` and `latest_top_candidates` for the most recent run output.
+* CSV policy: local CSVs are non-authoritative and only used for ad-hoc debugging. Candidate CSVs are skipped when DB is enabled; set `JBR_WRITE_CANDIDATE_CSVS=true` only for temporary exports.
 * `scripts/weekly_summary.py` is deprecated and retained for historical reference; all weekly and intraday summaries should query PostgreSQL directly.
 * Sample weekly metrics rollup (PostgreSQL):
 
@@ -23,11 +23,12 @@ ORDER BY 1 DESC;
 ## Nightly pipeline
 
 * Use `python -m scripts.run_pipeline --steps screener,backtest,metrics,ranker_eval` in scheduled tasks. Pass additional screener flags via `--screener-args "..."` when you need to tweak liquidity thresholds without editing the wrapper script.
-* After each screener run the pipeline inspects `data/top_candidates.csv`. If there are no rows it invokes `scripts.fallback_candidates`, logs `[INFO] FALLBACK_CHECK reason=no_candidates rows_out=<N> source=<scored|predictions|static>`, and rewrites `data/latest_candidates.csv` with canonical headers (`timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entry_price,adv20,atrp,source`). This ensures the executor and dashboard always have at least one row to render.
+* When DB is enabled the pipeline uses `screener_candidates`/`top_candidates` as the source of truth and skips CSV-based fallback. If DB is disabled, `scripts.fallback_candidates` can still generate a canonical `data/latest_candidates.csv`.
 * PythonAnywhere deployments now log `[INFO] DASH_RELOAD method=<pa|touch> rc=<0|ERR>` at the end of each pipeline run. The pipeline first tries `pa_reload_webapp $PYTHONANYWHERE_DOMAIN`; when unavailable it touches `/var/www/${PYTHONANYWHERE_DOMAIN//./_}_wsgi.py` instead.
 * `scripts.metrics` can be scheduled before the first trade executes; both the pipeline and the metrics script tolerate a missing `data/trades_log.csv`, creating an empty header stub and still writing `data/metrics_summary.csv` with zeroed metrics.
-* The Screener Health dashboard surfaces the latest pipeline tokens (`PIPELINE_START`, `PIPELINE_SUMMARY`, `FALLBACK_CHECK`, `PIPELINE_END`) even on zero-candidate days. When fallback data is active the Top Candidates table displays a subtle `fallback` badge sourced from the `latest_candidates.csv` `source` column.
-* The backtester exits cleanly with `Backtest: no candidates today — skipping.` when `data/top_candidates.csv` has no rows, so nightly automation does not fail on quiet days.
+* The Screener Health dashboard surfaces the latest pipeline tokens (`PIPELINE_START`, `PIPELINE_SUMMARY`, `PIPELINE_END`, `DASH RELOAD`) even on zero-candidate days. Use `latest_top_candidates` for dashboard tables.
+* The backtester exits cleanly with `Backtest: no candidates today ? skipping.` when the DB candidate set is empty, so nightly automation does not fail on quiet days.
+* Backtest history is expanded via API backfill when DB bars are insufficient. Set `BACKTEST_LOOKBACK_DAYS` and `BACKTEST_MIN_HISTORY_BARS` to control history depth, and `BACKTEST_SIP_FALLBACK=true` to allow SIP fallback when IEX is missing.
 
 ### Nightly ML data pipeline (Stage 0–2)
 

@@ -11,17 +11,18 @@ flowchart LR
   subgraph Section1["Section 1 - Actions"]
     direction TB
     A([Start run_pipeline])
-    B[Load env + logging]
-    D[Parse args + steps]
-    E[Prepare step args]
-    F1[Run screener\nwrite candidates to DB]
-    G1[Run backtest\nread candidates from DB]
-    H1[Run metrics\nwrite metrics_daily to DB]
+    B[Load env + configure logging]
+    D[Parse args + determine steps]
+    E[Resolve run date + base dir\nensure latest headers]
+    F[Prepare step args\nmerge split args + inject run_date + export bars]
+    F1[Run screener\nread metrics + DB counts]
+    G1["Run backtest\nbackfill bars if needed (IEX to SIP)"]
+    H1[Run metrics\nsync latest + refresh trade cache]
     I1[Run label_generator]
     J1[Run ranker_eval]
-    K1[Merge predictions, rerank + weights, write nightly status]
-    M[Finalize + summaries\nwrite pipeline_runs]
-    O[Update equity, reload dashboard]
+    K1[Enrich + rerank candidates\nwrite nightly status]
+    M[Finalize + summaries\nscreener_metrics + pipeline_status\npipeline_runs + connection health]
+    O[Update equity + reload dashboard]
     END([End])
   end
 
@@ -29,30 +30,33 @@ flowchart LR
     direction TB
     C{Missing env?}
     DB_req{DB enabled?}
-    S_req{Screener missing?}
-    CAND{"DB candidates > 0?"}
+    S_req{Screener step missing?}
+    CAND{"Zero candidates?"}
     G[Backtest step?]
     H[Metrics step?]
     I[Labels step?]
+    L_bars{Labels bars present?}
     J[Ranker_eval step?]
-    K[Enrich candidates?]
+    K[Enrich candidates flag?]
   end
 
   subgraph Section3["Section 3 - Errors"]
     direction TB
     C_fail[Exit rc=2]
     S_fail["Screener missing: stop + alert"]
-    DB_fail["DB required: stop + alert"]
+    DB_fail["DB required: stop + error report"]
     Z_warn["Zero candidates: alert + continue"]
+    L_skip["Labels skipped: missing/empty bars"]
   end
 
   subgraph Section4["Section 4 - References"]
     direction TB
-    DF1["DF-Candidates (DB)"]
+    DF1["DF-Candidates (DB views)"]
     DF2["DF-Metrics (DB + JSON)"]
     DF3[DF-ML]
     DF4[DF-Reports]
     DF5[DF-DB tables]
+    DF6["DF-API sources\nIEX primary, SIP fallback"]
   end
 
   subgraph Section5["Section 5 - Legend + Notes"]
@@ -76,10 +80,11 @@ flowchart LR
   D --> S_req
   S_req -- yes --> S_fail
   S_req -- no --> E
-  E --> F1
+  E --> F
+  F --> F1
   F1 --> CAND
-  CAND -- yes --> G
-  CAND -- no --> Z_warn
+  CAND -- yes --> Z_warn
+  CAND -- no --> G
   Z_warn --> G
   G -- yes --> G1
   G -- no --> H
@@ -87,8 +92,11 @@ flowchart LR
   H -- yes --> H1
   H -- no --> I
   H1 --> I
-  I -- yes --> I1
+  I -- yes --> L_bars
   I -- no --> J
+  L_bars -- yes --> I1
+  L_bars -- no --> L_skip
+  L_skip --> J
   I1 --> J
   J -- yes --> J1
   J -- no --> K
@@ -100,7 +108,9 @@ flowchart LR
   O --> END
 
   F1 -.-> DF1
+  F1 -.-> DF6
   G1 -.-> DF1
+  G1 -.-> DF6
   H1 -.-> DF2
   I1 -.-> DF3
   J1 -.-> DF3
@@ -110,10 +120,10 @@ flowchart LR
   DF1 -.-> NOTE
 
   class A,END start;
-  class C,DB_req,S_req,CAND,G,H,I,J,K decision;
-  class C_fail,S_fail,DB_fail,Z_warn warn;
-  class B,D,E,F1,G1,H1,I1,J1,K1,M,O step;
-  class DF1,DF2,DF3,DF4,DF5 ref;
+  class C,DB_req,S_req,CAND,G,H,I,L_bars,J,K decision;
+  class C_fail,S_fail,DB_fail,Z_warn,L_skip warn;
+  class B,D,E,F,F1,G1,H1,I1,J1,K1,M,O step;
+  class DF1,DF2,DF3,DF4,DF5,DF6 ref;
   class NOTE note;
   class L_start start;
   class L_decision decision;

@@ -1,0 +1,85 @@
+[2026-01-18T16:28:57.444726+00:00] START ranker_eval
+[2026-01-18 10:28:58,124] [INFO]: Loading features from DB (ml_artifacts: features)
+[2026-01-18 10:28:58,124] [INFO]: Loading predictions from DB (ml_artifacts: predictions)
+[2026-01-18 10:29:07,380] [ERROR]: Features not found in DB (ml_artifacts: features)
+[2026-01-18T16:29:07.456205+00:00] END ranker_eval rc=1 secs=10.0
+[2026-01-18T17:05:21.073837+00:00] START ranker_eval
+[2026-01-18 11:05:21,779] [INFO]: Loading features from DB (ml_artifacts: features)
+[2026-01-18 11:05:21,779] [INFO]: Loading predictions from DB (ml_artifacts: predictions)
+[2026-01-18 11:05:50,650] [INFO]: Evaluation complete: samples=348606 deciles=10 output=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\ranker_eval\latest.json
+[2026-01-18 11:05:50,651] [INFO]: Decile 1: count=34860 avg_label=0.2907 avg_score=0.2651
+[2026-01-18 11:05:50,651] [INFO]: Decile 2: count=34861 avg_label=0.2711 avg_score=0.2688
+[2026-01-18 11:05:50,651] [INFO]: Decile 3: count=34860 avg_label=0.2662 avg_score=0.2702
+[2026-01-18 11:05:50,651] [INFO]: Decile 4: count=34861 avg_label=0.2579 avg_score=0.2714
+[2026-01-18 11:05:50,651] [INFO]: Decile 5: count=34861 avg_label=0.2567 avg_score=0.2726
+[2026-01-18 11:05:50,651] [INFO]: Decile 6: count=34860 avg_label=0.2585 avg_score=0.2740
+[2026-01-18 11:05:50,651] [INFO]: Decile 7: count=34861 avg_label=0.2659 avg_score=0.2755
+[2026-01-18 11:05:50,651] [INFO]: Decile 8: count=34860 avg_label=0.2712 avg_score=0.2777
+[2026-01-18 11:05:50,651] [INFO]: Decile 9: count=34861 avg_label=0.2824 avg_score=0.2814
+[2026-01-18 11:05:50,651] [INFO]: Decile 10: count=34861 avg_label=0.3034 avg_score=0.3019
+[2026-01-18 11:06:12,700] [INFO]: [INFO] RANKER_EVAL_DB_WRITTEN run_date=2026-01-18 rows=348606
+[2026-01-18T17:06:12.781213+00:00] END ranker_eval rc=0 secs=51.7
+[2026-01-18T17:07:49.292226+00:00] START ranker_eval
+[2026-01-18 11:07:50,044] [INFO]: Loading features from DB (ml_artifacts: features)
+[2026-01-18 11:07:50,044] [INFO]: Loading predictions from DB (ml_artifacts: predictions)
+[2026-01-18 11:08:15,729] [INFO]: Evaluation complete: samples=348606 deciles=10 output=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\ranker_eval\latest.json
+[2026-01-18 11:08:15,729] [INFO]: Decile 1: count=34860 avg_label=0.2907 avg_score=0.2651
+[2026-01-18 11:08:15,729] [INFO]: Decile 2: count=34861 avg_label=0.2711 avg_score=0.2688
+[2026-01-18 11:08:15,729] [INFO]: Decile 3: count=34860 avg_label=0.2662 avg_score=0.2702
+[2026-01-18 11:08:15,729] [INFO]: Decile 4: count=34861 avg_label=0.2579 avg_score=0.2714
+[2026-01-18 11:08:15,729] [INFO]: Decile 5: count=34861 avg_label=0.2567 avg_score=0.2726
+[2026-01-18 11:08:15,729] [INFO]: Decile 6: count=34860 avg_label=0.2585 avg_score=0.2740
+[2026-01-18 11:08:15,729] [INFO]: Decile 7: count=34861 avg_label=0.2659 avg_score=0.2755
+[2026-01-18 11:08:15,729] [INFO]: Decile 8: count=34860 avg_label=0.2712 avg_score=0.2777
+[2026-01-18 11:08:15,729] [INFO]: Decile 9: count=34861 avg_label=0.2824 avg_score=0.2814
+[2026-01-18 11:08:15,729] [INFO]: Decile 10: count=34861 avg_label=0.3034 avg_score=0.3019
+[2026-01-18 11:08:35,257] [INFO]: [INFO] RANKER_EVAL_DB_WRITTEN run_date=2026-01-18 rows=348606
+[2026-01-18T17:08:35.336247+00:00] END ranker_eval rc=0 secs=46.0
+[2026-01-18T17:26:13.434443+00:00] START ranker_eval
+[2026-01-18 11:26:14,098] [INFO]: Loading features from DB (ml_artifacts: features)
+[2026-01-18 11:26:14,098] [INFO]: Loading predictions from DB (ml_artifacts: predictions)
+[2026-01-18 11:26:40,039] [INFO]: Evaluation complete: samples=348606 deciles=10 output=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\ranker_eval\latest.json
+[2026-01-18 11:26:40,040] [INFO]: Decile 1: count=34860 avg_label=0.2907 avg_score=0.2651
+[2026-01-18 11:26:40,040] [INFO]: Decile 2: count=34861 avg_label=0.2711 avg_score=0.2688
+[2026-01-18 11:26:40,040] [INFO]: Decile 3: count=34860 avg_label=0.2662 avg_score=0.2702
+[2026-01-18 11:26:40,040] [INFO]: Decile 4: count=34861 avg_label=0.2579 avg_score=0.2714
+[2026-01-18 11:26:40,040] [INFO]: Decile 5: count=34861 avg_label=0.2567 avg_score=0.2726
+[2026-01-18 11:26:40,040] [INFO]: Decile 6: count=34860 avg_label=0.2585 avg_score=0.2740
+[2026-01-18 11:26:40,040] [INFO]: Decile 7: count=34861 avg_label=0.2659 avg_score=0.2755
+[2026-01-18 11:26:40,040] [INFO]: Decile 8: count=34860 avg_label=0.2712 avg_score=0.2777
+[2026-01-18 11:26:40,040] [INFO]: Decile 9: count=34861 avg_label=0.2824 avg_score=0.2814
+[2026-01-18 11:26:40,040] [INFO]: Decile 10: count=34861 avg_label=0.3034 avg_score=0.3019
+[2026-01-18 11:26:51,260] [INFO]: [INFO] RANKER_EVAL_DB_WRITTEN run_date=2026-01-18 rows=348606
+[2026-01-18T17:26:51.521221+00:00] END ranker_eval rc=0 secs=38.1
+[2026-01-18T17:35:52.689426+00:00] START ranker_eval
+[2026-01-18 11:35:53,335] [INFO]: Loading features from DB (ml_artifacts: features)
+[2026-01-18 11:35:53,335] [INFO]: Loading predictions from DB (ml_artifacts: predictions)
+[2026-01-18 11:36:18,785] [INFO]: Evaluation complete: samples=348606 deciles=10 output=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\ranker_eval\latest.json
+[2026-01-18 11:36:18,785] [INFO]: Decile 1: count=34860 avg_label=0.2907 avg_score=0.2651
+[2026-01-18 11:36:18,785] [INFO]: Decile 2: count=34861 avg_label=0.2711 avg_score=0.2688
+[2026-01-18 11:36:18,786] [INFO]: Decile 3: count=34860 avg_label=0.2662 avg_score=0.2702
+[2026-01-18 11:36:18,786] [INFO]: Decile 4: count=34861 avg_label=0.2579 avg_score=0.2714
+[2026-01-18 11:36:18,786] [INFO]: Decile 5: count=34861 avg_label=0.2567 avg_score=0.2726
+[2026-01-18 11:36:18,786] [INFO]: Decile 6: count=34860 avg_label=0.2585 avg_score=0.2740
+[2026-01-18 11:36:18,786] [INFO]: Decile 7: count=34861 avg_label=0.2659 avg_score=0.2755
+[2026-01-18 11:36:18,786] [INFO]: Decile 8: count=34860 avg_label=0.2712 avg_score=0.2777
+[2026-01-18 11:36:18,786] [INFO]: Decile 9: count=34861 avg_label=0.2824 avg_score=0.2814
+[2026-01-18 11:36:18,786] [INFO]: Decile 10: count=34861 avg_label=0.3034 avg_score=0.3019
+[2026-01-18 11:36:39,357] [INFO]: [INFO] RANKER_EVAL_DB_WRITTEN run_date=2026-01-18 rows=348606
+[2026-01-18T17:36:39.434646+00:00] END ranker_eval rc=0 secs=46.7
+[2026-01-18T18:09:46.129042+00:00] START ranker_eval
+[2026-01-18 12:09:46,846] [INFO]: Loading features from DB (ml_artifacts: features)
+[2026-01-18 12:09:46,846] [INFO]: Loading predictions from DB (ml_artifacts: predictions)
+[2026-01-18 12:10:11,062] [INFO]: Evaluation complete: samples=348606 deciles=10 output=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\ranker_eval\latest.json
+[2026-01-18 12:10:11,062] [INFO]: Decile 1: count=34860 avg_label=0.2907 avg_score=0.2651
+[2026-01-18 12:10:11,062] [INFO]: Decile 2: count=34861 avg_label=0.2711 avg_score=0.2688
+[2026-01-18 12:10:11,062] [INFO]: Decile 3: count=34860 avg_label=0.2662 avg_score=0.2702
+[2026-01-18 12:10:11,062] [INFO]: Decile 4: count=34861 avg_label=0.2579 avg_score=0.2714
+[2026-01-18 12:10:11,062] [INFO]: Decile 5: count=34861 avg_label=0.2567 avg_score=0.2726
+[2026-01-18 12:10:11,062] [INFO]: Decile 6: count=34860 avg_label=0.2585 avg_score=0.2740
+[2026-01-18 12:10:11,062] [INFO]: Decile 7: count=34861 avg_label=0.2659 avg_score=0.2755
+[2026-01-18 12:10:11,062] [INFO]: Decile 8: count=34860 avg_label=0.2712 avg_score=0.2777
+[2026-01-18 12:10:11,062] [INFO]: Decile 9: count=34861 avg_label=0.2824 avg_score=0.2814
+[2026-01-18 12:10:11,063] [INFO]: Decile 10: count=34861 avg_label=0.3034 avg_score=0.3019
+[2026-01-18 12:10:46,937] [INFO]: [INFO] RANKER_EVAL_DB_WRITTEN run_date=2026-01-18 rows=348606
+[2026-01-18T18:10:47.011620+00:00] END ranker_eval rc=0 secs=60.9

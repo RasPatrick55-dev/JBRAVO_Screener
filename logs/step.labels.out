@@ -1,0 +1,30 @@
+[2026-01-18T16:14:35.399800+00:00] START labels
+[WARNING] [WARN] LABELS_INPUT_STALE latest_bar_date=2026-01-16 run_date=2026-01-18 bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
+[INFO] [INFO] LABELS_WRITTEN path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
+[INFO] [INFO] LABELS_DB_WRITTEN run_date=2026-01-18 rows=364439
+[2026-01-18T16:15:15.719771+00:00] END labels rc=0 secs=40.3
+[2026-01-18T16:28:16.834037+00:00] START labels
+[WARNING] [WARN] LABELS_INPUT_STALE latest_bar_date=2026-01-16 run_date=2026-01-18 bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
+[INFO] [INFO] LABELS_WRITTEN path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
+[INFO] [INFO] LABELS_DB_WRITTEN run_date=2026-01-18 rows=364439
+[2026-01-18T16:28:57.084966+00:00] END labels rc=0 secs=40.3
+[2026-01-18T16:40:29.190944+00:00] START labels
+[WARNING] [WARN] LABELS_INPUT_STALE latest_bar_date=2026-01-16 run_date=2026-01-18 bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
+[INFO] [INFO] LABELS_WRITTEN path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
+[INFO] [INFO] LABELS_DB_WRITTEN run_date=2026-01-18 rows=364439
+[2026-01-18T16:41:09.696619+00:00] END labels rc=0 secs=40.5
+[2026-01-18T17:01:00.686547+00:00] START labels
+[WARNING] [WARN] LABELS_INPUT_STALE latest_bar_date=2026-01-16 run_date=2026-01-18 bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
+[INFO] [INFO] LABELS_WRITTEN path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
+[INFO] [INFO] LABELS_DB_WRITTEN run_date=2026-01-18 rows=364439
+[2026-01-18T17:01:41.474740+00:00] END labels rc=0 secs=40.8
+[2026-01-18T17:03:55.275134+00:00] START labels
+[WARNING] [WARN] LABELS_INPUT_STALE latest_bar_date=2026-01-16 run_date=2026-01-18 bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
+[INFO] [INFO] LABELS_WRITTEN path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
+[INFO] [INFO] LABELS_DB_WRITTEN run_date=2026-01-18 rows=364439
+[2026-01-18T17:04:57.674836+00:00] END labels rc=0 secs=62.4
+[2026-01-18T17:20:27.514197+00:00] START labels
+[WARNING] [WARN] LABELS_INPUT_STALE latest_bar_date=2026-01-16 run_date=2026-01-18 bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
+[INFO] [INFO] LABELS_WRITTEN path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
+[INFO] [INFO] LABELS_DB_WRITTEN run_date=2026-01-18 rows=364439
+[2026-01-18T17:21:43.373768+00:00] END labels rc=0 secs=75.9

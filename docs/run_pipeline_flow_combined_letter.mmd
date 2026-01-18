@@ -1,0 +1,122 @@
+%% [MermaidChart: run_pipeline_flow_combined_letter]
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '13px', 'fontFamily': 'Helvetica, Arial, sans-serif', 'fontWeight': '600', 'textColor': '#101010', 'primaryTextColor': '#101010', 'secondaryTextColor': '#101010', 'tertiaryTextColor': '#101010', 'lineColor': '#333333', 'nodePadding': 8}, 'flowchart': {'nodeSpacing': 30, 'rankSpacing': 36}}}%%
+flowchart TB
+  classDef start fill:#cfead1,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 14px;
+  classDef decision fill:#ffdca8,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 14px;
+  classDef step fill:#cfe4ff,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 14px;
+  classDef warn fill:#ffcccc,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 14px;
+  classDef data fill:#e2d5ff,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 12px;
+  classDef note fill:#e0e0e0,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 14px;
+
+  subgraph Process["Process Flow"]
+    direction TB
+    A([Start])
+    B[Load env + logging]
+    C{Missing env?}
+    C_fail[Exit rc=2]
+    D{DB enabled?}
+    D_fail[DB required\nerror report + exit]
+    E[Parse args + steps]
+    F{Screener step missing?}
+    F_fail[Alert + error report\nexit rc=2]
+    G[Resolve run date/base dir\nensure latest headers]
+    H[Prepare step args\nmerge + inject run_date\nexport bars if screener]
+    S1[Run screener\nread metrics + DB counts]
+    Z{Zero candidates?}
+    Z_warn[Alert + continue]
+    BT{Backtest step?}
+    BT_run["Run backtest\nbackfill bars if needed (IEX to SIP)"]
+    MT{Metrics step?}
+    MT_run[Run metrics\nrefresh trade cache]
+    LB{Labels step?}
+    LB_bars{Labels bars present?}
+    LB_skip[Skip labels\nmissing/empty bars]
+    LB_run[Run label_generator]
+    RE{Ranker_eval step?}
+    RE_run[Run ranker_eval]
+    EN{Enrich candidates?}
+    EN_run[Enrich + rerank\nwrite nightly status]
+    FIN[Finalize summaries\nscreener_metrics + pipeline_status\nconnection health + pipeline_runs]
+    EQ[Update equity\nreload dashboard]
+    END([End])
+  end
+
+  subgraph Sources["Data Sources"]
+    direction LR
+    API_DATA["Market Data APIs\nIEX primary, SIP fallback"]
+  end
+
+  subgraph Data["Data Outputs"]
+    direction TB
+    subgraph DataRow1
+      direction LR
+      DB_TABLES["DB Tables\nscreener_candidates\nbacktest_results\nmetrics_daily\npipeline_runs\ntop_candidates\nml_artifacts\ndaily_bars\ntrades"]
+      DB_VIEWS["DB Views\nlatest_screener_candidates\nlatest_top_candidates"]
+      DB_TABLES --- DB_VIEWS
+    end
+    subgraph DataRow2
+      direction LR
+      STAGE_HEALTH["Stage + Health (data/)\nscreener_stage_fetch.json\nscreener_stage_post.json\npipeline_status.json\nconnection_health.json\npipeline_fresh.json"]
+      STAGE_LOGS["Logs + Reports\nreports/pipeline_summary.json\nreports/log_snips/*.err.txt\nlogs/pipeline.log\nlogs/step.*.out"]
+      STAGE_HEALTH --- STAGE_LOGS
+    end
+    subgraph DataRow3
+      direction LR
+      ML_FILES["ML Artifacts (data/)\nlabels/labels_RUNDATE\nfeatures/features_RUNDATE\npredictions/predictions_RUNDATE\nranker_eval/latest.json\nnightly_ml_status.json"]
+    end
+  end
+
+  A --> B --> C
+  C -- yes --> C_fail
+  C -- no --> D
+  D -- no --> D_fail
+  D -- yes --> E
+  E --> F
+  F -- yes --> F_fail
+  F -- no --> G
+  G --> H --> S1
+  S1 --> Z
+  Z -- yes --> Z_warn
+  Z -- no --> BT
+  Z_warn --> BT
+  BT -- yes --> BT_run
+  BT -- no --> MT
+  BT_run --> MT
+  MT -- yes --> MT_run
+  MT -- no --> LB
+  MT_run --> LB
+  LB -- yes --> LB_bars
+  LB -- no --> RE
+  LB_bars -- yes --> LB_run
+  LB_bars -- no --> LB_skip
+  LB_skip --> RE
+  LB_run --> RE
+  RE -- yes --> RE_run
+  RE -- no --> EN
+  RE_run --> EN
+  EN -- yes --> EN_run
+  EN -- no --> FIN
+  EN_run --> FIN
+  FIN --> EQ --> END
+
+  S1 -.-> STAGE_HEALTH
+  S1 -.-> ML_FILES
+  S1 -.-> DB_TABLES
+  BT_run -.-> DB_TABLES
+  MT_run -.-> DB_TABLES
+  LB_run -.-> ML_FILES
+  RE_run -.-> ML_FILES
+  EN_run -.-> ML_FILES
+  FIN -.-> STAGE_LOGS
+  FIN -.-> DB_TABLES
+  STAGE_HEALTH --> ML_FILES
+  API_DATA -.-> S1
+  API_DATA -.-> BT_run
+
+  linkStyle default stroke:#3a3a3a,stroke-width:2.2px;
+
+  class A,END start;
+  class C,D,F,Z,BT,MT,LB,LB_bars,RE,EN decision;
+  class C_fail,D_fail,F_fail,Z_warn,LB_skip warn;
+  class B,E,G,H,S1,BT_run,MT_run,LB_run,RE_run,EN_run,FIN,EQ step;
+  class API_DATA,DB_TABLES,DB_VIEWS,STAGE_HEALTH,STAGE_LOGS,ML_FILES data;

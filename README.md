@@ -17,8 +17,10 @@ By design:
 - Every candidate written has indicators populated and gates evaluated (passed_gates TRUE/FALSE).
 - run_date is not a unique run identifier; pipeline_health_app.run_ts_utc is canonical.
 - screener_run_map_app maps symbols to run_ts_utc for validation, backtesting, and metrics.
+- DB is the source of truth; use `latest_screener_candidates` and `latest_top_candidates` for final outputs. Candidate CSVs are optional (`JBR_WRITE_CANDIDATE_CSVS=true`).
+- Backtest expands bars via API backfill into `daily_bars` when history is short; SIP fallback can be enabled with `BACKTEST_SIP_FALLBACK=true`.
 - Each run emits a [SUMMARY] log line; scripts/verify_e2e.py enforces end-to-end correctness.
-- Zero-candidate fallback days are valid PASS cases when recorded in pipeline_health_app.
+- Zero-candidate fallback days are valid PASS cases when recorded in pipeline_health_app (CSV fallback only when DB is disabled).
 - ML assists ranking only, never creates candidates, and never overrides gates.
   Training is guarded by minimum sample thresholds; ML can be disabled without
   changing baseline screener behavior.
@@ -111,10 +113,11 @@ Disable it per-run via `--reload-web false`.
 
 Pipeline options worth knowing:
 
-* `--screener-args "..."` — pass extra flags directly to `scripts.screener`. For example `--screener-args "--feed iex --dollar-vol-min 2_000_000 --reuse-cache true"` keeps the nightly wrapper thin while still exposing all screener tuning knobs.
-* `--exec-args "..."` — forward arguments to `scripts.execute_trades`. Combine with `--steps screener,exec` to run the screener and executor back-to-back while still customising the execution pass (e.g. `--exec-args "--dry-run true --log-json false"`).
+* `--screener-args "..."` - pass extra flags directly to `scripts.screener`. For example `--screener-args "--feed iex --dollar-vol-min 2_000_000 --reuse-cache true"` keeps the nightly wrapper thin while still exposing all screener tuning knobs.
+* `--exec-args "..."` - forward arguments to `scripts.execute_trades`. Combine with `--steps screener,exec` to run the screener and executor back-to-back while still customizing the execution pass (e.g. `--exec-args "--dry-run true --log-json false"`).
 * `--reload-web true` triggers a PythonAnywhere reload when the pipeline finishes. If the `pa_reload_webapp` CLI is not available the runner falls back to touching `/var/www/raspatrick_pythonanywhere_com_wsgi.py` so the dashboard still refreshes automatically.
-* When the screener emits zero rows the pipeline now logs `FALLBACK_CHECK …` and invokes `scripts.fallback_candidates` to guarantee at least one canonical candidate row (columns: `timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entry_price,adv20,atrp,source`). Both `data/top_candidates.csv` and `data/latest_candidates.csv` are rewritten with these safe defaults.
+* `JBR_WRITE_CANDIDATE_CSVS=true` enables optional candidate CSV exports; by default DB views `latest_screener_candidates` and `latest_top_candidates` are the source of truth.
+* `BACKTEST_LOOKBACK_DAYS` and `BACKTEST_MIN_HISTORY_BARS` expand backtest coverage; `BACKTEST_SIP_FALLBACK=true` allows SIP fallback when IEX bars are missing.
 * `scripts.metrics` tolerates a missing or empty `data/trades_log.csv`, allowing fresh installs (before the first live trade) to produce `data/metrics_summary.csv` without manual scaffolding.
 * Nightly ranker evaluation runs by default via the `ranker_eval` pipeline step, writing `data/ranker_eval/latest.json` for the Screener Health decile charts. Temporarily skip it with `--steps screener,backtest,metrics` if needed.
 
@@ -147,7 +150,7 @@ Helpful flags include:
   final ranking pass.
 * `--full-days` — control the history loaded for shortlisted symbols.
 * `--reuse-cache` / `--refresh-latest` — toggle cached parquet reuse and whether
-  to refresh the `latest_candidates.csv` symlink.
+  to refresh optional candidate exports (when `JBR_WRITE_CANDIDATE_CSVS=true`).
 
 Refer to `config/ranker.yml` for the ranking weights applied during the
 `full-nightly` mode.

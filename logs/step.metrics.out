@@ -485,3 +485,255 @@ C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:638: DeprecationWarn
   end_time = datetime.utcnow()
 [2026-01-18 01:08:12,011] [INFO]: Script finished in 0:00:14.640816
 [2026-01-18T07:08:12.084759+00:00] END metrics rc=0 secs=15.4
+[2026-01-18T16:26:49.696286+00:00] START metrics
+[2026-01-18 10:26:50,426] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:57: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-18 10:26:50,426] [INFO]: Starting metrics calculation
+[2026-01-18 10:26:52,698] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-16 source=cli
+[2026-01-18 10:26:55,265] [INFO]: Screener Metrics Summary: total_candidates=16, avg_score=0.29
+[2026-01-18 10:26:55,265] [INFO]: Top 15 Screener Symbols: PLUG, SRRK, HMY, FN, RGLD, HBAN, SKY, MIRM, ALK, STLD, NVST, NBIS, DHI, TXG, HE
+[2026-01-18 10:26:55,267] [INFO]: Top Candidates: symbol    score  win_rate      net_pnl
+  PLUG 0.899187 64.754098  6847.756207
+  SRRK 0.592224 53.333333  1320.445329
+   HMY 0.565369 48.373984  1303.611636
+    FN 0.454846 47.208122    58.058443
+  RGLD 0.405272 44.512195   -55.281850
+  HBAN 0.336238 41.714286 -1180.146859
+   SKY 0.334976 39.735099  -597.755171
+  MIRM 0.324547 40.178571 -2043.109331
+   ALK 0.287021 39.534884 -1077.264321
+  STLD 0.245727 37.125749 -2191.319786
+  NVST 0.220868 33.870968 -1532.777587
+  NBIS 0.000000  0.000000     0.000000
+   DHI 0.000000  0.000000     0.000000
+   TXG 0.000000  0.000000     0.000000
+    HE 0.000000  0.000000     0.000000
+[2026-01-18 10:26:55,272] [INFO]: Successfully updated C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\top_candidates.csv with 15 records
+[2026-01-18 10:26:55,280] [INFO]: Metrics summary CSV successfully updated: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\metrics_summary.csv
+[2026-01-18 10:26:55,280] [INFO]: Calculated Metrics: Trades=1, Net PnL=-2.59, Win Rate=0.00%, Expectancy=-2.59, Profit Factor=0.0, Max Drawdown=0.00, Sharpe=0.00, Sortino=0.00
+[2026-01-18 10:26:57,607] [WARNING]: [WARN] METRICS_TOP_CANDIDATES_FILTERED dropped=13 remaining=3
+[2026-01-18 10:27:02,408] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-16 deleted=3
+[2026-01-18 10:27:02,518] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=3
+[2026-01-18 10:27:02,519] [INFO]: [INFO] METRICS_DB_TOP_CANDIDATES_UPSERT rows=3 run_date=2026-01-16
+[2026-01-18 10:27:04,983] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+[2026-01-18 10:27:04,984] [INFO]: [INFO] METRICS_DB_OK run_date=2026-01-16 total_trades=1 net_pnl=-2.590005000000019
+[2026-01-18 10:27:04,990] [INFO]: Metrics calculation complete
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:638: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18 10:27:04,990] [INFO]: Script finished in 0:00:14.563690
+[2026-01-18T16:27:05.071623+00:00] END metrics rc=0 secs=15.4
+[2026-01-18T16:40:08.844892+00:00] START metrics
+[2026-01-18 10:40:09,542] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:57: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-18 10:40:09,542] [INFO]: Starting metrics calculation
+[2026-01-18 10:40:11,750] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-16 source=cli
+[2026-01-18 10:40:14,236] [INFO]: Screener Metrics Summary: total_candidates=16, avg_score=0.29
+[2026-01-18 10:40:14,236] [INFO]: Top 15 Screener Symbols: PLUG, SRRK, HMY, FN, RGLD, HBAN, SKY, MIRM, ALK, STLD, NVST, NBIS, DHI, TXG, HE
+[2026-01-18 10:40:14,238] [INFO]: Top Candidates: symbol    score  win_rate      net_pnl
+  PLUG 0.899187 64.754098  6847.756207
+  SRRK 0.592224 53.333333  1320.445329
+   HMY 0.565369 48.373984  1303.611636
+    FN 0.454846 47.208122    58.058443
+  RGLD 0.405272 44.512195   -55.281850
+  HBAN 0.336238 41.714286 -1180.146859
+   SKY 0.334976 39.735099  -597.755171
+  MIRM 0.324547 40.178571 -2043.109331
+   ALK 0.287021 39.534884 -1077.264321
+  STLD 0.245727 37.125749 -2191.319786
+  NVST 0.220868 33.870968 -1532.777587
+  NBIS 0.000000  0.000000     0.000000
+   DHI 0.000000  0.000000     0.000000
+   TXG 0.000000  0.000000     0.000000
+    HE 0.000000  0.000000     0.000000
+[2026-01-18 10:40:14,245] [INFO]: Successfully updated C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\top_candidates.csv with 15 records
+[2026-01-18 10:40:14,253] [INFO]: Metrics summary CSV successfully updated: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\metrics_summary.csv
+[2026-01-18 10:40:14,253] [INFO]: Calculated Metrics: Trades=1, Net PnL=-2.59, Win Rate=0.00%, Expectancy=-2.59, Profit Factor=0.0, Max Drawdown=0.00, Sharpe=0.00, Sortino=0.00
+[2026-01-18 10:40:16,616] [WARNING]: [WARN] METRICS_TOP_CANDIDATES_FILTERED dropped=13 remaining=3
+[2026-01-18 10:40:21,317] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-16 deleted=3
+[2026-01-18 10:40:21,402] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=3
+[2026-01-18 10:40:21,402] [INFO]: [INFO] METRICS_DB_TOP_CANDIDATES_UPSERT rows=3 run_date=2026-01-16
+[2026-01-18 10:40:23,762] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+[2026-01-18 10:40:23,762] [INFO]: [INFO] METRICS_DB_OK run_date=2026-01-16 total_trades=1 net_pnl=-2.590005000000019
+[2026-01-18 10:40:23,768] [INFO]: Metrics calculation complete
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:638: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18 10:40:23,769] [INFO]: Script finished in 0:00:14.226182
+[2026-01-18T16:40:23.841449+00:00] END metrics rc=0 secs=15.0
+[2026-01-18T17:00:39.911279+00:00] START metrics
+[2026-01-18 11:00:40,740] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:57: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-18 11:00:40,741] [INFO]: Starting metrics calculation
+[2026-01-18 11:00:42,950] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-16 source=cli
+[2026-01-18 11:00:45,394] [INFO]: Screener Metrics Summary: total_candidates=16, avg_score=0.29
+[2026-01-18 11:00:45,394] [INFO]: Top 15 Screener Symbols: PLUG, SRRK, HMY, FN, RGLD, HBAN, SKY, MIRM, ALK, STLD, NVST, NBIS, DHI, TXG, HE
+[2026-01-18 11:00:45,397] [INFO]: Top Candidates: symbol    score  win_rate      net_pnl
+  PLUG 0.899187 64.754098  6847.756207
+  SRRK 0.592224 53.333333  1320.445329
+   HMY 0.565369 48.373984  1303.611636
+    FN 0.454846 47.208122    58.058443
+  RGLD 0.405272 44.512195   -55.281850
+  HBAN 0.336238 41.714286 -1180.146859
+   SKY 0.334976 39.735099  -597.755171
+  MIRM 0.324547 40.178571 -2043.109331
+   ALK 0.287021 39.534884 -1077.264321
+  STLD 0.245727 37.125749 -2191.319786
+  NVST 0.220868 33.870968 -1532.777587
+  NBIS 0.000000  0.000000     0.000000
+   DHI 0.000000  0.000000     0.000000
+   TXG 0.000000  0.000000     0.000000
+    HE 0.000000  0.000000     0.000000
+[2026-01-18 11:00:45,404] [INFO]: Successfully updated C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\top_candidates.csv with 15 records
+[2026-01-18 11:00:45,412] [INFO]: Metrics summary CSV successfully updated: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\metrics_summary.csv
+[2026-01-18 11:00:45,413] [INFO]: Calculated Metrics: Trades=1, Net PnL=-2.59, Win Rate=0.00%, Expectancy=-2.59, Profit Factor=0.0, Max Drawdown=0.00, Sharpe=0.00, Sortino=0.00
+[2026-01-18 11:00:47,743] [WARNING]: [WARN] METRICS_TOP_CANDIDATES_FILTERED dropped=13 remaining=3
+[2026-01-18 11:00:52,524] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-16 deleted=3
+[2026-01-18 11:00:52,624] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=3
+[2026-01-18 11:00:52,624] [INFO]: [INFO] METRICS_DB_TOP_CANDIDATES_UPSERT rows=3 run_date=2026-01-16
+[2026-01-18 11:00:55,011] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+[2026-01-18 11:00:55,011] [INFO]: [INFO] METRICS_DB_OK run_date=2026-01-16 total_trades=1 net_pnl=-2.590005000000019
+[2026-01-18 11:00:55,015] [INFO]: Metrics calculation complete
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:638: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18 11:00:55,015] [INFO]: Script finished in 0:00:14.274213
+[2026-01-18T17:00:55.086843+00:00] END metrics rc=0 secs=15.2
+[2026-01-18T17:03:29.027514+00:00] START metrics
+[2026-01-18 11:03:29,780] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:57: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-18 11:03:29,781] [INFO]: Starting metrics calculation
+[2026-01-18 11:03:32,597] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-16 source=cli
+[2026-01-18 11:03:35,085] [INFO]: Screener Metrics Summary: total_candidates=16, avg_score=0.29
+[2026-01-18 11:03:35,086] [INFO]: Top 15 Screener Symbols: PLUG, SRRK, HMY, FN, RGLD, HBAN, SKY, MIRM, ALK, STLD, NVST, NBIS, DHI, TXG, HE
+[2026-01-18 11:03:35,088] [INFO]: Top Candidates: symbol    score  win_rate      net_pnl
+  PLUG 0.899187 64.754098  6847.756207
+  SRRK 0.592224 53.333333  1320.445329
+   HMY 0.565369 48.373984  1303.611636
+    FN 0.454846 47.208122    58.058443
+  RGLD 0.405272 44.512195   -55.281850
+  HBAN 0.336238 41.714286 -1180.146859
+   SKY 0.334976 39.735099  -597.755171
+  MIRM 0.324547 40.178571 -2043.109331
+   ALK 0.287021 39.534884 -1077.264321
+  STLD 0.245727 37.125749 -2191.319786
+  NVST 0.220868 33.870968 -1532.777587
+  NBIS 0.000000  0.000000     0.000000
+   DHI 0.000000  0.000000     0.000000
+   TXG 0.000000  0.000000     0.000000
+    HE 0.000000  0.000000     0.000000
+[2026-01-18 11:03:35,095] [INFO]: Successfully updated C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\top_candidates.csv with 15 records
+[2026-01-18 11:03:35,102] [INFO]: Metrics summary CSV successfully updated: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\metrics_summary.csv
+[2026-01-18 11:03:35,103] [INFO]: Calculated Metrics: Trades=1, Net PnL=-2.59, Win Rate=0.00%, Expectancy=-2.59, Profit Factor=0.0, Max Drawdown=0.00, Sharpe=0.00, Sortino=0.00
+[2026-01-18 11:03:37,512] [WARNING]: [WARN] METRICS_TOP_CANDIDATES_FILTERED dropped=13 remaining=3
+[2026-01-18 11:03:44,878] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-16 deleted=3
+[2026-01-18 11:03:45,376] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=3
+[2026-01-18 11:03:45,377] [INFO]: [INFO] METRICS_DB_TOP_CANDIDATES_UPSERT rows=3 run_date=2026-01-16
+[2026-01-18 11:03:47,984] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+[2026-01-18 11:03:47,984] [INFO]: [INFO] METRICS_DB_OK run_date=2026-01-16 total_trades=1 net_pnl=-2.590005000000019
+[2026-01-18 11:03:47,989] [INFO]: Metrics calculation complete
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:638: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18 11:03:47,989] [INFO]: Script finished in 0:00:18.208824
+[2026-01-18T17:03:48.068527+00:00] END metrics rc=0 secs=19.0
+[2026-01-18T17:20:03.849889+00:00] START metrics
+[2026-01-18 11:20:04,834] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:57: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-18 11:20:04,835] [INFO]: Starting metrics calculation
+[2026-01-18 11:20:07,074] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-16 source=cli
+[2026-01-18 11:20:09,746] [INFO]: Screener Metrics Summary: total_candidates=16, avg_score=0.29
+[2026-01-18 11:20:09,747] [INFO]: Top 15 Screener Symbols: PLUG, SRRK, HMY, FN, RGLD, HBAN, SKY, MIRM, ALK, STLD, NVST, NBIS, DHI, TXG, HE
+[2026-01-18 11:20:09,749] [INFO]: Top Candidates: symbol    score  win_rate      net_pnl
+  PLUG 0.899187 64.754098  6847.756207
+  SRRK 0.592224 53.333333  1320.445329
+   HMY 0.565369 48.373984  1303.611636
+    FN 0.454846 47.208122    58.058443
+  RGLD 0.405272 44.512195   -55.281850
+  HBAN 0.336238 41.714286 -1180.146859
+   SKY 0.334976 39.735099  -597.755171
+  MIRM 0.324547 40.178571 -2043.109331
+   ALK 0.287021 39.534884 -1077.264321
+  STLD 0.245727 37.125749 -2191.319786
+  NVST 0.220868 33.870968 -1532.777587
+  NBIS 0.000000  0.000000     0.000000
+   DHI 0.000000  0.000000     0.000000
+   TXG 0.000000  0.000000     0.000000
+    HE 0.000000  0.000000     0.000000
+[2026-01-18 11:20:09,755] [INFO]: Successfully updated C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\top_candidates.csv with 15 records
+[2026-01-18 11:20:09,763] [INFO]: Metrics summary CSV successfully updated: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\metrics_summary.csv
+[2026-01-18 11:20:09,763] [INFO]: Calculated Metrics: Trades=1, Net PnL=-2.59, Win Rate=0.00%, Expectancy=-2.59, Profit Factor=0.0, Max Drawdown=0.00, Sharpe=0.00, Sortino=0.00
+[2026-01-18 11:20:12,786] [WARNING]: [WARN] METRICS_TOP_CANDIDATES_FILTERED dropped=13 remaining=3
+[2026-01-18 11:20:18,683] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-16 deleted=3
+[2026-01-18 11:20:18,880] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=3
+[2026-01-18 11:20:18,880] [INFO]: [INFO] METRICS_DB_TOP_CANDIDATES_UPSERT rows=3 run_date=2026-01-16
+[2026-01-18 11:20:21,401] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+[2026-01-18 11:20:21,401] [INFO]: [INFO] METRICS_DB_OK run_date=2026-01-16 total_trades=1 net_pnl=-2.590005000000019
+[2026-01-18 11:20:21,405] [INFO]: Metrics calculation complete
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:638: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18 11:20:21,405] [INFO]: Script finished in 0:00:16.570233
+[2026-01-18T17:20:21.692168+00:00] END metrics rc=0 secs=17.8
+[2026-01-18T17:33:16.940643+00:00] START metrics
+[2026-01-18 11:33:17,688] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:57: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-18 11:33:17,688] [INFO]: Starting metrics calculation
+[2026-01-18 11:33:19,871] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-15 source=cli
+[2026-01-18 11:33:22,385] [INFO]: Screener Metrics Summary: total_candidates=0, avg_score=nan
+[2026-01-18 11:33:22,385] [INFO]: Top 15 Screener Symbols: 
+[2026-01-18 11:33:22,387] [INFO]: Top Candidates: Empty DataFrame
+Columns: [symbol, score, win_rate, net_pnl]
+Index: []
+[2026-01-18 11:33:22,395] [INFO]: Successfully updated C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\top_candidates.csv with 0 records
+[2026-01-18 11:33:22,405] [INFO]: Metrics summary CSV successfully updated: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\metrics_summary.csv
+[2026-01-18 11:33:22,405] [INFO]: Calculated Metrics: Trades=1, Net PnL=-2.59, Win Rate=0.00%, Expectancy=-2.59, Profit Factor=0.0, Max Drawdown=0.00, Sharpe=0.00, Sortino=0.00
+[2026-01-18 11:33:29,552] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-15 deleted=0
+[2026-01-18 11:33:29,616] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=0
+[2026-01-18 11:33:29,617] [INFO]: [INFO] METRICS_DB_TOP_CANDIDATES_UPSERT rows=0 run_date=2026-01-15
+[2026-01-18 11:33:31,963] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+[2026-01-18 11:33:31,963] [INFO]: [INFO] METRICS_DB_OK run_date=2026-01-15 total_trades=1 net_pnl=-2.590005000000019
+[2026-01-18 11:33:31,970] [INFO]: Metrics calculation complete
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:638: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18 11:33:31,971] [INFO]: Script finished in 0:00:14.282647
+[2026-01-18T17:33:32.049930+00:00] END metrics rc=0 secs=15.1
+[2026-01-18T18:07:08.617700+00:00] START metrics
+[2026-01-18 12:07:09,299] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:77: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-18 12:07:09,300] [INFO]: Starting metrics calculation
+[2026-01-18 12:07:11,472] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-16 source=cli
+[2026-01-18 12:07:14,008] [INFO]: Screener Metrics Summary: total_candidates=16, avg_score=0.29
+[2026-01-18 12:07:14,009] [INFO]: Top 15 Screener Symbols: PLUG, SRRK, HMY, FN, RGLD, HBAN, SKY, MIRM, ALK, STLD, NVST, NBIS, DHI, TXG, HE
+[2026-01-18 12:07:14,011] [INFO]: Top Candidates: symbol    score  win_rate      net_pnl
+  PLUG 0.899187 64.754098  6847.756207
+  SRRK 0.592224 53.333333  1320.445329
+   HMY 0.565369 48.373984  1303.611636
+    FN 0.454846 47.208122    58.058443
+  RGLD 0.405272 44.512195   -55.281850
+  HBAN 0.336238 41.714286 -1180.146859
+   SKY 0.334976 39.735099  -597.755171
+  MIRM 0.324547 40.178571 -2043.109331
+   ALK 0.287021 39.534884 -1077.264321
+  STLD 0.245727 37.125749 -2191.319786
+  NVST 0.220868 33.870968 -1532.777587
+  NBIS 0.000000  0.000000     0.000000
+   DHI 0.000000  0.000000     0.000000
+   TXG 0.000000  0.000000     0.000000
+    HE 0.000000  0.000000     0.000000
+[2026-01-18 12:07:14,011] [INFO]: [INFO] TOP_CANDIDATES_CSV_SKIPPED reason=db_enabled
+[2026-01-18 12:07:14,022] [INFO]: Metrics summary CSV successfully updated: C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\metrics_summary.csv
+[2026-01-18 12:07:14,022] [INFO]: Calculated Metrics: Trades=1, Net PnL=-2.59, Win Rate=0.00%, Expectancy=-2.59, Profit Factor=0.0, Max Drawdown=0.00, Sharpe=0.00, Sortino=0.00
+[2026-01-18 12:07:16,377] [WARNING]: [WARN] METRICS_TOP_CANDIDATES_FILTERED dropped=13 remaining=3
+[2026-01-18 12:07:21,177] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-16 deleted=3
+[2026-01-18 12:07:21,281] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=3
+[2026-01-18 12:07:23,712] [INFO]: [INFO] METRICS_DB_TOP_CANDIDATES_UPSERT rows=3 run_date=2026-01-16
+[2026-01-18 12:07:26,044] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+[2026-01-18 12:07:26,045] [INFO]: [INFO] METRICS_DB_OK run_date=2026-01-16 total_trades=1 net_pnl=-2.590005000000019
+[2026-01-18 12:07:26,050] [INFO]: Metrics calculation complete
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:661: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18 12:07:26,051] [INFO]: Script finished in 0:00:16.750876
+[2026-01-18T18:07:26.125481+00:00] END metrics rc=0 secs=17.5

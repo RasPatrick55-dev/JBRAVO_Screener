@@ -14,8 +14,9 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import pandas as pd
 
@@ -23,6 +24,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 
 from utils.env import load_env  # noqa: E402
+from scripts import db  # noqa: E402
 from scripts.ranker_train import (  # noqa: E402
     FEATURE_COLUMNS,
     _extract_features_date,
@@ -58,14 +60,7 @@ def _find_latest(directory: Path, pattern: str) -> Path | None:
     return candidates[-1]
 
 
-def _load_features(path: Path, label_column: str) -> pd.DataFrame:
-    try:
-        df = pd.read_csv(path)
-    except FileNotFoundError:
-        raise
-    except Exception as exc:  # pragma: no cover - defensive
-        raise RuntimeError(f"Failed to read features from {path}: {exc}") from exc
-
+def _normalize_features_frame(df: pd.DataFrame, label_column: str) -> pd.DataFrame:
     required_columns: set[str] = {
         "symbol",
         "timestamp",
@@ -75,12 +70,23 @@ def _load_features(path: Path, label_column: str) -> pd.DataFrame:
     }
     missing = required_columns - set(df.columns)
     if missing:
-        raise RuntimeError(f"Features file {path} missing columns: {sorted(missing)}")
+        raise RuntimeError(f"Features input missing columns: {sorted(missing)}")
 
     df = df.dropna(subset=list(required_columns))
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
     return df.reset_index(drop=True)
+
+
+def _load_features(path: Path, label_column: str) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(path)
+    except FileNotFoundError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        raise RuntimeError(f"Failed to read features from {path}: {exc}") from exc
+
+    return _normalize_features_frame(df, label_column)
 
 
 def _load_model(path: Path):
@@ -173,11 +179,26 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
 
     features_path = args.features_path
-    if features_path is None:
-        features_path = _find_latest(BASE_DIR / "data" / "features", "features_*.csv")
-        if features_path is None:
-            LOG.error("No features files found in data/features")
+    features_meta: dict[str, Any] | None = None
+    if db.db_enabled():
+        features_meta = db.fetch_latest_ml_artifact("features")
+        if not features_meta:
+            LOG.error("No features artifacts found in DB (ml_artifacts: features)")
             return 1
+        LOG.info("Loading features from DB (ml_artifacts: features)")
+        try:
+            features_df = _normalize_features_frame(
+                db.load_ml_artifact_csv("features"), args.label_column
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            LOG.error("Failed to load features from DB: %s", exc)
+            return 1
+    else:
+        if features_path is None:
+            features_path = _find_latest(BASE_DIR / "data" / "features", "features_*.csv")
+            if features_path is None:
+                LOG.error("No features files found in data/features")
+                return 1
 
     model_path = args.model_path
     if model_path is None:
@@ -186,18 +207,19 @@ def main(argv: list[str] | None = None) -> int:
             LOG.error("No model files found in data/models")
             return 1
 
-    LOG.info("Loading features from %s", features_path)
-    try:
-        features_df = _load_features(features_path, args.label_column)
-    except FileNotFoundError:
-        LOG.error("Features file not found: %s", features_path)
-        return 1
-    except Exception as exc:  # pragma: no cover - defensive
-        LOG.error("Failed to load features: %s", exc)
-        return 1
+    if not db.db_enabled():
+        LOG.info("Loading features from %s", features_path)
+        try:
+            features_df = _load_features(features_path, args.label_column)
+        except FileNotFoundError:
+            LOG.error("Features file not found: %s", features_path)
+            return 1
+        except Exception as exc:  # pragma: no cover - defensive
+            LOG.error("Failed to load features: %s", exc)
+            return 1
 
     if features_df.empty:
-        LOG.error("Features file %s has no usable rows", features_path)
+        LOG.error("Features input has no usable rows")
         return 1
 
     LOG.info("Loading model from %s", model_path)
@@ -213,7 +235,10 @@ def main(argv: list[str] | None = None) -> int:
     probs = _predict(features_df, model, scaler)
     output_df = _build_output(features_df, args.label_column, probs)
 
-    snapshot_date = _extract_features_date(features_path)
+    if db.db_enabled() and features_meta:
+        snapshot_date = str(features_meta.get("run_date") or datetime.utcnow().date())
+    else:
+        snapshot_date = _extract_features_date(features_path)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"predictions_{snapshot_date}.csv"
@@ -225,6 +250,22 @@ def main(argv: list[str] | None = None) -> int:
         len(output_df),
         float(output_df["score_5d"].mean()) if not output_df.empty else 0.0,
     )
+    if db.db_enabled():
+        ok = db.upsert_ml_artifact_frame(
+            "predictions",
+            snapshot_date,
+            output_df,
+            source="ranker_predict",
+            file_name=output_path.name,
+        )
+        if ok:
+            LOG.info(
+                "[INFO] PREDICTIONS_DB_WRITTEN run_date=%s rows=%d",
+                snapshot_date,
+                len(output_df),
+            )
+        else:
+            LOG.warning("[WARN] PREDICTIONS_DB_WRITE_FAILED run_date=%s", snapshot_date)
     return 0
 
 

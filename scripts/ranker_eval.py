@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 
 from utils.env import load_env  # noqa: E402
+from scripts import db  # noqa: E402
 
 load_env()
 
@@ -57,6 +59,18 @@ def _find_latest(directory: Path, pattern: str) -> Path | None:
     return candidates[-1]
 
 
+def _normalize_features_frame(df: pd.DataFrame, label_column: str) -> pd.DataFrame:
+    required = {"symbol", "timestamp", label_column}
+    missing = required - set(df.columns)
+    if missing:
+        raise RuntimeError(f"Features input missing columns: {sorted(missing)}")
+
+    df = df.dropna(subset=list(required))
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+    return df.reset_index(drop=True)
+
+
 def _load_features(path: Path, label_column: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(path)
@@ -65,10 +79,14 @@ def _load_features(path: Path, label_column: str) -> pd.DataFrame:
     except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError(f"Failed to read features from {path}: {exc}") from exc
 
-    required = {"symbol", "timestamp", label_column}
+    return _normalize_features_frame(df, label_column)
+
+
+def _normalize_predictions_frame(df: pd.DataFrame) -> pd.DataFrame:
+    required = {"symbol", "timestamp", SCORE_COLUMN}
     missing = required - set(df.columns)
     if missing:
-        raise RuntimeError(f"Features file {path} missing columns: {sorted(missing)}")
+        raise RuntimeError(f"Predictions input missing columns: {sorted(missing)}")
 
     df = df.dropna(subset=list(required))
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
@@ -84,15 +102,7 @@ def _load_predictions(path: Path) -> pd.DataFrame:
     except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError(f"Failed to read predictions from {path}: {exc}") from exc
 
-    required = {"symbol", "timestamp", SCORE_COLUMN}
-    missing = required - set(df.columns)
-    if missing:
-        raise RuntimeError(f"Predictions file {path} missing columns: {sorted(missing)}")
-
-    df = df.dropna(subset=list(required))
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
-    return df.reset_index(drop=True)
+    return _normalize_predictions_frame(df)
 
 
 def _merge(features: pd.DataFrame, preds: pd.DataFrame, label_column: str) -> pd.DataFrame:
@@ -186,8 +196,18 @@ def _signal_quality(lift: float | None) -> str | None:
 
 
 def evaluate(args: EvalArgs) -> dict[str, Any]:
-    features = _load_features(args.features_path, args.label_column)
-    preds = _load_predictions(args.predictions_path)
+    if db.db_enabled():
+        features_raw = db.load_ml_artifact_csv("features")
+        preds_raw = db.load_ml_artifact_csv("predictions")
+        if features_raw.empty:
+            raise FileNotFoundError("Features not found in DB (ml_artifacts: features)")
+        if preds_raw.empty:
+            raise FileNotFoundError("Predictions not found in DB (ml_artifacts: predictions)")
+        features = _normalize_features_frame(features_raw, args.label_column)
+        preds = _normalize_predictions_frame(preds_raw)
+    else:
+        features = _load_features(args.features_path, args.label_column)
+        preds = _load_predictions(args.predictions_path)
     merged = _merge(features, preds, args.label_column)
 
     deciles = _compute_deciles(merged, args.label_column)
@@ -246,16 +266,19 @@ def parse_args(argv: list[str] | None = None) -> EvalArgs:
     parsed = parser.parse_args(argv)
 
     features_path = parsed.features_path
-    if features_path is None:
-        features_path = _find_latest(BASE_DIR / "data" / "features", "features_*.csv")
-        if features_path is None:
-            raise FileNotFoundError("No features files found in data/features")
-
     predictions_path = parsed.predictions_path
-    if predictions_path is None:
-        predictions_path = _find_latest(BASE_DIR / "data" / "predictions", "predictions_*.csv")
+    if not db.db_enabled():
+        if features_path is None:
+            features_path = _find_latest(BASE_DIR / "data" / "features", "features_*.csv")
+            if features_path is None:
+                raise FileNotFoundError("No features files found in data/features")
+
         if predictions_path is None:
-            raise FileNotFoundError("No predictions files found in data/predictions")
+            predictions_path = _find_latest(
+                BASE_DIR / "data" / "predictions", "predictions_*.csv"
+            )
+            if predictions_path is None:
+                raise FileNotFoundError("No predictions files found in data/predictions")
 
     return EvalArgs(
         features_path=features_path,
@@ -272,8 +295,12 @@ def main(argv: list[str] | None = None) -> int:
         LOG.error("%s", exc)
         return 1
 
-    LOG.info("Loading features from %s", args.features_path)
-    LOG.info("Loading predictions from %s", args.predictions_path)
+    if db.db_enabled():
+        LOG.info("Loading features from DB (ml_artifacts: features)")
+        LOG.info("Loading predictions from DB (ml_artifacts: predictions)")
+    else:
+        LOG.info("Loading features from %s", args.features_path)
+        LOG.info("Loading predictions from %s", args.predictions_path)
 
     try:
         payload = evaluate(args)
@@ -305,6 +332,29 @@ def main(argv: list[str] | None = None) -> int:
             dec["avg_label"],
             dec["avg_score"],
         )
+    if db.db_enabled():
+        meta = db.fetch_latest_ml_artifact("predictions") or db.fetch_latest_ml_artifact(
+            "features"
+        )
+        run_date = meta.get("run_date") if meta else None
+        if run_date is None:
+            run_date = datetime.now(timezone.utc).date()
+        ok = db.upsert_ml_artifact(
+            "ranker_eval",
+            run_date,
+            payload=payload,
+            rows_count=int(payload.get("sample_size", 0) or 0),
+            source="ranker_eval",
+            file_name=output_path.name,
+        )
+        if ok:
+            LOG.info(
+                "[INFO] RANKER_EVAL_DB_WRITTEN run_date=%s rows=%d",
+                run_date,
+                int(payload.get("sample_size", 0) or 0),
+            )
+        else:
+            LOG.warning("[WARN] RANKER_EVAL_DB_WRITE_FAILED run_date=%s", run_date)
 
     return 0
 

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetCalendarRequest
 
 
-def calc_daily_window(trading_client: TradingClient, days: int):
-    today = datetime.now(timezone.utc).date()
+def calc_daily_window(
+    trading_client: TradingClient,
+    days: int,
+    *,
+    end_date: date | None = None,
+):
+    today = end_date or datetime.now(timezone.utc).date()
     req = GetCalendarRequest(start=(today - timedelta(days=5000)), end=today)
     cal = trading_client.get_calendar(req)
     sessions = [d for d in cal if getattr(d, "close", None)]

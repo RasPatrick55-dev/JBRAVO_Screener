@@ -2098,6 +2098,7 @@ def _load_alpaca_universe(
     min_days_final: int = 90,
     reuse_cache: bool = True,
     skip_fetch: bool = False,
+    run_date_override: Optional[date] = None,
     metrics: Optional[MutableMapping[str, Any]] = None,
 ) -> Tuple[
     pd.DataFrame,
@@ -2480,18 +2481,35 @@ def _load_alpaca_universe(
     window_attempts: list[int] = []
     final_window = 0
     symbols_override_count = len(override_cleaned)
+    window_now = (
+        datetime(
+            run_date_override.year,
+            run_date_override.month,
+            run_date_override.day,
+            tzinfo=timezone.utc,
+        )
+        if run_date_override
+        else None
+    )
 
     for idx, window_days in enumerate(attempt_days):
         window_attempts.append(window_days)
         try:
-            start_iso, end_iso, last_day = calc_daily_window(trading_client, window_days)
+            start_iso, end_iso, last_day = calc_daily_window(
+                trading_client,
+                window_days,
+                end_date=run_date_override,
+            )
         except Exception as exc:
             LOGGER.error(
                 "Failed to determine trading window for %d days: %s",
                 window_days,
                 exc,
             )
-            start_iso, end_iso, last_day = _fallback_daily_window(window_days)
+            start_iso, end_iso, last_day = _fallback_daily_window(
+                window_days,
+                now=window_now,
+            )
             LOGGER.info(
                 "Using fallback trading window for %d days (%s -> %s)",
                 window_days,
@@ -4633,11 +4651,21 @@ def run_full_nightly(
         LOGGER.warning("Shortlist is empty; final ranking will have no candidates.")
 
     days = max(int(getattr(args, "full_days", 750) or 750), 1)
+    window_now = (
+        datetime(
+            run_date_override.year,
+            run_date_override.month,
+            run_date_override.day,
+            tzinfo=timezone.utc,
+        )
+        if run_date_override
+        else None
+    )
     try:
-        start_iso, end_iso, last_day = _fallback_daily_window(days)
+        start_iso, end_iso, last_day = _fallback_daily_window(days, now=window_now)
     except Exception as exc:  # pragma: no cover - fallback already guards
         LOGGER.warning("Failed to determine fetch window: %s", exc)
-        start_iso, end_iso, last_day = _fallback_daily_window(days)
+        start_iso, end_iso, last_day = _fallback_daily_window(days, now=window_now)
 
     reuse_cache = _as_bool(getattr(args, "reuse_cache", True), True)
     feed = getattr(args, "feed", DEFAULT_FEED)
@@ -5776,8 +5804,15 @@ def write_outputs(
     scored_path = data_dir / "scored_candidates.csv"
     metrics_path = data_dir / "screener_metrics.json"
 
-    _write_csv_atomic(top_path, top_df)
-    _write_csv_atomic(scored_path, scored_df)
+    write_candidate_csvs = not db.db_enabled()
+    env_override = os.getenv("JBR_WRITE_CANDIDATE_CSVS")
+    if env_override is not None:
+        write_candidate_csvs = _as_bool(env_override, write_candidate_csvs)
+    if write_candidate_csvs:
+        _write_csv_atomic(top_path, top_df)
+        _write_csv_atomic(scored_path, scored_df)
+    else:
+        LOGGER.info("[INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled")
 
     cfg_for_summary = ranker_cfg or _load_ranker_config()
     gate_meta = gate_counters or {}
@@ -6606,6 +6641,7 @@ def main(
                     min_days_final=args.min_days_final,
                     reuse_cache=bool(args.reuse_cache),
                     skip_fetch=bool(args.skip_fetch),
+                    run_date_override=run_date_override,
                     metrics=fetch_metrics,
                 )
                 fetch_elapsed = pipeline_timer.lap("fetch_secs")

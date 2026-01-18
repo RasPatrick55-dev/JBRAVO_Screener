@@ -18,11 +18,11 @@ Use `--base` to point at another repository root (useful for tests or sandboxes)
 
 ## What is validated
 
-The checker inspects the latest screener metrics, candidate CSVs, executor logs, and optional prediction artifacts. It records:
+The checker inspects the latest screener metrics, candidate outputs (DB views with optional CSV exports), executor logs, and optional prediction artifacts. It records:
 
 - Most recent timestamps from `screener_metrics.json`, `metrics_summary.csv`, and pipeline log markers.
 - Universe coverage (`symbols_in`, `symbols_with_bars`, `rows`, and bar totals).
-- Candidate file health, canonical headers, first three rows, and whether a fallback source was required.
+- Candidate output health (DB view row counts, canonical headers when CSVs are enabled, and fallback flags).
 - Gate pressure breakdown from `screener_metrics.json`.
 - Stage timings (`fetch_secs`, `feature_secs`, `rank_secs`, `gate_secs`).
 - Pipeline tokens (`PIPELINE_START`, `PIPELINE_SUMMARY`, `FALLBACK_CHECK`, `PIPELINE_END`, `DASH RELOAD`).
@@ -31,7 +31,7 @@ The checker inspects the latest screener metrics, candidate CSVs, executor logs,
 - Prediction/decile artifacts when available, including decile lift summaries.
 - Prefix guard to detect alphabet bias in scored candidates.
 
-Missing files are tolerated: the checker sets `present=false` flags so monitoring stays operational on zero-candidate or first-run days.
+Missing artifacts are tolerated: the checker sets `present=false` flags so monitoring stays operational on zero-candidate or first-run days.
 
 ## Using the output
 
@@ -51,11 +51,11 @@ The dashboard highlights paper-only environments with a lightweight badge. The S
 
 Run the checker and then confirm the live dashboard matches the generated findings:
 
-1. **Last run timestamps** – Screener and Execution panels should show the same UTC timestamps reported in `dashboard_findings.txt`.
-2. **Candidate state** – If `latest_candidates.csv` exists with zero rows, the Screener tab displays the “No candidates today; fallback may populate shortly” hint that links directly to the pipeline panel.
-3. **Pipeline tokens** – The pipeline log summary renders the latest `[INFO] PIPELINE_*` markers (START, SUMMARY, FALLBACK_CHECK, END, DASH RELOAD) in the same order as the checker output.
-4. **Execution metrics** – When `execute_metrics.json` is missing (paper-only mornings), the Execution tab keeps KPIs at zero and shows “No execution yet today (paper)” while the badge reinforces the environment.
-5. **Trades and logs** – If neither `executed_trades.csv` nor `trades_log.csv` is available the tab presents the “No trades yet (paper account)” hint instead of erroring, matching the checker’s `present=false` flags.
-6. **Deciles and predictions** – Missing evaluation artifacts should resolve to “Not computed yet” placeholders without stack traces; once present they match the checker’s decile lift summaries.
+1. **Last run timestamps** - Screener and Execution panels should show the same UTC timestamps reported in `dashboard_findings.txt`.
+2. **Candidate state** - If `latest_screener_candidates` returns zero rows, the Screener tab displays the "No candidates today" hint that links directly to the pipeline panel.
+3. **Pipeline tokens** - The pipeline log summary renders the latest `[INFO] PIPELINE_*` markers (START, SUMMARY, FALLBACK_CHECK, END, DASH RELOAD) in the same order as the checker output.
+4. **Execution metrics** - When `execute_metrics.json` is missing (paper-only mornings), the Execution tab keeps KPIs at zero and shows "No execution yet today (paper)" while the badge reinforces the environment.
+5. **Trades and logs** - If neither `executed_trades.csv` nor `trades_log.csv` is available the tab presents the "No trades yet (paper account)" hint instead of erroring, matching the checker's `present=false` flags.
+6. **Deciles and predictions** - Missing evaluation artifacts should resolve to "Not computed yet" placeholders without stack traces; once present they match the checker's decile lift summaries.
 
 Reviewing these items alongside the `reports/dashboard_consistency.json` payload ensures the UI and artifacts stay in lock-step even on zero-candidate or fallback-only days.

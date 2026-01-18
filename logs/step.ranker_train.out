@@ -1,0 +1,13 @@
+[2026-01-18T17:03:15.017144+00:00] START ranker_train
+[2026-01-18 11:03:24,198] [INFO]: Loading features from DB (ml_artifacts: features)
+[2026-01-18 11:03:35,110] [INFO]: Downsampling training set from 348606 to 50000 rows for faster execution
+[2026-01-18 11:03:35,126] [INFO]: Using LogisticRegression (lbfgs, max_iter=50)
+[2026-01-18 11:03:35,151] [INFO]: Features=None | Train=40000 | Val=10000 | Accuracy=0.7248 | AUC=0.5110
+[2026-01-18 11:03:35,153] [INFO]: Model saved to C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\models\ranker_2026-01-18.pkl
+[2026-01-18 11:03:35,153] [INFO]: Summary written to C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\models\ranker_summary_2026-01-18.json
+[2026-01-18 11:03:35,153] [INFO]: Validation metrics: {
+  "accuracy": 0.7248,
+  "auc": 0.5109943998713077,
+  "deciles": []
+}
+[2026-01-18T17:03:35.309681+00:00] END ranker_train rc=0 secs=20.3

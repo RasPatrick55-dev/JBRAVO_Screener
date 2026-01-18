@@ -54,6 +54,26 @@ def derive_prefix_counts_from_scored_candidates(base_dir: Path) -> dict:
             counts[symbol[0].upper()] += 1
     return dict(sorted(counts.items()))
 
+
+def _as_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _should_write_candidate_csvs() -> bool:
+    override = os.getenv("JBR_WRITE_CANDIDATE_CSVS")
+    if override is not None:
+        return _as_bool(override, False)
+    return not db.db_enabled()
+
 start_time = datetime.utcnow()
 
 # Columns expected in ``metrics_summary.csv``
@@ -377,6 +397,9 @@ def rank_candidates(df):
 
 # Save top-ranked candidates
 def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
+    if not _should_write_candidate_csvs():
+        logger.info("[INFO] TOP_CANDIDATES_CSV_SKIPPED reason=db_enabled")
+        return
     required_cols = ['symbol', 'score', 'win_rate', 'net_pnl']
     csv_path = os.path.join(BASE_DIR, 'data', output_file)
     if all(col in df.columns for col in required_cols):

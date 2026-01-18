@@ -2,7 +2,8 @@
 %%{init: {'theme': 'base', 'themeVariables': {'fontSize': '168px', 'fontFamily': 'Helvetica, Arial, sans-serif', 'fontWeight': '800', 'textColor': '#000000', 'primaryTextColor': '#000000', 'secondaryTextColor': '#000000', 'tertiaryTextColor': '#000000', 'lineColor': '#000000', 'nodePadding': 90}, 'flowchart': {'nodeSpacing': 80, 'rankSpacing': 140}}}%%
 flowchart LR
   classDef index fill:#e6f4ff,stroke:#000000,color:#000000,stroke-width:2px,padding:90px 500px,width:700px,min-width:700px;
-  A[Print A: Process Flow - docs/run_pipeline_flow_process.mmd]
-  B[Print B: Data Flow - docs/run_pipeline_flow_data.mmd]
-  A --> B
-  class A,B index;
+  A["Print A: Process Flow - docs/run_pipeline_flow_process.mmd"]
+  B["Print B: Data Flow - docs/run_pipeline_flow_data.mmd"]
+  C["Print C: Combined Flow (Letter) - docs/run_pipeline_flow_combined_letter.mmd"]
+  A --> B --> C
+  class A,B,C index;

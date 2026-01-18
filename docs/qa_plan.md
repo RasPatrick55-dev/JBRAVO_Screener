@@ -9,12 +9,12 @@ This document outlines the quality assurance expectations and release hygiene re
 - Ensure `score_breakdown` serialization to a JSON string preserves the canonical header field.
 
 ### Integration Tests
-- Dry-run pipeline generates both `top_candidates.csv` and `predictions/<date>.csv` artifacts.
+- Dry-run pipeline generates `predictions/<date>.csv` and DB writes for `screener_candidates`/`top_candidates`.
 - Backtest metrics include the new fields and the dashboard reads them without raising HTTP 500 errors.
 
 ### Operations Acceptance (Daily)
 - `grep` inspection confirms `PIPELINE_*` tokens (and `FALLBACK_CHECK`, when used) are present.
-- `latest_candidates.csv` retains the canonical header and contains at least one row.
+- `latest_screener_candidates` and `latest_top_candidates` return non-zero rows for active trading days.
 - Executor logs display buy/stop events or an explicit skip, and metrics are persisted.
 - Dashboard KPIs and screener tables refresh successfully and the evidence bundle renders.
 

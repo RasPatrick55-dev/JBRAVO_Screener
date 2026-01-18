@@ -1,0 +1,13 @@
+{
+	"servers": {
+		"rube": {
+			"type": "stdio",
+			"command": "npx",
+			"args": [
+				"mcp-remote",
+				"https://rube.app/mcp"
+			]
+		}
+	},
+	"inputs": []
+}

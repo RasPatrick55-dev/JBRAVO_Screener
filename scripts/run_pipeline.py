@@ -173,27 +173,64 @@ def _artifact_payload(path: Path | None) -> dict[str, object]:
     return payload
 
 
+def _artifact_payload_db(artifact_type: str) -> dict[str, object]:
+    payload: dict[str, object] = {"path": None, "modified": None}
+    if not db.db_enabled():
+        return payload
+    record = db.fetch_latest_ml_artifact(artifact_type)
+    if not record:
+        return payload
+    created_at = record.get("created_at")
+    if isinstance(created_at, datetime):
+        modified = created_at.isoformat()
+    else:
+        modified = None
+    payload["path"] = f"db://ml_artifacts/{artifact_type}"
+    payload["modified"] = modified
+    if record.get("run_date"):
+        payload["run_date"] = str(record.get("run_date"))
+    if record.get("rows_count") is not None:
+        try:
+            payload["rows"] = int(record.get("rows_count") or 0)
+        except Exception:
+            payload["rows"] = record.get("rows_count")
+    return payload
+
+
 def _write_nightly_ml_status(base_dir: Path) -> None:
     data_dir = Path(base_dir) / "data"
-    payload = {
-        "written_at": datetime.now(timezone.utc).isoformat(),
-        "bars": _artifact_payload(data_dir / "daily_bars.csv"),
-        "labels": _artifact_payload(
-            _latest_by_glob(data_dir / "labels", "labels_*.csv")
-        ),
-        "features": _artifact_payload(
-            _latest_by_glob(data_dir / "features", "features_*.csv")
-        ),
-        "model": _artifact_payload(
-            _latest_by_glob(data_dir / "models", "ranker_*.pkl")
-        ),
-        "predictions": _artifact_payload(
-            _latest_by_glob(data_dir / "predictions", "predictions_*.csv")
-        ),
-        "eval": _artifact_payload(
-            _latest_by_glob(data_dir / "ranker_eval", "*.json")
-        ),
-    }
+    if db.db_enabled():
+        payload = {
+            "written_at": datetime.now(timezone.utc).isoformat(),
+            "bars": _artifact_payload_db("daily_bars"),
+            "labels": _artifact_payload_db("labels"),
+            "features": _artifact_payload_db("features"),
+            "model": _artifact_payload(
+                _latest_by_glob(data_dir / "models", "ranker_*.pkl")
+            ),
+            "predictions": _artifact_payload_db("predictions"),
+            "eval": _artifact_payload_db("ranker_eval"),
+        }
+    else:
+        payload = {
+            "written_at": datetime.now(timezone.utc).isoformat(),
+            "bars": _artifact_payload(data_dir / "daily_bars.csv"),
+            "labels": _artifact_payload(
+                _latest_by_glob(data_dir / "labels", "labels_*.csv")
+            ),
+            "features": _artifact_payload(
+                _latest_by_glob(data_dir / "features", "features_*.csv")
+            ),
+            "model": _artifact_payload(
+                _latest_by_glob(data_dir / "models", "ranker_*.pkl")
+            ),
+            "predictions": _artifact_payload(
+                _latest_by_glob(data_dir / "predictions", "predictions_*.csv")
+            ),
+            "eval": _artifact_payload(
+                _latest_by_glob(data_dir / "ranker_eval", "*.json")
+            ),
+        }
 
     try:
         _write_json(data_dir / "nightly_ml_status.json", payload)
@@ -379,6 +416,26 @@ def _coerce_symbol(value: object) -> str:
     if isinstance(value, str):
         return value.strip().upper()
     return str(value).strip().upper()
+
+
+def _as_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _should_write_candidate_csvs() -> bool:
+    override = os.getenv("JBR_WRITE_CANDIDATE_CSVS")
+    if override is not None:
+        return _as_bool(override, False)
+    return not db.db_enabled()
 
 
 
@@ -769,6 +826,40 @@ def _resolve_labels_bars_path(raw_path: str | Path | None, base_dir: Path) -> Pa
     return path
 
 
+def _ingest_daily_bars_to_db(base_dir: Path, bars_path: Path, run_date: date) -> None:
+    if not db.db_enabled():
+        return
+    if not bars_path.exists() or bars_path.stat().st_size <= 0:
+        LOG.warning(
+            "[WARN] DAILY_BARS_DB_SKIPPED reason=missing_file path=%s",
+            bars_path,
+        )
+        return
+    try:
+        bars_df = pd.read_csv(bars_path)
+    except Exception as exc:
+        LOG.warning("[WARN] DAILY_BARS_DB_SKIPPED reason=read_error err=%s", exc)
+        return
+    if bars_df.empty:
+        LOG.warning("[WARN] DAILY_BARS_DB_SKIPPED reason=empty_file path=%s", bars_path)
+        return
+    ok = db.upsert_ml_artifact_frame(
+        "daily_bars",
+        run_date,
+        bars_df,
+        source="run_pipeline",
+        file_name=bars_path.name,
+    )
+    if ok:
+        LOG.info(
+            "[INFO] DAILY_BARS_DB_WRITTEN run_date=%s rows=%d",
+            run_date,
+            int(bars_df.shape[0]),
+        )
+    else:
+        LOG.warning("[WARN] DAILY_BARS_DB_WRITE_FAILED run_date=%s", run_date)
+
+
 def _snapshot_label_files(output_dir: Path) -> dict[Path, int]:
     if not output_dir.exists():
         return {}
@@ -856,6 +947,27 @@ def refresh_latest_candidates(base_dir: Path | None = None) -> pd.DataFrame:
     return frame
 
 
+def _load_latest_candidates_frame(base_dir: Path | None = None) -> pd.DataFrame:
+    base = _resolve_base_dir(base_dir)
+    if db.db_enabled():
+        frame = refresh_latest_candidates(base)
+        if frame.empty:
+            LOG.warning("[WARN] CANDIDATES_LOAD_SKIPPED reason=db_empty")
+        return frame
+    candidates_path = base / "data" / "latest_candidates.csv"
+    if not candidates_path.exists() or candidates_path.stat().st_size <= 0:
+        LOG.warning(
+            "[WARN] CANDIDATES_LOAD_SKIPPED reason=missing_file path=%s",
+            candidates_path,
+        )
+        return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
+    try:
+        return pd.read_csv(candidates_path)
+    except Exception:
+        LOG.exception("CANDIDATES_READ_FAILED path=%s", candidates_path)
+        return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
+
+
 def _maybe_fallback(base_dir: Path | None = None) -> int:
     LOG.warning("FALLBACK disabled: DB is source of truth.")
     frame = refresh_latest_candidates(base_dir)
@@ -892,14 +1004,9 @@ def _find_latest_predictions_path(base_dir: Path) -> Path | None:
         return None
 
 
-def _prepare_predictions_frame(
-    predictions_path: Path, score_column: str = DEFAULT_RANKER_SCORE_COLUMN
+def _normalize_predictions_frame(
+    df: pd.DataFrame, score_column: str = DEFAULT_RANKER_SCORE_COLUMN
 ) -> pd.DataFrame:
-    try:
-        df = pd.read_csv(predictions_path)
-    except Exception:
-        LOG.exception("PREDICTIONS_READ_FAILED path=%s", predictions_path)
-        return pd.DataFrame(columns=["symbol", score_column])
     if df.empty or "symbol" not in df.columns or score_column not in df.columns:
         return pd.DataFrame(columns=["symbol", score_column])
     working = df.copy()
@@ -911,32 +1018,49 @@ def _prepare_predictions_frame(
     return working[["symbol", score_column]]
 
 
+def _prepare_predictions_frame(
+    predictions_path: Path, score_column: str = DEFAULT_RANKER_SCORE_COLUMN
+) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(predictions_path)
+    except Exception:
+        LOG.exception("PREDICTIONS_READ_FAILED path=%s", predictions_path)
+        return pd.DataFrame(columns=["symbol", score_column])
+    return _normalize_predictions_frame(df, score_column)
+
+
+def _load_latest_predictions_frame(
+    base_dir: Path, score_column: str = DEFAULT_RANKER_SCORE_COLUMN
+) -> tuple[pd.DataFrame, str]:
+    if db.db_enabled():
+        predictions = db.load_ml_artifact_csv("predictions")
+        if predictions.empty:
+            return pd.DataFrame(columns=["symbol", score_column]), "db:missing"
+        return _normalize_predictions_frame(predictions, score_column), "db"
+    predictions_path = _find_latest_predictions_path(base_dir)
+    if predictions_path is None:
+        return pd.DataFrame(columns=["symbol", score_column]), "file:missing"
+    return _prepare_predictions_frame(predictions_path, score_column), str(predictions_path)
+
+
 def enrich_candidates_with_predictions(
     base_dir: Path | None = None,
     *,
     score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
     target_column: str = DEFAULT_RANKER_TARGET_COLUMN,
 ) -> Tuple[int, int] | None:
+    if not _should_write_candidate_csvs():
+        LOG.info("[INFO] CANDIDATE_ENRICHMENT_SKIPPED reason=db_enabled")
+        return None
     base = _resolve_base_dir(base_dir)
     latest_path = base / "data" / "latest_candidates.csv"
-    if not latest_path.exists() or latest_path.stat().st_size <= 0:
+    candidates = _load_latest_candidates_frame(base)
+    if candidates.empty:
         LOG.warning("[WARN] CANDIDATE_ENRICHMENT_SKIPPED reason=no_candidates")
         return None
-    predictions_path = _find_latest_predictions_path(base)
-    if predictions_path is None:
-        LOG.warning("[WARN] CANDIDATE_ENRICHMENT_SKIPPED reason=predictions_missing")
-        return None
-    predictions = _prepare_predictions_frame(predictions_path, score_column)
+    predictions, predictions_source = _load_latest_predictions_frame(base, score_column)
     if predictions.empty:
         LOG.warning("[WARN] CANDIDATE_ENRICHMENT_SKIPPED reason=predictions_empty")
-        return None
-    try:
-        candidates = pd.read_csv(latest_path)
-    except Exception:
-        LOG.exception("CANDIDATES_READ_FAILED path=%s", latest_path)
-        return None
-    if candidates.empty:
-        LOG.warning("[WARN] CANDIDATE_ENRICHMENT_SKIPPED reason=candidates_empty")
         return None
     renamed = predictions.rename(columns={score_column: target_column})
     merged = candidates.merge(renamed[["symbol", target_column]], on="symbol", how="left")
@@ -948,11 +1072,11 @@ def enrich_candidates_with_predictions(
     merged = merged[ordered]
     write_csv_atomic(str(latest_path), merged)
     LOG.info(
-        "[INFO] CANDIDATES_ENRICHED model_score_column=%s rows=%s matched=%s predictions_path=%s",
+        "[INFO] CANDIDATES_ENRICHED model_score_column=%s rows=%s matched=%s predictions_source=%s",
         target_column,
         len(merged.index),
         matched,
-        predictions_path.name,
+        predictions_source,
     )
 
 
@@ -961,43 +1085,24 @@ def _enrich_candidates_with_ranker(
     *,
     score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
     target_column: str = DEFAULT_RANKER_TARGET_COLUMN,
-) -> tuple[int, int] | None:
+) -> pd.DataFrame | None:
     base = _resolve_base_dir(base_dir)
     candidates_path = base / "data" / "latest_candidates.csv"
-    predictions_path = _find_latest_predictions_path(base)
-
-    if not candidates_path.exists() or predictions_path is None:
-        LOG.warning(
-            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=missing_file candidates_path=%s predictions_path=%s",
-            candidates_path,
-            predictions_path,
-        )
-        return
-
-    try:
-        candidates = pd.read_csv(candidates_path)
-    except Exception:
-        LOG.warning(
-            "[WARN] CANDIDATES_ENRICH_FAILED reason=candidates_read_error candidates_path=%s",
-            candidates_path,
-            exc_info=True,
-        )
-        return
-
-    if candidates.empty:
-        LOG.warning(
-            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=candidates_empty candidates_path=%s predictions_path=%s",
-            candidates_path,
-            predictions_path,
-        )
-        return
-
-    predictions = _prepare_predictions_frame(predictions_path, score_column)
+    predictions, predictions_source = _load_latest_predictions_frame(base, score_column)
     if predictions.empty:
         LOG.warning(
-            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=predictions_empty candidates_path=%s predictions_path=%s",
+            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=predictions_missing candidates_path=%s predictions_source=%s",
             candidates_path,
-            predictions_path,
+            predictions_source,
+        )
+        return
+
+    candidates = _load_latest_candidates_frame(base)
+    if candidates.empty:
+        LOG.warning(
+            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=candidates_empty candidates_path=%s predictions_source=%s",
+            candidates_path,
+            predictions_source,
         )
         return
 
@@ -1012,9 +1117,9 @@ def _enrich_candidates_with_ranker(
         merged = merged[ordered]
     except Exception:
         LOG.warning(
-            "[WARN] CANDIDATES_ENRICH_FAILED reason=merge_error candidates_path=%s predictions_path=%s",
+            "[WARN] CANDIDATES_ENRICH_FAILED reason=merge_error candidates_path=%s predictions_source=%s",
             candidates_path,
-            predictions_path,
+            predictions_source,
             exc_info=True,
         )
         return
@@ -1023,9 +1128,9 @@ def _enrich_candidates_with_ranker(
         write_csv_atomic(str(candidates_path), merged)
     except Exception:
         LOG.warning(
-            "[WARN] CANDIDATES_ENRICH_FAILED reason=write_error candidates_path=%s predictions_path=%s",
+            "[WARN] CANDIDATES_ENRICH_FAILED reason=write_error candidates_path=%s predictions_source=%s",
             candidates_path,
-            predictions_path,
+            predictions_source,
             exc_info=True,
         )
         return
@@ -1036,7 +1141,7 @@ def _enrich_candidates_with_ranker(
         len(merged.index),
         matched,
     )
-    return len(merged.index), matched
+    return merged
 
 
 def _apply_allocation_weights(
@@ -1092,7 +1197,11 @@ def _apply_allocation_weights(
 
 
 def _rerank_latest_candidates(
-    base_dir: Path, *, primary: str = "model_score_5d", secondary: str = "score"
+    base_dir: Path,
+    frame: pd.DataFrame | None = None,
+    *,
+    primary: str = "model_score_5d",
+    secondary: str = "score",
 ) -> bool:
     """
     Load data/latest_candidates.csv, verify primary column exists,
@@ -1100,9 +1209,23 @@ def _rerank_latest_candidates(
     Returns True if reranked, False if skipped.
     """
 
+    if not _should_write_candidate_csvs():
+        LOG.info("[INFO] CANDIDATES_RERANK_SKIPPED reason=db_enabled")
+        return False
+
     candidates_path = Path(base_dir) / "data" / "latest_candidates.csv"
     try:
-        frame = pd.read_csv(candidates_path)
+        if frame is None:
+            if db.db_enabled():
+                frame = refresh_latest_candidates(base_dir)
+            else:
+                frame = pd.read_csv(candidates_path)
+        if frame.empty:
+            LOG.warning(
+                "[WARN] CANDIDATES_RERANK_SKIPPED reason=empty_frame candidates_path=%s",
+                candidates_path,
+            )
+            return False
         if primary not in frame.columns:
             LOG.warning(
                 "[WARN] CANDIDATES_RERANK_SKIPPED reason=missing_model_score candidates_path=%s",
@@ -2081,6 +2204,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         "run_utc": datetime.now(timezone.utc).isoformat(),
                     },
                 )
+            if db.db_enabled():
+                bars_path = _resolve_labels_bars_path(export_bars_path, base_dir)
+                _ingest_daily_bars_to_db(base_dir, bars_path, pipeline_run_date)
         else:
             metrics = _read_json(SCREENER_METRICS_PATH)
             symbols_in = int(metrics.get("symbols_in", 0) or 0)
@@ -2156,7 +2282,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if "labels" in steps:
             current_step = "labels"
             bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
-            bars_rows = _count_csv_lines(bars_path)
+            if db.db_enabled():
+                bars_meta = db.fetch_latest_ml_artifact("daily_bars")
+                bars_rows = int(bars_meta.get("rows_count") or 0) if bars_meta else 0
+            else:
+                bars_rows = _count_csv_lines(bars_path)
             if bars_rows <= 0:
                 LOG.warning("[WARN] LABELS_SKIPPED reason=missing_or_empty path=%s", bars_path)
                 stage_times["labels"] = 0.0
@@ -2198,37 +2328,133 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 step_rcs["labels"] = rc_labels
                 if rc_labels:
                     LOG.warning("[WARN] LABELS_STEP rc=%s (continuing)", rc_labels)
+
+        if db.db_enabled() and (
+            "ranker_eval" in steps or getattr(args, "enrich_candidates_with_ranker", False)
+        ):
+            missing_artifacts: list[str] = []
+            if not db.fetch_latest_ml_artifact("daily_bars"):
+                missing_artifacts.append("daily_bars")
+            if not db.fetch_latest_ml_artifact("labels"):
+                missing_artifacts.append("labels")
+            if missing_artifacts:
+                LOG.warning(
+                    "[WARN] RANKER_PIPELINE_SKIPPED reason=missing_artifacts artifacts=%s",
+                    ",".join(missing_artifacts),
+                )
+            else:
+                LOG.info("[INFO] FEATURES_START")
+                rc_features, secs = run_step(
+                    "features",
+                    [sys.executable, "-m", "scripts.feature_generator"],
+                    timeout=60 * 5,
+                )
+                stage_times["features"] = secs
+                if rc_features:
+                    LOG.warning("[WARN] FEATURES_FAILED rc=%s (continuing)", rc_features)
+                else:
+                    model_path = _latest_by_glob(
+                        base_dir / "data" / "models", "ranker_*.pkl"
+                    )
+                    if model_path is None:
+                        LOG.info("[INFO] RANKER_TRAIN_START reason=model_missing")
+                        rc_train, secs = run_step(
+                            "ranker_train",
+                            [sys.executable, "-m", "scripts.ranker_train"],
+                            timeout=60 * 5,
+                        )
+                        stage_times["ranker_train"] = secs
+                        if rc_train:
+                            LOG.warning(
+                                "[WARN] RANKER_TRAIN_FAILED rc=%s (continuing)",
+                                rc_train,
+                            )
+                        model_path = _latest_by_glob(
+                            base_dir / "data" / "models", "ranker_*.pkl"
+                        )
+                    if model_path is None:
+                        LOG.warning("[WARN] PREDICTIONS_SKIPPED reason=model_missing")
+                    else:
+                        LOG.info("[INFO] PREDICTIONS_START model=%s", model_path.name)
+                        rc_predict, secs = run_step(
+                            "ranker_predict",
+                            [sys.executable, "-m", "scripts.ranker_predict"],
+                            timeout=60 * 3,
+                        )
+                        stage_times["ranker_predict"] = secs
+                        if rc_predict:
+                            LOG.warning(
+                                "[WARN] PREDICTIONS_FAILED rc=%s (continuing)",
+                                rc_predict,
+                            )
         if "ranker_eval" in steps:
             current_step = "ranker_eval"
-            cmd = [sys.executable, "-m", "scripts.ranker_eval"]
-            if extras["ranker_eval"]:
-                cmd.extend(extras["ranker_eval"])
-            rc_eval = 0
-            secs = 0.0
-            try:
-                rc_eval, secs = run_step("ranker_eval", cmd, timeout=60 * 3)
-            except Exception as exc:  # pragma: no cover - defensive continue
-                LOG.warning("RANKER_EVAL error (continuing): %s", exc)
-                rc_eval, secs = 1, 0.0
-            stage_times["ranker_eval"] = secs
-            step_rcs["ranker_eval"] = rc_eval
-            if rc_eval:
-                LOG.warning("[WARN] RANKER_EVAL_FAILED rc=%s (continuing)", rc_eval)
+            if db.db_enabled():
+                missing: list[str] = []
+                if not db.fetch_latest_ml_artifact("features"):
+                    missing.append("features")
+                if not db.fetch_latest_ml_artifact("predictions"):
+                    missing.append("predictions")
+                if missing:
+                    LOG.warning(
+                        "[WARN] RANKER_EVAL_SKIPPED reason=missing_artifacts artifacts=%s",
+                        ",".join(missing),
+                    )
+                    stage_times["ranker_eval"] = 0.0
+                    step_rcs["ranker_eval"] = 0
+                else:
+                    cmd = [sys.executable, "-m", "scripts.ranker_eval"]
+                    if extras["ranker_eval"]:
+                        cmd.extend(extras["ranker_eval"])
+                    rc_eval = 0
+                    secs = 0.0
+                    try:
+                        rc_eval, secs = run_step("ranker_eval", cmd, timeout=60 * 3)
+                    except Exception as exc:  # pragma: no cover - defensive continue
+                        LOG.warning("RANKER_EVAL error (continuing): %s", exc)
+                        rc_eval, secs = 1, 0.0
+                    stage_times["ranker_eval"] = secs
+                    step_rcs["ranker_eval"] = rc_eval
+                    if rc_eval:
+                        LOG.warning("[WARN] RANKER_EVAL_FAILED rc=%s (continuing)", rc_eval)
+                    else:
+                        payload = db.load_ml_artifact_payload("ranker_eval")
+                        LOG.info(
+                            "[INFO] RANKER_EVAL sample_size=%s deciles=%s",
+                            int(payload.get("sample_size", 0) or 0),
+                            len(payload.get("deciles") or []),
+                        )
             else:
-                payload = _read_json(DATA_DIR / "ranker_eval" / "latest.json")
-                LOG.info(
-                    "[INFO] RANKER_EVAL sample_size=%s deciles=%s",
-                    int(payload.get("sample_size", 0) or 0),
-                    len(payload.get("deciles") or []),
-                )
+                cmd = [sys.executable, "-m", "scripts.ranker_eval"]
+                if extras["ranker_eval"]:
+                    cmd.extend(extras["ranker_eval"])
+                rc_eval = 0
+                secs = 0.0
+                try:
+                    rc_eval, secs = run_step("ranker_eval", cmd, timeout=60 * 3)
+                except Exception as exc:  # pragma: no cover - defensive continue
+                    LOG.warning("RANKER_EVAL error (continuing): %s", exc)
+                    rc_eval, secs = 1, 0.0
+                stage_times["ranker_eval"] = secs
+                step_rcs["ranker_eval"] = rc_eval
+                if rc_eval:
+                    LOG.warning("[WARN] RANKER_EVAL_FAILED rc=%s (continuing)", rc_eval)
+                else:
+                    payload = _read_json(DATA_DIR / "ranker_eval" / "latest.json")
+                    LOG.info(
+                        "[INFO] RANKER_EVAL sample_size=%s deciles=%s",
+                        int(payload.get("sample_size", 0) or 0),
+                        len(payload.get("deciles") or []),
+                    )
 
         if getattr(args, "enrich_candidates_with_ranker", False):
-            _enrich_candidates_with_ranker(
+            enriched = _enrich_candidates_with_ranker(
                 base_dir=base_dir,
                 score_column=DEFAULT_RANKER_SCORE_COLUMN,
                 target_column=DEFAULT_RANKER_TARGET_COLUMN,
             )
-            _rerank_latest_candidates(base_dir)
+            if enriched is not None:
+                _rerank_latest_candidates(base_dir, frame=enriched)
     except Exception as exc:  # pragma: no cover - defensive guard
         rc = 1
         LOG.exception("PIPELINE_FATAL")
@@ -2257,14 +2483,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         except Exception:
             LOG.exception("PIPELINE_ENSURE_CANDIDATES_FAILED")
         final_rows = None
-        top_path = Path(base_dir) / "data" / "top_candidates.csv"
-        if top_path.exists():
+        if db.db_enabled():
             try:
-                final_rows = int(pd.read_csv(top_path).shape[0])
+                final_rows, _ = db.fetch_latest_screener_candidate_count()
             except Exception as exc:
-                logger.warning("[WARN] PIPELINE_SUMMARY_ROWS_FALLBACK reason=read_error detail=%s", exc)
-        if final_rows is not None:
-            rows_out = final_rows
+                logger.warning(
+                    "[WARN] PIPELINE_SUMMARY_ROWS_FALLBACK reason=db_error detail=%s", exc
+                )
+        if final_rows is not None and int(final_rows or 0) > 0:
+            rows_out = int(final_rows)
         screener_rc = step_rcs.get("screener") if "screener" in step_rcs else None
         backtest_rc = step_rcs.get("backtest") if "backtest" in step_rcs else None
         metrics_rc = step_rcs.get("metrics") if "metrics" in step_rcs else None

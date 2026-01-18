@@ -1,16 +1,94 @@
 {
-  "deciles": [],
-  "label_horizon_days": 5,
-  "reason": "no labeled samples",
-  "run_utc": "2025-11-29T00:10:19.795253+00:00",
-  "sample_size": 0,
+  "sample_size": 348606,
   "label_column": "label_5d_pos_300bp",
   "score_column": "score_5d",
   "decile_convention": "10=top",
   "top_decile_index": 10,
   "bottom_decile_index": 1,
-  "top_avg_label": null,
-  "bottom_avg_label": null,
-  "decile_lift": null,
-  "signal_quality": null
+  "deciles": [
+    {
+      "decile": 1,
+      "count": 34860,
+      "avg_label": 0.2907056798623064,
+      "avg_score": 0.26511667987111953,
+      "score_min": 2.487473662779272e-06,
+      "score_max": 0.2678668646516325
+    },
+    {
+      "decile": 2,
+      "count": 34861,
+      "avg_label": 0.2710765612001951,
+      "avg_score": 0.26875976600699986,
+      "score_min": 0.2678669875281865,
+      "score_max": 0.26954223525233
+    },
+    {
+      "decile": 3,
+      "count": 34860,
+      "avg_label": 0.2661503155479059,
+      "avg_score": 0.2701941859445793,
+      "score_min": 0.2695422730885091,
+      "score_max": 0.2708222068318873
+    },
+    {
+      "decile": 4,
+      "count": 34861,
+      "avg_label": 0.25788130002007975,
+      "avg_score": 0.27142894293938147,
+      "score_min": 0.2708222254913597,
+      "score_max": 0.2720267996556189
+    },
+    {
+      "decile": 5,
+      "count": 34861,
+      "avg_label": 0.25667651530363444,
+      "avg_score": 0.2726418084059033,
+      "score_min": 0.272026812408738,
+      "score_max": 0.2732786808393881
+    },
+    {
+      "decile": 6,
+      "count": 34860,
+      "avg_label": 0.2585197934595525,
+      "avg_score": 0.2739615251433661,
+      "score_min": 0.2732786950099019,
+      "score_max": 0.2746781285270562
+    },
+    {
+      "decile": 7,
+      "count": 34861,
+      "avg_label": 0.26585582742893205,
+      "avg_score": 0.27552162839191835,
+      "score_min": 0.2746781364530704,
+      "score_max": 0.276453476842989
+    },
+    {
+      "decile": 8,
+      "count": 34860,
+      "avg_label": 0.2711990820424555,
+      "avg_score": 0.27765435918137216,
+      "score_min": 0.2764534938071776,
+      "score_max": 0.2790606487038877
+    },
+    {
+      "decile": 9,
+      "count": 34861,
+      "avg_label": 0.28237858925446774,
+      "avg_score": 0.28135187832909286,
+      "score_min": 0.2790608086339118,
+      "score_max": 0.284551128548483
+    },
+    {
+      "decile": 10,
+      "count": 34861,
+      "avg_label": 0.303376265741086,
+      "avg_score": 0.3018745657112209,
+      "score_min": 0.2845512920492461,
+      "score_max": 0.9136857091563764
+    }
+  ],
+  "top_avg_label": 0.303376265741086,
+  "bottom_avg_label": 0.2907056798623064,
+  "decile_lift": 0.012670585878779617,
+  "signal_quality": "LOW"
 }

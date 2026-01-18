@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import os
@@ -722,6 +723,9 @@ def insert_screener_candidates(
             except Exception as exc:  # pragma: no cover - defensive logging
                 _log_write_result(False, "screener_run_map_app", 0, exc)
 
+    if inserted:
+        ensure_latest_screener_candidates_view()
+
     try:
         conn.close()
     except Exception:
@@ -1352,6 +1356,403 @@ def ensure_top_candidates_table() -> None:
             pass
 
 
+def ensure_daily_bars_table() -> None:
+    conn = _conn_or_none()
+    if conn is None:
+        return
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS daily_bars (
+                        symbol TEXT NOT NULL,
+                        date DATE NOT NULL,
+                        open NUMERIC,
+                        high NUMERIC,
+                        low NUMERIC,
+                        close NUMERIC,
+                        volume BIGINT,
+                        PRIMARY KEY (symbol, date)
+                    )
+                    """
+                )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_SCHEMA_FAILED table=daily_bars err=%s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def upsert_daily_bars_frame(frame: pd.DataFrame | None) -> int:
+    if frame is None or frame.empty:
+        return 0
+    ensure_daily_bars_table()
+    conn = _conn_or_none()
+    if conn is None:
+        return 0
+    working = frame.copy()
+    if "date" not in working.columns:
+        if "timestamp" in working.columns:
+            working["date"] = pd.to_datetime(working["timestamp"], errors="coerce").dt.date
+        elif working.index.name:
+            working["date"] = pd.to_datetime(working.index, errors="coerce").date
+    if "symbol" not in working.columns:
+        logger.warning("[WARN] DAILY_BARS_UPSERT_MISSING symbol column")
+        return 0
+    working["symbol"] = working["symbol"].astype("string").str.upper()
+    working["date"] = pd.to_datetime(working["date"], errors="coerce").dt.date
+    for col in ("open", "high", "low", "close"):
+        if col in working.columns:
+            working[col] = pd.to_numeric(working[col], errors="coerce")
+    if "volume" in working.columns:
+        working["volume"] = pd.to_numeric(working["volume"], errors="coerce").fillna(0).astype(int)
+    working = working.dropna(subset=["symbol", "date"])
+
+    rows_payloads: list[dict[str, Any]] = []
+    for _, row in working.iterrows():
+        rows_payloads.append(
+            {
+                "symbol": row.get("symbol"),
+                "date": row.get("date"),
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "close": row.get("close"),
+                "volume": row.get("volume"),
+            }
+        )
+    if not rows_payloads:
+        return 0
+    insert_sql = """
+        INSERT INTO daily_bars (symbol, date, open, high, low, close, volume)
+        VALUES (%(symbol)s, %(date)s, %(open)s, %(high)s, %(low)s, %(close)s, %(volume)s)
+        ON CONFLICT (symbol, date) DO UPDATE SET
+            open=EXCLUDED.open,
+            high=EXCLUDED.high,
+            low=EXCLUDED.low,
+            close=EXCLUDED.close,
+            volume=EXCLUDED.volume
+    """
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                extras.execute_batch(cursor, insert_sql, rows_payloads, page_size=200)
+        _log_write_result(True, "daily_bars", len(rows_payloads))
+        return len(rows_payloads)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        _log_write_result(False, "daily_bars", 0, exc)
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def ensure_latest_screener_candidates_view() -> None:
+    conn = _conn_or_none()
+    if conn is None:
+        return
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE OR REPLACE VIEW latest_screener_candidates AS
+                    SELECT *
+                    FROM screener_candidates
+                    WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
+                    """
+                )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "[WARN] DB_SCHEMA_FAILED view=latest_screener_candidates err=%s",
+            exc,
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def ensure_latest_top_candidates_view() -> None:
+    conn = _conn_or_none()
+    if conn is None:
+        return
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE OR REPLACE VIEW latest_top_candidates AS
+                    SELECT *
+                    FROM top_candidates
+                    WHERE run_date = (SELECT MAX(run_date) FROM top_candidates)
+                    """
+                )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "[WARN] DB_SCHEMA_FAILED view=latest_top_candidates err=%s",
+            exc,
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def ensure_ml_artifacts_table() -> None:
+    conn = _conn_or_none()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ml_artifacts (
+                    artifact_type TEXT NOT NULL,
+                    run_date DATE NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    rows_count INTEGER,
+                    payload JSONB,
+                    csv_data TEXT,
+                    source TEXT,
+                    file_name TEXT,
+                    PRIMARY KEY (artifact_type, run_date)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_ml_artifacts_type_created
+                ON ml_artifacts (artifact_type, created_at DESC)
+                """
+            )
+        conn.commit()
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_SCHEMA_FAILED table=ml_artifacts err=%s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def upsert_ml_artifact(
+    artifact_type: str,
+    run_date: Any,
+    *,
+    csv_data: str | None = None,
+    payload: Mapping[str, Any] | None = None,
+    rows_count: int | None = None,
+    source: str | None = None,
+    file_name: str | None = None,
+) -> bool:
+    if not db_enabled():
+        return False
+    ensure_ml_artifacts_table()
+    conn = _conn_or_none()
+    if conn is None:
+        return False
+    run_date_value = _coerce_date(run_date)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO ml_artifacts (
+                    artifact_type,
+                    run_date,
+                    created_at,
+                    rows_count,
+                    payload,
+                    csv_data,
+                    source,
+                    file_name
+                )
+                VALUES (
+                    %(artifact_type)s,
+                    %(run_date)s,
+                    NOW(),
+                    %(rows_count)s,
+                    %(payload)s,
+                    %(csv_data)s,
+                    %(source)s,
+                    %(file_name)s
+                )
+                ON CONFLICT (artifact_type, run_date)
+                DO UPDATE SET
+                    created_at = EXCLUDED.created_at,
+                    rows_count = EXCLUDED.rows_count,
+                    payload = EXCLUDED.payload,
+                    csv_data = EXCLUDED.csv_data,
+                    source = EXCLUDED.source,
+                    file_name = EXCLUDED.file_name
+                """,
+                {
+                    "artifact_type": artifact_type,
+                    "run_date": run_date_value,
+                    "rows_count": rows_count,
+                    "payload": extras.Json(payload) if payload is not None else None,
+                    "csv_data": csv_data,
+                    "source": source,
+                    "file_name": file_name,
+                },
+            )
+        conn.commit()
+        return True
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_WRITE_FAILED table=ml_artifacts err=%s", exc)
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def fetch_latest_ml_artifact(artifact_type: str) -> dict[str, Any] | None:
+    conn = _conn_or_none()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT run_date, created_at, rows_count, payload, csv_data, source, file_name
+                FROM ml_artifacts
+                WHERE artifact_type = %(artifact_type)s
+                ORDER BY run_date DESC, created_at DESC
+                LIMIT 1
+                """,
+                {"artifact_type": artifact_type},
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "run_date": row[0],
+            "created_at": row[1],
+            "rows_count": row[2],
+            "payload": row[3],
+            "csv_data": row[4],
+            "source": row[5],
+            "file_name": row[6],
+        }
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_READ_FAILED table=ml_artifacts err=%s", exc)
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def fetch_ml_artifact(
+    artifact_type: str, run_date: Any | None = None
+) -> dict[str, Any] | None:
+    conn = _conn_or_none()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cursor:
+            if run_date is None:
+                return fetch_latest_ml_artifact(artifact_type)
+            run_date_value = _coerce_date(run_date)
+            cursor.execute(
+                """
+                SELECT run_date, created_at, rows_count, payload, csv_data, source, file_name
+                FROM ml_artifacts
+                WHERE artifact_type = %(artifact_type)s
+                  AND run_date = %(run_date)s
+                """,
+                {"artifact_type": artifact_type, "run_date": run_date_value},
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "run_date": row[0],
+            "created_at": row[1],
+            "rows_count": row[2],
+            "payload": row[3],
+            "csv_data": row[4],
+            "source": row[5],
+            "file_name": row[6],
+        }
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_READ_FAILED table=ml_artifacts err=%s", exc)
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def load_ml_artifact_csv(
+    artifact_type: str, *, run_date: Any | None = None
+) -> pd.DataFrame:
+    record = fetch_ml_artifact(artifact_type, run_date=run_date)
+    if not record:
+        return pd.DataFrame()
+    csv_data = record.get("csv_data")
+    if not csv_data:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(io.StringIO(csv_data))
+    except Exception as exc:
+        logger.warning("[WARN] ML_ARTIFACT_CSV_READ_FAILED type=%s err=%s", artifact_type, exc)
+        return pd.DataFrame()
+
+
+def load_ml_artifact_payload(
+    artifact_type: str, *, run_date: Any | None = None
+) -> dict[str, Any]:
+    record = fetch_ml_artifact(artifact_type, run_date=run_date)
+    payload = record.get("payload") if record else None
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    if isinstance(payload, str):
+        try:
+            return json.loads(payload)
+        except Exception:
+            return {}
+    return {}
+
+
+def upsert_ml_artifact_frame(
+    artifact_type: str,
+    run_date: Any,
+    frame: pd.DataFrame,
+    *,
+    source: str | None = None,
+    file_name: str | None = None,
+) -> bool:
+    if frame is None:
+        return False
+    try:
+        csv_data = frame.to_csv(index=False)
+    except Exception as exc:
+        logger.warning("[WARN] ML_ARTIFACT_CSV_SERIALIZE_FAILED type=%s err=%s", artifact_type, exc)
+        return False
+    rows_count = int(frame.shape[0]) if hasattr(frame, "shape") else None
+    return upsert_ml_artifact(
+        artifact_type,
+        run_date,
+        csv_data=csv_data,
+        rows_count=rows_count,
+        source=source,
+        file_name=file_name,
+    )
+
+
+
 def upsert_top_candidates(
     run_date: Any,
     df_candidates: pd.DataFrame | None,
@@ -1408,6 +1809,7 @@ def upsert_top_candidates(
                         cursor.rowcount,
                     )
             _log_write_result(True, "top_candidates", 0)
+            ensure_latest_top_candidates_view()
             return True
         except Exception as exc:  # pragma: no cover - defensive logging
             _log_write_result(False, "top_candidates", 0, exc)
@@ -1456,6 +1858,7 @@ def upsert_top_candidates(
                     page_size=200,
                 )
         _log_write_result(True, "top_candidates", len(rows_payloads))
+        ensure_latest_top_candidates_view()
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "top_candidates", 0, exc)

@@ -28,6 +28,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 
 from utils.env import load_env  # noqa: E402
+from scripts import db  # noqa: E402
 
 load_env()
 
@@ -52,7 +53,7 @@ SAMPLE_RANDOM_STATE = 42
 
 @dataclass
 class TrainArgs:
-    features_path: Path
+    features_path: Path | None
     label_column: str
     output_dir: Path
 
@@ -111,6 +112,18 @@ def _extract_features_date(path: Path) -> str:
     return datetime.utcnow().strftime("%Y-%m-%d")
 
 
+def _normalize_features_frame(df: pd.DataFrame, label_column: str) -> pd.DataFrame:
+    required_columns = set(["symbol", "timestamp", *FEATURE_COLUMNS, label_column])
+    missing = required_columns - set(df.columns)
+    if missing:
+        raise RuntimeError(f"Features input missing columns: {sorted(missing)}")
+
+    df = df.dropna(subset=FEATURE_COLUMNS + [label_column])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+    return df.reset_index(drop=True)
+
+
 def _load_features(path: Path, label_column: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(path)
@@ -119,15 +132,7 @@ def _load_features(path: Path, label_column: str) -> pd.DataFrame:
     except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError(f"Failed to read features from {path}: {exc}") from exc
 
-    required_columns = set(["symbol", "timestamp", *FEATURE_COLUMNS, label_column])
-    missing = required_columns - set(df.columns)
-    if missing:
-        raise RuntimeError(f"Features file {path} missing columns: {sorted(missing)}")
-
-    df = df.dropna(subset=FEATURE_COLUMNS + [label_column])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
-    return df.reset_index(drop=True)
+    return _normalize_features_frame(df, label_column)
 
 
 def _choose_model():
@@ -281,8 +286,13 @@ def _save_outputs(
     joblib.dump(payload, model_path)
 
     summary_path = output_dir / f"ranker_summary_{snapshot_date}.json"
+    features_path_display = (
+        str(args.features_path)
+        if args.features_path is not None
+        else "db://ml_artifacts/features"
+    )
     summary = {
-        "features_path": str(args.features_path),
+        "features_path": features_path_display,
         "label_column": args.label_column,
         "train_size": metrics.pop("train_size", None),
         "val_size": metrics.pop("val_size", None),
@@ -317,11 +327,12 @@ def parse_args(argv: list[str] | None = None) -> TrainArgs:
     parsed = parser.parse_args(argv)
 
     features_path = parsed.features_path
-    if features_path is None:
-        default_dir = BASE_DIR / "data" / "features"
-        features_path = _find_latest_features(default_dir)
+    if not db.db_enabled():
         if features_path is None:
-            raise FileNotFoundError(f"No features files found in {default_dir}")
+            default_dir = BASE_DIR / "data" / "features"
+            features_path = _find_latest_features(default_dir)
+            if features_path is None:
+                raise FileNotFoundError(f"No features files found in {default_dir}")
 
     return TrainArgs(features_path=features_path, label_column=parsed.label_column, output_dir=parsed.output_dir)
 
@@ -333,18 +344,33 @@ def main(argv: list[str] | None = None) -> int:
         LOG.error("%s", exc)
         return 1
 
-    LOG.info("Loading features from %s", args.features_path)
-    try:
-        df = _load_features(args.features_path, args.label_column)
-    except FileNotFoundError:
-        LOG.error("Features file not found: %s", args.features_path)
-        return 1
-    except Exception as exc:  # pragma: no cover - defensive
-        LOG.error("Failed to load features: %s", exc)
-        return 1
+    features_meta = None
+    if db.db_enabled():
+        features_meta = db.fetch_latest_ml_artifact("features")
+        if not features_meta:
+            LOG.error("No features artifacts found in DB (ml_artifacts: features)")
+            return 1
+        LOG.info("Loading features from DB (ml_artifacts: features)")
+        try:
+            df = _normalize_features_frame(
+                db.load_ml_artifact_csv("features"), args.label_column
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            LOG.error("Failed to load features from DB: %s", exc)
+            return 1
+    else:
+        LOG.info("Loading features from %s", args.features_path)
+        try:
+            df = _load_features(args.features_path, args.label_column)
+        except FileNotFoundError:
+            LOG.error("Features file not found: %s", args.features_path)
+            return 1
+        except Exception as exc:  # pragma: no cover - defensive
+            LOG.error("Failed to load features: %s", exc)
+            return 1
 
     if df.empty:
-        LOG.error("Features file %s has no usable rows", args.features_path)
+        LOG.error("Features input has no usable rows")
         return 1
 
     try:
@@ -371,7 +397,10 @@ def main(argv: list[str] | None = None) -> int:
         f"{auc_display:.4f}" if auc_display not in (None, "nan") else "n/a",
     )
 
-    snapshot_date = _extract_features_date(args.features_path)
+    if db.db_enabled() and features_meta:
+        snapshot_date = str(features_meta.get("run_date") or datetime.utcnow().date())
+    else:
+        snapshot_date = _extract_features_date(args.features_path)
     try:
         outputs = _save_outputs(model, scaler, metrics, args, snapshot_date)
     except Exception as exc:  # pragma: no cover - defensive

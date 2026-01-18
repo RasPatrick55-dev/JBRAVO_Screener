@@ -8,23 +8,22 @@ flowchart LR
   classDef db fill:#ffecec,stroke:#000000,color:#000000,stroke-width:2px,padding:90px 500px,width:700px,min-width:700px;
   classDef note fill:#f2f2f2,stroke:#000000,color:#000000,stroke-width:2px,padding:90px 500px,width:700px,min-width:700px;
   %% DF-Candidates
-  C1[DF-Candidates - DB source of truth] --> D2
-  C1 -.-> C2["/data/top_candidates.csv (optional export)/"]
-  C1 -.-> C3["/data/scored_candidates.csv (optional export)/"]
+  C1["DF-Candidates - DB views (source of truth)"] --> D11
+  C1 --> D12
 
   %% DF-Metrics
-  M1[DF-Metrics - DB + JSON outputs] --> D2
+  M1[DF-Metrics - JSON + DB outputs] --> D2
   M1 --> M2[/data/screener_metrics.json/]
   M1 --> M3[/data/screener_stage_fetch.json/]
   M1 --> M4[/data/screener_stage_post.json/]
 
   %% DF-ML
-  L1[DF-ML - bars, labels, features, predictions, eval] --> L2[/data/daily_bars.csv/]
-  L1 --> L3[/data/labels/labels_RUNDATE.csv/]
-  L1 --> L4[/data/features/features_RUNDATE.csv/]
-  L1 --> L5[/data/predictions/predictions_RUNDATE.csv/]
-  L1 --> L6[/data/ranker_eval/latest.json/]
-  L1 --> L7[/data/nightly_ml_status.json/]
+  L1[DF-ML - labels, features, predictions, eval] --> L2[/data/labels/labels_RUNDATE/]
+  L1 --> L3[/data/features/features_RUNDATE/]
+  L1 --> L4[/data/predictions/predictions_RUNDATE/]
+  L1 --> L5[/data/ranker_eval/latest.json/]
+  L1 --> L6[/data/nightly_ml_status.json/]
+  API1["Alpaca Market Data API\nIEX primary, SIP fallback"] -.-> D10
 
   %% DF-Reports
   R1[DF-Reports - pipeline status + logs] --> R2[/data/pipeline_status.json/]
@@ -41,6 +40,11 @@ flowchart LR
   D2 --> D5[metrics_daily]
   D2 --> D6[pipeline_runs]
   D2 --> D7[trades]
+  D2 --> D8[top_candidates]
+  D2 --> D9[ml_artifacts]
+  D2 --> D10[daily_bars]
+  D2 --> D11["latest_screener_candidates (view)"]
+  D2 --> D12["latest_top_candidates (view)"]
 
   subgraph Legend
     L_cand[DF-Candidates]
@@ -54,13 +58,13 @@ flowchart LR
 
   NOTE[Print A: docs/run_pipeline_flow_process.mmd]
   NOTE -.-> C1
-
-  class C1,C2,C3 cand;
+  class C1 cand;
   class M1,M2,M3,M4 metr;
-  class L1,L2,L3,L4,L5,L6,L7 ml;
+  class L1,L2,L3,L4,L5,L6 ml;
   class R1,R2,R3,R4,R5,R6,R7 rep;
-  class D1,D2,D3,D4,D5,D6,D7 db;
+  class D1,D2,D3,D4,D5,D6,D7,D8,D9,D10,D11,D12 db;
   class NOTE note;
+  class API1 note;
   class L_cand cand;
   class L_metr metr;
   class L_ml ml;

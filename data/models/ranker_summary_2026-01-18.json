@@ -1,0 +1,11 @@
+{
+  "features_path": "db://ml_artifacts/features",
+  "label_column": "label_5d_pos_300bp",
+  "train_size": 40000,
+  "val_size": 10000,
+  "metrics": {
+    "accuracy": 0.7248,
+    "auc": 0.5109943998713077,
+    "deciles": []
+  }
+}

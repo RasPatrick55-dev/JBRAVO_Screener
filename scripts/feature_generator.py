@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from scripts import db
 BAR_COLUMNS = {"symbol", "timestamp", "open", "high", "low", "close", "volume"}
 LABEL_COLUMNS = [
     "symbol",
@@ -110,7 +111,14 @@ def _latest_labels_path(labels_dir: Path) -> Path:
 
 
 def _prepare_bars(bars_path: Path) -> pd.DataFrame:
-    bars = _load_csv(bars_path)
+    if db.db_enabled():
+        bars = db.load_ml_artifact_csv("daily_bars")
+        if bars.empty:
+            raise FileNotFoundError("Bars data not found in DB (ml_artifacts: daily_bars).")
+        if "timestamp" in bars.columns:
+            bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True, errors="coerce")
+    else:
+        bars = _load_csv(bars_path)
     _require_columns(bars, BAR_COLUMNS)
 
     bars = bars.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
@@ -120,7 +128,12 @@ def _prepare_bars(bars_path: Path) -> pd.DataFrame:
 
 
 def _load_labels(labels_path: Path) -> pd.DataFrame:
-    labels = _load_csv(labels_path)
+    if db.db_enabled():
+        labels = db.load_ml_artifact_csv("labels")
+        if labels.empty:
+            raise FileNotFoundError("Labels data not found in DB (ml_artifacts: labels).")
+    else:
+        labels = _load_csv(labels_path)
     _require_columns(labels, LABEL_COLUMNS)
 
     labels = labels.copy()
@@ -205,9 +218,10 @@ def main() -> None:
 
     try:
         labels_path = args.labels_path
-        if labels_path is None:
-            labels_path = _latest_labels_path(Path("data/labels"))
-            logging.info("Using latest labels file: %s", labels_path)
+        if not db.db_enabled():
+            if labels_path is None:
+                labels_path = _latest_labels_path(Path("data/labels"))
+                logging.info("Using latest labels file: %s", labels_path)
 
         merged, latest_bars_date, latest_labels_date = build_feature_set(
             args.bars_path, labels_path, keep_na=args.keep_na
@@ -236,6 +250,22 @@ def main() -> None:
 
         merged.to_csv(output_path, index=False)
         logging.info("Features written to %s", output_path)
+        if db.db_enabled():
+            ok = db.upsert_ml_artifact_frame(
+                "features",
+                run_date,
+                merged,
+                source="feature_generator",
+                file_name=output_path.name,
+            )
+            if ok:
+                logging.info(
+                    "[INFO] FEATURES_DB_WRITTEN run_date=%s rows=%d",
+                    run_date,
+                    int(merged.shape[0]),
+                )
+            else:
+                logging.warning("[WARN] FEATURES_DB_WRITE_FAILED run_date=%s", run_date)
     except (FileNotFoundError, ValueError) as err:
         logging.error(err)
         raise SystemExit(1)
