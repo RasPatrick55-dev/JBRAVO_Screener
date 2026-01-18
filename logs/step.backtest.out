@@ -24,3 +24,63 @@ C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarn
 C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1246: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   end_time = datetime.utcnow()
 [2026-01-18T03:58:42.959352+00:00] END backtest rc=0 secs=35.9
+[2026-01-18T04:33:42.504739+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1246: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T04:34:18.563542+00:00] END backtest rc=0 secs=36.1
+[2026-01-18T04:51:22.807216+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1246: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T04:51:58.648008+00:00] END backtest rc=0 secs=35.8
+[2026-01-18T05:21:34.629870+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T05:22:10.576305+00:00] END backtest rc=0 secs=35.9
+[2026-01-18T05:39:10.820463+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T05:39:49.730636+00:00] END backtest rc=0 secs=38.9
+[2026-01-18T06:01:02.811955+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T06:01:45.770150+00:00] END backtest rc=0 secs=43.0
+[2026-01-18T06:13:09.210702+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T06:13:24.055372+00:00] END backtest rc=0 secs=14.8
+[2026-01-18T06:23:02.468296+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T06:23:17.384743+00:00] END backtest rc=0 secs=14.9
+[2026-01-18T06:35:03.832526+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T06:35:25.928984+00:00] END backtest rc=0 secs=22.1
+[2026-01-18T06:57:16.381060+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T06:57:38.625976+00:00] END backtest rc=0 secs=22.2
+[2026-01-18T07:07:31.902380+00:00] START backtest
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-18T07:07:54.289403+00:00] END backtest rc=0 secs=22.4

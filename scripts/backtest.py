@@ -1073,7 +1073,24 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="(deprecated) CSV export disabled; DB is source of truth",
     )
+    parser.add_argument(
+        "--run-date",
+        default=None,
+        help="Override run_date for DB writes (YYYY-MM-DD)",
+    )
     return parser.parse_args(argv if argv is not None else None)
+
+
+def _parse_run_date_arg(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        parsed = pd.to_datetime(value)
+    except Exception:
+        return None
+    if pd.isna(parsed):  # type: ignore[arg-type]
+        return None
+    return parsed.date()
 
 
 def _load_symbols(source_csv: Path) -> List[str]:
@@ -1153,29 +1170,49 @@ def _validate_candidates_schema(conn: PGConnection) -> bool:
     return True
 
 
-def _load_symbols_db(conn: Optional[PGConnection], limit: int) -> tuple[List[str], Optional[date]]:
+def _load_symbols_db(
+    conn: Optional[PGConnection],
+    limit: int,
+    run_date: Optional[date] = None,
+) -> tuple[List[str], Optional[date]]:
     if conn is None:
         return [], None
     if not _validate_candidates_schema(conn):
         return [], None
+    requested_run_date = run_date
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT symbol, run_date
-                FROM screener_candidates
-                WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
-                ORDER BY score DESC NULLS LAST
-                LIMIT %(limit)s
-                """,
-                {"limit": limit},
-            )
+            if requested_run_date:
+                cursor.execute(
+                    """
+                    SELECT symbol, run_date
+                    FROM screener_candidates
+                    WHERE run_date = %(run_date)s
+                    ORDER BY score DESC NULLS LAST
+                    LIMIT %(limit)s
+                    """,
+                    {"limit": limit, "run_date": requested_run_date},
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT symbol, run_date
+                    FROM screener_candidates
+                    WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
+                    ORDER BY score DESC NULLS LAST
+                    LIMIT %(limit)s
+                    """,
+                    {"limit": limit},
+                )
             rows = cursor.fetchall()
         symbols = [row[0] for row in rows if row and row[0]]
-        run_date = rows[0][1] if rows and rows[0] else None
+        row_run_date = rows[0][1] if rows and rows[0] else None
+        run_date = row_run_date or requested_run_date
         logger.info("CANDIDATES_LOADED db_count=%d", len(symbols))
         if run_date:
             logger.info("BACKTEST_DB_CANDIDATES_OK run_date=%s rows=%s", run_date, len(symbols))
+        elif run_date is None and rows:
+            logger.info("BACKTEST_DB_CANDIDATES_MISSING run_date=None rows=%s", len(symbols))
         return symbols, run_date
     except Exception as exc:  # pragma: no cover - defensive guard
         logger.info("BACKTEST_DB_CANDIDATES_FALLBACK err=%s", exc)
@@ -1189,7 +1226,11 @@ def _parse_bool_flag(value: Optional[str], default: bool) -> bool:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    args = _parse_args(argv or [])
+    args = _parse_args(argv if argv is not None else sys.argv[1:])
+    run_date_override = _parse_run_date_arg(getattr(args, "run_date", None))
+    if getattr(args, "run_date", None) and run_date_override is None:
+        logger.error("[ERROR] BACKTEST_RUN_DATE_INVALID value=%s", args.run_date)
+        return 2
     if not db.db_enabled():
         logger.error("BACKTEST_DB_REQUIRED: DATABASE_URL/DB_* not configured.")
         return 2
@@ -1208,11 +1249,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_date: Optional[date] = None
     symbols_source: Optional[str] = None
 
-    symbols, run_date = _load_symbols_db(conn, candidate_limit)
+    symbols, run_date = _load_symbols_db(conn, candidate_limit, run_date_override)
     if symbols:
         symbols_source = "screener_candidates"
 
-    run_date = run_date or _determine_run_date(conn)
+    if run_date_override:
+        run_date = run_date_override
+    else:
+        run_date = run_date or _determine_run_date(conn)
+
+    run_date_source = "cli" if run_date_override else "default"
+    if run_date:
+        logger.info(
+            "[INFO] STEP_RUN_DATE step=backtest run_date=%s source=%s",
+            run_date,
+            run_date_source,
+        )
 
     if len(symbols) == 0:
         logger.info("BACKTEST_CANDIDATES_EMPTY source=db")

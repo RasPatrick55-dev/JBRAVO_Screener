@@ -901,3 +901,1261 @@ Trying to import the above resulted in these errors:
 [2026-01-17 21:58:02,224] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
 [2026-01-17 21:58:02,224] [INFO]: Screener complete: 7604 symbols examined, 5 candidates.
 [2026-01-18T03:58:02.373543+00:00] END screener rc=0 secs=274.2
+[2026-01-18T04:28:58.751322+00:00] START screener
+[2026-01-17 22:28:59,490] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 22:28:59,494] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 22:28:59,495] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-17 22:28:59,706] [INFO]: [STAGE] fetch start
+[2026-01-17 22:29:00,304] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-17 22:29:00,318] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-17 22:29:00,319] [INFO]: Asset sample: COPL.WS:NYSE, COPL.U:NYSE, AYTU:NASDAQ, CRMLW:NASDAQ, HDMV:ARCA
+[2026-01-17 22:29:00,338] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-17 22:29:00,451] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-17 22:29:00,457] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-17 22:29:00,558] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-17 22:29:00,558] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:02,363] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:02,363] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=4 rows=~33604 elapsed=1.8s cache=miss
+[2026-01-17 22:29:02,363] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:04,155] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:04,155] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~34544 elapsed=1.8s cache=miss
+[2026-01-17 22:29:04,155] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:05,901] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:05,901] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~32405 elapsed=1.7s cache=miss
+[2026-01-17 22:29:05,902] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:07,657] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:07,657] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33006 elapsed=1.8s cache=miss
+[2026-01-17 22:29:07,658] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:09,374] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:09,374] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~32261 elapsed=1.7s cache=miss
+[2026-01-17 22:29:09,375] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:11,020] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:11,020] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31774 elapsed=1.6s cache=miss
+[2026-01-17 22:29:11,020] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:12,711] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:12,711] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34430 elapsed=1.7s cache=miss
+[2026-01-17 22:29:12,711] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:14,483] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:14,483] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33943 elapsed=1.8s cache=miss
+[2026-01-17 22:29:14,483] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:16,196] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:29:16,196] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~33632 elapsed=1.7s cache=miss
+[2026-01-17 22:29:16,560] [INFO]: [BARS_ACCEPT] accepted=425 dropped_missing=25
+[2026-01-17 22:29:17,843] [INFO]: [BARS_RETRY] retried=25 recovered=0
+[2026-01-17 22:29:19,135] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-17 22:29:19,146] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=36 rows=299234 symbols_with_bars=414
+[2026-01-17 22:29:19,146] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-17 22:29:19,147] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-17 22:29:19,147] [INFO]: Fallback batches invoked: 1
+[2026-01-17 22:29:19,147] [INFO]: Symbols dropped for insufficient history: 25
+[2026-01-17 22:29:21,049] [INFO]: [STAGE] fetch end (rows=299234, elapsed=21.34s)
+[2026-01-17 22:29:21,050] [INFO]: [BARS_DIAG] feed=iex requested=500 with_bars=425 missing=75 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-17 22:29:23,502] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-17 22:29:25,021] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=299234 symbols=425
+[2026-01-17 22:29:25,025] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 22:29:25,066] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-17 22:29:25,452] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 22:29:25,452] [INFO]: [STAGE] coarse features start
+[2026-01-17 22:31:22,684] [INFO]: [STAGE] coarse features end (rows=299234)
+[2026-01-17 22:31:22,684] [INFO]: [STAGE] coarse rank start
+[2026-01-17 22:31:22,799] [INFO]: [INFO] Coarse rank boundary rows_in=425 score_non_null=425 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,Score,score_breakdown,coarse_score
+[2026-01-17 22:31:22,799] [INFO]: [STAGE] coarse rank end (rows=425)
+[2026-01-17 22:31:22,807] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=425)
+[2026-01-17 22:31:22,827] [INFO]: [STAGE] full features start (shortlist=425)
+[2026-01-17 22:33:18,700] [INFO]: [STAGE] full features end (rows=299234)
+[2026-01-17 22:33:18,832] [INFO]: [STAGE] finalize candidates pruned rows=299234 -> 265885
+[2026-01-17 22:33:18,832] [INFO]: [STAGE] full rank start
+[2026-01-17 22:33:18,946] [INFO]: [STAGE] full rank end (rows=425)
+[2026-01-17 22:33:18,946] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=425 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-17 22:33:18,947] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-17 22:33:18,948] [INFO]: [STAGE] quality filters pruned rows=425 -> 77
+[2026-01-17 22:33:18,949] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-17 22:33:28,742] [INFO]: [INFO] ML_RANK weight=0.30 rows=77 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.1695 model=data\models\rank_model.joblib
+[2026-01-17 22:33:28,745] [INFO]: [STAGE] gates start
+[2026-01-17 22:33:28,756] [INFO]: [STAGE] gates end (candidates=5)
+[2026-01-17 22:33:32,367] [INFO]: [SUMMARY] run_ts=2026-01-18T04:28:59Z mode=screener symbols_in=7604 with_bars=425 coarse_rows=425 shortlist_rows=425 final_rows=5 gated_rows=5 fallback_used=false db_ingest_rows=5
+[2026-01-17 22:33:32,462] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=77)
+[2026-01-17 22:33:34,850] [WARNING]: [WARN] DB_INGEST_FAILED table=screener_candidates err=can't adapt type 'NAType'
+[2026-01-17 22:33:37,547] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-17 22:33:37,548] [INFO]: Screener complete: 7604 symbols examined, 5 candidates.
+[2026-01-18T04:33:37.688309+00:00] END screener rc=0 secs=278.9
+[2026-01-18T04:46:51.415713+00:00] START screener
+[2026-01-17 22:46:52,084] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 22:46:52,087] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 22:46:52,088] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-17 22:46:52,310] [INFO]: [STAGE] fetch start
+[2026-01-17 22:46:52,940] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-17 22:46:52,953] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-17 22:46:52,955] [INFO]: Asset sample: CWH:NYSE, CWI:ARCA, CWK:NYSE, CWS:ARCA, CWST:NASDAQ
+[2026-01-17 22:46:52,974] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-17 22:46:53,084] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-17 22:46:53,088] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-17 22:46:53,192] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-17 22:46:53,193] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:46:55,025] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:46:55,026] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=4 rows=~33604 elapsed=1.8s cache=miss
+[2026-01-17 22:46:55,026] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:46:56,808] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:46:56,808] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~34544 elapsed=1.8s cache=miss
+[2026-01-17 22:46:56,808] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:46:58,475] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:46:58,475] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~32405 elapsed=1.7s cache=miss
+[2026-01-17 22:46:58,475] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:00,134] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:00,134] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33006 elapsed=1.7s cache=miss
+[2026-01-17 22:47:00,135] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:01,893] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:01,893] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~32261 elapsed=1.8s cache=miss
+[2026-01-17 22:47:01,893] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:03,512] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:03,513] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31774 elapsed=1.6s cache=miss
+[2026-01-17 22:47:03,513] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:05,327] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:05,327] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34430 elapsed=1.8s cache=miss
+[2026-01-17 22:47:05,328] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:07,129] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:07,129] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33943 elapsed=1.8s cache=miss
+[2026-01-17 22:47:07,130] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:08,866] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 22:47:08,866] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~33632 elapsed=1.7s cache=miss
+[2026-01-17 22:47:09,194] [INFO]: [BARS_ACCEPT] accepted=425 dropped_missing=25
+[2026-01-17 22:47:10,481] [INFO]: [BARS_RETRY] retried=25 recovered=0
+[2026-01-17 22:47:11,707] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-17 22:47:11,717] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=36 rows=299234 symbols_with_bars=414
+[2026-01-17 22:47:11,717] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-17 22:47:11,717] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-17 22:47:11,717] [INFO]: Fallback batches invoked: 1
+[2026-01-17 22:47:11,717] [INFO]: Symbols dropped for insufficient history: 25
+[2026-01-17 22:47:13,563] [INFO]: [STAGE] fetch end (rows=299234, elapsed=21.25s)
+[2026-01-17 22:47:13,564] [INFO]: [BARS_DIAG] feed=iex requested=500 with_bars=425 missing=75 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-17 22:47:15,923] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-17 22:47:17,403] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=299234 symbols=425
+[2026-01-17 22:47:17,405] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 22:47:17,445] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-17 22:47:17,827] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 22:47:17,827] [INFO]: [STAGE] coarse features start
+[2026-01-17 22:49:11,383] [INFO]: [STAGE] coarse features end (rows=299234)
+[2026-01-17 22:49:11,384] [INFO]: [STAGE] coarse rank start
+[2026-01-17 22:49:11,496] [INFO]: [INFO] Coarse rank boundary rows_in=425 score_non_null=425 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,Score,score_breakdown,coarse_score
+[2026-01-17 22:49:11,496] [INFO]: [STAGE] coarse rank end (rows=425)
+[2026-01-17 22:49:11,504] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=425)
+[2026-01-17 22:49:11,525] [INFO]: [STAGE] full features start (shortlist=425)
+[2026-01-17 22:51:08,505] [INFO]: [STAGE] full features end (rows=299234)
+[2026-01-17 22:51:08,645] [INFO]: [STAGE] finalize candidates pruned rows=299234 -> 265885
+[2026-01-17 22:51:08,645] [INFO]: [STAGE] full rank start
+[2026-01-17 22:51:08,769] [INFO]: [STAGE] full rank end (rows=425)
+[2026-01-17 22:51:08,770] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=425 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-17 22:51:08,770] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-17 22:51:08,772] [INFO]: [STAGE] quality filters pruned rows=425 -> 77
+[2026-01-17 22:51:08,772] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-17 22:51:09,224] [INFO]: [INFO] ML_RANK weight=0.30 rows=77 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.1695 model=data\models\rank_model.joblib
+[2026-01-17 22:51:09,227] [INFO]: [STAGE] gates start
+[2026-01-17 22:51:09,236] [INFO]: [STAGE] gates end (candidates=5)
+[2026-01-17 22:51:13,075] [INFO]: [SUMMARY] run_ts=2026-01-18T04:46:52Z mode=screener symbols_in=7604 with_bars=425 coarse_rows=425 shortlist_rows=425 final_rows=5 gated_rows=5 fallback_used=false db_ingest_rows=5
+[2026-01-17 22:51:13,176] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=77)
+[2026-01-17 22:51:15,556] [WARNING]: [WARN] DB_INGEST_FAILED table=screener_candidates err=can't adapt type 'NAType'
+[2026-01-17 22:51:18,029] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-17 22:51:18,029] [INFO]: Screener complete: 7604 symbols examined, 5 candidates.
+[2026-01-18T04:51:18.171489+00:00] END screener rc=0 secs=266.8
+[2026-01-18T05:16:58.288508+00:00] START screener
+[2026-01-17 23:16:58,942] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 23:16:58,946] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 23:16:58,948] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-17 23:16:59,276] [INFO]: [INFO] STEP_RUN_DATE step=screener run_date=2026-01-16 source=cli
+[2026-01-17 23:16:59,276] [INFO]: [STAGE] fetch start
+[2026-01-17 23:16:59,854] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-17 23:16:59,868] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-17 23:16:59,869] [INFO]: Asset sample: CORB:ARCA, FAX:AMEX, COPY:ARCA, COPX:ARCA, AZN:NASDAQ
+[2026-01-17 23:16:59,888] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-17 23:16:59,997] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-17 23:17:00,001] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-17 23:17:00,109] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-17 23:17:00,110] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:01,999] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:01,999] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=4 rows=~33604 elapsed=1.9s cache=miss
+[2026-01-17 23:17:01,999] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:03,927] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:03,927] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~34544 elapsed=1.9s cache=miss
+[2026-01-17 23:17:03,928] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:05,607] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:05,607] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~32405 elapsed=1.7s cache=miss
+[2026-01-17 23:17:05,608] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:07,265] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:07,265] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33006 elapsed=1.7s cache=miss
+[2026-01-17 23:17:07,266] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:09,088] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:09,088] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~32261 elapsed=1.8s cache=miss
+[2026-01-17 23:17:09,088] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:10,814] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:10,814] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31774 elapsed=1.7s cache=miss
+[2026-01-17 23:17:10,814] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:12,582] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:12,582] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34430 elapsed=1.8s cache=miss
+[2026-01-17 23:17:12,582] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:14,286] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:14,286] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33943 elapsed=1.7s cache=miss
+[2026-01-17 23:17:14,287] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:16,083] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:17:16,083] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~33632 elapsed=1.8s cache=miss
+[2026-01-17 23:17:16,457] [INFO]: [BARS_ACCEPT] accepted=425 dropped_missing=25
+[2026-01-17 23:17:17,727] [INFO]: [BARS_RETRY] retried=25 recovered=0
+[2026-01-17 23:17:18,999] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-17 23:17:19,009] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=36 rows=299234 symbols_with_bars=414
+[2026-01-17 23:17:19,009] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-17 23:17:19,010] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-17 23:17:19,010] [INFO]: Fallback batches invoked: 1
+[2026-01-17 23:17:19,010] [INFO]: Symbols dropped for insufficient history: 25
+[2026-01-17 23:17:20,900] [INFO]: [STAGE] fetch end (rows=299234, elapsed=21.62s)
+[2026-01-17 23:17:20,901] [INFO]: [BARS_DIAG] feed=iex requested=500 with_bars=425 missing=75 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-17 23:17:23,276] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-17 23:17:24,784] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=299234 symbols=425
+[2026-01-17 23:17:24,787] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 23:17:24,830] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-17 23:17:25,234] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 23:17:25,234] [INFO]: [STAGE] coarse features start
+[2026-01-17 23:19:22,592] [INFO]: [STAGE] coarse features end (rows=299234)
+[2026-01-17 23:19:22,593] [INFO]: [STAGE] coarse rank start
+[2026-01-17 23:19:22,714] [INFO]: [INFO] Coarse rank boundary rows_in=425 score_non_null=425 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,Score,score_breakdown,coarse_score
+[2026-01-17 23:19:22,715] [INFO]: [STAGE] coarse rank end (rows=425)
+[2026-01-17 23:19:22,722] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=425)
+[2026-01-17 23:19:22,745] [INFO]: [STAGE] full features start (shortlist=425)
+[2026-01-17 23:21:20,071] [INFO]: [STAGE] full features end (rows=299234)
+[2026-01-17 23:21:20,215] [INFO]: [STAGE] finalize candidates pruned rows=299234 -> 265885
+[2026-01-17 23:21:20,215] [INFO]: [STAGE] full rank start
+[2026-01-17 23:21:20,346] [INFO]: [STAGE] full rank end (rows=425)
+[2026-01-17 23:21:20,346] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=425 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-17 23:21:20,347] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-17 23:21:20,348] [INFO]: [STAGE] quality filters pruned rows=425 -> 77
+[2026-01-17 23:21:20,349] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-17 23:21:20,841] [INFO]: [INFO] ML_RANK weight=0.30 rows=77 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.1695 model=data\models\rank_model.joblib
+[2026-01-17 23:21:20,843] [INFO]: [STAGE] gates start
+[2026-01-17 23:21:20,854] [INFO]: [STAGE] gates end (candidates=5)
+[2026-01-17 23:21:24,885] [INFO]: [SUMMARY] run_ts=2026-01-18T05:16:59Z mode=screener symbols_in=7604 with_bars=425 coarse_rows=425 shortlist_rows=425 final_rows=5 gated_rows=5 fallback_used=false db_ingest_rows=5
+[2026-01-17 23:21:24,981] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=77)
+[2026-01-17 23:21:27,325] [WARNING]: [WARN] DB_INGEST_FAILED table=screener_candidates err=can't adapt type 'NAType'
+[2026-01-17 23:21:29,799] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-17 23:21:29,800] [INFO]: Screener complete: 7604 symbols examined, 5 candidates.
+[2026-01-18T05:21:29.941552+00:00] END screener rc=0 secs=271.7
+[2026-01-18T05:34:34.406565+00:00] START screener
+[2026-01-17 23:34:35,067] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 23:34:35,070] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 23:34:35,072] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-17 23:34:35,332] [INFO]: [INFO] STEP_RUN_DATE step=screener run_date=2026-01-16 source=cli
+[2026-01-17 23:34:35,332] [INFO]: [STAGE] fetch start
+[2026-01-17 23:34:35,955] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-17 23:34:35,969] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-17 23:34:35,970] [INFO]: Asset sample: CDZI:NASDAQ, FAX:AMEX, AYTU:NASDAQ, COPL.U:NYSE, COPL:NYSE
+[2026-01-17 23:34:35,989] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-17 23:34:36,103] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-17 23:34:36,108] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-17 23:34:36,210] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-17 23:34:36,211] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:38,004] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:38,004] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=4 rows=~33604 elapsed=1.8s cache=miss
+[2026-01-17 23:34:38,004] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:39,863] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:39,863] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~34544 elapsed=1.9s cache=miss
+[2026-01-17 23:34:39,863] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:41,452] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:41,452] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~32405 elapsed=1.6s cache=miss
+[2026-01-17 23:34:41,453] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:43,133] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:43,133] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33006 elapsed=1.7s cache=miss
+[2026-01-17 23:34:43,133] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:44,837] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:44,837] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~32261 elapsed=1.7s cache=miss
+[2026-01-17 23:34:44,837] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:46,438] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:46,439] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31774 elapsed=1.6s cache=miss
+[2026-01-17 23:34:46,439] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:48,186] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:48,186] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34430 elapsed=1.7s cache=miss
+[2026-01-17 23:34:48,186] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:49,912] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:49,912] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33943 elapsed=1.7s cache=miss
+[2026-01-17 23:34:49,912] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:51,594] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:34:51,594] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~33632 elapsed=1.7s cache=miss
+[2026-01-17 23:34:51,946] [INFO]: [BARS_ACCEPT] accepted=425 dropped_missing=25
+[2026-01-17 23:34:53,210] [INFO]: [BARS_RETRY] retried=25 recovered=0
+[2026-01-17 23:34:54,510] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-17 23:34:54,521] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=36 rows=299234 symbols_with_bars=414
+[2026-01-17 23:34:54,521] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-17 23:34:54,521] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-17 23:34:54,521] [INFO]: Fallback batches invoked: 1
+[2026-01-17 23:34:54,521] [INFO]: Symbols dropped for insufficient history: 25
+[2026-01-17 23:34:56,394] [INFO]: [STAGE] fetch end (rows=299234, elapsed=21.06s)
+[2026-01-17 23:34:56,394] [INFO]: [BARS_DIAG] feed=iex requested=500 with_bars=425 missing=75 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-17 23:34:58,830] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-17 23:35:00,356] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=299234 symbols=425
+[2026-01-17 23:35:00,359] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 23:35:00,399] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-17 23:35:00,781] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 23:35:00,781] [INFO]: [STAGE] coarse features start
+[2026-01-17 23:36:57,212] [INFO]: [STAGE] coarse features end (rows=299234)
+[2026-01-17 23:36:57,212] [INFO]: [STAGE] coarse rank start
+[2026-01-17 23:36:57,337] [INFO]: [INFO] Coarse rank boundary rows_in=425 score_non_null=425 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,Score,score_breakdown,coarse_score
+[2026-01-17 23:36:57,337] [INFO]: [STAGE] coarse rank end (rows=425)
+[2026-01-17 23:36:57,346] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=425)
+[2026-01-17 23:36:57,366] [INFO]: [STAGE] full features start (shortlist=425)
+[2026-01-17 23:38:55,867] [INFO]: [STAGE] full features end (rows=299234)
+[2026-01-17 23:38:56,007] [INFO]: [STAGE] finalize candidates pruned rows=299234 -> 265885
+[2026-01-17 23:38:56,007] [INFO]: [STAGE] full rank start
+[2026-01-17 23:38:56,126] [INFO]: [STAGE] full rank end (rows=425)
+[2026-01-17 23:38:56,126] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=425 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-17 23:38:56,127] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-17 23:38:56,128] [INFO]: [STAGE] quality filters pruned rows=425 -> 77
+[2026-01-17 23:38:56,129] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-17 23:38:56,956] [INFO]: [INFO] ML_RANK weight=0.30 rows=77 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.1695 model=data\models\rank_model.joblib
+[2026-01-17 23:38:56,958] [INFO]: [STAGE] gates start
+[2026-01-17 23:38:56,967] [INFO]: [STAGE] gates end (candidates=5)
+[2026-01-17 23:39:00,522] [INFO]: [SUMMARY] run_ts=2026-01-18T05:34:35Z mode=screener symbols_in=7604 with_bars=425 coarse_rows=425 shortlist_rows=425 final_rows=5 gated_rows=5 fallback_used=false db_ingest_rows=5
+[2026-01-17 23:39:00,611] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=77)
+[2026-01-17 23:39:03,324] [WARNING]: [WARN] DB_INGEST_FAILED table=screener_candidates err=can't adapt type 'NAType'
+[2026-01-17 23:39:05,845] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-17 23:39:05,845] [INFO]: Screener complete: 7604 symbols examined, 5 candidates.
+[2026-01-18T05:39:06.002457+00:00] END screener rc=0 secs=271.6
+[2026-01-18T05:54:01.542818+00:00] START screener
+[2026-01-17 23:54:02,216] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 23:54:02,219] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-17 23:54:02,222] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-17 23:54:02,453] [INFO]: [INFO] STEP_RUN_DATE step=screener run_date=2026-01-16 source=cli
+[2026-01-17 23:54:02,453] [INFO]: [STAGE] fetch start
+[2026-01-17 23:54:03,078] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-17 23:54:03,090] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-17 23:54:03,091] [INFO]: Asset sample: HDMV:ARCA, HDLB:ARCA, CDX:ARCA, HDL:NASDAQ, AZTA:NASDAQ
+[2026-01-17 23:54:03,110] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-17 23:54:03,220] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-17 23:54:03,228] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-17 23:54:03,327] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-17 23:54:03,329] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:05,121] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:05,121] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=4 rows=~33604 elapsed=1.8s cache=miss
+[2026-01-17 23:54:05,121] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:06,917] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:06,917] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~34544 elapsed=1.8s cache=miss
+[2026-01-17 23:54:06,917] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:08,589] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:08,590] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~32405 elapsed=1.7s cache=miss
+[2026-01-17 23:54:08,591] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:10,317] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:10,317] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33006 elapsed=1.7s cache=miss
+[2026-01-17 23:54:10,319] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:12,020] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:12,021] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~32261 elapsed=1.7s cache=miss
+[2026-01-17 23:54:12,021] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:13,716] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:13,716] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31774 elapsed=1.7s cache=miss
+[2026-01-17 23:54:13,719] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:15,462] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:15,462] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34430 elapsed=1.7s cache=miss
+[2026-01-17 23:54:15,464] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:17,158] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:17,158] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33943 elapsed=1.7s cache=miss
+[2026-01-17 23:54:17,158] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:18,898] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-17 23:54:18,899] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~33632 elapsed=1.7s cache=miss
+[2026-01-17 23:54:19,250] [INFO]: [BARS_ACCEPT] accepted=425 dropped_missing=25
+[2026-01-17 23:54:20,560] [INFO]: [BARS_RETRY] retried=25 recovered=0
+[2026-01-17 23:54:21,877] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-17 23:54:21,888] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=36 rows=299234 symbols_with_bars=414
+[2026-01-17 23:54:21,888] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-17 23:54:21,888] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-17 23:54:21,888] [INFO]: Fallback batches invoked: 1
+[2026-01-17 23:54:21,888] [INFO]: Symbols dropped for insufficient history: 25
+[2026-01-17 23:54:23,865] [INFO]: [STAGE] fetch end (rows=299234, elapsed=21.41s)
+[2026-01-17 23:54:23,865] [INFO]: [BARS_DIAG] feed=iex requested=500 with_bars=425 missing=75 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-17 23:54:26,229] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-17 23:54:27,767] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=299234 symbols=425
+[2026-01-17 23:54:27,769] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 23:54:27,813] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-17 23:54:28,210] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-17 23:54:28,211] [INFO]: [STAGE] coarse features start
+[2026-01-17 23:58:48,809] [INFO]: [STAGE] coarse features end (rows=299234)
+[2026-01-17 23:58:48,809] [INFO]: [STAGE] coarse rank start
+[2026-01-17 23:58:48,923] [INFO]: [INFO] Coarse rank boundary rows_in=425 score_non_null=425 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,Score,score_breakdown,coarse_score
+[2026-01-17 23:58:48,924] [INFO]: [STAGE] coarse rank end (rows=425)
+[2026-01-17 23:58:48,931] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=425)
+[2026-01-17 23:58:48,952] [INFO]: [STAGE] full features start (shortlist=425)
+[2026-01-18 00:00:47,772] [INFO]: [STAGE] full features end (rows=299234)
+[2026-01-18 00:00:47,904] [INFO]: [STAGE] finalize candidates pruned rows=299234 -> 265885
+[2026-01-18 00:00:47,904] [INFO]: [STAGE] full rank start
+[2026-01-18 00:00:48,025] [INFO]: [STAGE] full rank end (rows=425)
+[2026-01-18 00:00:48,026] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=425 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-18 00:00:48,026] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-18 00:00:48,028] [INFO]: [STAGE] quality filters pruned rows=425 -> 77
+[2026-01-18 00:00:48,028] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-18 00:00:48,804] [INFO]: [INFO] ML_RANK weight=0.30 rows=77 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.1695 model=data\models\rank_model.joblib
+[2026-01-18 00:00:48,807] [INFO]: [STAGE] gates start
+[2026-01-18 00:00:48,817] [INFO]: [STAGE] gates end (candidates=5)
+[2026-01-18 00:00:52,490] [INFO]: [SUMMARY] run_ts=2026-01-18T05:54:02Z mode=screener symbols_in=7604 with_bars=425 coarse_rows=425 shortlist_rows=425 final_rows=5 gated_rows=5 fallback_used=false db_ingest_rows=5
+[2026-01-18 00:00:52,580] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=77)
+[2026-01-18 00:00:55,004] [INFO]: [INFO] DB_INGEST_OK table=screener_candidates rows=5
+[2026-01-18 00:00:55,196] [INFO]: [INFO] DB_WRITE_OK table=screener_run_map_app rows=5
+[2026-01-18 00:00:57,762] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-18 00:00:57,762] [INFO]: Screener complete: 7604 symbols examined, 5 candidates.
+[2026-01-18T06:00:57.939508+00:00] END screener rc=0 secs=416.4
+[2026-01-18T06:08:27.434549+00:00] START screener
+[2026-01-18 00:08:28,083] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 00:08:28,086] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 00:08:28,088] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-18 00:08:28,322] [INFO]: [INFO] STEP_RUN_DATE step=screener run_date=2026-01-16 source=cli
+[2026-01-18 00:08:28,323] [INFO]: [STAGE] fetch start
+[2026-01-18 00:08:28,885] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-18 00:08:28,898] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-18 00:08:28,899] [INFO]: Asset sample: A:NYSE, AEE:NYSE, AIRT:NASDAQ, AISPW:NASDAQ, APT:AMEX
+[2026-01-18 00:08:28,917] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-18 00:08:29,021] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-18 00:08:29,025] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-18 00:08:29,131] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-18 00:08:29,131] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:30,888] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:30,888] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=4 rows=~33604 elapsed=1.8s cache=miss
+[2026-01-18 00:08:30,888] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:32,756] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:32,756] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~34544 elapsed=1.9s cache=miss
+[2026-01-18 00:08:32,756] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:34,430] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:34,430] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~32405 elapsed=1.7s cache=miss
+[2026-01-18 00:08:34,430] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:36,062] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:36,062] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33006 elapsed=1.6s cache=miss
+[2026-01-18 00:08:36,062] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:37,838] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:37,838] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~32261 elapsed=1.8s cache=miss
+[2026-01-18 00:08:37,838] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:39,594] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:39,594] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31774 elapsed=1.8s cache=miss
+[2026-01-18 00:08:39,594] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:41,322] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:41,322] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34430 elapsed=1.7s cache=miss
+[2026-01-18 00:08:41,322] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:42,989] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:42,989] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33943 elapsed=1.7s cache=miss
+[2026-01-18 00:08:42,990] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:44,828] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:08:44,828] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~33632 elapsed=1.8s cache=miss
+[2026-01-18 00:08:45,209] [INFO]: [BARS_ACCEPT] accepted=425 dropped_missing=25
+[2026-01-18 00:08:46,473] [INFO]: [BARS_RETRY] retried=25 recovered=0
+[2026-01-18 00:08:47,737] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-18 00:08:47,749] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=36 rows=299234 symbols_with_bars=414
+[2026-01-18 00:08:47,749] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-18 00:08:47,749] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-18 00:08:47,749] [INFO]: Fallback batches invoked: 1
+[2026-01-18 00:08:47,749] [INFO]: Symbols dropped for insufficient history: 25
+[2026-01-18 00:08:49,579] [INFO]: [STAGE] fetch end (rows=299234, elapsed=21.26s)
+[2026-01-18 00:08:49,579] [INFO]: [BARS_DIAG] feed=iex requested=500 with_bars=425 missing=75 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-18 00:08:51,969] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-18 00:08:53,507] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=299234 symbols=425
+[2026-01-18 00:08:53,510] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-18 00:08:53,549] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-18 00:08:53,927] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-18 00:08:53,927] [INFO]: [STAGE] coarse features start
+[2026-01-18 00:10:48,550] [INFO]: [STAGE] coarse features end (rows=299234)
+[2026-01-18 00:10:48,550] [INFO]: [STAGE] coarse rank start
+[2026-01-18 00:10:48,665] [INFO]: [INFO] Coarse rank boundary rows_in=425 score_non_null=425 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,Score,score_breakdown,coarse_score
+[2026-01-18 00:10:48,665] [INFO]: [STAGE] coarse rank end (rows=425)
+[2026-01-18 00:10:48,673] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=425)
+[2026-01-18 00:10:48,693] [INFO]: [STAGE] full features start (shortlist=425)
+[2026-01-18 00:12:41,448] [INFO]: [STAGE] full features end (rows=299234)
+[2026-01-18 00:12:41,588] [INFO]: [STAGE] finalize candidates pruned rows=299234 -> 265885
+[2026-01-18 00:12:41,588] [INFO]: [STAGE] full rank start
+[2026-01-18 00:12:41,712] [INFO]: [STAGE] full rank end (rows=425)
+[2026-01-18 00:12:41,712] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=425 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-18 00:12:41,713] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-18 00:12:41,714] [INFO]: [STAGE] quality filters pruned rows=425 -> 77
+[2026-01-18 00:12:41,714] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-18 00:12:52,509] [INFO]: [INFO] ML_RANK weight=0.30 rows=77 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.1695 model=data\models\rank_model.joblib
+[2026-01-18 00:12:52,511] [INFO]: [STAGE] gates start
+[2026-01-18 00:12:52,519] [INFO]: [STAGE] gates end (candidates=5)
+[2026-01-18 00:12:56,410] [INFO]: [SUMMARY] run_ts=2026-01-18T06:08:28Z mode=screener symbols_in=7604 with_bars=425 coarse_rows=425 shortlist_rows=425 final_rows=5 gated_rows=5 fallback_used=false db_ingest_rows=5
+[2026-01-18 00:12:56,501] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=77)
+[2026-01-18 00:12:58,939] [INFO]: [INFO] DB_INGEST_OK table=screener_candidates rows=5
+[2026-01-18 00:12:59,406] [INFO]: [INFO] DB_WRITE_OK table=screener_run_map_app rows=5
+[2026-01-18 00:13:01,849] [INFO]: [INFO] SCREENER_CANDIDATES_PRUNED run_date=2026-01-16 deleted=13
+[2026-01-18 00:13:04,310] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-18 00:13:04,310] [INFO]: Screener complete: 7604 symbols examined, 5 candidates.
+[2026-01-18T06:13:04.453147+00:00] END screener rc=0 secs=277.0
+[2026-01-18T06:18:39.309223+00:00] START screener
+[2026-01-18 00:18:39,986] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 00:18:39,990] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 00:18:39,992] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-18 00:18:40,169] [INFO]: [INFO] STEP_RUN_DATE step=screener run_date=2026-01-16 source=cli
+[2026-01-18 00:18:40,169] [INFO]: [STAGE] fetch start
+[2026-01-18 00:18:40,771] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-18 00:18:40,785] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-18 00:18:40,786] [INFO]: Asset sample: COPL.WS:NYSE, AFCG:NASDAQ, HDV:ARCA, HDUS:ARCA, HDSN:NASDAQ
+[2026-01-18 00:18:40,804] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-18 00:18:40,911] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-18 00:18:40,916] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-18 00:18:41,012] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-18 00:18:41,013] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:42,782] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:42,782] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=4 rows=~33604 elapsed=1.8s cache=miss
+[2026-01-18 00:18:42,783] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:44,493] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:44,493] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~34544 elapsed=1.7s cache=miss
+[2026-01-18 00:18:44,493] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:46,192] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:46,192] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~32405 elapsed=1.7s cache=miss
+[2026-01-18 00:18:46,192] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:48,675] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:48,675] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33006 elapsed=2.5s cache=miss
+[2026-01-18 00:18:48,675] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:50,318] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:50,318] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~32261 elapsed=1.6s cache=miss
+[2026-01-18 00:18:50,319] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:51,943] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:51,943] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31774 elapsed=1.6s cache=miss
+[2026-01-18 00:18:51,944] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:53,628] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:53,629] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34430 elapsed=1.7s cache=miss
+[2026-01-18 00:18:53,629] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:55,343] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:55,343] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33943 elapsed=1.7s cache=miss
+[2026-01-18 00:18:55,343] [WARNING]: Failed to read cached batch data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:56,996] [WARNING]: Failed to persist batch cache data\cache\bars_1d_iex\2026-01-16\0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+[2026-01-18 00:18:56,996] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~33632 elapsed=1.7s cache=miss
+[2026-01-18 00:18:57,320] [INFO]: [BARS_ACCEPT] accepted=425 dropped_missing=25
+[2026-01-18 00:18:58,601] [INFO]: [BARS_RETRY] retried=25 recovered=0
+[2026-01-18 00:18:59,832] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-18 00:18:59,842] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=36 rows=299234 symbols_with_bars=414
+[2026-01-18 00:18:59,842] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-18 00:18:59,842] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-18 00:18:59,842] [INFO]: Fallback batches invoked: 1
+[2026-01-18 00:18:59,842] [INFO]: Symbols dropped for insufficient history: 25
+[2026-01-18 00:19:01,644] [INFO]: [STAGE] fetch end (rows=299234, elapsed=21.47s)
+[2026-01-18 00:19:01,644] [INFO]: [BARS_DIAG] feed=iex requested=500 with_bars=425 missing=75 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-18 00:19:04,038] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-18 00:19:05,501] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=299234 symbols=425
+[2026-01-18 00:19:05,503] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-18 00:19:05,541] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-18 00:19:05,915] [WARNING]: PyYAML unavailable; using built-in ranker defaults.
+[2026-01-18 00:19:05,915] [INFO]: [STAGE] coarse features start
+[2026-01-18 00:20:55,418] [INFO]: [STAGE] coarse features end (rows=299234)
+[2026-01-18 00:20:55,418] [INFO]: [STAGE] coarse rank start
+[2026-01-18 00:20:55,529] [INFO]: [INFO] Coarse rank boundary rows_in=425 score_non_null=425 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,Score,score_breakdown,coarse_score
+[2026-01-18 00:20:55,529] [INFO]: [STAGE] coarse rank end (rows=425)
+[2026-01-18 00:20:55,537] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=425)
+[2026-01-18 00:20:55,556] [INFO]: [STAGE] full features start (shortlist=425)
+[2026-01-18 00:22:45,596] [INFO]: [STAGE] full features end (rows=299234)
+[2026-01-18 00:22:45,737] [INFO]: [STAGE] finalize candidates pruned rows=299234 -> 265885
+[2026-01-18 00:22:45,737] [INFO]: [STAGE] full rank start
+[2026-01-18 00:22:45,854] [INFO]: [STAGE] full rank end (rows=425)
+[2026-01-18 00:22:45,855] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=425 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-18 00:22:45,855] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-18 00:22:45,857] [INFO]: [STAGE] quality filters pruned rows=425 -> 77
+[2026-01-18 00:22:45,857] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-18 00:22:46,485] [INFO]: [INFO] ML_RANK weight=0.30 rows=77 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.1695 model=data\models\rank_model.joblib
+[2026-01-18 00:22:46,487] [INFO]: [STAGE] gates start
+[2026-01-18 00:22:46,496] [INFO]: [STAGE] gates end (candidates=5)
+[2026-01-18 00:22:49,911] [INFO]: [SUMMARY] run_ts=2026-01-18T06:18:40Z mode=screener symbols_in=7604 with_bars=425 coarse_rows=425 shortlist_rows=425 final_rows=5 gated_rows=5 fallback_used=false db_ingest_rows=5
+[2026-01-18 00:22:50,000] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=77)
+[2026-01-18 00:22:52,466] [INFO]: [INFO] DB_INGEST_OK table=screener_candidates rows=5
+[2026-01-18 00:22:52,746] [INFO]: [INFO] DB_WRITE_OK table=screener_run_map_app rows=5
+[2026-01-18 00:22:57,685] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-18 00:22:57,686] [INFO]: Screener complete: 7604 symbols examined, 5 candidates.
+[2026-01-18T06:22:57.837074+00:00] END screener rc=0 secs=258.5
+[2026-01-18T06:30:05.130532+00:00] START screener
+[2026-01-18 00:30:05,893] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 00:30:05,897] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 00:30:05,902] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-18 00:30:06,112] [INFO]: [INFO] STEP_RUN_DATE step=screener run_date=2026-01-16 source=cli
+[2026-01-18 00:30:06,112] [INFO]: [STAGE] fetch start
+[2026-01-18 00:30:06,732] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-18 00:30:06,744] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-18 00:30:06,745] [INFO]: Asset sample: HDL:NASDAQ, AZ:NASDAQ, FAX:AMEX, AYTU:NASDAQ, CDXS:NASDAQ
+[2026-01-18 00:30:06,780] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-18 00:30:06,876] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-18 00:30:06,882] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-18 00:30:06,985] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-18 00:30:07,142] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=3 rows=~20951 elapsed=0.2s cache=hit
+[2026-01-18 00:30:07,175] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32311 elapsed=0.0s cache=hit
+[2026-01-18 00:30:07,224] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~30383 elapsed=0.0s cache=hit
+[2026-01-18 00:30:07,274] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33076 elapsed=0.1s cache=hit
+[2026-01-18 00:30:07,321] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31569 elapsed=0.0s cache=hit
+[2026-01-18 00:30:07,370] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~32381 elapsed=0.0s cache=hit
+[2026-01-18 00:30:07,405] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34839 elapsed=0.0s cache=hit
+[2026-01-18 00:30:07,456] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~35132 elapsed=0.1s cache=hit
+[2026-01-18 00:30:07,501] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~35590 elapsed=0.0s cache=hit
+[2026-01-18 00:30:07,851] [INFO]: [BARS_ACCEPT] accepted=400 dropped_missing=50
+[2026-01-18 00:30:31,413] [INFO]: [BARS_RETRY] retried=411 recovered=386
+[2026-01-18 00:30:32,627] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-18 00:30:32,636] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=35 rows=285942 symbols_with_bars=391
+[2026-01-18 00:30:32,636] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-18 00:30:32,636] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-18 00:30:32,636] [INFO]: Fallback batches invoked: 1
+[2026-01-18 00:30:32,636] [INFO]: Symbols dropped for insufficient history: 29
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\screener.py:2051: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  result["tradable"] = result["tradable"].fillna(True).astype(bool)
+[2026-01-18 00:30:35,053] [INFO]: [STAGE] fetch end (rows=364439, elapsed=28.94s)
+[2026-01-18 00:30:35,053] [INFO]: [BARS_DIAG] feed=iex requested=886 with_bars=400 missing=486 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-18 00:30:37,448] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-18 00:30:39,309] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=364439 symbols=500
+[2026-01-18 00:30:39,392] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-18 00:30:39,841] [INFO]: [STAGE] coarse features start
+[2026-01-18 00:32:42,935] [INFO]: [STAGE] coarse features end (rows=324497)
+[2026-01-18 00:32:42,935] [INFO]: [STAGE] coarse rank start
+[2026-01-18 00:32:43,167] [INFO]: [INFO] Coarse rank boundary rows_in=445 score_non_null=445 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+[2026-01-18 00:32:43,167] [INFO]: [STAGE] coarse rank end (rows=445)
+[2026-01-18 00:32:43,178] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=445)
+[2026-01-18 00:32:43,198] [INFO]: [STAGE] full features start (shortlist=445)
+[2026-01-18 00:34:44,986] [INFO]: [STAGE] full features end (rows=324497)
+[2026-01-18 00:34:45,130] [INFO]: [STAGE] finalize candidates pruned rows=324497 -> 316259
+[2026-01-18 00:34:45,130] [INFO]: [STAGE] full rank start
+[2026-01-18 00:34:45,362] [INFO]: [STAGE] full rank end (rows=445)
+[2026-01-18 00:34:45,363] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=445 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-18 00:34:45,364] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-18 00:34:45,366] [INFO]: [STAGE] quality filters pruned rows=445 -> 127
+[2026-01-18 00:34:45,366] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-18 00:34:46,205] [INFO]: [INFO] ML_RANK weight=0.30 rows=127 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.5235 model=data\models\rank_model.joblib
+[2026-01-18 00:34:46,207] [INFO]: [STAGE] gates start
+[2026-01-18 00:34:46,213] [INFO]: [STAGE] gates end (candidates=6)
+[2026-01-18 00:34:51,390] [INFO]: [SUMMARY] run_ts=2026-01-18T06:30:06Z mode=screener symbols_in=7745 with_bars=445 coarse_rows=445 shortlist_rows=445 final_rows=6 gated_rows=6 fallback_used=false db_ingest_rows=6
+[2026-01-18 00:34:51,496] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=127)
+[2026-01-18 00:34:51,515] [WARNING]: [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=3 remaining=3
+[2026-01-18 00:34:53,927] [INFO]: [INFO] DB_INGEST_OK table=screener_candidates rows=3
+[2026-01-18 00:34:54,121] [INFO]: [INFO] DB_WRITE_OK table=screener_run_map_app rows=3
+[2026-01-18 00:34:58,995] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-18 00:34:58,996] [INFO]: Screener complete: 7745 symbols examined, 6 candidates.
+[2026-01-18T06:34:59.158352+00:00] END screener rc=0 secs=294.0
+[2026-01-18T06:52:21.511746+00:00] START screener
+[2026-01-18 00:52:22,269] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 00:52:22,273] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 00:52:22,276] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-18 00:52:22,590] [INFO]: [INFO] STEP_RUN_DATE step=screener run_date=2026-01-16 source=cli
+[2026-01-18 00:52:22,590] [INFO]: [STAGE] fetch start
+[2026-01-18 00:52:23,176] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-18 00:52:23,190] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-18 00:52:23,191] [INFO]: Asset sample: POCT:BATS, PRAA:NASDAQ, QID:ARCA, TSPA:ARCA, ALRG:ARCA
+[2026-01-18 00:52:23,226] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-18 00:52:23,313] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-18 00:52:23,317] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-18 00:52:23,418] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-18 00:52:23,465] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=3 rows=~20951 elapsed=0.0s cache=hit
+[2026-01-18 00:52:23,486] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32311 elapsed=0.0s cache=hit
+[2026-01-18 00:52:23,504] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~30383 elapsed=0.0s cache=hit
+[2026-01-18 00:52:23,526] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33076 elapsed=0.0s cache=hit
+[2026-01-18 00:52:23,546] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31569 elapsed=0.0s cache=hit
+[2026-01-18 00:52:23,568] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~32381 elapsed=0.0s cache=hit
+[2026-01-18 00:52:23,591] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34839 elapsed=0.0s cache=hit
+[2026-01-18 00:52:23,613] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~35132 elapsed=0.0s cache=hit
+[2026-01-18 00:52:23,634] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~35590 elapsed=0.0s cache=hit
+[2026-01-18 00:52:23,974] [INFO]: [BARS_ACCEPT] accepted=400 dropped_missing=50
+[2026-01-18 00:52:47,012] [INFO]: [BARS_RETRY] retried=411 recovered=386
+[2026-01-18 00:52:48,260] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-18 00:52:48,268] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=35 rows=285942 symbols_with_bars=391
+[2026-01-18 00:52:48,269] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-18 00:52:48,269] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-18 00:52:48,269] [INFO]: Fallback batches invoked: 1
+[2026-01-18 00:52:48,269] [INFO]: Symbols dropped for insufficient history: 29
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\screener.py:2051: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  result["tradable"] = result["tradable"].fillna(True).astype(bool)
+[2026-01-18 00:52:50,628] [INFO]: [STAGE] fetch end (rows=364439, elapsed=28.04s)
+[2026-01-18 00:52:50,628] [INFO]: [BARS_DIAG] feed=iex requested=886 with_bars=400 missing=486 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-18 00:52:53,014] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-18 00:52:54,837] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=364439 symbols=500
+[2026-01-18 00:52:54,899] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-18 00:52:55,360] [INFO]: [STAGE] coarse features start
+[2026-01-18 00:54:56,381] [INFO]: [STAGE] coarse features end (rows=324497)
+[2026-01-18 00:54:56,382] [INFO]: [STAGE] coarse rank start
+[2026-01-18 00:54:56,603] [INFO]: [INFO] Coarse rank boundary rows_in=445 score_non_null=445 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+[2026-01-18 00:54:56,603] [INFO]: [STAGE] coarse rank end (rows=445)
+[2026-01-18 00:54:56,611] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=445)
+[2026-01-18 00:54:56,630] [INFO]: [STAGE] full features start (shortlist=445)
+[2026-01-18 00:56:57,761] [INFO]: [STAGE] full features end (rows=324497)
+[2026-01-18 00:56:57,914] [INFO]: [STAGE] finalize candidates pruned rows=324497 -> 316259
+[2026-01-18 00:56:57,914] [INFO]: [STAGE] full rank start
+[2026-01-18 00:56:58,150] [INFO]: [STAGE] full rank end (rows=445)
+[2026-01-18 00:56:58,150] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=445 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-18 00:56:58,151] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-18 00:56:58,153] [INFO]: [STAGE] quality filters pruned rows=445 -> 127
+[2026-01-18 00:56:58,154] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-18 00:56:58,627] [INFO]: [INFO] ML_RANK weight=0.30 rows=127 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.5235 model=data\models\rank_model.joblib
+[2026-01-18 00:56:58,629] [INFO]: [STAGE] gates start
+[2026-01-18 00:56:58,635] [INFO]: [STAGE] gates end (candidates=6)
+[2026-01-18 00:57:03,710] [INFO]: [SUMMARY] run_ts=2026-01-18T06:52:22Z mode=screener symbols_in=7745 with_bars=445 coarse_rows=445 shortlist_rows=445 final_rows=6 gated_rows=6 fallback_used=false db_ingest_rows=6
+[2026-01-18 00:57:03,821] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=127)
+[2026-01-18 00:57:03,842] [WARNING]: [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=3 remaining=3
+[2026-01-18 00:57:06,260] [INFO]: [INFO] DB_INGEST_OK table=screener_candidates rows=3
+[2026-01-18 00:57:06,463] [INFO]: [INFO] DB_WRITE_OK table=screener_run_map_app rows=3
+[2026-01-18 00:57:11,490] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-18 00:57:11,490] [INFO]: Screener complete: 7745 symbols examined, 6 candidates.
+[2026-01-18T06:57:11.642708+00:00] END screener rc=0 secs=290.1
+[2026-01-18T07:02:34.362681+00:00] START screener
+[2026-01-18 01:02:35,109] [INFO]: Script started
+[INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 01:02:35,112] [INFO]: [INFO] ENV_LOADED files=["C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\.env"]
+[2026-01-18 01:02:35,114] [INFO]: [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+[2026-01-18 01:02:35,289] [INFO]: [INFO] STEP_RUN_DATE step=screener run_date=2026-01-16 source=cli
+[2026-01-18 01:02:35,289] [INFO]: [STAGE] fetch start
+[2026-01-18 01:02:35,881] [INFO]: Asset meta ready: 12088 symbols (tradable US equities)
+[2026-01-18 01:02:35,895] [INFO]: Asset metrics: total=13154 tradable_equities=12354 after_filters=12088
+[2026-01-18 01:02:35,896] [INFO]: Asset sample: POCT:BATS, PRAA:NASDAQ, QID:ARCA, TSPA:ARCA, ALRG:ARCA
+[2026-01-18 01:02:35,930] [INFO]: Universe sample size: 5875 (of 12088 tradable equities)
+[2026-01-18 01:02:36,020] [INFO]: Universe hygiene filtered 5875 -> 4934 symbols
+[2026-01-18 01:02:36,025] [INFO]: Universe prefix counts: {'A': 48, 'C': 39, 'S': 38, 'N': 30, 'M': 25, 'G': 22, 'P': 21, 'B': 21, 'I': 21, 'E': 20, 'F': 19, 'T': 18, 'V': 17, 'L': 16, 'H': 16, 'R': 12, 'D': 12, 'W': 11, 'O': 11, 'U': 11, 'K': 6, 'Z': 6, 'X': 5, 'J': 3, 'Y': 2}
+[2026-01-18 01:02:36,131] [INFO]: Requesting 750 trading days ending 2026-01-16 (2023-01-20T00:00:00Z -> 2026-01-16T23:59:59Z)
+[2026-01-18 01:02:36,177] [INFO]: [INFO] bars: batch 01/09 syms=50 pages=3 rows=~20951 elapsed=0.0s cache=hit
+[2026-01-18 01:02:36,198] [INFO]: [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32311 elapsed=0.0s cache=hit
+[2026-01-18 01:02:36,217] [INFO]: [INFO] bars: batch 03/09 syms=50 pages=4 rows=~30383 elapsed=0.0s cache=hit
+[2026-01-18 01:02:36,238] [INFO]: [INFO] bars: batch 04/09 syms=50 pages=4 rows=~33076 elapsed=0.0s cache=hit
+[2026-01-18 01:02:36,259] [INFO]: [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31569 elapsed=0.0s cache=hit
+[2026-01-18 01:02:36,279] [INFO]: [INFO] bars: batch 06/09 syms=50 pages=4 rows=~32381 elapsed=0.0s cache=hit
+[2026-01-18 01:02:36,302] [INFO]: [INFO] bars: batch 07/09 syms=50 pages=4 rows=~34839 elapsed=0.0s cache=hit
+[2026-01-18 01:02:36,324] [INFO]: [INFO] bars: batch 08/09 syms=50 pages=4 rows=~35132 elapsed=0.0s cache=hit
+[2026-01-18 01:02:36,349] [INFO]: [INFO] bars: batch 09/09 syms=50 pages=4 rows=~35590 elapsed=0.0s cache=hit
+[2026-01-18 01:02:36,665] [INFO]: [BARS_ACCEPT] accepted=400 dropped_missing=50
+[2026-01-18 01:02:59,938] [INFO]: [BARS_RETRY] retried=411 recovered=386
+[2026-01-18 01:03:01,132] [INFO]: [BARS_FEED_FALLBACK] from=iex to=sip recovered=0
+[2026-01-18 01:03:01,140] [INFO]: Bars fetch metrics: batches=9 paged=9 pages=35 rows=285942 symbols_with_bars=391
+[2026-01-18 01:03:01,140] [INFO]: Bars window attempts: [750] -> used=750
+[2026-01-18 01:03:01,140] [INFO]: Symbols without bars (sample): ['VOYG', 'CBC', 'OTH', 'CRAQ', 'GLIBK', 'ETOR', 'FCRS', 'LCCCR', 'GTERR', 'THH']
+[2026-01-18 01:03:01,140] [INFO]: Fallback batches invoked: 1
+[2026-01-18 01:03:01,140] [INFO]: Symbols dropped for insufficient history: 29
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\screener.py:2051: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  result["tradable"] = result["tradable"].fillna(True).astype(bool)
+[2026-01-18 01:03:03,479] [INFO]: [STAGE] fetch end (rows=364439, elapsed=28.19s)
+[2026-01-18 01:03:03,479] [INFO]: [BARS_DIAG] feed=iex requested=886 with_bars=400 missing=486 examples=[VOYG,CBC,OTH,CRAQ,GLIBK,ETOR,FCRS,LCCCR,GTERR,THH]
+[2026-01-18 01:03:05,967] [INFO]: [INFO] DB_WRITE_OK table=bar_coverage_app rows=1
+[2026-01-18 01:03:07,765] [INFO]: [INFO] DAILY_BARS_EXPORTED path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv rows=364439 symbols=500
+[2026-01-18 01:03:07,826] [INFO]: [INFO] SENTIMENT enabled=False url_set=False weight=0.000 min=-999.000
+[2026-01-18 01:03:08,310] [INFO]: [STAGE] coarse features start
+[2026-01-18 01:05:11,476] [INFO]: [STAGE] coarse features end (rows=324497)
+[2026-01-18 01:05:11,476] [INFO]: [STAGE] coarse rank start
+[2026-01-18 01:05:11,701] [INFO]: [INFO] Coarse rank boundary rows_in=445 score_non_null=445 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+[2026-01-18 01:05:11,701] [INFO]: [STAGE] coarse rank end (rows=445)
+[2026-01-18 01:05:11,709] [INFO]: [STAGE] shortlist written: data\tmp\shortlist.csv (rows=445)
+[2026-01-18 01:05:11,729] [INFO]: [STAGE] full features start (shortlist=445)
+[2026-01-18 01:07:13,545] [INFO]: [STAGE] full features end (rows=324497)
+[2026-01-18 01:07:13,687] [INFO]: [STAGE] finalize candidates pruned rows=324497 -> 316259
+[2026-01-18 01:07:13,687] [INFO]: [STAGE] full rank start
+[2026-01-18 01:07:13,906] [INFO]: [STAGE] full rank end (rows=445)
+[2026-01-18 01:07:13,906] [INFO]: [INFO] SENTIMENT_STAGE enter df_rows=445 cols_has_symbol=True cache_dir=data\cache\sentiment run_date=2026-01-18
+[2026-01-18 01:07:13,907] [INFO]: [INFO] SENTIMENT_FETCH skipped reason=disabled
+[2026-01-18 01:07:13,909] [INFO]: [STAGE] quality filters pruned rows=445 -> 127
+[2026-01-18 01:07:13,909] [INFO]: Rank model not found at data\models\rank_model.joblib; skipping ML ranking
+[2026-01-18 01:07:14,362] [INFO]: [INFO] ML_RANK weight=0.30 rows=127 prob_up_non_null=0 prob_up_mean=0.0000 rank_corr=1.0000 final_score_mean=0.5235 model=data\models\rank_model.joblib
+[2026-01-18 01:07:14,365] [INFO]: [STAGE] gates start
+[2026-01-18 01:07:14,370] [INFO]: [STAGE] gates end (candidates=6)
+[2026-01-18 01:07:19,338] [INFO]: [SUMMARY] run_ts=2026-01-18T07:02:35Z mode=screener symbols_in=7745 with_bars=445 coarse_rows=445 shortlist_rows=445 final_rows=6 gated_rows=6 fallback_used=false db_ingest_rows=6
+[2026-01-18 01:07:19,448] [INFO]: [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=127)
+[2026-01-18 01:07:19,468] [WARNING]: [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=3 remaining=3
+[2026-01-18 01:07:21,870] [INFO]: [INFO] DB_INGEST_OK table=screener_candidates rows=3
+[2026-01-18 01:07:22,078] [INFO]: [INFO] DB_WRITE_OK table=screener_run_map_app rows=3
+[2026-01-18 01:07:26,887] [INFO]: [INFO] DB_WRITE_OK table=pipeline_health rows=1
+[2026-01-18 01:07:26,887] [INFO]: Screener complete: 7745 symbols examined, 6 candidates.
+[2026-01-18T07:07:27.030703+00:00] END screener rc=0 secs=292.7

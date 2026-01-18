@@ -18,7 +18,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
 from types import SimpleNamespace
@@ -1705,6 +1705,41 @@ def _inject_export_daily_bars_arg(args: list[str], export_path: str | Path | Non
     return args
 
 
+def _previous_trading_day(value: date) -> date:
+    while value.weekday() >= 5:
+        value -= timedelta(days=1)
+    return value
+
+
+def _resolve_pipeline_run_date(now: datetime | None = None) -> date:
+    tz = zoneinfo.ZoneInfo("America/New_York")
+    local_now = now.astimezone(tz) if now else datetime.now(tz)
+    close_time = local_now.replace(hour=16, minute=0, second=0, microsecond=0)
+    local_date = local_now.date()
+    if local_now <= close_time:
+        local_date -= timedelta(days=1)
+    return _previous_trading_day(local_date)
+
+
+def _inject_run_date_arg(args: list[str], run_date: date | None) -> list[str]:
+    if run_date is None:
+        return args
+    cleaned: list[str] = []
+    skip_next = False
+    for token in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if token == "--run-date":
+            skip_next = True
+            continue
+        if token.startswith("--run-date="):
+            continue
+        cleaned.append(token)
+    cleaned.extend(["--run-date", run_date.isoformat()])
+    return cleaned
+
+
 def _write_refresh_metrics(metrics_path: Path) -> None:
     payload: dict[str, Any] = {
         "last_run_utc": datetime.now(timezone.utc).isoformat(),
@@ -1940,6 +1975,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             LOG.debug("ALERT_SCREEENER_MISSING_FAILED", exc_info=True)
         raise SystemExit(2)
     LOG.info("[INFO] PIPELINE_START steps=%s", ",".join(steps))
+    pipeline_run_date = _resolve_pipeline_run_date()
+    LOG.info(
+        "[INFO] PIPELINE_RUN_DATE run_date=%s tz=America/New_York",
+        pipeline_run_date.isoformat(),
+    )
 
     _ensure_latest_headers()
     base_dir = _resolve_base_dir()
@@ -1969,6 +2009,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             export_bars_path,
             "screener_step_disabled",
         )
+
+    extras["screener"] = _inject_run_date_arg(extras["screener"], pipeline_run_date)
+    extras["backtest"] = _inject_run_date_arg(extras["backtest"], pipeline_run_date)
+    extras["metrics"] = _inject_run_date_arg(extras["metrics"], pipeline_run_date)
 
     step_rcs: dict[str, int] = {step: 0 for step in steps}
 

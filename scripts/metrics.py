@@ -3,7 +3,8 @@ import sys
 import os
 import json
 import csv
-from typing import Any, Mapping, Optional
+import argparse
+from typing import Any, Mapping, Optional, Iterable
 
 # Ensure project root is on ``sys.path`` before third-party imports
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -233,11 +234,14 @@ def validate_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:
 
 
 # Load backtest results
-def load_results(csv_file: str = "backtest_results.csv") -> pd.DataFrame:
+def load_results(
+    csv_file: str = "backtest_results.csv",
+    run_date: Optional[date] = None,
+) -> pd.DataFrame:
     if not db.db_enabled():
         logger.warning("Backtest results skipped: DB disabled")
         return pd.DataFrame()
-    df, _ = db.fetch_latest_backtest_results()
+    df, _ = db.fetch_latest_backtest_results(run_date=run_date)
     return df
 
 # Calculate additional performance metrics
@@ -405,7 +409,22 @@ def _write_exit_reason_placeholder(base_dir: Path) -> None:
     write_csv_atomic(str(path), frame)
 
 
-def main():
+def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run metrics ranking + summary")
+    parser.add_argument(
+        "--run-date",
+        default=None,
+        help="Override run_date for DB writes (YYYY-MM-DD)",
+    )
+    return parser.parse_args(list(argv) if argv is not None else None)
+
+
+def main(argv: Optional[Iterable[str]] = None) -> int:
+    args = parse_args(argv)
+    run_date_override = _coerce_run_date(getattr(args, "run_date", None))
+    if getattr(args, "run_date", None) and run_date_override is None:
+        logger.error("[ERROR] METRICS_RUN_DATE_INVALID value=%s", args.run_date)
+        return 2
     if not db.db_enabled():
         logger.error("[ERROR] METRICS_DB_REQUIRED: DATABASE_URL/DB_* not configured.")
         return 2
@@ -414,7 +433,35 @@ def main():
         logger.error("[ERROR] METRICS_DB_REQUIRED: unable to connect to database.")
         return 2
 
-    results_df = load_results()
+    if run_date_override:
+        run_date = run_date_override
+        run_date_source = "cli"
+    else:
+        run_date = db.fetch_latest_run_date("backtest_results")
+        run_date_source = "backtest_results"
+        if run_date is None:
+            run_date = db.fetch_latest_run_date("screener_candidates")
+            run_date_source = "screener_candidates"
+        if run_date is None:
+            logger.error("[ERROR] METRICS_NO_UPSTREAM_RUN_DATE")
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return 2
+        logger.info(
+            "[INFO] METRICS_RUN_DATE_RESOLVED run_date=%s source=%s",
+            run_date,
+            run_date_source,
+        )
+
+    logger.info(
+        "[INFO] STEP_RUN_DATE step=metrics run_date=%s source=%s",
+        run_date,
+        "cli" if run_date_override else "default",
+    )
+
+    results_df = load_results(run_date=run_date)
 
     trades_df: pd.DataFrame
     db_trades = _load_trades_from_db(conn)
@@ -500,19 +547,41 @@ def main():
         if "exit_reason" in trades_df.columns:
             logger.info("Exit reason breakdown skipped: DB is source of truth.")
 
-    run_date_conn = db.get_db_conn()
-    try:
-        run_date = _resolve_run_date(run_date_conn)
-    finally:
-        if run_date_conn is not None:
-            try:
-                run_date_conn.close()
-            except Exception:
-                pass
-
     if db.db_enabled():
         try:
-            if db.upsert_top_candidates(run_date, ranked_df):
+            screener_fields = db.fetch_screener_candidates_for_run_date(run_date)
+            if not screener_fields.empty and "symbol" in screener_fields.columns:
+                screener_fields["symbol"] = (
+                    screener_fields["symbol"].astype(str).str.upper()
+                )
+                ranked_df["symbol"] = ranked_df["symbol"].astype(str).str.upper()
+                before_rows = int(ranked_df.shape[0])
+                merged = ranked_df.merge(
+                    screener_fields,
+                    on="symbol",
+                    how="inner",
+                    suffixes=("", "_sc"),
+                )
+                dropped = before_rows - int(merged.shape[0])
+                if dropped:
+                    logger.warning(
+                        "[WARN] METRICS_TOP_CANDIDATES_FILTERED dropped=%s remaining=%s",
+                        dropped,
+                        int(merged.shape[0]),
+                    )
+                for col in ("entry_price", "adv20", "atrp", "exchange", "source"):
+                    sc_col = f"{col}_sc"
+                    if sc_col in merged.columns:
+                        merged[col] = merged[sc_col]
+                        merged.drop(columns=[sc_col], inplace=True)
+                ranked_df = merged
+            else:
+                logger.warning(
+                    "[WARN] METRICS_TOP_CANDIDATES_FILTERED reason=screener_empty run_date=%s",
+                    run_date,
+                )
+                ranked_df = ranked_df.iloc[0:0].copy()
+            if db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True):
                 logger.info(
                     "[INFO] METRICS_DB_TOP_CANDIDATES_UPSERT rows=%s run_date=%s",
                     len(ranked_df.index),
@@ -564,7 +633,7 @@ def main():
 
 if __name__ == "__main__":
     logger.info("Starting metrics calculation")
-    exit_code = main()
+    exit_code = main(sys.argv[1:])
     logger.info("Metrics calculation complete")
     end_time = datetime.utcnow()
     elapsed_time = end_time - start_time

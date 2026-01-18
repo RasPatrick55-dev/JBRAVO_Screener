@@ -21,7 +21,7 @@ import re
 import shutil
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path, PurePath
 from typing import (
     Any,
@@ -4577,7 +4577,12 @@ def run_coarse_features(
     return coarse_output if return_frame else 0
 
 
-def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
+def run_full_nightly(
+    args: argparse.Namespace,
+    base_dir: Path,
+    *,
+    run_date_override: Optional[date] = None,
+) -> int:
     LOGGER.info("[MODE] full-nightly start")
     coarse_path = base_dir / "data" / "tmp" / "coarse_rank.csv"
     regenerated = run_coarse_features(args, base_dir, return_frame=True)
@@ -4702,6 +4707,13 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
     )
 
     now = datetime.now(timezone.utc)
+    run_date_value = run_date_override or now.date()
+    run_date_source = "cli" if run_date_override else "default"
+    LOGGER.info(
+        "[INFO] STEP_RUN_DATE step=screener run_date=%s source=%s",
+        run_date_value,
+        run_date_source,
+    )
     symbols_requested = int(fetch_metrics.get("symbols_in", 0) or len(symbols))
     symbols_with_bars = int(
         fetch_metrics.get("symbols_with_any_bars")
@@ -4753,6 +4765,7 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
         reject_samples,
         status="ok",
         now=now,
+        run_date=run_date_value,
         gate_counters=gate_counters,
         fetch_metrics=fetch_metrics,
         asset_metrics={},
@@ -5741,8 +5754,11 @@ def write_outputs(
     ranker_cfg: Optional[Mapping[str, object]] = None,
     timings: Optional[Mapping[str, float]] = None,
     mode: str = "screener",
+    run_date: Optional[date] = None,
 ) -> Path:
     now = now or datetime.now(timezone.utc)
+    run_date_value = run_date or now.date()
+    run_date_str = run_date_value.isoformat()
     data_dir = base_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -5797,7 +5813,7 @@ def write_outputs(
 
     diagnostics_dir = data_dir / "diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
-    run_date = now.date().isoformat()
+    run_date = run_date_str
     diag_columns = [
         "symbol",
         "Score",
@@ -5996,11 +6012,13 @@ def write_outputs(
 
     if mode in {"screener", "full-nightly"} and db.db_enabled():
         try:
+            insert_frame = _prepare_screener_db_frame(top_df, scored_df)
             db.insert_screener_candidates(
-                now.date(),
-                top_df,
+                run_date_value,
+                insert_frame,
                 run_ts_utc=now,
             )
+            db.prune_screener_candidates_incomplete(run_date_value)
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning("[WARN] DB_WRITE_FAILED table=screener_candidates err=%s", exc)
 
@@ -6029,7 +6047,7 @@ def write_outputs(
         LOGGER.warning("Could not append metrics history: %s", exc)
 
     pipeline_health = {
-        "run_date": now.date().isoformat(),
+        "run_date": run_date_str,
         "real_candidate_count": int(stats.get("candidates_out", 0)),
         "fallback_used": bool(stats.get("fallback_used", False)),
         "gate_count": int(
@@ -6054,7 +6072,7 @@ def write_outputs(
     }
     db.insert_pipeline_health(
         {
-            "run_date": now.date().isoformat(),
+            "run_date": run_date_str,
             "run_ts_utc": _format_timestamp(now),
             "mode": str(mode or "screener"),
             "symbols_in": int(stats.get("symbols_in", 0)),
@@ -6108,6 +6126,111 @@ def write_outputs(
     return metrics_path
 
 
+def _parse_run_date_arg(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        parsed = pd.to_datetime(value)
+    except Exception:
+        return None
+    if pd.isna(parsed):  # type: ignore[arg-type]
+        return None
+    return parsed.date()
+
+
+def _prepare_screener_db_frame(
+    top_df: pd.DataFrame,
+    scored_df: Optional[pd.DataFrame],
+) -> pd.DataFrame:
+    if top_df is None or top_df.empty:
+        return top_df
+    if scored_df is None or scored_df.empty:
+        return top_df
+
+    frame = top_df.copy()
+    frame["symbol"] = frame.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+
+    scored_meta = scored_df.copy()
+    scored_meta["symbol"] = (
+        scored_meta.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    )
+    scored_meta = scored_meta.dropna(subset=["symbol"]).drop_duplicates(subset=["symbol"], keep="last")
+
+    meta = pd.DataFrame({"symbol": scored_meta["symbol"]})
+    if "exchange" in scored_meta.columns:
+        meta["exchange_meta"] = (
+            scored_meta["exchange"].astype("string").fillna("").str.strip().str.upper()
+        )
+    if "ADV20" in scored_meta.columns:
+        meta["adv20_meta"] = pd.to_numeric(scored_meta["ADV20"], errors="coerce")
+    atrp_meta = pd.Series(pd.NA, index=scored_meta.index)
+    if "atrp" in scored_meta.columns:
+        atrp_meta = pd.to_numeric(scored_meta["atrp"], errors="coerce")
+    if "ATR_pct" in scored_meta.columns:
+        atrp_pct = pd.to_numeric(scored_meta["ATR_pct"], errors="coerce")
+        atrp_meta = atrp_meta.where(atrp_meta.notna() & (atrp_meta > 0), atrp_pct)
+    meta["atrp_meta"] = atrp_meta
+    if "close" in scored_meta.columns:
+        meta["close_meta"] = pd.to_numeric(scored_meta["close"], errors="coerce")
+
+    frame = frame.merge(meta, on="symbol", how="left")
+
+    exchange = frame.get("exchange", pd.Series("", index=frame.index, dtype="string"))
+    exchange = exchange.astype("string").fillna("").str.strip().str.upper()
+    if "exchange_meta" in frame.columns:
+        exchange = exchange.where(exchange != "", frame["exchange_meta"])
+    frame["exchange"] = exchange.astype("string").fillna("").str.strip().str.upper()
+    frame.drop(columns=["exchange_meta"], inplace=True, errors="ignore")
+
+    adv20 = (
+        pd.to_numeric(frame["adv20"], errors="coerce")
+        if "adv20" in frame.columns
+        else pd.Series(pd.NA, index=frame.index)
+    )
+    if "adv20_meta" in frame.columns:
+        adv20 = adv20.where(adv20.notna() & (adv20 > 0), frame["adv20_meta"])
+    frame["adv20"] = pd.to_numeric(adv20, errors="coerce")
+    frame.drop(columns=["adv20_meta"], inplace=True, errors="ignore")
+
+    atrp = (
+        pd.to_numeric(frame["atrp"], errors="coerce")
+        if "atrp" in frame.columns
+        else pd.Series(pd.NA, index=frame.index)
+    )
+    if "atrp_meta" in frame.columns:
+        atrp = atrp.where(atrp.notna() & (atrp > 0), frame["atrp_meta"])
+    frame["atrp"] = pd.to_numeric(atrp, errors="coerce")
+    frame.drop(columns=["atrp_meta"], inplace=True, errors="ignore")
+
+    entry_price = (
+        pd.to_numeric(frame["entry_price"], errors="coerce")
+        if "entry_price" in frame.columns
+        else pd.Series(pd.NA, index=frame.index)
+    )
+    if "close_meta" in frame.columns:
+        entry_price = entry_price.where(entry_price.notna() & (entry_price > 0), frame["close_meta"])
+    frame["entry_price"] = pd.to_numeric(entry_price, errors="coerce")
+    frame.drop(columns=["close_meta"], inplace=True, errors="ignore")
+
+    required_mask = (
+        frame["entry_price"].notna()
+        & (frame["entry_price"] > 0)
+        & frame["adv20"].notna()
+        & (frame["adv20"] > 0)
+        & frame["atrp"].notna()
+        & (frame["atrp"] > 0)
+        & frame["exchange"].astype("string").fillna("").str.strip().ne("")
+    )
+    dropped = int((~required_mask).sum())
+    if dropped:
+        LOGGER.warning(
+            "[WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=%s remaining=%s",
+            dropped,
+            int(required_mask.sum()),
+        )
+    return frame.loc[required_mask].copy()
+
+
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the nightly screener")
     source_default = os.environ.get("SCREENER_SOURCE")
@@ -6143,6 +6266,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         help="Directory to write outputs (defaults to repo root)",
+    )
+    parser.add_argument(
+        "--run-date",
+        default=None,
+        help="Override run_date for DB writes (YYYY-MM-DD)",
     )
     parser.add_argument(
         "--ranker-config",
@@ -6335,6 +6463,10 @@ def main(
         if "--mode" not in {item for item in arg_list if isinstance(item, str)}:
             arg_list = ["--mode", "screener", *arg_list]
     args = parse_args(arg_list)
+    run_date_override = _parse_run_date_arg(getattr(args, "run_date", None))
+    if getattr(args, "run_date", None) and run_date_override is None:
+        LOGGER.error("[ERROR] SCREENER_RUN_DATE_INVALID value=%s", args.run_date)
+        return 2
     base_dir = Path(output_dir or args.output_dir or Path(__file__).resolve().parents[1])
 
     try:
@@ -6395,9 +6527,20 @@ def main(
         if mode == "delta-update":
             return _run_delta_update(args, base_dir)
         if mode == "full-nightly":
-            return run_full_nightly(args, base_dir)
+            return run_full_nightly(
+                args,
+                base_dir,
+                run_date_override=run_date_override,
+            )
 
         now = datetime.now(timezone.utc)
+        run_date_value = run_date_override or now.date()
+        run_date_source = "cli" if run_date_override else "default"
+        LOGGER.info(
+            "[INFO] STEP_RUN_DATE step=screener run_date=%s source=%s",
+            run_date_value,
+            run_date_source,
+        )
         pipeline_timer = T()
         fetch_elapsed = 0.0
 
@@ -6543,6 +6686,7 @@ def main(
             reject_samples,
             status="ok",
             now=now,
+            run_date=run_date_value,
             gate_counters=gate_counters,
             fetch_metrics=fetch_metrics,
             asset_metrics=asset_metrics,
