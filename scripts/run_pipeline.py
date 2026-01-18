@@ -2,7 +2,7 @@
 
 The pipeline relies on the screener summary line for observability and uses
 pipeline_health_app.run_ts_utc plus screener_run_map_app for run scoping.
-Fallback candidates are used only when the screener produces zero real rows.
+The database is the source of truth; CSV fallback is disabled.
 """
 import argparse
 import csv
@@ -28,7 +28,7 @@ import pandas as pd
 import requests
 
 from scripts import db
-from scripts.fallback_candidates import CANONICAL_COLUMNS, build_latest_candidates, normalize_candidate_df
+from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.screener import write_universe_prefix_counts
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
 from utils import write_csv_atomic, atomic_write_bytes
@@ -49,7 +49,6 @@ _SPLIT_FLAG_MAP = {
     "--screener-args-split": "screener_args_split",
     "--backtest-args-split": "backtest_args_split",
     "--metrics-args-split": "metrics_args_split",
-    "--exec-args-split": "exec_args_split",
     "--ranker-eval-args-split": "ranker_eval_args_split",
 }
 
@@ -397,10 +396,18 @@ def compose_metrics_from_artifacts(
     existing_metrics = ensure_canonical_metrics(_read_json(metrics_path))
     fetch_stats = _read_json(data_dir / "screener_stage_fetch.json")
     post_stats = _read_json(data_dir / "screener_stage_post.json")
-    rows_final = _count_rows(data_dir / "top_candidates.csv")
-    latest_rows = _count_rows(data_dir / "latest_candidates.csv")
-    if latest_rows:
-        rows_final = max(rows_final, latest_rows)
+    rows_final = 0
+    latest_rows = 0
+    scored_rows = 0
+    db_rows: int | None = None
+    if db.db_enabled():
+        db_rows, _ = db.fetch_latest_screener_candidate_count()
+        rows_final = int(db_rows or 0)
+    else:
+        rows_final = _count_rows(data_dir / "top_candidates.csv")
+        latest_rows = _count_rows(data_dir / "latest_candidates.csv")
+        if latest_rows:
+            rows_final = max(rows_final, latest_rows)
     metrics_rows = _coerce_optional_int(existing_metrics.get("rows")) or _coerce_optional_int(
         existing_metrics.get("rows_out")
     )
@@ -410,16 +417,18 @@ def compose_metrics_from_artifacts(
         hinted = _coerce_optional_int(post_stats.get("candidates_final"))
         if hinted:
             rows_final = hinted
-    scored_candidates = data_dir / "scored_candidates.csv"
-    scored_rows = _count_csv_lines(scored_candidates)
-    if scored_rows <= 0 and scored_candidates.exists():
-        scored_rows = 0
+    if not db.db_enabled():
+        scored_candidates = data_dir / "scored_candidates.csv"
+        scored_rows = _count_csv_lines(scored_candidates)
+        if scored_rows <= 0 and scored_candidates.exists():
+            scored_rows = 0
     symbols_in_hints = [
         _coerce_optional_int(existing_metrics.get("symbols_in")),
         _coerce_optional_int(symbols_in),
         _coerce_optional_int(fetch_stats.get("symbols_in")) if fetch_stats else None,
         _coerce_optional_int(post_stats.get("symbols_in")) if post_stats else None,
         scored_rows if scored_rows else None,
+        db_rows if db_rows else None,
     ]
     symbols_in_effective = 0
     for hint in symbols_in_hints:
@@ -817,6 +826,9 @@ def _count_csv_lines(path: Path | None) -> int:
 
 
 def _sync_top_candidates_to_latest(base_dir: Path | None = None) -> None:
+    if db.db_enabled():
+        logger.info("LATEST_SYNC skipped: DB is source of truth.")
+        return
     base = _resolve_base_dir(base_dir)
     data_dir = base / "data"
     top = data_dir / "top_candidates.csv"
@@ -833,36 +845,20 @@ def _sync_top_candidates_to_latest(base_dir: Path | None = None) -> None:
 
 
 def refresh_latest_candidates(base_dir: Path | None = None) -> pd.DataFrame:
-    base = _resolve_base_dir(base_dir)
-    data_dir = base / "data"
-    top_path = data_dir / "top_candidates.csv"
-    latest_path = data_dir / "latest_candidates.csv"
-    metrics_path = data_dir / "screener_metrics.json"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    canonical = write_latest_candidates_canonical(base)
-    if not canonical.empty and canonical["close"].notna().any():
-        _write_refresh_metrics(metrics_path)
-        return canonical
-    if latest_path.exists() and latest_path.stat().st_size > 0:
-        try:
-            existing = pd.read_csv(latest_path)
-            if not existing.empty:
-                _write_refresh_metrics(metrics_path)
-                return existing
-        except Exception:
-            logger.exception("Failed reading existing latest_candidates.csv during refresh")
-    frame, _ = build_latest_candidates(base)
-    _write_refresh_metrics(metrics_path)
+    if not db.db_enabled():
+        logger.error("LATEST_CANDIDATES refresh skipped: DB required.")
+        return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
+    frame, _ = db.fetch_latest_screener_candidates()
+    if frame.empty:
+        logger.warning("LATEST_CANDIDATES DB empty; no candidates to refresh.")
+        return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
+    logger.info("LATEST_CANDIDATES refreshed from DB rows=%d", len(frame.index))
     return frame
 
 
 def _maybe_fallback(base_dir: Path | None = None) -> int:
-    base = _resolve_base_dir(base_dir)
-    try:
-        subprocess.check_call([sys.executable, "-m", "scripts.fallback_candidates"], cwd=base)
-    except subprocess.CalledProcessError:  # pragma: no cover - legacy shim
-        LOG.warning("FALLBACK invocation failed", exc_info=True)
-    frame = refresh_latest_candidates(base)
+    LOG.warning("FALLBACK disabled: DB is source of truth.")
+    frame = refresh_latest_candidates(base_dir)
     return int(len(frame.index))
 
 
@@ -1297,17 +1293,6 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Extra CLI arguments for scripts.screener provided as separate tokens",
     )
     parser.add_argument(
-        "--exec-args",
-        default=os.getenv("JBR_EXEC_ARGS", ""),
-        help="Extra CLI arguments forwarded to scripts.execute_trades",
-    )
-    parser.add_argument(
-        "--exec-args-split",
-        nargs="*",
-        default=None,
-        help="Extra CLI arguments for scripts.execute_trades provided as separate tokens",
-    )
-    parser.add_argument(
         "--backtest-args",
         default=os.getenv("JBR_BACKTEST_ARGS", ""),
         help="Extra CLI arguments forwarded to scripts.backtest",
@@ -1381,11 +1366,10 @@ def determine_steps(raw: Optional[str]) -> list[str]:
     default = "screener,backtest,metrics,ranker_eval"
     target = raw or os.environ.get("PIPE_STEPS", default)
     steps = [part.strip().lower() for part in target.split(",") if part.strip()]
+    allowed = {"screener", "backtest", "metrics", "labels", "ranker_eval"}
     normalized: list[str] = []
     for step in steps or default.split(","):
-        if step == "exec":
-            normalized.append("execute")
-        else:
+        if step in allowed:
             normalized.append(step)
     return normalized
 
@@ -1479,10 +1463,7 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
     """
     Fallback for metrics['universe_prefix_counts'].
 
-    Derives prefix counts from CSV artifacts produced by the pipeline.
-    Preference order:
-      1) data/scored_candidates.csv  (full scored universe)
-      2) data/latest_candidates.csv  (latest filtered candidates)
+    Derives prefix counts from DB screener_candidates when available.
 
     "Prefix" = first character of the 'symbol' column, upper-cased.
 
@@ -1490,54 +1471,28 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
     """
     logger = logging.getLogger(__name__)
 
-    data_dir = base_dir / "data"
-    candidate_paths = [
-        data_dir / "scored_candidates.csv",
-        data_dir / "latest_candidates.csv",
-    ]
+    if not db.db_enabled():
+        logger.warning("prefix_counts: DB disabled")
+        return {}
 
-    for csv_path in candidate_paths:
-        if not csv_path.exists():
+    try:
+        df, _ = db.fetch_latest_screener_candidates()
+    except Exception as exc:
+        logger.warning("prefix_counts: DB read failed (%s)", exc)
+        return {}
+
+    if df.empty or "symbol" not in df.columns:
+        return {}
+
+    counts: Counter[str] = Counter()
+    for sym in df["symbol"].astype(str).tolist():
+        sym = sym.strip()
+        if not sym:
             continue
+        counts[sym[0].upper()] += 1
 
-        try:
-            with csv_path.open(newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                fieldnames = reader.fieldnames or []
-                if "symbol" not in fieldnames:
-                    logger.info(
-                        "prefix_counts: no 'symbol' column in %s (fields=%s)",
-                        csv_path,
-                        fieldnames,
-                    )
-                    continue
-
-                counts: Counter[str] = Counter()
-                for row in reader:
-                    sym = (row.get("symbol") or "").strip()
-                    if not sym:
-                        continue
-                    prefix = sym[0].upper()
-                    counts[prefix] += 1
-
-            if counts:
-                logger.info(
-                    "prefix_counts: derived from %s prefixes=%d symbols=%d",
-                    csv_path,
-                    len(counts),
-                    sum(counts.values()),
-                )
-                # Stable ordering for JSON
-                return {k: int(counts[k]) for k in sorted(counts)}
-
-        except Exception as exc:
-            logger.warning(
-                "prefix_counts: failed to derive from %s (%s)",
-                csv_path,
-                exc,
-                exc_info=True,
-            )
-
+    if counts:
+        return {k: int(counts[k]) for k in sorted(counts)}
     return {}
 
 
@@ -1582,20 +1537,28 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
                     fallback_hint["bars_rows_total"] = int(bars_total) if bars_total else None
                 break
 
-    latest_candidates = data_dir / "latest_candidates.csv"
-    top_candidates = data_dir / "top_candidates.csv"
-    top_rows = _count_csv_lines(top_candidates)
-    latest_rows = _count_csv_lines(latest_candidates)
-    if top_rows:
-        fallback_hint["rows"] = top_rows
-    elif latest_rows and not fallback_hint.get("rows"):
-        fallback_hint["rows"] = latest_rows
+    if db.db_enabled():
+        fallback_hint["latest_source"] = "db"
+        db_rows, _ = db.fetch_latest_screener_candidate_count()
+        if db_rows:
+            fallback_hint["rows"] = int(db_rows)
+            if fallback_hint["symbols_in"] is None:
+                fallback_hint["symbols_in"] = int(db_rows)
+    else:
+        latest_candidates = data_dir / "latest_candidates.csv"
+        top_candidates = data_dir / "top_candidates.csv"
+        top_rows = _count_csv_lines(top_candidates)
+        latest_rows = _count_csv_lines(latest_candidates)
+        if top_rows:
+            fallback_hint["rows"] = top_rows
+        elif latest_rows and not fallback_hint.get("rows"):
+            fallback_hint["rows"] = latest_rows
 
-    scored_candidates = data_dir / "scored_candidates.csv"
-    if fallback_hint["symbols_in"] is None:
-        rows = _count_csv_lines(scored_candidates)
-        if rows or scored_candidates.exists():
-            fallback_hint["symbols_in"] = rows
+        scored_candidates = data_dir / "scored_candidates.csv"
+        if fallback_hint["symbols_in"] is None:
+            rows = _count_csv_lines(scored_candidates)
+            if rows or scored_candidates.exists():
+                fallback_hint["symbols_in"] = rows
 
     if fallback_hint["symbols_with_bars"] is None and fallback_hint["symbols_in"] is not None:
         fallback_hint["symbols_with_bars"] = fallback_hint["symbols_in"]
@@ -1695,6 +1658,8 @@ def _annotate_screener_metrics(
 
 
 def _ensure_latest_headers() -> None:
+    if db.db_enabled():
+        return
     if LATEST_CANDIDATES.exists() and LATEST_CANDIDATES.stat().st_size > 0:
         return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1759,14 +1724,18 @@ def _write_refresh_metrics(metrics_path: Path) -> None:
 
 
 def ensure_candidates(min_rows: int = 1) -> int:
-    current = _count_rows(LATEST_CANDIDATES)
-    if current > 0:
-        return current
-    frame, _ = build_latest_candidates(PROJECT_ROOT, max_rows=max(1, min_rows))
-    normalized = normalize_candidate_df(frame)
-    write_csv_atomic(str(TOP_CANDIDATES), normalized)
-    write_csv_atomic(str(LATEST_CANDIDATES), normalized)
-    return int(len(normalized.index))
+    if not db.db_enabled():
+        LOG.error("[ERROR] CANDIDATES_DB_REQUIRED")
+        return 0
+    count, _ = db.fetch_latest_screener_candidate_count()
+    count = int(count or 0)
+    if count < min_rows:
+        LOG.warning(
+            "[WARN] CANDIDATES_DB_INSUFFICIENT count=%s required=%s",
+            count,
+            min_rows,
+        )
+    return count
 
 
 def _extract_timing(metrics: Mapping[str, Any], key: str) -> float:
@@ -1818,6 +1787,10 @@ def ingest_artifacts_to_db(run_date: date) -> None:
 
     def _log_fail(table: str, err: Exception | str) -> None:
         logger.warning("[WARN] DB_INGEST_FAILED table=%s err=%s", table, err)
+
+    if db.db_enabled():
+        logger.info("CSV ingest disabled: DB is source of truth.")
+        return
 
     if not db.db_enabled():
         _log_fail("all", "db_disabled")
@@ -1940,31 +1913,6 @@ def ingest_artifacts_to_db(run_date: date) -> None:
         _log_fail("pipeline_runs", exc)
 
 
-def _split_or_string(exec_args: str, split_list: Optional[Sequence[str]]) -> list[str]:
-    if split_list is not None and len(split_list) > 0:
-        return [token for token in split_list if token != "--"]
-    return _split_args(exec_args)
-
-
-def sync_execute_metrics(base_dir: Path) -> dict[str, Any]:
-    base = Path(base_dir)
-    metrics_path = base / "data" / "execute_metrics.json"
-    payload = _read_json(metrics_path)
-    if not payload:
-        logger.info("EXECUTE_METRICS_SYNC empty path=%s", metrics_path)
-        return {}
-    submitted = payload.get("orders_submitted")
-    filled = payload.get("orders_filled")
-    skips = payload.get("skips") if isinstance(payload.get("skips"), Mapping) else {}
-    logger.info(
-        "EXECUTE_METRICS_SYNC orders_submitted=%s orders_filled=%s skips=%s",
-        submitted,
-        filled,
-        skips,
-    )
-    return payload
-
-
 def main(argv: Optional[Iterable[str]] = None) -> int:
     _refresh_logger()
     loaded_files, missing_keys = load_env(REQUIRED_ENV_KEYS)
@@ -1976,6 +1924,21 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         raise SystemExit(2)
     args = parse_args(argv)
     steps = tuple(determine_steps(args.steps))
+    if not db.db_enabled():
+        LOG.error("[ERROR] DB_REQUIRED: DATABASE_URL/DB_* not configured.")
+        write_error_report(step="pipeline", detail="db_required")
+        raise SystemExit(2)
+    if "screener" not in steps:
+        LOG.error("[ERROR] SCREENER_STEP_REQUIRED steps=%s", ",".join(steps))
+        write_error_report(step="screener", detail="step_missing")
+        try:
+            send_alert(
+                "JBRAVO pipeline failed: screener missing",
+                {"steps": ",".join(steps), "run_utc": datetime.now(timezone.utc).isoformat()},
+            )
+        except Exception:
+            LOG.debug("ALERT_SCREEENER_MISSING_FAILED", exc_info=True)
+        raise SystemExit(2)
     LOG.info("[INFO] PIPELINE_START steps=%s", ",".join(steps))
 
     _ensure_latest_headers()
@@ -1985,7 +1948,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         "screener": _strip_labels_args(
             _merge_split_args(args.screener_args, args.screener_args_split)
         ),
-        "execute": _split_or_string(args.exec_args, args.exec_args_split),
         "backtest": _merge_split_args(args.backtest_args, args.backtest_args_split),
         "metrics": _merge_split_args(args.metrics_args, args.metrics_args_split),
         "ranker_eval": _merge_split_args(
@@ -2011,9 +1973,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     step_rcs: dict[str, int] = {step: 0 for step in steps}
 
     LOG.info(
-        "[INFO] PIPELINE_ARGS screener=%s execute=%s backtest=%s metrics=%s ranker_eval=%s",
+        "[INFO] PIPELINE_ARGS screener=%s backtest=%s metrics=%s ranker_eval=%s",
         extras["screener"],
-        extras["execute"],
         extras["backtest"],
         extras["metrics"],
         extras["ranker_eval"],
@@ -2057,59 +2018,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     metrics_rows = int(metrics.get("rows") or 0)
                 except Exception:
                     metrics_rows = 0
-            top_frame = _load_top_candidates()
-            latest_source = "screener"
-            latest_rows = 0
-            if top_frame.empty:
-                LOG.info("[INFO] FALLBACK_CHECK start origin=screener")
-                frame, fallback_source = build_latest_candidates(PROJECT_ROOT, max_rows=1)
-                write_csv_atomic(str(TOP_CANDIDATES), frame)
-                fallback_rows = int(len(frame.index))
-                rows = fallback_rows
-                if metrics_rows is not None:
-                    rows = metrics_rows
-                else:
-                    metrics_rows = fallback_rows
-                try:
-                    refreshed = refresh_latest_candidates()
-                    if isinstance(refreshed, pd.DataFrame):
-                        latest_rows = int(len(refreshed.index))
-                    elif isinstance(refreshed, Mapping):
-                        metrics = dict(refreshed)
-                    base = _resolve_base_dir()
-                    local_metrics_path = base / "data" / "screener_metrics.json"
-                    metrics = _read_json(local_metrics_path) or metrics
-                    if "rows" in metrics:
-                        metrics_rows = int(metrics.get("rows") or 0)
-                        rows = metrics_rows
-                        symbols_in = int(metrics.get("symbols_in", symbols_in) or symbols_in)
-                        symbols_with_bars = int(
-                            metrics.get("symbols_with_bars", symbols_with_bars) or symbols_with_bars
-                        )
-                except Exception:  # pragma: no cover - defensive fallback refresh
-                    LOG.debug("refresh_latest_candidates failed", exc_info=True)
-                latest_source = "fallback"
-                if str(fallback_source) in {"scored", "predictions"}:
-                    latest_source = f"fallback:{fallback_source}"
-                if not latest_rows:
-                    latest_rows = fallback_rows
-            else:
-                rows = _write_latest_from_frame(top_frame, source="screener")
-                if metrics_rows is None:
-                    metrics_rows = rows
-                latest_rows = rows
-                latest_source = "screener"
-            LOG.info(
-                "[INFO] FALLBACK_CHECK rows_out=%d source=%s",
-                latest_rows,
-                latest_source,
-            )
-            _sync_top_candidates_to_latest(base_dir)
-            if (metrics_rows or 0) == 0 and (latest_rows or 0) == 0 and not zero_candidates_alerted:
+            db_rows = 0
+            if db.db_enabled():
+                db_rows, _ = db.fetch_latest_screener_candidate_count()
+            rows = int(db_rows or metrics_rows or 0)
+            latest_source = "db" if db.db_enabled() else "screener_metrics"
+            LOG.info("[INFO] CANDIDATE_COUNTS rows=%d source=%s", rows, latest_source)
+            if (metrics_rows or 0) == 0 and rows == 0 and not zero_candidates_alerted:
                 zero_candidates_alerted = True
-                LOG.warning("[WARN] ZERO_CANDIDATES_AFTER_FALLBACK symbols_in=%s", symbols_in)
+                LOG.warning("[WARN] ZERO_CANDIDATES symbols_in=%s", symbols_in)
                 send_alert(
-                    "JBRAVO pipeline: 0 candidates after fallback",
+                    "JBRAVO pipeline: 0 candidates after screener",
                     {
                         "symbols_in": symbols_in,
                         "with_bars": symbols_with_bars,
@@ -2119,7 +2038,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     },
                 )
         else:
-            LOG.info("[INFO] FALLBACK_CHECK start origin=latest")
             metrics = _read_json(SCREENER_METRICS_PATH)
             symbols_in = int(metrics.get("symbols_in", 0) or 0)
             symbols_with_bars = int(metrics.get("symbols_with_bars", 0) or 0)
@@ -2129,16 +2047,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 except Exception:
                     metrics_rows = 0
             rows = ensure_candidates(metrics_rows or 0)
-            latest_source = "fallback"
-            try:
-                latest_frame = pd.read_csv(LATEST_CANDIDATES)
-                if not latest_frame.empty and "source" in latest_frame.columns:
-                    value = str(latest_frame.iloc[0]["source"] or "").strip()
-                    if value:
-                        latest_source = value
-            except Exception:  # pragma: no cover - defensive read
-                latest_source = "fallback"
-            LOG.info("[INFO] FALLBACK_CHECK rows_out=%d source=%s", rows, latest_source)
+            latest_source = "db"
+            LOG.info("[INFO] CANDIDATE_COUNTS rows=%d source=%s", rows, latest_source)
 
         if "backtest" in steps:
             current_step = "backtest"
@@ -2167,7 +2077,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             try:
                 rc_metrics, secs = _run_step_metrics(cmd, timeout=60 * 3)
             except FileNotFoundError:
-                logger.warning("No trades_log.csv; metrics will write zero summary and continue.")
+                logger.warning("METRICS skipped: dependency missing.")
                 rc_metrics, secs = 0, 0.0
             except Exception as e:
                 logger.warning("METRICS non-fatal error: %s", e)
@@ -2275,30 +2185,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 target_column=DEFAULT_RANKER_TARGET_COLUMN,
             )
             _rerank_latest_candidates(base_dir)
-        if "execute" in steps:
-            current_step = "execute"
-            min_rows = rows or (metrics_rows if metrics_rows else 0) or 1
-            rows = ensure_candidates(min_rows)
-            cmd = [sys.executable, "-m", "scripts.execute_trades"]
-            exec_args = extras["execute"]
-            if not any(arg.startswith("--time-window") for arg in exec_args):
-                cmd.extend(["--time-window", "auto"])
-            if exec_args:
-                cmd.extend(exec_args)
-            rc_exec, secs = run_step("execute", cmd, timeout=60 * 10)
-            stage_times["execute"] = secs
-            step_rcs["execute"] = rc_exec
-            if rc_exec and not rc:
-                rc = rc_exec
-                if error_info is None:
-                    error_info = {"step": "execute", "rc": int(rc_exec), "message": "step_failed"}
-            if rc_exec == 0:
-                try:
-                    sync_execute_metrics(base_dir)
-                except Exception:
-                    logger.exception("EXEC_METRICS_SYNC failed (non-fatal)")
-            else:
-                logger.error("Execute step failed rc=%s", rc_exec)
     except Exception as exc:  # pragma: no cover - defensive guard
         rc = 1
         LOG.exception("PIPELINE_FATAL")

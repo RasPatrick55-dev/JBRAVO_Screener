@@ -4762,27 +4762,9 @@ def run_full_nightly(args: argparse.Namespace, base_dir: Path) -> int:
     )
     LOGGER.info("Full nightly outputs written to %s", output_path)
 
-    latest_candidates_df: pd.DataFrame | None = None
     refresh_latest = _as_bool(getattr(args, "refresh_latest", True), True)
     if refresh_latest:
-        try:
-            try:
-                from .run_pipeline import refresh_latest_candidates  # type: ignore
-            except Exception:  # pragma: no cover - fallback for script execution
-                from scripts.run_pipeline import refresh_latest_candidates  # type: ignore
-            latest_candidates_df = refresh_latest_candidates()
-        except Exception as exc:  # pragma: no cover - copy failures unexpected
-            LOGGER.warning("Failed to refresh latest candidates: %s", exc)
-
-        if latest_candidates_df is not None:
-            try:
-                db.insert_screener_candidates(
-                    datetime.now(timezone.utc).date(),
-                    latest_candidates_df,
-                    run_ts_utc=now,
-                )
-            except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning("[WARN] DB_WRITE_FAILED table=screener_candidates err=%s", exc)
+        LOGGER.info("Refresh latest candidates disabled: DB is source of truth.")
 
     _update_metrics_file(
         base_dir,
@@ -6012,6 +5994,16 @@ def write_outputs(
     metrics["timings"] = timing_payload
     _write_json_atomic(metrics_path, metrics)
 
+    if mode in {"screener", "full-nightly"} and db.db_enabled():
+        try:
+            db.insert_screener_candidates(
+                now.date(),
+                top_df,
+                run_ts_utc=now,
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("[WARN] DB_WRITE_FAILED table=screener_candidates err=%s", exc)
+
     hist_path = data_dir / "screener_metrics_history.csv"
     row = {
         "run_utc": metrics.get("last_run_utc"),
@@ -6279,7 +6271,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--refresh-latest",
         choices=["true", "false"],
         default="true",
-        help="Update latest_candidates.csv after full-nightly (default: true)",
+        help="(deprecated) ignored; DB is source of truth",
     )
     parser.add_argument(
         "--gate-preset",

@@ -1042,7 +1042,7 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--source",
         default=os.path.join(BASE_DIR, "data", "latest_candidates.csv"),
-        help="CSV file containing candidate symbols (default: data/latest_candidates.csv)",
+        help="(deprecated) CSV source ignored; DB is source of truth",
     )
     parser.add_argument(
         "--quick",
@@ -1071,7 +1071,7 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--export-csv",
         choices=["true", "false"],
         default=None,
-        help="Export CSV outputs (default: true if DB disabled, false if DB enabled)",
+        help="(deprecated) CSV export disabled; DB is source of truth",
     )
     return parser.parse_args(argv if argv is not None else None)
 
@@ -1190,31 +1190,32 @@ def _parse_bool_flag(value: Optional[str], default: bool) -> bool:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv or [])
+    if not db.db_enabled():
+        logger.error("BACKTEST_DB_REQUIRED: DATABASE_URL/DB_* not configured.")
+        return 2
     conn = _db_engine_if_available()
-    export_default = True
+    if conn is None:
+        logger.error("BACKTEST_DB_REQUIRED: unable to connect to database.")
+        return 2
+    export_default = False
     export_csv = _parse_bool_flag(args.export_csv, export_default)
+    if export_csv:
+        logger.warning("BACKTEST_CSV_EXPORT_DISABLED: DB is source of truth.")
+        export_csv = False
     candidate_limit = args.limit if args.limit is not None else 15
 
     symbols: List[str] = []
     run_date: Optional[date] = None
     symbols_source: Optional[str] = None
 
-    if conn:
-        symbols, run_date = _load_symbols_db(conn, candidate_limit)
-        if symbols:
-            symbols_source = "screener_candidates"
-
-    if not symbols:
-        source_csv = Path(args.source).expanduser()
-        symbols = _load_symbols(source_csv)
-        if symbols:
-            symbols_source = str(source_csv)
-            logger.info("CANDIDATES_LOADED csv_count=%d", len(symbols))
+    symbols, run_date = _load_symbols_db(conn, candidate_limit)
+    if symbols:
+        symbols_source = "screener_candidates"
 
     run_date = run_date or _determine_run_date(conn)
 
     if len(symbols) == 0:
-        logger.info("BACKTEST_CANDIDATES_FALLBACK reason=%s", "empty_or_missing")
+        logger.info("BACKTEST_CANDIDATES_EMPTY source=db")
         logger.info("Backtest: no candidates today - skipping.")
         end_time = datetime.utcnow()
         elapsed_time = end_time - start_time

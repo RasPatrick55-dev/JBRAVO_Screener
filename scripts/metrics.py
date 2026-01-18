@@ -35,24 +35,22 @@ logger.info("Metrics script started")
 
 
 def derive_prefix_counts_from_scored_candidates(base_dir: Path) -> dict:
-    path = base_dir / "data" / "scored_candidates.csv"
-    counts: Counter[str] = Counter()
-    if not path.exists():
-        logging.warning("Prefix count skipped: %s not found", path)
+    if not db.db_enabled():
+        logging.warning("Prefix count skipped: DB disabled")
         return {}
-
     try:
-        with path.open(newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                symbol = (row.get("symbol") or "").strip()
-                if symbol and symbol[0].isalpha():
-                    prefix = symbol[0].upper()
-                    counts[prefix] += 1
+        df, _ = db.fetch_latest_screener_candidates()
     except Exception as exc:
-        logging.warning("Error reading %s for prefix counts: %s", path, exc)
+        logging.warning("Prefix count skipped: DB query failed: %s", exc)
         return {}
-
+    if df.empty or "symbol" not in df.columns:
+        logging.warning("Prefix count skipped: no symbols in DB results")
+        return {}
+    counts: Counter[str] = Counter()
+    for symbol in df["symbol"].astype(str).tolist():
+        symbol = symbol.strip()
+        if symbol and symbol[0].isalpha():
+            counts[symbol[0].upper()] += 1
     return dict(sorted(counts.items()))
 
 start_time = datetime.utcnow()
@@ -236,15 +234,11 @@ def validate_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:
 
 # Load backtest results
 def load_results(csv_file: str = "backtest_results.csv") -> pd.DataFrame:
-    csv_path = Path(BASE_DIR) / "data" / csv_file
-    if not csv_path.exists():
-        logger.warning("Backtest results missing at %s; continuing with empty frame", csv_path)
+    if not db.db_enabled():
+        logger.warning("Backtest results skipped: DB disabled")
         return pd.DataFrame()
-    try:
-        return pd.read_csv(csv_path)
-    except Exception as exc:  # pragma: no cover - defensive I/O guard
-        logger.error("Failed to read backtest results %s: %s", csv_path, exc)
-        return pd.DataFrame()
+    df, _ = db.fetch_latest_backtest_results()
+    return df
 
 # Calculate additional performance metrics
 def calculate_metrics(trades_df: pd.DataFrame) -> dict:
@@ -333,6 +327,22 @@ def rank_candidates(df):
         for col in missing:
             df[col] = 0
 
+    new_nan_rows = pd.Series(False, index=df.index)
+    for col in ("win_rate", "net_pnl", "trades"):
+        if col not in df.columns:
+            continue
+        before_na = df[col].isna()
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        after_na = df[col].isna()
+        introduced = after_na & ~before_na
+        if introduced.any():
+            new_nan_rows |= introduced
+            logger.warning(
+                "Ranking numeric conversion introduced %d NaNs in %s",
+                int(introduced.sum()),
+                col,
+            )
+
     df['avg_return'] = df['net_pnl'] / df['trades'].replace(0, 1) if 'net_pnl' in df.columns and 'trades' in df.columns else 0
 
     df['win_rate_norm'] = df['win_rate'] / df['win_rate'].max() if 'win_rate' in df.columns else 0
@@ -347,6 +357,16 @@ def rank_candidates(df):
         df['trades_norm'] * weights['trades'] +
         df['avg_return_norm'] * weights['avg_return']
     )
+
+    if new_nan_rows.any():
+        nan_scores = df['score'].isna()
+        drop_mask = nan_scores & new_nan_rows
+        if drop_mask.any():
+            logger.warning(
+                "Dropping %d rows with NaN scores after numeric conversion",
+                int(drop_mask.sum()),
+            )
+            df = df.loc[~drop_mask].copy()
 
     ranked_df = df.sort_values(by='score', ascending=False).reset_index(drop=True)
     return ranked_df
@@ -367,7 +387,7 @@ def save_top_candidates(df, top_n=15, output_file='top_candidates.csv'):
             logger.error("Failed appending to %s: %s", csv_path, e)
     else:
         missing_cols = [col for col in required_cols if col not in df.columns]
-        logger.error(f"Missing columns: {missing_cols}")
+        logger.warning("Missing columns for top candidates CSV: %s", missing_cols)
 
 # Save overall metrics summary
 def save_metrics_summary(metrics_summary, symbols, output_file="metrics_summary.csv"):
@@ -377,7 +397,7 @@ def save_metrics_summary(metrics_summary, symbols, output_file="metrics_summary.
     )
     csv_path = Path(BASE_DIR) / "data" / output_file
     write_csv_atomic(str(csv_path), metrics_summary_df)
-    logger.info(f"Successfully updated metrics_summary.csv: {csv_path}")
+    logger.info("Metrics summary CSV successfully updated: %s", csv_path)
 
 def _write_exit_reason_placeholder(base_dir: Path) -> None:
     path = base_dir / "data" / "exit_reason_summary.csv"
@@ -386,49 +406,30 @@ def _write_exit_reason_placeholder(base_dir: Path) -> None:
 
 
 def main():
+    if not db.db_enabled():
+        logger.error("[ERROR] METRICS_DB_REQUIRED: DATABASE_URL/DB_* not configured.")
+        return 2
+    conn: PGConnection | None = db.get_db_conn()
+    if conn is None:
+        logger.error("[ERROR] METRICS_DB_REQUIRED: unable to connect to database.")
+        return 2
+
     results_df = load_results()
 
-    trades_path = Path(BASE_DIR) / "data" / "trades_log.csv"
-    metrics_summary_file = _summary_path()
-
-    use_db = False
-    conn: PGConnection | None = None
-    if db.db_enabled():
-        conn = db.get_db_conn()
-        if conn is not None:
-            try:
-                with conn.cursor() as cursor:
-                    cursor.execute("SELECT 1")
-                use_db = True
-            except Exception as exc:  # pragma: no cover - defensive guard
-                logger.warning("[WARN] METRICS_DB_UNAVAILABLE err=%s", exc)
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                conn = None
-
     trades_df: pd.DataFrame
-    if use_db:
-        db_trades = _load_trades_from_db(conn)
-        if db_trades is None:
-            use_db = False
-            trades_df = pd.DataFrame(columns=_TRADES_CANONICAL_COLUMNS)
-        else:
-            trades_df = db_trades
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            conn = None
-    else:
+    db_trades = _load_trades_from_db(conn)
+    if db_trades is None:
+        logger.error("[ERROR] METRICS_DB_LOAD_FAILED: trades unavailable.")
         try:
-            trades_df = load_trades_log(trades_path)
-        except FileNotFoundError:
-            logger.warning("No trades_log.csv; writing zeroed metrics_summary.csv")
-            write_zero_metrics_summary(metrics_summary_file)
-            return 0
+            conn.close()
+        except Exception:
+            pass
+        return 2
+    trades_df = db_trades
+    try:
+        conn.close()
+    except Exception:
+        pass
 
     # Detect missing symbol-level metrics and compute from trades_log.csv
     if "net_pnl" not in results_df.columns:
@@ -462,22 +463,25 @@ def main():
         "Top 15 Screener Symbols: %s",
         ", ".join(ranked_df['symbol'].head(15).tolist()),
     )
-    save_top_candidates(ranked_df)
     logger.info(
         "Top Candidates: %s",
         ranked_df[['symbol', 'score', 'win_rate', 'net_pnl']].head(15).to_string(index=False)
     )
+    save_top_candidates(ranked_df)
 
     if not trades_df.empty:
         trades_df = validate_numeric(trades_df, "net_pnl")
 
     summary_metrics = calculate_metrics(trades_df.copy())
     if trades_df.empty:
-        logger.warning("Trades log missing or empty; writing default metrics row.")
+        logger.warning("Trades dataset empty; writing default metrics row.")
     metrics_summary = pd.DataFrame(
         [[summary_metrics.get(col, 0) for col in REQUIRED_COLUMNS]],
         columns=REQUIRED_COLUMNS,
     )
+
+    symbol_series = ranked_df["symbol"] if "symbol" in ranked_df.columns else pd.Series(dtype="object")
+    save_metrics_summary(summary_metrics, symbol_series.tolist())
 
     if not trades_df.empty:
         logger.info(
@@ -494,46 +498,39 @@ def main():
         )
 
         if "exit_reason" in trades_df.columns:
-            pnl_column = "net_pnl" if "net_pnl" in trades_df.columns else "pnl"
-            breakdown = trades_df.groupby("exit_reason")[pnl_column].agg(
-                trades="count", total_pnl="sum", avg_pnl="mean"
-            )
-            breakdown_path = Path(BASE_DIR) / "data" / "exit_reason_summary.csv"
-            write_csv_atomic(str(breakdown_path), breakdown.reset_index())
-            logger.info(
-                "Exit reason breakdown saved to %s", breakdown_path
-            )
-    elif use_db:
-        _write_exit_reason_placeholder(Path(BASE_DIR))
+            logger.info("Exit reason breakdown skipped: DB is source of truth.")
+
+    run_date_conn = db.get_db_conn()
+    try:
+        run_date = _resolve_run_date(run_date_conn)
+    finally:
+        if run_date_conn is not None:
+            try:
+                run_date_conn.close()
+            except Exception:
+                pass
+
+    if db.db_enabled():
+        try:
+            if db.upsert_top_candidates(run_date, ranked_df):
+                logger.info(
+                    "[INFO] METRICS_DB_TOP_CANDIDATES_UPSERT rows=%s run_date=%s",
+                    len(ranked_df.index),
+                    run_date,
+                )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning("[WARN] DB_WRITE_FAILED table=top_candidates err=%s", exc)
 
     try:
-        write_csv_atomic(str(metrics_summary_file), metrics_summary)
+        db.upsert_metrics_daily(run_date, summary_metrics)
         logger.info(
-            f"Metrics summary CSV successfully updated: {metrics_summary_file}"
+            "[INFO] METRICS_DB_OK run_date=%s total_trades=%s net_pnl=%s",
+            run_date,
+            summary_metrics.get("total_trades"),
+            summary_metrics.get("net_pnl"),
         )
-        if use_db:
-            try:
-                run_date_conn = db.get_db_conn()
-                try:
-                    run_date = _resolve_run_date(run_date_conn)
-                finally:
-                    if run_date_conn is not None:
-                        try:
-                            run_date_conn.close()
-                        except Exception:
-                            pass
-                db.upsert_metrics_daily(run_date, summary_metrics)
-                logger.info(
-                    "[INFO] METRICS_DB_OK run_date=%s total_trades=%s net_pnl=%s",
-                    run_date,
-                    summary_metrics.get("total_trades"),
-                    summary_metrics.get("net_pnl"),
-                )
-            except Exception as exc:  # pragma: no cover - defensive guard
-                logger.warning("[WARN] DB_WRITE_FAILED table=metrics_daily err=%s", exc)
-    except Exception as e:
-        logger.error(f"Failed to write metrics_summary.csv: {e}")
-        return 1
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_WRITE_FAILED table=metrics_daily err=%s", exc)
 
     metrics_path = Path(BASE_DIR) / "data" / "screener_metrics.json"
     metrics: dict = {}

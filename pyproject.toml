@@ -15,7 +15,10 @@ dependencies = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+addopts = "-ra"
+testpaths = ["tests"]
 markers = [
     "alpaca_optional: tests that can run without Alpaca credentials",
+    "integration: tests that hit real PostgreSQL and external services",
     "slow: slow/integration tests that are not run by default",
 ]

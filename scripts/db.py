@@ -863,6 +863,128 @@ def get_latest_pipeline_health_run_ts() -> Optional[datetime]:
 def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> bool:
     if df_results is None or df_results.empty:
         return False
+
+
+def fetch_latest_screener_candidate_count() -> tuple[int, Optional[date]]:
+    conn = _conn_or_none()
+    if conn is None:
+        return 0, None
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT run_date, COUNT(*)
+                FROM screener_candidates
+                WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
+                GROUP BY run_date
+                """
+            )
+            row = cursor.fetchone()
+        if not row:
+            return 0, None
+        return int(row[1] or 0), row[0]
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_READ_FAILED table=screener_candidates err=%s", exc)
+        return 0, None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def fetch_latest_screener_candidates(
+    limit: int | None = None,
+) -> tuple[pd.DataFrame, Optional[date]]:
+    conn = _conn_or_none()
+    if conn is None:
+        return pd.DataFrame(), None
+    try:
+        with conn.cursor() as cursor:
+            if limit:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM screener_candidates
+                    WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
+                    ORDER BY score DESC NULLS LAST
+                    LIMIT %(limit)s
+                    """,
+                    {"limit": int(limit)},
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM screener_candidates
+                    WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
+                    """
+                )
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description or []]
+        df = pd.DataFrame(rows, columns=columns)
+        run_date = None
+        if "run_date" in df.columns and not df["run_date"].isna().all():
+            try:
+                run_date = df["run_date"].dropna().iloc[0]
+            except Exception:
+                run_date = None
+        return df, run_date
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_READ_FAILED table=screener_candidates err=%s", exc)
+        return pd.DataFrame(), None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def fetch_latest_backtest_results(
+    limit: int | None = None,
+) -> tuple[pd.DataFrame, Optional[date]]:
+    conn = _conn_or_none()
+    if conn is None:
+        return pd.DataFrame(), None
+    try:
+        with conn.cursor() as cursor:
+            if limit:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM backtest_results
+                    WHERE run_date = (SELECT MAX(run_date) FROM backtest_results)
+                    ORDER BY net_pnl DESC NULLS LAST
+                    LIMIT %(limit)s
+                    """,
+                    {"limit": int(limit)},
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM backtest_results
+                    WHERE run_date = (SELECT MAX(run_date) FROM backtest_results)
+                    """
+                )
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description or []]
+        df = pd.DataFrame(rows, columns=columns)
+        run_date = None
+        if "run_date" in df.columns and not df["run_date"].isna().all():
+            try:
+                run_date = df["run_date"].dropna().iloc[0]
+            except Exception:
+                run_date = None
+        return df, run_date
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_READ_FAILED table=backtest_results err=%s", exc)
+        return pd.DataFrame(), None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
     conn = _conn_or_none()
     if conn is None:
         return False
@@ -1018,6 +1140,132 @@ def upsert_metrics_daily(run_date: Any, summary_metrics_dict: Mapping[str, Any] 
         _log_write_result(True, "metrics_daily", 1)
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "metrics_daily", 0, exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def ensure_top_candidates_table() -> None:
+    conn = _conn_or_none()
+    if conn is None:
+        return
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS top_candidates (
+                        run_date DATE NOT NULL,
+                        symbol TEXT NOT NULL,
+                        score DOUBLE PRECISION,
+                        win_rate DOUBLE PRECISION,
+                        net_pnl DOUBLE PRECISION,
+                        trades INTEGER,
+                        wins INTEGER,
+                        losses INTEGER,
+                        expectancy DOUBLE PRECISION,
+                        profit_factor DOUBLE PRECISION,
+                        max_drawdown DOUBLE PRECISION,
+                        sharpe DOUBLE PRECISION,
+                        sortino DOUBLE PRECISION,
+                        exchange TEXT,
+                        entry_price DOUBLE PRECISION,
+                        adv20 DOUBLE PRECISION,
+                        atrp DOUBLE PRECISION,
+                        source TEXT,
+                        created_at TIMESTAMPTZ DEFAULT now(),
+                        PRIMARY KEY (run_date, symbol)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_top_candidates_run_date
+                    ON top_candidates (run_date)
+                    """
+                )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_SCHEMA_FAILED table=top_candidates err=%s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def upsert_top_candidates(run_date: Any, df_candidates: pd.DataFrame | None) -> bool:
+    if df_candidates is None or df_candidates.empty:
+        return False
+    ensure_top_candidates_table()
+    conn = _conn_or_none()
+    if conn is None:
+        return False
+
+    insert_cols = [
+        "run_date",
+        "symbol",
+        "score",
+        "win_rate",
+        "net_pnl",
+        "trades",
+        "wins",
+        "losses",
+        "expectancy",
+        "profit_factor",
+        "max_drawdown",
+        "sharpe",
+        "sortino",
+        "exchange",
+        "entry_price",
+        "adv20",
+        "atrp",
+        "source",
+    ]
+    update_cols = [col for col in insert_cols if col not in ("run_date", "symbol")]
+    values_sql = ", ".join([f"%({col})s" for col in insert_cols])
+    updates_sql = ", ".join([f"{col}=EXCLUDED.{col}" for col in update_cols])
+    insert_sql = (
+        f"INSERT INTO top_candidates ({', '.join(insert_cols)}) "
+        f"VALUES ({values_sql}) "
+        f"ON CONFLICT (run_date, symbol) DO UPDATE SET {updates_sql}"
+    )
+    run_date_value = _coerce_date(run_date)
+    rows_payloads: list[dict[str, Any]] = []
+    for _, row in df_candidates.iterrows():
+        symbol = (row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        payload: dict[str, Any] = {col: None for col in insert_cols}
+        payload["run_date"] = run_date_value
+        payload["symbol"] = symbol
+        for col in insert_cols:
+            if col in {"run_date", "symbol"}:
+                continue
+            if col == "source" and col not in row:
+                payload[col] = "metrics"
+                continue
+            payload[col] = row.get(col) if col in row else None
+        rows_payloads.append(payload)
+
+    if not rows_payloads:
+        return False
+
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                extras.execute_batch(
+                    cursor,
+                    insert_sql,
+                    rows_payloads,
+                    page_size=200,
+                )
+        _log_write_result(True, "top_candidates", len(rows_payloads))
+        return True
+    except Exception as exc:  # pragma: no cover - defensive logging
+        _log_write_result(False, "top_candidates", 0, exc)
+        return False
     finally:
         try:
             conn.close()

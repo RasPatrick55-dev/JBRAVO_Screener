@@ -16,3 +16,123 @@ C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:550: DeprecationWarn
   end_time = datetime.utcnow()
 [2026-01-08 21:18:05,317] [INFO]: Script finished in 0:00:00.094208
 [2026-01-09T03:18:05.389504+00:00] END metrics rc=0 secs=0.9
+[2026-01-18T03:33:53.522646+00:00] START metrics
+[2026-01-17 21:33:54,274] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:56: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-17 21:33:54,276] [INFO]: Starting metrics calculation
+Traceback (most recent call last):
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\array_ops.py", line 218, in _na_arithmetic_op
+    result = func(left, right)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\computation\expressions.py", line 242, in evaluate
+    return _evaluate(op, op_str, a, b)  # type: ignore[misc]
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\computation\expressions.py", line 73, in _evaluate_standard
+    return op(a, b)
+TypeError: unsupported operand type(s) for *: 'decimal.Decimal' and 'float'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py", line 505, in <module>
+    exit_code = main()
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py", line 410, in main
+    ranked_df = rank_candidates(results_df)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py", line 339, in rank_candidates
+    df['win_rate_norm'] * weights['win_rate'] +
+    ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\common.py", line 76, in new_method
+    return method(self, other)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\arraylike.py", line 202, in __mul__
+    return self._arith_method(other, operator.mul)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\series.py", line 6146, in _arith_method
+    return base.IndexOpsMixin._arith_method(self, other, op)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\base.py", line 1391, in _arith_method
+    result = ops.arithmetic_op(lvalues, rvalues, op)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\array_ops.py", line 283, in arithmetic_op
+    res_values = _na_arithmetic_op(left, right, op)  # type: ignore[arg-type]
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\array_ops.py", line 227, in _na_arithmetic_op
+    result = _masked_arith_op(left, right, op)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\array_ops.py", line 182, in _masked_arith_op
+    result[mask] = op(xrav[mask], y)
+                   ~~^^^^^^^^^^^^^^^
+TypeError: unsupported operand type(s) for *: 'decimal.Decimal' and 'float'
+[2026-01-18T03:33:59.207969+00:00] END metrics rc=1 secs=5.7
+[2026-01-18T03:42:36.198929+00:00] START metrics
+[2026-01-17 21:42:36,822] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:56: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-17 21:42:36,822] [INFO]: Starting metrics calculation
+Traceback (most recent call last):
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\array_ops.py", line 218, in _na_arithmetic_op
+    result = func(left, right)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\computation\expressions.py", line 242, in evaluate
+    return _evaluate(op, op_str, a, b)  # type: ignore[misc]
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\computation\expressions.py", line 73, in _evaluate_standard
+    return op(a, b)
+TypeError: unsupported operand type(s) for *: 'decimal.Decimal' and 'float'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py", line 505, in <module>
+    exit_code = main()
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py", line 410, in main
+    ranked_df = rank_candidates(results_df)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py", line 339, in rank_candidates
+    df['win_rate_norm'] * weights['win_rate'] +
+    ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\common.py", line 76, in new_method
+    return method(self, other)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\arraylike.py", line 202, in __mul__
+    return self._arith_method(other, operator.mul)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\series.py", line 6146, in _arith_method
+    return base.IndexOpsMixin._arith_method(self, other, op)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\base.py", line 1391, in _arith_method
+    result = ops.arithmetic_op(lvalues, rvalues, op)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\array_ops.py", line 283, in arithmetic_op
+    res_values = _na_arithmetic_op(left, right, op)  # type: ignore[arg-type]
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\array_ops.py", line 227, in _na_arithmetic_op
+    result = _masked_arith_op(left, right, op)
+  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Lib\site-packages\pandas\core\ops\array_ops.py", line 182, in _masked_arith_op
+    result[mask] = op(xrav[mask], y)
+                   ~~^^^^^^^^^^^^^^^
+TypeError: unsupported operand type(s) for *: 'decimal.Decimal' and 'float'
+[2026-01-18T03:42:41.551026+00:00] END metrics rc=1 secs=5.4
+[2026-01-18T03:58:45.386156+00:00] START metrics
+[2026-01-17 21:58:45,982] [INFO]: Metrics script started
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:56: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+[2026-01-17 21:58:45,982] [INFO]: Starting metrics calculation
+[2026-01-17 21:58:50,679] [INFO]: Screener Metrics Summary: total_candidates=14, avg_score=0.35
+[2026-01-17 21:58:50,680] [INFO]: Top 15 Screener Symbols: VSCO, PLUG, LOGI, SRRK, HMY, FN, RGLD, SKY, HBAN, ALK, STLD, MIRM, NVST, NBIS
+[2026-01-17 21:58:50,682] [INFO]: Top Candidates: symbol    score  win_rate      net_pnl
+  VSCO 0.851209 55.729167  7325.795900
+  PLUG 0.826545 66.990291  7100.683629
+  LOGI 0.428603 51.612903  1469.455100
+  SRRK 0.427654 51.388889   961.050010
+   HMY 0.423777 48.085106  1168.466136
+    FN 0.348817 47.802198     3.993407
+  RGLD 0.303993 43.356643   -88.903321
+   SKY 0.279833 41.406250  -226.632571
+  HBAN 0.245222 41.216216 -1029.891187
+   ALK 0.214686 38.983051 -1109.122829
+  STLD 0.196352 38.216561 -1720.513029
+  MIRM 0.187992 38.000000 -2247.749833
+  NVST 0.173469 35.135135 -1385.900537
+  NBIS 0.000000  0.000000     0.000000
+[2026-01-17 21:58:50,684] [INFO]: Calculated Metrics: Trades=1, Net PnL=-2.59, Win Rate=0.00%, Expectancy=-2.59, Profit Factor=0.0, Max Drawdown=0.00, Sharpe=0.00, Sortino=0.00
+[2026-01-17 21:58:55,384] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+[2026-01-17 21:58:55,384] [INFO]: [INFO] METRICS_DB_OK run_date=2026-01-18 total_trades=1 net_pnl=-2.590005000000019
+[2026-01-17 21:58:55,395] [INFO]: Metrics calculation complete
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:533: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-17 21:58:55,395] [INFO]: Script finished in 0:00:09.413264
+[2026-01-18T03:58:55.464242+00:00] END metrics rc=0 secs=10.1

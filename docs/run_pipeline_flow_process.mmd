@@ -1,0 +1,123 @@
+%% [MermaidChart: run_pipeline_flow_process]
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '168px', 'fontFamily': 'Helvetica, Arial, sans-serif', 'fontWeight': '800', 'textColor': '#000000', 'primaryTextColor': '#000000', 'secondaryTextColor': '#000000', 'tertiaryTextColor': '#000000', 'lineColor': '#000000', 'nodePadding': 90}, 'flowchart': {'nodeSpacing': 80, 'rankSpacing': 140}}}%%
+flowchart LR
+  classDef start fill:#f0fff4,stroke:#000000,color:#000000,stroke-width:2px,padding:90px 500px,width:700px,min-width:700px;
+  classDef decision fill:#fffbe6,stroke:#000000,color:#000000,stroke-width:2px,padding:90px 500px,width:700px,min-width:700px;
+  classDef step fill:#e6f4ff,stroke:#000000,color:#000000,stroke-width:2px,padding:90px 500px,width:700px,min-width:700px;
+  classDef warn fill:#ffecec,stroke:#000000,color:#000000,stroke-width:2px,padding:90px 500px,width:700px,min-width:700px;
+  classDef ref fill:#f5e9ff,stroke:#000000,color:#000000,stroke-width:2px,padding:90px 500px,width:700px,min-width:700px;
+  classDef note fill:#f2f2f2,stroke:#000000,color:#000000,stroke-width:2px,padding:90px 500px,width:700px,min-width:700px;
+
+  subgraph Section1["Section 1 - Actions"]
+    direction TB
+    A([Start run_pipeline])
+    B[Load env + logging]
+    D[Parse args + steps]
+    E[Prepare step args]
+    F1[Run screener\nwrite candidates to DB]
+    G1[Run backtest\nread candidates from DB]
+    H1[Run metrics\nwrite metrics_daily to DB]
+    I1[Run label_generator]
+    J1[Run ranker_eval]
+    K1[Merge predictions, rerank + weights, write nightly status]
+    M[Finalize + summaries\nwrite pipeline_runs]
+    O[Update equity, reload dashboard]
+    END([End])
+  end
+
+  subgraph Section2["Section 2 - Questions"]
+    direction TB
+    C{Missing env?}
+    DB_req{DB enabled?}
+    S_req{Screener missing?}
+    CAND{"DB candidates > 0?"}
+    G[Backtest step?]
+    H[Metrics step?]
+    I[Labels step?]
+    J[Ranker_eval step?]
+    K[Enrich candidates?]
+  end
+
+  subgraph Section3["Section 3 - Errors"]
+    direction TB
+    C_fail[Exit rc=2]
+    S_fail["Screener missing: stop + alert"]
+    DB_fail["DB required: stop + alert"]
+    Z_warn["Zero candidates: alert + continue"]
+  end
+
+  subgraph Section4["Section 4 - References"]
+    direction TB
+    DF1["DF-Candidates (DB)"]
+    DF2["DF-Metrics (DB + JSON)"]
+    DF3[DF-ML]
+    DF4[DF-Reports]
+    DF5[DF-DB tables]
+  end
+
+  subgraph Section5["Section 5 - Legend + Notes"]
+    direction TB
+    L_start[Start/End]
+    L_decision{Decision}
+    L_step[Process step]
+    L_warn[Error/Exit]
+    L_ref[Cross-reference]
+    L_note[Note]
+    L_start --> L_decision --> L_step --> L_warn --> L_ref --> L_note
+    NOTE[Print B: docs/run_pipeline_flow_data.mmd]
+  end
+
+  A --> B
+  B --> C
+  C -- yes --> C_fail
+  C -- no --> DB_req
+  DB_req -- no --> DB_fail
+  DB_req -- yes --> D
+  D --> S_req
+  S_req -- yes --> S_fail
+  S_req -- no --> E
+  E --> F1
+  F1 --> CAND
+  CAND -- yes --> G
+  CAND -- no --> Z_warn
+  Z_warn --> G
+  G -- yes --> G1
+  G -- no --> H
+  G1 --> H
+  H -- yes --> H1
+  H -- no --> I
+  H1 --> I
+  I -- yes --> I1
+  I -- no --> J
+  I1 --> J
+  J -- yes --> J1
+  J -- no --> K
+  J1 --> K
+  K -- yes --> K1
+  K -- no --> M
+  K1 --> M
+  M --> O
+  O --> END
+
+  F1 -.-> DF1
+  G1 -.-> DF1
+  H1 -.-> DF2
+  I1 -.-> DF3
+  J1 -.-> DF3
+  K1 -.-> DF3
+  M -.-> DF4
+  M -.-> DF5
+  DF1 -.-> NOTE
+
+  class A,END start;
+  class C,DB_req,S_req,CAND,G,H,I,J,K decision;
+  class C_fail,S_fail,DB_fail,Z_warn warn;
+  class B,D,E,F1,G1,H1,I1,J1,K1,M,O step;
+  class DF1,DF2,DF3,DF4,DF5 ref;
+  class NOTE note;
+  class L_start start;
+  class L_decision decision;
+  class L_step step;
+  class L_warn warn;
+  class L_ref ref;
+  class L_note note;
