@@ -32,14 +32,12 @@ import requests
 from scripts import db
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.utils.env import load_env
-from utils import atomic_write_bytes, write_csv_atomic
 from utils.alerts import send_alert
 from utils.env import (
     AlpacaCredentialsError,
     AlpacaUnauthorizedError,
     assert_alpaca_creds,
     get_alpaca_creds,
-    write_auth_error_artifacts,
 )
 import utils.telemetry as telemetry
 
@@ -367,7 +365,7 @@ def record_executed_trade(
     event_type: str | None = None,
     raw: Mapping[str, Any] | None = None,
 ) -> None:
-    """Append a trade execution event to ``executed_trades.csv``."""
+    """Record a trade execution event in PostgreSQL."""
 
     side_value = (side or "").lower()
     event_label = (event_type or "").upper() or None
@@ -408,36 +406,6 @@ def record_executed_trade(
         "raw": raw_payload or None,
     }
 
-    existing: pd.DataFrame
-    if EXECUTED_TRADES_PATH.exists():
-        try:
-            existing = pd.read_csv(EXECUTED_TRADES_PATH)
-        except Exception:
-            LOGGER.exception(
-                "Failed to read existing executed trades log at %s",
-                EXECUTED_TRADES_PATH,
-            )
-            existing = pd.DataFrame(columns=EXECUTED_TRADES_COLUMNS)
-    else:
-        existing = pd.DataFrame(columns=EXECUTED_TRADES_COLUMNS)
-
-    for column in EXECUTED_TRADES_COLUMNS:
-        if column not in existing.columns:
-            existing[column] = pd.NA
-
-    updated = pd.concat(
-        [existing[EXECUTED_TRADES_COLUMNS], pd.DataFrame([row])],
-        ignore_index=True,
-    )
-
-    try:
-        write_csv_atomic(str(EXECUTED_TRADES_PATH), updated[EXECUTED_TRADES_COLUMNS])
-    except Exception:
-        LOGGER.exception(
-            "Failed to append executed trade for %s to %s",
-            symbol,
-            EXECUTED_TRADES_PATH,
-        )
     event_for_log = event_label or row["order_status"]
     try:
         db_ok = db.insert_executed_trade(row)
@@ -812,10 +780,10 @@ def _log_call(label, fn, *args, **kwargs):
         logger.warning("[CALL] %s ok=0 dt=%.3fs err=%r", label, _time.perf_counter() - t0, e)
         return None, e
 LOG_PATH = Path("logs") / "execute_trades.log"
-METRICS_PATH = Path("data") / "execute_metrics.json"
-EXECUTED_TRADES_PATH = Path("data") / "executed_trades.csv"
 _EXECUTE_START_UTC: datetime | None = None
 _EXECUTE_FINISH_UTC: datetime | None = None
+_EXECUTE_METRICS_PAYLOAD: Dict[str, Any] | None = None
+_EXECUTOR_RUN_WRITTEN: bool = False
 
 
 def write_execute_metrics(
@@ -825,7 +793,6 @@ def write_execute_metrics(
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
 ) -> Dict[str, Any]:
-    METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = dict(payload or {})
     if status:
         payload["status"] = status
@@ -834,13 +801,12 @@ def write_execute_metrics(
         start_dt=start_dt,
         end_dt=end_dt or datetime.now(timezone.utc),
     )
-    atomic_write_bytes(
-        METRICS_PATH,
-        json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8"),
-    )
+    global _EXECUTE_METRICS_PAYLOAD
+    _EXECUTE_METRICS_PAYLOAD = dict(enriched)
+    # PHASE 3: persist executor run metrics to executor_runs table.
     log_info(
         "METRICS_UPDATED",
-        path=str(METRICS_PATH),
+        target="memory",
         run_started_utc=enriched.get("run_started_utc"),
         run_finished_utc=enriched.get("run_finished_utc"),
         status=enriched.get("status"),
@@ -857,11 +823,7 @@ def _write_execute_metrics_error(
 ) -> None:
     """Persist an error snapshot so dashboards surface a clear banner."""
 
-    METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        existing = json.loads(METRICS_PATH.read_text(encoding="utf-8")) if METRICS_PATH.exists() else {}
-    except Exception:
-        existing = {}
+    existing = _load_execute_metrics() or {}
     if not isinstance(existing, dict):
         existing = {}
     payload: Dict[str, Any] = dict(existing)
@@ -896,23 +858,6 @@ def _write_execute_metrics_error(
         start_dt=_EXECUTE_START_UTC,
         end_dt=datetime.now(timezone.utc),
     )
-EXECUTED_TRADES_COLUMNS: list[str] = [
-    "order_id",
-    "symbol",
-    "qty",
-    "avg_entry_price",
-    "current_price",
-    "unrealized_pl",
-    "entry_price",
-    "entry_time",
-    "exit_price",
-    "exit_time",
-    "net_pnl",
-    "pnl",
-    "order_status",
-    "order_type",
-    "side",
-]
 DEFAULT_BAR_DIRECTORIES: Sequence[Path] = (
     Path("data") / "daily",
     Path("data") / "bars" / "daily",
@@ -1058,18 +1003,13 @@ def _paper_only_guard(trading_client: Any | None, base_url: str | None = "") -> 
 
 
 def _load_execute_metrics() -> Optional[Dict[str, Any]]:
-    if not METRICS_PATH.exists():
+    if _EXECUTE_METRICS_PAYLOAD is None:
         return None
-    try:
-        payload = json.loads(METRICS_PATH.read_text(encoding="utf-8")) or {}
-    except Exception as exc:  # pragma: no cover - defensive metrics parsing
-        LOGGER.warning("Failed to load execute metrics: %s", exc)
-        return None
-    if isinstance(payload, Mapping):
-        return dict(payload)
+    if isinstance(_EXECUTE_METRICS_PAYLOAD, Mapping):
+        return dict(_EXECUTE_METRICS_PAYLOAD)
     LOGGER.warning(
-        "Execute metrics file contained unexpected payload type: %s",
-        type(payload).__name__,
+        "Execute metrics payload contained unexpected type: %s",
+        type(_EXECUTE_METRICS_PAYLOAD).__name__,
     )
     return None
 
@@ -1226,17 +1166,17 @@ def _canonicalize_execute_metrics(
     return enriched
 
 
-def _count_csv_rows(path: Path) -> int:
-    """Return the number of data rows in a CSV (excluding the header)."""
+def _count_db_candidates() -> int:
+    """Return the number of candidates available in Postgres for the latest run."""
 
+    if not db.db_enabled():
+        return 0
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            total = sum(1 for _ in handle)
-    except FileNotFoundError:
-        return 0
+        count, _ = db.fetch_latest_screener_candidate_count()
+        return int(count or 0)
     except Exception:
+        LOGGER.debug("Failed to count candidates in DB", exc_info=True)
         return 0
-    return max(total - 1, 0)
 
 
 _HHMM_RE = re.compile(r"^\d{4}$")
@@ -1317,7 +1257,7 @@ def write_premarket_snapshot(
     except Exception:
         buying_power = None
 
-    candidates_in = _count_csv_rows(data_dir / "latest_candidates.csv")
+    candidates_in = _count_db_candidates()
     start_str, end_str = _premarket_bounds_strings()
     timestamp_started = (
         started_utc
@@ -1452,12 +1392,25 @@ def _record_auth_error(
     sanitized: Mapping[str, object],
     missing: Iterable[str] | None = None,
 ) -> None:
-    write_auth_error_artifacts(
-        reason=reason,
-        sanitized=sanitized,
-        missing=missing or [],
-        metrics_path=METRICS_PATH,
-        summary_path=Path("data") / "metrics_summary.csv",
+    missing_list = sorted({str(item) for item in (missing or []) if str(item).strip()})
+    payload: Dict[str, Any] = {
+        "status": "auth_error",
+        "auth_ok": False,
+        "auth_reason": reason,
+        "auth_missing": missing_list,
+        "auth_hint": dict(sanitized),
+        "error": {
+            "message": "auth_error",
+            "reason": reason,
+            "missing": missing_list,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    write_execute_metrics(
+        payload,
+        status="auth_error",
+        start_dt=_EXECUTE_START_UTC,
+        end_dt=datetime.now(timezone.utc),
     )
 
 
@@ -1847,12 +1800,12 @@ def load_candidates_from_db(
     metrics: ExecutionMetrics | None = None,
     record_skip: Optional[Callable[..., Any]] = None,
     diagnostic: bool = False,
-) -> list[Dict[str, Any]]:
+) -> pd.DataFrame:
     """Load the latest screener candidates from PostgreSQL."""
 
     LOGGER.info("Loading candidates from DB")
 
-    def _record_missing_config() -> list[Dict[str, Any]]:
+    def _record_missing_config() -> pd.DataFrame:
         LOGGER.error("[ERROR] Missing DB config: set JBRAVO_DB_* or DATABASE_URL")
         if metrics is not None:
             metrics.auth_ok = False
@@ -1863,7 +1816,7 @@ def load_candidates_from_db(
                 record_skip("DATA_MISSING", count=1, detail="missing_db_config")
             except TypeError:
                 record_skip("DATA_MISSING", count=1)
-        return []
+        return pd.DataFrame()
 
     host = os.getenv("JBRAVO_DB_HOST")
     port = os.getenv("JBRAVO_DB_PORT")
@@ -1905,7 +1858,7 @@ def load_candidates_from_db(
     )
 
     def _record_no_db_candidates(detail: str) -> None:
-        LOGGER.info("[INFO] NO_DB_CANDIDATES %s", detail)
+        LOGGER.info("[INFO] NO_CANDIDATES %s", detail)
         if record_skip is not None:
             try:
                 record_skip("NO_CANDIDATES", count=1, detail=detail)
@@ -1933,33 +1886,15 @@ def load_candidates_from_db(
                 LOGGER.info("DB_PING ok=true")
             except Exception as exc:  # pragma: no cover - diagnostic logging
                 LOGGER.info("DB_PING ok=false err=%s", exc)
-        LOGGER.info("[INFO] DB_QUERY max_timestamp")
-        max_df = pd.read_sql_query(
-            "SELECT MAX(timestamp) AS max_ts FROM screener_candidates;",
-            connection,
-        )
-        if not max_df.empty and "max_ts" in max_df.columns:
-            max_timestamp_value = max_df["max_ts"].iloc[0]
-        max_ts_display = (
-            max_timestamp_value.isoformat()
-            if hasattr(max_timestamp_value, "isoformat")
-            else (str(max_timestamp_value) if max_timestamp_value is not None else "NULL")
-        )
-        LOGGER.info("[INFO] DB_MAX_TIMESTAMP %s", max_ts_display)
-        if max_timestamp_value is None or pd.isna(max_timestamp_value):
-            LOGGER.info("[INFO] DB_CANDIDATES_LOADED count=0 max_timestamp=%s", max_ts_display)
-            _record_no_db_candidates("max_timestamp_null")
-            return []
-        LOGGER.info("[INFO] DB_QUERY latest_batch order=score_desc")
+        LOGGER.info("[INFO] DB_QUERY latest_screener_candidates order=score_desc")
         query = """
             SELECT
-                run_date, symbol, score, exchange, close, volume,
-                universe_count, score_breakdown, entry_price, adv20, atrp, source, timestamp
-            FROM screener_candidates
-            WHERE timestamp = %s
+                run_date, timestamp, symbol, score, exchange, close, volume,
+                universe_count, score_breakdown, entry_price, adv20, atrp, source
+            FROM latest_screener_candidates
             ORDER BY score DESC;
         """
-        df = pd.read_sql_query(query, connection, params=(max_timestamp_value,))
+        df = pd.read_sql_query(query, connection)
     except Exception as exc:
         raise CandidateLoadError(f"Failed to load candidates from database: {exc}") from exc
     finally:
@@ -1968,7 +1903,8 @@ def load_candidates_from_db(
                 connection.close()
             except Exception:
                 LOGGER.debug("Failed to close DB connection", exc_info=True)
-    records = df.to_dict(orient="records")
+    if not df.empty and "timestamp" in df.columns:
+        max_timestamp_value = df["timestamp"].dropna().max()
     max_ts_display = (
         max_timestamp_value.isoformat()
         if hasattr(max_timestamp_value, "isoformat")
@@ -1976,16 +1912,16 @@ def load_candidates_from_db(
     )
     LOGGER.info(
         "[INFO] DB_CANDIDATES_LOADED count=%s max_timestamp=%s",
-        len(records),
+        len(df),
         max_ts_display,
     )
-    if not records:
+    if df.empty:
         _record_no_db_candidates("latest_batch_empty")
-        return []
+        return df
     if diagnostic:
-        sample = [{"symbol": rec.get("symbol"), "score": rec.get("score")} for rec in records[:5]]
+        sample = [{"symbol": rec.get("symbol"), "score": rec.get("score")} for rec in df.to_dict("records")[:5]]
         LOGGER.info("[DIAGNOSTIC] DB_SAMPLE symbols_scores=%s", sample)
-    return records
+    return df
 
 
 class AlpacaAuthFailure(RuntimeError):
@@ -2110,7 +2046,7 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
 @dataclass
 class ExecutorConfig:
     source_path: Path = Path("data/latest_candidates.csv")
-    source_type: str = "csv"
+    source_type: str = "db"
     allocation_pct: float = 0.05
     max_positions: int = 7
     max_new_positions: int = 7
@@ -3555,12 +3491,11 @@ class TradeExecutor:
         return allowed, message, resolved_window
 
     def _load_latest_candidates_from_db(self) -> tuple[pd.DataFrame, Optional[str]]:
-        records = load_candidates_from_db(
+        df = load_candidates_from_db(
             metrics=self.metrics,
             record_skip=self.record_skip_reason,
             diagnostic=bool(getattr(self.config, "diagnostic", False)),
         )
-        df = pd.DataFrame(records)
         if "symbol" in df.columns:
             df["symbol"] = df["symbol"].astype("string").str.upper()
         run_label: Optional[str] = None
@@ -3573,25 +3508,14 @@ class TradeExecutor:
         return df, run_label
 
     def load_candidates(self, *, rank: bool = True) -> pd.DataFrame:
-        source_type = (self.config.source_type or "csv").strip().lower()
-        if source_type == "db":
-            LOGGER.info("[INFO] CANDIDATE_SOURCE db")
+        source_type = (self.config.source_type or "db").strip().lower()
+        LOGGER.info("[INFO] CANDIDATE_SOURCE db")
         df: pd.DataFrame
         base_dir: Path | None = None
-        if source_type == "db":
-            df, _ = self._load_latest_candidates_from_db()
-            base_dir = Path.cwd()
-        elif source_type == "csv":
-            path = self.config.source_path
-            if not path.exists():
-                raise CandidateLoadError(f"Candidate file not found: {path}")
-            df = pd.read_csv(path, dtype={"symbol": "string"})
-            try:
-                base_dir = path.resolve().parent.parent
-            except Exception:
-                base_dir = Path.cwd()
-        else:
-            raise CandidateLoadError(f"Unknown candidate source: {source_type}")
+        if source_type != "db":
+            raise CandidateLoadError(f"Candidate source disabled: {source_type}")
+        df, _ = self._load_latest_candidates_from_db()
+        base_dir = Path.cwd()
         raw_columns = list(df.columns)
         LOGGER.info("[INFO] CANDIDATE_COLUMNS raw=%s", raw_columns)
         normalized_columns = [str(column).strip() for column in raw_columns]
@@ -5158,19 +5082,30 @@ class TradeExecutor:
             self.metrics.orders_filled,
             summary_skips,
         )
+        global _EXECUTOR_RUN_WRITTEN
+        if _EXECUTOR_RUN_WRITTEN:
+            return
+        run_payload = _load_execute_metrics() or self.metrics.as_dict()
+        if _EXECUTE_START_UTC and "run_started_utc" not in run_payload:
+            run_payload["run_started_utc"] = _EXECUTE_START_UTC.isoformat()
+        if _EXECUTE_FINISH_UTC and "run_finished_utc" not in run_payload:
+            run_payload["run_finished_utc"] = _EXECUTE_FINISH_UTC.isoformat()
+        if "status" not in run_payload:
+            run_payload["status"] = self.metrics.status
+        try:
+            if db.insert_executor_run(run_payload):
+                _EXECUTOR_RUN_WRITTEN = True
+            else:
+                LOGGER.warning(
+                    "[WARN] EXECUTOR_RUN_WRITE_FAILED status=%s",
+                    run_payload.get("status"),
+                )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("[WARN] EXECUTOR_RUN_WRITE_FAILED err=%s", exc)
 
     def persist_metrics(self) -> None:
         payload = self.metrics.as_dict()
-        METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        existing: Dict[str, Any] = {}
-        if METRICS_PATH.exists():
-            try:
-                existing_payload = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
-            except Exception as exc:  # pragma: no cover - defensive merge
-                _warn_context("metrics.persist", f"decode_failed: {exc}")
-                existing_payload = {}
-            if isinstance(existing_payload, Mapping):
-                existing = dict(existing_payload)
+        existing: Dict[str, Any] = _load_execute_metrics() or {}
         merged = dict(existing)
         merged.update(payload)
         existing_skips = existing.get("skips") if isinstance(existing.get("skips"), Mapping) else {}
@@ -5322,15 +5257,15 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Execute trades for pipeline candidates")
     parser.add_argument(
         "--source",
-        choices=("db", "csv"),
+        choices=("db",),
         default=ExecutorConfig.source_type,
-        help="Candidate source: db or csv (default csv)",
+        help="Candidate source: db (PostgreSQL only)",
     )
     parser.add_argument(
         "--source-path",
         type=Path,
         default=ExecutorConfig.source_path,
-        help="Path to the candidate CSV file (used when --source=csv)",
+        help="Unused (CSV sources disabled)",
     )
     parser.add_argument(
         "--allocation-pct",
@@ -5574,7 +5509,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
     market_timezone = args.market_timezone or ExecutorConfig.market_timezone
     return ExecutorConfig(
         source_path=args.source_path,
-        source_type=(args.source or "csv").lower(),
+        source_type=(args.source or "db").lower(),
         allocation_pct=args.allocation_pct,
         max_positions=args.max_positions,
         max_new_positions=args.max_new_positions,
@@ -5699,7 +5634,7 @@ def run_executor(
             )
             LOGGER.info(banner)
         try:
-            LOGGER.info("[INFO] CANDIDATE_SOURCE %s", str(config.source_type or "csv"))
+            LOGGER.info("[INFO] CANDIDATE_SOURCE %s", str(config.source_type or "db"))
             frame = loader.load_candidates(rank=False)
         except CandidateLoadError as exc:
             LOGGER.error("%s", exc)
@@ -5907,7 +5842,7 @@ def run_executor(
 
 
 def load_candidates(path: Path) -> pd.DataFrame:
-    config = ExecutorConfig(source_path=path, source_type="csv")
+    config = ExecutorConfig(source_path=path, source_type="db")
     metrics = ExecutionMetrics()
     executor = TradeExecutor(config, None, metrics)
     return executor.load_candidates()
@@ -6024,7 +5959,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 skip_counts = {str(k): _as_int(v) for k, v in (skip_block or {}).items()}
                 candidates_in = _as_int(metrics_payload.get("symbols_in"))
                 if candidates_in <= 0:
-                    candidates_in = _count_csv_rows(Path("data") / "latest_candidates.csv")
+                    candidates_in = _count_db_candidates()
                 orders_submitted = _as_int(metrics_payload.get("orders_submitted"))
                 non_time_skips = sum(count for reason, count in skip_counts.items() if reason != "TIME_WINDOW")
                 time_only = non_time_skips == 0 and skip_counts.get("TIME_WINDOW", 0) > 0

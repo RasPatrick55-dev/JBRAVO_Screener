@@ -34,3 +34,137 @@
 2025-07-07 09:34:00 INFO Trade execution started
 2025-07-07 09:35:00 INFO AAPL order filled
 2025-07-07 09:35:10 WARNING AMZN order rejected
+[2026-01-19 12:15:05,510] [INFO] METRICS_UPDATED run_finished_utc=2026-01-19T18:15:05.508074+00:00 run_started_utc=2026-01-19T18:15:05.508074+00:00 status=error target=memory
+[2026-01-19 12:15:05,511] [INFO] [INFO] RECONCILE_AUTO_START stage=start lookback_days=14 limit=500
+[2026-01-19 12:15:08,019] [INFO] [INFO] RECONCILE_START open_trades=1
+[2026-01-19 12:15:08,020] [INFO] alpaca.get_positions
+[2026-01-19 12:15:08,434] [INFO] [INFO] RECONCILE_CLOSE_BY_POSITION trade_id=2 symbol=EGO
+[2026-01-19 12:15:08,895] [INFO] [INFO] RECONCILE_WATERMARK after=2026-01-02T23:27:53.388734+00:00 fetched_orders=6
+[2026-01-19 12:15:09,313] [INFO] [INFO] RECONCILE_DECORATE_SELL trade_id=2 symbol=EGO exit_order_id=605a4273-9e28-4e4d-95bd-53433fd55eef exit_price=36.06 reason=SELL_FILL
+[2026-01-19 12:15:09,555] [INFO] [INFO] RECONCILE_WATERMARK_UPDATE last_after=2026-01-05T08:55:59.119310+00:00
+[2026-01-19 12:15:09,555] [INFO] [INFO] RECONCILE_END closed=1 decorated=1
+[2026-01-19 12:15:09,555] [INFO] [INFO] RECONCILE_AUTO_END stage=start
+[2026-01-19 12:15:09,555] [INFO] ========================================================================
+[2026-01-19 12:15:09,555] [INFO] [INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons
+[2026-01-19 12:15:09,555] [INFO] ========================================================================
+[2026-01-19 12:15:09,555] [INFO] [INFO] CANDIDATE_SOURCE db
+[2026-01-19 12:15:09,555] [INFO] [INFO] CANDIDATE_SOURCE db
+[2026-01-19 12:15:09,555] [INFO] Loading candidates from DB
+[2026-01-19 12:15:09,555] [INFO] [INFO] DB_PASSWORD decoded_from_url=true
+[2026-01-19 12:15:09,555] [INFO] [INFO] DB_CONFIG source=DATABASE_URL
+[2026-01-19 12:15:09,555] [INFO] [INFO] DB_CONNECT target=host=localhost port=9999 db=jbravo user=R*** pass=***
+[2026-01-19 12:15:12,287] [ERROR] Failed to load candidates from database: connection to server at "localhost" (::1), port 9999 failed: Connection refused (0x0000274D/10061)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "localhost" (127.0.0.1), port 9999 failed: FATAL:  password authentication failed for user "RasPatrick"
+connection to server at "localhost" (127.0.0.1), port 9999 failed: FATAL:  password authentication failed for user "RasPatrick"
+
+[2026-01-19 12:15:12,287] [INFO] METRICS_UPDATED run_finished_utc=2026-01-19T18:15:12.287643+00:00 run_started_utc=2026-01-19T18:15:05.508074+00:00 status=error target=memory
+[2026-01-19 12:15:12,287] [INFO] [INFO] RECONCILE_AUTO_START stage=end lookback_days=14 limit=500
+[2026-01-19 12:15:14,758] [INFO] [INFO] RECONCILE_START open_trades=0
+[2026-01-19 12:15:15,009] [INFO] [INFO] RECONCILE_WATERMARK after=2026-01-05T08:55:59.119310+00:00 fetched_orders=1
+[2026-01-19 12:15:15,178] [INFO] [INFO] RECONCILE_WATERMARK_UPDATE last_after=2026-01-05T08:55:59.119310+00:00
+[2026-01-19 12:15:15,178] [INFO] [INFO] RECONCILE_END closed=0 decorated=0
+[2026-01-19 12:15:15,178] [INFO] [INFO] RECONCILE_AUTO_END stage=end
+[2026-01-19 12:15:15,179] [INFO] EXECUTE END submitted=0 trailing=0 skips={'TIME_WINDOW': 0, 'CASH': 0, 'ZERO_QTY': 0, 'PRICE_BOUNDS': 0, 'MAX_POSITIONS': 0, 'API_FAIL': 0, 'DATA_MISSING': 1, 'EXISTING_POSITION': 0, 'OPEN_ORDER': 0, 'NO_CANDIDATES': 0}
+[2026-01-19 12:15:17,593] [INFO] METRICS_UPDATED run_finished_utc=2026-01-19T18:15:17.592964+00:00 run_started_utc=2026-01-19T18:15:05.508074+00:00 status=error target=memory
+[2026-01-19 12:28:10,625] [INFO] METRICS_UPDATED run_finished_utc=2026-01-19T18:28:10.623392+00:00 run_started_utc=2026-01-19T18:28:10.623392+00:00 status=error target=memory
+[2026-01-19 12:28:10,626] [INFO] [INFO] RECONCILE_AUTO_START stage=start lookback_days=14 limit=500
+[2026-01-19 12:28:13,034] [INFO] [INFO] RECONCILE_START open_trades=0
+[2026-01-19 12:28:13,356] [INFO] [INFO] RECONCILE_WATERMARK after=2026-01-05T08:55:59.119310+00:00 fetched_orders=1
+[2026-01-19 12:28:13,473] [INFO] [INFO] RECONCILE_WATERMARK_UPDATE last_after=2026-01-05T08:55:59.119310+00:00
+[2026-01-19 12:28:13,473] [INFO] [INFO] RECONCILE_END closed=0 decorated=0
+[2026-01-19 12:28:13,474] [INFO] [INFO] RECONCILE_AUTO_END stage=start
+[2026-01-19 12:28:13,474] [INFO] ========================================================================
+[2026-01-19 12:28:13,474] [INFO] [INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons
+[2026-01-19 12:28:13,474] [INFO] ========================================================================
+[2026-01-19 12:28:13,474] [INFO] [INFO] CANDIDATE_SOURCE db
+[2026-01-19 12:28:13,474] [INFO] [INFO] CANDIDATE_SOURCE db
+[2026-01-19 12:28:13,474] [INFO] Loading candidates from DB
+[2026-01-19 12:28:13,474] [INFO] [INFO] DB_PASSWORD decoded_from_url=true
+[2026-01-19 12:28:13,474] [INFO] [INFO] DB_CONFIG source=DATABASE_URL
+[2026-01-19 12:28:13,474] [INFO] [INFO] DB_CONNECT target=host=localhost port=9999 db=jbravo user=s*** pass=***
+[2026-01-19 12:28:15,953] [INFO] [INFO] DB_QUERY latest_screener_candidates order=score_desc
+[2026-01-19 12:28:16,273] [INFO] [INFO] DB_CANDIDATES_LOADED count=11 max_timestamp=2026-01-16T05:00:00+00:00
+[2026-01-19 12:28:16,275] [INFO] [INFO] DB_CANDIDATES rows=11
+[2026-01-19 12:28:16,275] [INFO] [INFO] CANDIDATE_COLUMNS raw=['run_date', 'timestamp', 'symbol', 'score', 'exchange', 'close', 'volume', 'universe_count', 'score_breakdown', 'entry_price', 'adv20', 'atrp', 'source']
+[2026-01-19 12:28:16,276] [INFO] [INFO] CANDIDATE_COLUMNS normalized=['run_date', 'timestamp', 'symbol', 'score', 'exchange', 'close', 'volume', 'universe_count', 'score_breakdown', 'entry_price', 'adv20', 'atrp', 'source']
+[2026-01-19 12:28:16,296] [INFO] [INFO] DB_CANDIDATES_LOADED count=11 max_timestamp=2026-01-16 05:00:00+00:00
+[2026-01-19 12:28:16,296] [INFO] RANK_CANDIDATES_ENTER rows=11 cols=19
+[2026-01-19 12:28:16,296] [INFO] [INFO] CANDIDATE_RANKING key=score rows=11 non_null=11 reason=missing_model_score_column
+[2026-01-19 12:28:16,302] [INFO] [INFO] CANDIDATE_PICK key=score top=[('KTOS', 1.017624), ('BX', 0.965677), ('WT', 0.9625), ('DBRG', 0.908036), ('RF', 0.875), ('UEC', 0.8625), ('MUR', 0.8625), ('TXG', 0.676436), ('HE', 0.594166), ('NOV', 0.532129), ('ASO', 0.345532)]
+[2026-01-19 12:28:16,303] [INFO] [INFO] ALLOC_WEIGHT_COLUMNS present=False columns=['timestamp', 'symbol', 'score', 'exchange', 'close', 'volume', 'universe_count', 'score_breakdown', 'entry_price', 'adv20', 'atrp', 'source', 'sma9', 'ema20', 'sma180']
+[2026-01-19 12:28:16,303] [INFO] ALLOC_WEIGHT_DIAG total_rows=7 weights_non_null=0 picked=7 picked_weights_found=0 sample=[]
+[2026-01-19 12:28:16,303] [INFO] ALLOC_BLOCK_ENTER rows=11 top_n=7 base_alloc_pct=0.05
+[2026-01-19 12:28:16,303] [INFO] ALLOCATION_MODE mode=flat base_alloc_pct=0.05
+[2026-01-19 12:28:16,303] [WARNING] ALLOC_SPLIT_SKIPPED reason=missing_or_invalid_alloc_weight
+[2026-01-19 12:28:16,303] [INFO] [INFO] SUBMIT_AT passed target -> proceeding ny_now=2026-01-19T13:28:16.303460-05:00 target=2026-01-19T07:00:00-05:00
+[2026-01-19 12:28:16,303] [INFO] MARKET_TIME in_window=True ny_now=2026-01-19T13:28:16.303507-05:00 window=regular
+[2026-01-19 12:28:16,303] [INFO] EXEC_START candidates=11 diagnostic=False dry_run=True hhmm=13:28 in_window=True ny_now=2026-01-19T13:28:16.303507-05:00 resolved=regular submit_at_ny=07:00 time_window=auto
+[2026-01-19 12:28:16,303] [INFO] [INFO] TRADING_MODE base=https://paper-api.alpaca.markets paper_mode=True forced=auto
+[2026-01-19 12:28:16,303] [INFO] alpaca.auth/v2/account
+[2026-01-19 12:28:16,530] [INFO] alpaca.auth/v2/clock
+[2026-01-19 12:28:16,726] [INFO] [INFO] AUTH_RESULT ok=True reason=ok
+[2026-01-19 12:28:19,180] [INFO] [INFO] RECONCILE_START open_trades=0
+[2026-01-19 12:28:19,652] [INFO] [INFO] RECONCILE_WATERMARK after=2026-01-05T08:55:59.119310+00:00 fetched_orders=1
+[2026-01-19 12:28:19,954] [INFO] [INFO] RECONCILE_WATERMARK_UPDATE last_after=2026-01-05T08:55:59.119310+00:00
+[2026-01-19 12:28:19,954] [INFO] [INFO] RECONCILE_END closed=0 decorated=0
+[2026-01-19 12:28:19,955] [INFO] METRICS_UPDATED run_finished_utc=2026-01-19T18:28:19.954984+00:00 run_started_utc=2026-01-19T18:28:10.623392+00:00 status=ok target=memory
+[2026-01-19 12:28:19,955] [INFO] EXECUTE_SUMMARY orders_filled=0 orders_submitted=0 skips.API_FAIL=0 skips.CASH=0 skips.DATA_MISSING=0 skips.EXISTING_POSITION=0 skips.MAX_POSITIONS=0 skips.NO_CANDIDATES=0 skips.OPEN_ORDER=0 skips.PRICE_BOUNDS=0 skips.TIME_WINDOW=0 skips.ZERO_QTY=0 trailing_attached=0
+[2026-01-19 12:28:19,955] [INFO] EXECUTE_SUMMARY orders_submitted=0 orders_filled=0 skips={}
+[2026-01-19 12:28:25,332] [INFO] [INFO] RECONCILE_AUTO_START stage=end lookback_days=14 limit=500
+[2026-01-19 12:28:27,810] [INFO] [INFO] RECONCILE_START open_trades=0
+[2026-01-19 12:28:28,038] [INFO] [INFO] RECONCILE_WATERMARK after=2026-01-05T08:55:59.119310+00:00 fetched_orders=1
+[2026-01-19 12:28:28,197] [INFO] [INFO] RECONCILE_WATERMARK_UPDATE last_after=2026-01-05T08:55:59.119310+00:00
+[2026-01-19 12:28:28,197] [INFO] [INFO] RECONCILE_END closed=0 decorated=0
+[2026-01-19 12:28:28,198] [INFO] [INFO] RECONCILE_AUTO_END stage=end
+[2026-01-19 12:28:28,198] [INFO] EXECUTE END submitted=0 trailing=0 skips={'TIME_WINDOW': 0, 'CASH': 0, 'ZERO_QTY': 0, 'PRICE_BOUNDS': 0, 'MAX_POSITIONS': 0, 'API_FAIL': 0, 'DATA_MISSING': 0, 'EXISTING_POSITION': 0, 'OPEN_ORDER': 0, 'NO_CANDIDATES': 0}
+[2026-01-19 12:28:30,670] [INFO] METRICS_UPDATED run_finished_utc=2026-01-19T18:28:30.670288+00:00 run_started_utc=2026-01-19T18:28:10.623392+00:00 status=ok target=memory
+[2026-01-19 12:43:32,350] [INFO] METRICS_UPDATED run_finished_utc=2026-01-19T18:43:32.347877+00:00 run_started_utc=2026-01-19T18:43:32.347877+00:00 status=error target=memory
+[2026-01-19 12:43:32,350] [INFO] [INFO] RECONCILE_AUTO_START stage=start lookback_days=14 limit=500
+[2026-01-19 12:43:34,809] [INFO] [INFO] RECONCILE_START open_trades=0
+[2026-01-19 12:43:35,177] [INFO] [INFO] RECONCILE_WATERMARK after=2026-01-05T08:55:59.119310+00:00 fetched_orders=1
+[2026-01-19 12:43:35,290] [INFO] [INFO] RECONCILE_WATERMARK_UPDATE last_after=2026-01-05T08:55:59.119310+00:00
+[2026-01-19 12:43:35,290] [INFO] [INFO] RECONCILE_END closed=0 decorated=0
+[2026-01-19 12:43:35,291] [INFO] [INFO] RECONCILE_AUTO_END stage=start
+[2026-01-19 12:43:35,291] [INFO] [INFO] CANDIDATE_SOURCE db
+[2026-01-19 12:43:35,291] [INFO] [INFO] CANDIDATE_SOURCE db
+[2026-01-19 12:43:35,291] [INFO] Loading candidates from DB
+[2026-01-19 12:43:35,291] [INFO] [INFO] DB_PASSWORD decoded_from_url=true
+[2026-01-19 12:43:35,291] [INFO] [INFO] DB_CONFIG source=DATABASE_URL
+[2026-01-19 12:43:35,291] [INFO] [INFO] DB_CONNECT target=host=localhost port=9999 db=jbravo user=s*** pass=***
+[2026-01-19 12:43:37,664] [INFO] [INFO] DB_QUERY latest_screener_candidates order=score_desc
+[2026-01-19 12:43:37,940] [INFO] [INFO] DB_CANDIDATES_LOADED count=11 max_timestamp=2026-01-16T05:00:00+00:00
+[2026-01-19 12:43:37,941] [INFO] [INFO] DB_CANDIDATES rows=11
+[2026-01-19 12:43:37,941] [INFO] [INFO] CANDIDATE_COLUMNS raw=['run_date', 'timestamp', 'symbol', 'score', 'exchange', 'close', 'volume', 'universe_count', 'score_breakdown', 'entry_price', 'adv20', 'atrp', 'source']
+[2026-01-19 12:43:37,942] [INFO] [INFO] CANDIDATE_COLUMNS normalized=['run_date', 'timestamp', 'symbol', 'score', 'exchange', 'close', 'volume', 'universe_count', 'score_breakdown', 'entry_price', 'adv20', 'atrp', 'source']
+[2026-01-19 12:43:37,958] [INFO] [INFO] DB_CANDIDATES_LOADED count=11 max_timestamp=2026-01-16 05:00:00+00:00
+[2026-01-19 12:43:37,958] [INFO] RANK_CANDIDATES_ENTER rows=11 cols=19
+[2026-01-19 12:43:37,958] [INFO] [INFO] CANDIDATE_RANKING key=score rows=11 non_null=11 reason=missing_model_score_column
+[2026-01-19 12:43:37,962] [INFO] [INFO] CANDIDATE_PICK key=score top=[('KTOS', 1.017624), ('BX', 0.965677), ('WT', 0.9625), ('DBRG', 0.908036), ('RF', 0.875), ('UEC', 0.8625), ('MUR', 0.8625), ('TXG', 0.676436), ('HE', 0.594166), ('NOV', 0.532129), ('ASO', 0.345532)]
+[2026-01-19 12:43:37,962] [INFO] [INFO] ALLOC_WEIGHT_COLUMNS present=False columns=['timestamp', 'symbol', 'score', 'exchange', 'close', 'volume', 'universe_count', 'score_breakdown', 'entry_price', 'adv20', 'atrp', 'source', 'sma9', 'ema20', 'sma180']
+[2026-01-19 12:43:37,962] [INFO] ALLOC_WEIGHT_DIAG total_rows=7 weights_non_null=0 picked=7 picked_weights_found=0 sample=[]
+[2026-01-19 12:43:37,962] [INFO] ALLOC_BLOCK_ENTER rows=11 top_n=7 base_alloc_pct=0.05
+[2026-01-19 12:43:37,962] [INFO] ALLOCATION_MODE mode=flat base_alloc_pct=0.05
+[2026-01-19 12:43:37,962] [WARNING] ALLOC_SPLIT_SKIPPED reason=missing_or_invalid_alloc_weight
+[2026-01-19 12:43:37,963] [INFO] [INFO] SUBMIT_AT passed target -> proceeding ny_now=2026-01-19T13:43:37.963021-05:00 target=2026-01-19T07:00:00-05:00
+[2026-01-19 12:43:37,963] [INFO] MARKET_TIME in_window=True ny_now=2026-01-19T13:43:37.963068-05:00 window=regular
+[2026-01-19 12:43:37,963] [INFO] EXEC_START candidates=11 diagnostic=False dry_run=False hhmm=13:43 in_window=True ny_now=2026-01-19T13:43:37.963068-05:00 resolved=regular submit_at_ny=07:00 time_window=auto
+[2026-01-19 12:43:37,963] [INFO] [INFO] TRADING_MODE base=https://paper-api.alpaca.markets paper_mode=True forced=auto
+[2026-01-19 12:43:37,963] [INFO] alpaca.auth/v2/account
+[2026-01-19 12:43:38,204] [INFO] alpaca.auth/v2/clock
+[2026-01-19 12:43:38,372] [INFO] [INFO] AUTH_RESULT ok=True reason=ok
+[2026-01-19 12:43:40,893] [INFO] [INFO] RECONCILE_START open_trades=0
+[2026-01-19 12:43:41,186] [INFO] [INFO] RECONCILE_WATERMARK after=2026-01-05T08:55:59.119310+00:00 fetched_orders=1
+[2026-01-19 12:43:41,324] [INFO] [INFO] RECONCILE_WATERMARK_UPDATE last_after=2026-01-05T08:55:59.119310+00:00
+[2026-01-19 12:43:41,325] [INFO] [INFO] RECONCILE_END closed=0 decorated=0
+[2026-01-19 12:43:41,325] [INFO] METRICS_UPDATED run_finished_utc=2026-01-19T18:43:41.325251+00:00 run_started_utc=2026-01-19T18:43:32.347877+00:00 status=ok target=memory
+[2026-01-19 12:43:41,325] [INFO] EXECUTE_SUMMARY orders_filled=0 orders_submitted=0 skips.API_FAIL=0 skips.CASH=0 skips.DATA_MISSING=0 skips.EXISTING_POSITION=0 skips.MAX_POSITIONS=0 skips.NO_CANDIDATES=0 skips.OPEN_ORDER=0 skips.PRICE_BOUNDS=0 skips.TIME_WINDOW=0 skips.ZERO_QTY=0 trailing_attached=0
+[2026-01-19 12:43:41,325] [INFO] EXECUTE_SUMMARY orders_submitted=0 orders_filled=0 skips={}
+[2026-01-19 12:43:46,173] [INFO] [INFO] RECONCILE_AUTO_START stage=end lookback_days=14 limit=500
+[2026-01-19 12:43:48,575] [INFO] [INFO] RECONCILE_START open_trades=0
+[2026-01-19 12:43:48,786] [INFO] [INFO] RECONCILE_WATERMARK after=2026-01-05T08:55:59.119310+00:00 fetched_orders=1
+[2026-01-19 12:43:48,896] [INFO] [INFO] RECONCILE_WATERMARK_UPDATE last_after=2026-01-05T08:55:59.119310+00:00
+[2026-01-19 12:43:48,896] [INFO] [INFO] RECONCILE_END closed=0 decorated=0
+[2026-01-19 12:43:48,896] [INFO] [INFO] RECONCILE_AUTO_END stage=end
+[2026-01-19 12:43:48,897] [INFO] EXECUTE END submitted=0 trailing=0 skips={'TIME_WINDOW': 0, 'CASH': 0, 'ZERO_QTY': 0, 'PRICE_BOUNDS': 0, 'MAX_POSITIONS': 0, 'API_FAIL': 0, 'DATA_MISSING': 0, 'EXISTING_POSITION': 0, 'OPEN_ORDER': 0, 'NO_CANDIDATES': 0}
+[2026-01-19 12:43:51,213] [INFO] METRICS_UPDATED run_finished_utc=2026-01-19T18:43:51.213047+00:00 run_started_utc=2026-01-19T18:43:32.347877+00:00 status=ok target=memory

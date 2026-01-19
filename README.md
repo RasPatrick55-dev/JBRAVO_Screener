@@ -157,15 +157,15 @@ Refer to `config/ranker.yml` for the ranking weights applied during the
 
 ### Executor dry-run mode
 
-The execution script now accepts a `--dry-run` flag and a `--source` override to
-load a custom candidates file:
+The execution script accepts a `--dry-run` flag and always loads candidates
+from PostgreSQL (latest screener view).
 
 ```bash
 # Preview orders without hitting the brokerage API
 python scripts/execute_trades.py --dry-run
 
-# Execute using a different candidate list
-python scripts/execute_trades.py --source data/predictions/2024-05-01.csv
+# Confirm candidate-source log tokens
+python scripts/execute_trades.py --dry-run | rg "CANDIDATE_SOURCE db|DB_CANDIDATES|NO_CANDIDATES"
 
 # Tighten liquidity/price guardrails (values shown are the defaults)
 python scripts/execute_trades.py --min-adv20 2000000 --min-price 1 --max-price 1000

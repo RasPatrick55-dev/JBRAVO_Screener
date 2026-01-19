@@ -1,0 +1,128 @@
+%% [MermaidChart: task_run_pipeline_flow]
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '13px', 'fontFamily': 'Helvetica, Arial, sans-serif', 'fontWeight': '600', 'textColor': '#101010', 'primaryTextColor': '#101010', 'secondaryTextColor': '#101010', 'tertiaryTextColor': '#101010', 'lineColor': '#333333', 'nodePadding': 8}, 'flowchart': {'nodeSpacing': 32, 'rankSpacing': 40}}}%%
+flowchart TB
+  classDef trigger fill:#cfead1,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 14px;
+  classDef decision fill:#ffdca8,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 14px;
+  classDef step fill:#cfe4ff,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 14px;
+  classDef write fill:#ffb3b3,stroke:#7a1f1f,color:#101010,stroke-width:1.8px,padding:8px 12px;
+  classDef read fill:#8fd3ff,stroke:#1f4f99,color:#101010,stroke-width:1.8px,padding:8px 12px;
+  classDef external fill:#e0e0e0,stroke:#1f1f1f,color:#101010,stroke-width:1.5px,padding:8px 14px;
+
+  subgraph Sources["Data Sources"]
+    direction LR
+    API_DATA["Market Data APIs\nIEX primary, SIP fallback"]
+    BROKER_API["Broker API\norders + positions"]
+  end
+
+  subgraph TaskPipeline["Task: Run Pipeline (after-close / pre-market)"]
+    direction TB
+    T0["Trigger: schedule or manual run\nTime: after-close primary, pre-market rerun"]:::trigger
+    T1[Load env + validate config]
+    T2[Resolve run_date + base dir]
+    T3["Run screener\nfetch prices + fundamentals"]
+    T4{Backtest step?}
+    T4Y["Run backtest\nbackfill daily_bars if needed"]
+    T5{Metrics step?}
+    T5Y["Run metrics\nscore + rank candidates"]
+    T6{ML steps?}
+    T6Y["Labels + features + predictions\nranker_eval"]
+    T7{Enrich step?}
+    T7Y["Enrich + rerank candidates"]
+    T8["Finalize pipeline\nstatus + health + logs"]
+  end
+
+  subgraph TaskExec["Task: Execute Trades (market hours)"]
+    direction TB
+    E0["Trigger: trade window or manual\nTime: market open + intraday"]:::trigger
+    E1["Load account + risk limits"]
+    E2["Select candidates\nlatest_top_candidates view"]
+    E3["Build orders + sizing"]
+    E4["Send orders to broker"]
+    E5["Record orders + fills"]
+  end
+
+  subgraph TaskMonitor["Task: Monitor Positions (market hours + after-close)"]
+    direction TB
+    M0["Trigger: intraday schedule\nTime: market hours + after-close checks"]:::trigger
+    M1["Pull positions + market data"]
+    M2["Compute PnL + risk checks"]
+    M3{Exit or adjust?}
+    M3Y["Place exit or adjust orders"]
+    M4["Update positions + alerts"]
+  end
+
+  subgraph Outputs["Data Ownership"]
+    direction TB
+    subgraph Writes["Writes"]
+      direction TB
+      W1["Write: screener_candidates"]
+      W2["Write: daily_bars"]
+      W3["Write: backtest_results"]
+      W4["Write: top_candidates"]
+      W5["Write: metrics_daily"]
+      W6["Write: ml_artifacts"]
+      W7["Write: pipeline_runs"]
+      W8["Write: logs + reports\nlogs/step.*.out, pipeline.log\nreports/pipeline_summary.json"]
+      W9["Write: orders, trades, positions"]
+      W10["Write: alerts + notifications"]
+    end
+    subgraph Reads["Reads"]
+      direction TB
+      R1["Read: latest_screener_candidates view"]
+      R2["Read: latest_top_candidates view"]
+      R3["Read: daily_bars"]
+      R4["Read: orders, trades, positions"]
+    end
+  end
+
+  T0 --> T1 --> T2 --> T3 --> T4
+  T4 -- yes --> T4Y --> T5
+  T4 -- no --> T5
+  T5 -- yes --> T5Y --> T6
+  T5 -- no --> T6
+  T6 -- yes --> T6Y --> T7
+  T6 -- no --> T7
+  T7 -- yes --> T7Y --> T8
+  T7 -- no --> T8
+
+  T8 --> E0
+  E0 --> E1 --> E2 --> E3 --> E4 --> E5 --> M0
+  M0 --> M1 --> M2 --> M3
+  M3 -- yes --> M3Y --> M4
+  M3 -- no --> M4
+
+  API_DATA -.-> T3
+  API_DATA -.-> T4Y
+  API_DATA -.-> M1
+  BROKER_API -.-> E4
+  BROKER_API -.-> M1
+
+  T3 -.-> W1
+  T4Y -.-> W2
+  T4Y -.-> W3
+  T5Y -.-> W4
+  T5Y -.-> W5
+  T6Y -.-> W6
+  T7Y -.-> W4
+  T8 -.-> W7
+  T8 -.-> W8
+  E5 -.-> W9
+  M4 -.-> W9
+  M4 -.-> W10
+
+  W1 -.-> R1
+  W4 -.-> R2
+  W2 -.-> R3
+  W9 -.-> R4
+
+  R1 -.-> T5Y
+  R1 -.-> T4Y
+  R2 -.-> E2
+  R3 -.-> T4Y
+  R4 -.-> M1
+
+  class T1,T2,T3,T4Y,T5Y,T6Y,T7Y,T8,E1,E2,E3,E4,E5,M1,M2,M3Y,M4 step;
+  class T4,T5,T6,T7,M3 decision;
+  class API_DATA,BROKER_API external;
+  class W1,W2,W3,W4,W5,W6,W7,W8,W9,W10 write;
+  class R1,R2,R3,R4 read;

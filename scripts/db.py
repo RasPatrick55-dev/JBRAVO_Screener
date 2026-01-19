@@ -859,6 +859,105 @@ def insert_pipeline_health(record: Mapping[str, Any]) -> None:
             pass
 
 
+def ensure_executor_runs_table() -> None:
+    conn = _conn_or_none()
+    if conn is None:
+        return
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS executor_runs (
+                        run_ts_utc TIMESTAMPTZ PRIMARY KEY,
+                        status TEXT,
+                        symbols_in INTEGER,
+                        orders_submitted INTEGER,
+                        orders_filled INTEGER,
+                        trailing_attached INTEGER,
+                        open_positions INTEGER,
+                        open_orders INTEGER,
+                        exit_reason TEXT,
+                        skipped_reasons JSONB,
+                        run_started_utc TIMESTAMPTZ,
+                        run_finished_utc TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ DEFAULT now()
+                    )
+                    """
+                )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_SCHEMA_FAILED table=executor_runs err=%s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def insert_executor_run(payload: Mapping[str, Any] | None) -> bool:
+    if not payload:
+        return False
+    conn = _conn_or_none()
+    if conn is None:
+        return False
+    ensure_executor_runs_table()
+    run_ts = normalize_ts(
+        payload.get("run_finished_utc")
+        or payload.get("run_started_utc")
+        or payload.get("last_run_utc")
+        or payload.get("run_ts_utc"),
+        field="run_ts_utc",
+    )
+    if run_ts is None:
+        logger.warning("[WARN] DB_WRITE_FAILED table=executor_runs err=missing_run_ts")
+        return False
+    skipped = (
+        payload.get("skipped_reasons")
+        if payload.get("skipped_reasons") is not None
+        else payload.get("skips") if payload.get("skips") is not None else payload.get("skipped_by_reason")
+    )
+    stmt_payload = {
+        "run_ts_utc": run_ts,
+        "status": payload.get("status"),
+        "symbols_in": _coerce_int(payload.get("symbols_in"), 0),
+        "orders_submitted": _coerce_int(payload.get("orders_submitted"), 0),
+        "orders_filled": _coerce_int(payload.get("orders_filled"), 0),
+        "trailing_attached": _coerce_int(payload.get("trailing_attached"), 0),
+        "open_positions": _coerce_int(payload.get("open_positions"), 0),
+        "open_orders": _coerce_int(payload.get("open_orders"), 0),
+        "exit_reason": payload.get("exit_reason"),
+        "skipped_reasons": _json_dumps_or_none(skipped),
+        "run_started_utc": normalize_ts(payload.get("run_started_utc"), field="run_started_utc"),
+        "run_finished_utc": normalize_ts(payload.get("run_finished_utc"), field="run_finished_utc"),
+    }
+    stmt = """
+        INSERT INTO executor_runs (
+            run_ts_utc, status, symbols_in, orders_submitted, orders_filled,
+            trailing_attached, open_positions, open_orders, exit_reason,
+            skipped_reasons, run_started_utc, run_finished_utc
+        )
+        VALUES (
+            %(run_ts_utc)s, %(status)s, %(symbols_in)s, %(orders_submitted)s, %(orders_filled)s,
+            %(trailing_attached)s, %(open_positions)s, %(open_orders)s, %(exit_reason)s,
+            CAST(%(skipped_reasons)s AS JSONB), %(run_started_utc)s, %(run_finished_utc)s
+        )
+    """
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(stmt, stmt_payload)
+        _log_write_result(True, "executor_runs", 1)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive logging
+        _log_write_result(False, "executor_runs", 0, exc)
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def insert_bar_coverage(record: Mapping[str, Any]) -> None:
     if not record:
         return
