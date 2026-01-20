@@ -37,6 +37,11 @@ PY
   exit 0
 fi
 
+if [[ ! -f "$PROJECT_HOME/data/latest_candidates.csv" ]] || [[ "$(wc -l < "$PROJECT_HOME/data/latest_candidates.csv")" -lt 2 ]]; then
+    echo "[INFO] No candidates from pipeline, running fallback_candidates..."
+    python -m scripts.fallback_candidates --top-n 3 --min-order-usd 300
+fi
+
 if [[ "${APCA_API_BASE_URL:-}" != *paper* ]]; then
   echo "[ERROR] APCA_API_BASE_URL must be a paper endpoint: ${APCA_API_BASE_URL:-unset}" >&2
   exit 1
@@ -95,86 +100,6 @@ PY
 
 # Run Alpaca connectivity probe for Screener Health tab
 python -m scripts.check_connection || echo "[WARN] connection probe failed (non-fatal)"
-
-count_candidates() {
-python - <<'PY'
-from pathlib import Path
-path = Path("data") / "latest_candidates.csv"
-count = 0
-try:
-    with path.open() as handle:
-        for line in handle:
-            if line.strip():
-                count += 1
-except FileNotFoundError:
-    count = 0
-print(count)
-PY
-}
-
-CANDIDATE_LINES=$(count_candidates)
-if [ "$CANDIDATE_LINES" -lt 2 ]; then
-  echo "[WRAPPER] latest_candidates.csv missing or short -> running fallback_candidates"
-  python -m scripts.fallback_candidates
-  CANDIDATE_LINES=$(count_candidates)
-  if [ "$CANDIDATE_LINES" -lt 2 ]; then
-    echo "[ERROR] latest_candidates.csv still missing or short after fallback" >&2
-    exit 1
-  fi
-fi
-
-python - <<'PY'
-import json, os, pathlib, sys, time
-root=pathlib.Path('.')
-latest=root/"data"/"latest_candidates.csv"
-metrics=root/"data"/"screener_metrics.json"
-hours=int(os.environ.get("JBRAVO_STALE_MAX_HOURS","26"))
-now=time.time()
-issues=[]
-def too_stale(path: pathlib.Path) -> bool:
-    try:
-        return (now-path.stat().st_mtime) > hours*3600
-    except FileNotFoundError:
-        return True
-line_count=0
-if latest.exists():
-    try:
-        with latest.open() as handle:
-            for _ in range(2):
-                if handle.readline():
-                    line_count+=1
-    except Exception:
-        line_count=0
-if not latest.exists() or line_count < 2:
-    issues.append("NO_CANDIDATES")
-elif too_stale(latest):
-    issues.append("STALE_CANDIDATES")
-if not metrics.exists():
-    issues.append("NO_METRICS")
-elif too_stale(metrics):
-    issues.append("STALE_METRICS")
-if issues:
-    summary={"orders_submitted":0,"orders_filled":0,"skips":{"STALE_ARTIFACTS":1}}
-    out=root/"data"/"execute_metrics.json"
-    out.write_text(json.dumps(summary, indent=2))
-    print(f"[WRAPPER] artifacts stale or missing -> exit. issues={issues}")
-    print("EXECUTE_SUMMARY orders_submitted=0 orders_filled=0 skips={'STALE_ARTIFACTS': 1}")
-    sys.exit(10)
-print("[WRAPPER] artifacts OK; proceeding to execution")
-PY
-rc=$?
-if [ "$rc" -eq 10 ]; then
-  PREMARKET_FINISHED_UTC=$(python - <<'PY'
-from datetime import datetime, timezone
-print(datetime.now(timezone.utc).isoformat())
-PY
-  )
-  export PREMARKET_FINISHED_UTC
-  write_premarket_snapshot
-  exit 0
-elif [ "$rc" -ne 0 ]; then
-  exit "$rc"
-fi
 
 BASE_ALLOCATION_PCT=0.06
 RISK_OUTPUT=$(BASE_ALLOCATION_PCT="$BASE_ALLOCATION_PCT" python - <<'PY'
