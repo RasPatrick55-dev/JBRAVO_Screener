@@ -23,23 +23,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PIPELINE_LOG="logs/pipeline.log"
-if ! grep -q "PIPELINE_END rc=0" "$PIPELINE_LOG"; then
+if ! grep -q "PIPELINE_END rc=0" "$PROJECT_HOME/logs/pipeline.log"; then
   echo "[WARN] PIPELINE_MISSING — executor skipped"
-  python - <<'PY'
-import json
-from datetime import datetime, timezone
-from pathlib import Path
-
-payload = {
-    "status": "SKIPPED_PIPELINE_MISSING",
-    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-}
-path = Path("data") / "last_premarket_run.json"
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+  echo "[WARN] Pipeline not completed; skipping trade execution." >> "$PROJECT_HOME/logs/execute_trades.log"
+  python - <<PY
+import json, datetime
+json.dump({
+  "timestamp": datetime.datetime.utcnow().isoformat(),
+  "status": "SKIPPED_PIPELINE_MISSING"
+}, open("$PROJECT_HOME/data/last_premarket_run.json","w"))
 PY
-  touch /var/www/raspatrick_pythonanywhere_com_wsgi.py || true
+  touch "$WSGI_FILE"
   exit 0
 fi
 
