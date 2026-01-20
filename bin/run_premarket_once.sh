@@ -23,80 +23,29 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "[WRAPPER] checking pipeline freshness"
-set +e
-PIPELINE_INFO=$(python - <<'PY'
-import json
-import pathlib
-from datetime import datetime
-import zoneinfo
-
-base = pathlib.Path('.')
-summary = base / 'reports' / 'pipeline_summary.json'
-ny = zoneinfo.ZoneInfo('America/New_York')
-today = datetime.now(ny).date()
-
-fresh = False
-reason = 'missing_summary'
-
-try:
-    data = json.loads(summary.read_text())
-    rc = int(data.get('rc', 1))
-    ts = data.get('timestamp')
-    ts_date = None
-    if isinstance(ts, str) and ts:
-        try:
-            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            ts_date = dt.astimezone(ny).date()
-        except Exception:
-            ts_date = None
-    fresh = rc == 0 and ts_date == today
-    if not fresh:
-        reason = f"rc={rc} ts_date={ts_date}"
-except FileNotFoundError:
-    reason = 'missing_summary'
-except Exception as exc:
-    reason = f"read_error:{exc}"
-
-print(json.dumps({'fresh': fresh, 'reason': reason}))
-raise SystemExit(0 if fresh else 1)
-PY
-)
-PIPELINE_READY=$?
-set -e
-PIPELINE_REASON=$(PIPELINE_INFO="$PIPELINE_INFO" python - <<'PY'
-import json
-import os
-
-payload = json.loads(os.environ.get('PIPELINE_INFO', '{}') or '{}')
-print(payload.get('reason', ''))
-PY
-)
-
-if [ "$PIPELINE_READY" -ne 0 ]; then
-  echo "[WRAPPER] pipeline stale -> re-running (reason: $PIPELINE_REASON)"
-  if ! python -m scripts.run_pipeline; then
-    echo "[WRAPPER] pipeline rerun failed"
-    exit 1
-  fi
-  PIPELINE_RERUN_TS=$(python - <<'PY'
-from datetime import datetime, timezone
-print(datetime.now(timezone.utc).isoformat())
-PY
-  )
-  export PIPELINE_REASON PIPELINE_RERUN_TS
+PIPELINE_LOG="logs/pipeline.log"
+if ! [ -f "$PIPELINE_LOG" ] || ! grep -q "PIPELINE_END rc=0" "$PIPELINE_LOG"; then
+  echo "[WARN] PIPELINE_MISSING — executor skipped"
   python - <<'PY'
-import os
-from utils.alerts import send_alert
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 
-send_alert(
-    "JBRAVO wrapper auto-ran pipeline",
-    {
-        "reason": os.environ.get("PIPELINE_REASON", "unknown"),
-        "run_utc": os.environ.get("PIPELINE_RERUN_TS"),
-    },
-)
+payload = {
+    "status": "SKIPPED_PIPELINE_MISSING",
+    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+}
+path = Path("data") / "last_premarket_run.json"
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 PY
+  touch /var/www/raspatrick_pythonanywhere_com_wsgi.py || true
+  exit 0
+fi
+
+if [[ "${APCA_API_BASE_URL:-}" != *paper* ]]; then
+  echo "[ERROR] APCA_API_BASE_URL must be a paper endpoint: ${APCA_API_BASE_URL:-unset}" >&2
+  exit 1
 fi
 
 echo "[WRAPPER] probing Alpaca credentials"
@@ -152,6 +101,33 @@ PY
 
 # Run Alpaca connectivity probe for Screener Health tab
 python -m scripts.check_connection || echo "[WARN] connection probe failed (non-fatal)"
+
+count_candidates() {
+python - <<'PY'
+from pathlib import Path
+path = Path("data") / "latest_candidates.csv"
+count = 0
+try:
+    with path.open() as handle:
+        for line in handle:
+            if line.strip():
+                count += 1
+except FileNotFoundError:
+    count = 0
+print(count)
+PY
+}
+
+CANDIDATE_LINES=$(count_candidates)
+if [ "$CANDIDATE_LINES" -lt 2 ]; then
+  echo "[WRAPPER] latest_candidates.csv missing or short -> running fallback_candidates"
+  python -m scripts.fallback_candidates
+  CANDIDATE_LINES=$(count_candidates)
+  if [ "$CANDIDATE_LINES" -lt 2 ]; then
+    echo "[ERROR] latest_candidates.csv still missing or short after fallback" >&2
+    exit 1
+  fi
+fi
 
 python - <<'PY'
 import json, os, pathlib, sys, time
