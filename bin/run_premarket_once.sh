@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 PIPELINE_LOG="logs/pipeline.log"
-if ! [ -f "$PIPELINE_LOG" ] || ! grep -q "PIPELINE_END rc=0" "$PIPELINE_LOG"; then
+if ! grep -q "PIPELINE_END rc=0" "$PIPELINE_LOG"; then
   echo "[WARN] PIPELINE_MISSING — executor skipped"
   python - <<'PY'
 import json
