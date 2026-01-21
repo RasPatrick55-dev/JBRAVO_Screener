@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 export TZ="America/New_York"
-PROJECT="${PROJECT:-/home/RasPatrick/jbravo_screener}"
+PROJECT_HOME="${PROJECT_HOME:-/home/RasPatrick/jbravo_screener}"
 VENV="${VENV:-/home/RasPatrick/.virtualenvs/jbravo-env}"
-cd "$PROJECT"
+cd "$PROJECT_HOME"
 
 unset \
   APCA_API_KEY_ID \
@@ -17,7 +17,7 @@ unset \
   ALPACA_API_BASE_URL \
   ALPACA_API_DATA_URL
 
-set -a; . "$PROJECT/.env"; set +a
+set -a; . "$PROJECT_HOME/.env"; set +a
 
 export APCA_API_KEY_ID="${APCA_API_KEY_ID:-${ALPACA_API_KEY_ID:-}}"
 export APCA_API_SECRET_KEY="${APCA_API_SECRET_KEY:-${ALPACA_API_SECRET_KEY:-}}"
@@ -40,20 +40,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-if ! grep -q "PIPELINE_END rc=0" "$PROJECT_HOME/logs/pipeline.log"; then
-  echo "[WARN] PIPELINE_MISSING — executor skipped"
-  echo "[WARN] Pipeline not completed; skipping trade execution." >> "$PROJECT_HOME/logs/execute_trades.log"
-  python - <<PY
-import json, datetime
-json.dump({
-  "timestamp": datetime.datetime.utcnow().isoformat(),
-  "status": "SKIPPED_PIPELINE_MISSING"
-}, open("$PROJECT_HOME/data/last_premarket_run.json","w"))
-PY
-  touch "$WSGI_FILE"
-  exit 0
-fi
 
 if [[ "${APCA_API_BASE_URL:-}" != *paper* ]]; then
   echo "[ERROR] APCA_API_BASE_URL must be a paper endpoint: ${APCA_API_BASE_URL:-unset}" >&2
@@ -217,6 +203,11 @@ PY
   export PREMARKET_FINISHED_UTC
 
   write_premarket_snapshot
+  exit 0
+fi
+
+if ! grep -q "PIPELINE_END rc=0" "$PROJECT_HOME/logs/pipeline.log"; then
+  echo "[WARN] Pipeline not completed; skipping trade execution." >> "$PROJECT_HOME/logs/execute_trades.log"
   exit 0
 fi
 
