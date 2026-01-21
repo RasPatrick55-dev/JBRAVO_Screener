@@ -5,8 +5,26 @@ export TZ="America/New_York"
 PROJECT="${PROJECT:-/home/RasPatrick/jbravo_screener}"
 VENV="${VENV:-/home/RasPatrick/.virtualenvs/jbravo-env}"
 cd "$PROJECT"
+
+unset \
+  APCA_API_KEY_ID \
+  APCA_API_SECRET_KEY \
+  APCA_API_BASE_URL \
+  APCA_DATA_API_BASE_URL \
+  APCA_API_DATA_URL \
+  ALPACA_API_KEY_ID \
+  ALPACA_API_SECRET_KEY \
+  ALPACA_API_BASE_URL \
+  ALPACA_API_DATA_URL
+
+set -a; . "$PROJECT/.env"; set +a
+
+export APCA_API_KEY_ID="${APCA_API_KEY_ID:-${ALPACA_API_KEY_ID:-}}"
+export APCA_API_SECRET_KEY="${APCA_API_SECRET_KEY:-${ALPACA_API_SECRET_KEY:-}}"
+export APCA_API_BASE_URL="${APCA_API_BASE_URL:-https://paper-api.alpaca.markets}"
+export APCA_DATA_API_BASE_URL="${APCA_DATA_API_BASE_URL:-https://data.alpaca.markets}"
+
 source "$VENV/bin/activate"
-set -a; . ~/.config/jbravo/.env; set +a
 
 DRY_RUN="${JBRAVO_DRY_RUN:-false}"
 
