@@ -37,11 +37,6 @@ PY
   exit 0
 fi
 
-if [[ ! -f "$PROJECT_HOME/data/latest_candidates.csv" ]] || [[ "$(wc -l < "$PROJECT_HOME/data/latest_candidates.csv")" -lt 2 ]]; then
-    echo "[INFO] No candidates from pipeline, running fallback_candidates..."
-    python -m scripts.fallback_candidates --top-n 3 --min-order-usd 300
-fi
-
 if [[ "${APCA_API_BASE_URL:-}" != *paper* ]]; then
   echo "[ERROR] APCA_API_BASE_URL must be a paper endpoint: ${APCA_API_BASE_URL:-unset}" >&2
   exit 1
@@ -175,7 +170,7 @@ PY
 printf '%s - wrapper - %s\n' "$LOG_TIMESTAMP" "$RISK_LIMIT_LOG_LINE" >> logs/execute_trades.log
 echo "$RISK_LIMIT_LOG_LINE"
 
-EXEC_SOURCE="data/latest_candidates.csv"
+EXEC_SOURCE="db"
 EXEC_SOURCE_LOG_LINE="[INFO] EXEC_SOURCE path=${EXEC_SOURCE}"
 LOG_TIMESTAMP=$(PYTHONPATH="" python - <<'PY'
 from datetime import datetime, timezone
@@ -208,11 +203,14 @@ PY
 fi
 
 python -m scripts.execute_trades \
-  --source "$EXEC_SOURCE" \
-  --allocation-pct "$FINAL_ALLOCATION_PCT" --min-order-usd 300 --max-positions "$FINAL_MAX_POSITIONS" --max-new-positions "$FINAL_MAX_NEW_POSITIONS" \
-  --trailing-percent 3 --time-window premarket --extended-hours true \
-  --submit-at-ny "07:00" --price-source prevclose \
-  --cancel-after-min 35 --limit-buffer-pct 0.0
+  --source db \
+  --allocation-pct 0.06 \
+  --min-order-usd 300 \
+  --max-positions 4 \
+  --trailing-percent 3 \
+  --limit-buffer-pct 1.0 \
+  --extended-hours true \
+  --time-window premarket
 
 PREMARKET_FINISHED_UTC=$(python - <<'PY'
 from datetime import datetime, timezone
