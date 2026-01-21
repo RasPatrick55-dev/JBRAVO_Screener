@@ -204,13 +204,15 @@ fi
 
 python -m scripts.execute_trades \
   --source db \
+  --time-window auto \
+  --extended-hours true \
+  --alloc-weight-key score \
   --allocation-pct 0.06 \
   --min-order-usd 300 \
   --max-positions 4 \
   --trailing-percent 3 \
   --limit-buffer-pct 1.0 \
-  --extended-hours true \
-  --time-window premarket
+  --cancel-after-min 35
 
 PREMARKET_FINISHED_UTC=$(python - <<'PY'
 from datetime import datetime, timezone
