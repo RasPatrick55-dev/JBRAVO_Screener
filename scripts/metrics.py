@@ -635,11 +635,4 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     logger.info("[INFO] metrics.py completed successfully")
     return exit_code
 
-if __name__ == "__main__":
-    logger.info("Starting metrics calculation")
-    exit_code = main()
-    logger.info("Metrics calculation complete")
-    end_time = datetime.utcnow()
-    elapsed_time = end_time - start_time
-    logger.info("Script finished in %s", elapsed_time)
-    sys.exit(exit_code)
+main()
