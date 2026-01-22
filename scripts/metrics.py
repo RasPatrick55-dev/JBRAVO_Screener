@@ -421,6 +421,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
+    print(">>> METRICS MAIN ENTERED <<<")
+    logger.info(">>> METRICS MAIN ENTERED <<<")
     logger.info("⚙️ [METRICS] main() start")
     args = parse_args(argv)
     run_date_override = _coerce_run_date(getattr(args, "run_date", None))
@@ -472,8 +474,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         logger.exception("[ERROR] Failed to load screener candidates: %s", exc)
         screener_df = pd.DataFrame()
 
-    logger.info("📊 [METRICS] screener_df rows: %s", len(screener_df))
-    logger.info("📊 [METRICS] backtest_df rows: %s", len(backtest_df))
+    print(f">>> screener_df rows: {len(screener_df)}")
+    logger.info(f">>> screener_df rows: {len(screener_df)}")
+    print(f">>> backtest_df rows: {len(backtest_df)}")
+    logger.info(f">>> backtest_df rows: {len(backtest_df)}")
 
     results_df = backtest_df
 
@@ -514,13 +518,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             results_df = symbol_metrics
 
     try:
+        print(">>> Starting rank_and_filter_candidates()")
+        logger.info(">>> Starting rank_and_filter_candidates()")
         logger.info("🚦 [METRICS] Starting candidate ranking")
         ranked_df = rank_and_filter_candidates(screener_df, results_df, run_date)
         if ranked_df is None:
-            logger.warning("⚠️ [METRICS] ranked_df is None — skipping DB writes")
+            print(">>> ranked_df is None — skipping DB writes")
+            logger.warning(">>> ranked_df is None — skipping DB writes")
         elif ranked_df.empty:
-            logger.warning("⚠️ [METRICS] ranked_df is empty — no candidates to persist")
+            print(">>> ranked_df is empty — skipping DB writes")
+            logger.warning(">>> ranked_df is empty — skipping DB writes")
         else:
+            print(f">>> ranked_df rows: {len(ranked_df)}")
+            logger.info(f">>> ranked_df rows: {len(ranked_df)}")
             logger.info("✅ [METRICS] ranked_df rows: %s", len(ranked_df))
             logger.info(f"[DEBUG] ranked_df shape: {ranked_df.shape}")
             logger.info(f"[DEBUG] Ranked DataFrame columns: {list(ranked_df.columns)}")
@@ -543,12 +553,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         logger.exception("❌ [METRICS] Exception during ranking")
         ranked_df = None
 
-    if ranked_df is not None and not ranked_df.empty:
-        logger.info("📥 [METRICS] Writing to top_candidates DB")
-        db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True)
-        logger.info("✅ [METRICS] top_candidates DB write complete")
+    if ranked_df is None:
+        print(">>> ranked_df is None — skipping DB writes")
+        logger.warning(">>> ranked_df is None — skipping DB writes")
+    elif ranked_df.empty:
+        print(">>> ranked_df is empty — skipping DB writes")
+        logger.warning(">>> ranked_df is empty — skipping DB writes")
     else:
-        logger.warning("⚠️ [METRICS] Skipped top_candidates DB write due to empty ranked_df")
+        print(">>> Writing to top_candidates")
+        logger.info(">>> Writing to top_candidates")
+        db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True)
+        print(">>> top_candidates write complete")
+        logger.info(">>> top_candidates write complete")
+        logger.info("✅ [METRICS] top_candidates DB write complete")
 
     if not trades_df.empty:
         trades_df = validate_numeric(trades_df, "net_pnl")
@@ -574,8 +591,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             logger.info("Exit reason breakdown skipped: DB is source of truth.")
 
     try:
+        print(f">>> summary_metrics: {summary_metrics}")
+        logger.info(f">>> summary_metrics: {summary_metrics}")
         logger.info("🧮 [METRICS] summary_metrics: %s", summary_metrics)
         db.upsert_metrics_daily(summary_metrics, run_date)
+        print(">>> metrics_daily write complete")
+        logger.info(">>> metrics_daily write complete")
         logger.info("✅ [METRICS] metrics_daily DB write complete")
     except Exception:  # pragma: no cover - defensive guard
         logger.exception("[ERROR] Failed to write to metrics_daily")
@@ -608,6 +629,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     except Exception as exc:  # pragma: no cover - defensive I/O guard
         logger.warning("Failed to update %s: %s", metrics_path, exc)
 
+    print(">>> METRICS MAIN COMPLETED <<<")
+    logger.info(">>> METRICS MAIN COMPLETED <<<")
     logger.info("🏁 [METRICS] main() complete")
     logger.info("[INFO] metrics.py completed successfully")
     return exit_code
