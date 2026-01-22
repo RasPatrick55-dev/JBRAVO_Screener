@@ -42,29 +42,55 @@ print(
 
 os.environ.setdefault("JBRAVO_HOME", str(ROOT))
 
+from flask import Flask, send_from_directory  # noqa: E402
+from werkzeug.middleware.dispatcher import DispatcherMiddleware  # noqa: E402
+
 from dashboards.dashboard_app import app as dash_app  # noqa: E402
 
-application = dash_app.server
-
-# ROOT_REDIRECT_TO_V2
-_real_application = application
+FRONTEND_BUILD = ROOT / "frontend" / "dist"
+FRONTEND_ASSETS = FRONTEND_BUILD / "assets"
 
 
-def application(environ, start_response):
-    path = environ.get("PATH_INFO", "")
-    if path in ("", "/"):
-        qs = environ.get("QUERY_STRING", "")
-        loc = "/v2/" + (f"?{qs}" if qs else "")
-        start_response(
-            "302 Found",
-            [
-                ("Location", loc),
-                ("Content-Type", "text/plain; charset=utf-8"),
-                ("Cache-Control", "no-store"),
-            ],
-        )
-        return [b"Redirecting to /v2/"]
-    return _real_application(environ, start_response)
+class PrefixMiddleware:
+    """Re-apply a URL prefix stripped by DispatcherMiddleware."""
+
+    def __init__(self, app, prefix: str) -> None:
+        self.app = app
+        self.prefix = prefix
+
+    def __call__(self, environ, start_response):
+        environ = environ.copy()
+        environ["PATH_INFO"] = f"{self.prefix}{environ.get('PATH_INFO', '')}"
+        return self.app(environ, start_response)
+
+
+frontend_app = Flask(
+    __name__,
+    static_folder=str(FRONTEND_ASSETS),
+    static_url_path="/assets",
+)
+
+
+@frontend_app.route("/", defaults={"path": ""})
+@frontend_app.route("/<path:path>")
+def react_catch_all(path: str):
+    index_path = FRONTEND_BUILD / "index.html"
+    if not index_path.exists():
+        message = "React build not found. Run the frontend build and place output in frontend/dist."
+        return message, 503
+    return send_from_directory(FRONTEND_BUILD, "index.html")
+
+
+dash_wsgi = PrefixMiddleware(dash_app.server, "/v2")
+api_wsgi = PrefixMiddleware(dash_app.server, "/api")
+
+application = DispatcherMiddleware(
+    frontend_app,
+    {
+        "/v2": dash_wsgi,
+        "/api": api_wsgi,
+    },
+)
 
 LOGGER = logging.getLogger("jbravo.wsgi")
 if not LOGGER.handlers:
