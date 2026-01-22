@@ -6,23 +6,9 @@ PROJECT_HOME="${PROJECT_HOME:-/home/RasPatrick/jbravo_screener}"
 VENV="${VENV:-/home/RasPatrick/.virtualenvs/jbravo-env}"
 cd "$PROJECT_HOME"
 
-unset \
-  APCA_API_KEY_ID \
-  APCA_API_SECRET_KEY \
-  APCA_API_BASE_URL \
-  APCA_DATA_API_BASE_URL \
-  APCA_API_DATA_URL \
-  ALPACA_API_KEY_ID \
-  ALPACA_API_SECRET_KEY \
-  ALPACA_API_BASE_URL \
-  ALPACA_API_DATA_URL
-
-set -a; . "$PROJECT_HOME/.env"; set +a
-
-export APCA_API_KEY_ID="${APCA_API_KEY_ID:-${ALPACA_API_KEY_ID:-}}"
-export APCA_API_SECRET_KEY="${APCA_API_SECRET_KEY:-${ALPACA_API_SECRET_KEY:-}}"
-export APCA_API_BASE_URL="${APCA_API_BASE_URL:-https://paper-api.alpaca.markets}"
-export APCA_DATA_API_BASE_URL="${APCA_DATA_API_BASE_URL:-https://data.alpaca.markets}"
+set -a
+. "$HOME/.config/jbravo/.env"
+set +a
 
 source "$VENV/bin/activate"
 
@@ -46,22 +32,34 @@ if [[ "${APCA_API_BASE_URL:-}" != *paper* ]]; then
   exit 1
 fi
 
-echo "[WRAPPER] probing Alpaca credentials"
+echo "[WRAPPER] probing Alpaca credentials via load_env"
 ALPACA_PROBE=$(python - <<'PY'
-import os, requests, json
-base=os.environ["APCA_API_BASE_URL"].rstrip("/")
-headers={"APCA-API-KEY-ID":os.environ["APCA_API_KEY_ID"],"APCA-API-SECRET-KEY":os.environ["APCA_API_SECRET_KEY"]}
-r=requests.get(f"{base}/v2/account", headers=headers, timeout=10)
-ok=r.status_code==200; bp=(r.json().get("buying_power") if ok else "0")
-print(json.dumps({"status":"OK" if ok else "FAIL","buying_power":bp,"auth_ok":ok}))
-raise SystemExit(0 if ok else 2)
+from scripts.utils.env import load_env
+import requests, os, json
+
+# Load env exactly like pipeline
+load_env(required_keys=("APCA_API_KEY_ID","APCA_API_SECRET_KEY","APCA_API_BASE_URL"))
+
+base = os.environ["APCA_API_BASE_URL"].rstrip("/")
+headers = {
+    "APCA-API-KEY-ID": os.environ["APCA_API_KEY_ID"],
+    "APCA-API-SECRET-KEY": os.environ["APCA_API_SECRET_KEY"],
+}
+
+r = requests.get(f"{base}/v2/account", headers=headers, timeout=10)
+
+print(json.dumps({
+    "status_code": r.status_code,
+    "ok": r.status_code == 200,
+    "base": base
+}))
+
+raise SystemExit(0 if r.status_code == 200 else 2)
 PY
 )
-probe_rc=$?
+rc=$?
 echo "$ALPACA_PROBE"
-if [ "$probe_rc" -ne 0 ]; then
-  exit "$probe_rc"
-fi
+[ $rc -eq 0 ] || exit $rc
 export ALPACA_PROBE
 
 echo "[WRAPPER] Alpaca account probe OK"
