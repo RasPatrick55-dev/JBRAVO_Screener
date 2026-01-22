@@ -2048,6 +2048,7 @@ class ExecutorConfig:
     source_path: Path = Path("data/latest_candidates.csv")
     source_type: str = "db"
     allocation_pct: float = 0.05
+    alloc_weight_key: str = "score"
     max_positions: int = 7
     max_new_positions: int = 7
     entry_buffer_bps: int = 75
@@ -3644,6 +3645,21 @@ class TradeExecutor:
         ranked = ranked.drop(columns=["_rank_val", "_score_sort"]).reset_index(drop=True)
         return ranked
 
+    def _apply_alloc_weight_key(self, df: pd.DataFrame) -> pd.DataFrame:
+        alloc_weight_key = str(getattr(self.config, "alloc_weight_key", "score") or "score").lower()
+        working = df.copy()
+        working = working.drop(columns=["alloc_weight"], errors="ignore")
+        if alloc_weight_key == "none":
+            return working
+        if alloc_weight_key == "model_score":
+            if "model_score" not in working.columns:
+                LOGGER.warning("[WARN] ALLOC_WEIGHT_FALLBACK reason=missing_model_score")
+                return working
+            working["alloc_weight"] = pd.to_numeric(working["model_score"], errors="coerce")
+            return working
+        working["alloc_weight"] = pd.to_numeric(working.get("score"), errors="coerce")
+        return working
+
     def hydrate_candidates(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         records = df.to_dict(orient="records")
         self.hydrator.prime_latest_bars(records)
@@ -3812,11 +3828,30 @@ class TradeExecutor:
         prefiltered: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
         diagnostic_mode = bool(getattr(self.config, "diagnostic", False))
-        self.metrics.symbols_in = len(df)
+        weighted_df = self._apply_alloc_weight_key(df)
+        self.metrics.symbols_in = len(weighted_df)
         if prefiltered is not None:
             candidates = prefiltered
+            if "alloc_weight" in weighted_df.columns:
+                weight_symbols = weighted_df.get("symbol", pd.Series(dtype="string"))
+                weight_series = pd.to_numeric(
+                    weighted_df.get("alloc_weight", pd.Series(dtype="float")), errors="coerce"
+                )
+                weight_map = {
+                    str(sym).upper(): weight
+                    for sym, weight in zip(weight_symbols, weight_series)
+                    if str(sym).strip()
+                }
+                for record in candidates:
+                    symbol = str(record.get("symbol", "")).upper()
+                    if not symbol:
+                        continue
+                    record["alloc_weight"] = weight_map.get(symbol)
+            else:
+                for record in candidates:
+                    record.pop("alloc_weight", None)
         else:
-            records = self.hydrate_candidates(df)
+            records = self.hydrate_candidates(weighted_df)
             candidates = self.guard_candidates(records)
         allowed, status, resolved_window = self.evaluate_time_window()
         self.metrics.in_window = bool(allowed)
@@ -3907,7 +3942,7 @@ class TradeExecutor:
             candidates,
             max_positions=max_positions,
             base_alloc_pct=allocation_pct,
-            source_df=df,
+            source_df=weighted_df,
         )
 
         weight_map: dict[str, float] = {}
@@ -5274,6 +5309,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Fraction of buying power allocated per position (0-1)",
     )
     parser.add_argument(
+        "--alloc-weight-key",
+        choices=("score", "model_score", "none"),
+        default=ExecutorConfig.alloc_weight_key,
+        help="Column used for proportional allocation weights",
+    )
+    parser.add_argument(
         "--min-order-usd",
         type=float,
         default=ExecutorConfig.min_order_usd,
@@ -5511,6 +5552,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         source_path=args.source_path,
         source_type=(args.source or "db").lower(),
         allocation_pct=args.allocation_pct,
+        alloc_weight_key=args.alloc_weight_key,
         max_positions=args.max_positions,
         max_new_positions=args.max_new_positions,
         entry_buffer_bps=args.entry_buffer_bps,
@@ -5656,6 +5698,7 @@ def run_executor(
             LOGGER.info("[INFO] DB_CANDIDATES_LOADED count=%s max_timestamp=%s", len(frame), max_ts)
 
         candidates_df = loader._rank_candidates(frame)
+        candidates_df = loader._apply_alloc_weight_key(candidates_df)
 
         try:
             base_alloc_pct = float(config.allocation_pct)
@@ -5920,6 +5963,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
 
         args = parse_args(argv)
+        log_info("ALLOC_WEIGHT_MODE", key=args.alloc_weight_key)
         LOGGER.info(
             "[INFO] EXEC_CONFIG ext_hours=%s alloc=%.2f max_pos=%d trail_pct=%.1f",
             args.extended_hours,
