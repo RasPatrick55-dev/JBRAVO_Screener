@@ -411,7 +411,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         "cli" if run_date_override else "default",
     )
 
-    results_df = load_results(run_date=run_date)
+    backtest_df = load_results(run_date=run_date)
+    try:
+        screener_df = db.fetch_screener_candidates_for_run_date(run_date)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.exception("[ERROR] Failed to load screener candidates: %s", exc)
+        screener_df = pd.DataFrame()
+
+    logger.info(f"[DEBUG] screener_candidates shape: {screener_df.shape}")
+    logger.info(f"[DEBUG] backtest_results shape: {backtest_df.shape}")
+
+    results_df = backtest_df
 
     trades_df: pd.DataFrame
     db_trades = _load_trades_from_db(conn)
@@ -451,8 +461,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             results_df = symbol_metrics
 
     ranked_df = rank_candidates(results_df)
-    logger.info("[DEBUG] Ranked candidates dataframe shape: %s", ranked_df.shape)
-    logger.info("[DEBUG] Ranked candidates columns: %s", list(ranked_df.columns))
+    logger.info(f"[DEBUG] Ranked DataFrame shape: {ranked_df.shape}")
+    logger.info(f"[DEBUG] Ranked DataFrame columns: {list(ranked_df.columns)}")
     logger.info(
         "Screener Metrics Summary: total_candidates=%s, avg_score=%.2f",
         len(ranked_df),
@@ -490,19 +500,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if "exit_reason" in trades_df.columns:
             logger.info("Exit reason breakdown skipped: DB is source of truth.")
 
-    if ranked_df.empty:
-        logger.warning("[WARN] No candidates ranked — skipping DB writes")
-    else:
+    if not ranked_df.empty:
         try:
-            screener_fields = db.fetch_screener_candidates_for_run_date(run_date)
-            if not screener_fields.empty and "symbol" in screener_fields.columns:
-                screener_fields["symbol"] = (
-                    screener_fields["symbol"].astype(str).str.upper()
+            if not screener_df.empty and "symbol" in screener_df.columns:
+                screener_df["symbol"] = (
+                    screener_df["symbol"].astype(str).str.upper()
                 )
                 ranked_df["symbol"] = ranked_df["symbol"].astype(str).str.upper()
                 before_rows = int(ranked_df.shape[0])
                 merged = ranked_df.merge(
-                    screener_fields,
+                    screener_df,
                     on="symbol",
                     how="inner",
                     suffixes=("", "_sc"),
@@ -526,31 +533,34 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     run_date,
                 )
                 ranked_df = ranked_df.iloc[0:0].copy()
-            logger.info(
-                "[DEBUG] Writing top candidates to DB: %s rows", len(ranked_df)
-            )
-            if db.insert_top_candidates(ranked_df, run_date):
-                logger.info("[INFO] DB_TOP_CANDIDATES rows=%s", len(ranked_df.index))
-                logger.info(
-                    "[INFO] DB write to top_candidates completed successfully"
+            if ranked_df.empty:
+                logger.warning(
+                    "[WARN] No ranked candidates — skipping top_candidates DB insert"
                 )
+            else:
+                logger.info(f"[INFO] Writing {len(ranked_df)} top candidates to DB")
+                if db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True):
+                    logger.info("[INFO] DB_TOP_CANDIDATES rows=%s", len(ranked_df.index))
+                    logger.info(
+                        "[INFO] DB write to top_candidates completed successfully"
+                    )
         except Exception:  # pragma: no cover - defensive guard
             logger.exception("[ERROR] Failed to write to top_candidates")
+    else:
+        logger.warning("[WARN] No ranked candidates — skipping top_candidates DB insert")
 
-        try:
-            logger.info(
-                "[DEBUG] Writing summary metrics to DB: %s", summary_metrics
-            )
-            db.upsert_metrics_daily(summary_metrics, run_date)
-            logger.info(
-                "[INFO] METRICS_DB_OK run_date=%s total_trades=%s net_pnl=%s",
-                run_date,
-                summary_metrics.get("total_trades"),
-                summary_metrics.get("net_pnl"),
-            )
-            logger.info("[INFO] DB write to metrics_daily completed successfully")
-        except Exception:  # pragma: no cover - defensive guard
-            logger.exception("[ERROR] Failed to write to metrics_daily")
+    try:
+        logger.info(f"[INFO] Summary metrics prepared: {summary_metrics}")
+        db.upsert_metrics_daily(summary_metrics, run_date)
+        logger.info(
+            "[INFO] METRICS_DB_OK run_date=%s total_trades=%s net_pnl=%s",
+            run_date,
+            summary_metrics.get("total_trades"),
+            summary_metrics.get("net_pnl"),
+        )
+        logger.info("[INFO] DB write to metrics_daily complete")
+    except Exception:  # pragma: no cover - defensive guard
+        logger.exception("[ERROR] Failed to write to metrics_daily")
 
     metrics_path = Path(BASE_DIR) / "data" / "screener_metrics.json"
     metrics: dict = {}
