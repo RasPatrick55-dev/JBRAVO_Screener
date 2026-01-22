@@ -637,7 +637,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 if __name__ == "__main__":
     logger.info("Starting metrics calculation")
-    exit_code = main(sys.argv[1:])
+    exit_code = main()
     logger.info("Metrics calculation complete")
     end_time = datetime.utcnow()
     elapsed_time = end_time - start_time
