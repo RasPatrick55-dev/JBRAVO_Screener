@@ -360,6 +360,54 @@ def rank_candidates(df):
     ranked_df = df.sort_values(by='score', ascending=False).reset_index(drop=True)
     return ranked_df
 
+
+def rank_and_filter_candidates(
+    screener_df: pd.DataFrame,
+    backtest_df: pd.DataFrame,
+    run_date: date,
+) -> Optional[pd.DataFrame]:
+    if backtest_df is None:
+        logger.warning("[WARN] backtest_df is None — skipping ranking")
+        return None
+
+    ranked_df = rank_candidates(backtest_df.copy())
+    if ranked_df is None:
+        return None
+
+    if ranked_df.empty:
+        return ranked_df
+
+    if screener_df.empty or "symbol" not in screener_df.columns:
+        logger.warning(
+            "[WARN] METRICS_TOP_CANDIDATES_FILTERED reason=screener_empty run_date=%s",
+            run_date,
+        )
+        return ranked_df.iloc[0:0].copy()
+
+    screener_df = screener_df.copy()
+    screener_df["symbol"] = screener_df["symbol"].astype(str).str.upper()
+    ranked_df["symbol"] = ranked_df["symbol"].astype(str).str.upper()
+    before_rows = int(ranked_df.shape[0])
+    merged = ranked_df.merge(
+        screener_df,
+        on="symbol",
+        how="inner",
+        suffixes=("", "_sc"),
+    )
+    dropped = before_rows - int(merged.shape[0])
+    if dropped:
+        logger.warning(
+            "[WARN] METRICS_TOP_CANDIDATES_FILTERED dropped=%s remaining=%s",
+            dropped,
+            int(merged.shape[0]),
+        )
+    for col in ("entry_price", "adv20", "atrp", "exchange", "source"):
+        sc_col = f"{col}_sc"
+        if sc_col in merged.columns:
+            merged[col] = merged[sc_col]
+            merged.drop(columns=[sc_col], inplace=True)
+    return merged
+
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run metrics ranking + summary")
     parser.add_argument(
@@ -373,16 +421,20 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     run_date_override = _coerce_run_date(getattr(args, "run_date", None))
+    exit_code = 0
     if getattr(args, "run_date", None) and run_date_override is None:
         logger.error("[ERROR] METRICS_RUN_DATE_INVALID value=%s", args.run_date)
-        return 2
+        exit_code = 2
+
     if not db.db_enabled():
         logger.warning("[WARN] METRICS_DB_DISABLED: DATABASE_URL/DB_* not configured.")
-        return 0
-    conn: PGConnection | None = db.get_db_conn()
-    if conn is None:
-        logger.error("[ERROR] METRICS_DB_REQUIRED: unable to connect to database.")
-        return 2
+        conn = None
+        exit_code = max(exit_code, 2)
+    else:
+        conn = db.get_db_conn()
+        if conn is None:
+            logger.error("[ERROR] METRICS_DB_REQUIRED: unable to connect to database.")
+            exit_code = max(exit_code, 2)
 
     if run_date_override:
         run_date = run_date_override
@@ -395,11 +447,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             run_date_source = "screener_candidates"
         if run_date is None:
             logger.error("[ERROR] METRICS_NO_UPSTREAM_RUN_DATE")
-            try:
-                conn.close()
-            except Exception:
-                pass
-            return 2
+            run_date = _resolve_run_date(conn)
+            run_date_source = "fallback"
+            exit_code = max(exit_code, 2)
         logger.info(
             "[INFO] METRICS_RUN_DATE_RESOLVED run_date=%s source=%s",
             run_date,
@@ -428,14 +478,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     db_trades = _load_trades_from_db(conn)
     if db_trades is None:
         logger.error("[ERROR] METRICS_DB_LOAD_FAILED: trades unavailable.")
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return 2
-    trades_df = db_trades
+        trades_df = pd.DataFrame()
+        exit_code = max(exit_code, 2)
+    else:
+        trades_df = db_trades
     try:
-        conn.close()
+        if conn is not None:
+            conn.close()
     except Exception:
         pass
 
@@ -462,13 +511,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             results_df = symbol_metrics
 
     try:
-        logger.info(
-            "[DEBUG] Starting rank_and_filter_candidates with %s candidates",
-            len(screener_df),
-        )
-        ranked_df = rank_candidates(results_df)
+        logger.info("[DEBUG] Starting candidate ranking")
+        ranked_df = rank_and_filter_candidates(screener_df, results_df, run_date)
         if ranked_df is None:
-            logger.warning("[WARN] ranked_df is None after ranking — skipping DB writes")
+            logger.warning("[WARN] ranked_df is None — skipping DB writes")
+        elif ranked_df.empty:
+            logger.warning("[WARN] ranked_df is empty — no candidates to write")
         else:
             logger.info(f"[DEBUG] ranked_df shape: {ranked_df.shape}")
             logger.info(f"[DEBUG] Ranked DataFrame columns: {list(ranked_df.columns)}")
@@ -487,8 +535,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 .head(15)
                 .to_string(index=False),
             )
+            logger.info(f"[INFO] Writing {len(ranked_df)} top candidates to DB")
+            db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True)
+            logger.info("[INFO] DB write to top_candidates completed")
     except Exception:
-        logger.exception("[ERROR] Exception during rank_and_filter_candidates")
+        logger.exception("[ERROR] Exception during ranking or DB write")
         ranked_df = None
 
     if not trades_df.empty:
@@ -513,52 +564,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
         if "exit_reason" in trades_df.columns:
             logger.info("Exit reason breakdown skipped: DB is source of truth.")
-
-    if ranked_df is not None and not ranked_df.empty:
-        try:
-            if not screener_df.empty and "symbol" in screener_df.columns:
-                screener_df["symbol"] = (
-                    screener_df["symbol"].astype(str).str.upper()
-                )
-                ranked_df["symbol"] = ranked_df["symbol"].astype(str).str.upper()
-                before_rows = int(ranked_df.shape[0])
-                merged = ranked_df.merge(
-                    screener_df,
-                    on="symbol",
-                    how="inner",
-                    suffixes=("", "_sc"),
-                )
-                dropped = before_rows - int(merged.shape[0])
-                if dropped:
-                    logger.warning(
-                        "[WARN] METRICS_TOP_CANDIDATES_FILTERED dropped=%s remaining=%s",
-                        dropped,
-                        int(merged.shape[0]),
-                    )
-                for col in ("entry_price", "adv20", "atrp", "exchange", "source"):
-                    sc_col = f"{col}_sc"
-                    if sc_col in merged.columns:
-                        merged[col] = merged[sc_col]
-                        merged.drop(columns=[sc_col], inplace=True)
-                ranked_df = merged
-            else:
-                logger.warning(
-                    "[WARN] METRICS_TOP_CANDIDATES_FILTERED reason=screener_empty run_date=%s",
-                    run_date,
-                )
-                ranked_df = ranked_df.iloc[0:0].copy()
-            if ranked_df.empty:
-                logger.warning(
-                    "[WARN] No ranked candidates — skipping top_candidates DB insert"
-                )
-            else:
-                logger.info(f"[INFO] Writing {len(ranked_df)} top candidates to DB")
-                db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True)
-                logger.info("[INFO] DB write to top_candidates completed")
-        except Exception:  # pragma: no cover - defensive guard
-            logger.exception("[ERROR] Failed to write to top_candidates")
-    else:
-        logger.warning("[WARN] No ranked candidates — skipping top_candidates DB insert")
 
     try:
         logger.info(f"[INFO] Summary metrics prepared: {summary_metrics}")
@@ -595,7 +600,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     except Exception as exc:  # pragma: no cover - defensive I/O guard
         logger.warning("Failed to update %s: %s", metrics_path, exc)
 
-    return 0
+    logger.info("[INFO] metrics.py completed successfully")
+    return exit_code
 
 if __name__ == "__main__":
     logger.info("Starting metrics calculation")
