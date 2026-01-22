@@ -1354,7 +1354,12 @@ def fetch_latest_backtest_results(
             pass
 
 
-def upsert_metrics_daily(run_date: Any, summary_metrics_dict: Mapping[str, Any] | None) -> None:
+def upsert_metrics_daily(
+    run_date: Any | Mapping[str, Any],
+    summary_metrics_dict: Mapping[str, Any] | Any | None = None,
+) -> None:
+    if isinstance(run_date, Mapping) and summary_metrics_dict is not None:
+        run_date, summary_metrics_dict = summary_metrics_dict, run_date
     if not summary_metrics_dict:
         return
     conn = _conn_or_none()
@@ -1405,6 +1410,10 @@ def upsert_metrics_daily(run_date: Any, summary_metrics_dict: Mapping[str, Any] 
             conn.close()
         except Exception:
             pass
+
+
+def insert_top_candidates(df_candidates: pd.DataFrame | None, run_date: Any) -> bool:
+    return upsert_top_candidates(run_date, df_candidates, replace_for_run_date=True)
 
 
 def ensure_top_candidates_table() -> None:
