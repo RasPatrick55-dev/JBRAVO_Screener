@@ -1,3 +1,4 @@
+print(">>> METRICS FILE EXECUTED <<<")
 # metrics.py (enhanced with comprehensive metrics)
 import sys
 import os
@@ -420,139 +421,106 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
-    print(">>> METRICS MAIN ENTERED <<<")
-    logger.info(">>> METRICS MAIN ENTERED <<<")
-    logger.info("⚙️ [METRICS] main() start")
-    args = parse_args(argv)
-    run_date_override = _coerce_run_date(getattr(args, "run_date", None))
-    exit_code = 0
-    if getattr(args, "run_date", None) and run_date_override is None:
-        logger.error("[ERROR] METRICS_RUN_DATE_INVALID value=%s", args.run_date)
-        exit_code = 2
+print(">>> METRICS MAIN ENTERED <<<")
+logger.info(">>> METRICS MAIN ENTERED <<<")
+logger.info("⚙️ [METRICS] main() start")
+args = parse_args()
+run_date_override = _coerce_run_date(getattr(args, "run_date", None))
+exit_code = 0
+if getattr(args, "run_date", None) and run_date_override is None:
+    logger.error("[ERROR] METRICS_RUN_DATE_INVALID value=%s", args.run_date)
+    exit_code = 2
 
-    if not db.db_enabled():
-        logger.warning("[WARN] METRICS_DB_DISABLED: DATABASE_URL/DB_* not configured.")
-        conn = None
+if not db.db_enabled():
+    logger.warning("[WARN] METRICS_DB_DISABLED: DATABASE_URL/DB_* not configured.")
+    conn = None
+    exit_code = max(exit_code, 2)
+else:
+    conn = db.get_db_conn()
+    if conn is None:
+        logger.error("[ERROR] METRICS_DB_REQUIRED: unable to connect to database.")
         exit_code = max(exit_code, 2)
-    else:
-        conn = db.get_db_conn()
-        if conn is None:
-            logger.error("[ERROR] METRICS_DB_REQUIRED: unable to connect to database.")
-            exit_code = max(exit_code, 2)
 
-    if run_date_override:
-        run_date = run_date_override
-        run_date_source = "cli"
-    else:
-        run_date = db.fetch_latest_run_date("backtest_results")
-        run_date_source = "backtest_results"
-        if run_date is None:
-            run_date = db.fetch_latest_run_date("screener_candidates")
-            run_date_source = "screener_candidates"
-        if run_date is None:
-            logger.error("[ERROR] METRICS_NO_UPSTREAM_RUN_DATE")
-            run_date = _resolve_run_date(conn)
-            run_date_source = "fallback"
-            exit_code = max(exit_code, 2)
-        logger.info(
-            "[INFO] METRICS_RUN_DATE_RESOLVED run_date=%s source=%s",
-            run_date,
-            run_date_source,
-        )
-
+if run_date_override:
+    run_date = run_date_override
+    run_date_source = "cli"
+else:
+    run_date = db.fetch_latest_run_date("backtest_results")
+    run_date_source = "backtest_results"
+    if run_date is None:
+        run_date = db.fetch_latest_run_date("screener_candidates")
+        run_date_source = "screener_candidates"
+    if run_date is None:
+        logger.error("[ERROR] METRICS_NO_UPSTREAM_RUN_DATE")
+        run_date = _resolve_run_date(conn)
+        run_date_source = "fallback"
+        exit_code = max(exit_code, 2)
     logger.info(
-        "[INFO] STEP_RUN_DATE step=metrics run_date=%s source=%s",
+        "[INFO] METRICS_RUN_DATE_RESOLVED run_date=%s source=%s",
         run_date,
-        "cli" if run_date_override else "default",
+        run_date_source,
     )
 
-    backtest_df = load_results(run_date=run_date)
-    try:
-        screener_df = db.fetch_screener_candidates_for_run_date(run_date)
-    except Exception as exc:  # pragma: no cover - defensive guard
-        logger.exception("[ERROR] Failed to load screener candidates: %s", exc)
-        screener_df = pd.DataFrame()
+logger.info(
+    "[INFO] STEP_RUN_DATE step=metrics run_date=%s source=%s",
+    run_date,
+    "cli" if run_date_override else "default",
+)
 
-    print(f">>> screener_df rows: {len(screener_df)}")
-    logger.info(f">>> screener_df rows: {len(screener_df)}")
-    print(f">>> backtest_df rows: {len(backtest_df)}")
-    logger.info(f">>> backtest_df rows: {len(backtest_df)}")
+backtest_df = load_results(run_date=run_date)
+try:
+    screener_df = db.fetch_screener_candidates_for_run_date(run_date)
+except Exception as exc:  # pragma: no cover - defensive guard
+    logger.exception("[ERROR] Failed to load screener candidates: %s", exc)
+    screener_df = pd.DataFrame()
 
-    results_df = backtest_df
+print(">>> Loaded screener_df and backtest_df")
+print(f">>> screener_df rows: {len(screener_df)}")
+logger.info(f">>> screener_df rows: {len(screener_df)}")
+print(f">>> backtest_df rows: {len(backtest_df)}")
+logger.info(f">>> backtest_df rows: {len(backtest_df)}")
 
-    trades_df: pd.DataFrame
-    db_trades = _load_trades_from_db(conn)
-    if db_trades is None:
-        logger.error("[ERROR] METRICS_DB_LOAD_FAILED: trades unavailable.")
-        trades_df = pd.DataFrame()
-        exit_code = max(exit_code, 2)
+results_df = backtest_df
+
+trades_df: pd.DataFrame
+db_trades = _load_trades_from_db(conn)
+if db_trades is None:
+    logger.error("[ERROR] METRICS_DB_LOAD_FAILED: trades unavailable.")
+    trades_df = pd.DataFrame()
+    exit_code = max(exit_code, 2)
+else:
+    trades_df = db_trades
+try:
+    if conn is not None:
+        conn.close()
+except Exception:
+    pass
+
+# Detect missing symbol-level metrics and compute from trades_log.csv
+if "net_pnl" not in results_df.columns:
+    if trades_df.empty:
+        results_df = pd.DataFrame(
+            columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
+        )
     else:
-        trades_df = db_trades
-    try:
-        if conn is not None:
-            conn.close()
-    except Exception:
-        pass
+        trades_df = validate_numeric(trades_df, "net_pnl")
+        grouped = trades_df.groupby("symbol")["net_pnl"]
 
-    # Detect missing symbol-level metrics and compute from trades_log.csv
-    if "net_pnl" not in results_df.columns:
-        if trades_df.empty:
-            results_df = pd.DataFrame(
-                columns=["symbol", "trades", "wins", "losses", "net_pnl", "win_rate"]
-            )
-        else:
-            trades_df = validate_numeric(trades_df, "net_pnl")
-            grouped = trades_df.groupby("symbol")["net_pnl"]
+        symbol_metrics = grouped.agg(
+            trades="count",
+            wins=lambda s: (s > 0).sum(),
+            losses=lambda s: (s <= 0).sum(),
+            net_pnl="sum",
+        ).reset_index()
+        symbol_metrics["win_rate"] = symbol_metrics["wins"] / symbol_metrics["trades"] * 100
 
-            symbol_metrics = grouped.agg(
-                trades="count",
-                wins=lambda s: (s > 0).sum(),
-                losses=lambda s: (s <= 0).sum(),
-                net_pnl="sum",
-            ).reset_index()
-            symbol_metrics["win_rate"] = (
-                symbol_metrics["wins"] / symbol_metrics["trades"] * 100
-            )
+        results_df = symbol_metrics
 
-            results_df = symbol_metrics
-
-    try:
-        print(">>> Starting rank_and_filter_candidates()")
-        logger.info(">>> Starting rank_and_filter_candidates()")
-        logger.info("🚦 [METRICS] Starting candidate ranking")
-        ranked_df = rank_and_filter_candidates(screener_df, results_df, run_date)
-        if ranked_df is None:
-            print(">>> ranked_df is None — skipping DB writes")
-            logger.warning(">>> ranked_df is None — skipping DB writes")
-        elif ranked_df.empty:
-            print(">>> ranked_df is empty — skipping DB writes")
-            logger.warning(">>> ranked_df is empty — skipping DB writes")
-        else:
-            print(f">>> ranked_df rows: {len(ranked_df)}")
-            logger.info(f">>> ranked_df rows: {len(ranked_df)}")
-            logger.info("✅ [METRICS] ranked_df rows: %s", len(ranked_df))
-            logger.info(f"[DEBUG] ranked_df shape: {ranked_df.shape}")
-            logger.info(f"[DEBUG] Ranked DataFrame columns: {list(ranked_df.columns)}")
-            logger.info(
-                "Screener Metrics Summary: total_candidates=%s, avg_score=%.2f",
-                len(ranked_df),
-                ranked_df["score"].mean(),
-            )
-            logger.info(
-                "Top 15 Screener Symbols: %s",
-                ", ".join(ranked_df["symbol"].head(15).tolist()),
-            )
-            logger.info(
-                "Top Candidates: %s",
-                ranked_df[["symbol", "score", "win_rate", "net_pnl"]]
-                .head(15)
-                .to_string(index=False),
-            )
-    except Exception:
-        logger.exception("❌ [METRICS] Exception during ranking")
-        ranked_df = None
-
+try:
+    print(">>> Starting rank_and_filter_candidates")
+    logger.info(">>> Starting rank_and_filter_candidates()")
+    logger.info("🚦 [METRICS] Starting candidate ranking")
+    ranked_df = rank_and_filter_candidates(screener_df, results_df, run_date)
     if ranked_df is None:
         print(">>> ranked_df is None — skipping DB writes")
         logger.warning(">>> ranked_df is None — skipping DB writes")
@@ -560,79 +528,108 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print(">>> ranked_df is empty — skipping DB writes")
         logger.warning(">>> ranked_df is empty — skipping DB writes")
     else:
-        print(">>> Writing to top_candidates")
-        logger.info(">>> Writing to top_candidates")
-        db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True)
-        print(">>> top_candidates write complete")
-        logger.info(">>> top_candidates write complete")
-        logger.info("✅ [METRICS] top_candidates DB write complete")
-
-    if not trades_df.empty:
-        trades_df = validate_numeric(trades_df, "net_pnl")
-
-    summary_metrics = calculate_metrics(trades_df.copy())
-    if trades_df.empty:
-        logger.warning("Trades dataset empty; writing default metrics row.")
-    if not trades_df.empty:
+        print(f">>> ranked_df rows: {len(ranked_df)}")
+        logger.info(f">>> ranked_df rows: {len(ranked_df)}")
+        logger.info("✅ [METRICS] ranked_df rows: %s", len(ranked_df))
+        logger.info(f"[DEBUG] ranked_df shape: {ranked_df.shape}")
+        logger.info(f"[DEBUG] Ranked DataFrame columns: {list(ranked_df.columns)}")
         logger.info(
-            "Calculated Metrics: Trades=%s, Net PnL=%.2f, Win Rate=%.2f%%, "
-            "Expectancy=%.2f, Profit Factor=%s, Max Drawdown=%.2f, Sharpe=%.2f, Sortino=%.2f",
-            summary_metrics.get("total_trades", 0),
-            summary_metrics.get("net_pnl", 0.0),
-            summary_metrics.get("win_rate", 0.0),
-            summary_metrics.get("expectancy", 0.0),
-            summary_metrics.get("profit_factor", 0.0),
-            summary_metrics.get("max_drawdown", 0.0),
-            summary_metrics.get("sharpe", 0.0),
-            summary_metrics.get("sortino", 0.0),
+            "Screener Metrics Summary: total_candidates=%s, avg_score=%.2f",
+            len(ranked_df),
+            ranked_df["score"].mean(),
         )
-
-        if "exit_reason" in trades_df.columns:
-            logger.info("Exit reason breakdown skipped: DB is source of truth.")
-
-    try:
-        print(f">>> summary_metrics: {summary_metrics}")
-        logger.info(f">>> summary_metrics: {summary_metrics}")
-        logger.info("🧮 [METRICS] summary_metrics: %s", summary_metrics)
-        db.upsert_metrics_daily(summary_metrics, run_date)
-        print(">>> metrics_daily write complete")
-        logger.info(">>> metrics_daily write complete")
-        logger.info("✅ [METRICS] metrics_daily DB write complete")
-    except Exception:  # pragma: no cover - defensive guard
-        logger.exception("[ERROR] Failed to write to metrics_daily")
-
-    metrics_path = Path(BASE_DIR) / "data" / "screener_metrics.json"
-    metrics: dict = {}
-    if metrics_path.exists():
-        try:
-            candidate = json.loads(metrics_path.read_text(encoding="utf-8"))
-            if isinstance(candidate, dict):
-                metrics.update(candidate)
-            else:
-                logger.warning(
-                    "Existing screener_metrics.json is not a dict; resetting prefix counts context."
-                )
-        except Exception as exc:  # pragma: no cover - defensive I/O guard
-            logger.warning("Failed to read %s: %s", metrics_path, exc)
-
-    if not metrics.get("universe_prefix_counts"):
-        metrics["universe_prefix_counts"] = derive_prefix_counts_from_scored_candidates(
-            Path(BASE_DIR)
+        logger.info(
+            "Top 15 Screener Symbols: %s",
+            ", ".join(ranked_df["symbol"].head(15).tolist()),
         )
+        logger.info(
+            "Top Candidates: %s",
+            ranked_df[["symbol", "score", "win_rate", "net_pnl"]]
+            .head(15)
+            .to_string(index=False),
+        )
+except Exception:
+    logger.exception("❌ [METRICS] Exception during ranking")
+    ranked_df = None
 
-    if "universe_prefix_counts" not in metrics:
-        metrics["universe_prefix_counts"] = {}
+if ranked_df is None:
+    print(">>> ranked_df is None — skipping DB writes")
+    logger.warning(">>> ranked_df is None — skipping DB writes")
+elif ranked_df.empty:
+    print(">>> ranked_df is empty — skipping DB writes")
+    logger.warning(">>> ranked_df is empty — skipping DB writes")
+else:
+    print(">>> Writing to top_candidates")
+    logger.info(">>> Writing to top_candidates")
+    db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True)
+    print(">>> top_candidates write complete")
+    logger.info(">>> top_candidates write complete")
+    logger.info("✅ [METRICS] top_candidates DB write complete")
 
+if not trades_df.empty:
+    trades_df = validate_numeric(trades_df, "net_pnl")
+
+summary_metrics = calculate_metrics(trades_df.copy())
+if trades_df.empty:
+    logger.warning("Trades dataset empty; writing default metrics row.")
+if not trades_df.empty:
+    logger.info(
+        "Calculated Metrics: Trades=%s, Net PnL=%.2f, Win Rate=%.2f%%, "
+        "Expectancy=%.2f, Profit Factor=%s, Max Drawdown=%.2f, Sharpe=%.2f, Sortino=%.2f",
+        summary_metrics.get("total_trades", 0),
+        summary_metrics.get("net_pnl", 0.0),
+        summary_metrics.get("win_rate", 0.0),
+        summary_metrics.get("expectancy", 0.0),
+        summary_metrics.get("profit_factor", 0.0),
+        summary_metrics.get("max_drawdown", 0.0),
+        summary_metrics.get("sharpe", 0.0),
+        summary_metrics.get("sortino", 0.0),
+    )
+
+    if "exit_reason" in trades_df.columns:
+        logger.info("Exit reason breakdown skipped: DB is source of truth.")
+
+try:
+    print(f">>> summary_metrics: {summary_metrics}")
+    logger.info(f">>> summary_metrics: {summary_metrics}")
+    logger.info("🧮 [METRICS] summary_metrics: %s", summary_metrics)
+    print(">>> Writing to metrics_daily")
+    db.upsert_metrics_daily(summary_metrics, run_date)
+    print(">>> metrics_daily write complete")
+    logger.info(">>> metrics_daily write complete")
+    logger.info("✅ [METRICS] metrics_daily DB write complete")
+except Exception:  # pragma: no cover - defensive guard
+    logger.exception("[ERROR] Failed to write to metrics_daily")
+
+metrics_path = Path(BASE_DIR) / "data" / "screener_metrics.json"
+metrics: dict = {}
+if metrics_path.exists():
     try:
-        metrics = ensure_canonical_metrics(metrics)
-        write_screener_metrics_json(metrics_path, metrics)
+        candidate = json.loads(metrics_path.read_text(encoding="utf-8"))
+        if isinstance(candidate, dict):
+            metrics.update(candidate)
+        else:
+            logger.warning(
+                "Existing screener_metrics.json is not a dict; resetting prefix counts context."
+            )
     except Exception as exc:  # pragma: no cover - defensive I/O guard
-        logger.warning("Failed to update %s: %s", metrics_path, exc)
+        logger.warning("Failed to read %s: %s", metrics_path, exc)
 
-    print(">>> METRICS MAIN COMPLETED <<<")
-    logger.info(">>> METRICS MAIN COMPLETED <<<")
-    logger.info("🏁 [METRICS] main() complete")
-    logger.info("[INFO] metrics.py completed successfully")
-    return exit_code
+if not metrics.get("universe_prefix_counts"):
+    metrics["universe_prefix_counts"] = derive_prefix_counts_from_scored_candidates(
+        Path(BASE_DIR)
+    )
 
-main()
+if "universe_prefix_counts" not in metrics:
+    metrics["universe_prefix_counts"] = {}
+
+try:
+    metrics = ensure_canonical_metrics(metrics)
+    write_screener_metrics_json(metrics_path, metrics)
+except Exception as exc:  # pragma: no cover - defensive I/O guard
+    logger.warning("Failed to update %s: %s", metrics_path, exc)
+
+print(">>> METRICS COMPLETE <<<")
+logger.info(">>> METRICS MAIN COMPLETED <<<")
+logger.info("🏁 [METRICS] main() complete")
+logger.info("[INFO] metrics.py completed successfully")
