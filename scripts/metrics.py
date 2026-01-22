@@ -3,13 +3,13 @@ import sys
 import os
 import json
 import argparse
+import logging
 from typing import Any, Mapping, Optional, Iterable
 
 # Ensure project root is on ``sys.path`` before third-party imports
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
-import logging
 from datetime import datetime, timezone, date
 from pathlib import Path
 from collections import Counter
@@ -23,13 +23,14 @@ from utils.env import load_env
 
 load_env()
 
+logger = logging.getLogger(__name__)
+
 logfile = os.path.join(BASE_DIR, "logs", "metrics.log")
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] [%(levelname)s]: %(message)s",
     handlers=[logging.FileHandler(logfile), logging.StreamHandler(sys.stdout)],
 )
-logger = logging.getLogger(__name__)
 logger.info("Metrics script started")
 
 
@@ -460,22 +461,35 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
             results_df = symbol_metrics
 
-    ranked_df = rank_candidates(results_df)
-    logger.info(f"[DEBUG] Ranked DataFrame shape: {ranked_df.shape}")
-    logger.info(f"[DEBUG] Ranked DataFrame columns: {list(ranked_df.columns)}")
-    logger.info(
-        "Screener Metrics Summary: total_candidates=%s, avg_score=%.2f",
-        len(ranked_df),
-        ranked_df['score'].mean(),
-    )
-    logger.info(
-        "Top 15 Screener Symbols: %s",
-        ", ".join(ranked_df['symbol'].head(15).tolist()),
-    )
-    logger.info(
-        "Top Candidates: %s",
-        ranked_df[['symbol', 'score', 'win_rate', 'net_pnl']].head(15).to_string(index=False)
-    )
+    try:
+        logger.info(
+            "[DEBUG] Starting rank_and_filter_candidates with %s candidates",
+            len(screener_df),
+        )
+        ranked_df = rank_candidates(results_df)
+        if ranked_df is None:
+            logger.warning("[WARN] ranked_df is None after ranking — skipping DB writes")
+        else:
+            logger.info(f"[DEBUG] ranked_df shape: {ranked_df.shape}")
+            logger.info(f"[DEBUG] Ranked DataFrame columns: {list(ranked_df.columns)}")
+            logger.info(
+                "Screener Metrics Summary: total_candidates=%s, avg_score=%.2f",
+                len(ranked_df),
+                ranked_df["score"].mean(),
+            )
+            logger.info(
+                "Top 15 Screener Symbols: %s",
+                ", ".join(ranked_df["symbol"].head(15).tolist()),
+            )
+            logger.info(
+                "Top Candidates: %s",
+                ranked_df[["symbol", "score", "win_rate", "net_pnl"]]
+                .head(15)
+                .to_string(index=False),
+            )
+    except Exception:
+        logger.exception("[ERROR] Exception during rank_and_filter_candidates")
+        ranked_df = None
 
     if not trades_df.empty:
         trades_df = validate_numeric(trades_df, "net_pnl")
@@ -500,7 +514,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if "exit_reason" in trades_df.columns:
             logger.info("Exit reason breakdown skipped: DB is source of truth.")
 
-    if not ranked_df.empty:
+    if ranked_df is not None and not ranked_df.empty:
         try:
             if not screener_df.empty and "symbol" in screener_df.columns:
                 screener_df["symbol"] = (
@@ -539,11 +553,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 )
             else:
                 logger.info(f"[INFO] Writing {len(ranked_df)} top candidates to DB")
-                if db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True):
-                    logger.info("[INFO] DB_TOP_CANDIDATES rows=%s", len(ranked_df.index))
-                    logger.info(
-                        "[INFO] DB write to top_candidates completed successfully"
-                    )
+                db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True)
+                logger.info("[INFO] DB write to top_candidates completed")
         except Exception:  # pragma: no cover - defensive guard
             logger.exception("[ERROR] Failed to write to top_candidates")
     else:
@@ -552,13 +563,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     try:
         logger.info(f"[INFO] Summary metrics prepared: {summary_metrics}")
         db.upsert_metrics_daily(summary_metrics, run_date)
-        logger.info(
-            "[INFO] METRICS_DB_OK run_date=%s total_trades=%s net_pnl=%s",
-            run_date,
-            summary_metrics.get("total_trades"),
-            summary_metrics.get("net_pnl"),
-        )
-        logger.info("[INFO] DB write to metrics_daily complete")
+        logger.info("[INFO] DB write to metrics_daily completed")
     except Exception:  # pragma: no cover - defensive guard
         logger.exception("[ERROR] Failed to write to metrics_daily")
 
