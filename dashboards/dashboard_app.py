@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 import subprocess
 import json
 import math
+from decimal import Decimal
 from alpaca.trading.client import TradingClient
 from dotenv import load_dotenv
 import logging
@@ -23,7 +24,7 @@ import pytz
 import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
-from flask import jsonify, redirect, request
+from flask import abort, jsonify, send_from_directory
 from plotly.subplots import make_subplots
 from scripts import db
 
@@ -58,6 +59,104 @@ from dashboards.db_client import db_query_df
 BASE_DIR = os.environ.get(
     "JBRAVO_HOME", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
+
+DATA_EXPORT_ALLOWLIST: set[str] = set()
+
+LOG_EXPORT_ALLOWLIST = {
+    "pipeline.log",
+    "execute_trades.log",
+}
+
+
+def _db_fetch_one(sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    conn = db.get_db_conn()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params or {})
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            columns = [desc[0] for desc in cursor.description]
+        return dict(zip(columns, row))
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_QUERY_FAIL err=%s", exc)
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _db_fetch_all(sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    conn = db.get_db_conn()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params or {})
+            rows = cursor.fetchall()
+            if not rows:
+                return []
+            columns = [desc[0] for desc in cursor.description]
+        return [dict(zip(columns, row)) for row in rows]
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] DB_QUERY_FAIL err=%s", exc)
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _metrics_summary_db() -> dict[str, Any]:
+    row = _db_fetch_one(
+        """
+        SELECT run_date, total_trades, win_rate, net_pnl, profit_factor
+        FROM metrics_daily
+        ORDER BY run_date DESC
+        LIMIT 1
+        """
+    )
+    if not row:
+        return {}
+    return {
+        "last_run_utc": _serialize_record(row.get("run_date")),
+        "total_trades": _serialize_record(row.get("total_trades")),
+        "win_rate": _serialize_record(row.get("win_rate")),
+        "net_pnl": _serialize_record(row.get("net_pnl")),
+        "profit_factor": _serialize_record(row.get("profit_factor")),
+    }
+
+
+def _account_latest_db() -> dict[str, Any]:
+    for sql, source in (
+        (_ACCOUNT_LATEST_SQL, "v_account_latest"),
+        (_ACCOUNT_LATEST_SQL_NO_PORTFOLIO, "v_account_latest"),
+        (_ACCOUNT_RECENT_SQL, "alpaca_account_snapshots"),
+    ):
+        row = _db_fetch_one(sql)
+        if row:
+            row["source"] = source
+            return row
+    return {}
+
+
+def _serialize_record(value: Any) -> Any:
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime().isoformat()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+# React build output for the new Dashboard UI
+REACT_BUILD_DIR = Path(BASE_DIR) / "frontend" / "dist"
+REACT_ASSET_DIR = REACT_BUILD_DIR / "assets"
 
 # Absolute paths to CSV data files used throughout the dashboard
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
@@ -2543,61 +2642,205 @@ def data_freshness_alert(path, name, threshold_minutes=60):
     return None
 
 
+DASH_BASE_PATH = "/v2/"
+
 app = Dash(
     __name__,
     external_stylesheets=[
         dbc.themes.DARKLY,
         "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates@V2.1.0/dbc.min.css",
     ],
+    url_base_pathname=DASH_BASE_PATH,
     suppress_callback_exceptions=True,
 )
 
 server = app.server
 
 
-DASH_BASE_PATH = "/v2/"
-
-
 @server.route("/")
-def root_redirect():
-    """Backwards compatibility for old bookmarks."""
+def react_root():
+    """Serve the React build at the root instead of the Dash UI."""
 
-    qs = request.query_string.decode("utf-8") if request.query_string else ""
-    target = DASH_BASE_PATH + (f"?{qs}" if qs else "")
-    return redirect(target, code=302)
+    index_path = REACT_BUILD_DIR / "index.html"
+    if not index_path.exists():
+        message = "React build not found. Run the frontend build and place output in frontend/dist."
+        return message, 503
+    return send_from_directory(REACT_BUILD_DIR, "index.html")
+
+
+@server.route("/ui-assets/<path:filename>")
+def react_assets(filename: str):
+    if not REACT_BUILD_DIR.exists():
+        abort(404)
+    file_path = REACT_BUILD_DIR / filename
+    if not file_path.exists():
+        abort(404)
+    return send_from_directory(REACT_BUILD_DIR, filename)
 
 
 @server.route("/health/overview")
 def health_overview():
     """Return a lightweight JSON payload describing dashboard health."""
 
-    base = Path(BASE_DIR) / "data"
-    ms_path = base / "metrics_summary.csv"
-    tl_path = base / "trades_log.csv"
     summary: dict[str, Any] = {
-        "metrics_summary_present": ms_path.exists(),
-        "trades_log_present": tl_path.exists(),
+        "metrics_summary_present": False,
+        "trades_log_present": False,
         "trades_log_rows": None,
         "kpis": {},
     }
+    metrics = _metrics_summary_db()
+    if metrics:
+        summary["metrics_summary_present"] = True
+        summary["kpis"] = metrics
 
-    try:
-        if summary["metrics_summary_present"]:
-            df = pd.read_csv(ms_path)
-            if not df.empty:
-                summary["kpis"] = df.iloc[-1].to_dict()
-    except Exception as exc:  # pragma: no cover - telemetry helper
-        summary["kpis_error"] = str(exc)
+    trades_row = _db_fetch_one("SELECT COUNT(*) AS count FROM trades")
+    if trades_row and trades_row.get("count") is not None:
+        summary["trades_log_present"] = True
+        summary["trades_log_rows"] = int(trades_row["count"])
 
-    try:
-        if summary["trades_log_present"]:
-            with open(tl_path, "r", encoding="utf-8", errors="ignore") as handle:
-                row_count = sum(1 for _ in handle)
-            summary["trades_log_rows"] = max(0, row_count - 1)
-    except Exception:
-        pass
+    return jsonify({"ok": bool(metrics or trades_row), **summary})
 
-    return jsonify({"ok": True, **summary})
+
+@server.route("/api/account/overview")
+def api_account_overview():
+    row = _account_latest_db()
+    if not row:
+        return jsonify({"ok": False, "snapshot": {}})
+    snapshot = {key: _serialize_record(value) for key, value in row.items()}
+    return jsonify({"ok": True, "snapshot": snapshot})
+
+
+@server.route("/api/trades/overview")
+def api_trades_overview():
+    metrics = _metrics_summary_db()
+    trades_df = load_trades_db(limit=200)
+    trade_records = []
+    if not trades_df.empty:
+        for record in trades_df.to_dict(orient="records"):
+            trade_records.append({key: _serialize_record(value) for key, value in record.items()})
+
+    open_df = load_open_trades_db()
+    open_count = int(len(open_df)) if open_df is not None else 0
+    open_pnl = None
+    if isinstance(open_df, pd.DataFrame) and not open_df.empty and "realized_pnl" in open_df.columns:
+        open_pnl = float(open_df["realized_pnl"].fillna(0).sum())
+
+    payload = {
+        "ok": bool(metrics or trade_records),
+        "metrics": metrics,
+        "trades": trade_records,
+        "open_positions": {"count": open_count, "realized_pnl": open_pnl},
+    }
+    return jsonify(payload)
+
+
+@server.route("/api/execute/overview")
+def api_execute_overview():
+    now_utc = datetime.now(timezone.utc)
+    ny_tz = pytz.timezone("America/New_York")
+    ny_now = now_utc.astimezone(ny_tz)
+    window_start = ny_now.replace(hour=7, minute=0, second=0, microsecond=0)
+    window_end = ny_now.replace(hour=9, minute=30, second=0, microsecond=0)
+    in_window = window_start <= ny_now <= window_end
+
+    account = _account_latest_db()
+    buying_power = account.get("buying_power") if account else None
+
+    trades_df = load_trades_db(limit=500)
+    submitted = int(len(trades_df)) if not trades_df.empty else 0
+    filled = 0
+    rejected = 0
+    if not trades_df.empty and "status" in trades_df.columns:
+        for status in trades_df["status"].fillna("").astype(str):
+            status_lower = status.lower()
+            if "reject" in status_lower:
+                rejected += 1
+            elif "fill" in status_lower or status_lower in {"closed", "filled"}:
+                filled += 1
+
+    open_df = load_open_trades_db()
+    open_count = int(len(open_df)) if open_df is not None else 0
+
+    skip_counts: dict[str, int] = {}
+    lines = tail_log(execute_trades_log_path, limit=400)
+    last_exec_ts = None
+    for line in lines:
+        match = re.search(r"EXECUTE_SKIP reason=([A-Z_]+)", line)
+        if match:
+            reason = match.group(1)
+            skip_counts[reason] = skip_counts.get(reason, 0) + 1
+        if "Starting pre-market trade execution" in line or "Starting trade execution" in line:
+            candidate = _parse_log_timestamp(line)
+            if candidate:
+                last_exec_ts = candidate
+    payload = {
+        "ok": True,
+        "in_window": in_window,
+        "buying_power": buying_power,
+        "open_positions": open_count,
+        "orders_submitted": submitted,
+        "orders_filled": filled,
+        "orders_rejected": rejected,
+        "skip_counts": skip_counts,
+        "last_execution": last_exec_ts.isoformat() if last_exec_ts else None,
+        "ny_now": ny_now.isoformat(),
+    }
+    return jsonify(payload)
+
+
+@server.route("/api/screener/candidates")
+def api_screener_candidates():
+    if not db.db_enabled():
+        return jsonify({"ok": False, "rows": [], "rows_final": 0, "run_date": None})
+
+    latest = _db_fetch_one("SELECT MAX(run_date) AS run_date FROM screener_candidates")
+    run_date = latest.get("run_date") if latest else None
+    if not run_date:
+        return jsonify({"ok": True, "rows": [], "rows_final": 0, "run_date": None})
+
+    rows = _db_fetch_all(
+        """
+        SELECT
+            run_date, timestamp, symbol, score, exchange, close, volume,
+            universe_count, score_breakdown, entry_price, adv20, atrp, source
+        FROM screener_candidates
+        WHERE run_date = %(run_date)s
+        ORDER BY score DESC NULLS LAST
+        LIMIT 50
+        """,
+        {"run_date": run_date},
+    )
+    serialized = [
+        {key: _serialize_record(value) for key, value in row.items()} for row in rows
+    ]
+    return jsonify(
+        {
+            "ok": True,
+            "rows": serialized,
+            "rows_final": len(serialized),
+            "run_date": _serialize_record(run_date),
+        }
+    )
+
+
+@server.route("/data/<path:filename>")
+def data_exports(filename: str):
+    if filename not in DATA_EXPORT_ALLOWLIST:
+        abort(404)
+    base = Path(BASE_DIR) / "data"
+    if not (base / filename).exists():
+        abort(404)
+    return send_from_directory(base, filename)
+
+
+@server.route("/logs/<path:filename>")
+def log_exports(filename: str):
+    if filename not in LOG_EXPORT_ALLOWLIST:
+        abort(404)
+    base = Path(BASE_DIR) / "logs"
+    if not (base / filename).exists():
+        abort(404)
+    return send_from_directory(base, filename)
 
 
 @app.server.route("/api/health")
