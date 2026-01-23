@@ -15,6 +15,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -1497,7 +1498,14 @@ def determine_steps(raw: Optional[str]) -> list[str]:
     return normalized
 
 
-def run_step(name: str, cmd: Sequence[str], *, timeout: Optional[float] = None) -> tuple[int, float]:
+def run_step(
+    name: str,
+    cmd: Sequence[str],
+    *,
+    timeout: Optional[float] = None,
+    tee_to_stdout: bool = False,
+    tee_to_logger: bool = False,
+) -> tuple[int, float]:
     started = time.time()
     LOG.info("[INFO] START %s cmd=%s", name, shlex.join(cmd))
     env = os.environ.copy()
@@ -1519,17 +1527,43 @@ def run_step(name: str, cmd: Sequence[str], *, timeout: Optional[float] = None) 
                 bool(env.get("DATABASE_URL")),
                 len(env),
             )
-            proc = subprocess.Popen(
-                list(cmd),
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                cwd=PROJECT_ROOT,
-                env=env,
-                text=True,
-            )
+            if tee_to_stdout or tee_to_logger:
+                proc = subprocess.Popen(
+                    list(cmd),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    cwd=PROJECT_ROOT,
+                    env=env,
+                    text=True,
+                    bufsize=1,
+                )
+            else:
+                proc = subprocess.Popen(
+                    list(cmd),
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    cwd=PROJECT_ROOT,
+                    env=env,
+                    text=True,
+                )
         except Exception as exc:
             LOG.error("Failed to launch step %s: %s", name, exc)
             return 1, 0.0
+        stream_thread = None
+        if tee_to_stdout or tee_to_logger:
+            def _stream_output() -> None:
+                if proc.stdout is None:
+                    return
+                for line in proc.stdout:
+                    log_file.write(line)
+                    log_file.flush()
+                    if tee_to_stdout:
+                        print(line, end="")
+                    if tee_to_logger:
+                        LOG.info("[STEP:%s] %s", name, line.rstrip("\n"))
+
+            stream_thread = threading.Thread(target=_stream_output, daemon=True)
+            stream_thread.start()
 
         while True:
             try:
@@ -1549,13 +1583,21 @@ def run_step(name: str, cmd: Sequence[str], *, timeout: Optional[float] = None) 
                 LOG.info("[INFO] %s still running secs=%.1f log=%s", name, elapsed, log_path)
                 last_heartbeat = now
         elapsed = time.time() - started
+        if stream_thread is not None:
+            stream_thread.join(timeout=5)
         log_file.write(f"[{datetime.now(timezone.utc).isoformat()}] END {name} rc={rc} secs={elapsed:.1f}\n")
     LOG.info("END %s rc=%s secs=%.1f log=%s", name, rc, elapsed, log_path)
     return rc, elapsed
 
 
 def _run_step_metrics(cmd: Sequence[str], *, timeout: Optional[float] = None) -> tuple[int, float]:
-    return run_step("metrics", cmd, timeout=timeout)
+    return run_step(
+        "metrics",
+        cmd,
+        timeout=timeout,
+        tee_to_stdout=True,
+        tee_to_logger=True,
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -2245,7 +2287,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             rc_metrics = 0
             secs = 0.0
             try:
+                print(">>> [run_pipeline] launching metrics.py subprocess <<<")
+                logger.info(">>> [run_pipeline] launching metrics.py subprocess <<<")
                 rc_metrics, secs = _run_step_metrics(cmd, timeout=60 * 3)
+                print(">>> [run_pipeline] metrics.py completed <<<")
+                logger.info(">>> [run_pipeline] metrics.py completed <<<")
             except FileNotFoundError:
                 logger.warning("METRICS skipped: dependency missing.")
                 rc_metrics, secs = 0, 0.0
