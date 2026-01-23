@@ -5,6 +5,7 @@ import os
 import json
 import argparse
 import logging
+import traceback
 from typing import Any, Mapping, Optional, Iterable
 
 # Ensure project root is on ``sys.path`` before third-party imports
@@ -557,19 +558,37 @@ except Exception:
     logger.exception("❌ [METRICS] Exception during ranking")
     ranked_df = None
 
-if ranked_df is None:
-    print(">>> ranked_df is None — skipping DB writes")
-    logger.warning(">>> ranked_df is None — skipping DB writes")
-elif ranked_df.empty:
-    print(">>> ranked_df is empty — skipping DB writes")
-    logger.warning(">>> ranked_df is empty — skipping DB writes")
+if isinstance(ranked_df, pd.DataFrame):
+    top_candidates_df = ranked_df
 else:
-    print(">>> Writing to top_candidates")
-    logger.info(">>> Writing to top_candidates")
-    db.upsert_top_candidates(run_date, ranked_df, replace_for_run_date=True)
+    top_candidates_df = pd.DataFrame()
+    print(">>> ranked_df is None — attempting top_candidates write anyway")
+    logger.warning("ranked_df is None; attempting top_candidates write anyway.")
+
+if top_candidates_df.empty:
+    print(">>> Top candidates DataFrame is empty; attempting DB write anyway")
+    logger.warning("Top candidates DataFrame was empty. Attempting insert anyway.")
+
+top_candidates_rows = int(top_candidates_df.shape[0])
+print(
+    f">>> Attempting to insert {top_candidates_rows} rows into top_candidates "
+    f"for run_date={run_date}"
+)
+logger.warning(
+    "Attempting to insert %s rows into top_candidates for run_date=%s",
+    top_candidates_rows,
+    run_date,
+)
+try:
+    db.upsert_top_candidates(run_date, top_candidates_df, replace_for_run_date=True)
     print(">>> top_candidates write complete")
-    logger.info(">>> top_candidates write complete")
+    logger.warning("top_candidates write complete")
     logger.info("✅ [METRICS] top_candidates DB write complete")
+except Exception:
+    exc_trace = traceback.format_exc()
+    print(">>> top_candidates write failed")
+    print(exc_trace)
+    logger.warning("DB insert failed for top_candidates: %s", exc_trace)
 
 if not trades_df.empty:
     trades_df = validate_numeric(trades_df, "net_pnl")
@@ -594,17 +613,26 @@ if not trades_df.empty:
     if "exit_reason" in trades_df.columns:
         logger.info("Exit reason breakdown skipped: DB is source of truth.")
 
+if not summary_metrics:
+    summary_metrics = calculate_metrics(pd.DataFrame())
+    print(">>> summary_metrics missing; using fallback zeroed metrics")
+    logger.warning("summary_metrics missing; using fallback zeroed metrics.")
+
+print(f">>> summary_metrics: {summary_metrics}")
+logger.info(f">>> summary_metrics: {summary_metrics}")
+logger.info("🧮 [METRICS] summary_metrics: %s", summary_metrics)
+print(f">>> Attempting to insert metrics_daily for run_date={run_date}")
+logger.warning("Attempting to insert metrics_daily for run_date=%s", run_date)
 try:
-    print(f">>> summary_metrics: {summary_metrics}")
-    logger.info(f">>> summary_metrics: {summary_metrics}")
-    logger.info("🧮 [METRICS] summary_metrics: %s", summary_metrics)
-    print(">>> Writing to metrics_daily")
     db.upsert_metrics_daily(summary_metrics, run_date)
     print(">>> metrics_daily write complete")
-    logger.info(">>> metrics_daily write complete")
+    logger.warning("metrics_daily write complete")
     logger.info("✅ [METRICS] metrics_daily DB write complete")
-except Exception:  # pragma: no cover - defensive guard
-    logger.exception("[ERROR] Failed to write to metrics_daily")
+except Exception:
+    exc_trace = traceback.format_exc()
+    print(">>> metrics_daily write failed")
+    print(exc_trace)
+    logger.warning("DB insert failed for metrics_daily: %s", exc_trace)
 
 metrics_path = Path(BASE_DIR) / "data" / "screener_metrics.json"
 metrics: dict = {}
