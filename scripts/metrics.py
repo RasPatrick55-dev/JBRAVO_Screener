@@ -478,8 +478,10 @@ except Exception as exc:  # pragma: no cover - defensive guard
 print(">>> Loaded screener_df and backtest_df")
 print(f">>> screener_df rows: {len(screener_df)}")
 logger.info(f">>> screener_df rows: {len(screener_df)}")
+logger.warning(f">>> screener_df rows: {len(screener_df)}")
 print(f">>> backtest_df rows: {len(backtest_df)}")
 logger.info(f">>> backtest_df rows: {len(backtest_df)}")
+logger.warning(f">>> backtest_df rows: {len(backtest_df)}")
 if screener_df.empty or backtest_df.empty:
     print(">>> Input data is empty — skipping metrics <<<")
 else:
@@ -529,12 +531,17 @@ try:
     if ranked_df is None:
         print(">>> ranked_df is None — skipping DB writes")
         logger.warning(">>> ranked_df is None — skipping DB writes")
+        print(">>> ranked_df rows: 0")
+        logger.warning(">>> ranked_df rows: 0")
     else:
         print(f">>> ranked_df rows: {len(ranked_df)}")
         logger.info(f">>> ranked_df rows: {len(ranked_df)}")
+        logger.warning(f">>> ranked_df rows: {len(ranked_df)}")
         if ranked_df.empty:
             print(">>> ranked_df is empty — skipping DB writes")
             logger.warning(">>> ranked_df is empty — skipping DB writes")
+            print(f">>> ranked_df columns: {list(ranked_df.columns)}")
+            logger.warning(f">>> ranked_df columns: {list(ranked_df.columns)}")
         else:
             logger.info("✅ [METRICS] ranked_df rows: %s", len(ranked_df))
             logger.info(f"[DEBUG] ranked_df shape: {ranked_df.shape}")
@@ -570,6 +577,11 @@ if top_candidates_df.empty:
     logger.warning("Top candidates DataFrame was empty. Attempting insert anyway.")
 
 top_candidates_rows = int(top_candidates_df.shape[0])
+db_enabled = db.db_enabled()
+print(f">>> db.db_enabled(): {db_enabled}")
+logger.warning(f">>> db.db_enabled(): {db_enabled}")
+print(">>> Attempting to write top_candidates to DB")
+logger.warning(">>> Writing top_candidates to DB")
 print(
     f">>> Attempting to insert {top_candidates_rows} rows into top_candidates "
     f"for run_date={run_date}"
@@ -582,7 +594,7 @@ logger.warning(
 try:
     db.upsert_top_candidates(run_date, top_candidates_df, replace_for_run_date=True)
     print(">>> top_candidates write complete")
-    logger.warning("top_candidates write complete")
+    logger.warning(">>> top_candidates write complete")
     logger.info("✅ [METRICS] top_candidates DB write complete")
 except Exception:
     exc_trace = traceback.format_exc()
@@ -614,19 +626,27 @@ if not trades_df.empty:
         logger.info("Exit reason breakdown skipped: DB is source of truth.")
 
 if not summary_metrics:
+    print(">>> summary_metrics is empty; columns: []")
+    logger.warning(">>> summary_metrics is empty; columns: []")
     summary_metrics = calculate_metrics(pd.DataFrame())
     print(">>> summary_metrics missing; using fallback zeroed metrics")
     logger.warning("summary_metrics missing; using fallback zeroed metrics.")
 
 print(f">>> summary_metrics: {summary_metrics}")
 logger.info(f">>> summary_metrics: {summary_metrics}")
+logger.warning(f">>> summary_metrics: {summary_metrics}")
 logger.info("🧮 [METRICS] summary_metrics: %s", summary_metrics)
+db_enabled = db.db_enabled()
+print(f">>> db.db_enabled(): {db_enabled}")
+logger.warning(f">>> db.db_enabled(): {db_enabled}")
+print(">>> Attempting to write metrics_daily to DB")
+logger.warning(">>> Writing metrics_daily to DB")
 print(f">>> Attempting to insert metrics_daily for run_date={run_date}")
 logger.warning("Attempting to insert metrics_daily for run_date=%s", run_date)
 try:
     db.upsert_metrics_daily(summary_metrics, run_date)
     print(">>> metrics_daily write complete")
-    logger.warning("metrics_daily write complete")
+    logger.warning(">>> metrics_daily write complete")
     logger.info("✅ [METRICS] metrics_daily DB write complete")
 except Exception:
     exc_trace = traceback.format_exc()
@@ -663,6 +683,7 @@ except Exception as exc:  # pragma: no cover - defensive I/O guard
     logger.warning("Failed to update %s: %s", metrics_path, exc)
 
 print(">>> METRICS COMPLETE <<<")
+print(">>> METRICS FILE COMPLETED <<<")
 logger.info(">>> METRICS MAIN COMPLETED <<<")
 logger.info("🏁 [METRICS] main() complete")
 logger.info("[INFO] metrics.py completed successfully")
