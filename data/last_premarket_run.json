@@ -1,10 +1,10 @@
 {
-  "started_utc": null,
-  "ny_now": null,
-  "in_window": false,
-  "candidates_in": 0,
-  "auth_ok": false,
-  "buying_power": 0,
-  "orders_submitted": 0,
-  "skip_counts": {}
+  "auth_ok": true,
+  "buying_power": 387690.2,
+  "candidates_in": 11,
+  "finished_utc": "2026-01-22T12:00:03.051387+00:00",
+  "in_window": true,
+  "skip_counts": {},
+  "started_utc": "2026-01-22T09:02:33.070051+00:00",
+  "window_label": "07:00-09:30 ET"
 }

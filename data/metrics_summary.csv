@@ -1,2 +1,2 @@
-total_trades,net_pnl,win_rate,expectancy,profit_factor,max_drawdown,sharpe,sortino
-1,-2.590005000000019,0.0,-2.590005000000019,0.0,0.0,0.0,0.0
+last_run_utc,symbols_in,with_bars,bars_rows,candidates,status,auth_reason,auth_missing,auth_hint
+2026-01-22T21:46:25.084434+00:00,131,131,293395,15,auth_error,unauthorized,,"{""base_urls"": {""data"": ""https://data.alpaca.markets"", ""trading"": ""https://paper-api.alpaca.markets""}, ""key_prefix"": ""PK7I\u2026"", ""secret_len"": 40}"

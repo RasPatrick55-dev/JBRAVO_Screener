@@ -126,3 +126,47 @@ C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:36: DeprecationWarn
 C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   end_time = datetime.utcnow()
 [2026-01-18T18:07:06.240971+00:00] END backtest rc=0 secs=22.1
+[2026-01-22T15:35:44.895420+00:00] START backtest
+[2026-01-22T15:36:21.381730+00:00] END backtest rc=0 secs=36.5
+[2026-01-22T16:46:05.999376+00:00] START backtest
+[2026-01-22T16:46:42.232152+00:00] END backtest rc=0 secs=36.2
+[2026-01-22T16:55:06.895556+00:00] START backtest
+[2026-01-22T16:55:43.327913+00:00] END backtest rc=0 secs=36.4
+[2026-01-22T17:24:16.513460+00:00] START backtest
+[2026-01-22T17:24:52.093915+00:00] END backtest rc=0 secs=35.6
+[2026-01-22T17:26:28.644737+00:00] START backtest
+[2026-01-22T17:27:05.977099+00:00] END backtest rc=0 secs=37.3
+[2026-01-22T18:33:29.044062+00:00] START backtest
+[2026-01-22T18:33:33.680465+00:00] START backtest
+[2026-01-22T18:34:04.064222+00:00] END backtest rc=0 secs=35.0
+[2026-01-22T18:34:07.616369+00:00] END backtest rc=0 secs=33.9
+[2026-01-22T19:26:05.260006+00:00] START backtest
+/home/RasPatrick/jbravo_screener/scripts/backtest.py:36: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  start_time = datetime.utcnow()
+/home/RasPatrick/jbravo_screener/scripts/backtest.py:1492: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  end_time = datetime.utcnow()
+[2026-01-22T19:26:16.738236+00:00] END backtest rc=0 secs=11.5
+[2026-01-22T20:41:50.922736+00:00] START backtest
+[2026-01-22T20:42:24.354575+00:00] END backtest rc=0 secs=33.4
+[2026-01-22T21:01:19.380574+00:00] START backtest
+[2026-01-22T21:01:20.758528+00:00] END backtest rc=0 secs=1.4
+[2026-01-22T21:37:30.595546+00:00] START backtest
+[2026-01-22T21:37:31.821707+00:00] END backtest rc=0 secs=1.2
+[2026-01-22T21:43:45.122308+00:00] START backtest
+[2026-01-22T21:43:46.249839+00:00] END backtest rc=0 secs=1.1
+[2026-01-22T22:12:06.666312+00:00] START backtest
+[2026-01-22T22:12:08.241442+00:00] END backtest rc=0 secs=1.6
+[2026-01-23T01:51:39.424787+00:00] START backtest
+[2026-01-23T01:52:08.503840+00:00] END backtest rc=0 secs=29.1
+[2026-01-23T02:36:30.542055+00:00] START backtest
+[2026-01-23T02:37:00.869877+00:00] END backtest rc=0 secs=30.3
+[2026-01-23T02:59:44.691408+00:00] START backtest
+[2026-01-23T03:00:15.520523+00:00] END backtest rc=0 secs=30.8
+[2026-01-23T03:39:18.830374+00:00] START backtest
+[2026-01-23T03:39:48.877321+00:00] END backtest rc=0 secs=30.0
+[2026-01-23T04:04:43.753241+00:00] START backtest
+[2026-01-23T04:05:33.807859+00:00] END backtest rc=0 secs=50.1
+[2026-01-23T04:10:10.188966+00:00] START backtest
+[2026-01-23T04:10:40.418040+00:00] END backtest rc=0 secs=30.2
+[2026-01-23T04:47:08.834545+00:00] START backtest
+[2026-01-23T04:49:54.378994+00:00] END backtest rc=0 secs=165.5

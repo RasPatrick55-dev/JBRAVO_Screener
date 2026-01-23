@@ -1,0 +1,5 @@
+nohup: ignoring input
+[2026-01-22 15:30:03,197] [INFO]: Script started
+2026-01-22 15:30:03,211 - pipeline - [INFO] ENV_LOADED files=[/home/RasPatrick/.config/jbravo/.env]
+2026-01-22 15:30:03,213 - pipeline - [ERROR] SCREENER_STEP_REQUIRED steps=metrics
+[2026-01-22 15:30:03,230] [INFO]: ALERT_WEBHOOK not set; would send alert: JBRAVO pipeline failed: screener missing

@@ -1,13 +1,18 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+
 cd /home/RasPatrick/jbravo_screener
+source /home/RasPatrick/.virtualenvs/jbravo-env/bin/activate
+set -a
+. /home/RasPatrick/.config/jbravo/.env
+set +a
 
-# Use the venv's Python path — this is the PythonAnywhere-recommended way for tasks.
-VENV_PY="/home/RasPatrick/.virtualenvs/jbravo-env/bin/python"
-
-# Fresh log for the dashboard Pipeline tab
-: > logs/pipeline.log
-
-exec "$VENV_PY" -m scripts.run_pipeline \
-  --steps screener,backtest,metrics \
-  --screener-args-split --feed iex --dollar-vol-min 2000000 --reuse-cache true
+python -m scripts.execute_trades \
+  --source db \
+  --allocation-pct 0.05 \
+  --min-order-usd 300 \
+  --max-positions 4 \
+  --trailing-percent 3 \
+  --time-window any \
+  --extended-hours True \
+  --cancel-after-min 35 \
+  --limit-buffer-pct 1.0

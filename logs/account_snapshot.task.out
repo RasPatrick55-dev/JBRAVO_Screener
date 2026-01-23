@@ -1,0 +1,114 @@
+2026-01-22 01:16:15,843 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 01:16:15,884 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 01:16:15,925 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 01:16:15.885114+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 02:15:53,833 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 02:15:53,862 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 02:15:53,890 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 02:15:53.863121+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 03:15:52,873 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 03:15:52,905 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 03:15:52,936 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 03:15:52.906118+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 04:15:54,881 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 04:15:54,919 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 04:15:54,948 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 04:15:54.919985+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 05:15:59,780 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 05:15:59,810 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 05:15:59,856 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 05:15:59.810311+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 06:16:03,083 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 06:16:03,136 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 06:16:03,186 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 06:16:03.137012+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 07:16:04,484 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 07:16:04,563 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 07:16:04,654 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 07:16:04.563304+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 08:16:06,443 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 08:16:06,488 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 08:16:06,533 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 08:16:06.488250+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 09:15:54,934 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 09:15:54,971 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 09:15:54,996 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 09:15:54.971976+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 10:15:50,828 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 10:15:50,864 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 10:15:50,901 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 10:15:50.865140+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 11:15:55,920 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 11:15:55,951 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 11:15:55,989 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 11:15:55.951820+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 12:15:58,200 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 12:15:58,225 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 12:15:58,282 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 12:15:58.225879+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 13:15:57,903 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 13:15:57,939 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 13:15:57,974 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 13:15:57.939653+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 14:15:52,890 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 14:15:52,919 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 14:15:52,962 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 14:15:52.919320+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 15:15:50,737 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 15:15:50,907 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 15:15:50,936 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 15:15:50.908538+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 16:16:00,861 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 16:16:00,891 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 16:16:00,933 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 16:16:00.891483+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 17:15:56,494 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 17:15:56,589 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 17:15:56,616 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 17:15:56.589191+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 18:16:12,125 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 18:16:12,238 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 18:16:12,270 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 18:16:12.238559+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 19:16:00,651 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 19:16:00,683 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 19:16:00,726 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 19:16:00.683595+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 20:15:52,261 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 20:15:52,304 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 20:15:52,339 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 20:15:52.305137+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 21:15:53,672 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 21:15:53,712 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 21:15:53,747 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 21:15:53.713082+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 22:15:39,669 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 22:15:39,688 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 22:15:39,712 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 22:15:39.688950+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-22 23:15:52,196 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-22 23:15:52,228 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-22 23:15:52,259 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-22 23:15:52.228921+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 00:16:00,443 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 00:16:00,499 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 00:16:00,536 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 00:16:00.499432+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 01:15:53,965 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 01:15:54,003 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 01:15:54,053 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 01:15:54.003322+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 02:15:55,834 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 02:15:55,896 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 02:15:55,939 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 02:15:55.896409+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 03:15:53,212 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 03:15:53,250 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 03:15:53,301 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 03:15:53.250294+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 04:15:48,346 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 04:15:48,379 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 04:15:48,444 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 04:15:48.379255+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 05:15:59,590 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 05:15:59,610 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 05:15:59,630 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 05:15:59.610934+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 06:16:16,674 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 06:16:16,697 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 06:16:16,719 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 06:16:16.697669+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 07:16:00,114 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 07:16:00,139 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 07:16:00,165 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 07:16:00.139983+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 08:16:23,870 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 08:16:23,942 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 08:16:23,996 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 08:16:23.942368+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 09:15:56,633 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 09:15:56,658 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 09:15:56,679 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 09:15:56.659086+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 10:15:56,419 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 10:15:56,442 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 10:15:56,464 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 10:15:56.442217+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 11:16:07,705 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 11:16:07,733 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 11:16:07,772 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 11:16:07.733534+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 12:16:17,640 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 12:16:17,666 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 12:16:17,687 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 12:16:17.666685+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 13:16:20,125 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 13:16:20,148 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 13:16:20,171 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 13:16:20.148691+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2
+2026-01-23 14:16:06,997 [INFO] ACCT_SNAP_START base_url=https://paper-api.alpaca.markets paper_mode=True
+2026-01-23 14:16:07,023 [INFO] ACCT_SNAP_FETCH_OK status=200 account_id=ff9f94aa-260f-4d05-8b38-c0f576030657
+2026-01-23 14:16:07,045 [INFO] ACCT_SNAP_DB_OK inserted=1 taken_at=2026-01-23 14:16:07.023781+00:00 equity=96922.55 cash=96922.55 buying_power=387690.2

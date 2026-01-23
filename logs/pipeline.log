@@ -1,1390 +1,178 @@
-2025-07-07 09:30:00 Screener started
-2025-07-07 09:31:00 Screener completed
-2025-07-07 09:32:00 Backtest started
-2025-07-07 09:33:00 Backtest completed
-2025-07-07 09:34:00 Trade execution started
-2025-07-07 09:35:00 Trade execution completed
-2026-01-08 20:32:13,720 - pipeline - [INFO] ENV_LOADED files=[]
-2026-01-08 20:32:13,720 - pipeline - [ERROR] ENV_MISSING_KEYS=[APCA_API_KEY_ID, APCA_API_SECRET_KEY, APCA_API_BASE_URL, APCA_DATA_API_BASE_URL, ALPACA_DATA_FEED]
-2026-01-08 21:13:46,752 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-08 21:13:46,753 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-08 21:13:46,761 - pipeline - [INFO] PIPELINE_ARGS screener=['--export-daily-bars-path', 'data\\daily_bars.csv'] execute=[] backtest=[] metrics=[] ranker_eval=[]
-2026-01-08 21:13:46,761 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --export-daily-bars-path 'data\daily_bars.csv'
-2026-01-08 21:13:46,761 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=False keys_count=73
-2026-01-08 21:14:01,815 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:14:16,918 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:14:32,031 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:14:47,127 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:15:02,234 - pipeline - [INFO] screener still running secs=75.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:15:17,286 - pipeline - [INFO] screener still running secs=90.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:15:32,349 - pipeline - [INFO] screener still running secs=105.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:15:47,463 - pipeline - [INFO] screener still running secs=120.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:16:02,618 - pipeline - [INFO] screener still running secs=135.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:16:17,716 - pipeline - [INFO] screener still running secs=151.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:16:32,819 - pipeline - [INFO] screener still running secs=166.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:16:47,942 - pipeline - [INFO] screener still running secs=181.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:17:03,050 - pipeline - [INFO] screener still running secs=196.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:17:18,134 - pipeline - [INFO] screener still running secs=211.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:17:33,198 - pipeline - [INFO] screener still running secs=226.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:17:48,300 - pipeline - [INFO] screener still running secs=241.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:17:55,205 - pipeline - END screener rc=0 secs=248.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-08 21:17:55,304 - pipeline - [INFO] FALLBACK_CHECK start origin=screener
-2026-01-08 21:17:55,432 - pipeline - LATEST_CANDIDATES canonicalized from top_candidates rows=1
-2026-01-08 21:17:55,449 - pipeline - [INFO] FALLBACK_CHECK rows_out=1 source=fallback:scored
-2026-01-08 21:17:55,462 - pipeline - LATEST_CANDIDATES canonicalized from top_candidates rows=1
-2026-01-08 21:17:55,463 - pipeline - LATEST_SYNC source=top_candidates rows=1
-2026-01-08 21:17:55,464 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest
-2026-01-08 21:17:55,465 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=False keys_count=73
-2026-01-08 21:18:04,474 - pipeline - END backtest rc=0 secs=9.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-08 21:18:04,476 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics
-2026-01-08 21:18:04,476 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=False keys_count=73
-2026-01-08 21:18:05,389 - pipeline - END metrics rc=0 secs=0.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-08 21:18:05,431 - pipeline - LATEST_CANDIDATES canonicalized from top_candidates rows=1
-2026-01-08 21:18:05,432 - pipeline - LATEST_SYNC source=top_candidates rows=1
-2026-01-08 21:18:05,432 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=False keys_count=72
-2026-01-08 21:18:06,069 - pipeline - TRADE_PERFORMANCE_CACHE_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2241, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<8 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\venv\\Scripts\\python.exe', '-m', 'scripts.trade_performance_refresh', '--lookback-days', '400']' returned non-zero exit status 1.
-2026-01-08 21:18:06,164 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=423 symbols_in=77
-2026-01-08 21:18:06,656 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=423 with_bars_required=77 rows=1 fetch_secs=0.000 feature_secs=0.000 rank_secs=0.000 gate_secs=0.000 bars_rows_total=301299 source=fallback:scored
-2026-01-08 21:18:06,673 - pipeline - [WARN] SUMMARY_TODAY_MISSING date=2026-01-09
-2026-01-08 21:18:06,673 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=1 bars_rows_total=301299
-2026-01-08 21:18:06,693 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-08 21:18:06,693 - pipeline - [WARN] DB_INGEST_FAILED table=all err=db_disabled
-2026-01-08 21:18:06,693 - pipeline - [INFO] PIPELINE_END rc=0 duration=259.9s
-2026-01-08 21:18:06,694 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=False keys_count=72
-2026-01-08 21:18:07,727 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-08 21:18:07,727 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-17 21:28:37,837 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-17 21:28:37,840 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-17 21:28:37,840 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--export-daily-bars-path', 'data\\daily_bars.csv'] backtest=[] metrics=[] ranker_eval=[]
-2026-01-17 21:28:37,840 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --export-daily-bars-path 'data\daily_bars.csv'
-2026-01-17 21:28:37,840 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 21:28:52,905 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:29:08,060 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:29:23,198 - pipeline - [INFO] screener still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:29:38,339 - pipeline - [INFO] screener still running secs=60.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:29:53,487 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:30:08,580 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:30:23,697 - pipeline - [INFO] screener still running secs=105.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:30:38,839 - pipeline - [INFO] screener still running secs=121.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:30:53,906 - pipeline - [INFO] screener still running secs=136.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:31:09,023 - pipeline - [INFO] screener still running secs=151.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:31:24,115 - pipeline - [INFO] screener still running secs=166.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:31:39,206 - pipeline - [INFO] screener still running secs=181.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:31:54,352 - pipeline - [INFO] screener still running secs=196.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:32:09,424 - pipeline - [INFO] screener still running secs=211.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:32:24,530 - pipeline - [INFO] screener still running secs=226.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:32:39,599 - pipeline - [INFO] screener still running secs=241.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:32:54,705 - pipeline - [INFO] screener still running secs=256.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:33:09,824 - pipeline - [INFO] screener still running secs=272.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:33:09,835 - pipeline - END screener rc=0 secs=272.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:33:12,238 - pipeline - [INFO] CANDIDATE_COUNTS rows=15 source=db
-2026-01-17 21:33:14,575 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest
-2026-01-17 21:33:14,577 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 21:33:29,710 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 21:33:44,830 - pipeline - [INFO] backtest still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 21:33:50,992 - pipeline - END backtest rc=0 secs=36.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 21:33:53,522 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics
-2026-01-17 21:33:53,524 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 21:33:59,208 - pipeline - END metrics rc=1 secs=5.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-17 21:33:59,208 - pipeline - [WARN] METRICS_STEP rc=1 (continuing)
-2026-01-17 21:33:59,208 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-17 21:33:59,208 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 21:34:57,468 - pipeline - TRADE_PERFORMANCE_CACHE_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2097, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<8 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\venv\\Scripts\\python.exe', '-m', 'scripts.trade_performance_refresh', '--lookback-days', '400']' returned non-zero exit status 120.
-2026-01-17 21:35:02,209 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-17 21:35:02,631 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=15 fetch_secs=21.339 feature_secs=232.736 rank_secs=0.119 gate_secs=0.009 bars_rows_total=299234 source=db
-2026-01-17 21:35:02,648 - pipeline - [WARN] SUMMARY_TODAY_MISSING date=2026-01-18
-2026-01-17 21:35:02,648 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=15 bars_rows_total=299234
-2026-01-17 21:35:02,665 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-17 21:35:05,086 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-17 21:35:05,086 - pipeline - [INFO] PIPELINE_END rc=0 duration=387.2s
-2026-01-17 21:35:05,086 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 21:35:06,205 - pipeline - ACCOUNT_EQUITY_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2438, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<12 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\venv\\Scripts\\python.exe', '-m', 'scripts.update_account_equity', '--period', '1M', '--timeframe', '1D', '--extended-hours', 'true']' returned non-zero exit status 120.
-2026-01-17 21:37:38,282 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-17 21:37:38,283 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-17 21:37:38,283 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--export-daily-bars-path', 'data\\daily_bars.csv'] backtest=[] metrics=[] ranker_eval=[]
-2026-01-17 21:37:38,283 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --export-daily-bars-path 'data\daily_bars.csv'
-2026-01-17 21:37:38,283 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 21:37:53,405 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:38:08,489 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:38:23,556 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:38:38,670 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:38:53,816 - pipeline - [INFO] screener still running secs=75.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:39:08,922 - pipeline - [INFO] screener still running secs=90.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:39:24,039 - pipeline - [INFO] screener still running secs=105.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:39:39,139 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:39:54,254 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:40:09,385 - pipeline - [INFO] screener still running secs=151.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:40:24,455 - pipeline - [INFO] screener still running secs=166.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:40:39,554 - pipeline - [INFO] screener still running secs=181.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:40:54,622 - pipeline - [INFO] screener still running secs=196.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:41:09,720 - pipeline - [INFO] screener still running secs=211.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:41:24,804 - pipeline - [INFO] screener still running secs=226.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:41:39,920 - pipeline - [INFO] screener still running secs=241.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:41:53,004 - pipeline - END screener rc=0 secs=254.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:41:55,360 - pipeline - [INFO] CANDIDATE_COUNTS rows=15 source=db
-2026-01-17 21:41:57,727 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest
-2026-01-17 21:41:57,728 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 21:42:12,804 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 21:42:27,939 - pipeline - [INFO] backtest still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 21:42:33,845 - pipeline - END backtest rc=0 secs=36.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 21:42:36,198 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics
-2026-01-17 21:42:36,198 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 21:42:41,551 - pipeline - END metrics rc=1 secs=5.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-17 21:42:41,551 - pipeline - [WARN] METRICS_STEP rc=1 (continuing)
-2026-01-17 21:42:41,551 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-17 21:42:41,551 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 21:42:42,294 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-17 21:42:47,076 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-17 21:42:47,522 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=15 fetch_secs=20.948 feature_secs=217.266 rank_secs=0.113 gate_secs=0.010 bars_rows_total=299234 source=db
-2026-01-17 21:42:47,539 - pipeline - [WARN] SUMMARY_TODAY_MISSING date=2026-01-18
-2026-01-17 21:42:47,539 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=15 bars_rows_total=299234
-2026-01-17 21:42:47,559 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-17 21:42:50,220 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-17 21:42:50,220 - pipeline - [INFO] PIPELINE_END rc=0 duration=311.9s
-2026-01-17 21:42:50,220 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 21:42:51,286 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-17 21:53:28,194 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-17 21:53:28,195 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-17 21:53:28,195 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--export-daily-bars-path', 'data\\daily_bars.csv'] backtest=[] metrics=[] ranker_eval=[]
-2026-01-17 21:53:28,196 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --export-daily-bars-path 'data\daily_bars.csv'
-2026-01-17 21:53:28,196 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 21:53:43,285 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:53:58,398 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:54:13,497 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:54:28,612 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:54:43,753 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:54:58,893 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:55:13,990 - pipeline - [INFO] screener still running secs=105.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:55:29,120 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:55:44,223 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:55:59,352 - pipeline - [INFO] screener still running secs=151.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:56:14,482 - pipeline - [INFO] screener still running secs=166.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:56:29,582 - pipeline - [INFO] screener still running secs=181.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:56:44,697 - pipeline - [INFO] screener still running secs=196.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:56:59,802 - pipeline - [INFO] screener still running secs=211.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:57:14,884 - pipeline - [INFO] screener still running secs=226.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:57:30,019 - pipeline - [INFO] screener still running secs=241.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:57:45,113 - pipeline - [INFO] screener still running secs=256.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:58:00,220 - pipeline - [INFO] screener still running secs=272.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:58:02,373 - pipeline - END screener rc=0 secs=274.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 21:58:04,740 - pipeline - [INFO] CANDIDATE_COUNTS rows=15 source=db
-2026-01-17 21:58:07,072 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest
-2026-01-17 21:58:07,073 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 21:58:22,199 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 21:58:37,330 - pipeline - [INFO] backtest still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 21:58:42,959 - pipeline - END backtest rc=0 secs=35.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 21:58:45,385 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics
-2026-01-17 21:58:45,386 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 21:58:55,464 - pipeline - END metrics rc=0 secs=10.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-17 21:58:55,464 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-17 21:58:55,464 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 21:58:59,634 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-17 21:59:04,420 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-17 21:59:04,945 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=15 fetch_secs=22.219 feature_secs=234.666 rank_secs=0.118 gate_secs=0.011 bars_rows_total=299234 source=db
-2026-01-17 21:59:04,962 - pipeline - [WARN] SUMMARY_TODAY_MISSING date=2026-01-18
-2026-01-17 21:59:04,962 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=15 bars_rows_total=299234
-2026-01-17 21:59:04,992 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-17 21:59:07,435 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-17 21:59:07,435 - pipeline - [INFO] PIPELINE_END rc=0 duration=339.2s
-2026-01-17 21:59:07,435 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 21:59:08,435 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-17 22:28:58,750 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-17 22:28:58,750 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-17 22:28:58,750 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv'] backtest=[] metrics=[] ranker_eval=[]
-2026-01-17 22:28:58,751 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv'
-2026-01-17 22:28:58,751 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 22:29:13,874 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:29:29,006 - pipeline - [INFO] screener still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:29:44,113 - pipeline - [INFO] screener still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:29:59,222 - pipeline - [INFO] screener still running secs=60.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:30:14,331 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:30:29,470 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:30:44,542 - pipeline - [INFO] screener still running secs=105.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:30:59,651 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:31:14,737 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:31:29,859 - pipeline - [INFO] screener still running secs=151.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:31:44,982 - pipeline - [INFO] screener still running secs=166.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:32:00,101 - pipeline - [INFO] screener still running secs=181.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:32:15,215 - pipeline - [INFO] screener still running secs=196.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:32:30,325 - pipeline - [INFO] screener still running secs=211.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:32:45,422 - pipeline - [INFO] screener still running secs=226.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:33:00,546 - pipeline - [INFO] screener still running secs=241.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:33:15,650 - pipeline - [INFO] screener still running secs=256.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:33:30,753 - pipeline - [INFO] screener still running secs=272.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:33:37,688 - pipeline - END screener rc=0 secs=278.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:33:40,185 - pipeline - [INFO] CANDIDATE_COUNTS rows=13 source=db
-2026-01-17 22:33:42,504 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest
-2026-01-17 22:33:42,504 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 22:33:57,609 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 22:34:12,756 - pipeline - [INFO] backtest still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 22:34:18,563 - pipeline - END backtest rc=0 secs=36.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 22:34:20,863 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics
-2026-01-17 22:34:20,863 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 22:34:35,983 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-17 22:34:36,191 - pipeline - END metrics rc=0 secs=15.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-17 22:34:36,192 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-17 22:34:36,192 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 22:34:36,861 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-17 22:34:41,565 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-17 22:34:41,994 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=13 fetch_secs=21.343 feature_secs=231.060 rank_secs=0.114 gate_secs=0.011 bars_rows_total=299234 source=db
-2026-01-17 22:34:42,010 - pipeline - [WARN] SUMMARY_TODAY_MISSING date=2026-01-18
-2026-01-17 22:34:42,010 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=13 bars_rows_total=299234
-2026-01-17 22:34:42,029 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-17 22:34:44,605 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-17 22:34:44,605 - pipeline - [INFO] PIPELINE_END rc=0 duration=345.9s
-2026-01-17 22:34:44,606 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 22:34:45,602 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-17 22:34:45,603 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-17 22:46:51,414 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-17 22:46:51,415 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-17 22:46:51,415 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv'] backtest=[] metrics=[] ranker_eval=[]
-2026-01-17 22:46:51,415 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv'
-2026-01-17 22:46:51,415 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 22:47:06,549 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:47:21,688 - pipeline - [INFO] screener still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:47:36,795 - pipeline - [INFO] screener still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:47:51,919 - pipeline - [INFO] screener still running secs=60.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:48:07,042 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:48:22,139 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:48:37,266 - pipeline - [INFO] screener still running secs=105.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:48:52,373 - pipeline - [INFO] screener still running secs=121.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:49:07,497 - pipeline - [INFO] screener still running secs=136.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:49:22,637 - pipeline - [INFO] screener still running secs=151.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:49:37,757 - pipeline - [INFO] screener still running secs=166.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:49:52,874 - pipeline - [INFO] screener still running secs=181.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:50:07,979 - pipeline - [INFO] screener still running secs=196.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:50:23,072 - pipeline - [INFO] screener still running secs=211.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:50:38,189 - pipeline - [INFO] screener still running secs=226.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:50:53,324 - pipeline - [INFO] screener still running secs=241.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:51:08,436 - pipeline - [INFO] screener still running secs=257.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:51:18,171 - pipeline - END screener rc=0 secs=266.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 22:51:20,504 - pipeline - [INFO] CANDIDATE_COUNTS rows=13 source=db
-2026-01-17 22:51:22,806 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest
-2026-01-17 22:51:22,807 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 22:51:37,939 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 22:51:53,058 - pipeline - [INFO] backtest still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 22:51:58,648 - pipeline - END backtest rc=0 secs=35.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 22:52:01,142 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics
-2026-01-17 22:52:01,143 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 22:52:16,278 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-17 22:52:18,367 - pipeline - END metrics rc=0 secs=17.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-17 22:52:18,367 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-17 22:52:18,368 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 22:52:19,059 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-17 22:52:23,798 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-17 22:52:24,234 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=13 fetch_secs=21.253 feature_secs=228.477 rank_secs=0.125 gate_secs=0.010 bars_rows_total=299234 source=db
-2026-01-17 22:52:24,252 - pipeline - [WARN] SUMMARY_TODAY_MISSING date=2026-01-18
-2026-01-17 22:52:24,252 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=13 bars_rows_total=299234
-2026-01-17 22:52:24,272 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-17 22:52:26,674 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-17 22:52:26,674 - pipeline - [INFO] PIPELINE_END rc=0 duration=335.3s
-2026-01-17 22:52:26,674 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 22:52:27,716 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-17 22:52:27,717 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-17 23:16:58,284 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-17 23:16:58,285 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-17 23:16:58,287 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-17 23:16:58,287 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-17 23:16:58,288 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-17 23:16:58,288 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 23:17:13,405 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:17:28,532 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:17:43,634 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:17:58,767 - pipeline - [INFO] screener still running secs=60.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:18:13,893 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:18:29,016 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:18:44,148 - pipeline - [INFO] screener still running secs=105.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:18:59,283 - pipeline - [INFO] screener still running secs=121.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:19:14,416 - pipeline - [INFO] screener still running secs=136.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:19:29,513 - pipeline - [INFO] screener still running secs=151.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:19:44,605 - pipeline - [INFO] screener still running secs=166.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:19:59,696 - pipeline - [INFO] screener still running secs=181.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:20:14,828 - pipeline - [INFO] screener still running secs=196.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:20:29,981 - pipeline - [INFO] screener still running secs=211.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:20:45,083 - pipeline - [INFO] screener still running secs=226.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:21:00,214 - pipeline - [INFO] screener still running secs=241.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:21:15,336 - pipeline - [INFO] screener still running secs=257.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:21:29,941 - pipeline - END screener rc=0 secs=271.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:21:32,317 - pipeline - [INFO] CANDIDATE_COUNTS rows=13 source=db
-2026-01-17 23:21:34,629 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-17 23:21:34,629 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 23:21:49,782 - pipeline - [INFO] backtest still running secs=15.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 23:22:04,866 - pipeline - [INFO] backtest still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 23:22:10,576 - pipeline - END backtest rc=0 secs=35.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 23:22:12,853 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-17 23:22:12,854 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 23:22:23,009 - pipeline - END metrics rc=0 secs=10.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-17 23:22:23,009 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-17 23:22:23,009 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 23:22:23,748 - pipeline - TRADE_PERFORMANCE_CACHE_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2141, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<8 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\venv\\Scripts\\python.exe', '-m', 'scripts.trade_performance_refresh', '--lookback-days', '400']' returned non-zero exit status 120.
-2026-01-17 23:22:28,391 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-17 23:22:28,811 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=13 fetch_secs=21.625 feature_secs=232.537 rank_secs=0.132 gate_secs=0.011 bars_rows_total=299234 source=db
-2026-01-17 23:22:28,830 - pipeline - [WARN] SUMMARY_TODAY_MISSING date=2026-01-18
-2026-01-17 23:22:28,831 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=13 bars_rows_total=299234
-2026-01-17 23:22:28,846 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-17 23:22:31,190 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-17 23:22:31,190 - pipeline - [INFO] PIPELINE_END rc=0 duration=332.9s
-2026-01-17 23:22:31,190 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 23:22:32,232 - pipeline - ACCOUNT_EQUITY_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2482, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<12 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\JBravoGit\\JBRAVO_Screener\\venv\\Scripts\\python.exe', '-m', 'scripts.update_account_equity', '--period', '1M', '--timeframe', '1D', '--extended-hours', 'true']' returned non-zero exit status 120.
-2026-01-17 23:22:32,233 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-17 23:34:34,401 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-17 23:34:34,402 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-17 23:34:34,405 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-17 23:34:34,405 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-17 23:34:34,406 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-17 23:34:34,406 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 23:34:49,550 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:35:04,638 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:35:19,736 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:35:34,826 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:35:49,941 - pipeline - [INFO] screener still running secs=75.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:36:05,058 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:36:20,147 - pipeline - [INFO] screener still running secs=105.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:36:35,262 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:36:50,377 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:37:05,507 - pipeline - [INFO] screener still running secs=151.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:37:20,617 - pipeline - [INFO] screener still running secs=166.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:37:35,750 - pipeline - [INFO] screener still running secs=181.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:37:50,867 - pipeline - [INFO] screener still running secs=196.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:38:05,964 - pipeline - [INFO] screener still running secs=211.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:38:21,080 - pipeline - [INFO] screener still running secs=226.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:38:36,187 - pipeline - [INFO] screener still running secs=241.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:38:51,317 - pipeline - [INFO] screener still running secs=256.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:39:06,002 - pipeline - END screener rc=0 secs=271.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:39:08,474 - pipeline - [INFO] CANDIDATE_COUNTS rows=13 source=db
-2026-01-17 23:39:10,819 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-17 23:39:10,822 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 23:39:25,966 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 23:39:41,114 - pipeline - [INFO] backtest still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 23:39:49,730 - pipeline - END backtest rc=0 secs=38.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-17 23:39:52,026 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-17 23:39:52,027 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 23:40:07,089 - pipeline - END metrics rc=0 secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-17 23:40:07,090 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-17 23:40:07,090 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 23:40:07,785 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-17 23:40:12,455 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-17 23:40:12,882 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=13 fetch_secs=21.063 feature_secs=232.665 rank_secs=0.119 gate_secs=0.009 bars_rows_total=299234 source=db
-2026-01-17 23:40:12,904 - pipeline - [WARN] SUMMARY_TODAY_MISSING date=2026-01-18
-2026-01-17 23:40:12,904 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=13 bars_rows_total=299234
-2026-01-17 23:40:12,919 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-17 23:40:15,315 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-17 23:40:15,315 - pipeline - [INFO] PIPELINE_END rc=0 duration=340.9s
-2026-01-17 23:40:15,315 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-17 23:40:16,416 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-17 23:40:16,416 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-17 23:54:01,538 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-17 23:54:01,539 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-17 23:54:01,542 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-17 23:54:01,542 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-17 23:54:01,542 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-17 23:54:01,543 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-17 23:54:16,657 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:54:31,764 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:54:46,903 - pipeline - [INFO] screener still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:55:02,033 - pipeline - [INFO] screener still running secs=60.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:55:17,127 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:55:32,218 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:55:47,319 - pipeline - [INFO] screener still running secs=105.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:56:02,429 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:56:17,502 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:56:32,607 - pipeline - [INFO] screener still running secs=151.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:56:47,735 - pipeline - [INFO] screener still running secs=166.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:57:02,862 - pipeline - [INFO] screener still running secs=181.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:57:17,967 - pipeline - [INFO] screener still running secs=196.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:57:33,087 - pipeline - [INFO] screener still running secs=211.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:57:48,199 - pipeline - [INFO] screener still running secs=226.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:58:03,306 - pipeline - [INFO] screener still running secs=241.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:58:18,419 - pipeline - [INFO] screener still running secs=256.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:58:33,491 - pipeline - [INFO] screener still running secs=271.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:58:48,577 - pipeline - [INFO] screener still running secs=287.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:59:03,667 - pipeline - [INFO] screener still running secs=302.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:59:18,753 - pipeline - [INFO] screener still running secs=317.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:59:33,839 - pipeline - [INFO] screener still running secs=332.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-17 23:59:48,938 - pipeline - [INFO] screener still running secs=347.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:00:04,037 - pipeline - [INFO] screener still running secs=362.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:00:19,147 - pipeline - [INFO] screener still running secs=377.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:00:34,239 - pipeline - [INFO] screener still running secs=392.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:00:49,352 - pipeline - [INFO] screener still running secs=407.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:00:57,939 - pipeline - END screener rc=0 secs=416.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:01:00,399 - pipeline - [INFO] CANDIDATE_COUNTS rows=18 source=db
-2026-01-18 00:01:02,811 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 00:01:02,813 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-18 00:01:17,934 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 00:01:33,031 - pipeline - [INFO] backtest still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 00:01:45,770 - pipeline - END backtest rc=0 secs=43.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 00:01:48,092 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 00:01:48,094 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-18 00:02:03,221 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 00:02:03,306 - pipeline - END metrics rc=0 secs=15.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 00:02:03,306 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 00:02:03,306 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-18 00:02:04,177 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 00:02:09,143 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-18 00:02:09,661 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=18 fetch_secs=21.412 feature_secs=377.363 rank_secs=0.122 gate_secs=0.011 bars_rows_total=299234 source=db
-2026-01-18 00:02:09,684 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=18 bars_rows_total=299234
-2026-01-18 00:02:09,697 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 00:02:12,125 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 00:02:12,125 - pipeline - [INFO] PIPELINE_END rc=0 duration=490.6s
-2026-01-18 00:02:12,125 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-18 00:02:13,224 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 00:02:13,224 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-18 00:08:27,413 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 00:08:27,414 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-18 00:08:27,433 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 00:08:27,434 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 00:08:27,434 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 00:08:27,434 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-18 00:08:42,540 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:08:57,623 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:09:12,738 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:09:27,822 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:09:42,906 - pipeline - [INFO] screener still running secs=75.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:09:58,008 - pipeline - [INFO] screener still running secs=90.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:10:13,106 - pipeline - [INFO] screener still running secs=105.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:10:28,188 - pipeline - [INFO] screener still running secs=120.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:10:43,263 - pipeline - [INFO] screener still running secs=135.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:10:58,338 - pipeline - [INFO] screener still running secs=150.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:11:13,422 - pipeline - [INFO] screener still running secs=166.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:11:28,520 - pipeline - [INFO] screener still running secs=181.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:11:43,606 - pipeline - [INFO] screener still running secs=196.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:11:58,722 - pipeline - [INFO] screener still running secs=211.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:12:13,800 - pipeline - [INFO] screener still running secs=226.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:12:28,934 - pipeline - [INFO] screener still running secs=241.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:12:44,038 - pipeline - [INFO] screener still running secs=256.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:12:59,095 - pipeline - [INFO] screener still running secs=271.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:13:04,453 - pipeline - END screener rc=0 secs=277.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:13:06,828 - pipeline - [INFO] CANDIDATE_COUNTS rows=5 source=db
-2026-01-18 00:13:09,210 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 00:13:09,210 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-18 00:13:24,055 - pipeline - END backtest rc=0 secs=14.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 00:13:26,425 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 00:13:26,425 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-18 00:13:41,531 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 00:13:41,877 - pipeline - END metrics rc=0 secs=15.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 00:13:41,877 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 00:13:41,877 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-18 00:13:42,595 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 00:13:47,403 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-18 00:13:47,838 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=5 fetch_secs=21.256 feature_secs=225.328 rank_secs=0.124 gate_secs=0.008 bars_rows_total=299234 source=db
-2026-01-18 00:13:47,861 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=5 bars_rows_total=299234
-2026-01-18 00:13:47,885 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 00:13:50,292 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 00:13:50,293 - pipeline - [INFO] PIPELINE_END rc=0 duration=322.9s
-2026-01-18 00:13:50,293 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-18 00:13:51,281 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 00:13:51,282 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-18 00:18:39,305 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 00:18:39,306 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-18 00:18:39,308 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 00:18:39,308 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 00:18:39,308 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 00:18:39,309 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-18 00:18:54,411 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:19:09,528 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:19:24,623 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:19:39,712 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:19:54,803 - pipeline - [INFO] screener still running secs=75.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:20:09,888 - pipeline - [INFO] screener still running secs=90.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:20:25,013 - pipeline - [INFO] screener still running secs=105.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:20:40,111 - pipeline - [INFO] screener still running secs=120.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:20:55,207 - pipeline - [INFO] screener still running secs=135.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:21:10,301 - pipeline - [INFO] screener still running secs=151.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:21:25,419 - pipeline - [INFO] screener still running secs=166.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:21:40,527 - pipeline - [INFO] screener still running secs=181.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:21:55,604 - pipeline - [INFO] screener still running secs=196.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:22:10,696 - pipeline - [INFO] screener still running secs=211.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:22:25,775 - pipeline - [INFO] screener still running secs=226.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:22:40,861 - pipeline - [INFO] screener still running secs=241.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:22:55,940 - pipeline - [INFO] screener still running secs=256.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:22:57,837 - pipeline - END screener rc=0 secs=258.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:23:00,173 - pipeline - [INFO] CANDIDATE_COUNTS rows=5 source=db
-2026-01-18 00:23:02,467 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 00:23:02,468 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-18 00:23:17,384 - pipeline - END backtest rc=0 secs=14.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 00:23:19,691 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\JBravoGit\JBRAVO_Screener\venv\Scripts\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 00:23:19,691 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=84
-2026-01-18 00:23:34,671 - pipeline - END metrics rc=0 secs=15.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 00:23:34,672 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 00:23:34,672 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-18 00:23:35,446 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 00:23:40,163 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=414 symbols_in=77
-2026-01-18 00:23:40,562 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=77 with_bars=77 with_bars_any=425 with_bars_required=77 rows=5 fetch_secs=21.474 feature_secs=217.548 rank_secs=0.118 gate_secs=0.008 bars_rows_total=299234 source=db
-2026-01-18 00:23:40,584 - pipeline - SCREENER_METRICS_SYNC symbols_in=77 with_bars=77 rows=5 bars_rows_total=299234
-2026-01-18 00:23:40,597 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 00:23:43,121 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 00:23:43,121 - pipeline - [INFO] PIPELINE_END rc=0 duration=303.8s
-2026-01-18 00:23:43,121 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=83
-2026-01-18 00:23:44,175 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 00:23:44,175 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-18 00:30:05,127 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 00:30:05,128 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-18 00:30:05,129 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 00:30:05,130 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 00:30:05,130 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 00:30:05,130 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=81
-2026-01-18 00:30:20,250 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:30:35,356 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:30:50,477 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:31:05,567 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:31:20,683 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:31:35,772 - pipeline - [INFO] screener still running secs=90.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:31:50,855 - pipeline - [INFO] screener still running secs=105.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:32:05,981 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:32:21,080 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:32:36,194 - pipeline - [INFO] screener still running secs=151.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:32:51,321 - pipeline - [INFO] screener still running secs=166.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:33:06,462 - pipeline - [INFO] screener still running secs=181.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:33:21,588 - pipeline - [INFO] screener still running secs=196.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:33:36,749 - pipeline - [INFO] screener still running secs=211.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:33:51,889 - pipeline - [INFO] screener still running secs=226.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:34:07,015 - pipeline - [INFO] screener still running secs=241.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:34:22,107 - pipeline - [INFO] screener still running secs=257.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:34:37,238 - pipeline - [INFO] screener still running secs=272.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:34:52,369 - pipeline - [INFO] screener still running secs=287.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:34:59,158 - pipeline - END screener rc=0 secs=294.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:35:01,527 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 00:35:03,832 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 00:35:03,832 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=81
-2026-01-18 00:35:18,973 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 00:35:25,929 - pipeline - END backtest rc=0 secs=22.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 00:35:28,235 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 00:35:28,236 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=81
-2026-01-18 00:35:43,369 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 00:35:43,499 - pipeline - END metrics rc=0 secs=15.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 00:35:43,499 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 00:35:43,499 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=80
-2026-01-18 00:35:44,332 - pipeline - TRADE_PERFORMANCE_CACHE_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2141, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<8 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\miniconda3\\python.exe', '-m', 'scripts.trade_performance_refresh', '--lookback-days', '400']' returned non-zero exit status 120.
-2026-01-18 00:35:48,973 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 00:35:49,480 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=28.941 feature_secs=242.758 rank_secs=0.232 gate_secs=0.006 bars_rows_total=285942 source=db
-2026-01-18 00:35:49,503 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 00:35:49,514 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 00:35:51,842 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 00:35:51,842 - pipeline - [INFO] PIPELINE_END rc=0 duration=346.7s
-2026-01-18 00:35:51,842 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=80
-2026-01-18 00:35:52,976 - pipeline - ACCOUNT_EQUITY_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2482, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<12 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\miniconda3\\python.exe', '-m', 'scripts.update_account_equity', '--period', '1M', '--timeframe', '1D', '--extended-hours', 'true']' returned non-zero exit status 120.
-2026-01-18 00:35:52,978 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-18 00:52:21,509 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 00:52:21,510 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-18 00:52:21,511 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 00:52:21,511 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 00:52:21,511 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 00:52:21,511 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=81
-2026-01-18 00:52:36,659 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:52:51,735 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:53:06,830 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:53:21,925 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:53:37,006 - pipeline - [INFO] screener still running secs=75.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:53:52,117 - pipeline - [INFO] screener still running secs=90.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:54:07,216 - pipeline - [INFO] screener still running secs=105.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:54:22,298 - pipeline - [INFO] screener still running secs=120.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:54:37,404 - pipeline - [INFO] screener still running secs=135.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:54:52,514 - pipeline - [INFO] screener still running secs=151.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:55:07,657 - pipeline - [INFO] screener still running secs=166.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:55:22,801 - pipeline - [INFO] screener still running secs=181.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:55:37,945 - pipeline - [INFO] screener still running secs=196.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:55:53,066 - pipeline - [INFO] screener still running secs=211.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:56:08,168 - pipeline - [INFO] screener still running secs=226.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:56:23,288 - pipeline - [INFO] screener still running secs=241.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:56:38,410 - pipeline - [INFO] screener still running secs=256.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:56:53,538 - pipeline - [INFO] screener still running secs=272.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:57:08,655 - pipeline - [INFO] screener still running secs=287.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:57:11,642 - pipeline - END screener rc=0 secs=290.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 00:57:13,978 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 00:57:16,380 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 00:57:16,381 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=81
-2026-01-18 00:57:31,480 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 00:57:38,626 - pipeline - END backtest rc=0 secs=22.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 00:57:41,228 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 00:57:41,228 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=81
-2026-01-18 00:57:56,351 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 00:57:56,414 - pipeline - END metrics rc=0 secs=15.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 00:57:56,414 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 00:57:56,414 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=80
-2026-01-18 00:57:57,275 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 00:58:02,156 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 00:58:02,569 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=28.038 feature_secs=240.046 rank_secs=0.236 gate_secs=0.006 bars_rows_total=285942 source=db
-2026-01-18 00:58:02,594 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 00:58:02,607 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 00:58:05,010 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 00:58:05,010 - pipeline - [INFO] PIPELINE_END rc=0 duration=343.5s
-2026-01-18 00:58:05,010 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=80
-2026-01-18 00:58:06,209 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 00:58:06,209 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-18 01:02:34,360 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 01:02:34,361 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
-2026-01-18 01:02:34,362 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 01:02:34,362 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 01:02:34,362 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 01:02:34,362 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=81
-2026-01-18 01:02:49,446 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:03:04,537 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:03:19,636 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:03:34,717 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:03:49,803 - pipeline - [INFO] screener still running secs=75.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:04:04,895 - pipeline - [INFO] screener still running secs=90.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:04:19,985 - pipeline - [INFO] screener still running secs=105.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:04:35,122 - pipeline - [INFO] screener still running secs=120.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:04:50,252 - pipeline - [INFO] screener still running secs=135.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:05:05,366 - pipeline - [INFO] screener still running secs=151.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:05:20,487 - pipeline - [INFO] screener still running secs=166.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:05:35,583 - pipeline - [INFO] screener still running secs=181.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:05:50,695 - pipeline - [INFO] screener still running secs=196.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:06:05,804 - pipeline - [INFO] screener still running secs=211.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:06:20,895 - pipeline - [INFO] screener still running secs=226.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:06:35,991 - pipeline - [INFO] screener still running secs=241.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:06:51,082 - pipeline - [INFO] screener still running secs=256.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:07:06,167 - pipeline - [INFO] screener still running secs=271.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:07:21,267 - pipeline - [INFO] screener still running secs=286.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:07:27,030 - pipeline - END screener rc=0 secs=292.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 01:07:29,406 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 01:07:31,901 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 01:07:31,902 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=81
-2026-01-18 01:07:47,021 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 01:07:54,289 - pipeline - END backtest rc=0 secs=22.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 01:07:56,658 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 01:07:56,659 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=81
-2026-01-18 01:08:11,759 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 01:08:12,084 - pipeline - END metrics rc=0 secs=15.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 01:08:12,085 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 01:08:12,085 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=80
-2026-01-18 01:08:12,924 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 01:08:17,728 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 01:08:18,204 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=28.190 feature_secs=242.907 rank_secs=0.220 gate_secs=0.006 bars_rows_total=285942 source=db
-2026-01-18 01:08:18,228 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 01:08:18,242 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 01:08:20,709 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 01:08:20,709 - pipeline - [INFO] PIPELINE_END rc=0 duration=346.3s
-2026-01-18 01:08:20,709 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=80
-2026-01-18 01:08:21,801 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 01:08:21,801 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-18 10:08:48,507 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 10:08:48,507 - pipeline - [INFO] PIPELINE_START steps=screener,labels
-2026-01-18 10:08:48,509 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 10:08:48,509 - pipeline - [INFO] PIPELINE_ARGS screener=['--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 10:08:48,509 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 10:08:48,509 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:09:03,660 - pipeline - [INFO] screener still running secs=15.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:09:18,788 - pipeline - [INFO] screener still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:09:33,919 - pipeline - [INFO] screener still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:09:49,056 - pipeline - [INFO] screener still running secs=60.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:10:04,183 - pipeline - [INFO] screener still running secs=75.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:10:19,310 - pipeline - [INFO] screener still running secs=90.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:10:34,442 - pipeline - [INFO] screener still running secs=105.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:10:49,560 - pipeline - [INFO] screener still running secs=121.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:11:04,703 - pipeline - [INFO] screener still running secs=136.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:11:19,812 - pipeline - [INFO] screener still running secs=151.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:11:34,930 - pipeline - [INFO] screener still running secs=166.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:11:50,059 - pipeline - [INFO] screener still running secs=181.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:12:05,177 - pipeline - [INFO] screener still running secs=196.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:12:20,322 - pipeline - [INFO] screener still running secs=211.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:12:35,444 - pipeline - [INFO] screener still running secs=226.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:12:50,550 - pipeline - [INFO] screener still running secs=242.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:13:05,692 - pipeline - [INFO] screener still running secs=257.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:13:20,817 - pipeline - [INFO] screener still running secs=272.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:13:35,923 - pipeline - [INFO] screener still running secs=287.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:13:51,037 - pipeline - [INFO] screener still running secs=302.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:14:06,126 - pipeline - [INFO] screener still running secs=317.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:14:09,290 - pipeline - END screener rc=0 secs=320.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:14:11,626 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 10:14:30,963 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-16 rows=364439
-2026-01-18 10:14:35,399 - pipeline - [INFO] START labels bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 10:14:35,399 - pipeline - [INFO] LABELS_START bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 10:14:35,399 - pipeline - [INFO] START labels cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.label_generator --bars-path 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv' --output-dir 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels'
-2026-01-18 10:14:35,400 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:14:50,478 - pipeline - [INFO] labels still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 10:15:05,576 - pipeline - [INFO] labels still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 10:15:15,719 - pipeline - END labels rc=0 secs=40.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 10:15:16,092 - pipeline - [INFO] LABELS_END labels_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
-2026-01-18 10:15:23,140 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 10:15:23,638 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=30.132 feature_secs=266.790 rank_secs=0.271 gate_secs=0.007 bars_rows_total=285942 source=db
-2026-01-18 10:15:23,676 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 10:15:23,689 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 10:15:26,030 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 10:15:26,030 - pipeline - [INFO] PIPELINE_END rc=0 duration=397.5s
-2026-01-18 10:15:26,030 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 10:15:27,149 - pipeline - ACCOUNT_EQUITY_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2590, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<12 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\miniconda3\\python.exe', '-m', 'scripts.update_account_equity', '--period', '1M', '--timeframe', '1D', '--extended-hours', 'true']' returned non-zero exit status 120.
-2026-01-18 10:20:57,766 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 10:20:57,767 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics,labels,ranker_eval
-2026-01-18 10:20:57,767 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 10:20:57,767 - pipeline - [INFO] PIPELINE_ARGS screener=['--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 10:20:57,767 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 10:20:57,768 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:21:12,884 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:21:27,978 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:21:43,090 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:21:58,215 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:22:13,335 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:22:28,446 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:22:43,558 - pipeline - [INFO] screener still running secs=105.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:22:58,682 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:23:13,774 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:23:28,909 - pipeline - [INFO] screener still running secs=151.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:23:44,051 - pipeline - [INFO] screener still running secs=166.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:23:59,158 - pipeline - [INFO] screener still running secs=181.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:24:14,288 - pipeline - [INFO] screener still running secs=196.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:24:29,390 - pipeline - [INFO] screener still running secs=211.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:24:44,545 - pipeline - [INFO] screener still running secs=226.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:24:59,661 - pipeline - [INFO] screener still running secs=241.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:25:14,785 - pipeline - [INFO] screener still running secs=257.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:25:29,914 - pipeline - [INFO] screener still running secs=272.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:25:45,052 - pipeline - [INFO] screener still running secs=287.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:25:59,980 - pipeline - END screener rc=0 secs=302.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:26:02,316 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 10:26:23,146 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-16 rows=364439
-2026-01-18 10:26:25,507 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 10:26:25,510 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:26:40,638 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 10:26:47,360 - pipeline - END backtest rc=0 secs=21.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 10:26:49,695 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 10:26:49,698 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:27:04,837 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 10:27:05,071 - pipeline - END metrics rc=0 secs=15.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 10:27:05,071 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 10:27:05,072 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 10:28:12,427 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 10:28:16,833 - pipeline - [INFO] START labels bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 10:28:16,833 - pipeline - [INFO] LABELS_START bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 10:28:16,833 - pipeline - [INFO] START labels cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.label_generator --bars-path 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv' --output-dir 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels'
-2026-01-18 10:28:16,834 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:28:31,977 - pipeline - [INFO] labels still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 10:28:47,100 - pipeline - [INFO] labels still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 10:28:57,085 - pipeline - END labels rc=0 secs=40.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 10:28:57,443 - pipeline - [INFO] LABELS_END labels_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
-2026-01-18 10:28:57,443 - pipeline - [INFO] START ranker_eval cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_eval
-2026-01-18 10:28:57,444 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:29:07,456 - pipeline - END ranker_eval rc=1 secs=10.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 10:29:07,456 - pipeline - [WARN] RANKER_EVAL_FAILED rc=1 (continuing)
-2026-01-18 10:29:14,523 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 10:29:14,946 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=29.525 feature_secs=250.215 rank_secs=0.218 gate_secs=0.006 bars_rows_total=285942 source=db
-2026-01-18 10:29:14,971 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 10:29:14,985 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 10:29:17,393 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 10:29:17,393 - pipeline - [INFO] PIPELINE_END rc=0 duration=499.6s
-2026-01-18 10:29:17,393 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 10:29:18,504 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 10:34:07,936 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 10:34:07,937 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics,labels,ranker_eval
-2026-01-18 10:34:07,937 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 10:34:07,938 - pipeline - [INFO] PIPELINE_ARGS screener=['--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 10:34:07,938 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 10:34:07,938 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:34:23,043 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:34:38,159 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:34:53,259 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:35:08,376 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:35:23,528 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:35:38,648 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:35:53,726 - pipeline - [INFO] screener still running secs=105.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:36:08,800 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:36:23,880 - pipeline - [INFO] screener still running secs=135.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:36:38,962 - pipeline - [INFO] screener still running secs=151.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:36:54,047 - pipeline - [INFO] screener still running secs=166.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:37:09,111 - pipeline - [INFO] screener still running secs=181.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:37:24,180 - pipeline - [INFO] screener still running secs=196.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:37:39,262 - pipeline - [INFO] screener still running secs=211.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:37:54,330 - pipeline - [INFO] screener still running secs=226.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:38:09,425 - pipeline - [INFO] screener still running secs=241.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:38:24,497 - pipeline - [INFO] screener still running secs=256.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:38:39,577 - pipeline - [INFO] screener still running secs=271.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:38:54,666 - pipeline - [INFO] screener still running secs=286.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:39:09,804 - pipeline - [INFO] screener still running secs=301.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:39:17,675 - pipeline - END screener rc=0 secs=309.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:39:20,179 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 10:39:41,299 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-16 rows=364439
-2026-01-18 10:39:43,605 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 10:39:43,606 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:39:58,731 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 10:40:06,127 - pipeline - END backtest rc=0 secs=22.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 10:40:08,844 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 10:40:08,844 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:40:23,841 - pipeline - END metrics rc=0 secs=15.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 10:40:23,841 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 10:40:23,842 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 10:40:24,696 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 10:40:29,190 - pipeline - [INFO] START labels bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 10:40:29,190 - pipeline - [INFO] LABELS_START bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 10:40:29,190 - pipeline - [INFO] START labels cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.label_generator --bars-path 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv' --output-dir 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels'
-2026-01-18 10:40:29,191 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:40:44,312 - pipeline - [INFO] labels still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 10:40:59,427 - pipeline - [INFO] labels still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 10:41:09,696 - pipeline - END labels rc=0 secs=40.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 10:41:10,060 - pipeline - [INFO] LABELS_END labels_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
-2026-01-18 10:41:14,662 - pipeline - [WARN] RANKER_EVAL_SKIPPED reason=missing_artifacts artifacts=features,predictions
-2026-01-18 10:41:21,679 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 10:41:22,160 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=29.229 feature_secs=258.668 rank_secs=0.235 gate_secs=0.006 bars_rows_total=285942 source=db
-2026-01-18 10:41:22,189 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 10:41:22,202 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 10:41:24,507 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 10:41:24,507 - pipeline - [INFO] PIPELINE_END rc=0 duration=436.6s
-2026-01-18 10:41:24,507 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 10:41:25,570 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 10:54:43,417 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 10:54:43,418 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics,labels,ranker_eval
-2026-01-18 10:54:43,419 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 10:54:43,419 - pipeline - [INFO] PIPELINE_ARGS screener=['--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 10:54:43,419 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 10:54:43,419 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:54:58,510 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:55:13,626 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:55:28,726 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:55:43,811 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:55:58,930 - pipeline - [INFO] screener still running secs=75.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:56:14,037 - pipeline - [INFO] screener still running secs=90.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:56:29,179 - pipeline - [INFO] screener still running secs=105.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:56:44,325 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:56:59,406 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:57:14,571 - pipeline - [INFO] screener still running secs=151.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:57:15,438 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 10:57:15,439 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics,labels,ranker_eval
-2026-01-18 10:57:15,439 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 10:57:15,439 - pipeline - [INFO] PIPELINE_ARGS screener=['--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 10:57:15,439 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 10:57:15,440 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 10:57:29,691 - pipeline - [INFO] screener still running secs=166.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:57:30,562 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:57:44,810 - pipeline - [INFO] screener still running secs=181.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:57:45,717 - pipeline - [INFO] screener still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:57:59,916 - pipeline - [INFO] screener still running secs=196.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:58:00,822 - pipeline - [INFO] screener still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:58:15,044 - pipeline - [INFO] screener still running secs=211.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:58:15,925 - pipeline - [INFO] screener still running secs=60.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:58:30,139 - pipeline - [INFO] screener still running secs=226.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:58:31,054 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:58:45,248 - pipeline - [INFO] screener still running secs=241.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:58:46,175 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:00,350 - pipeline - [INFO] screener still running secs=256.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:01,300 - pipeline - [INFO] screener still running secs=105.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:15,485 - pipeline - [INFO] screener still running secs=272.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:16,436 - pipeline - [INFO] screener still running secs=121.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:30,615 - pipeline - [INFO] screener still running secs=287.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:31,566 - pipeline - [INFO] screener still running secs=136.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:45,742 - pipeline - [INFO] screener still running secs=302.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:46,693 - pipeline - [INFO] screener still running secs=151.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:50,110 - pipeline - END screener rc=0 secs=306.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 10:59:52,585 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 11:00:01,820 - pipeline - [INFO] screener still running secs=166.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:00:12,333 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-16 rows=364439
-2026-01-18 11:00:14,640 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 11:00:14,642 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:00:16,960 - pipeline - [INFO] screener still running secs=181.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:00:29,783 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 11:00:32,099 - pipeline - [INFO] screener still running secs=196.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:00:37,552 - pipeline - END backtest rc=0 secs=22.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 11:00:39,910 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 11:00:39,911 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:00:47,218 - pipeline - [INFO] screener still running secs=211.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:00:55,024 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 11:00:55,086 - pipeline - END metrics rc=0 secs=15.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 11:00:55,087 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 11:00:55,087 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 11:00:55,969 - pipeline - TRADE_PERFORMANCE_CACHE_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2240, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<8 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\miniconda3\\python.exe', '-m', 'scripts.trade_performance_refresh', '--lookback-days', '400']' returned non-zero exit status 120.
-2026-01-18 11:01:00,686 - pipeline - [INFO] START labels bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 11:01:00,686 - pipeline - [INFO] LABELS_START bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 11:01:00,686 - pipeline - [INFO] START labels cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.label_generator --bars-path 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv' --output-dir 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels'
-2026-01-18 11:01:00,688 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:01:02,340 - pipeline - [INFO] screener still running secs=226.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:01:15,806 - pipeline - [INFO] labels still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:01:17,448 - pipeline - [INFO] screener still running secs=242.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:01:30,921 - pipeline - [INFO] labels still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:01:32,589 - pipeline - [INFO] screener still running secs=257.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:01:41,474 - pipeline - END labels rc=0 secs=40.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:01:41,883 - pipeline - [INFO] LABELS_END labels_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
-2026-01-18 11:01:47,731 - pipeline - [INFO] screener still running secs=272.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:02:02,829 - pipeline - [INFO] screener still running secs=287.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:02:03,773 - pipeline - [INFO] FEATURES_START
-2026-01-18 11:02:03,773 - pipeline - [INFO] START features cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.feature_generator
-2026-01-18 11:02:03,774 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:02:17,956 - pipeline - [INFO] screener still running secs=302.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:02:18,885 - pipeline - [INFO] features still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:02:22,692 - pipeline - END screener rc=0 secs=307.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:02:26,140 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 11:02:34,018 - pipeline - [INFO] features still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:02:48,331 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-16 rows=364439
-2026-01-18 11:02:49,130 - pipeline - [INFO] features still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:02:53,472 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 11:02:53,472 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:03:04,247 - pipeline - [INFO] features still running secs=60.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:03:08,606 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 11:03:15,016 - pipeline - END features rc=0 secs=71.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:03:15,016 - pipeline - [INFO] RANKER_TRAIN_START reason=model_missing
-2026-01-18 11:03:15,016 - pipeline - [INFO] START ranker_train cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_train
-2026-01-18 11:03:15,017 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:03:23,724 - pipeline - [INFO] backtest still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 11:03:26,634 - pipeline - END backtest rc=0 secs=33.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 11:03:29,027 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 11:03:29,027 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:03:30,167 - pipeline - [INFO] ranker_train still running secs=15.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_train.out
-2026-01-18 11:03:35,309 - pipeline - END ranker_train rc=0 secs=20.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_train.out
-2026-01-18 11:03:35,310 - pipeline - [INFO] PREDICTIONS_START model=ranker_2026-01-18.pkl
-2026-01-18 11:03:35,310 - pipeline - [INFO] START ranker_predict cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_predict
-2026-01-18 11:03:35,310 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:03:44,152 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 11:03:48,068 - pipeline - END metrics rc=0 secs=19.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 11:03:48,068 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 11:03:48,068 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 11:03:48,882 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 11:03:50,409 - pipeline - [INFO] ranker_predict still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:03:55,274 - pipeline - [INFO] START labels bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 11:03:55,274 - pipeline - [INFO] LABELS_START bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 11:03:55,274 - pipeline - [INFO] START labels cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.label_generator --bars-path 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv' --output-dir 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels'
-2026-01-18 11:03:55,275 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:04:05,493 - pipeline - [INFO] ranker_predict still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:04:10,378 - pipeline - [INFO] labels still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:04:20,576 - pipeline - [INFO] ranker_predict still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:04:25,477 - pipeline - [INFO] labels still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:04:35,659 - pipeline - [INFO] ranker_predict still running secs=60.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:04:40,560 - pipeline - [INFO] labels still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:04:50,727 - pipeline - [INFO] ranker_predict still running secs=75.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:04:51,128 - pipeline - END ranker_predict rc=0 secs=75.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:04:55,675 - pipeline - [INFO] labels still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:04:57,675 - pipeline - END labels rc=0 secs=62.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:04:58,049 - pipeline - [INFO] LABELS_END labels_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
-2026-01-18 11:05:21,073 - pipeline - [INFO] START ranker_eval cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_eval
-2026-01-18 11:05:21,073 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:05:22,803 - pipeline - [INFO] FEATURES_START
-2026-01-18 11:05:22,803 - pipeline - [INFO] START features cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.feature_generator
-2026-01-18 11:05:22,803 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:05:36,192 - pipeline - [INFO] ranker_eval still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:05:37,926 - pipeline - [INFO] features still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:05:51,307 - pipeline - [INFO] ranker_eval still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:05:53,026 - pipeline - [INFO] features still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:06:06,405 - pipeline - [INFO] ranker_eval still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:06:08,094 - pipeline - [INFO] features still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:06:12,781 - pipeline - END ranker_eval rc=0 secs=51.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:06:21,884 - pipeline - [INFO] RANKER_EVAL sample_size=348606 deciles=10
-2026-01-18 11:06:23,209 - pipeline - [INFO] features still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:06:31,361 - pipeline - END features rc=0 secs=68.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:06:31,362 - pipeline - [INFO] PREDICTIONS_START model=ranker_2026-01-18.pkl
-2026-01-18 11:06:31,362 - pipeline - [INFO] START ranker_predict cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_predict
-2026-01-18 11:06:31,363 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:06:31,664 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 11:06:32,076 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=29.748 feature_secs=254.516 rank_secs=0.254 gate_secs=0.005 bars_rows_total=285942 source=db
-2026-01-18 11:06:32,105 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 11:06:32,117 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 11:06:34,475 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 11:06:34,475 - pipeline - [INFO] PIPELINE_END rc=0 duration=711.1s
-2026-01-18 11:06:34,476 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 11:06:35,694 - pipeline - ACCOUNT_EQUITY_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2682, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<12 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\miniconda3\\python.exe', '-m', 'scripts.update_account_equity', '--period', '1M', '--timeframe', '1D', '--extended-hours', 'true']' returned non-zero exit status 120.
-2026-01-18 11:06:46,462 - pipeline - [INFO] ranker_predict still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:07:01,544 - pipeline - [INFO] ranker_predict still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:07:16,655 - pipeline - [INFO] ranker_predict still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:07:31,804 - pipeline - [INFO] ranker_predict still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:07:31,927 - pipeline - END ranker_predict rc=0 secs=60.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:07:49,291 - pipeline - [INFO] START ranker_eval cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_eval
-2026-01-18 11:07:49,292 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:08:04,410 - pipeline - [INFO] ranker_eval still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:08:19,556 - pipeline - [INFO] ranker_eval still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:08:34,672 - pipeline - [INFO] ranker_eval still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:08:35,336 - pipeline - END ranker_eval rc=0 secs=46.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:08:39,828 - pipeline - [INFO] RANKER_EVAL sample_size=348606 deciles=10
-2026-01-18 11:08:47,307 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=29.445 feature_secs=252.093 rank_secs=0.225 gate_secs=0.006 bars_rows_total=285942 source=db
-2026-01-18 11:08:47,338 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 11:08:47,352 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 11:08:49,771 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 11:08:49,771 - pipeline - [INFO] PIPELINE_END rc=0 duration=694.3s
-2026-01-18 11:08:49,771 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 11:08:50,981 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 11:14:06,389 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 11:14:16,910 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 11:14:16,911 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics,labels,ranker_eval
-2026-01-18 11:14:16,912 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 11:14:16,912 - pipeline - [INFO] PIPELINE_ARGS screener=['--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 11:14:16,912 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 11:14:16,912 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:14:32,037 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:14:47,109 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:15:02,202 - pipeline - [INFO] screener still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:15:17,310 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:15:32,456 - pipeline - [INFO] screener still running secs=75.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:15:47,554 - pipeline - [INFO] screener still running secs=90.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:16:02,678 - pipeline - [INFO] screener still running secs=105.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:16:17,796 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:16:32,935 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:16:48,040 - pipeline - [INFO] screener still running secs=151.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:17:03,159 - pipeline - [INFO] screener still running secs=166.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:17:18,309 - pipeline - [INFO] screener still running secs=181.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:17:33,424 - pipeline - [INFO] screener still running secs=196.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:17:48,536 - pipeline - [INFO] screener still running secs=211.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:18:03,646 - pipeline - [INFO] screener still running secs=226.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:18:18,774 - pipeline - [INFO] screener still running secs=241.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:18:33,899 - pipeline - [INFO] screener still running secs=257.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:18:49,019 - pipeline - [INFO] screener still running secs=272.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:19:04,135 - pipeline - [INFO] screener still running secs=287.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:19:10,792 - pipeline - END screener rc=0 secs=293.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:19:13,219 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 11:19:35,331 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-16 rows=364439
-2026-01-18 11:19:37,620 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 11:19:37,623 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:19:52,745 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 11:20:01,412 - pipeline - END backtest rc=0 secs=23.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 11:20:03,849 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 11:20:03,850 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:20:18,993 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 11:20:21,692 - pipeline - END metrics rc=0 secs=17.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 11:20:21,694 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 11:20:21,694 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 11:20:22,490 - pipeline - TRADE_PERFORMANCE_CACHE_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2240, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<8 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\miniconda3\\python.exe', '-m', 'scripts.trade_performance_refresh', '--lookback-days', '400']' returned non-zero exit status 120.
-2026-01-18 11:20:27,513 - pipeline - [INFO] START labels bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 11:20:27,513 - pipeline - [INFO] LABELS_START bars_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv
-2026-01-18 11:20:27,513 - pipeline - [INFO] START labels cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.label_generator --bars-path 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\daily_bars.csv' --output-dir 'C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels'
-2026-01-18 11:20:27,515 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:20:42,643 - pipeline - [INFO] labels still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:20:57,805 - pipeline - [INFO] labels still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:21:12,940 - pipeline - [INFO] labels still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:21:28,178 - pipeline - [INFO] labels still running secs=60.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:21:43,374 - pipeline - END labels rc=0 secs=75.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.labels.out
-2026-01-18 11:21:45,624 - pipeline - [INFO] LABELS_END labels_path=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\data\labels\labels_20260118.csv rows=364439
-2026-01-18 11:21:57,422 - pipeline - [INFO] FEATURES_START
-2026-01-18 11:21:57,422 - pipeline - [INFO] START features cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.feature_generator
-2026-01-18 11:21:57,424 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:22:12,595 - pipeline - [INFO] features still running secs=15.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:22:27,817 - pipeline - [INFO] features still running secs=30.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:22:42,943 - pipeline - [INFO] features still running secs=45.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:22:58,092 - pipeline - [INFO] features still running secs=60.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:23:13,243 - pipeline - [INFO] features still running secs=75.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:23:28,544 - pipeline - [INFO] features still running secs=91.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:23:40,911 - pipeline - END features rc=0 secs=103.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:23:40,913 - pipeline - [INFO] PREDICTIONS_START model=ranker_2026-01-18.pkl
-2026-01-18 11:23:40,913 - pipeline - [INFO] START ranker_predict cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_predict
-2026-01-18 11:23:40,915 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:23:56,160 - pipeline - [INFO] ranker_predict still running secs=15.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:24:11,310 - pipeline - [INFO] ranker_predict still running secs=30.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:24:26,460 - pipeline - [INFO] ranker_predict still running secs=45.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:24:41,579 - pipeline - [INFO] ranker_predict still running secs=60.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:24:56,710 - pipeline - [INFO] ranker_predict still running secs=75.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:25:11,842 - pipeline - [INFO] ranker_predict still running secs=90.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:25:26,944 - pipeline - [INFO] ranker_predict still running secs=106.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:25:42,060 - pipeline - [INFO] ranker_predict still running secs=121.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:25:57,210 - pipeline - [INFO] ranker_predict still running secs=136.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:25:57,562 - pipeline - END ranker_predict rc=0 secs=136.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:26:13,433 - pipeline - [INFO] START ranker_eval cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_eval
-2026-01-18 11:26:13,434 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:26:28,594 - pipeline - [INFO] ranker_eval still running secs=15.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:26:43,706 - pipeline - [INFO] ranker_eval still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:26:51,521 - pipeline - END ranker_eval rc=0 secs=38.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:26:56,055 - pipeline - [INFO] RANKER_EVAL sample_size=348606 deciles=10
-2026-01-18 11:27:03,050 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 11:27:03,612 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=30.599 feature_secs=240.950 rank_secs=0.204 gate_secs=0.006 bars_rows_total=285942 source=db
-2026-01-18 11:27:03,646 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 11:27:03,677 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 11:27:06,116 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 11:27:06,116 - pipeline - [INFO] PIPELINE_END rc=0 duration=769.2s
-2026-01-18 11:27:06,116 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 11:27:07,197 - pipeline - ACCOUNT_EQUITY_REFRESH_FAILED
-Traceback (most recent call last):
-  File "C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\run_pipeline.py", line 2682, in main
-    subprocess.run(
-    ~~~~~~~~~~~~~~^
-        [
-        ^
-    ...<12 lines>...
-        env=env,
-        ^^^^^^^^
-    )
-    ^
-  File "C:\Users\RasPa\miniconda3\Lib\subprocess.py", line 579, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['C:\\Users\\RasPa\\miniconda3\\python.exe', '-m', 'scripts.update_account_equity', '--period', '1M', '--timeframe', '1D', '--extended-hours', 'true']' returned non-zero exit status 120.
-2026-01-18 11:27:57,436 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 11:27:57,436 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics,ranker_eval
-2026-01-18 11:27:57,436 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-15 tz=America/New_York
-2026-01-18 11:27:57,437 - pipeline - [INFO] PIPELINE_ARGS screener=['--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-15'] backtest=['--run-date', '2026-01-15'] metrics=['--run-date', '2026-01-15'] ranker_eval=[]
-2026-01-18 11:27:57,437 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-15
-2026-01-18 11:27:57,437 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:28:12,559 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:28:27,660 - pipeline - [INFO] screener still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:28:42,788 - pipeline - [INFO] screener still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:28:57,861 - pipeline - [INFO] screener still running secs=60.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:29:12,945 - pipeline - [INFO] screener still running secs=75.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:29:28,027 - pipeline - [INFO] screener still running secs=90.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:29:43,144 - pipeline - [INFO] screener still running secs=105.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:29:58,243 - pipeline - [INFO] screener still running secs=120.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:30:13,327 - pipeline - [INFO] screener still running secs=135.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:30:28,427 - pipeline - [INFO] screener still running secs=151.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:30:43,560 - pipeline - [INFO] screener still running secs=166.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:30:58,661 - pipeline - [INFO] screener still running secs=181.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:31:13,776 - pipeline - [INFO] screener still running secs=196.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:31:28,911 - pipeline - [INFO] screener still running secs=211.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:31:44,030 - pipeline - [INFO] screener still running secs=226.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:31:59,093 - pipeline - [INFO] screener still running secs=241.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:32:14,160 - pipeline - [INFO] screener still running secs=256.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:32:29,227 - pipeline - [INFO] screener still running secs=271.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:32:39,176 - pipeline - END screener rc=0 secs=281.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 11:32:41,575 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 11:33:01,924 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-15 rows=364439
-2026-01-18 11:33:04,255 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-15
-2026-01-18 11:33:04,256 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:33:14,614 - pipeline - END backtest rc=0 secs=10.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 11:33:16,939 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-15
-2026-01-18 11:33:16,940 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:33:32,050 - pipeline - END metrics rc=0 secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 11:33:32,050 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 11:33:32,050 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 11:33:32,790 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 11:33:43,988 - pipeline - [INFO] FEATURES_START
-2026-01-18 11:33:43,988 - pipeline - [INFO] START features cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.feature_generator
-2026-01-18 11:33:43,988 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:33:59,079 - pipeline - [INFO] features still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:34:14,194 - pipeline - [INFO] features still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:34:29,296 - pipeline - [INFO] features still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:34:40,698 - pipeline - END features rc=0 secs=56.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 11:34:40,698 - pipeline - [INFO] PREDICTIONS_START model=ranker_2026-01-18.pkl
-2026-01-18 11:34:40,698 - pipeline - [INFO] START ranker_predict cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_predict
-2026-01-18 11:34:40,699 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:34:55,812 - pipeline - [INFO] ranker_predict still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:35:10,927 - pipeline - [INFO] ranker_predict still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:35:26,044 - pipeline - [INFO] ranker_predict still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:35:37,948 - pipeline - END ranker_predict rc=0 secs=57.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 11:35:52,688 - pipeline - [INFO] START ranker_eval cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_eval
-2026-01-18 11:35:52,689 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 11:36:07,812 - pipeline - [INFO] ranker_eval still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:36:22,927 - pipeline - [INFO] ranker_eval still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:36:38,011 - pipeline - [INFO] ranker_eval still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:36:39,434 - pipeline - END ranker_eval rc=0 secs=46.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 11:36:43,966 - pipeline - [INFO] RANKER_EVAL sample_size=348606 deciles=10
-2026-01-18 11:36:50,908 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 11:36:51,499 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=29.251 feature_secs=231.076 rank_secs=0.211 gate_secs=0.005 bars_rows_total=285942 source=db
-2026-01-18 11:36:51,531 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 11:36:51,546 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 11:36:53,874 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 11:36:53,875 - pipeline - [INFO] PIPELINE_END rc=0 duration=536.4s
-2026-01-18 11:36:53,875 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 11:36:54,933 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 11:36:54,933 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
-2026-01-18 12:01:20,324 - pipeline - [INFO] ENV_LOADED files=[C:\Users\RasPa\JBravoGit\JBRAVO_Screener\.env]
-2026-01-18 12:01:20,325 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics,ranker_eval
-2026-01-18 12:01:20,325 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-16 tz=America/New_York
-2026-01-18 12:01:20,325 - pipeline - [INFO] PIPELINE_ARGS screener=['--export-daily-bars-path', 'data\\daily_bars.csv', '--run-date', '2026-01-16'] backtest=['--run-date', '2026-01-16'] metrics=['--run-date', '2026-01-16'] ranker_eval=[]
-2026-01-18 12:01:20,325 - pipeline - [INFO] START screener cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.screener --mode screener --export-daily-bars-path 'data\daily_bars.csv' --run-date 2026-01-16
-2026-01-18 12:01:20,326 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 12:01:35,456 - pipeline - [INFO] screener still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:01:50,598 - pipeline - [INFO] screener still running secs=30.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:02:05,677 - pipeline - [INFO] screener still running secs=45.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:02:20,793 - pipeline - [INFO] screener still running secs=60.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:02:35,921 - pipeline - [INFO] screener still running secs=75.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:02:51,011 - pipeline - [INFO] screener still running secs=90.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:03:06,141 - pipeline - [INFO] screener still running secs=105.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:03:21,241 - pipeline - [INFO] screener still running secs=120.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:03:36,308 - pipeline - [INFO] screener still running secs=136.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:03:51,410 - pipeline - [INFO] screener still running secs=151.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:04:06,494 - pipeline - [INFO] screener still running secs=166.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:04:21,626 - pipeline - [INFO] screener still running secs=181.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:04:36,726 - pipeline - [INFO] screener still running secs=196.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:04:51,827 - pipeline - [INFO] screener still running secs=211.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:05:06,942 - pipeline - [INFO] screener still running secs=226.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:05:22,009 - pipeline - [INFO] screener still running secs=241.7 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:05:37,121 - pipeline - [INFO] screener still running secs=256.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:05:52,209 - pipeline - [INFO] screener still running secs=271.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:06:07,293 - pipeline - [INFO] screener still running secs=287.0 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:06:18,918 - pipeline - END screener rc=0 secs=298.6 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.screener.out
-2026-01-18 12:06:21,291 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
-2026-01-18 12:06:41,700 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-16 rows=364439
-2026-01-18 12:06:44,122 - pipeline - [INFO] START backtest cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.backtest --run-date 2026-01-16
-2026-01-18 12:06:44,123 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 12:06:59,211 - pipeline - [INFO] backtest still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 12:07:06,241 - pipeline - END backtest rc=0 secs=22.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.backtest.out
-2026-01-18 12:07:08,616 - pipeline - [INFO] START metrics cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.metrics --run-date 2026-01-16
-2026-01-18 12:07:08,617 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 12:07:23,712 - pipeline - [INFO] metrics still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 12:07:26,125 - pipeline - END metrics rc=0 secs=17.5 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.metrics.out
-2026-01-18 12:07:26,125 - pipeline - LATEST_SYNC skipped: DB is source of truth.
-2026-01-18 12:07:26,125 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 12:07:26,953 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
-2026-01-18 12:07:37,164 - pipeline - [INFO] FEATURES_START
-2026-01-18 12:07:37,164 - pipeline - [INFO] START features cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.feature_generator
-2026-01-18 12:07:37,164 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 12:07:52,236 - pipeline - [INFO] features still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 12:08:07,342 - pipeline - [INFO] features still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 12:08:22,428 - pipeline - [INFO] features still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 12:08:34,566 - pipeline - END features rc=0 secs=57.4 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.features.out
-2026-01-18 12:08:34,567 - pipeline - [INFO] PREDICTIONS_START model=ranker_2026-01-18.pkl
-2026-01-18 12:08:34,567 - pipeline - [INFO] START ranker_predict cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_predict
-2026-01-18 12:08:34,567 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 12:08:49,676 - pipeline - [INFO] ranker_predict still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 12:09:04,787 - pipeline - [INFO] ranker_predict still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 12:09:19,857 - pipeline - [INFO] ranker_predict still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 12:09:33,317 - pipeline - END ranker_predict rc=0 secs=58.8 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_predict.out
-2026-01-18 12:09:46,128 - pipeline - [INFO] START ranker_eval cmd='C:\Users\RasPa\miniconda3\python.exe' -m scripts.ranker_eval
-2026-01-18 12:09:46,129 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=74
-2026-01-18 12:10:01,209 - pipeline - [INFO] ranker_eval still running secs=15.1 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 12:10:16,290 - pipeline - [INFO] ranker_eval still running secs=30.2 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 12:10:31,396 - pipeline - [INFO] ranker_eval still running secs=45.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 12:10:46,461 - pipeline - [INFO] ranker_eval still running secs=60.3 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 12:10:47,011 - pipeline - END ranker_eval rc=0 secs=60.9 log=C:\Users\RasPa\JBravoGit\JBRAVO_Screener\logs\step.ranker_eval.out
-2026-01-18 12:10:51,487 - pipeline - [INFO] RANKER_EVAL sample_size=348606 deciles=10
-2026-01-18 12:10:58,341 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=391 symbols_in=127
-2026-01-18 12:10:58,837 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=127 with_bars=127 with_bars_any=400 with_bars_required=127 rows=8 fetch_secs=31.061 feature_secs=242.893 rank_secs=0.221 gate_secs=0.006 bars_rows_total=285942 source=db
-2026-01-18 12:10:58,873 - pipeline - SCREENER_METRICS_SYNC symbols_in=127 with_bars=127 rows=8 bars_rows_total=285942
-2026-01-18 12:10:58,886 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
-2026-01-18 12:11:01,219 - pipeline - CSV ingest disabled: DB is source of truth.
-2026-01-18 12:11:01,219 - pipeline - [INFO] PIPELINE_END rc=0 duration=580.9s
-2026-01-18 12:11:01,220 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=73
-2026-01-18 12:11:02,382 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
-2026-01-18 12:11:02,382 - pipeline - [WARN] DASH RELOAD failed method=touch path=\var\www\raspatrick_pythonanywhere_com_wsgi.py detail=[Errno 2] No such file or directory: '\\var\\www\\raspatrick_pythonanywhere_com_wsgi.py'
+2026-01-23 04:26:14,424 - pipeline - [INFO] ENV_LOADED files=[/home/RasPatrick/.config/jbravo/.env]
+2026-01-23 04:26:14,426 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
+2026-01-23 04:26:14,426 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-22 tz=America/New_York
+2026-01-23 04:26:14,427 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data/daily_bars.csv', '--run-date', '2026-01-22'] backtest=['--run-date', '2026-01-22'] metrics=['--run-date', '2026-01-22'] ranker_eval=[]
+2026-01-23 04:26:14,427 - pipeline - [INFO] START screener cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path data/daily_bars.csv --run-date 2026-01-22
+2026-01-23 04:26:14,427 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=42
+2026-01-23 04:26:29,444 - pipeline - [INFO] screener still running secs=15.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:26:44,446 - pipeline - [INFO] screener still running secs=30.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:26:59,448 - pipeline - [INFO] screener still running secs=45.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:27:14,452 - pipeline - [INFO] screener still running secs=60.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:27:29,456 - pipeline - [INFO] screener still running secs=75.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:27:44,458 - pipeline - [INFO] screener still running secs=90.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:27:59,461 - pipeline - [INFO] screener still running secs=105.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:28:14,467 - pipeline - [INFO] screener still running secs=120.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:28:29,469 - pipeline - [INFO] screener still running secs=135.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:28:44,474 - pipeline - [INFO] screener still running secs=150.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:28:59,479 - pipeline - [INFO] screener still running secs=165.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:29:14,482 - pipeline - [INFO] screener still running secs=180.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:29:29,485 - pipeline - [INFO] screener still running secs=195.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:29:44,489 - pipeline - [INFO] screener still running secs=210.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:29:59,491 - pipeline - [INFO] screener still running secs=225.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:30:14,493 - pipeline - [INFO] screener still running secs=240.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:30:29,495 - pipeline - [INFO] screener still running secs=255.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:30:44,497 - pipeline - [INFO] screener still running secs=270.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:30:59,499 - pipeline - [INFO] screener still running secs=285.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:31:14,504 - pipeline - [INFO] screener still running secs=300.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:31:29,508 - pipeline - [INFO] screener still running secs=315.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:31:44,512 - pipeline - [INFO] screener still running secs=330.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:31:59,517 - pipeline - [INFO] screener still running secs=345.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:32:14,520 - pipeline - [INFO] screener still running secs=360.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:32:29,522 - pipeline - [INFO] screener still running secs=375.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:32:44,525 - pipeline - [INFO] screener still running secs=390.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:32:59,528 - pipeline - [INFO] screener still running secs=405.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:33:14,542 - pipeline - [INFO] screener still running secs=420.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:33:29,544 - pipeline - [INFO] screener still running secs=435.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:33:44,547 - pipeline - [INFO] screener still running secs=450.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:33:59,549 - pipeline - [INFO] screener still running secs=465.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:34:14,551 - pipeline - [INFO] screener still running secs=480.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:34:29,553 - pipeline - [INFO] screener still running secs=495.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:34:44,556 - pipeline - [INFO] screener still running secs=510.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:34:59,628 - pipeline - [INFO] screener still running secs=525.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:35:14,631 - pipeline - [INFO] screener still running secs=540.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:35:30,027 - pipeline - [INFO] screener still running secs=555.6 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:35:45,031 - pipeline - [INFO] screener still running secs=570.6 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:36:00,329 - pipeline - [INFO] screener still running secs=585.9 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:36:15,628 - pipeline - [INFO] screener still running secs=601.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:36:30,828 - pipeline - [INFO] screener still running secs=616.4 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:36:45,928 - pipeline - [INFO] screener still running secs=631.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:37:01,231 - pipeline - [INFO] screener still running secs=646.8 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:37:16,629 - pipeline - [INFO] screener still running secs=662.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:37:31,930 - pipeline - [INFO] screener still running secs=677.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:37:47,228 - pipeline - [INFO] screener still running secs=692.8 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:38:02,628 - pipeline - [INFO] screener still running secs=708.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:38:18,028 - pipeline - [INFO] screener still running secs=723.6 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:38:33,128 - pipeline - [INFO] screener still running secs=738.7 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:38:48,228 - pipeline - [INFO] screener still running secs=753.8 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:39:03,327 - pipeline - [INFO] screener still running secs=768.9 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:39:18,478 - pipeline - [INFO] screener still running secs=784.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:39:33,928 - pipeline - [INFO] screener still running secs=799.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:39:49,427 - pipeline - [INFO] screener still running secs=815.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:40:04,729 - pipeline - [INFO] screener still running secs=830.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:40:20,227 - pipeline - [INFO] screener still running secs=845.8 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:40:35,330 - pipeline - [INFO] screener still running secs=860.9 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:40:50,432 - pipeline - [INFO] screener still running secs=876.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:41:05,529 - pipeline - [INFO] screener still running secs=891.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:41:20,579 - pipeline - [INFO] screener still running secs=906.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:41:35,630 - pipeline - [INFO] screener still running secs=921.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:41:50,928 - pipeline - [INFO] screener still running secs=936.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:42:06,130 - pipeline - [INFO] screener still running secs=951.7 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:42:21,233 - pipeline - [INFO] screener still running secs=966.8 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:42:36,427 - pipeline - [INFO] screener still running secs=982.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:42:51,729 - pipeline - [INFO] screener still running secs=997.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:43:06,835 - pipeline - [INFO] screener still running secs=1012.4 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:43:21,929 - pipeline - [INFO] screener still running secs=1027.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:43:37,028 - pipeline - [INFO] screener still running secs=1042.6 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:43:52,228 - pipeline - [INFO] screener still running secs=1057.8 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:44:07,327 - pipeline - [INFO] screener still running secs=1072.9 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:44:22,528 - pipeline - [INFO] screener still running secs=1088.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:44:37,728 - pipeline - [INFO] screener still running secs=1103.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:44:52,928 - pipeline - [INFO] screener still running secs=1118.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:45:08,228 - pipeline - [INFO] screener still running secs=1133.8 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:45:23,628 - pipeline - [INFO] screener still running secs=1149.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:45:38,928 - pipeline - [INFO] screener still running secs=1164.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:45:53,931 - pipeline - [INFO] screener still running secs=1179.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:46:09,130 - pipeline - [INFO] screener still running secs=1194.7 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:46:15,850 - pipeline - STEP_TIMEOUT name=screener timeout=1200 rc=-9
+2026-01-23 04:46:15,931 - pipeline - END screener rc=-9 secs=1201.4 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-23 04:46:16,034 - pipeline - [INFO] CANDIDATE_COUNTS rows=8 source=db
+2026-01-23 04:47:08,728 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-22 rows=364450
+2026-01-23 04:47:08,833 - pipeline - [INFO] START backtest cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.backtest --run-date 2026-01-22
+2026-01-23 04:47:08,834 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=42
+2026-01-23 04:47:24,127 - pipeline - [INFO] backtest still running secs=15.3 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:47:39,131 - pipeline - [INFO] backtest still running secs=30.3 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:47:54,428 - pipeline - [INFO] backtest still running secs=45.6 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:48:09,528 - pipeline - [INFO] backtest still running secs=60.7 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:48:24,531 - pipeline - [INFO] backtest still running secs=75.7 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:48:39,533 - pipeline - [INFO] backtest still running secs=90.7 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:48:54,535 - pipeline - [INFO] backtest still running secs=105.7 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:49:09,632 - pipeline - [INFO] backtest still running secs=120.8 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:49:25,127 - pipeline - [INFO] backtest still running secs=136.3 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:49:40,429 - pipeline - [INFO] backtest still running secs=151.6 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:49:54,383 - pipeline - END backtest rc=0 secs=165.5 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-23 04:49:54,434 - pipeline - >>> [run_pipeline] launching metrics.py subprocess <<<
+2026-01-23 04:49:54,435 - pipeline - [INFO] START metrics cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.metrics --run-date 2026-01-22
+2026-01-23 04:49:54,435 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=42
+2026-01-23 04:49:54,932 - pipeline - [STEP:metrics] >>> METRICS FILE EXECUTED <<<
+2026-01-23 04:50:09,728 - pipeline - [INFO] metrics still running secs=15.3 log=/home/RasPatrick/jbravo_screener/logs/step.metrics.out
+2026-01-23 04:50:18,429 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,428] [INFO]: Metrics script started
+2026-01-23 04:50:18,429 - pipeline - [STEP:metrics] >>> METRICS MAIN ENTERED <<<
+2026-01-23 04:50:18,429 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,429] [INFO]: >>> METRICS MAIN ENTERED <<<
+2026-01-23 04:50:18,429 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,429] [INFO]: ⚙️ [METRICS] main() start
+2026-01-23 04:50:18,632 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,632] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-22 source=cli
+2026-01-23 04:50:18,744 - pipeline - [STEP:metrics] >>> Loaded screener_df and backtest_df
+2026-01-23 04:50:18,744 - pipeline - [STEP:metrics] >>> screener_df rows: 8
+2026-01-23 04:50:18,744 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,744] [INFO]: >>> screener_df rows: 8
+2026-01-23 04:50:18,744 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,744] [WARNING]: >>> screener_df rows: 8
+2026-01-23 04:50:18,744 - pipeline - [STEP:metrics] >>> backtest_df rows: 8
+2026-01-23 04:50:18,744 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,744] [INFO]: >>> backtest_df rows: 8
+2026-01-23 04:50:18,827 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,744] [WARNING]: >>> backtest_df rows: 8
+2026-01-23 04:50:18,827 - pipeline - [STEP:metrics] >>> Input data loaded — proceeding to ranking <<<
+2026-01-23 04:50:19,027 - pipeline - [STEP:metrics] >>> Starting rank_and_filter_candidates
+2026-01-23 04:50:19,027 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,930] [INFO]: >>> Starting rank_and_filter_candidates()
+2026-01-23 04:50:19,028 - pipeline - [STEP:metrics] [2026-01-23 04:50:18,930] [INFO]: 🚦 [METRICS] Starting candidate ranking
+2026-01-23 04:50:19,228 - pipeline - [STEP:metrics] >>> ranked_df rows: 8
+2026-01-23 04:50:19,228 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,228] [INFO]: >>> ranked_df rows: 8
+2026-01-23 04:50:19,229 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,228] [WARNING]: >>> ranked_df rows: 8
+2026-01-23 04:50:19,229 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,229] [INFO]: ✅ [METRICS] ranked_df rows: 8
+2026-01-23 04:50:19,229 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,229] [INFO]: [DEBUG] ranked_df shape: (8, 22)
+2026-01-23 04:50:19,229 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,229] [INFO]: [DEBUG] Ranked DataFrame columns: ['run_date', 'symbol', 'trades', 'win_rate', 'net_pnl', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino', 'created_at', 'avg_return', 'win_rate_norm', 'net_pnl_norm', 'trades_norm', 'avg_return_norm', 'score', 'entry_price', 'adv20', 'atrp', 'exchange', 'source']
+2026-01-23 04:50:19,229 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,229] [INFO]: Screener Metrics Summary: total_candidates=8, avg_score=0.17
+2026-01-23 04:50:19,230 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,230] [INFO]: Top 15 Screener Symbols: UAL, LIF, LTH, FLUT, BANC, PCTY, HBAN, WY
+2026-01-23 04:50:19,429 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,428] [INFO]: Top Candidates: symbol     score  win_rate      net_pnl
+2026-01-23 04:50:19,430 - pipeline - [STEP:metrics]    UAL  0.854234 47.317744  1368.185929
+2026-01-23 04:50:19,430 - pipeline - [STEP:metrics]    LIF  0.830812 52.678571  1463.123467
+2026-01-23 04:50:19,430 - pipeline - [STEP:metrics]    LTH  0.558829 45.348837   431.651543
+2026-01-23 04:50:19,430 - pipeline - [STEP:metrics]   FLUT  0.197025 41.346154  -522.298736
+2026-01-23 04:50:19,430 - pipeline - [STEP:metrics]   BANC  0.044947 41.885626 -2079.987019
+2026-01-23 04:50:19,431 - pipeline - [STEP:metrics]   PCTY -0.219683 44.238683 -3121.934729
+2026-01-23 04:50:19,432 - pipeline - [STEP:metrics]   HBAN -0.309597 40.036900 -3480.092605
+2026-01-23 04:50:19,432 - pipeline - [STEP:metrics]     WY -0.561798 39.539347 -4575.352193
+2026-01-23 04:50:19,433 - pipeline - [STEP:metrics] >>> db.db_enabled(): True
+2026-01-23 04:50:19,434 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,428] [WARNING]: >>> db.db_enabled(): True
+2026-01-23 04:50:19,434 - pipeline - [STEP:metrics] >>> Attempting to insert 8 rows into top_candidates
+2026-01-23 04:50:19,435 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,428] [WARNING]: >>> Inserting into top_candidates: rows=8
+2026-01-23 04:50:19,632 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,632] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-22 deleted=8
+2026-01-23 04:50:19,638 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,637] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=8
+2026-01-23 04:50:19,741 - pipeline - [STEP:metrics] >>> insert_top_candidates completed successfully
+2026-01-23 04:50:19,832 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,832] [INFO]: Calculated Metrics: Trades=2, Net PnL=74.69, Win Rate=50.00%, Expectancy=37.34, Profit Factor=29.837780235945516, Max Drawdown=-2.59, Sharpe=1.31, Sortino=0.00
+2026-01-23 04:50:19,927 - pipeline - [STEP:metrics] >>> summary_metrics: {'total_trades': 2, 'net_pnl': 74.68999500000062, 'win_rate': 50.0, 'expectancy': 37.34499750000031, 'profit_factor': 29.837780235945516, 'max_drawdown': -2.590005000000019, 'sharpe': 1.3100834190883026, 'sortino': 0.0}
+2026-01-23 04:50:19,927 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,927] [INFO]: >>> summary_metrics: {'total_trades': 2, 'net_pnl': 74.68999500000062, 'win_rate': 50.0, 'expectancy': 37.34499750000031, 'profit_factor': 29.837780235945516, 'max_drawdown': -2.590005000000019, 'sharpe': 1.3100834190883026, 'sortino': 0.0}
+2026-01-23 04:50:19,927 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,927] [WARNING]: >>> summary_metrics: {'total_trades': 2, 'net_pnl': 74.68999500000062, 'win_rate': 50.0, 'expectancy': 37.34499750000031, 'profit_factor': 29.837780235945516, 'max_drawdown': -2.590005000000019, 'sharpe': 1.3100834190883026, 'sortino': 0.0}
+2026-01-23 04:50:19,928 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,927] [INFO]: 🧮 [METRICS] summary_metrics: {'total_trades': 2, 'net_pnl': 74.68999500000062, 'win_rate': 50.0, 'expectancy': 37.34499750000031, 'profit_factor': 29.837780235945516, 'max_drawdown': -2.590005000000019, 'sharpe': 1.3100834190883026, 'sortino': 0.0}
+2026-01-23 04:50:19,928 - pipeline - [STEP:metrics] >>> db.db_enabled(): True
+2026-01-23 04:50:19,928 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,928] [WARNING]: >>> db.db_enabled(): True
+2026-01-23 04:50:19,928 - pipeline - [STEP:metrics] >>> Attempting to upsert metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+2026-01-23 04:50:19,928 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,928] [WARNING]: >>> Upserting metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+2026-01-23 04:50:20,027 - pipeline - [STEP:metrics] [2026-01-23 04:50:19,940] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+2026-01-23 04:50:20,027 - pipeline - [STEP:metrics] >>> upsert_metrics_daily completed successfully
+2026-01-23 04:50:20,139 - pipeline - [STEP:metrics] >>> METRICS COMPLETE <<<
+2026-01-23 04:50:20,139 - pipeline - [STEP:metrics] >>> METRICS FILE COMPLETED <<<
+2026-01-23 04:50:20,139 - pipeline - [STEP:metrics] [2026-01-23 04:50:20,139] [INFO]: >>> METRICS MAIN COMPLETED <<<
+2026-01-23 04:50:20,139 - pipeline - [STEP:metrics] [2026-01-23 04:50:20,139] [INFO]: 🏁 [METRICS] main() complete
+2026-01-23 04:50:20,140 - pipeline - [STEP:metrics] [2026-01-23 04:50:20,139] [INFO]: [INFO] metrics.py completed successfully
+2026-01-23 04:50:24,333 - pipeline - END metrics rc=0 secs=29.9 log=/home/RasPatrick/jbravo_screener/logs/step.metrics.out
+2026-01-23 04:50:24,333 - pipeline - >>> [run_pipeline] metrics.py completed <<<
+2026-01-23 04:50:24,333 - pipeline - LATEST_SYNC skipped: DB is source of truth.
+2026-01-23 04:50:24,333 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=41
+2026-01-23 04:50:52,428 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
+2026-01-23 04:50:52,443 - pipeline - [WARN] CANDIDATES_DB_INSUFFICIENT count=8 required=12
+2026-01-23 04:50:52,844 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=153 with_bars=153 with_bars_any=409 with_bars_required=153 rows=12 fetch_secs=0.000 feature_secs=0.000 rank_secs=0.000 gate_secs=0.000 bars_rows_total=289457 source=fallback
+2026-01-23 04:50:53,136 - pipeline - Wrote screener_metrics.json: symbols_in=153 symbols_with_bars=153 rows=12 bars_rows_total=289457
+2026-01-23 04:50:53,136 - pipeline - SCREENER_METRICS_SYNC symbols_in=153 with_bars=153 rows=12 bars_rows_total=289457
+2026-01-23 04:50:53,170 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
+2026-01-23 04:50:53,238 - pipeline - CSV ingest disabled: DB is source of truth.
+2026-01-23 04:50:53,238 - pipeline - [INFO] PIPELINE_END rc=-9 duration=1478.8s
+2026-01-23 04:50:53,238 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=41
+2026-01-23 04:51:19,127 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
+2026-01-23 04:51:19,130 - pipeline - [INFO] DASH RELOAD method=touch rc=0 path=/var/www/raspatrick_pythonanywhere_com_wsgi.py

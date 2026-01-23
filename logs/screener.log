@@ -29034,3 +29034,1141 @@ Trying to import the above resulted in these errors:
 2026-01-18 12:06:08,326 - screener - INFO - [STAGE] predictions written: data\predictions\2026-01-18.csv (top_n=127)
 2026-01-18 12:06:08,346 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=3 remaining=3
 2026-01-18 12:06:18,771 - screener - INFO - Screener complete: 7745 symbols examined, 6 candidates.
+2026-01-22 15:20:56,536 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 15:20:56,624 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 15:20:56,625 - screener - INFO - [STAGE] fetch start
+2026-01-22 15:20:57,136 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 15:20:57,179 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 15:20:57,182 - screener - INFO - Asset sample: BAC.PRS:NYSE, CGUI:ARCA, BAC.PRO:NYSE, BAC.PRM:NYSE, NETG:NASDAQ
+2026-01-22 15:20:57,227 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 15:20:57,491 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 15:20:57,508 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 15:20:57,616 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 15:20:57,884 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.3s cache=hit
+2026-01-22 15:20:57,934 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.0s cache=hit
+2026-01-22 15:20:57,997 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.1s cache=hit
+2026-01-22 15:20:58,047 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.0s cache=hit
+2026-01-22 15:20:58,107 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.1s cache=hit
+2026-01-22 15:20:58,190 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 15:20:58,241 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.1s cache=hit
+2026-01-22 15:20:58,295 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.1s cache=hit
+2026-01-22 15:20:58,347 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.1s cache=hit
+2026-01-22 15:20:59,114 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 15:21:13,596 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 15:21:15,106 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 15:21:15,116 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 15:21:15,116 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 15:21:15,116 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 15:21:15,116 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 15:21:15,117 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 15:21:15,117 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 15:21:20,989 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=24.36s)
+2026-01-22 15:21:20,989 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 15:21:26,107 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 15:21:26,256 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 15:21:27,239 - screener - INFO - [STAGE] coarse features start
+2026-01-22 15:28:13,121 - screener - INFO - [STAGE] coarse features end (rows=343989)
+2026-01-22 15:28:13,122 - screener - INFO - [STAGE] coarse rank start
+2026-01-22 15:28:13,582 - screener - INFO - [INFO] Coarse rank boundary rows_in=475 score_non_null=475 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-22 15:28:13,582 - screener - INFO - [STAGE] coarse rank end (rows=475)
+2026-01-22 15:28:13,605 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=475)
+2026-01-22 15:28:13,645 - screener - INFO - [STAGE] full features start (shortlist=475)
+2026-01-22 15:35:12,859 - screener - INFO - [STAGE] full features end (rows=343989)
+2026-01-22 15:35:13,081 - screener - INFO - [STAGE] finalize candidates pruned rows=343989 -> 334005
+2026-01-22 15:35:13,081 - screener - INFO - [STAGE] full rank start
+2026-01-22 15:35:13,481 - screener - INFO - [STAGE] full rank end (rows=475)
+2026-01-22 15:35:13,481 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=475 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-22
+2026-01-22 15:35:13,484 - screener - INFO - [INFO] SENTIMENT_FETCH start target=475 unique=475
+2026-01-22 15:35:19,450 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=475
+2026-01-22 15:35:19,450 - screener - INFO - [INFO] SENTIMENT_FETCH done target=475 fetched=0 missing=475 cache_file=data/cache/sentiment/2026-01-22.json
+2026-01-22 15:35:19,450 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=475 secs=5.966
+2026-01-22 15:35:19,471 - screener - INFO - [STAGE] quality filters pruned rows=475 -> 131
+2026-01-22 15:35:21,634 - screener - INFO - [STAGE] gates start
+2026-01-22 15:35:21,650 - screener - INFO - [STAGE] gates end (candidates=15)
+2026-01-22 15:35:40,542 - screener - INFO - [SUMMARY] run_ts=2026-01-22T15:20:56Z mode=screener symbols_in=7744 with_bars=475 coarse_rows=475 shortlist_rows=475 final_rows=15 gated_rows=15 fallback_used=false db_ingest_rows=15
+2026-01-22 15:35:40,699 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-22 15:35:40,768 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-22.csv (top_n=131)
+2026-01-22 15:35:40,850 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=9 remaining=6
+2026-01-22 15:35:40,955 - screener - INFO - Screener complete: 7744 symbols examined, 15 candidates.
+2026-01-22 16:31:03,011 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 16:31:03,037 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 16:31:03,037 - screener - INFO - [STAGE] fetch start
+2026-01-22 16:31:03,680 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 16:31:03,732 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 16:31:03,735 - screener - INFO - Asset sample: NEWTP:NASDAQ, ASBP:NASDAQ, PBJA:BATS, ASB.PRE:NYSE, NEWTI:NASDAQ
+2026-01-22 16:31:03,814 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 16:31:04,174 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 16:31:04,187 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 16:31:04,360 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 16:31:04,457 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.1s cache=hit
+2026-01-22 16:31:04,498 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.0s cache=hit
+2026-01-22 16:31:04,540 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.0s cache=hit
+2026-01-22 16:31:04,579 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.0s cache=hit
+2026-01-22 16:31:04,623 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.0s cache=hit
+2026-01-22 16:31:04,695 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 16:31:04,762 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.1s cache=hit
+2026-01-22 16:31:04,826 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.1s cache=hit
+2026-01-22 16:31:04,897 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.1s cache=hit
+2026-01-22 16:31:05,652 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 16:31:20,327 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 16:31:21,443 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 16:31:21,451 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 16:31:21,451 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 16:31:21,452 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 16:31:21,452 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 16:31:21,452 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 16:31:21,452 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 16:31:27,013 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=23.98s)
+2026-01-22 16:31:27,013 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 16:31:31,951 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 16:31:32,079 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 16:31:33,086 - screener - INFO - [STAGE] coarse features start
+2026-01-22 16:37:51,209 - screener - INFO - [STAGE] coarse features end (rows=343989)
+2026-01-22 16:37:51,209 - screener - INFO - [STAGE] coarse rank start
+2026-01-22 16:37:51,590 - screener - INFO - [INFO] Coarse rank boundary rows_in=475 score_non_null=475 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-22 16:37:51,591 - screener - INFO - [STAGE] coarse rank end (rows=475)
+2026-01-22 16:37:51,612 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=475)
+2026-01-22 16:37:51,648 - screener - INFO - [STAGE] full features start (shortlist=475)
+2026-01-22 16:40:11,149 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 16:40:11,176 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 16:40:11,177 - screener - INFO - [STAGE] fetch start
+2026-01-22 16:40:11,731 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 16:40:11,790 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 16:40:11,793 - screener - INFO - Asset sample: NEWTP:NASDAQ, ASBP:NASDAQ, PBJA:BATS, ASB.PRE:NYSE, NEWTI:NASDAQ
+2026-01-22 16:40:11,879 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 16:40:12,244 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 16:40:12,257 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 16:40:12,452 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 16:40:12,577 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.1s cache=hit
+2026-01-22 16:40:12,640 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.1s cache=hit
+2026-01-22 16:40:12,683 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.0s cache=hit
+2026-01-22 16:40:12,723 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.0s cache=hit
+2026-01-22 16:40:12,799 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.1s cache=hit
+2026-01-22 16:40:12,913 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 16:40:12,988 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.1s cache=hit
+2026-01-22 16:40:13,063 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.1s cache=hit
+2026-01-22 16:40:13,121 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.1s cache=hit
+2026-01-22 16:40:14,185 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 16:40:23,727 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 16:40:24,520 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 16:40:24,528 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 16:40:24,529 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 16:40:24,529 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 16:40:24,529 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 16:40:24,529 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 16:40:24,529 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 16:40:32,032 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=20.86s)
+2026-01-22 16:40:32,032 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 16:40:37,659 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 16:40:37,794 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 16:40:38,865 - screener - INFO - [STAGE] coarse features start
+2026-01-22 16:45:38,662 - screener - INFO - [STAGE] full features end (rows=343989)
+2026-01-22 16:45:38,929 - screener - INFO - [STAGE] finalize candidates pruned rows=343989 -> 334005
+2026-01-22 16:45:38,929 - screener - INFO - [STAGE] full rank start
+2026-01-22 16:45:39,425 - screener - INFO - [STAGE] full rank end (rows=475)
+2026-01-22 16:45:39,425 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=475 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-22
+2026-01-22 16:45:39,428 - screener - INFO - [INFO] SENTIMENT_FETCH start target=475 unique=475
+2026-01-22 16:45:45,816 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=475
+2026-01-22 16:45:45,816 - screener - INFO - [INFO] SENTIMENT_FETCH done target=475 fetched=0 missing=475 cache_file=data/cache/sentiment/2026-01-22.json
+2026-01-22 16:45:45,816 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=475 secs=6.388
+2026-01-22 16:45:45,841 - screener - INFO - [STAGE] quality filters pruned rows=475 -> 131
+2026-01-22 16:45:46,725 - screener - INFO - [STAGE] gates start
+2026-01-22 16:45:46,738 - screener - INFO - [STAGE] gates end (candidates=15)
+2026-01-22 16:46:01,172 - screener - INFO - [SUMMARY] run_ts=2026-01-22T16:31:03Z mode=screener symbols_in=7744 with_bars=475 coarse_rows=475 shortlist_rows=475 final_rows=15 gated_rows=15 fallback_used=false db_ingest_rows=15
+2026-01-22 16:46:01,350 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-22 16:46:01,453 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-22.csv (top_n=131)
+2026-01-22 16:46:01,555 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=9 remaining=6
+2026-01-22 16:46:01,666 - screener - INFO - Screener complete: 7744 symbols examined, 15 candidates.
+2026-01-22 16:48:20,745 - screener - INFO - [STAGE] coarse features end (rows=343989)
+2026-01-22 16:48:20,746 - screener - INFO - [STAGE] coarse rank start
+2026-01-22 16:48:21,180 - screener - INFO - [INFO] Coarse rank boundary rows_in=475 score_non_null=475 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-22 16:48:21,181 - screener - INFO - [STAGE] coarse rank end (rows=475)
+2026-01-22 16:48:21,200 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=475)
+2026-01-22 16:48:21,241 - screener - INFO - [STAGE] full features start (shortlist=475)
+2026-01-22 16:54:40,925 - screener - INFO - [STAGE] full features end (rows=343989)
+2026-01-22 16:54:41,166 - screener - INFO - [STAGE] finalize candidates pruned rows=343989 -> 334005
+2026-01-22 16:54:41,166 - screener - INFO - [STAGE] full rank start
+2026-01-22 16:54:41,563 - screener - INFO - [STAGE] full rank end (rows=475)
+2026-01-22 16:54:41,563 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=475 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-22
+2026-01-22 16:54:41,566 - screener - INFO - [INFO] SENTIMENT_FETCH start target=475 unique=475
+2026-01-22 16:54:47,582 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=475
+2026-01-22 16:54:47,582 - screener - INFO - [INFO] SENTIMENT_FETCH done target=475 fetched=0 missing=475 cache_file=data/cache/sentiment/2026-01-22.json
+2026-01-22 16:54:47,582 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=475 secs=6.016
+2026-01-22 16:54:47,605 - screener - INFO - [STAGE] quality filters pruned rows=475 -> 131
+2026-01-22 16:54:48,396 - screener - INFO - [STAGE] gates start
+2026-01-22 16:54:48,420 - screener - INFO - [STAGE] gates end (candidates=15)
+2026-01-22 16:55:02,813 - screener - INFO - [SUMMARY] run_ts=2026-01-22T16:40:11Z mode=screener symbols_in=7744 with_bars=475 coarse_rows=475 shortlist_rows=475 final_rows=15 gated_rows=15 fallback_used=false db_ingest_rows=15
+2026-01-22 16:55:02,956 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-22 16:55:03,014 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-22.csv (top_n=131)
+2026-01-22 16:55:03,088 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=9 remaining=6
+2026-01-22 16:55:03,196 - screener - INFO - Screener complete: 7744 symbols examined, 15 candidates.
+2026-01-22 17:01:18,923 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 17:01:19,099 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 17:01:19,099 - screener - INFO - [STAGE] fetch start
+2026-01-22 17:01:19,594 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 17:01:19,632 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 17:01:19,634 - screener - INFO - Asset sample: BALI:BATS, ICU:NASDAQ, NETG:NASDAQ, ASBP:NASDAQ, PBJA:BATS
+2026-01-22 17:01:19,674 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 17:01:19,862 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 17:01:19,871 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 17:01:19,974 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 17:01:20,049 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.1s cache=hit
+2026-01-22 17:01:20,089 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.0s cache=hit
+2026-01-22 17:01:20,136 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.0s cache=hit
+2026-01-22 17:01:20,176 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.0s cache=hit
+2026-01-22 17:01:20,221 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.0s cache=hit
+2026-01-22 17:01:20,290 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 17:01:20,335 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.0s cache=hit
+2026-01-22 17:01:20,375 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.0s cache=hit
+2026-01-22 17:01:20,420 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.0s cache=hit
+2026-01-22 17:01:21,132 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 17:01:33,420 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 17:01:34,729 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 17:01:34,737 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 17:01:34,737 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 17:01:34,738 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 17:01:34,738 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 17:01:34,738 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 17:01:34,738 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 17:01:40,362 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=21.26s)
+2026-01-22 17:01:40,362 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 17:01:46,331 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 17:01:46,465 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 17:01:47,426 - screener - INFO - [STAGE] coarse features start
+2026-01-22 17:09:13,656 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 17:09:13,706 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 17:09:13,706 - screener - INFO - [STAGE] fetch start
+2026-01-22 17:09:14,478 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 17:09:14,523 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 17:09:14,526 - screener - INFO - Asset sample: BALI:BATS, ICU:NASDAQ, NETG:NASDAQ, ASBP:NASDAQ, PBJA:BATS
+2026-01-22 17:09:14,577 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 17:09:14,798 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 17:09:14,813 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 17:09:15,004 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 17:09:15,249 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.2s cache=hit
+2026-01-22 17:09:15,302 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.1s cache=hit
+2026-01-22 17:09:15,355 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.1s cache=hit
+2026-01-22 17:09:15,409 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.1s cache=hit
+2026-01-22 17:09:15,469 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.1s cache=hit
+2026-01-22 17:09:15,563 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 17:09:15,617 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.1s cache=hit
+2026-01-22 17:09:15,671 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.1s cache=hit
+2026-01-22 17:09:15,726 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.1s cache=hit
+2026-01-22 17:09:16,544 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 17:09:26,948 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 17:09:28,965 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 17:09:28,974 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 17:09:28,974 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 17:09:28,974 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 17:09:28,974 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 17:09:28,974 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 17:09:28,974 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 17:09:35,074 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=21.37s)
+2026-01-22 17:09:35,075 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 17:09:40,166 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 17:09:40,309 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 17:09:41,295 - screener - INFO - [STAGE] coarse features start
+2026-01-22 17:10:17,419 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 17:10:17,464 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 17:10:17,464 - screener - INFO - [STAGE] fetch start
+2026-01-22 17:10:19,438 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 17:10:19,485 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 17:10:19,488 - screener - INFO - Asset sample: BALI:BATS, ICU:NASDAQ, NETG:NASDAQ, ASBP:NASDAQ, PBJA:BATS
+2026-01-22 17:10:19,540 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 17:10:19,761 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 17:10:19,774 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 17:10:20,552 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 17:10:20,732 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.2s cache=hit
+2026-01-22 17:10:20,782 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.1s cache=hit
+2026-01-22 17:10:20,834 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.1s cache=hit
+2026-01-22 17:10:20,885 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.1s cache=hit
+2026-01-22 17:10:20,941 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.1s cache=hit
+2026-01-22 17:10:21,035 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 17:10:21,094 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.1s cache=hit
+2026-01-22 17:10:21,143 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.0s cache=hit
+2026-01-22 17:10:21,194 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.0s cache=hit
+2026-01-22 17:10:22,024 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 17:10:34,917 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 17:10:36,428 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 17:10:36,439 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 17:10:36,439 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 17:10:36,439 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 17:10:36,440 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 17:10:36,440 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 17:10:36,440 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 17:10:42,114 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=24.65s)
+2026-01-22 17:10:42,114 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 17:10:47,615 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 17:10:47,750 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 17:10:48,782 - screener - INFO - [STAGE] coarse features start
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            2026-01-22 17:18:00,317 - screener - INFO - [STAGE] coarse features end (rows=343989)
+2026-01-22 17:18:00,318 - screener - INFO - [STAGE] coarse rank start
+2026-01-22 17:18:00,803 - screener - INFO - [INFO] Coarse rank boundary rows_in=475 score_non_null=475 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-22 17:18:00,803 - screener - INFO - [STAGE] coarse rank end (rows=475)
+2026-01-22 17:18:00,827 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=475)
+2026-01-22 17:18:00,870 - screener - INFO - [STAGE] full features start (shortlist=475)
+2026-01-22 17:23:42,034 - screener - INFO - [STAGE] full features end (rows=343989)
+2026-01-22 17:23:42,326 - screener - INFO - [STAGE] finalize candidates pruned rows=343989 -> 334005
+2026-01-22 17:23:42,326 - screener - INFO - [STAGE] full rank start
+2026-01-22 17:23:42,811 - screener - INFO - [STAGE] full rank end (rows=475)
+2026-01-22 17:23:42,811 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=475 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-22
+2026-01-22 17:23:42,815 - screener - INFO - [INFO] SENTIMENT_FETCH start target=475 unique=475
+2026-01-22 17:23:48,804 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=475
+2026-01-22 17:23:48,804 - screener - INFO - [INFO] SENTIMENT_FETCH done target=475 fetched=0 missing=475 cache_file=data/cache/sentiment/2026-01-22.json
+2026-01-22 17:23:48,805 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=475 secs=5.989
+2026-01-22 17:23:48,828 - screener - INFO - [STAGE] quality filters pruned rows=475 -> 131
+2026-01-22 17:23:50,778 - screener - INFO - [STAGE] gates start
+2026-01-22 17:23:50,794 - screener - INFO - [STAGE] gates end (candidates=15)
+2026-01-22 17:24:12,197 - screener - INFO - [SUMMARY] run_ts=2026-01-22T17:09:13Z mode=screener symbols_in=7744 with_bars=475 coarse_rows=475 shortlist_rows=475 final_rows=15 gated_rows=15 fallback_used=false db_ingest_rows=15
+2026-01-22 17:24:12,379 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-22 17:24:12,446 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-22.csv (top_n=131)
+2026-01-22 17:24:12,513 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=9 remaining=6
+2026-01-22 17:24:12,630 - screener - INFO - Screener complete: 7744 symbols examined, 15 candidates.
+2026-01-22 17:25:53,823 - screener - INFO - [STAGE] full features end (rows=343989)
+2026-01-22 17:25:54,086 - screener - INFO - [STAGE] finalize candidates pruned rows=343989 -> 334005
+2026-01-22 17:25:54,086 - screener - INFO - [STAGE] full rank start
+2026-01-22 17:25:54,560 - screener - INFO - [STAGE] full rank end (rows=475)
+2026-01-22 17:25:54,560 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=475 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-22
+2026-01-22 17:25:54,563 - screener - INFO - [INFO] SENTIMENT_FETCH start target=475 unique=475
+2026-01-22 17:26:00,564 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=475
+2026-01-22 17:26:00,564 - screener - INFO - [INFO] SENTIMENT_FETCH done target=475 fetched=0 missing=475 cache_file=data/cache/sentiment/2026-01-22.json
+2026-01-22 17:26:00,564 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=475 secs=6.001
+2026-01-22 17:26:00,591 - screener - INFO - [STAGE] quality filters pruned rows=475 -> 131
+2026-01-22 17:26:02,240 - screener - INFO - [STAGE] gates start
+2026-01-22 17:26:02,259 - screener - INFO - [STAGE] gates end (candidates=15)
+2026-01-22 17:26:24,148 - screener - INFO - [SUMMARY] run_ts=2026-01-22T17:10:17Z mode=screener symbols_in=7744 with_bars=475 coarse_rows=475 shortlist_rows=475 final_rows=15 gated_rows=15 fallback_used=false db_ingest_rows=15
+2026-01-22 17:26:24,321 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-22 17:26:24,387 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-22.csv (top_n=131)
+2026-01-22 17:26:24,454 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=9 remaining=6
+2026-01-22 17:26:24,551 - screener - INFO - Screener complete: 7744 symbols examined, 15 candidates.
+2026-01-22 17:50:37,717 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 17:50:37,741 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 17:50:37,741 - screener - INFO - [STAGE] fetch start
+2026-01-22 17:50:38,398 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 17:50:38,448 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 17:50:38,453 - screener - INFO - Asset sample: XLU:ARCA, XLRE:ARCA, XLP:ARCA, XLI:ARCA, XLG:ARCA
+2026-01-22 17:50:38,542 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 17:50:38,912 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 17:50:38,932 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 17:50:39,099 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 17:50:39,294 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.2s cache=hit
+2026-01-22 17:50:39,378 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.1s cache=hit
+2026-01-22 17:50:39,459 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.1s cache=hit
+2026-01-22 17:50:39,533 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.1s cache=hit
+2026-01-22 17:50:39,623 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.1s cache=hit
+2026-01-22 17:50:39,764 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 17:50:39,817 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.1s cache=hit
+2026-01-22 17:50:39,882 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.1s cache=hit
+2026-01-22 17:50:39,964 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.1s cache=hit
+2026-01-22 17:50:40,990 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 17:50:50,469 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 17:50:51,858 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 17:50:51,867 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 17:50:51,867 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 17:50:51,867 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 17:50:51,867 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 17:50:51,867 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 17:50:51,867 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 17:50:58,109 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=20.37s)
+2026-01-22 17:50:58,109 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 17:51:03,840 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 17:51:04,032 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 17:51:05,357 - screener - INFO - [STAGE] coarse features start
+2026-01-22 17:58:14,644 - screener - INFO - [STAGE] coarse features end (rows=343989)
+2026-01-22 17:58:14,645 - screener - INFO - [STAGE] coarse rank start
+2026-01-22 17:58:15,090 - screener - INFO - [INFO] Coarse rank boundary rows_in=475 score_non_null=475 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-22 17:58:15,091 - screener - INFO - [STAGE] coarse rank end (rows=475)
+2026-01-22 17:58:15,112 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=475)
+2026-01-22 17:58:15,166 - screener - INFO - [STAGE] full features start (shortlist=475)
+2026-01-22 17:59:33,467 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 17:59:33,670 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 17:59:33,670 - screener - INFO - [STAGE] fetch start
+2026-01-22 17:59:34,188 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 17:59:34,226 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 17:59:34,228 - screener - INFO - Asset sample: XLU:ARCA, XLRE:ARCA, XLP:ARCA, XLI:ARCA, XLG:ARCA
+2026-01-22 17:59:34,273 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 17:59:34,463 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 17:59:34,472 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 17:59:34,573 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 17:59:34,658 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.1s cache=hit
+2026-01-22 17:59:34,698 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.0s cache=hit
+2026-01-22 17:59:34,739 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.0s cache=hit
+2026-01-22 17:59:34,779 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.0s cache=hit
+2026-01-22 17:59:34,826 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.0s cache=hit
+2026-01-22 17:59:34,907 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 17:59:34,953 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.0s cache=hit
+2026-01-22 17:59:34,997 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.0s cache=hit
+2026-01-22 17:59:35,042 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.0s cache=hit
+2026-01-22 17:59:35,789 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 17:59:45,869 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 17:59:47,058 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 17:59:47,070 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 17:59:47,070 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 17:59:47,071 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 17:59:47,071 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 17:59:47,071 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 17:59:47,071 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 17:59:52,391 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=18.72s)
+2026-01-22 17:59:52,391 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 17:59:57,642 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 17:59:57,771 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 17:59:58,788 - screener - INFO - [STAGE] coarse features start
+2026-01-22 18:18:04,046 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 18:18:04,084 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 18:18:04,085 - screener - INFO - [STAGE] fetch start
+2026-01-22 18:18:04,780 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 18:18:04,840 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 18:18:04,843 - screener - INFO - Asset sample: LULG:NASDAQ, LUD:AMEX, LUCYW:NASDAQ, FBND:ARCA, LUCY:NASDAQ
+2026-01-22 18:18:04,918 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 18:18:05,207 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 18:18:05,222 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 18:18:05,443 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 18:18:05,650 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.2s cache=hit
+2026-01-22 18:18:05,697 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.0s cache=hit
+2026-01-22 18:18:05,754 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.1s cache=hit
+2026-01-22 18:18:05,802 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.0s cache=hit
+2026-01-22 18:18:05,876 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.1s cache=hit
+2026-01-22 18:18:05,961 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 18:18:06,027 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.1s cache=hit
+2026-01-22 18:18:06,085 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.1s cache=hit
+2026-01-22 18:18:06,131 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.0s cache=hit
+2026-01-22 18:18:06,599 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 18:18:06,622 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 18:18:06,622 - screener - INFO - [STAGE] fetch start
+2026-01-22 18:18:06,874 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 18:18:07,111 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 18:18:07,161 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 18:18:07,163 - screener - INFO - Asset sample: LULG:NASDAQ, LUD:AMEX, LUCYW:NASDAQ, FBND:ARCA, LUCY:NASDAQ
+2026-01-22 18:18:07,213 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 18:18:07,454 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 18:18:07,466 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 18:18:07,599 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 18:18:07,674 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.1s cache=hit
+2026-01-22 18:18:07,716 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.0s cache=hit
+2026-01-22 18:18:07,763 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.0s cache=hit
+2026-01-22 18:18:07,810 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.0s cache=hit
+2026-01-22 18:18:07,868 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.1s cache=hit
+2026-01-22 18:18:07,950 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 18:18:08,003 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.1s cache=hit
+2026-01-22 18:18:08,048 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.0s cache=hit
+2026-01-22 18:18:08,096 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.0s cache=hit
+2026-01-22 18:18:08,835 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 18:18:34,086 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 18:18:50,162 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 18:18:52,768 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 18:18:52,777 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 18:18:52,777 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 18:18:52,777 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 18:18:52,777 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 18:18:52,777 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 18:18:52,777 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 18:18:57,677 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=53.59s)
+2026-01-22 18:18:57,677 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 18:18:58,449 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 18:18:58,461 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 18:18:58,461 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 18:18:58,461 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 18:18:58,461 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 18:18:58,461 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 18:18:58,461 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 18:19:02,535 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 18:19:02,715 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 18:19:04,635 - screener - INFO - [STAGE] coarse features start
+2026-01-22 18:19:05,186 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=58.56s)
+2026-01-22 18:19:05,187 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 18:19:10,479 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 18:19:10,591 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 18:19:11,607 - screener - INFO - [STAGE] coarse features start
+2026-01-22 18:26:27,433 - screener - INFO - [STAGE] coarse features end (rows=343989)
+2026-01-22 18:26:27,434 - screener - INFO - [STAGE] coarse rank start
+2026-01-22 18:26:27,896 - screener - INFO - [INFO] Coarse rank boundary rows_in=475 score_non_null=475 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-22 18:26:27,896 - screener - INFO - [STAGE] coarse rank end (rows=475)
+2026-01-22 18:26:27,917 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=475)
+2026-01-22 18:26:27,955 - screener - INFO - [STAGE] full features start (shortlist=475)
+2026-01-22 18:26:28,086 - screener - INFO - [STAGE] coarse features end (rows=343989)
+2026-01-22 18:26:28,087 - screener - INFO - [STAGE] coarse rank start
+2026-01-22 18:26:28,470 - screener - INFO - [INFO] Coarse rank boundary rows_in=475 score_non_null=475 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-22 18:26:28,470 - screener - INFO - [STAGE] coarse rank end (rows=475)
+2026-01-22 18:26:28,492 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=475)
+2026-01-22 18:26:28,529 - screener - INFO - [STAGE] full features start (shortlist=475)
+2026-01-22 18:32:53,377 - screener - INFO - [STAGE] full features end (rows=343989)
+2026-01-22 18:32:53,610 - screener - INFO - [STAGE] finalize candidates pruned rows=343989 -> 334005
+2026-01-22 18:32:53,610 - screener - INFO - [STAGE] full rank start
+2026-01-22 18:32:53,991 - screener - INFO - [STAGE] full rank end (rows=475)
+2026-01-22 18:32:53,991 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=475 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-22
+2026-01-22 18:32:53,994 - screener - INFO - [INFO] SENTIMENT_FETCH start target=475 unique=475
+2026-01-22 18:32:54,421 - screener - INFO - [STAGE] full features end (rows=343989)
+2026-01-22 18:32:54,628 - screener - INFO - [STAGE] finalize candidates pruned rows=343989 -> 334005
+2026-01-22 18:32:54,628 - screener - INFO - [STAGE] full rank start
+2026-01-22 18:32:55,034 - screener - INFO - [STAGE] full rank end (rows=475)
+2026-01-22 18:32:55,034 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=475 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-22
+2026-01-22 18:32:55,037 - screener - INFO - [INFO] SENTIMENT_FETCH start target=475 unique=475
+2026-01-22 18:33:05,274 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=475
+2026-01-22 18:33:05,274 - screener - INFO - [INFO] SENTIMENT_FETCH done target=475 fetched=0 missing=475 cache_file=data/cache/sentiment/2026-01-22.json
+2026-01-22 18:33:05,275 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=475 secs=11.280
+2026-01-22 18:33:05,302 - screener - INFO - [STAGE] quality filters pruned rows=475 -> 131
+2026-01-22 18:33:07,513 - screener - INFO - [STAGE] gates start
+2026-01-22 18:33:07,527 - screener - INFO - [STAGE] gates end (candidates=15)
+2026-01-22 18:33:10,677 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=475
+2026-01-22 18:33:10,677 - screener - INFO - [INFO] SENTIMENT_FETCH done target=475 fetched=0 missing=475 cache_file=data/cache/sentiment/2026-01-22.json
+2026-01-22 18:33:10,677 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=475 secs=15.640
+2026-01-22 18:33:10,702 - screener - INFO - [STAGE] quality filters pruned rows=475 -> 131
+2026-01-22 18:33:11,639 - screener - INFO - [STAGE] gates start
+2026-01-22 18:33:11,659 - screener - INFO - [STAGE] gates end (candidates=15)
+2026-01-22 18:33:24,240 - screener - INFO - [SUMMARY] run_ts=2026-01-22T18:18:06Z mode=screener symbols_in=7744 with_bars=475 coarse_rows=475 shortlist_rows=475 final_rows=15 gated_rows=15 fallback_used=false db_ingest_rows=15
+2026-01-22 18:33:24,392 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-22 18:33:24,451 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-22.csv (top_n=131)
+2026-01-22 18:33:24,518 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=9 remaining=6
+2026-01-22 18:33:24,622 - screener - INFO - Screener complete: 7744 symbols examined, 15 candidates.
+2026-01-22 18:33:28,859 - screener - INFO - [SUMMARY] run_ts=2026-01-22T18:18:04Z mode=screener symbols_in=7744 with_bars=475 coarse_rows=475 shortlist_rows=475 final_rows=15 gated_rows=15 fallback_used=false db_ingest_rows=15
+2026-01-22 18:33:29,004 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-22 18:33:29,065 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-22.csv (top_n=131)
+2026-01-22 18:33:29,142 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=9 remaining=6
+2026-01-22 18:33:29,319 - screener - INFO - Screener complete: 7744 symbols examined, 15 candidates.
+2026-01-22 19:15:59,690 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 19:15:59,714 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 19:15:59,714 - screener - INFO - [STAGE] fetch start
+2026-01-22 19:16:00,103 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 19:16:00,143 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 19:16:00,146 - screener - INFO - Asset sample: BSJS:NASDAQ, PG:NYSE, BBIN:BATS, PFG:NASDAQ, OWLS:NASDAQ
+2026-01-22 19:16:00,179 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 19:16:00,413 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 19:16:00,437 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 19:16:00,567 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 19:16:00,571 - screener - WARNING - Failed to read cached batch data/cache/bars_1d_iex/2026-01-21/0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:02,117 - screener - WARNING - Failed to persist batch cache data/cache/bars_1d_iex/2026-01-21/0001.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:02,117 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32045 elapsed=1.5s cache=miss
+2026-01-22 19:16:02,118 - screener - WARNING - Failed to read cached batch data/cache/bars_1d_iex/2026-01-21/0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:03,357 - screener - WARNING - Failed to persist batch cache data/cache/bars_1d_iex/2026-01-21/0002.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:03,357 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32754 elapsed=1.2s cache=miss
+2026-01-22 19:16:03,358 - screener - WARNING - Failed to read cached batch data/cache/bars_1d_iex/2026-01-21/0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:04,562 - screener - WARNING - Failed to persist batch cache data/cache/bars_1d_iex/2026-01-21/0003.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:04,562 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33460 elapsed=1.2s cache=miss
+2026-01-22 19:16:04,563 - screener - WARNING - Failed to read cached batch data/cache/bars_1d_iex/2026-01-21/0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:05,707 - screener - WARNING - Failed to persist batch cache data/cache/bars_1d_iex/2026-01-21/0004.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:05,707 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=1.1s cache=miss
+2026-01-22 19:16:05,708 - screener - WARNING - Failed to read cached batch data/cache/bars_1d_iex/2026-01-21/0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:06,809 - screener - WARNING - Failed to persist batch cache data/cache/bars_1d_iex/2026-01-21/0005.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:06,809 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31738 elapsed=1.1s cache=miss
+2026-01-22 19:16:06,810 - screener - WARNING - Failed to read cached batch data/cache/bars_1d_iex/2026-01-21/0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:07,896 - screener - WARNING - Failed to persist batch cache data/cache/bars_1d_iex/2026-01-21/0006.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:07,896 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29377 elapsed=1.1s cache=miss
+2026-01-22 19:16:07,896 - screener - WARNING - Failed to read cached batch data/cache/bars_1d_iex/2026-01-21/0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:09,186 - screener - WARNING - Failed to persist batch cache data/cache/bars_1d_iex/2026-01-21/0007.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:09,186 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=1.3s cache=miss
+2026-01-22 19:16:09,187 - screener - WARNING - Failed to read cached batch data/cache/bars_1d_iex/2026-01-21/0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:10,288 - screener - WARNING - Failed to persist batch cache data/cache/bars_1d_iex/2026-01-21/0008.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:10,288 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33241 elapsed=1.1s cache=miss
+2026-01-22 19:16:10,289 - screener - WARNING - Failed to read cached batch data/cache/bars_1d_iex/2026-01-21/0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:11,505 - screener - WARNING - Failed to persist batch cache data/cache/bars_1d_iex/2026-01-21/0009.parquet: Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.
+A suitable version of pyarrow or fastparquet is required for parquet support.
+Trying to import the above resulted in these errors:
+ - Missing optional dependency 'pyarrow'. pyarrow is required for parquet support. Use pip or conda to install pyarrow.
+ - Missing optional dependency 'fastparquet'. fastparquet is required for parquet support. Use pip or conda to install fastparquet.
+2026-01-22 19:16:11,505 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30633 elapsed=1.2s cache=miss
+2026-01-22 19:16:12,107 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-22 19:16:12,943 - screener - INFO - [BARS_RETRY] retried=41 recovered=0
+2026-01-22 19:16:13,607 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 19:16:13,623 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=289421 symbols_with_bars=396
+2026-01-22 19:16:13,624 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 19:16:13,624 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 19:16:13,624 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 19:16:13,624 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 19:16:13,624 - screener - INFO - Symbols dropped for insufficient history: 39
+2026-01-22 19:16:16,918 - screener - INFO - [STAGE] fetch end (rows=289637, elapsed=17.20s)
+2026-01-22 19:16:16,918 - screener - INFO - [BARS_DIAG] feed=iex requested=532 with_bars=409 missing=123 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 19:16:20,992 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=289637 symbols=410
+2026-01-22 19:16:21,110 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 19:16:21,725 - screener - INFO - [STAGE] coarse features start
+2026-01-22 19:21:00,762 - screener - INFO - [STAGE] coarse features end (rows=289421)
+2026-01-22 19:21:00,763 - screener - INFO - [STAGE] coarse rank start
+2026-01-22 19:21:01,111 - screener - INFO - [INFO] Coarse rank boundary rows_in=409 score_non_null=409 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-22 19:21:01,111 - screener - INFO - [STAGE] coarse rank end (rows=409)
+2026-01-22 19:21:01,132 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=409)
+2026-01-22 19:21:01,163 - screener - INFO - [STAGE] full features start (shortlist=409)
+2026-01-22 19:25:44,144 - screener - INFO - [STAGE] full features end (rows=289421)
+2026-01-22 19:25:44,340 - screener - INFO - [STAGE] finalize candidates pruned rows=289421 -> 257490
+2026-01-22 19:25:44,340 - screener - INFO - [STAGE] full rank start
+2026-01-22 19:25:44,648 - screener - INFO - [STAGE] full rank end (rows=409)
+2026-01-22 19:25:44,648 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=409 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-22
+2026-01-22 19:25:44,651 - screener - INFO - [INFO] SENTIMENT_FETCH start target=409 unique=409
+2026-01-22 19:25:50,428 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=409
+2026-01-22 19:25:50,428 - screener - INFO - [INFO] SENTIMENT_FETCH done target=409 fetched=0 missing=409 cache_file=data/cache/sentiment/2026-01-22.json
+2026-01-22 19:25:50,428 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=409 secs=5.777
+2026-01-22 19:25:50,445 - screener - INFO - [STAGE] quality filters pruned rows=409 -> 82
+2026-01-22 19:25:52,848 - screener - INFO - [STAGE] gates start
+2026-01-22 19:25:52,863 - screener - INFO - [STAGE] gates end (candidates=6)
+2026-01-22 19:26:01,415 - screener - INFO - [SUMMARY] run_ts=2026-01-22T19:15:59Z mode=screener symbols_in=7627 with_bars=409 coarse_rows=409 shortlist_rows=409 final_rows=6 gated_rows=6 fallback_used=false db_ingest_rows=6
+2026-01-22 19:26:01,544 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-22 19:26:01,604 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-22.csv (top_n=82)
+2026-01-22 19:26:01,797 - screener - INFO - Screener complete: 7627 symbols examined, 6 candidates.
+2026-01-22 20:26:06,995 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 20:26:07,022 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-21 source=cli
+2026-01-22 20:26:07,022 - screener - INFO - [STAGE] fetch start
+2026-01-22 20:26:07,570 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 20:26:07,612 - screener - INFO - Asset metrics: total=13178 tradable_equities=12383 after_filters=12116
+2026-01-22 20:26:07,614 - screener - INFO - Asset sample: LOTWW:NASDAQ, LOTI:NASDAQ, VHT:ARCA, LOT:NASDAQ, LONZ:ARCA
+2026-01-22 20:26:07,654 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 20:26:07,851 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 20:26:07,863 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 20:26:07,967 - screener - INFO - Requesting 750 trading days ending 2026-01-21 (2023-01-24T00:00:00Z -> 2026-01-21T23:59:59Z)
+2026-01-22 20:26:08,200 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32069 elapsed=0.2s cache=hit
+2026-01-22 20:26:08,252 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~31537 elapsed=0.1s cache=hit
+2026-01-22 20:26:08,307 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33076 elapsed=0.1s cache=hit
+2026-01-22 20:26:08,364 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~32248 elapsed=0.1s cache=hit
+2026-01-22 20:26:08,427 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~36477 elapsed=0.1s cache=hit
+2026-01-22 20:26:08,535 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~31874 elapsed=0.1s cache=hit
+2026-01-22 20:26:08,621 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32718 elapsed=0.1s cache=hit
+2026-01-22 20:26:08,694 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~31448 elapsed=0.1s cache=hit
+2026-01-22 20:26:08,759 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~32282 elapsed=0.1s cache=hit
+2026-01-22 20:26:09,447 - screener - INFO - [BARS_ACCEPT] accepted=418 dropped_missing=32
+2026-01-22 20:26:19,580 - screener - INFO - [BARS_RETRY] retried=319 recovered=278
+2026-01-22 20:26:20,514 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=1
+2026-01-22 20:26:20,526 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=293395 symbols_with_bars=404
+2026-01-22 20:26:20,526 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-22 20:26:20,526 - screener - INFO - Bars HTTP empty batches: 2
+2026-01-22 20:26:20,526 - screener - INFO - Symbols without bars (sample): ['ASIC', 'CBK', 'DMIIR', 'ALH', 'CEPV', 'EGG', 'OYSE', 'YDDL', 'CRAQ', 'MIAX']
+2026-01-22 20:26:20,526 - screener - INFO - Fallback batches invoked: 1
+2026-01-22 20:26:20,526 - screener - INFO - Symbols dropped for insufficient history: 31
+2026-01-22 20:26:26,300 - screener - INFO - [STAGE] fetch end (rows=361183, elapsed=19.28s)
+2026-01-22 20:26:26,301 - screener - INFO - [BARS_DIAG] feed=iex requested=810 with_bars=418 missing=392 examples=[ASIC,CBK,DMIIR,ALH,CEPV,EGG,OYSE,YDDL,CRAQ,MIAX]
+2026-01-22 20:26:31,695 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=361183 symbols=500
+2026-01-22 20:26:31,837 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-22 20:26:32,770 - screener - INFO - [STAGE] coarse features start
+2026-01-22 20:34:21,494 - screener - INFO - [STAGE] coarse features end (rows=343989)
+2026-01-22 20:34:21,495 - screener - INFO - [STAGE] coarse rank start
+2026-01-22 20:34:22,181 - screener - INFO - [INFO] Coarse rank boundary rows_in=475 score_non_null=475 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-22 20:34:22,181 - screener - INFO - [STAGE] coarse rank end (rows=475)
+2026-01-22 20:34:22,208 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=475)
+2026-01-22 20:34:22,266 - screener - INFO - [STAGE] full features start (shortlist=475)
+2026-01-22 20:41:26,036 - screener - INFO - [STAGE] full features end (rows=343989)
+2026-01-22 20:41:26,264 - screener - INFO - [STAGE] finalize candidates pruned rows=343989 -> 334005
+2026-01-22 20:41:26,264 - screener - INFO - [STAGE] full rank start
+2026-01-22 20:41:26,649 - screener - INFO - [STAGE] full rank end (rows=475)
+2026-01-22 20:41:26,650 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=475 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-22
+2026-01-22 20:41:26,652 - screener - INFO - [INFO] SENTIMENT_FETCH start target=475 unique=475
+2026-01-22 20:41:32,550 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=475
+2026-01-22 20:41:32,550 - screener - INFO - [INFO] SENTIMENT_FETCH done target=475 fetched=0 missing=475 cache_file=data/cache/sentiment/2026-01-22.json
+2026-01-22 20:41:32,550 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=475 secs=5.897
+2026-01-22 20:41:32,569 - screener - INFO - [STAGE] quality filters pruned rows=475 -> 131
+2026-01-22 20:41:34,513 - screener - INFO - [STAGE] gates start
+2026-01-22 20:41:34,527 - screener - INFO - [STAGE] gates end (candidates=15)
+2026-01-22 20:41:47,143 - screener - INFO - [SUMMARY] run_ts=2026-01-22T20:26:07Z mode=screener symbols_in=7744 with_bars=475 coarse_rows=475 shortlist_rows=475 final_rows=15 gated_rows=15 fallback_used=false db_ingest_rows=15
+2026-01-22 20:41:47,290 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-22 20:41:47,348 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-22.csv (top_n=131)
+2026-01-22 20:41:47,410 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=9 remaining=6
+2026-01-22 20:41:47,504 - screener - INFO - Screener complete: 7744 symbols examined, 15 candidates.
+2026-01-22 21:00:59,862 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 21:00:59,945 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-22 21:00:59,945 - screener - INFO - [STAGE] fetch start
+2026-01-22 21:01:00,630 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 21:01:00,668 - screener - INFO - Asset metrics: total=13179 tradable_equities=12383 after_filters=12116
+2026-01-22 21:01:00,671 - screener - INFO - Asset sample: GDOT:NYSE, FDX:NYSE, AES:NYSE, GBND:ARCA, FWD:ARCA
+2026-01-22 21:01:00,718 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 21:01:00,937 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 21:01:00,950 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 21:01:01,143 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-22 21:01:02,917 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=1.8s cache=miss
+2026-01-22 21:01:04,427 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=1.5s cache=miss
+2026-01-22 21:01:05,724 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=1.3s cache=miss
+2026-01-22 21:01:07,008 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=1.3s cache=miss
+2026-01-22 21:01:08,369 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=1.4s cache=miss
+2026-01-22 21:01:09,615 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=1.2s cache=miss
+2026-01-22 21:01:10,782 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=1.2s cache=miss
+2026-01-22 21:01:12,113 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=1.3s cache=miss
+2026-01-22 21:01:13,309 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=1.2s cache=miss
+2026-01-22 21:01:14,080 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-22 21:01:15,035 - screener - INFO - [BARS_RETRY] retried=41 recovered=0
+2026-01-22 21:01:15,766 - screener - ERROR - [ERROR] ALPACA_UNAUTHORIZED endpoint=/v2/stocks/bars?symbols=ALH&timeframe=1Day&start=2023-01-25T00%3A00%3A00Z&end=2026-01-22T23%3A59%3A59Z&feed=sip&limit=10000 feed=sip hint="check keys/base urls"
+2026-01-22 21:37:23,253 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 21:37:23,283 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-22 21:37:23,283 - screener - INFO - [STAGE] fetch start
+2026-01-22 21:37:23,882 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 21:37:23,924 - screener - INFO - Asset metrics: total=13179 tradable_equities=12383 after_filters=12116
+2026-01-22 21:37:23,927 - screener - INFO - Asset sample: ECO:NYSE, IRET:ARCA, JTEK:NASDAQ, CXW:NYSE, EYEG:NASDAQ
+2026-01-22 21:37:23,992 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 21:37:24,293 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 21:37:24,303 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 21:37:24,397 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-22 21:37:24,491 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.1s cache=hit
+2026-01-22 21:37:24,546 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.1s cache=hit
+2026-01-22 21:37:24,645 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.1s cache=hit
+2026-01-22 21:37:24,694 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.0s cache=hit
+2026-01-22 21:37:24,742 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.0s cache=hit
+2026-01-22 21:37:24,828 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.1s cache=hit
+2026-01-22 21:37:24,879 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.1s cache=hit
+2026-01-22 21:37:24,975 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.1s cache=hit
+2026-01-22 21:37:25,040 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.1s cache=hit
+2026-01-22 21:37:25,917 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-22 21:37:26,741 - screener - INFO - [BARS_RETRY] retried=41 recovered=0
+2026-01-22 21:37:27,008 - screener - ERROR - [ERROR] ALPACA_UNAUTHORIZED endpoint=/v2/stocks/bars?symbols=ASIC&timeframe=1Day&start=2023-01-25T00%3A00%3A00Z&end=2026-01-22T23%3A59%3A59Z&feed=sip&limit=10000 feed=sip hint="check keys/base urls"
+2026-01-22 21:43:38,237 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 21:43:38,267 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-22 21:43:38,267 - screener - INFO - [STAGE] fetch start
+2026-01-22 21:43:38,697 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 21:43:38,735 - screener - INFO - Asset metrics: total=13179 tradable_equities=12383 after_filters=12116
+2026-01-22 21:43:38,737 - screener - INFO - Asset sample: BRLN:BATS, QDVO:ARCA, ALOVU:NASDAQ, QEFA:ARCA, QMAG:BATS
+2026-01-22 21:43:38,776 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 21:43:38,958 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 21:43:38,965 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 21:43:39,055 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-22 21:43:39,139 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.1s cache=hit
+2026-01-22 21:43:39,185 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.0s cache=hit
+2026-01-22 21:43:39,230 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.0s cache=hit
+2026-01-22 21:43:39,279 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.0s cache=hit
+2026-01-22 21:43:39,324 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.0s cache=hit
+2026-01-22 21:43:39,394 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.1s cache=hit
+2026-01-22 21:43:39,442 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.0s cache=hit
+2026-01-22 21:43:39,490 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.0s cache=hit
+2026-01-22 21:43:39,553 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.1s cache=hit
+2026-01-22 21:43:40,301 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-22 21:43:41,110 - screener - INFO - [BARS_RETRY] retried=41 recovered=0
+2026-01-22 21:43:41,384 - screener - ERROR - [ERROR] ALPACA_UNAUTHORIZED endpoint=/v2/stocks/bars?symbols=ASIC&timeframe=1Day&start=2023-01-25T00%3A00%3A00Z&end=2026-01-22T23%3A59%3A59Z&feed=sip&limit=10000 feed=sip hint="check keys/base urls"
+2026-01-22 22:11:59,326 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-22 22:11:59,364 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-22 22:11:59,364 - screener - INFO - [STAGE] fetch start
+2026-01-22 22:11:59,805 - screener - INFO - Asset meta ready: 12116 symbols (tradable US equities)
+2026-01-22 22:11:59,844 - screener - INFO - Asset metrics: total=13179 tradable_equities=12383 after_filters=12116
+2026-01-22 22:11:59,847 - screener - INFO - Asset sample: NXST:NASDAQ, SBIO:ARCA, NXPI:NASDAQ, SBXE.U:NYSE, ECO:NYSE
+2026-01-22 22:11:59,889 - screener - INFO - Universe sample size: 5881 (of 12116 tradable equities)
+2026-01-22 22:12:00,081 - screener - INFO - Universe hygiene filtered 5881 -> 4939 symbols
+2026-01-22 22:12:00,089 - screener - INFO - Universe prefix counts: {'C': 46, 'A': 40, 'B': 28, 'N': 27, 'S': 26, 'G': 26, 'T': 25, 'M': 24, 'F': 23, 'D': 22, 'L': 19, 'I': 17, 'E': 15, 'R': 15, 'P': 15, 'O': 12, 'V': 11, 'W': 11, 'H': 11, 'U': 11, 'K': 9, 'Z': 5, 'J': 4, 'Q': 4, 'X': 3, 'Y': 1}
+2026-01-22 22:12:00,212 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-22 22:12:00,293 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.1s cache=hit
+2026-01-22 22:12:00,335 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.0s cache=hit
+2026-01-22 22:12:00,375 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.0s cache=hit
+2026-01-22 22:12:00,416 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.0s cache=hit
+2026-01-22 22:12:00,456 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.0s cache=hit
+2026-01-22 22:12:00,527 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.1s cache=hit
+2026-01-22 22:12:00,579 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.1s cache=hit
+2026-01-22 22:12:00,625 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.0s cache=hit
+2026-01-22 22:12:00,668 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.0s cache=hit
+2026-01-22 22:12:01,511 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-22 22:12:02,574 - screener - INFO - [BARS_RETRY] retried=41 recovered=0
+2026-01-22 22:12:02,864 - screener - ERROR - [ERROR] ALPACA_UNAUTHORIZED endpoint=/v2/stocks/bars?symbols=ASIC&timeframe=1Day&start=2023-01-25T00%3A00%3A00Z&end=2026-01-22T23%3A59%3A59Z&feed=sip&limit=10000 feed=sip hint="check keys/base urls"
+2026-01-23 01:37:41,127 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-23 01:37:41,151 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-23 01:37:41,151 - screener - INFO - [STAGE] fetch start
+2026-01-23 01:37:41,605 - screener - INFO - Asset meta ready: 12112 symbols (tradable US equities)
+2026-01-23 01:37:41,652 - screener - INFO - Asset metrics: total=13179 tradable_equities=12379 after_filters=12112
+2026-01-23 01:37:41,655 - screener - INFO - Asset sample: LUCD:NASDAQ, NKTR:NASDAQ, NIO:NYSE, XLB:ARCA, SCIIR:NASDAQ
+2026-01-23 01:37:41,712 - screener - INFO - Universe sample size: 5877 (of 12112 tradable equities)
+2026-01-23 01:37:41,932 - screener - INFO - Universe hygiene filtered 5877 -> 4935 symbols
+2026-01-23 01:37:41,953 - screener - INFO - Universe prefix counts: {'A': 52, 'S': 41, 'C': 36, 'M': 32, 'B': 29, 'T': 24, 'P': 20, 'N': 20, 'D': 19, 'R': 19, 'G': 18, 'H': 17, 'V': 17, 'F': 16, 'L': 15, 'E': 12, 'I': 11, 'K': 10, 'O': 9, 'X': 6, 'U': 6, 'W': 6, 'Z': 5, 'Q': 4, 'J': 4, 'Y': 2}
+2026-01-23 01:37:42,082 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-23 01:37:42,305 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.2s cache=hit
+2026-01-23 01:37:42,355 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.0s cache=hit
+2026-01-23 01:37:42,402 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.0s cache=hit
+2026-01-23 01:37:42,453 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.1s cache=hit
+2026-01-23 01:37:42,499 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.0s cache=hit
+2026-01-23 01:37:42,577 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.1s cache=hit
+2026-01-23 01:37:42,625 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.0s cache=hit
+2026-01-23 01:37:42,675 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.0s cache=hit
+2026-01-23 01:37:42,720 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.0s cache=hit
+2026-01-23 01:37:43,381 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-23 01:37:56,555 - screener - INFO - [BARS_RETRY] retried=408 recovered=374
+2026-01-23 01:37:59,619 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=2
+2026-01-23 01:37:59,627 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=289457 symbols_with_bars=396
+2026-01-23 01:37:59,628 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-23 01:37:59,628 - screener - INFO - Bars HTTP empty batches: 1
+2026-01-23 01:37:59,628 - screener - INFO - Symbols without bars (sample): ['DEFT', 'Q', 'SVAC', 'VBIX', 'STUB', 'GURE', 'KWM', 'SCZM', 'REED', 'MCGA']
+2026-01-23 01:37:59,628 - screener - INFO - Fallback batches invoked: 1
+2026-01-23 01:37:59,628 - screener - INFO - Symbols dropped for insufficient history: 40
+2026-01-23 01:38:05,856 - screener - INFO - [STAGE] fetch end (rows=364450, elapsed=24.70s)
+2026-01-23 01:38:05,856 - screener - INFO - [BARS_DIAG] feed=iex requested=892 with_bars=409 missing=483 examples=[DEFT,Q,SVAC,VBIX,STUB,GURE,KWM,SCZM,REED,MCGA]
+2026-01-23 01:38:10,697 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=364450 symbols=500
+2026-01-23 01:38:10,832 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-23 01:38:11,773 - screener - INFO - [STAGE] coarse features start
+2026-01-23 01:44:40,808 - screener - INFO - [STAGE] coarse features end (rows=364450)
+2026-01-23 01:44:40,809 - screener - INFO - [STAGE] coarse rank start
+2026-01-23 01:44:41,205 - screener - INFO - [INFO] Coarse rank boundary rows_in=500 score_non_null=500 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-23 01:44:41,205 - screener - INFO - [STAGE] coarse rank end (rows=500)
+2026-01-23 01:44:41,225 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=500)
+2026-01-23 01:44:41,264 - screener - INFO - [STAGE] full features start (shortlist=500)
+2026-01-23 01:51:09,944 - screener - INFO - [STAGE] full features end (rows=364450)
+2026-01-23 01:51:10,184 - screener - INFO - [STAGE] finalize candidates pruned rows=364450 -> 357435
+2026-01-23 01:51:10,185 - screener - INFO - [STAGE] full rank start
+2026-01-23 01:51:10,605 - screener - INFO - [STAGE] full rank end (rows=500)
+2026-01-23 01:51:10,605 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=500 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-23
+2026-01-23 01:51:10,609 - screener - INFO - [INFO] SENTIMENT_FETCH start target=500 unique=500
+2026-01-23 01:51:16,630 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=500
+2026-01-23 01:51:16,630 - screener - INFO - [INFO] SENTIMENT_FETCH done target=500 fetched=0 missing=500 cache_file=data/cache/sentiment/2026-01-23.json
+2026-01-23 01:51:16,630 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=500 secs=6.022
+2026-01-23 01:51:16,650 - screener - INFO - [STAGE] quality filters pruned rows=500 -> 153
+2026-01-23 01:51:18,412 - screener - INFO - [STAGE] gates start
+2026-01-23 01:51:18,426 - screener - INFO - [STAGE] gates end (candidates=12)
+2026-01-23 01:51:35,227 - screener - INFO - [SUMMARY] run_ts=2026-01-23T01:37:41Z mode=screener symbols_in=7751 with_bars=500 coarse_rows=500 shortlist_rows=500 final_rows=12 gated_rows=12 fallback_used=false db_ingest_rows=12
+2026-01-23 01:51:35,389 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-23 01:51:35,459 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-23.csv (top_n=153)
+2026-01-23 01:51:35,523 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=4 remaining=8
+2026-01-23 01:51:35,619 - screener - INFO - Screener complete: 7751 symbols examined, 12 candidates.
+2026-01-23 02:22:11,317 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-23 02:22:11,340 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-23 02:22:11,340 - screener - INFO - [STAGE] fetch start
+2026-01-23 02:22:11,810 - screener - INFO - Asset meta ready: 12112 symbols (tradable US equities)
+2026-01-23 02:22:11,848 - screener - INFO - Asset metrics: total=13179 tradable_equities=12379 after_filters=12112
+2026-01-23 02:22:11,850 - screener - INFO - Asset sample: MOO:ARCA, MOMO:NASDAQ, VTES:ARCA, VTHR:NASDAQ, MOAT:BATS
+2026-01-23 02:22:11,894 - screener - INFO - Universe sample size: 5877 (of 12112 tradable equities)
+2026-01-23 02:22:12,113 - screener - INFO - Universe hygiene filtered 5877 -> 4935 symbols
+2026-01-23 02:22:12,125 - screener - INFO - Universe prefix counts: {'A': 52, 'S': 41, 'C': 36, 'M': 32, 'B': 29, 'T': 24, 'P': 20, 'N': 20, 'D': 19, 'R': 19, 'G': 18, 'H': 17, 'V': 17, 'F': 16, 'L': 15, 'E': 12, 'I': 11, 'K': 10, 'O': 9, 'X': 6, 'U': 6, 'W': 6, 'Z': 5, 'Q': 4, 'J': 4, 'Y': 2}
+2026-01-23 02:22:12,268 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-23 02:22:12,369 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.1s cache=hit
+2026-01-23 02:22:12,412 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.0s cache=hit
+2026-01-23 02:22:12,459 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.0s cache=hit
+2026-01-23 02:22:12,512 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.1s cache=hit
+2026-01-23 02:22:12,567 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.1s cache=hit
+2026-01-23 02:22:12,664 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.1s cache=hit
+2026-01-23 02:22:12,707 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.0s cache=hit
+2026-01-23 02:22:12,752 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.0s cache=hit
+2026-01-23 02:22:12,791 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.0s cache=hit
+2026-01-23 02:22:13,494 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-23 02:22:27,076 - screener - INFO - [BARS_RETRY] retried=408 recovered=374
+2026-01-23 02:22:29,181 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=2
+2026-01-23 02:22:29,190 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=289457 symbols_with_bars=396
+2026-01-23 02:22:29,190 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-23 02:22:29,190 - screener - INFO - Bars HTTP empty batches: 1
+2026-01-23 02:22:29,190 - screener - INFO - Symbols without bars (sample): ['DEFT', 'Q', 'SVAC', 'VBIX', 'STUB', 'GURE', 'KWM', 'SCZM', 'REED', 'MCGA']
+2026-01-23 02:22:29,190 - screener - INFO - Fallback batches invoked: 1
+2026-01-23 02:22:29,190 - screener - INFO - Symbols dropped for insufficient history: 40
+2026-01-23 02:22:34,608 - screener - INFO - [STAGE] fetch end (rows=364450, elapsed=23.27s)
+2026-01-23 02:22:34,609 - screener - INFO - [BARS_DIAG] feed=iex requested=892 with_bars=409 missing=483 examples=[DEFT,Q,SVAC,VBIX,STUB,GURE,KWM,SCZM,REED,MCGA]
+2026-01-23 02:22:40,418 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=364450 symbols=500
+2026-01-23 02:22:40,531 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-23 02:22:41,675 - screener - INFO - [STAGE] coarse features start
+2026-01-23 02:29:24,108 - screener - INFO - [STAGE] coarse features end (rows=364450)
+2026-01-23 02:29:24,108 - screener - INFO - [STAGE] coarse rank start
+2026-01-23 02:29:24,521 - screener - INFO - [INFO] Coarse rank boundary rows_in=500 score_non_null=500 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-23 02:29:24,521 - screener - INFO - [STAGE] coarse rank end (rows=500)
+2026-01-23 02:29:24,540 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=500)
+2026-01-23 02:29:24,585 - screener - INFO - [STAGE] full features start (shortlist=500)
+2026-01-23 02:36:00,742 - screener - INFO - [STAGE] full features end (rows=364450)
+2026-01-23 02:36:00,998 - screener - INFO - [STAGE] finalize candidates pruned rows=364450 -> 357435
+2026-01-23 02:36:00,998 - screener - INFO - [STAGE] full rank start
+2026-01-23 02:36:01,505 - screener - INFO - [STAGE] full rank end (rows=500)
+2026-01-23 02:36:01,506 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=500 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-23
+2026-01-23 02:36:01,509 - screener - INFO - [INFO] SENTIMENT_FETCH start target=500 unique=500
+2026-01-23 02:36:07,713 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=500
+2026-01-23 02:36:07,713 - screener - INFO - [INFO] SENTIMENT_FETCH done target=500 fetched=0 missing=500 cache_file=data/cache/sentiment/2026-01-23.json
+2026-01-23 02:36:07,713 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=500 secs=6.205
+2026-01-23 02:36:07,734 - screener - INFO - [STAGE] quality filters pruned rows=500 -> 153
+2026-01-23 02:36:08,422 - screener - INFO - [STAGE] gates start
+2026-01-23 02:36:08,436 - screener - INFO - [STAGE] gates end (candidates=12)
+2026-01-23 02:36:26,224 - screener - INFO - [SUMMARY] run_ts=2026-01-23T02:22:11Z mode=screener symbols_in=7751 with_bars=500 coarse_rows=500 shortlist_rows=500 final_rows=12 gated_rows=12 fallback_used=false db_ingest_rows=12
+2026-01-23 02:36:26,394 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-23 02:36:26,467 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-23.csv (top_n=153)
+2026-01-23 02:36:26,543 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=4 remaining=8
+2026-01-23 02:36:26,636 - screener - INFO - Screener complete: 7751 symbols examined, 12 candidates.
+2026-01-23 02:45:21,574 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-23 02:45:21,604 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-23 02:45:21,604 - screener - INFO - [STAGE] fetch start
+2026-01-23 02:45:22,068 - screener - INFO - Asset meta ready: 12112 symbols (tradable US equities)
+2026-01-23 02:45:22,109 - screener - INFO - Asset metrics: total=13179 tradable_equities=12379 after_filters=12112
+2026-01-23 02:45:22,111 - screener - INFO - Asset sample: TACH:NASDAQ, SCIIR:NASDAQ, NRDS:NASDAQ, NOG:NYSE, VTMX:NYSE
+2026-01-23 02:45:22,154 - screener - INFO - Universe sample size: 5877 (of 12112 tradable equities)
+2026-01-23 02:45:22,350 - screener - INFO - Universe hygiene filtered 5877 -> 4935 symbols
+2026-01-23 02:45:22,358 - screener - INFO - Universe prefix counts: {'A': 52, 'S': 41, 'C': 36, 'M': 32, 'B': 29, 'T': 24, 'P': 20, 'N': 20, 'D': 19, 'R': 19, 'G': 18, 'H': 17, 'V': 17, 'F': 16, 'L': 15, 'E': 12, 'I': 11, 'K': 10, 'O': 9, 'X': 6, 'U': 6, 'W': 6, 'Z': 5, 'Q': 4, 'J': 4, 'Y': 2}
+2026-01-23 02:45:22,447 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-23 02:45:22,512 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.1s cache=hit
+2026-01-23 02:45:22,552 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.0s cache=hit
+2026-01-23 02:45:22,596 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.0s cache=hit
+2026-01-23 02:45:22,639 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.0s cache=hit
+2026-01-23 02:45:22,679 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.0s cache=hit
+2026-01-23 02:45:22,747 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.1s cache=hit
+2026-01-23 02:45:22,790 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.0s cache=hit
+2026-01-23 02:45:22,855 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.1s cache=hit
+2026-01-23 02:45:22,893 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.0s cache=hit
+2026-01-23 02:45:23,570 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-23 02:45:38,001 - screener - INFO - [BARS_RETRY] retried=408 recovered=374
+2026-01-23 02:45:39,591 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=2
+2026-01-23 02:45:39,599 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=289457 symbols_with_bars=396
+2026-01-23 02:45:39,600 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-23 02:45:39,600 - screener - INFO - Bars HTTP empty batches: 1
+2026-01-23 02:45:39,600 - screener - INFO - Symbols without bars (sample): ['DEFT', 'Q', 'SVAC', 'VBIX', 'STUB', 'GURE', 'KWM', 'SCZM', 'REED', 'MCGA']
+2026-01-23 02:45:39,600 - screener - INFO - Fallback batches invoked: 1
+2026-01-23 02:45:39,600 - screener - INFO - Symbols dropped for insufficient history: 40
+2026-01-23 02:45:44,801 - screener - INFO - [STAGE] fetch end (rows=364450, elapsed=23.20s)
+2026-01-23 02:45:44,801 - screener - INFO - [BARS_DIAG] feed=iex requested=892 with_bars=409 missing=483 examples=[DEFT,Q,SVAC,VBIX,STUB,GURE,KWM,SCZM,REED,MCGA]
+2026-01-23 02:45:49,733 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=364450 symbols=500
+2026-01-23 02:45:49,845 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-23 02:45:50,798 - screener - INFO - [STAGE] coarse features start
+2026-01-23 02:52:29,939 - screener - INFO - [STAGE] coarse features end (rows=364450)
+2026-01-23 02:52:29,940 - screener - INFO - [STAGE] coarse rank start
+2026-01-23 02:52:30,350 - screener - INFO - [INFO] Coarse rank boundary rows_in=500 score_non_null=500 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-23 02:52:30,350 - screener - INFO - [STAGE] coarse rank end (rows=500)
+2026-01-23 02:52:30,369 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=500)
+2026-01-23 02:52:30,410 - screener - INFO - [STAGE] full features start (shortlist=500)
+2026-01-23 02:59:15,219 - screener - INFO - [STAGE] full features end (rows=364450)
+2026-01-23 02:59:15,454 - screener - INFO - [STAGE] finalize candidates pruned rows=364450 -> 357435
+2026-01-23 02:59:15,454 - screener - INFO - [STAGE] full rank start
+2026-01-23 02:59:15,880 - screener - INFO - [STAGE] full rank end (rows=500)
+2026-01-23 02:59:15,880 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=500 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-23
+2026-01-23 02:59:15,883 - screener - INFO - [INFO] SENTIMENT_FETCH start target=500 unique=500
+2026-01-23 02:59:22,016 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=500
+2026-01-23 02:59:22,016 - screener - INFO - [INFO] SENTIMENT_FETCH done target=500 fetched=0 missing=500 cache_file=data/cache/sentiment/2026-01-23.json
+2026-01-23 02:59:22,016 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=500 secs=6.132
+2026-01-23 02:59:22,066 - screener - INFO - [STAGE] quality filters pruned rows=500 -> 153
+2026-01-23 02:59:23,032 - screener - INFO - [STAGE] gates start
+2026-01-23 02:59:23,047 - screener - INFO - [STAGE] gates end (candidates=12)
+2026-01-23 02:59:40,566 - screener - INFO - [SUMMARY] run_ts=2026-01-23T02:45:21Z mode=screener symbols_in=7751 with_bars=500 coarse_rows=500 shortlist_rows=500 final_rows=12 gated_rows=12 fallback_used=false db_ingest_rows=12
+2026-01-23 02:59:40,741 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-23 02:59:40,808 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-23.csv (top_n=153)
+2026-01-23 02:59:40,875 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=4 remaining=8
+2026-01-23 02:59:40,970 - screener - INFO - Screener complete: 7751 symbols examined, 12 candidates.
+2026-01-23 03:25:13,743 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-23 03:25:13,815 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-23 03:25:13,815 - screener - INFO - [STAGE] fetch start
+2026-01-23 03:25:14,237 - screener - INFO - Asset meta ready: 12112 symbols (tradable US equities)
+2026-01-23 03:25:14,275 - screener - INFO - Asset metrics: total=13179 tradable_equities=12379 after_filters=12112
+2026-01-23 03:25:14,277 - screener - INFO - Asset sample: CLX:NYSE, WTI:NYSE, CLWT:NASDAQ, CLW:NYSE, CLVT:NYSE
+2026-01-23 03:25:14,317 - screener - INFO - Universe sample size: 5877 (of 12112 tradable equities)
+2026-01-23 03:25:14,506 - screener - INFO - Universe hygiene filtered 5877 -> 4935 symbols
+2026-01-23 03:25:14,514 - screener - INFO - Universe prefix counts: {'A': 52, 'S': 41, 'C': 36, 'M': 32, 'B': 29, 'T': 24, 'P': 20, 'N': 20, 'D': 19, 'R': 19, 'G': 18, 'H': 17, 'V': 17, 'F': 16, 'L': 15, 'E': 12, 'I': 11, 'K': 10, 'O': 9, 'X': 6, 'U': 6, 'W': 6, 'Z': 5, 'Q': 4, 'J': 4, 'Y': 2}
+2026-01-23 03:25:14,602 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-23 03:25:14,668 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.1s cache=hit
+2026-01-23 03:25:14,708 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.0s cache=hit
+2026-01-23 03:25:14,757 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.0s cache=hit
+2026-01-23 03:25:14,797 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.0s cache=hit
+2026-01-23 03:25:14,837 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.0s cache=hit
+2026-01-23 03:25:14,903 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.1s cache=hit
+2026-01-23 03:25:14,946 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.0s cache=hit
+2026-01-23 03:25:14,987 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.0s cache=hit
+2026-01-23 03:25:15,029 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.0s cache=hit
+2026-01-23 03:25:15,716 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-23 03:25:25,128 - screener - INFO - [BARS_RETRY] retried=408 recovered=374
+2026-01-23 03:25:28,733 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=2
+2026-01-23 03:25:28,745 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=289457 symbols_with_bars=396
+2026-01-23 03:25:28,745 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-23 03:25:28,745 - screener - INFO - Bars HTTP empty batches: 1
+2026-01-23 03:25:28,745 - screener - INFO - Symbols without bars (sample): ['DEFT', 'Q', 'SVAC', 'VBIX', 'STUB', 'GURE', 'KWM', 'SCZM', 'REED', 'MCGA']
+2026-01-23 03:25:28,745 - screener - INFO - Fallback batches invoked: 1
+2026-01-23 03:25:28,745 - screener - INFO - Symbols dropped for insufficient history: 40
+2026-01-23 03:25:34,754 - screener - INFO - [STAGE] fetch end (rows=364450, elapsed=20.94s)
+2026-01-23 03:25:34,754 - screener - INFO - [BARS_DIAG] feed=iex requested=892 with_bars=409 missing=483 examples=[DEFT,Q,SVAC,VBIX,STUB,GURE,KWM,SCZM,REED,MCGA]
+2026-01-23 03:25:39,954 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=364450 symbols=500
+2026-01-23 03:25:40,069 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-23 03:25:40,991 - screener - INFO - [STAGE] coarse features start
+2026-01-23 03:32:11,829 - screener - INFO - [STAGE] coarse features end (rows=364450)
+2026-01-23 03:32:11,830 - screener - INFO - [STAGE] coarse rank start
+2026-01-23 03:32:12,312 - screener - INFO - [INFO] Coarse rank boundary rows_in=500 score_non_null=500 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-23 03:32:12,312 - screener - INFO - [STAGE] coarse rank end (rows=500)
+2026-01-23 03:32:12,330 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=500)
+2026-01-23 03:32:12,372 - screener - INFO - [STAGE] full features start (shortlist=500)
+2026-01-23 03:38:47,628 - screener - INFO - [STAGE] full features end (rows=364450)
+2026-01-23 03:38:47,908 - screener - INFO - [STAGE] finalize candidates pruned rows=364450 -> 357435
+2026-01-23 03:38:47,908 - screener - INFO - [STAGE] full rank start
+2026-01-23 03:38:48,320 - screener - INFO - [STAGE] full rank end (rows=500)
+2026-01-23 03:38:48,320 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=500 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-23
+2026-01-23 03:38:48,324 - screener - INFO - [INFO] SENTIMENT_FETCH start target=500 unique=500
+2026-01-23 03:38:54,306 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=500
+2026-01-23 03:38:54,307 - screener - INFO - [INFO] SENTIMENT_FETCH done target=500 fetched=0 missing=500 cache_file=data/cache/sentiment/2026-01-23.json
+2026-01-23 03:38:54,307 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=500 secs=5.983
+2026-01-23 03:38:54,345 - screener - INFO - [STAGE] quality filters pruned rows=500 -> 153
+2026-01-23 03:38:55,119 - screener - INFO - [STAGE] gates start
+2026-01-23 03:38:55,137 - screener - INFO - [STAGE] gates end (candidates=12)
+2026-01-23 03:39:14,760 - screener - INFO - [SUMMARY] run_ts=2026-01-23T03:25:13Z mode=screener symbols_in=7751 with_bars=500 coarse_rows=500 shortlist_rows=500 final_rows=12 gated_rows=12 fallback_used=false db_ingest_rows=12
+2026-01-23 03:39:14,924 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-23 03:39:14,995 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-23.csv (top_n=153)
+2026-01-23 03:39:15,060 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=4 remaining=8
+2026-01-23 03:39:15,155 - screener - INFO - Screener complete: 7751 symbols examined, 12 candidates.
+2026-01-23 03:45:35,079 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-23 03:45:35,113 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-23 03:45:35,114 - screener - INFO - [STAGE] fetch start
+2026-01-23 03:45:36,176 - screener - INFO - Asset meta ready: 12112 symbols (tradable US equities)
+2026-01-23 03:45:36,253 - screener - INFO - Asset metrics: total=13179 tradable_equities=12379 after_filters=12112
+2026-01-23 03:45:36,259 - screener - INFO - Asset sample: CMCM:NYSE, VWAV:NASDAQ, CMCL:AMEX, VWAVW:NASDAQ, CMCI:BATS
+2026-01-23 03:45:36,401 - screener - INFO - Universe sample size: 5877 (of 12112 tradable equities)
+2026-01-23 03:45:37,049 - screener - INFO - Universe hygiene filtered 5877 -> 4935 symbols
+2026-01-23 03:45:37,087 - screener - INFO - Universe prefix counts: {'A': 52, 'S': 41, 'C': 36, 'M': 32, 'B': 29, 'T': 24, 'P': 20, 'N': 20, 'D': 19, 'R': 19, 'G': 18, 'H': 17, 'V': 17, 'F': 16, 'L': 15, 'E': 12, 'I': 11, 'K': 10, 'O': 9, 'X': 6, 'U': 6, 'W': 6, 'Z': 5, 'Q': 4, 'J': 4, 'Y': 2}
+2026-01-23 03:45:37,372 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-23 03:45:37,822 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.4s cache=hit
+2026-01-23 03:45:37,999 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.2s cache=hit
+2026-01-23 03:45:38,223 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.2s cache=hit
+2026-01-23 03:45:38,356 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.1s cache=hit
+2026-01-23 03:45:38,496 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.1s cache=hit
+2026-01-23 03:45:38,701 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.2s cache=hit
+2026-01-23 03:45:38,827 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.1s cache=hit
+2026-01-23 03:45:38,944 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.1s cache=hit
+2026-01-23 03:45:39,035 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.1s cache=hit
+2026-01-23 03:45:40,898 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-23 03:45:57,744 - screener - INFO - [BARS_RETRY] retried=408 recovered=374
+2026-01-23 03:45:59,154 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=2
+2026-01-23 03:45:59,171 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=289457 symbols_with_bars=396
+2026-01-23 03:45:59,171 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-23 03:45:59,171 - screener - INFO - Bars HTTP empty batches: 1
+2026-01-23 03:45:59,171 - screener - INFO - Symbols without bars (sample): ['DEFT', 'Q', 'SVAC', 'VBIX', 'STUB', 'GURE', 'KWM', 'SCZM', 'REED', 'MCGA']
+2026-01-23 03:45:59,171 - screener - INFO - Fallback batches invoked: 1
+2026-01-23 03:45:59,172 - screener - INFO - Symbols dropped for insufficient history: 40
+2026-01-23 03:46:07,790 - screener - INFO - [STAGE] fetch end (rows=364450, elapsed=32.68s)
+2026-01-23 03:46:07,790 - screener - INFO - [BARS_DIAG] feed=iex requested=892 with_bars=409 missing=483 examples=[DEFT,Q,SVAC,VBIX,STUB,GURE,KWM,SCZM,REED,MCGA]
+2026-01-23 03:46:18,293 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=364450 symbols=500
+2026-01-23 03:46:18,447 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-23 03:46:19,977 - screener - INFO - [STAGE] coarse features start
+2026-01-23 03:54:00,548 - screener - INFO - [STAGE] coarse features end (rows=364450)
+2026-01-23 03:54:00,549 - screener - INFO - [STAGE] coarse rank start
+2026-01-23 03:54:00,962 - screener - INFO - [INFO] Coarse rank boundary rows_in=500 score_non_null=500 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-23 03:54:00,962 - screener - INFO - [STAGE] coarse rank end (rows=500)
+2026-01-23 03:54:00,982 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=500)
+2026-01-23 03:54:01,022 - screener - INFO - [STAGE] full features start (shortlist=500)
+2026-01-23 03:55:21,792 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-23 03:55:21,818 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-23 03:55:21,818 - screener - INFO - [STAGE] fetch start
+2026-01-23 03:55:22,258 - screener - INFO - Asset meta ready: 12112 symbols (tradable US equities)
+2026-01-23 03:55:22,296 - screener - INFO - Asset metrics: total=13179 tradable_equities=12379 after_filters=12112
+2026-01-23 03:55:22,298 - screener - INFO - Asset sample: WBIG:ARCA, WBIL:ARCA, CMCSA:NASDAQ, WBIY:NYSE, CMCO:NASDAQ
+2026-01-23 03:55:22,340 - screener - INFO - Universe sample size: 5877 (of 12112 tradable equities)
+2026-01-23 03:55:22,560 - screener - INFO - Universe hygiene filtered 5877 -> 4935 symbols
+2026-01-23 03:55:22,569 - screener - INFO - Universe prefix counts: {'A': 52, 'S': 41, 'C': 36, 'M': 32, 'B': 29, 'T': 24, 'P': 20, 'N': 20, 'D': 19, 'R': 19, 'G': 18, 'H': 17, 'V': 17, 'F': 16, 'L': 15, 'E': 12, 'I': 11, 'K': 10, 'O': 9, 'X': 6, 'U': 6, 'W': 6, 'Z': 5, 'Q': 4, 'J': 4, 'Y': 2}
+2026-01-23 03:55:22,655 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-23 03:55:22,754 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.1s cache=hit
+2026-01-23 03:55:22,801 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.0s cache=hit
+2026-01-23 03:55:22,841 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.0s cache=hit
+2026-01-23 03:55:22,882 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.0s cache=hit
+2026-01-23 03:55:22,921 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.0s cache=hit
+2026-01-23 03:55:22,984 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.1s cache=hit
+2026-01-23 03:55:23,026 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.0s cache=hit
+2026-01-23 03:55:23,068 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.0s cache=hit
+2026-01-23 03:55:23,110 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.0s cache=hit
+2026-01-23 03:55:23,791 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-23 03:55:33,888 - screener - INFO - [BARS_RETRY] retried=408 recovered=374
+2026-01-23 03:55:37,991 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=2
+2026-01-23 03:55:37,999 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=289457 symbols_with_bars=396
+2026-01-23 03:55:37,999 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-23 03:55:37,999 - screener - INFO - Bars HTTP empty batches: 1
+2026-01-23 03:55:38,000 - screener - INFO - Symbols without bars (sample): ['DEFT', 'Q', 'SVAC', 'VBIX', 'STUB', 'GURE', 'KWM', 'SCZM', 'REED', 'MCGA']
+2026-01-23 03:55:38,000 - screener - INFO - Fallback batches invoked: 1
+2026-01-23 03:55:38,000 - screener - INFO - Symbols dropped for insufficient history: 40
+2026-01-23 03:55:43,407 - screener - INFO - [STAGE] fetch end (rows=364450, elapsed=21.59s)
+2026-01-23 03:55:43,407 - screener - INFO - [BARS_DIAG] feed=iex requested=892 with_bars=409 missing=483 examples=[DEFT,Q,SVAC,VBIX,STUB,GURE,KWM,SCZM,REED,MCGA]
+2026-01-23 03:55:48,296 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=364450 symbols=500
+2026-01-23 03:55:48,407 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-23 03:55:49,363 - screener - INFO - [STAGE] coarse features start
+2026-01-23 04:02:44,378 - screener - INFO - [STAGE] coarse features end (rows=364450)
+2026-01-23 04:02:44,379 - screener - INFO - [STAGE] coarse rank start
+2026-01-23 04:02:44,792 - screener - INFO - [INFO] Coarse rank boundary rows_in=500 score_non_null=500 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-23 04:02:44,792 - screener - INFO - [STAGE] coarse rank end (rows=500)
+2026-01-23 04:02:44,812 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=500)
+2026-01-23 04:02:44,850 - screener - INFO - [STAGE] full features start (shortlist=500)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            2026-01-23 04:09:35,096 - screener - INFO - [STAGE] full features end (rows=364450)
+2026-01-23 04:09:35,342 - screener - INFO - [STAGE] finalize candidates pruned rows=364450 -> 357435
+2026-01-23 04:09:35,342 - screener - INFO - [STAGE] full rank start
+2026-01-23 04:09:35,767 - screener - INFO - [STAGE] full rank end (rows=500)
+2026-01-23 04:09:35,767 - screener - INFO - [INFO] SENTIMENT_STAGE enter df_rows=500 cols_has_symbol=True cache_dir=data/cache/sentiment run_date=2026-01-23
+2026-01-23 04:09:35,770 - screener - INFO - [INFO] SENTIMENT_FETCH start target=500 unique=500
+2026-01-23 04:09:46,651 - screener - INFO - [INFO] SENTIMENT_FETCH skip cache persist reason=empty_payload target=500
+2026-01-23 04:09:46,651 - screener - INFO - [INFO] SENTIMENT_FETCH done target=500 fetched=0 missing=500 cache_file=data/cache/sentiment/2026-01-23.json
+2026-01-23 04:09:46,651 - screener - INFO - [INFO] SENTIMENT_FETCH stats cache_hit=0 errors=500 secs=10.881
+2026-01-23 04:09:46,672 - screener - INFO - [STAGE] quality filters pruned rows=500 -> 153
+2026-01-23 04:09:47,407 - screener - INFO - [STAGE] gates start
+2026-01-23 04:09:47,422 - screener - INFO - [STAGE] gates end (candidates=12)
+2026-01-23 04:10:05,798 - screener - INFO - [SUMMARY] run_ts=2026-01-23T03:55:21Z mode=screener symbols_in=7751 with_bars=500 coarse_rows=500 shortlist_rows=500 final_rows=12 gated_rows=12 fallback_used=false db_ingest_rows=12
+2026-01-23 04:10:06,006 - screener - INFO - [INFO] CANDIDATE_CSV_SKIPPED reason=db_enabled
+2026-01-23 04:10:06,068 - screener - INFO - [STAGE] predictions written: data/predictions/2026-01-23.csv (top_n=153)
+2026-01-23 04:10:06,129 - screener - WARNING - [WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=4 remaining=8
+2026-01-23 04:10:06,222 - screener - INFO - Screener complete: 7751 symbols examined, 12 candidates.
+2026-01-23 04:26:15,441 - screener - INFO - [INFO] ALPACA_CREDENTIALS_OK sanitized={"base_urls": {"data": "https://data.alpaca.markets", "trading": "https://paper-api.alpaca.markets"}, "key_prefix": "PK7I\u2026", "secret_len": 40}
+2026-01-23 04:26:15,466 - screener - INFO - [INFO] STEP_RUN_DATE step=screener run_date=2026-01-22 source=cli
+2026-01-23 04:26:15,466 - screener - INFO - [STAGE] fetch start
+2026-01-23 04:26:15,949 - screener - INFO - Asset meta ready: 12112 symbols (tradable US equities)
+2026-01-23 04:26:15,993 - screener - INFO - Asset metrics: total=13179 tradable_equities=12379 after_filters=12112
+2026-01-23 04:26:15,995 - screener - INFO - Asset sample: CMCT:NASDAQ, CMCSA:NASDAQ, CMCO:NASDAQ, WCEO:ARCA, CMCM:NYSE
+2026-01-23 04:26:16,036 - screener - INFO - Universe sample size: 5877 (of 12112 tradable equities)
+2026-01-23 04:26:16,227 - screener - INFO - Universe hygiene filtered 5877 -> 4935 symbols
+2026-01-23 04:26:16,238 - screener - INFO - Universe prefix counts: {'A': 52, 'S': 41, 'C': 36, 'M': 32, 'B': 29, 'T': 24, 'P': 20, 'N': 20, 'D': 19, 'R': 19, 'G': 18, 'H': 17, 'V': 17, 'F': 16, 'L': 15, 'E': 12, 'I': 11, 'K': 10, 'O': 9, 'X': 6, 'U': 6, 'W': 6, 'Z': 5, 'Q': 4, 'J': 4, 'Y': 2}
+2026-01-23 04:26:16,327 - screener - INFO - Requesting 750 trading days ending 2026-01-22 (2023-01-25T00:00:00Z -> 2026-01-22T23:59:59Z)
+2026-01-23 04:26:16,536 - screener - INFO - [INFO] bars: batch 01/09 syms=50 pages=4 rows=~32048 elapsed=0.2s cache=hit
+2026-01-23 04:26:16,585 - screener - INFO - [INFO] bars: batch 02/09 syms=50 pages=4 rows=~32756 elapsed=0.0s cache=hit
+2026-01-23 04:26:16,656 - screener - INFO - [INFO] bars: batch 03/09 syms=50 pages=4 rows=~33467 elapsed=0.1s cache=hit
+2026-01-23 04:26:16,709 - screener - INFO - [INFO] bars: batch 04/09 syms=50 pages=4 rows=~34194 elapsed=0.1s cache=hit
+2026-01-23 04:26:16,756 - screener - INFO - [INFO] bars: batch 05/09 syms=50 pages=4 rows=~31742 elapsed=0.0s cache=hit
+2026-01-23 04:26:16,835 - screener - INFO - [INFO] bars: batch 06/09 syms=50 pages=4 rows=~29374 elapsed=0.1s cache=hit
+2026-01-23 04:26:16,918 - screener - INFO - [INFO] bars: batch 07/09 syms=50 pages=4 rows=~32333 elapsed=0.1s cache=hit
+2026-01-23 04:26:16,981 - screener - INFO - [INFO] bars: batch 08/09 syms=50 pages=4 rows=~33240 elapsed=0.1s cache=hit
+2026-01-23 04:26:17,041 - screener - INFO - [INFO] bars: batch 09/09 syms=50 pages=4 rows=~30634 elapsed=0.1s cache=hit
+2026-01-23 04:26:17,905 - screener - INFO - [BARS_ACCEPT] accepted=409 dropped_missing=41
+2026-01-23 04:26:31,510 - screener - INFO - [BARS_RETRY] retried=408 recovered=374
+2026-01-23 04:26:37,125 - screener - INFO - [BARS_FEED_FALLBACK] from=iex to=sip recovered=2
+2026-01-23 04:26:37,133 - screener - INFO - Bars fetch metrics: batches=9 paged=9 pages=36 rows=289457 symbols_with_bars=396
+2026-01-23 04:26:37,134 - screener - INFO - Bars window attempts: [750] -> used=750
+2026-01-23 04:26:37,134 - screener - INFO - Bars HTTP empty batches: 1
+2026-01-23 04:26:37,134 - screener - INFO - Symbols without bars (sample): ['DEFT', 'Q', 'SVAC', 'VBIX', 'STUB', 'GURE', 'KWM', 'SCZM', 'REED', 'MCGA']
+2026-01-23 04:26:37,134 - screener - INFO - Fallback batches invoked: 1
+2026-01-23 04:26:37,134 - screener - INFO - Symbols dropped for insufficient history: 40
+2026-01-23 04:26:42,725 - screener - INFO - [STAGE] fetch end (rows=364450, elapsed=27.26s)
+2026-01-23 04:26:42,725 - screener - INFO - [BARS_DIAG] feed=iex requested=892 with_bars=409 missing=483 examples=[DEFT,Q,SVAC,VBIX,STUB,GURE,KWM,SCZM,REED,MCGA]
+2026-01-23 04:26:48,099 - screener - INFO - [INFO] DAILY_BARS_EXPORTED path=/home/RasPatrick/jbravo_screener/data/daily_bars.csv rows=364450 symbols=500
+2026-01-23 04:26:48,231 - screener - INFO - [INFO] SENTIMENT enabled=True url_set=True weight=0.250 min=-0.200
+2026-01-23 04:26:49,298 - screener - INFO - [STAGE] coarse features start
+2026-01-23 04:34:35,617 - screener - INFO - [STAGE] coarse features end (rows=364450)
+2026-01-23 04:34:35,617 - screener - INFO - [STAGE] coarse rank start
+2026-01-23 04:34:36,070 - screener - INFO - [INFO] Coarse rank boundary rows_in=500 score_non_null=500 cols=symbol,timestamp,TS,PT,RSI,MACD_HIST,ADX,AROON,VCP,VOLexp,REL_VOLUME_x,OBV_DELTA_x,BB_BANDWIDTH_x,ATR_pct,GAPpen,LIQpen,close,volume,exchange,history,REL_VOLUME_y,OBV,OBV_DELTA_y,BB_UPPER,BB_LOWER,BB_BANDWIDTH_y,SQUEEZE_ON,SMA9,EMA20,SMA180,WK52_PROX,RS20_SLOPE,RSI14,MACD,AROON_UP,AROON_DN,REL_VOLUME,OBV_DELTA,BB_BANDWIDTH,prev_MACD_HIST,prev_AROON_UP,prev_AROON_DN,Score,trend_score,momentum_score,volume_score,volatility_score,risk_score,trend_contribution,momentum_contribution,volume_contribution,volatility_contribution,risk_contribution,wk52_bonus_contribution,wk52_bonus,rs_bonus_contribution,rs_bonus,score_breakdown,component_breakdown,coarse_score
+2026-01-23 04:34:36,070 - screener - INFO - [STAGE] coarse rank end (rows=500)
+2026-01-23 04:34:36,089 - screener - INFO - [STAGE] shortlist written: data/tmp/shortlist.csv (rows=500)
+2026-01-23 04:34:36,130 - screener - INFO - [STAGE] full features start (shortlist=500)
