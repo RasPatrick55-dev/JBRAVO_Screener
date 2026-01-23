@@ -479,6 +479,10 @@ print(f">>> screener_df rows: {len(screener_df)}")
 logger.info(f">>> screener_df rows: {len(screener_df)}")
 print(f">>> backtest_df rows: {len(backtest_df)}")
 logger.info(f">>> backtest_df rows: {len(backtest_df)}")
+if screener_df.empty or backtest_df.empty:
+    print(">>> Input data is empty — skipping metrics <<<")
+else:
+    print(">>> Input data loaded — proceeding to ranking <<<")
 
 results_df = backtest_df
 
@@ -524,30 +528,31 @@ try:
     if ranked_df is None:
         print(">>> ranked_df is None — skipping DB writes")
         logger.warning(">>> ranked_df is None — skipping DB writes")
-    elif ranked_df.empty:
-        print(">>> ranked_df is empty — skipping DB writes")
-        logger.warning(">>> ranked_df is empty — skipping DB writes")
     else:
         print(f">>> ranked_df rows: {len(ranked_df)}")
         logger.info(f">>> ranked_df rows: {len(ranked_df)}")
-        logger.info("✅ [METRICS] ranked_df rows: %s", len(ranked_df))
-        logger.info(f"[DEBUG] ranked_df shape: {ranked_df.shape}")
-        logger.info(f"[DEBUG] Ranked DataFrame columns: {list(ranked_df.columns)}")
-        logger.info(
-            "Screener Metrics Summary: total_candidates=%s, avg_score=%.2f",
-            len(ranked_df),
-            ranked_df["score"].mean(),
-        )
-        logger.info(
-            "Top 15 Screener Symbols: %s",
-            ", ".join(ranked_df["symbol"].head(15).tolist()),
-        )
-        logger.info(
-            "Top Candidates: %s",
-            ranked_df[["symbol", "score", "win_rate", "net_pnl"]]
-            .head(15)
-            .to_string(index=False),
-        )
+        if ranked_df.empty:
+            print(">>> ranked_df is empty — skipping DB writes")
+            logger.warning(">>> ranked_df is empty — skipping DB writes")
+        else:
+            logger.info("✅ [METRICS] ranked_df rows: %s", len(ranked_df))
+            logger.info(f"[DEBUG] ranked_df shape: {ranked_df.shape}")
+            logger.info(f"[DEBUG] Ranked DataFrame columns: {list(ranked_df.columns)}")
+            logger.info(
+                "Screener Metrics Summary: total_candidates=%s, avg_score=%.2f",
+                len(ranked_df),
+                ranked_df["score"].mean(),
+            )
+            logger.info(
+                "Top 15 Screener Symbols: %s",
+                ", ".join(ranked_df["symbol"].head(15).tolist()),
+            )
+            logger.info(
+                "Top Candidates: %s",
+                ranked_df[["symbol", "score", "win_rate", "net_pnl"]]
+                .head(15)
+                .to_string(index=False),
+            )
 except Exception:
     logger.exception("❌ [METRICS] Exception during ranking")
     ranked_df = None
