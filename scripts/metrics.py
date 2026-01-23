@@ -529,8 +529,8 @@ try:
     logger.info("🚦 [METRICS] Starting candidate ranking")
     ranked_df = rank_and_filter_candidates(screener_df, results_df, run_date)
     if ranked_df is None:
-        print(">>> ranked_df is None — skipping DB writes")
-        logger.warning(">>> ranked_df is None — skipping DB writes")
+        print(">>> ranked_df is None — insert attempted anyway")
+        logger.warning(">>> ranked_df is None — insert attempted anyway")
         print(">>> ranked_df rows: 0")
         logger.warning(">>> ranked_df rows: 0")
     else:
@@ -538,8 +538,8 @@ try:
         logger.info(f">>> ranked_df rows: {len(ranked_df)}")
         logger.warning(f">>> ranked_df rows: {len(ranked_df)}")
         if ranked_df.empty:
-            print(">>> ranked_df is empty — skipping DB writes")
-            logger.warning(">>> ranked_df is empty — skipping DB writes")
+            print(">>> ranked_df is empty — insert attempted anyway")
+            logger.warning(">>> ranked_df is empty — no rows expected in DB")
             print(f">>> ranked_df columns: {list(ranked_df.columns)}")
             logger.warning(f">>> ranked_df columns: {list(ranked_df.columns)}")
         else:
@@ -569,38 +569,27 @@ if isinstance(ranked_df, pd.DataFrame):
     top_candidates_df = ranked_df
 else:
     top_candidates_df = pd.DataFrame()
-    print(">>> ranked_df is None — attempting top_candidates write anyway")
-    logger.warning("ranked_df is None; attempting top_candidates write anyway.")
+    print(">>> ranked_df is None — insert attempted anyway")
+    logger.warning(">>> ranked_df is None — insert attempted anyway")
 
 if top_candidates_df.empty:
-    print(">>> Top candidates DataFrame is empty; attempting DB write anyway")
-    logger.warning("Top candidates DataFrame was empty. Attempting insert anyway.")
+    print(">>> ranked_df is empty — insert attempted anyway")
+    logger.warning(">>> ranked_df is empty — no rows expected in DB")
 
 top_candidates_rows = int(top_candidates_df.shape[0])
 db_enabled = db.db_enabled()
 print(f">>> db.db_enabled(): {db_enabled}")
 logger.warning(f">>> db.db_enabled(): {db_enabled}")
-print(">>> Attempting to write top_candidates to DB")
-logger.warning(">>> Writing top_candidates to DB")
-print(
-    f">>> Attempting to insert {top_candidates_rows} rows into top_candidates "
-    f"for run_date={run_date}"
-)
-logger.warning(
-    "Attempting to insert %s rows into top_candidates for run_date=%s",
-    top_candidates_rows,
-    run_date,
-)
 try:
-    db.upsert_top_candidates(run_date, top_candidates_df, replace_for_run_date=True)
-    print(">>> top_candidates write complete")
-    logger.warning(">>> top_candidates write complete")
-    logger.info("✅ [METRICS] top_candidates DB write complete")
-except Exception:
-    exc_trace = traceback.format_exc()
-    print(">>> top_candidates write failed")
-    print(exc_trace)
-    logger.warning("DB insert failed for top_candidates: %s", exc_trace)
+    print(f">>> Attempting to insert {top_candidates_rows} rows into top_candidates")
+    logger.warning(
+        f">>> Inserting into top_candidates: rows={top_candidates_rows}"
+    )
+    db.insert_top_candidates(top_candidates_df, run_date)
+    print(">>> insert_top_candidates completed successfully")
+except Exception as exc:
+    print(f">>> ERROR in insert_top_candidates: {exc}")
+    logger.exception("Failed to insert into top_candidates")
 
 if not trades_df.empty:
     trades_df = validate_numeric(trades_df, "net_pnl")
@@ -628,6 +617,8 @@ if not trades_df.empty:
 if not summary_metrics:
     print(">>> summary_metrics is empty; columns: []")
     logger.warning(">>> summary_metrics is empty; columns: []")
+    print(">>> summary_metrics is empty — upsert attempted anyway")
+    logger.warning(">>> summary_metrics is empty — check metric extraction")
     summary_metrics = calculate_metrics(pd.DataFrame())
     print(">>> summary_metrics missing; using fallback zeroed metrics")
     logger.warning("summary_metrics missing; using fallback zeroed metrics.")
@@ -639,20 +630,18 @@ logger.info("🧮 [METRICS] summary_metrics: %s", summary_metrics)
 db_enabled = db.db_enabled()
 print(f">>> db.db_enabled(): {db_enabled}")
 logger.warning(f">>> db.db_enabled(): {db_enabled}")
-print(">>> Attempting to write metrics_daily to DB")
-logger.warning(">>> Writing metrics_daily to DB")
-print(f">>> Attempting to insert metrics_daily for run_date={run_date}")
-logger.warning("Attempting to insert metrics_daily for run_date=%s", run_date)
 try:
+    print(
+        f">>> Attempting to upsert metrics_daily: keys={list(summary_metrics.keys())}"
+    )
+    logger.warning(
+        f">>> Upserting metrics_daily: keys={list(summary_metrics.keys())}"
+    )
     db.upsert_metrics_daily(summary_metrics, run_date)
-    print(">>> metrics_daily write complete")
-    logger.warning(">>> metrics_daily write complete")
-    logger.info("✅ [METRICS] metrics_daily DB write complete")
-except Exception:
-    exc_trace = traceback.format_exc()
-    print(">>> metrics_daily write failed")
-    print(exc_trace)
-    logger.warning("DB insert failed for metrics_daily: %s", exc_trace)
+    print(">>> upsert_metrics_daily completed successfully")
+except Exception as exc:
+    print(f">>> ERROR in upsert_metrics_daily: {exc}")
+    logger.exception("Failed to upsert metrics_daily")
 
 metrics_path = Path(BASE_DIR) / "data" / "screener_metrics.json"
 metrics: dict = {}
