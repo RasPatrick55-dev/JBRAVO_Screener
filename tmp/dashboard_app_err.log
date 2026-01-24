@@ -1,0 +1,5 @@
+C:\Users\RasPa\JBravoGit\JBRAVO_Screener\dashboards\dashboard_app.py:2547: DeprecationWarning:
+
+datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+
+^C

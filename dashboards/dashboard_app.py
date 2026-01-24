@@ -2678,6 +2678,16 @@ def react_assets(filename: str):
     return send_from_directory(REACT_BUILD_DIR, filename)
 
 
+@server.route("/assets/<path:filename>")
+def react_asset_bundle(filename: str):
+    if not REACT_ASSET_DIR.exists():
+        abort(404)
+    file_path = REACT_ASSET_DIR / filename
+    if not file_path.exists():
+        abort(404)
+    return send_from_directory(REACT_ASSET_DIR, filename)
+
+
 @server.route("/health/overview")
 def health_overview():
     """Return a lightweight JSON payload describing dashboard health."""
@@ -2699,6 +2709,16 @@ def health_overview():
         summary["trades_log_rows"] = int(trades_row["count"])
 
     return jsonify({"ok": bool(metrics or trades_row), **summary})
+
+
+@server.route("/api/time")
+def api_time():
+    now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+    payload = {"utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store, max-age=1, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @server.route("/api/account/overview")
