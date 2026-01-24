@@ -19,3 +19,4 @@ data/cache/
 .pytest_cache/
 .coverage
 htmlcov/
+frontend/node_modules/
