@@ -419,16 +419,16 @@ export default function TradesOverview({ activeTab, onTabSelect }: TradesOvervie
   ];
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
 
-      <main className="relative pt-24 pb-12">
-        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl" />
-        <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl" />
+      <main className="relative pt-20 pb-12 sm:pt-24">
+        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl dark:from-cyan-500/15 dark:via-slate-950/40 dark:to-amber-500/20 dark:opacity-70" />
+        <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl dark:from-emerald-500/15 dark:via-slate-950/40 dark:to-cyan-500/15 dark:opacity-70" />
 
-        <div className="relative mx-auto max-w-[1240px] px-8">
+        <div className="relative mx-auto max-w-[1240px] px-4 sm:px-6 lg:px-8">
           <header className="max-w-xl">
-            <h1 className="text-2xl font-semibold text-slate-900">Trades Overview</h1>
+            <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">Trades Overview</h1>
             <p className="mt-2 text-sm text-slate-500">Trade history and performance results</p>
           </header>
 
@@ -468,7 +468,7 @@ export default function TradesOverview({ activeTab, onTabSelect }: TradesOvervie
 
           <section className="mt-10">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-slate-800">Trade History</h2>
+              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Trade History</h2>
               <StatusBadge label={resultState.label} tone={resultState.tone} size="sm" />
             </div>
             <div className="mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -493,7 +493,7 @@ export default function TradesOverview({ activeTab, onTabSelect }: TradesOvervie
                         key={`${trade.symbol}-${index}`}
                         className="grid grid-cols-[1.2fr_1fr_1fr_0.7fr_0.8fr_1.6fr_0.6fr] items-center gap-3 border-b border-slate-100 py-3 text-sm text-slate-700"
                       >
-                        <div className="font-semibold text-slate-900">{trade.symbol}</div>
+                        <div className="font-semibold text-slate-900 dark:text-slate-100">{trade.symbol}</div>
                         <div>{formatDateTime(trade.entryTime)}</div>
                         <div>{formatDateTime(trade.exitTime)}</div>
                         <div>{formatNumber(trade.qty)}</div>
@@ -514,13 +514,13 @@ export default function TradesOverview({ activeTab, onTabSelect }: TradesOvervie
 
           <section className="mt-10">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-slate-800">Results Summary</h2>
+              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Results Summary</h2>
               <span className="text-xs text-slate-500">Derived from trade history</span>
             </div>
             <div className="mt-4 grid grid-cols-3 gap-6">
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="text-xs uppercase tracking-wide text-slate-400">Net Performance</div>
-                <div className="mt-3 text-2xl font-semibold text-slate-900">
+                <div className="mt-3 text-2xl font-semibold text-slate-900 dark:text-slate-100">
                   {formatSignedCurrency(summaryMetrics.netPnl)}
                 </div>
                 <div className="mt-2 text-xs text-slate-500">
@@ -529,7 +529,7 @@ export default function TradesOverview({ activeTab, onTabSelect }: TradesOvervie
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="text-xs uppercase tracking-wide text-slate-400">Win / Loss Split</div>
-                <div className="mt-3 text-2xl font-semibold text-slate-900">
+                <div className="mt-3 text-2xl font-semibold text-slate-900 dark:text-slate-100">
                   {tradeStats.wins} / {tradeStats.losses}
                 </div>
                 <div className="mt-2 text-xs text-slate-500">Win rate {formatPercent(summaryMetrics.winRate)}</div>
@@ -541,7 +541,7 @@ export default function TradesOverview({ activeTab, onTabSelect }: TradesOvervie
                     exitReasonCounts.map(([reason, count]) => (
                       <div key={reason} className="flex items-center justify-between">
                         <span className="text-xs text-slate-500">{reason}</span>
-                        <span className="font-semibold text-slate-900">{count}</span>
+                        <span className="font-semibold text-slate-900 dark:text-slate-100">{count}</span>
                       </div>
                     ))
                   ) : (
@@ -556,3 +556,5 @@ export default function TradesOverview({ activeTab, onTabSelect }: TradesOvervie
     </div>
   );
 }
+
+

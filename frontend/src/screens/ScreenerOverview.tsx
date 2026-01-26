@@ -436,16 +436,16 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
   const displayEntries: LogEntry[] = logEntries.length ? logEntries : [emptyLog];
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
 
-      <main className="relative pt-24 pb-12">
-        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl" />
-        <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl" />
+      <main className="relative pt-20 pb-12 sm:pt-24">
+        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl dark:from-cyan-500/15 dark:via-slate-950/40 dark:to-amber-500/20 dark:opacity-70" />
+        <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl dark:from-emerald-500/15 dark:via-slate-950/40 dark:to-cyan-500/15 dark:opacity-70" />
 
-        <div className="relative mx-auto max-w-[1240px] px-8">
+        <div className="relative mx-auto max-w-[1240px] px-4 sm:px-6 lg:px-8">
           <header className="max-w-xl">
-            <h1 className="text-2xl font-semibold text-slate-900">Screener Overview</h1>
+            <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">Screener Overview</h1>
             <p className="mt-2 text-sm text-slate-500">
               Pre-market candidates, coverage, and pipeline readiness.
             </p>
@@ -487,7 +487,7 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
 
           <section className="mt-10">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-slate-800">Candidate Shortlist</h2>
+              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Candidate Shortlist</h2>
               <span className="text-xs text-slate-500">Top ranked opportunities</span>
             </div>
             <div className="mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -514,7 +514,7 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
                       key={`${row.symbol}-${index}`}
                       className="grid grid-cols-[1fr_0.8fr_0.7fr_0.9fr_0.9fr_0.9fr_0.9fr_0.8fr] items-center gap-3 border-b border-slate-100 py-3 text-sm text-slate-700"
                     >
-                      <div className="font-semibold text-slate-900">{row.symbol}</div>
+                      <div className="font-semibold text-slate-900 dark:text-slate-100">{row.symbol}</div>
                       <div>{formatNumber(row.score)}</div>
                       <div>{row.exchange}</div>
                       <div>{formatCurrency(row.close)}</div>
@@ -536,7 +536,7 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
           <section className="mt-10 grid grid-cols-[1.1fr_0.9fr] gap-6">
             <div>
               <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold text-slate-800">Pipeline Metadata</h2>
+                <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Pipeline Metadata</h2>
                 <StatusBadge label={pipelineState.label} tone={pipelineState.tone} size="sm" />
               </div>
               <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -544,7 +544,7 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
                   {metadata.map((item) => (
                     <div key={item.label} className="flex items-center justify-between border-b border-slate-100 pb-3">
                       <dt className="text-slate-500">{item.label}</dt>
-                      <dd className="font-semibold text-slate-800">{item.value}</dd>
+                      <dd className="font-semibold text-slate-800 dark:text-slate-200">{item.value}</dd>
                     </div>
                   ))}
                 </dl>
@@ -552,7 +552,7 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
             </div>
 
             <div>
-              <h2 className="text-base font-semibold text-slate-800">Pipeline Activity</h2>
+              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Pipeline Activity</h2>
               <div className="mt-4">
                 <LogViewer
                   title="Pipeline Log"
@@ -568,3 +568,5 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
     </div>
   );
 }
+
+

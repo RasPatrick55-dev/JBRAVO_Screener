@@ -377,16 +377,16 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
   const displayEntries: LogEntry[] = logEntries.length ? logEntries : [emptyLog];
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
 
-      <main className="relative pt-24 pb-12">
-        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl" />
-        <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl" />
+      <main className="relative pt-20 pb-12 sm:pt-24">
+        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl dark:from-cyan-500/15 dark:via-slate-950/40 dark:to-amber-500/20 dark:opacity-70" />
+        <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl dark:from-emerald-500/15 dark:via-slate-950/40 dark:to-cyan-500/15 dark:opacity-70" />
 
-        <div className="relative mx-auto max-w-[1240px] px-8">
+        <div className="relative mx-auto max-w-[1240px] px-4 sm:px-6 lg:px-8">
           <header className="max-w-xl">
-            <h1 className="text-2xl font-semibold text-slate-900">ML Pipeline</h1>
+            <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">ML Pipeline</h1>
             <p className="mt-2 text-sm text-slate-500">
               Model readiness, feature pipeline health, and scoring outputs.
             </p>
@@ -429,7 +429,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
           <section className="mt-10 grid grid-cols-[1.05fr_0.95fr] gap-6">
             <div>
               <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold text-slate-800">Pipeline Stages</h2>
+                <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Pipeline Stages</h2>
                 <StatusBadge label={pipelineState.label} tone={pipelineState.tone} size="sm" />
               </div>
               <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -438,7 +438,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                     <div key={stage.label} className="flex items-center justify-between rounded-xl border border-slate-100 px-4 py-3">
                       <div>
                         <div className="text-xs uppercase tracking-wide text-slate-400">{stage.label}</div>
-                        <div className="mt-1 text-sm font-semibold text-slate-800">{stage.detail}</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-200">{stage.detail}</div>
                       </div>
                       <StatusBadge label={stage.status} tone={stage.tone} size="sm" />
                     </div>
@@ -448,13 +448,13 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
             </div>
 
             <div>
-              <h2 className="text-base font-semibold text-slate-800">Model Artifacts</h2>
+              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Model Artifacts</h2>
               <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <dl className="grid grid-cols-1 gap-y-4 text-sm">
                   {artifacts.map((item) => (
                     <div key={item.label} className="flex items-center justify-between border-b border-slate-100 pb-3">
                       <dt className="text-slate-500">{item.label}</dt>
-                      <dd className="font-semibold text-slate-800">{item.value}</dd>
+                      <dd className="font-semibold text-slate-800 dark:text-slate-200">{item.value}</dd>
                     </div>
                   ))}
                 </dl>
@@ -467,7 +467,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
 
           <section className="mt-10">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-slate-800">Pipeline Activity</h2>
+              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Pipeline Activity</h2>
               <span className="text-xs text-slate-500">Latest pipeline events</span>
             </div>
             <div className="mt-4">
@@ -479,3 +479,5 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
     </div>
   );
 }
+
+

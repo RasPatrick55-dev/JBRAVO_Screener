@@ -31,6 +31,20 @@ To launch the dashboard locally run:
 python dashboards/dashboard_app.py
 ```
 
+## Logo.dev Stock Logos
+
+The Dashboard Monitoring Positions card supports Logo.dev stock ticker logos. Set the publishable key in `.env`:
+
+```
+REACT_APP_LOGO_DEV_API_KEY=your_publishable_logo_dev_key
+```
+
+If you are building the Vite frontend directly, mirror it as:
+
+```
+VITE_LOGO_DEV_API_KEY=your_publishable_logo_dev_key
+```
+
 ## Dashboard Metrics
 
 The dashboard surfaces executor state in the Ops Summary. Metrics map to the executor JSON as follows:

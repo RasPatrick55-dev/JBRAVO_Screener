@@ -12,6 +12,11 @@ import json
 import math
 from decimal import Decimal
 from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import GetOrdersRequest
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
+from alpaca.data.enums import DataFeed
+from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
 import logging
 import plotly.graph_objects as go
@@ -22,13 +27,13 @@ import os
 import inspect
 import pytz
 import re
+import urllib.request
+from urllib.parse import quote
 from pathlib import Path
-from typing import Any, Mapping, Optional
-from flask import abort, jsonify, send_from_directory
+from typing import Any, Callable, Mapping, Optional
+from flask import Response, abort, jsonify, send_from_directory, request
 from plotly.subplots import make_subplots
 from scripts import db
-
-os.environ.setdefault("JBRAVO_HOME", "/home/oai/jbravo_screener")
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +61,12 @@ from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _
 from dashboards.db_client import db_query_df
 
 # Base directory of the project (parent of this file)
-BASE_DIR = os.environ.get(
-    "JBRAVO_HOME", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
+DEFAULT_HOME = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENV_HOME = os.environ.get("JBRAVO_HOME")
+if not ENV_HOME or not os.path.exists(ENV_HOME):
+    ENV_HOME = DEFAULT_HOME
+    os.environ["JBRAVO_HOME"] = ENV_HOME
+BASE_DIR = ENV_HOME
 
 DATA_EXPORT_ALLOWLIST: set[str] = set()
 
@@ -66,6 +74,355 @@ LOG_EXPORT_ALLOWLIST = {
     "pipeline.log",
     "execute_trades.log",
 }
+
+_DAILY_BARS_CACHE: dict[str, Any] = {"mtime": None, "df": None}
+TASK_LOG_PATH = os.environ.get("PIPELINE_TASK_LOG_PATH") or os.path.join(
+    BASE_DIR, "logs", "pipeline_task.log"
+)
+EXECUTE_TASK_LOG_PATH = os.environ.get("EXECUTE_TASK_LOG_PATH") or os.path.join(
+    BASE_DIR, "logs", "execute_task.log"
+)
+
+def _pythonanywhere_token() -> Optional[str]:
+    return os.environ.get("PYTHONANYWHERE_API_TOKEN") or os.environ.get("API_TOKEN")
+
+
+def _pythonanywhere_username() -> Optional[str]:
+    return os.environ.get("PYTHONANYWHERE_USERNAME") or os.environ.get("PYTHONANYWHERE_USER")
+
+
+def _fetch_pythonanywhere_file(
+    remote_url: Optional[str], remote_path: Optional[str]
+) -> Optional[tuple[str, str]]:
+    token = _pythonanywhere_token()
+    username = _pythonanywhere_username()
+
+    if not token:
+        return None
+    if not remote_url and not (username and remote_path):
+        return None
+
+    if not remote_url:
+        if remote_path and username and remote_path.startswith(f"/user/{username}/files"):
+            remote_path = remote_path.replace(f"/user/{username}/files", "", 1)
+        if remote_path and not remote_path.startswith("/"):
+            remote_path = f"/{remote_path}"
+        remote_url = f"https://www.pythonanywhere.com/api/v0/user/{username}/files/path{remote_path}"
+
+    try:
+        req = urllib.request.Request(
+            remote_url, headers={"Authorization": f"Token {token}"}
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status != 200:
+                return None
+            return resp.read().decode("utf-8", errors="ignore"), remote_url
+    except Exception:
+        return None
+
+
+def _fetch_pythonanywhere_task_log_for(
+    *,
+    task_id: Optional[str],
+    remote_path: Optional[str],
+    remote_url: Optional[str],
+    match_keywords: list[str],
+) -> Optional[tuple[str, str]]:
+    token = _pythonanywhere_token()
+    username = _pythonanywhere_username()
+
+    if not token:
+        return None
+    if not remote_url and not (username and (remote_path or task_id or match_keywords)):
+        return None
+
+    if not remote_url:
+        if task_id:
+            try:
+                schedule_url = f"https://www.pythonanywhere.com/api/v0/user/{username}/schedule/{task_id}/"
+                req = urllib.request.Request(
+                    schedule_url, headers={"Authorization": f"Token {token}"}
+                )
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                remote_path = payload.get("logfile")
+            except Exception:
+                remote_path = None
+        elif username and match_keywords:
+            try:
+                schedule_url = f"https://www.pythonanywhere.com/api/v0/user/{username}/schedule/"
+                req = urllib.request.Request(
+                    schedule_url, headers={"Authorization": f"Token {token}"}
+                )
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    tasks = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                best_task = None
+                best_rank = len(match_keywords) + 1
+                for task in tasks:
+                    description = str(task.get("description") or "")
+                    command = str(task.get("command") or "")
+                    match_source = f"{description} {command}".lower()
+                    for idx, keyword in enumerate(match_keywords):
+                        if keyword in match_source and idx < best_rank:
+                            best_rank = idx
+                            best_task = task
+                            break
+                if best_task:
+                    remote_path = best_task.get("logfile")
+            except Exception:
+                remote_path = None
+
+        if not remote_path:
+            return None
+
+    return _fetch_pythonanywhere_file(remote_url, remote_path)
+
+
+def _fetch_pythonanywhere_task_log() -> Optional[tuple[str, str]]:
+    return _fetch_pythonanywhere_task_log_for(
+        task_id=os.environ.get("PYTHONANYWHERE_PIPELINE_TASK_ID"),
+        remote_path=os.environ.get("PYTHONANYWHERE_TASK_LOG_PATH"),
+        remote_url=os.environ.get("PYTHONANYWHERE_TASK_LOG_URL"),
+        match_keywords=["run pipeline", "run_pipeline"],
+    )
+
+
+def _fetch_pythonanywhere_execute_task_log() -> Optional[tuple[str, str]]:
+    return _fetch_pythonanywhere_task_log_for(
+        task_id=os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_ID"),
+        remote_path=os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_LOG_PATH"),
+        remote_url=os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_LOG_URL"),
+        match_keywords=[
+            "pre-market executor",
+            "pre-market",
+            "premarket",
+            "execute trades",
+            "execute_trades",
+            "execute_trades.py",
+        ],
+    )
+
+
+def _to_float(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_daily_bars_cache() -> Optional[pd.DataFrame]:
+    path = Path(BASE_DIR) / "data" / "daily_bars.csv"
+    if not path.exists():
+        return None
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+
+    cached_df = _DAILY_BARS_CACHE.get("df")
+    cached_mtime = _DAILY_BARS_CACHE.get("mtime")
+    if cached_df is None or cached_mtime != mtime:
+        try:
+            df = pd.read_csv(path, usecols=["symbol", "timestamp", "close"])
+        except Exception:
+            return None
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df = df.dropna(subset=["symbol", "timestamp", "close"])
+        df["symbol"] = df["symbol"].astype(str)
+        df.sort_values(["symbol", "timestamp"], inplace=True)
+        _DAILY_BARS_CACHE["df"] = df
+        _DAILY_BARS_CACHE["mtime"] = mtime
+        cached_df = df
+
+    return cached_df
+
+
+def _logo_url_for_symbol(symbol: str) -> Optional[str]:
+    if not symbol:
+        return None
+    safe_symbol = quote(symbol.upper(), safe=".-")
+    return f"/api/logos/{safe_symbol}.png"
+
+
+def _alpaca_feed() -> Optional[DataFeed]:
+    feed_env = (os.getenv("ALPACA_DATA_FEED") or "IEX").strip().upper()
+    if feed_env == "IEX":
+        return DataFeed.IEX
+    if feed_env == "SIP":
+        return DataFeed.SIP
+    return None
+
+
+def _fetch_alpaca_sparklines(
+    symbols: list[str], points: int = 12
+) -> dict[str, list[float]]:
+    if data_client is None or not symbols:
+        return {}
+
+    now_utc = datetime.now(timezone.utc)
+    start = now_utc - timedelta(days=45)
+    feed = _alpaca_feed()
+    try:
+        request = StockBarsRequest(
+            symbol_or_symbols=symbols,
+            timeframe=TimeFrame.Day,
+            start=start,
+            end=now_utc,
+            feed=feed,
+        )
+        bars = data_client.get_stock_bars(request)
+    except Exception:
+        return {}
+
+    df = getattr(bars, "df", None)
+    if df is None or df.empty:
+        return {}
+
+    sparkline_map: dict[str, list[float]] = {}
+    if isinstance(df.index, pd.MultiIndex) and "symbol" in df.index.names:
+        for symbol in symbols:
+            if symbol not in df.index.get_level_values("symbol"):
+                continue
+            symbol_df = df.xs(symbol, level="symbol")
+            closes = symbol_df["close"].tail(points).tolist()
+            sparkline_map[symbol] = [float(value) for value in closes if value is not None]
+        return sparkline_map
+
+    if "symbol" in df.columns:
+        for symbol, group in df.groupby("symbol"):
+            closes = group["close"].tail(points).tolist()
+            sparkline_map[str(symbol)] = [float(value) for value in closes if value is not None]
+        return sparkline_map
+
+    return {}
+
+
+def _positions_from_alpaca() -> list[dict[str, Any]]:
+    if trading_client is None:
+        return []
+    try:
+        positions = trading_client.get_all_positions() or []
+    except Exception:
+        return []
+
+    output: list[dict[str, Any]] = []
+    for position in positions:
+        symbol = str(getattr(position, "symbol", "") or "").strip()
+        if not symbol:
+            continue
+        qty = _to_float(getattr(position, "qty", None))
+        entry_price = _to_float(getattr(position, "avg_entry_price", None))
+        current_price = _to_float(getattr(position, "current_price", None))
+        dollar_pl = _to_float(getattr(position, "unrealized_pl", None))
+        percent_pl = _to_float(getattr(position, "unrealized_plpc", None))
+        if percent_pl is not None:
+            percent_pl = percent_pl * 100
+        output.append(
+            {
+                "symbol": symbol,
+                "qty": qty,
+                "entry_price": entry_price,
+                "current_price": current_price,
+                "dollar_pl": dollar_pl,
+                "percent_pl": percent_pl,
+            }
+        )
+    return output
+
+
+def _fetch_latest_prices(symbols: list[str]) -> dict[str, float]:
+    if data_client is None or not symbols:
+        return {}
+    feed = _alpaca_feed()
+    try:
+        request = StockLatestTradeRequest(symbol_or_symbols=symbols, feed=feed)
+        latest_trades = data_client.get_stock_latest_trade(request) or {}
+    except Exception:
+        return {}
+
+    prices: dict[str, float] = {}
+    for symbol, trade in latest_trades.items():
+        price = getattr(trade, "price", None)
+        if price is None:
+            continue
+        try:
+            prices[str(symbol)] = float(price)
+        except (TypeError, ValueError):
+            continue
+    return prices
+
+
+def _parse_task_log(
+    path: Path, fetcher: Optional[Callable[[], Optional[tuple[str, str]]]] = None
+) -> dict[str, Any]:
+    lines: list[str] | None = None
+    source: Optional[str] = None
+    remote_payload = (fetcher or _fetch_pythonanywhere_task_log)()
+    if remote_payload:
+        remote_text, remote_source = remote_payload
+        lines = remote_text.splitlines()
+        source = remote_source
+
+    if not lines and path.exists():
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            source = str(path)
+        except Exception:
+            lines = None
+
+    if not lines:
+        return {"ok": False}
+
+    start_ts = None
+    end_ts = None
+    duration_seconds = None
+    rc = None
+
+    def _parse_timestamp(line: str) -> Optional[str]:
+        match = re.match(r"^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})", line)
+        if not match:
+            return None
+        date, time = match.groups()
+        return f"{date}T{time}Z"
+
+    end_index = None
+    for idx in range(len(lines) - 1, -1, -1):
+        line = lines[idx]
+        if "Completed task" in line:
+            end_index = idx
+            end_ts = _parse_timestamp(line)
+            duration_match = re.search(r"took\s+([0-9.]+)\s+seconds", line)
+            if duration_match:
+                try:
+                    duration_seconds = float(duration_match.group(1))
+                except ValueError:
+                    duration_seconds = None
+            rc_match = re.search(r"return code was\s+(-?\d+)", line)
+            if rc_match:
+                try:
+                    rc = int(rc_match.group(1))
+                except ValueError:
+                    rc = None
+            break
+
+    if end_index is not None:
+        for idx in range(end_index - 1, -1, -1):
+            line = lines[idx]
+            if "Started task" in line:
+                start_ts = _parse_timestamp(line)
+                break
+
+    return {
+        "ok": bool(start_ts or end_ts),
+        "started_utc": start_ts,
+        "finished_utc": end_ts,
+        "duration_seconds": duration_seconds,
+        "rc": rc,
+        "source": source,
+    }
 
 
 def _db_fetch_one(sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -418,8 +775,13 @@ API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 if not API_KEY or not API_SECRET:
     trading_client = None
     logger.warning("Missing Alpaca credentials; Alpaca API features disabled")
+    data_client = None
 else:
     trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
+    try:
+        data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
+    except Exception:
+        data_client = None
 logger = logging.getLogger(__name__)
 
 
@@ -2721,6 +3083,22 @@ def api_time():
     return response
 
 
+@server.route("/api/logos/<symbol>")
+def api_logo(symbol: str):
+    safe_symbol = quote(symbol.upper(), safe=".-")
+    url = f"https://storage.googleapis.com/iex/api/logos/{safe_symbol}.png"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read()
+            content_type = resp.headers.get_content_type() or "image/png"
+    except Exception:
+        return Response(status=404)
+    response = Response(data, content_type=content_type)
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+
 @server.route("/api/account/overview")
 def api_account_overview():
     row = _account_latest_db()
@@ -2751,6 +3129,195 @@ def api_trades_overview():
         "trades": trade_records,
         "open_positions": {"count": open_count, "realized_pnl": open_pnl},
     }
+    return jsonify(payload)
+
+
+@server.route("/api/pipeline/task")
+def api_pipeline_task():
+    payload = _parse_task_log(Path(TASK_LOG_PATH))
+    return jsonify(payload)
+
+
+@server.route("/api/execute/task")
+def api_execute_task():
+    payload = _parse_task_log(
+        Path(EXECUTE_TASK_LOG_PATH), fetcher=_fetch_pythonanywhere_execute_task_log
+    )
+    return jsonify(payload)
+
+
+@server.route("/api/positions/monitoring")
+def api_positions_monitoring():
+    include_debug = str(request.args.get("debug", "")).lower() in {"1", "true", "yes", "on"}
+    def _sparkline_from_daily_bars(
+        symbols: list[str], points: int = 12
+    ) -> dict[str, list[float]]:
+        bars_df = _load_daily_bars_cache()
+        if bars_df is None or bars_df.empty:
+            return {}
+        sparkline_map: dict[str, list[float]] = {}
+        for symbol in symbols:
+            symbol_df = bars_df[bars_df["symbol"] == symbol]
+            if symbol_df.empty:
+                continue
+            closes = symbol_df["close"].tail(points).tolist()
+            sparkline_map[symbol] = [float(value) for value in closes if value is not None]
+        return sparkline_map
+
+    alpaca_positions = _positions_from_alpaca()
+    sparkline_points = 12
+    if alpaca_positions:
+        symbols = [position["symbol"] for position in alpaca_positions]
+        sparkline_map = _fetch_alpaca_sparklines(symbols, points=sparkline_points)
+        if not sparkline_map:
+            sparkline_map = _sparkline_from_daily_bars(symbols, points=sparkline_points)
+        latest_prices = _fetch_latest_prices(symbols)
+
+        positions: list[dict[str, Any]] = []
+        for position in alpaca_positions:
+            symbol = position["symbol"]
+            sparkline = sparkline_map.get(symbol, [])
+            current_price = position.get("current_price")
+            latest_price = latest_prices.get(symbol)
+            if current_price is None and sparkline:
+                current_price = sparkline[-1]
+            if current_price is None:
+                current_price = latest_price or position.get("entry_price")
+
+            dollar_pl = position.get("dollar_pl")
+            percent_pl = position.get("percent_pl")
+            qty = position.get("qty")
+            entry_price = position.get("entry_price")
+            cost_basis = None
+            if qty is not None and entry_price is not None:
+                cost_basis = qty * entry_price
+
+            price_for_pl = latest_price if latest_price is not None else current_price
+            if price_for_pl is not None and entry_price is not None and qty:
+                computed_pl = (price_for_pl - entry_price) * qty
+                if dollar_pl is None or (abs(dollar_pl) < 1e-9 and abs(computed_pl) > 1e-9):
+                    dollar_pl = computed_pl
+            if percent_pl is None or (abs(percent_pl) < 1e-9 and dollar_pl is not None and abs(dollar_pl) > 1e-9):
+                if cost_basis:
+                    percent_pl = (dollar_pl / cost_basis) * 100
+            positions.append(
+                {
+                    "symbol": symbol,
+                    "qty": qty,
+                    "entryPrice": entry_price,
+                    "currentPrice": current_price,
+                    "sparklineData": sparkline,
+                    "percentPL": percent_pl,
+                    "dollarPL": dollar_pl,
+                    "costBasis": cost_basis,
+                    "logoUrl": _logo_url_for_symbol(symbol),
+                    **(
+                        {
+                            "_debug": {
+                                "qty": qty,
+                                "entryPrice": entry_price,
+                                "costBasis": cost_basis,
+                                "currentPrice": current_price,
+                                "latestTradePrice": latest_price,
+                                "sparklineTail": sparkline[-3:] if sparkline else [],
+                            }
+                        }
+                        if include_debug
+                        else {}
+                    ),
+                }
+            )
+        payload = {"ok": True, "positions": positions, "source": "alpaca"}
+        if include_debug:
+            payload["_debug"] = {
+                "feed": os.getenv("ALPACA_DATA_FEED"),
+                "symbols": symbols,
+                "latestPrices": latest_prices,
+            }
+        return jsonify(payload)
+
+    open_df = load_open_trades_db()
+    if open_df is None or open_df.empty:
+        return jsonify({"ok": True, "positions": []})
+
+    if "symbol" not in open_df.columns:
+        return jsonify({"ok": False, "positions": []})
+
+    aggregated: dict[str, dict[str, Any]] = {}
+    for record in open_df.to_dict(orient="records"):
+        symbol = str(record.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        qty = _to_float(record.get("qty"))
+        entry_price = _to_float(record.get("entry_price"))
+        realized_pnl = _to_float(record.get("realized_pnl"))
+
+        bucket = aggregated.setdefault(
+            symbol,
+            {"symbol": symbol, "qty": 0.0, "entry_value": 0.0, "realized_pnl": 0.0, "has_realized": False},
+        )
+        if qty is not None and entry_price is not None:
+            bucket["qty"] += qty
+            bucket["entry_value"] += qty * entry_price
+        if realized_pnl is not None:
+            bucket["realized_pnl"] += realized_pnl
+            bucket["has_realized"] = True
+
+    symbols = list(aggregated.keys())
+    sparkline_map = _sparkline_from_daily_bars(symbols, points=sparkline_points)
+    positions = []
+
+    for symbol, bucket in aggregated.items():
+        qty = bucket["qty"] if bucket["qty"] > 0 else None
+        entry_price = (
+            bucket["entry_value"] / bucket["qty"] if bucket["qty"] > 0 else None
+        )
+        cost_basis = bucket["entry_value"] if bucket["entry_value"] else None
+        sparkline = sparkline_map.get(symbol, [])
+        current_price = sparkline[-1] if sparkline else entry_price
+
+        dollar_pl = None
+        if bucket["has_realized"]:
+            dollar_pl = bucket["realized_pnl"]
+        elif current_price is not None and entry_price is not None and qty is not None:
+            dollar_pl = (current_price - entry_price) * qty
+
+        percent_pl = None
+        if dollar_pl is not None and entry_price is not None and qty is not None and qty != 0:
+            cost_basis = entry_price * qty
+            if cost_basis != 0:
+                percent_pl = (dollar_pl / cost_basis) * 100
+
+        positions.append(
+            {
+                "symbol": symbol,
+                "qty": qty,
+                "entryPrice": entry_price,
+                "currentPrice": current_price,
+                "sparklineData": sparkline,
+                "percentPL": percent_pl,
+                "dollarPL": dollar_pl,
+                "costBasis": cost_basis,
+                "logoUrl": _logo_url_for_symbol(symbol),
+                **(
+                    {
+                        "_debug": {
+                            "qty": qty,
+                            "entryPrice": entry_price,
+                            "costBasis": cost_basis,
+                            "currentPrice": current_price,
+                            "sparklineTail": sparkline[-3:] if sparkline else [],
+                        }
+                    }
+                    if include_debug
+                    else {}
+                ),
+            }
+        )
+
+    payload = {"ok": True, "positions": positions, "source": "db"}
+    if include_debug:
+        payload["_debug"] = {"symbols": symbols}
     return jsonify(payload)
 
 
@@ -2808,6 +3375,72 @@ def api_execute_overview():
     return jsonify(payload)
 
 
+@server.route("/api/execute/orders-summary")
+def api_execute_orders_summary():
+    now_utc = datetime.now(timezone.utc)
+    since_utc = now_utc - timedelta(hours=24)
+    if trading_client is None:
+        return jsonify(
+            {
+                "ok": False,
+                "orders_filled": 0,
+                "total_value": 0,
+                "since_utc": since_utc.isoformat(),
+                "until_utc": now_utc.isoformat(),
+                "source": "alpaca",
+            }
+        )
+    try:
+        request = GetOrdersRequest(
+            status="closed",
+            after=since_utc,
+            until=now_utc,
+            direction="desc",
+            limit=500,
+        )
+        orders = trading_client.get_orders(filter=request) or []
+        filled_count = 0
+        filled_value = 0.0
+        for order in orders:
+            filled_at = getattr(order, "filled_at", None)
+            if filled_at is None:
+                continue
+            if filled_at < since_utc:
+                continue
+            side = getattr(order, "side", None)
+            side_value = side.value if hasattr(side, "value") else str(side or "").lower()
+            if side_value and side_value != "buy":
+                continue
+            qty = float(getattr(order, "filled_qty", 0) or 0)
+            price = float(getattr(order, "filled_avg_price", 0) or 0)
+            if qty <= 0 or price <= 0:
+                continue
+            filled_count += 1
+            filled_value += qty * price
+        return jsonify(
+            {
+                "ok": True,
+                "orders_filled": filled_count,
+                "total_value": filled_value,
+                "since_utc": since_utc.isoformat(),
+                "until_utc": now_utc.isoformat(),
+                "source": "alpaca",
+            }
+        )
+    except Exception as exc:
+        logger.error("Failed to fetch Alpaca order summary: %s", exc)
+        return jsonify(
+            {
+                "ok": False,
+                "orders_filled": 0,
+                "total_value": 0,
+                "since_utc": since_utc.isoformat(),
+                "until_utc": now_utc.isoformat(),
+                "source": "alpaca",
+            }
+        )
+
+
 @server.route("/api/screener/candidates")
 def api_screener_candidates():
     if not db.db_enabled():
@@ -2857,6 +3490,22 @@ def data_exports(filename: str):
 def log_exports(filename: str):
     if filename not in LOG_EXPORT_ALLOWLIST:
         abort(404)
+    if filename == "pipeline.log":
+        remote_payload = _fetch_pythonanywhere_file(
+            os.environ.get("PYTHONANYWHERE_PIPELINE_LOG_URL"),
+            os.environ.get("PYTHONANYWHERE_PIPELINE_LOG_PATH"),
+        )
+        if remote_payload:
+            remote_text, _ = remote_payload
+            return Response(remote_text, mimetype="text/plain")
+    if filename == "execute_trades.log":
+        remote_payload = _fetch_pythonanywhere_file(
+            os.environ.get("PYTHONANYWHERE_EXECUTE_LOG_URL"),
+            os.environ.get("PYTHONANYWHERE_EXECUTE_LOG_PATH"),
+        )
+        if remote_payload:
+            remote_text, _ = remote_payload
+            return Response(remote_text, mimetype="text/plain")
     base = Path(BASE_DIR) / "logs"
     if not (base / filename).exists():
         abort(404)

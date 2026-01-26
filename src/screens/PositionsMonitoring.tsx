@@ -413,16 +413,16 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
   ];
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
 
-      <main className="relative pt-24 pb-12">
-        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl" />
-        <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl" />
+      <main className="relative pt-20 pb-12 sm:pt-24">
+        <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl dark:from-cyan-500/15 dark:via-slate-950/40 dark:to-amber-500/20 dark:opacity-70" />
+        <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl dark:from-emerald-500/15 dark:via-slate-950/40 dark:to-cyan-500/15 dark:opacity-70" />
 
-        <div className="relative mx-auto max-w-[1240px] px-8">
+        <div className="relative mx-auto max-w-[1240px] px-4 sm:px-6 lg:px-8">
           <header className="max-w-xl">
-            <h1 className="text-2xl font-semibold text-slate-900">Positions Monitoring</h1>
+            <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">Positions Monitoring</h1>
             <p className="mt-2 text-sm text-slate-500">
               Live exposure, open positions, and risk posture.
             </p>
@@ -464,7 +464,7 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
 
           <section className="mt-10">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-slate-800">Open Positions</h2>
+              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Open Positions</h2>
               <span className="text-xs text-slate-500">Read-only trade ledger</span>
             </div>
             <div className="mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -498,7 +498,7 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
                         key={`${position.symbol}-${index}`}
                         className="grid grid-cols-[1fr_1fr_0.7fr_0.8fr_0.9fr_1fr_0.8fr_0.9fr] items-center gap-3 border-b border-slate-100 py-3 text-sm text-slate-700"
                       >
-                        <div className="font-semibold text-slate-900">{position.symbol}</div>
+                        <div className="font-semibold text-slate-900 dark:text-slate-100">{position.symbol}</div>
                         <div>{formatDate(position.entryTime)}</div>
                         <div>{formatNumber(position.qty)}</div>
                         <div>{formatCurrency(position.entryPrice)}</div>
@@ -524,7 +524,7 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
 
           <section className="mt-10">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-slate-800">Risk Controls</h2>
+              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Risk Controls</h2>
               <span className="text-xs text-slate-500">Execution gates and limits</span>
             </div>
             <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -533,7 +533,7 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
                   <div key={check.label} className="flex items-center justify-between rounded-xl border border-slate-100 px-4 py-3">
                     <div>
                       <div className="text-xs uppercase tracking-wide text-slate-400">{check.label}</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-800">{check.value}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-200">{check.value}</div>
                     </div>
                     <StatusBadge label={check.status} tone={check.tone} size="sm" />
                   </div>
@@ -543,7 +543,7 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
           </section>
 
           <section className="mt-10">
-            <h2 className="text-base font-semibold text-slate-800">Position Alerts</h2>
+            <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Position Alerts</h2>
             <div className="mt-4 grid grid-cols-3 gap-4">
               {positionAlerts.map((alert) => (
                 <div key={alert.title} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -563,3 +563,5 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
     </div>
   );
 }
+
+
