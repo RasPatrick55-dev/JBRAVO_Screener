@@ -40,14 +40,14 @@ print(
     bool(os.getenv("DATABASE_URL")),
 )
 
-os.environ.setdefault("JBRAVO_HOME", str(ROOT))
+os.environ.setdefault("JBRAVO_HOME", str(PROJECT_HOME))
 
 from flask import Flask, send_from_directory  # noqa: E402
 from werkzeug.middleware.dispatcher import DispatcherMiddleware  # noqa: E402
 
 from dashboards.dashboard_app import app as dash_app  # noqa: E402
 
-FRONTEND_BUILD = ROOT / "frontend" / "dist"
+FRONTEND_BUILD = PROJECT_HOME / "frontend" / "dist"
 FRONTEND_ASSETS = FRONTEND_BUILD / "assets"
 
 
