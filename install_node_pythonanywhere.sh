@@ -4,7 +4,7 @@ set -euo pipefail
 # install_node_pythonanywhere.sh
 # - Installs nvm (Node Version Manager) in the user's home directory.
 # - Ensures nvm loads on new shells (bash login/interactive).
-# - Installs a stable Node.js version (v18.x) and sets it as default.
+# - Installs a stable Node.js version (v20.19.0) and sets it as default.
 # - Verifies node + npm are available.
 #
 # Usage inside PythonAnywhere:
@@ -16,7 +16,7 @@ set -euo pipefail
 # - PythonAnywhere free plans may have limited disk/CPU; builds can be slow.
 # - Always keep Node pinned to a known version for reproducibility.
 
-NODE_VERSION="${NODE_VERSION:-18.20.4}"
+NODE_VERSION="${NODE_VERSION:-20.19.0}"
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh"
 

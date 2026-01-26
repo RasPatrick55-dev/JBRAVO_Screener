@@ -45,6 +45,23 @@ If you are building the Vite frontend directly, mirror it as:
 VITE_LOGO_DEV_API_KEY=your_publishable_logo_dev_key
 ```
 
+## Frontend Build (PythonAnywhere)
+
+The React/Vite frontend lives in `frontend/` and is served from `frontend/dist`
+by `raspatrick_pythonanywhere_com_wsgi.py`. Build the frontend on
+PythonAnywhere after pulling new UI changes:
+
+```bash
+cd /home/RasPatrick/jbravo_screener
+chmod +x install_node_pythonanywhere.sh build_frontend_pythonanywhere.sh
+./install_node_pythonanywhere.sh   # installs Node 20.19.0 via nvm
+./build_frontend_pythonanywhere.sh
+touch /var/www/raspatrick_pythonanywhere_com_wsgi.py
+```
+
+Set `VITE_LOGO_DEV_API_KEY` in `frontend/.env` before building. Keep
+`frontend/.env` local (it is ignored by git).
+
 ## Dashboard Metrics
 
 The dashboard surfaces executor state in the Ops Summary. Metrics map to the executor JSON as follows:
@@ -83,7 +100,7 @@ nearest SEC Rule 612 tick before hitting the Alpaca API, preventing 422
 The metrics pipeline is resilient to a missing `data/trades_log.csv`; when the
 file is absent an empty `data/metrics_summary.csv` is written and the run still
 reports `PIPELINE_END rc=0`. Dashboard reloads continue to work even when the
-`pa_reload_webapp` CLI is unavailable—the runner touches the WSGI file as a
+`pa_reload_webapp` CLI is unavailable - the runner touches the WSGI file as a
 fallback.
 
 ## Cron Job Setup
@@ -160,10 +177,10 @@ python scripts/screener.py --mode full-nightly
 
 Helpful flags include:
 
-* `--prefilter-days` / `--prefilter-top` — tune the universe size before the
+* `--prefilter-days` / `--prefilter-top` - tune the universe size before the
   final ranking pass.
-* `--full-days` — control the history loaded for shortlisted symbols.
-* `--reuse-cache` / `--refresh-latest` — toggle cached parquet reuse and whether
+* `--full-days` - control the history loaded for shortlisted symbols.
+* `--reuse-cache` / `--refresh-latest` - toggle cached parquet reuse and whether
   to refresh optional candidate exports (when `JBR_WRITE_CANDIDATE_CSVS=true`).
 
 Refer to `config/ranker.yml` for the ranking weights applied during the

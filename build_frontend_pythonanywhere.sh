@@ -20,6 +20,7 @@ FRONTEND_DIR="$REPO_DIR/frontend"
 BUILD_DIR="$FRONTEND_DIR/dist"
 TARGET_DIR="$FRONTEND_DIR/dist"
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+NODE_VERSION="${NODE_VERSION:-20.19.0}"
 
 log() {
   printf "[frontend-build] %s\n" "$1"
@@ -43,8 +44,23 @@ if [ -s "$NVM_DIR/nvm.sh" ]; then
   . "$NVM_DIR/nvm.sh"
 fi
 
+if command -v nvm >/dev/null 2>&1; then
+  log "Using Node.js $NODE_VERSION via nvm"
+  nvm install "$NODE_VERSION"
+  nvm use "$NODE_VERSION"
+fi
+
 if ! command -v node >/dev/null 2>&1; then
   log "node not found. Run ./install_node_pythonanywhere.sh first."
+  exit 1
+fi
+
+NODE_CURRENT="$(node -v | sed 's/^v//')"
+NODE_MAJOR="${NODE_CURRENT%%.*}"
+NODE_MINOR="${NODE_CURRENT#*.}"
+NODE_MINOR="${NODE_MINOR%%.*}"
+if [ "$NODE_MAJOR" -lt 20 ] || { [ "$NODE_MAJOR" -eq 20 ] && [ "$NODE_MINOR" -lt 19 ]; }; then
+  log "Node.js $NODE_CURRENT is too old. Install $NODE_VERSION with ./install_node_pythonanywhere.sh."
   exit 1
 fi
 
