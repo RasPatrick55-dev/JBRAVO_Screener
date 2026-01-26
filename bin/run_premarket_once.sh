@@ -127,6 +127,7 @@ python -m scripts.check_connection || echo "[WARN] connection probe failed (non-
 # Execute trades
 python -m scripts.execute_trades \
   --source db \
+    --price-source blended \
   --time-window auto \
   --extended-hours true \
   --alloc-weight-key score \
