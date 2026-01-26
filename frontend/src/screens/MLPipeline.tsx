@@ -205,7 +205,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
       setIsLoading(true);
       const [health, pipelineLog] = await Promise.all([
         fetchJson<ApiHealthResponse>("/api/health"),
-        fetchText("/logs/pipeline.log"),
+        fetchText("/api/logs/pipeline.log"),
       ]);
       if (!isMounted) {
         return;
@@ -479,5 +479,6 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
     </div>
   );
 }
+
 
 

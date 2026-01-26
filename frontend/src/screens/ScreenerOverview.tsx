@@ -255,7 +255,7 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
       const [health, candidatesPayload, pipelineLog] = await Promise.all([
         fetchJson<ApiHealthResponse>("/api/health"),
         fetchJson<ScreenerCandidatesResponse>("/api/screener/candidates"),
-        fetchText("/logs/pipeline.log"),
+        fetchText("/api/logs/pipeline.log"),
       ]);
       if (!isMounted) {
         return;
@@ -568,5 +568,6 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
     </div>
   );
 }
+
 
 

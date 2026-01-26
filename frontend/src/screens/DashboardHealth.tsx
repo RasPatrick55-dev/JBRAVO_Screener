@@ -789,8 +789,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
           fetchJson<PipelineTaskRunResponse>("/api/pipeline/task"),
           fetchJson<ExecuteTaskRunResponse>("/api/execute/task"),
           fetchJson<ExecuteOrdersSummaryResponse>("/api/execute/orders-summary"),
-          fetchText("/logs/pipeline.log"),
-          fetchText("/logs/execute_trades.log"),
+          fetchText("/api/logs/pipeline.log"),
+          fetchText("/api/logs/execute_trades.log"),
         ]);
 
       if (!isMounted) {
@@ -1358,5 +1358,6 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     </div>
   );
 }
+
 
 
