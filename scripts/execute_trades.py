@@ -2073,7 +2073,7 @@ class ExecutorConfig:
     position_sizer: str = "notional"
     atr_target_pct: float = 0.02
     submit_at_ny: str = "07:00"
-    price_source: str = "prevclose"
+    price_source: str = "blended"
     price_band_pct: float = 10.0
     price_band_action: str = "clamp"
     chase_interval_minutes: int = 5
