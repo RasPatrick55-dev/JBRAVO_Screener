@@ -3487,6 +3487,7 @@ def data_exports(filename: str):
 
 
 @server.route("/logs/<path:filename>")
+@server.route("/api/logs/<path:filename>")
 def log_exports(filename: str):
     if filename not in LOG_EXPORT_ALLOWLIST:
         abort(404)
