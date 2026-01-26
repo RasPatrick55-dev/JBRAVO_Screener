@@ -35,11 +35,59 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Require successful pipeline
-if ! grep -q "PIPELINE_END rc=0" "$PROJECT_HOME/logs/pipeline.log"; then
-  echo "[WARN] Pipeline not completed; skipping trade execution." >> "$PROJECT_HOME/logs/execute_trades.log"
-  exit 0
-fi
+# Require successful pipeline (database gate)
+PIPELINE_GATE=$(python - <<'PY'
+import os
+
+try:
+    import psycopg2
+except Exception as exc:
+    print(f"[WARN] PIPELINE_GATE missing_psycopg2={exc}; skipping trade execution.")
+    print("PIPELINE_GATE allow=0 reason=missing_psycopg2")
+    raise SystemExit(0)
+
+db_url = os.environ.get("DATABASE_URL")
+if not db_url:
+    print("[WARN] PIPELINE_GATE missing DATABASE_URL; skipping trade execution.")
+    print("PIPELINE_GATE allow=0 reason=missing_database_url")
+    raise SystemExit(0)
+
+try:
+    with psycopg2.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT run_date, ended_at AS finished_at, rc
+                FROM pipeline_runs
+                WHERE rc = 0
+                ORDER BY ended_at DESC NULLS LAST
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+except Exception as exc:
+    print(f"[WARN] PIPELINE_GATE db_error={exc}; skipping trade execution.")
+    print("PIPELINE_GATE allow=0 reason=db_error")
+    raise SystemExit(0)
+
+if not row:
+    print("[WARN] PIPELINE_GATE no successful pipeline run; skipping trade execution.")
+    print("PIPELINE_GATE allow=0 reason=no_successful_run")
+else:
+    run_date, finished_at, rc = row
+    print(
+        "PIPELINE_GATE allow=1 run_date=%s finished_at=%s rc=%s"
+        % (run_date, finished_at, rc)
+    )
+PY
+)
+
+echo "$PIPELINE_GATE" | tee -a "$PROJECT_HOME/logs/execute_trades.log"
+case "$PIPELINE_GATE" in
+  *"allow=0"*)
+    exit 0
+    ;;
+esac
 
 echo "[WRAPPER] probing Alpaca credentials"
 ALPACA_PROBE=$(python - <<'PY'
