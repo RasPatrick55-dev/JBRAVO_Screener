@@ -176,3 +176,435 @@
 2026-01-23 04:50:53,238 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=41
 2026-01-23 04:51:19,127 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
 2026-01-23 04:51:19,130 - pipeline - [INFO] DASH RELOAD method=touch rc=0 path=/var/www/raspatrick_pythonanywhere_com_wsgi.py
+2026-01-24 03:45:28,320 - pipeline - [INFO] ENV_LOADED files=[/home/RasPatrick/.config/jbravo/.env]
+2026-01-24 03:45:28,322 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
+2026-01-24 03:45:28,323 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-23 tz=America/New_York
+2026-01-24 03:45:28,323 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data/daily_bars.csv', '--run-date', '2026-01-23'] backtest=['--run-date', '2026-01-23'] metrics=['--run-date', '2026-01-23'] ranker_eval=[]
+2026-01-24 03:45:28,323 - pipeline - [INFO] START screener cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path data/daily_bars.csv --run-date 2026-01-23
+2026-01-24 03:45:28,325 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=42
+2026-01-24 03:45:43,347 - pipeline - [INFO] screener still running secs=15.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:45:58,351 - pipeline - [INFO] screener still running secs=30.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:46:13,360 - pipeline - [INFO] screener still running secs=45.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:46:28,370 - pipeline - [INFO] screener still running secs=60.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:46:43,373 - pipeline - [INFO] screener still running secs=75.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:46:58,375 - pipeline - [INFO] screener still running secs=90.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:47:13,404 - pipeline - [INFO] screener still running secs=105.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:47:28,407 - pipeline - [INFO] screener still running secs=120.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:47:43,409 - pipeline - [INFO] screener still running secs=135.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:47:58,412 - pipeline - [INFO] screener still running secs=150.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:48:13,418 - pipeline - [INFO] screener still running secs=165.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:48:28,420 - pipeline - [INFO] screener still running secs=180.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:48:43,423 - pipeline - [INFO] screener still running secs=195.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:48:58,425 - pipeline - [INFO] screener still running secs=210.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:49:13,427 - pipeline - [INFO] screener still running secs=225.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:49:28,430 - pipeline - [INFO] screener still running secs=240.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:49:43,432 - pipeline - [INFO] screener still running secs=255.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:49:58,434 - pipeline - [INFO] screener still running secs=270.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:50:13,451 - pipeline - [INFO] screener still running secs=285.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:50:28,491 - pipeline - [INFO] screener still running secs=300.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:50:43,493 - pipeline - [INFO] screener still running secs=315.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:50:58,495 - pipeline - [INFO] screener still running secs=330.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:51:13,499 - pipeline - [INFO] screener still running secs=345.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:51:28,503 - pipeline - [INFO] screener still running secs=360.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:51:43,506 - pipeline - [INFO] screener still running secs=375.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:51:58,508 - pipeline - [INFO] screener still running secs=390.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:52:13,525 - pipeline - [INFO] screener still running secs=405.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:52:28,528 - pipeline - [INFO] screener still running secs=420.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:52:43,530 - pipeline - [INFO] screener still running secs=435.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:52:58,532 - pipeline - [INFO] screener still running secs=450.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:53:13,548 - pipeline - [INFO] screener still running secs=465.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:53:28,551 - pipeline - [INFO] screener still running secs=480.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:53:43,554 - pipeline - [INFO] screener still running secs=495.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:53:58,556 - pipeline - [INFO] screener still running secs=510.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:54:13,562 - pipeline - [INFO] screener still running secs=525.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:54:28,564 - pipeline - [INFO] screener still running secs=540.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:54:43,565 - pipeline - [INFO] screener still running secs=555.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:54:58,567 - pipeline - [INFO] screener still running secs=570.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:55:13,570 - pipeline - [INFO] screener still running secs=585.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:55:28,589 - pipeline - [INFO] screener still running secs=600.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:55:43,592 - pipeline - [INFO] screener still running secs=615.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:55:58,594 - pipeline - [INFO] screener still running secs=630.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:56:13,597 - pipeline - [INFO] screener still running secs=645.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:56:28,602 - pipeline - [INFO] screener still running secs=660.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:56:43,604 - pipeline - [INFO] screener still running secs=675.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:56:58,607 - pipeline - [INFO] screener still running secs=690.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:57:13,610 - pipeline - [INFO] screener still running secs=705.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:57:28,612 - pipeline - [INFO] screener still running secs=720.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:57:43,614 - pipeline - [INFO] screener still running secs=735.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:57:48,682 - pipeline - END screener rc=0 secs=740.4 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-24 03:57:48,704 - pipeline - [INFO] CANDIDATE_COUNTS rows=6 source=db
+2026-01-24 03:57:51,398 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-23 rows=297027
+2026-01-24 03:57:51,413 - pipeline - [INFO] START backtest cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.backtest --run-date 2026-01-23
+2026-01-24 03:57:51,414 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=42
+2026-01-24 03:58:06,429 - pipeline - [INFO] backtest still running secs=15.0 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-24 03:58:21,431 - pipeline - [INFO] backtest still running secs=30.0 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-24 03:58:21,598 - pipeline - END backtest rc=0 secs=30.2 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-24 03:58:21,612 - pipeline - >>> [run_pipeline] launching metrics.py subprocess <<<
+2026-01-24 03:58:21,612 - pipeline - [INFO] START metrics cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.metrics --run-date 2026-01-23
+2026-01-24 03:58:21,613 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=42
+2026-01-24 03:58:21,647 - pipeline - [STEP:metrics] >>> METRICS FILE EXECUTED <<<
+2026-01-24 03:58:22,567 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,567] [INFO]: Metrics script started
+2026-01-24 03:58:22,567 - pipeline - [STEP:metrics] >>> METRICS MAIN ENTERED <<<
+2026-01-24 03:58:22,567 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,567] [INFO]: >>> METRICS MAIN ENTERED <<<
+2026-01-24 03:58:22,567 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,567] [INFO]: ⚙️ [METRICS] main() start
+2026-01-24 03:58:22,584 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,584] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-23 source=cli
+2026-01-24 03:58:22,615 - pipeline - [STEP:metrics] >>> Loaded screener_df and backtest_df
+2026-01-24 03:58:22,615 - pipeline - [STEP:metrics] >>> screener_df rows: 6
+2026-01-24 03:58:22,615 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,615] [INFO]: >>> screener_df rows: 6
+2026-01-24 03:58:22,615 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,615] [WARNING]: >>> screener_df rows: 6
+2026-01-24 03:58:22,615 - pipeline - [STEP:metrics] >>> backtest_df rows: 5
+2026-01-24 03:58:22,615 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,615] [INFO]: >>> backtest_df rows: 5
+2026-01-24 03:58:22,615 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,615] [WARNING]: >>> backtest_df rows: 5
+2026-01-24 03:58:22,615 - pipeline - [STEP:metrics] >>> Input data loaded — proceeding to ranking <<<
+2026-01-24 03:58:22,622 - pipeline - [STEP:metrics] >>> Starting rank_and_filter_candidates
+2026-01-24 03:58:22,622 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,622] [INFO]: >>> Starting rank_and_filter_candidates()
+2026-01-24 03:58:22,622 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,622] [INFO]: 🚦 [METRICS] Starting candidate ranking
+2026-01-24 03:58:22,631 - pipeline - [STEP:metrics] >>> ranked_df rows: 5
+2026-01-24 03:58:22,631 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,631] [INFO]: >>> ranked_df rows: 5
+2026-01-24 03:58:22,631 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,631] [WARNING]: >>> ranked_df rows: 5
+2026-01-24 03:58:22,631 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,631] [INFO]: ✅ [METRICS] ranked_df rows: 5
+2026-01-24 03:58:22,631 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,631] [INFO]: [DEBUG] ranked_df shape: (5, 22)
+2026-01-24 03:58:22,632 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,631] [INFO]: [DEBUG] Ranked DataFrame columns: ['run_date', 'symbol', 'trades', 'win_rate', 'net_pnl', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino', 'created_at', 'avg_return', 'win_rate_norm', 'net_pnl_norm', 'trades_norm', 'avg_return_norm', 'score', 'entry_price', 'adv20', 'atrp', 'exchange', 'source']
+2026-01-24 03:58:22,632 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,632] [INFO]: Screener Metrics Summary: total_candidates=5, avg_score=1.03
+2026-01-24 03:58:22,632 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,632] [INFO]: Top 15 Screener Symbols: GGB, CVE, AMD, CMC, HSY
+2026-01-24 03:58:22,636 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,636] [INFO]: Top Candidates: symbol    score  win_rate      net_pnl
+2026-01-24 03:58:22,637 - pipeline - [STEP:metrics]    GGB 1.125535 42.768274 -4150.360500
+2026-01-24 03:58:22,637 - pipeline - [STEP:metrics]    CVE 1.062772 45.000000 -3492.157029
+2026-01-24 03:58:22,637 - pipeline - [STEP:metrics]    AMD 1.028000 45.696970 -3200.427486
+2026-01-24 03:58:22,637 - pipeline - [STEP:metrics]    CMC 0.989951 43.956044 -3036.466945
+2026-01-24 03:58:22,637 - pipeline - [STEP:metrics]    HSY 0.931695 40.771812 -2936.722192
+2026-01-24 03:58:22,637 - pipeline - [STEP:metrics] >>> db.db_enabled(): True
+2026-01-24 03:58:22,637 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,637] [WARNING]: >>> db.db_enabled(): True
+2026-01-24 03:58:22,637 - pipeline - [STEP:metrics] >>> Attempting to insert 5 rows into top_candidates
+2026-01-24 03:58:22,637 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,637] [WARNING]: >>> Inserting into top_candidates: rows=5
+2026-01-24 03:58:22,663 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,663] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-23 deleted=0
+2026-01-24 03:58:22,669 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,669] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=5
+2026-01-24 03:58:22,685 - pipeline - [STEP:metrics] >>> insert_top_candidates completed successfully
+2026-01-24 03:58:22,690 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,690] [INFO]: Calculated Metrics: Trades=3, Net PnL=41.83, Win Rate=33.33%, Expectancy=13.94, Profit Factor=2.1799714837840063, Max Drawdown=-2.59, Sharpe=-0.45, Sortino=-0.58
+2026-01-24 03:58:22,690 - pipeline - [STEP:metrics] >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-24 03:58:22,690 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,690] [INFO]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-24 03:58:22,690 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,690] [WARNING]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-24 03:58:22,690 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,690] [INFO]: 🧮 [METRICS] summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-24 03:58:22,690 - pipeline - [STEP:metrics] >>> db.db_enabled(): True
+2026-01-24 03:58:22,690 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,690] [WARNING]: >>> db.db_enabled(): True
+2026-01-24 03:58:22,690 - pipeline - [STEP:metrics] >>> Attempting to upsert metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+2026-01-24 03:58:22,690 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,690] [WARNING]: >>> Upserting metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+2026-01-24 03:58:22,704 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,704] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+2026-01-24 03:58:22,704 - pipeline - [STEP:metrics] >>> upsert_metrics_daily completed successfully
+2026-01-24 03:58:22,716 - pipeline - [STEP:metrics] >>> METRICS COMPLETE <<<
+2026-01-24 03:58:22,717 - pipeline - [STEP:metrics] >>> METRICS FILE COMPLETED <<<
+2026-01-24 03:58:22,717 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,716] [INFO]: >>> METRICS MAIN COMPLETED <<<
+2026-01-24 03:58:22,717 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,717] [INFO]: 🏁 [METRICS] main() complete
+2026-01-24 03:58:22,717 - pipeline - [STEP:metrics] [2026-01-24 03:58:22,717] [INFO]: [INFO] metrics.py completed successfully
+2026-01-24 03:58:22,844 - pipeline - END metrics rc=0 secs=1.2 log=/home/RasPatrick/jbravo_screener/logs/step.metrics.out
+2026-01-24 03:58:22,844 - pipeline - >>> [run_pipeline] metrics.py completed <<<
+2026-01-24 03:58:22,845 - pipeline - LATEST_SYNC skipped: DB is source of truth.
+2026-01-24 03:58:22,845 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=41
+2026-01-24 04:01:05,241 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
+2026-01-24 04:01:05,335 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=406 symbols_in=83
+2026-01-24 04:01:05,417 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=83 with_bars=83 with_bars_any=414 with_bars_required=83 rows=6 fetch_secs=19.378 feature_secs=692.296 rank_secs=0.341 gate_secs=0.015 bars_rows_total=297027 source=db
+2026-01-24 04:01:05,429 - pipeline - SCREENER_METRICS_SYNC symbols_in=83 with_bars=83 rows=6 bars_rows_total=297027
+2026-01-24 04:01:05,477 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
+2026-01-24 04:01:05,502 - pipeline - CSV ingest disabled: DB is source of truth.
+2026-01-24 04:01:05,502 - pipeline - [INFO] PIPELINE_END rc=0 duration=937.2s
+2026-01-24 04:01:05,502 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=41
+2026-01-24 04:01:10,946 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
+2026-01-24 04:01:10,953 - pipeline - [INFO] DASH RELOAD method=touch rc=0 path=/var/www/raspatrick_pythonanywhere_com_wsgi.py
+2026-01-25 03:45:28,906 - pipeline - [INFO] ENV_LOADED files=[/home/RasPatrick/.config/jbravo/.env]
+2026-01-25 03:45:28,908 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
+2026-01-25 03:45:28,909 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-23 tz=America/New_York
+2026-01-25 03:45:28,909 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data/daily_bars.csv', '--run-date', '2026-01-23'] backtest=['--run-date', '2026-01-23'] metrics=['--run-date', '2026-01-23'] ranker_eval=[]
+2026-01-25 03:45:28,909 - pipeline - [INFO] START screener cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path data/daily_bars.csv --run-date 2026-01-23
+2026-01-25 03:45:28,910 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=42
+2026-01-25 03:45:43,931 - pipeline - [INFO] screener still running secs=15.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:45:58,934 - pipeline - [INFO] screener still running secs=30.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:46:13,944 - pipeline - [INFO] screener still running secs=45.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:46:28,952 - pipeline - [INFO] screener still running secs=60.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:46:43,955 - pipeline - [INFO] screener still running secs=75.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:46:58,957 - pipeline - [INFO] screener still running secs=90.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:47:13,971 - pipeline - [INFO] screener still running secs=105.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:47:28,978 - pipeline - [INFO] screener still running secs=120.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:47:43,980 - pipeline - [INFO] screener still running secs=135.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:47:58,982 - pipeline - [INFO] screener still running secs=150.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:48:13,988 - pipeline - [INFO] screener still running secs=165.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:48:28,990 - pipeline - [INFO] screener still running secs=180.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:48:43,992 - pipeline - [INFO] screener still running secs=195.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:48:58,994 - pipeline - [INFO] screener still running secs=210.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:49:13,996 - pipeline - [INFO] screener still running secs=225.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:49:28,999 - pipeline - [INFO] screener still running secs=240.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:49:44,001 - pipeline - [INFO] screener still running secs=255.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:49:59,003 - pipeline - [INFO] screener still running secs=270.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:50:14,033 - pipeline - [INFO] screener still running secs=285.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:50:29,044 - pipeline - [INFO] screener still running secs=300.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:50:44,046 - pipeline - [INFO] screener still running secs=315.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:50:59,048 - pipeline - [INFO] screener still running secs=330.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:51:14,061 - pipeline - [INFO] screener still running secs=345.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:51:29,066 - pipeline - [INFO] screener still running secs=360.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:51:44,068 - pipeline - [INFO] screener still running secs=375.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:51:59,070 - pipeline - [INFO] screener still running secs=390.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:52:14,074 - pipeline - [INFO] screener still running secs=405.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:52:29,077 - pipeline - [INFO] screener still running secs=420.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:52:44,079 - pipeline - [INFO] screener still running secs=435.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:52:59,081 - pipeline - [INFO] screener still running secs=450.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:53:14,087 - pipeline - [INFO] screener still running secs=465.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:53:29,089 - pipeline - [INFO] screener still running secs=480.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:53:44,092 - pipeline - [INFO] screener still running secs=495.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:53:59,094 - pipeline - [INFO] screener still running secs=510.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:54:14,097 - pipeline - [INFO] screener still running secs=525.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:54:29,099 - pipeline - [INFO] screener still running secs=540.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:54:44,101 - pipeline - [INFO] screener still running secs=555.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:54:59,103 - pipeline - [INFO] screener still running secs=570.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:55:14,116 - pipeline - [INFO] screener still running secs=585.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:55:29,128 - pipeline - [INFO] screener still running secs=600.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:55:44,132 - pipeline - [INFO] screener still running secs=615.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:55:59,135 - pipeline - [INFO] screener still running secs=630.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:56:14,139 - pipeline - [INFO] screener still running secs=645.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:56:29,141 - pipeline - [INFO] screener still running secs=660.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:56:44,142 - pipeline - [INFO] screener still running secs=675.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:56:59,145 - pipeline - [INFO] screener still running secs=690.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:57:14,147 - pipeline - [INFO] screener still running secs=705.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:57:29,149 - pipeline - [INFO] screener still running secs=720.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:57:44,151 - pipeline - [INFO] screener still running secs=735.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:57:59,152 - pipeline - [INFO] screener still running secs=750.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:58:14,155 - pipeline - [INFO] screener still running secs=765.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:58:29,158 - pipeline - [INFO] screener still running secs=780.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:58:44,160 - pipeline - [INFO] screener still running secs=795.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:58:59,162 - pipeline - [INFO] screener still running secs=810.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:59:14,173 - pipeline - [INFO] screener still running secs=825.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:59:29,175 - pipeline - [INFO] screener still running secs=840.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:59:44,177 - pipeline - [INFO] screener still running secs=855.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 03:59:59,178 - pipeline - [INFO] screener still running secs=870.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 04:00:14,185 - pipeline - [INFO] screener still running secs=885.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 04:00:29,219 - pipeline - [INFO] screener still running secs=900.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 04:00:44,354 - pipeline - [INFO] screener still running secs=915.4 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 04:00:59,398 - pipeline - [INFO] screener still running secs=930.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 04:01:14,482 - pipeline - [INFO] screener still running secs=945.6 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 04:01:29,579 - pipeline - [INFO] screener still running secs=960.7 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 04:01:42,320 - pipeline - END screener rc=0 secs=973.4 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-25 04:01:42,389 - pipeline - [INFO] CANDIDATE_COUNTS rows=9 source=db
+2026-01-25 04:01:55,299 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-23 rows=367101
+2026-01-25 04:01:55,327 - pipeline - [INFO] START backtest cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.backtest --run-date 2026-01-23
+2026-01-25 04:01:55,329 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=42
+2026-01-25 04:02:10,351 - pipeline - [INFO] backtest still running secs=15.0 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-25 04:02:25,395 - pipeline - [INFO] backtest still running secs=30.1 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-25 04:02:34,615 - pipeline - END backtest rc=0 secs=39.3 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-25 04:02:34,630 - pipeline - >>> [run_pipeline] launching metrics.py subprocess <<<
+2026-01-25 04:02:34,630 - pipeline - [INFO] START metrics cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.metrics --run-date 2026-01-23
+2026-01-25 04:02:34,631 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=42
+2026-01-25 04:02:34,673 - pipeline - [STEP:metrics] >>> METRICS FILE EXECUTED <<<
+2026-01-25 04:02:35,897 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,896] [INFO]: Metrics script started
+2026-01-25 04:02:35,897 - pipeline - [STEP:metrics] >>> METRICS MAIN ENTERED <<<
+2026-01-25 04:02:35,897 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,897] [INFO]: >>> METRICS MAIN ENTERED <<<
+2026-01-25 04:02:35,897 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,897] [INFO]: ⚙️ [METRICS] main() start
+2026-01-25 04:02:35,920 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,919] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-23 source=cli
+2026-01-25 04:02:35,958 - pipeline - [STEP:metrics] >>> Loaded screener_df and backtest_df
+2026-01-25 04:02:35,958 - pipeline - [STEP:metrics] >>> screener_df rows: 9
+2026-01-25 04:02:35,958 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,957] [INFO]: >>> screener_df rows: 9
+2026-01-25 04:02:35,958 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,958] [WARNING]: >>> screener_df rows: 9
+2026-01-25 04:02:35,958 - pipeline - [STEP:metrics] >>> backtest_df rows: 8
+2026-01-25 04:02:35,958 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,958] [INFO]: >>> backtest_df rows: 8
+2026-01-25 04:02:35,958 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,958] [WARNING]: >>> backtest_df rows: 8
+2026-01-25 04:02:35,958 - pipeline - [STEP:metrics] >>> Input data loaded — proceeding to ranking <<<
+2026-01-25 04:02:35,969 - pipeline - [STEP:metrics] >>> Starting rank_and_filter_candidates
+2026-01-25 04:02:35,969 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,969] [INFO]: >>> Starting rank_and_filter_candidates()
+2026-01-25 04:02:35,969 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,969] [INFO]: 🚦 [METRICS] Starting candidate ranking
+2026-01-25 04:02:35,983 - pipeline - [STEP:metrics] >>> ranked_df rows: 8
+2026-01-25 04:02:35,983 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,983] [INFO]: >>> ranked_df rows: 8
+2026-01-25 04:02:35,983 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,983] [WARNING]: >>> ranked_df rows: 8
+2026-01-25 04:02:35,983 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,983] [INFO]: ✅ [METRICS] ranked_df rows: 8
+2026-01-25 04:02:35,983 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,983] [INFO]: [DEBUG] ranked_df shape: (8, 22)
+2026-01-25 04:02:35,983 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,983] [INFO]: [DEBUG] Ranked DataFrame columns: ['run_date', 'symbol', 'trades', 'win_rate', 'net_pnl', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino', 'created_at', 'avg_return', 'win_rate_norm', 'net_pnl_norm', 'trades_norm', 'avg_return_norm', 'score', 'entry_price', 'adv20', 'atrp', 'exchange', 'source']
+2026-01-25 04:02:35,983 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,983] [INFO]: Screener Metrics Summary: total_candidates=8, avg_score=-1.02
+2026-01-25 04:02:35,984 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,984] [INFO]: Top 15 Screener Symbols: BKD, DINO, PBR, CVE, CMC, HSY, GGB, AMD
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,990] [INFO]: Top Candidates: symbol     score  win_rate      net_pnl
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics]    BKD  1.000000 45.631068   611.582293
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics]   DINO -0.664505 45.043103 -1707.603845
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics]    PBR -0.674925 43.307087 -1558.518493
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics]    CVE -1.085664 43.571429 -2193.239721
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics]    CMC -1.109521 42.284569 -2368.820117
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics]    HSY -1.387819 37.183099 -2359.010721
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics]    GGB -1.506639 42.005420 -2609.017479
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics]    AMD -2.735212 41.325536 -4746.837014
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics] >>> db.db_enabled(): True
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,990] [WARNING]: >>> db.db_enabled(): True
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics] >>> Attempting to insert 8 rows into top_candidates
+2026-01-25 04:02:35,990 - pipeline - [STEP:metrics] [2026-01-25 04:02:35,990] [WARNING]: >>> Inserting into top_candidates: rows=8
+2026-01-25 04:02:36,025 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,025] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-23 deleted=5
+2026-01-25 04:02:36,031 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,030] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=8
+2026-01-25 04:02:36,051 - pipeline - [STEP:metrics] >>> insert_top_candidates completed successfully
+2026-01-25 04:02:36,058 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,058] [INFO]: Calculated Metrics: Trades=3, Net PnL=41.83, Win Rate=33.33%, Expectancy=13.94, Profit Factor=2.1799714837840063, Max Drawdown=-2.59, Sharpe=-0.45, Sortino=-0.58
+2026-01-25 04:02:36,059 - pipeline - [STEP:metrics] >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-25 04:02:36,059 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,059] [INFO]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-25 04:02:36,060 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,059] [WARNING]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-25 04:02:36,060 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,059] [INFO]: 🧮 [METRICS] summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-25 04:02:36,060 - pipeline - [STEP:metrics] >>> db.db_enabled(): True
+2026-01-25 04:02:36,060 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,059] [WARNING]: >>> db.db_enabled(): True
+2026-01-25 04:02:36,060 - pipeline - [STEP:metrics] >>> Attempting to upsert metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+2026-01-25 04:02:36,060 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,059] [WARNING]: >>> Upserting metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+2026-01-25 04:02:36,075 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,075] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+2026-01-25 04:02:36,075 - pipeline - [STEP:metrics] >>> upsert_metrics_daily completed successfully
+2026-01-25 04:02:36,088 - pipeline - [STEP:metrics] >>> METRICS COMPLETE <<<
+2026-01-25 04:02:36,089 - pipeline - [STEP:metrics] >>> METRICS FILE COMPLETED <<<
+2026-01-25 04:02:36,089 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,088] [INFO]: >>> METRICS MAIN COMPLETED <<<
+2026-01-25 04:02:36,089 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,089] [INFO]: 🏁 [METRICS] main() complete
+2026-01-25 04:02:36,089 - pipeline - [STEP:metrics] [2026-01-25 04:02:36,089] [INFO]: [INFO] metrics.py completed successfully
+2026-01-25 04:02:36,320 - pipeline - END metrics rc=0 secs=1.7 log=/home/RasPatrick/jbravo_screener/logs/step.metrics.out
+2026-01-25 04:02:36,320 - pipeline - >>> [run_pipeline] metrics.py completed <<<
+2026-01-25 04:02:36,320 - pipeline - LATEST_SYNC skipped: DB is source of truth.
+2026-01-25 04:02:36,320 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=41
+2026-01-25 04:05:17,915 - pipeline - [INFO] TRADE_PERFORMANCE_CACHE_REFRESHED
+2026-01-25 04:05:18,113 - pipeline - [WARN] METRICS_WITH_BARS_CLAMP with_bars=406 symbols_in=150
+2026-01-25 04:05:18,365 - pipeline - [INFO] PIPELINE_SUMMARY symbols_in=150 with_bars=150 with_bars_any=414 with_bars_required=150 rows=9 fetch_secs=27.632 feature_secs=817.375 rank_secs=0.423 gate_secs=0.015 bars_rows_total=297027 source=db
+2026-01-25 04:05:18,390 - pipeline - SCREENER_METRICS_SYNC symbols_in=150 with_bars=150 rows=9 bars_rows_total=297027
+2026-01-25 04:05:18,456 - pipeline - [INFO] HEALTH trading_ok=True data_ok=True stage=end trading_status=200 data_status=200
+2026-01-25 04:05:18,508 - pipeline - CSV ingest disabled: DB is source of truth.
+2026-01-25 04:05:18,508 - pipeline - [INFO] PIPELINE_END rc=0 duration=1189.6s
+2026-01-25 04:05:18,508 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=41
+2026-01-25 04:05:28,664 - pipeline - ACCOUNT_EQUITY_REFRESH_OK
+2026-01-25 04:05:28,668 - pipeline - [INFO] DASH RELOAD method=touch rc=0 path=/var/www/raspatrick_pythonanywhere_com_wsgi.py
+2026-01-26 03:45:34,396 - pipeline - [INFO] ENV_LOADED files=[/home/RasPatrick/.config/jbravo/.env]
+2026-01-26 03:45:34,400 - pipeline - [INFO] PIPELINE_START steps=screener,backtest,metrics
+2026-01-26 03:45:34,401 - pipeline - [INFO] PIPELINE_RUN_DATE run_date=2026-01-23 tz=America/New_York
+2026-01-26 03:45:34,401 - pipeline - [INFO] PIPELINE_ARGS screener=['--feed', 'iex', '--dollar-vol-min', '2000000', '--reuse-cache', 'true', '--export-daily-bars-path', 'data/daily_bars.csv', '--run-date', '2026-01-23'] backtest=['--run-date', '2026-01-23'] metrics=['--run-date', '2026-01-23'] ranker_eval=[]
+2026-01-26 03:45:34,401 - pipeline - [INFO] START screener cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.screener --mode screener --feed iex --dollar-vol-min 2000000 --reuse-cache true --export-daily-bars-path data/daily_bars.csv --run-date 2026-01-23
+2026-01-26 03:45:34,403 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=46
+2026-01-26 03:45:49,439 - pipeline - [INFO] screener still running secs=15.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:46:04,441 - pipeline - [INFO] screener still running secs=30.0 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:46:19,458 - pipeline - [INFO] screener still running secs=45.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:46:34,460 - pipeline - [INFO] screener still running secs=60.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:46:49,470 - pipeline - [INFO] screener still running secs=75.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:47:04,475 - pipeline - [INFO] screener still running secs=90.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:47:19,490 - pipeline - [INFO] screener still running secs=105.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:47:34,492 - pipeline - [INFO] screener still running secs=120.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:47:49,494 - pipeline - [INFO] screener still running secs=135.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:48:04,496 - pipeline - [INFO] screener still running secs=150.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:48:19,499 - pipeline - [INFO] screener still running secs=165.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:48:34,501 - pipeline - [INFO] screener still running secs=180.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:48:49,503 - pipeline - [INFO] screener still running secs=195.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:49:04,505 - pipeline - [INFO] screener still running secs=210.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:49:19,508 - pipeline - [INFO] screener still running secs=225.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:49:34,510 - pipeline - [INFO] screener still running secs=240.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:49:49,512 - pipeline - [INFO] screener still running secs=255.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:50:04,514 - pipeline - [INFO] screener still running secs=270.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:50:19,528 - pipeline - [INFO] screener still running secs=285.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:50:34,534 - pipeline - [INFO] screener still running secs=300.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:50:49,536 - pipeline - [INFO] screener still running secs=315.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:51:04,538 - pipeline - [INFO] screener still running secs=330.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:51:19,541 - pipeline - [INFO] screener still running secs=345.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:51:34,543 - pipeline - [INFO] screener still running secs=360.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:51:49,545 - pipeline - [INFO] screener still running secs=375.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:52:04,547 - pipeline - [INFO] screener still running secs=390.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:52:19,551 - pipeline - [INFO] screener still running secs=405.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:52:34,553 - pipeline - [INFO] screener still running secs=420.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:52:49,555 - pipeline - [INFO] screener still running secs=435.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:53:04,557 - pipeline - [INFO] screener still running secs=450.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:53:19,562 - pipeline - [INFO] screener still running secs=465.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:53:34,564 - pipeline - [INFO] screener still running secs=480.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:53:49,566 - pipeline - [INFO] screener still running secs=495.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:54:04,568 - pipeline - [INFO] screener still running secs=510.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:54:19,570 - pipeline - [INFO] screener still running secs=525.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:54:34,572 - pipeline - [INFO] screener still running secs=540.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:54:49,574 - pipeline - [INFO] screener still running secs=555.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:55:04,578 - pipeline - [INFO] screener still running secs=570.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:55:19,628 - pipeline - [INFO] screener still running secs=585.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:55:34,636 - pipeline - [INFO] screener still running secs=600.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:55:49,638 - pipeline - [INFO] screener still running secs=615.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:56:04,641 - pipeline - [INFO] screener still running secs=630.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:56:19,644 - pipeline - [INFO] screener still running secs=645.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:56:34,646 - pipeline - [INFO] screener still running secs=660.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:56:49,648 - pipeline - [INFO] screener still running secs=675.2 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:57:04,652 - pipeline - [INFO] screener still running secs=690.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:57:19,655 - pipeline - [INFO] screener still running secs=705.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:57:34,657 - pipeline - [INFO] screener still running secs=720.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:57:49,659 - pipeline - [INFO] screener still running secs=735.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:58:04,663 - pipeline - [INFO] screener still running secs=750.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:58:19,667 - pipeline - [INFO] screener still running secs=765.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:58:34,669 - pipeline - [INFO] screener still running secs=780.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:58:49,670 - pipeline - [INFO] screener still running secs=795.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:59:04,672 - pipeline - [INFO] screener still running secs=810.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:59:19,677 - pipeline - [INFO] screener still running secs=825.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:59:34,679 - pipeline - [INFO] screener still running secs=840.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 03:59:49,681 - pipeline - [INFO] screener still running secs=855.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:00:04,683 - pipeline - [INFO] screener still running secs=870.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:00:19,748 - pipeline - [INFO] screener still running secs=885.3 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:00:34,856 - pipeline - [INFO] screener still running secs=900.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:00:49,910 - pipeline - [INFO] screener still running secs=915.5 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:01:04,972 - pipeline - [INFO] screener still running secs=930.6 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:01:20,044 - pipeline - [INFO] screener still running secs=945.6 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:01:35,064 - pipeline - [INFO] screener still running secs=960.7 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:01:50,081 - pipeline - [INFO] screener still running secs=975.7 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:01:59,472 - pipeline - END screener rc=0 secs=985.1 log=/home/RasPatrick/jbravo_screener/logs/step.screener.out
+2026-01-26 04:01:59,497 - pipeline - [INFO] CANDIDATE_COUNTS rows=12 source=db
+2026-01-26 04:02:04,840 - pipeline - [INFO] DAILY_BARS_DB_WRITTEN run_date=2026-01-23 rows=366268
+2026-01-26 04:02:04,860 - pipeline - [INFO] START backtest cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.backtest --run-date 2026-01-23
+2026-01-26 04:02:04,862 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=46
+2026-01-26 04:02:19,902 - pipeline - [INFO] backtest still running secs=15.0 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-26 04:02:34,907 - pipeline - [INFO] backtest still running secs=30.0 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-26 04:02:44,678 - pipeline - END backtest rc=0 secs=39.8 log=/home/RasPatrick/jbravo_screener/logs/step.backtest.out
+2026-01-26 04:02:44,692 - pipeline - >>> [run_pipeline] launching metrics.py subprocess <<<
+2026-01-26 04:02:44,692 - pipeline - [INFO] START metrics cmd=/home/RasPatrick/.virtualenvs/jbravo-env/bin/python -m scripts.metrics --run-date 2026-01-23
+2026-01-26 04:02:44,694 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=46
+2026-01-26 04:02:44,733 - pipeline - [STEP:metrics] >>> METRICS FILE EXECUTED <<<
+2026-01-26 04:02:45,891 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,891] [INFO]: Metrics script started
+2026-01-26 04:02:45,891 - pipeline - [STEP:metrics] >>> METRICS MAIN ENTERED <<<
+2026-01-26 04:02:45,891 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,891] [INFO]: >>> METRICS MAIN ENTERED <<<
+2026-01-26 04:02:45,891 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,891] [INFO]: ⚙️ [METRICS] main() start
+2026-01-26 04:02:45,908 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,908] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-23 source=cli
+2026-01-26 04:02:45,940 - pipeline - [STEP:metrics] >>> Loaded screener_df and backtest_df
+2026-01-26 04:02:45,940 - pipeline - [STEP:metrics] >>> screener_df rows: 12
+2026-01-26 04:02:45,940 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,940] [INFO]: >>> screener_df rows: 12
+2026-01-26 04:02:45,940 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,940] [WARNING]: >>> screener_df rows: 12
+2026-01-26 04:02:45,940 - pipeline - [STEP:metrics] >>> backtest_df rows: 11
+2026-01-26 04:02:45,940 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,940] [INFO]: >>> backtest_df rows: 11
+2026-01-26 04:02:45,940 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,940] [WARNING]: >>> backtest_df rows: 11
+2026-01-26 04:02:45,940 - pipeline - [STEP:metrics] >>> Input data loaded — proceeding to ranking <<<
+2026-01-26 04:02:45,947 - pipeline - [STEP:metrics] >>> Starting rank_and_filter_candidates
+2026-01-26 04:02:45,947 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,947] [INFO]: >>> Starting rank_and_filter_candidates()
+2026-01-26 04:02:45,948 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,947] [INFO]: 🚦 [METRICS] Starting candidate ranking
+2026-01-26 04:02:45,958 - pipeline - [STEP:metrics] >>> ranked_df rows: 11
+2026-01-26 04:02:45,958 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,958] [INFO]: >>> ranked_df rows: 11
+2026-01-26 04:02:45,958 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,958] [WARNING]: >>> ranked_df rows: 11
+2026-01-26 04:02:45,958 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,958] [INFO]: ✅ [METRICS] ranked_df rows: 11
+2026-01-26 04:02:45,958 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,958] [INFO]: [DEBUG] ranked_df shape: (11, 22)
+2026-01-26 04:02:45,959 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,958] [INFO]: [DEBUG] Ranked DataFrame columns: ['run_date', 'symbol', 'trades', 'win_rate', 'net_pnl', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino', 'created_at', 'avg_return', 'win_rate_norm', 'net_pnl_norm', 'trades_norm', 'avg_return_norm', 'score', 'entry_price', 'adv20', 'atrp', 'exchange', 'source']
+2026-01-26 04:02:45,959 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,959] [INFO]: Screener Metrics Summary: total_candidates=11, avg_score=8.29
+2026-01-26 04:02:45,959 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,959] [INFO]: Top 15 Screener Symbols: DINO, HSY, BDX, GGB, CMC, CVE, AMD, PBR, FORM, BKD, GS
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,965] [INFO]: Top Candidates: symbol     score  win_rate      net_pnl
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]   DINO 13.019070 42.140468 -2242.821807
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]    HSY 12.085774 35.379061 -2052.000071
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]    BDX 10.591804 36.057692 -1663.598819
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]    GGB 10.401792 42.641509 -1726.415129
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]    CMC  9.549970 44.270833 -1693.354186
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]    CVE  9.107373 44.807122 -1573.255457
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]    AMD  8.075181 42.814371 -1384.436307
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]    PBR  7.253393 44.194757 -1176.982386
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]   FORM  5.872236 44.590164  -960.984064
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]    BKD  4.319193 43.636364  -719.885929
+2026-01-26 04:02:45,965 - pipeline - [STEP:metrics]     GS  0.911504 44.313725   -69.091414
+2026-01-26 04:02:45,966 - pipeline - [STEP:metrics] >>> db.db_enabled(): True
+2026-01-26 04:02:45,966 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,965] [WARNING]: >>> db.db_enabled(): True
+2026-01-26 04:02:45,966 - pipeline - [STEP:metrics] >>> Attempting to insert 11 rows into top_candidates
+2026-01-26 04:02:45,966 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,965] [WARNING]: >>> Inserting into top_candidates: rows=11
+2026-01-26 04:02:45,994 - pipeline - [STEP:metrics] [2026-01-26 04:02:45,994] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-23 deleted=8
+2026-01-26 04:02:46,002 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,002] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=11
+2026-01-26 04:02:46,020 - pipeline - [STEP:metrics] >>> insert_top_candidates completed successfully
+2026-01-26 04:02:46,030 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,030] [INFO]: Calculated Metrics: Trades=3, Net PnL=41.83, Win Rate=33.33%, Expectancy=13.94, Profit Factor=2.1799714837840063, Max Drawdown=-2.59, Sharpe=-0.45, Sortino=-0.58
+2026-01-26 04:02:46,030 - pipeline - [STEP:metrics] >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-26 04:02:46,030 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,030] [INFO]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-26 04:02:46,030 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,030] [WARNING]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-26 04:02:46,030 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,030] [INFO]: 🧮 [METRICS] summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+2026-01-26 04:02:46,030 - pipeline - [STEP:metrics] >>> db.db_enabled(): True
+2026-01-26 04:02:46,031 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,030] [WARNING]: >>> db.db_enabled(): True
+2026-01-26 04:02:46,031 - pipeline - [STEP:metrics] >>> Attempting to upsert metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+2026-01-26 04:02:46,031 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,031] [WARNING]: >>> Upserting metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+2026-01-26 04:02:46,045 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,045] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+2026-01-26 04:02:46,045 - pipeline - [STEP:metrics] >>> upsert_metrics_daily completed successfully
+2026-01-26 04:02:46,058 - pipeline - [STEP:metrics] >>> METRICS COMPLETE <<<
+2026-01-26 04:02:46,058 - pipeline - [STEP:metrics] >>> METRICS FILE COMPLETED <<<
+2026-01-26 04:02:46,058 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,058] [INFO]: >>> METRICS MAIN COMPLETED <<<
+2026-01-26 04:02:46,059 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,058] [INFO]: 🏁 [METRICS] main() complete
+2026-01-26 04:02:46,059 - pipeline - [STEP:metrics] [2026-01-26 04:02:46,058] [INFO]: [INFO] metrics.py completed successfully
+2026-01-26 04:02:46,275 - pipeline - END metrics rc=0 secs=1.6 log=/home/RasPatrick/jbravo_screener/logs/step.metrics.out
+2026-01-26 04:02:46,275 - pipeline - >>> [run_pipeline] metrics.py completed <<<
+2026-01-26 04:02:46,276 - pipeline - LATEST_SYNC skipped: DB is source of truth.
+2026-01-26 04:02:46,276 - pipeline - [INFO] CHILD_ENV_KEYS has_database_url=True keys_count=45

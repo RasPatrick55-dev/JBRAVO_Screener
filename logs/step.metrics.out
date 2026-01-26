@@ -1640,3 +1640,180 @@ C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\metrics.py:661: DeprecationWarn
 [2026-01-23 04:50:20,139] [INFO]: 🏁 [METRICS] main() complete
 [2026-01-23 04:50:20,139] [INFO]: [INFO] metrics.py completed successfully
 [2026-01-23T04:50:24.327717+00:00] END metrics rc=0 secs=29.9
+[2026-01-24T03:58:21.613550+00:00] START metrics
+>>> METRICS FILE EXECUTED <<<
+[2026-01-24 03:58:22,567] [INFO]: Metrics script started
+>>> METRICS MAIN ENTERED <<<
+[2026-01-24 03:58:22,567] [INFO]: >>> METRICS MAIN ENTERED <<<
+[2026-01-24 03:58:22,567] [INFO]: ⚙️ [METRICS] main() start
+[2026-01-24 03:58:22,584] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-23 source=cli
+>>> Loaded screener_df and backtest_df
+>>> screener_df rows: 6
+[2026-01-24 03:58:22,615] [INFO]: >>> screener_df rows: 6
+[2026-01-24 03:58:22,615] [WARNING]: >>> screener_df rows: 6
+>>> backtest_df rows: 5
+[2026-01-24 03:58:22,615] [INFO]: >>> backtest_df rows: 5
+[2026-01-24 03:58:22,615] [WARNING]: >>> backtest_df rows: 5
+>>> Input data loaded — proceeding to ranking <<<
+>>> Starting rank_and_filter_candidates
+[2026-01-24 03:58:22,622] [INFO]: >>> Starting rank_and_filter_candidates()
+[2026-01-24 03:58:22,622] [INFO]: 🚦 [METRICS] Starting candidate ranking
+>>> ranked_df rows: 5
+[2026-01-24 03:58:22,631] [INFO]: >>> ranked_df rows: 5
+[2026-01-24 03:58:22,631] [WARNING]: >>> ranked_df rows: 5
+[2026-01-24 03:58:22,631] [INFO]: ✅ [METRICS] ranked_df rows: 5
+[2026-01-24 03:58:22,631] [INFO]: [DEBUG] ranked_df shape: (5, 22)
+[2026-01-24 03:58:22,631] [INFO]: [DEBUG] Ranked DataFrame columns: ['run_date', 'symbol', 'trades', 'win_rate', 'net_pnl', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino', 'created_at', 'avg_return', 'win_rate_norm', 'net_pnl_norm', 'trades_norm', 'avg_return_norm', 'score', 'entry_price', 'adv20', 'atrp', 'exchange', 'source']
+[2026-01-24 03:58:22,632] [INFO]: Screener Metrics Summary: total_candidates=5, avg_score=1.03
+[2026-01-24 03:58:22,632] [INFO]: Top 15 Screener Symbols: GGB, CVE, AMD, CMC, HSY
+[2026-01-24 03:58:22,636] [INFO]: Top Candidates: symbol    score  win_rate      net_pnl
+   GGB 1.125535 42.768274 -4150.360500
+   CVE 1.062772 45.000000 -3492.157029
+   AMD 1.028000 45.696970 -3200.427486
+   CMC 0.989951 43.956044 -3036.466945
+   HSY 0.931695 40.771812 -2936.722192
+>>> db.db_enabled(): True
+[2026-01-24 03:58:22,637] [WARNING]: >>> db.db_enabled(): True
+>>> Attempting to insert 5 rows into top_candidates
+[2026-01-24 03:58:22,637] [WARNING]: >>> Inserting into top_candidates: rows=5
+[2026-01-24 03:58:22,663] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-23 deleted=0
+[2026-01-24 03:58:22,669] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=5
+>>> insert_top_candidates completed successfully
+[2026-01-24 03:58:22,690] [INFO]: Calculated Metrics: Trades=3, Net PnL=41.83, Win Rate=33.33%, Expectancy=13.94, Profit Factor=2.1799714837840063, Max Drawdown=-2.59, Sharpe=-0.45, Sortino=-0.58
+>>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+[2026-01-24 03:58:22,690] [INFO]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+[2026-01-24 03:58:22,690] [WARNING]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+[2026-01-24 03:58:22,690] [INFO]: 🧮 [METRICS] summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+>>> db.db_enabled(): True
+[2026-01-24 03:58:22,690] [WARNING]: >>> db.db_enabled(): True
+>>> Attempting to upsert metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+[2026-01-24 03:58:22,690] [WARNING]: >>> Upserting metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+[2026-01-24 03:58:22,704] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+>>> upsert_metrics_daily completed successfully
+>>> METRICS COMPLETE <<<
+>>> METRICS FILE COMPLETED <<<
+[2026-01-24 03:58:22,716] [INFO]: >>> METRICS MAIN COMPLETED <<<
+[2026-01-24 03:58:22,717] [INFO]: 🏁 [METRICS] main() complete
+[2026-01-24 03:58:22,717] [INFO]: [INFO] metrics.py completed successfully
+[2026-01-24T03:58:22.839785+00:00] END metrics rc=0 secs=1.2
+[2026-01-25T04:02:34.631942+00:00] START metrics
+>>> METRICS FILE EXECUTED <<<
+[2026-01-25 04:02:35,896] [INFO]: Metrics script started
+>>> METRICS MAIN ENTERED <<<
+[2026-01-25 04:02:35,897] [INFO]: >>> METRICS MAIN ENTERED <<<
+[2026-01-25 04:02:35,897] [INFO]: ⚙️ [METRICS] main() start
+[2026-01-25 04:02:35,919] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-23 source=cli
+>>> Loaded screener_df and backtest_df
+>>> screener_df rows: 9
+[2026-01-25 04:02:35,957] [INFO]: >>> screener_df rows: 9
+[2026-01-25 04:02:35,958] [WARNING]: >>> screener_df rows: 9
+>>> backtest_df rows: 8
+[2026-01-25 04:02:35,958] [INFO]: >>> backtest_df rows: 8
+[2026-01-25 04:02:35,958] [WARNING]: >>> backtest_df rows: 8
+>>> Input data loaded — proceeding to ranking <<<
+>>> Starting rank_and_filter_candidates
+[2026-01-25 04:02:35,969] [INFO]: >>> Starting rank_and_filter_candidates()
+[2026-01-25 04:02:35,969] [INFO]: 🚦 [METRICS] Starting candidate ranking
+>>> ranked_df rows: 8
+[2026-01-25 04:02:35,983] [INFO]: >>> ranked_df rows: 8
+[2026-01-25 04:02:35,983] [WARNING]: >>> ranked_df rows: 8
+[2026-01-25 04:02:35,983] [INFO]: ✅ [METRICS] ranked_df rows: 8
+[2026-01-25 04:02:35,983] [INFO]: [DEBUG] ranked_df shape: (8, 22)
+[2026-01-25 04:02:35,983] [INFO]: [DEBUG] Ranked DataFrame columns: ['run_date', 'symbol', 'trades', 'win_rate', 'net_pnl', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino', 'created_at', 'avg_return', 'win_rate_norm', 'net_pnl_norm', 'trades_norm', 'avg_return_norm', 'score', 'entry_price', 'adv20', 'atrp', 'exchange', 'source']
+[2026-01-25 04:02:35,983] [INFO]: Screener Metrics Summary: total_candidates=8, avg_score=-1.02
+[2026-01-25 04:02:35,984] [INFO]: Top 15 Screener Symbols: BKD, DINO, PBR, CVE, CMC, HSY, GGB, AMD
+[2026-01-25 04:02:35,990] [INFO]: Top Candidates: symbol     score  win_rate      net_pnl
+   BKD  1.000000 45.631068   611.582293
+  DINO -0.664505 45.043103 -1707.603845
+   PBR -0.674925 43.307087 -1558.518493
+   CVE -1.085664 43.571429 -2193.239721
+   CMC -1.109521 42.284569 -2368.820117
+   HSY -1.387819 37.183099 -2359.010721
+   GGB -1.506639 42.005420 -2609.017479
+   AMD -2.735212 41.325536 -4746.837014
+>>> db.db_enabled(): True
+[2026-01-25 04:02:35,990] [WARNING]: >>> db.db_enabled(): True
+>>> Attempting to insert 8 rows into top_candidates
+[2026-01-25 04:02:35,990] [WARNING]: >>> Inserting into top_candidates: rows=8
+[2026-01-25 04:02:36,025] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-23 deleted=5
+[2026-01-25 04:02:36,030] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=8
+>>> insert_top_candidates completed successfully
+[2026-01-25 04:02:36,058] [INFO]: Calculated Metrics: Trades=3, Net PnL=41.83, Win Rate=33.33%, Expectancy=13.94, Profit Factor=2.1799714837840063, Max Drawdown=-2.59, Sharpe=-0.45, Sortino=-0.58
+>>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+[2026-01-25 04:02:36,059] [INFO]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+[2026-01-25 04:02:36,059] [WARNING]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+[2026-01-25 04:02:36,059] [INFO]: 🧮 [METRICS] summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+>>> db.db_enabled(): True
+[2026-01-25 04:02:36,059] [WARNING]: >>> db.db_enabled(): True
+>>> Attempting to upsert metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+[2026-01-25 04:02:36,059] [WARNING]: >>> Upserting metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+[2026-01-25 04:02:36,075] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+>>> upsert_metrics_daily completed successfully
+>>> METRICS COMPLETE <<<
+>>> METRICS FILE COMPLETED <<<
+[2026-01-25 04:02:36,088] [INFO]: >>> METRICS MAIN COMPLETED <<<
+[2026-01-25 04:02:36,089] [INFO]: 🏁 [METRICS] main() complete
+[2026-01-25 04:02:36,089] [INFO]: [INFO] metrics.py completed successfully
+[2026-01-25T04:02:36.316754+00:00] END metrics rc=0 secs=1.7
+[2026-01-26T04:02:44.694067+00:00] START metrics
+>>> METRICS FILE EXECUTED <<<
+[2026-01-26 04:02:45,891] [INFO]: Metrics script started
+>>> METRICS MAIN ENTERED <<<
+[2026-01-26 04:02:45,891] [INFO]: >>> METRICS MAIN ENTERED <<<
+[2026-01-26 04:02:45,891] [INFO]: ⚙️ [METRICS] main() start
+[2026-01-26 04:02:45,908] [INFO]: [INFO] STEP_RUN_DATE step=metrics run_date=2026-01-23 source=cli
+>>> Loaded screener_df and backtest_df
+>>> screener_df rows: 12
+[2026-01-26 04:02:45,940] [INFO]: >>> screener_df rows: 12
+[2026-01-26 04:02:45,940] [WARNING]: >>> screener_df rows: 12
+>>> backtest_df rows: 11
+[2026-01-26 04:02:45,940] [INFO]: >>> backtest_df rows: 11
+[2026-01-26 04:02:45,940] [WARNING]: >>> backtest_df rows: 11
+>>> Input data loaded — proceeding to ranking <<<
+>>> Starting rank_and_filter_candidates
+[2026-01-26 04:02:45,947] [INFO]: >>> Starting rank_and_filter_candidates()
+[2026-01-26 04:02:45,947] [INFO]: 🚦 [METRICS] Starting candidate ranking
+>>> ranked_df rows: 11
+[2026-01-26 04:02:45,958] [INFO]: >>> ranked_df rows: 11
+[2026-01-26 04:02:45,958] [WARNING]: >>> ranked_df rows: 11
+[2026-01-26 04:02:45,958] [INFO]: ✅ [METRICS] ranked_df rows: 11
+[2026-01-26 04:02:45,958] [INFO]: [DEBUG] ranked_df shape: (11, 22)
+[2026-01-26 04:02:45,958] [INFO]: [DEBUG] Ranked DataFrame columns: ['run_date', 'symbol', 'trades', 'win_rate', 'net_pnl', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino', 'created_at', 'avg_return', 'win_rate_norm', 'net_pnl_norm', 'trades_norm', 'avg_return_norm', 'score', 'entry_price', 'adv20', 'atrp', 'exchange', 'source']
+[2026-01-26 04:02:45,959] [INFO]: Screener Metrics Summary: total_candidates=11, avg_score=8.29
+[2026-01-26 04:02:45,959] [INFO]: Top 15 Screener Symbols: DINO, HSY, BDX, GGB, CMC, CVE, AMD, PBR, FORM, BKD, GS
+[2026-01-26 04:02:45,965] [INFO]: Top Candidates: symbol     score  win_rate      net_pnl
+  DINO 13.019070 42.140468 -2242.821807
+   HSY 12.085774 35.379061 -2052.000071
+   BDX 10.591804 36.057692 -1663.598819
+   GGB 10.401792 42.641509 -1726.415129
+   CMC  9.549970 44.270833 -1693.354186
+   CVE  9.107373 44.807122 -1573.255457
+   AMD  8.075181 42.814371 -1384.436307
+   PBR  7.253393 44.194757 -1176.982386
+  FORM  5.872236 44.590164  -960.984064
+   BKD  4.319193 43.636364  -719.885929
+    GS  0.911504 44.313725   -69.091414
+>>> db.db_enabled(): True
+[2026-01-26 04:02:45,965] [WARNING]: >>> db.db_enabled(): True
+>>> Attempting to insert 11 rows into top_candidates
+[2026-01-26 04:02:45,965] [WARNING]: >>> Inserting into top_candidates: rows=11
+[2026-01-26 04:02:45,994] [INFO]: [INFO] TOP_CANDIDATES_REPLACED run_date=2026-01-23 deleted=8
+[2026-01-26 04:02:46,002] [INFO]: [INFO] DB_WRITE_OK table=top_candidates rows=11
+>>> insert_top_candidates completed successfully
+[2026-01-26 04:02:46,030] [INFO]: Calculated Metrics: Trades=3, Net PnL=41.83, Win Rate=33.33%, Expectancy=13.94, Profit Factor=2.1799714837840063, Max Drawdown=-2.59, Sharpe=-0.45, Sortino=-0.58
+>>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+[2026-01-26 04:02:46,030] [INFO]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+[2026-01-26 04:02:46,030] [WARNING]: >>> summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+[2026-01-26 04:02:46,030] [INFO]: 🧮 [METRICS] summary_metrics: {'total_trades': 3, 'net_pnl': 41.82999500000055, 'win_rate': 33.33333333333333, 'expectancy': 13.94333166666685, 'profit_factor': 2.1799714837840063, 'max_drawdown': -2.590005000000019, 'sharpe': -0.45373724864683473, 'sortino': -0.5840749705008051}
+>>> db.db_enabled(): True
+[2026-01-26 04:02:46,030] [WARNING]: >>> db.db_enabled(): True
+>>> Attempting to upsert metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+[2026-01-26 04:02:46,031] [WARNING]: >>> Upserting metrics_daily: keys=['total_trades', 'net_pnl', 'win_rate', 'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino']
+[2026-01-26 04:02:46,045] [INFO]: [INFO] DB_WRITE_OK table=metrics_daily rows=1
+>>> upsert_metrics_daily completed successfully
+>>> METRICS COMPLETE <<<
+>>> METRICS FILE COMPLETED <<<
+[2026-01-26 04:02:46,058] [INFO]: >>> METRICS MAIN COMPLETED <<<
+[2026-01-26 04:02:46,058] [INFO]: 🏁 [METRICS] main() complete
+[2026-01-26 04:02:46,058] [INFO]: [INFO] metrics.py completed successfully
+[2026-01-26T04:02:46.271954+00:00] END metrics rc=0 secs=1.6

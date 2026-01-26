@@ -170,3 +170,9 @@ C:\Users\RasPa\JBravoGit\JBRAVO_Screener\scripts\backtest.py:1298: DeprecationWa
 [2026-01-23T04:10:40.418040+00:00] END backtest rc=0 secs=30.2
 [2026-01-23T04:47:08.834545+00:00] START backtest
 [2026-01-23T04:49:54.378994+00:00] END backtest rc=0 secs=165.5
+[2026-01-24T03:57:51.414429+00:00] START backtest
+[2026-01-24T03:58:21.595277+00:00] END backtest rc=0 secs=30.2
+[2026-01-25T04:01:55.329643+00:00] START backtest
+[2026-01-25T04:02:34.611804+00:00] END backtest rc=0 secs=39.3
+[2026-01-26T04:02:04.862076+00:00] START backtest
+[2026-01-26T04:02:44.674539+00:00] END backtest rc=0 secs=39.8
