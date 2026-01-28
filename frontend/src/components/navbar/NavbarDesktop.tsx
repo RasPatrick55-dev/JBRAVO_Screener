@@ -104,7 +104,7 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
             </div>
           </div>
           <div className="flex items-center justify-center overflow-x-auto lg:justify-end">
-            <div className="min-w-max">
+            <div className="w-full sm:min-w-max">
               <MarketClockGroup serverUtc={serverUtc || localUtc} />
             </div>
           </div>

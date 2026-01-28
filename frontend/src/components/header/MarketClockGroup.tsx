@@ -33,6 +33,27 @@ const TIME_FORMATTERS = {
   }),
 };
 
+const TIME_FORMATTERS_MOBILE = {
+  utc: new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }),
+  ny: new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }),
+  chicago: new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }),
+};
+
 const NY_PARTS_FORMATTER = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York",
   hour: "2-digit",
@@ -46,6 +67,12 @@ const NY_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "2-digit",
   year: "numeric",
+});
+
+const NY_DATE_FORMATTER_MOBILE = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  month: "short",
+  day: "2-digit",
 });
 
 const PHASE_STYLES: Record<MarketPhase, { status: string; glow: string }> = {
@@ -157,6 +184,11 @@ export default function MarketClockGroup({ serverUtc }: MarketClockGroupProps) {
   const utcTime = isValid ? TIME_FORMATTERS.utc.format(timestamp) : PLACEHOLDER_TIME;
   const nyTime = isValid ? TIME_FORMATTERS.ny.format(timestamp) : PLACEHOLDER_TIME;
   const chicagoTime = isValid ? TIME_FORMATTERS.chicago.format(timestamp) : PLACEHOLDER_TIME;
+  const utcTimeMobile = isValid ? TIME_FORMATTERS_MOBILE.utc.format(timestamp) : PLACEHOLDER_TIME;
+  const nyTimeMobile = isValid ? TIME_FORMATTERS_MOBILE.ny.format(timestamp) : PLACEHOLDER_TIME;
+  const chicagoTimeMobile = isValid
+    ? TIME_FORMATTERS_MOBILE.chicago.format(timestamp)
+    : PLACEHOLDER_TIME;
 
   const nyParts = isValid ? getNyTimeParts(timestamp) : { hour: 0, minute: 0, second: 0 };
   const phase = isValid
@@ -164,6 +196,9 @@ export default function MarketClockGroup({ serverUtc }: MarketClockGroupProps) {
     : "Closed";
   const dateLabel = isValid
     ? NY_DATE_FORMATTER.format(timestamp).toUpperCase()
+    : PLACEHOLDER_DATE;
+  const dateLabelMobile = isValid
+    ? NY_DATE_FORMATTER_MOBILE.format(timestamp).toUpperCase()
     : PLACEHOLDER_DATE;
   const phaseLabel = phase.toUpperCase();
   const phaseStyles = PHASE_STYLES[phase];
@@ -195,7 +230,7 @@ export default function MarketClockGroup({ serverUtc }: MarketClockGroupProps) {
 
   return (
     <div className="flex items-center">
-      <div className="flex items-stretch overflow-hidden rounded-[12px] border border-[#2B3447] bg-[linear-gradient(135deg,#0B1220_0%,#111827_100%)] shadow-[0_0_0_1px_rgba(36,44,58,0.6)]">
+      <div className="hidden items-stretch overflow-hidden rounded-[12px] border border-[#2B3447] bg-[linear-gradient(135deg,#0B1220_0%,#111827_100%)] shadow-[0_0_0_1px_rgba(36,44,58,0.6)] sm:flex">
         <div className="flex min-w-[140px] flex-col justify-center gap-[2px] px-[12px]">
           <span className="font-cousine text-[9px] font-bold uppercase tracking-[0.3em] text-[#9AA4B2] whitespace-nowrap leading-[12px]">
             {dateLabel}
@@ -221,6 +256,45 @@ export default function MarketClockGroup({ serverUtc }: MarketClockGroupProps) {
                 timeClass={clock.timeClass}
               />
               {index < clockChips.length - 1 ? <Divider /> : null}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex w-full flex-col gap-2 rounded-[12px] border border-[#2B3447] bg-[linear-gradient(135deg,#0B1220_0%,#111827_100%)] p-2 shadow-[0_0_0_1px_rgba(36,44,58,0.6)] sm:hidden">
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-cousine text-[9px] font-bold uppercase tracking-[0.3em] text-[#9AA4B2] whitespace-nowrap leading-[12px]">
+            {dateLabelMobile}
+          </span>
+          <span
+            className={
+              "font-cousine text-[12px] font-bold uppercase tracking-[0.22em] whitespace-nowrap leading-[14px] market-status " +
+              phaseStyles.status
+            }
+            style={phaseGlowStyle}
+          >
+            {phaseLabel}
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            { label: "UTC", value: utcTimeMobile, accent: "border-[#00C6E8]", tone: "text-[#00D3F2]" },
+            { label: "EST", value: nyTimeMobile, accent: "border-[#3B4454]", tone: "text-[#9AA4B2]" },
+            { label: "CST", value: chicagoTimeMobile, accent: "border-[#FF7A00]", tone: "text-[#FF9B45]" },
+          ].map((clock) => (
+            <div
+              key={clock.label}
+              className={
+                "rounded-[10px] border " +
+                clock.accent +
+                " bg-[#0F172A] px-2 py-1 text-[11px] font-semibold text-slate-100"
+              }
+            >
+              <div className={"text-[9px] font-bold uppercase tracking-[0.2em] " + clock.tone}>
+                {clock.label}
+              </div>
+              <div className="font-cousine text-[11px] font-bold text-slate-100">
+                {clock.value}
+              </div>
             </div>
           ))}
         </div>
