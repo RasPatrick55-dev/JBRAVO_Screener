@@ -127,7 +127,8 @@ python -m scripts.check_connection || echo "[WARN] connection probe failed (non-
 # Execute trades
 python -m scripts.execute_trades \
   --source db \
-    --price-source blended \
+  --price-source blended \
+  --ref-buffer-pct 0.75 \
   --time-window auto \
   --extended-hours true \
   --alloc-weight-key score \
@@ -135,7 +136,7 @@ python -m scripts.execute_trades \
   --min-order-usd 300 \
   --max-positions 4 \
   --trailing-percent 3 \
-  --cancel-after-min 35
+  --cancel-after-min 30
 
 PREMARKET_FINISHED_UTC=$(python - <<'PY'
 from datetime import datetime, timezone

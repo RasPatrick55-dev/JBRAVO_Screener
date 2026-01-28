@@ -2054,9 +2054,9 @@ class ExecutorConfig:
     entry_buffer_bps: int = 75
     limit_buffer_pct: float = 0.5
     max_gap_pct: float = _env_float("MAX_GAP_PCT", 3.0)
-    ref_buffer_pct: float = _env_float("REF_BUFFER_PCT", 0.5)
+    ref_buffer_pct: float = _env_float("REF_BUFFER_PCT", 0.75)
     trailing_percent: float = 3.0
-    cancel_after_min: int = 35
+    cancel_after_min: int = 30
     max_poll_secs: int = 60
     extended_hours: bool = True
     time_window: str = "auto"
@@ -5357,7 +5357,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         type=float,
         default=ExecutorConfig.ref_buffer_pct,
         help=(
-            "Percent buffer added to live reference prices (env: REF_BUFFER_PCT, default 0.5)"
+            "Percent buffer added to live reference prices (env: REF_BUFFER_PCT, default 0.75)"
         ),
     )
     parser.add_argument(
