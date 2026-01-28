@@ -394,12 +394,44 @@ const parsePipelineLogRun = (logText: string | null | undefined) => {
   let rc: number | null = null;
   let startIndex = -1;
   let endIndex = -1;
-  const stepRcs: { screener: number | null; backtest: number | null; metrics: number | null } =
-    {
-      screener: null,
-      backtest: null,
-      metrics: null,
-    };
+  type StepKey = "screener" | "backtest" | "metrics";
+  const stepRcs: { screener: number | null; backtest: number | null; metrics: number | null } = {
+    screener: null,
+    backtest: null,
+    metrics: null,
+  };
+  const stepPriorities: Record<StepKey, number> = {
+    screener: 0,
+    backtest: 0,
+    metrics: 0,
+  };
+
+  const mapStepName = (raw: string): StepKey | null => {
+    const text = raw.toLowerCase();
+    if (text.includes("screener")) {
+      return "screener";
+    }
+    if (text.includes("backtest")) {
+      return "backtest";
+    }
+    if (text.includes("metrics")) {
+      return "metrics";
+    }
+    return null;
+  };
+
+  const setStepRc = (step: StepKey | null, value: number | null, priority: number) => {
+    if (!step) {
+      return;
+    }
+    if (value === null || Number.isNaN(value)) {
+      return;
+    }
+    if (priority >= stepPriorities[step]) {
+      stepRcs[step] = value;
+      stepPriorities[step] = priority;
+    }
+  };
 
   const lines = logText.split(/\r?\n/);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -441,28 +473,55 @@ const parsePipelineLogRun = (logText: string | null | undefined) => {
   if (startIndex >= 0 && endIndex >= 0) {
     for (let i = startIndex; i <= endIndex; i += 1) {
       const line = lines[i];
-      if (line.includes("END screener")) {
-        const rcMatch = line.match(/rc=([0-9-]+)/);
-        if (rcMatch) {
-          const parsedRc = Number(rcMatch[1]);
-          stepRcs.screener = Number.isFinite(parsedRc) ? parsedRc : stepRcs.screener;
-        }
+
+      const endMatch = line.match(/\bEND\s+(screener|backtest|metrics)\b.*\brc=([0-9-]+)/i);
+      if (endMatch) {
+        const step = mapStepName(endMatch[1]);
+        const parsedRc = Number(endMatch[2]);
+        setStepRc(step, Number.isFinite(parsedRc) ? parsedRc : null, 2);
+        continue;
       }
-      if (line.includes("END backtest")) {
-        const rcMatch = line.match(/rc=([0-9-]+)/);
-        if (rcMatch) {
-          const parsedRc = Number(rcMatch[1]);
-          stepRcs.backtest = Number.isFinite(parsedRc) ? parsedRc : stepRcs.backtest;
-        }
+
+      const timeoutMatch = line.match(/\bSTEP_TIMEOUT\b.*\bname=([a-zA-Z_]+)\b.*\brc=([0-9-]+)/i);
+      if (timeoutMatch) {
+        const step = mapStepName(timeoutMatch[1]);
+        const parsedRc = Number(timeoutMatch[2]);
+        setStepRc(step, Number.isFinite(parsedRc) ? parsedRc : null, 2);
+        continue;
       }
-      if (line.includes("END metrics")) {
-        const rcMatch = line.match(/rc=([0-9-]+)/);
-        if (rcMatch) {
-          const parsedRc = Number(rcMatch[1]);
-          stepRcs.metrics = Number.isFinite(parsedRc) ? parsedRc : stepRcs.metrics;
+
+      const completedMatch = line.match(/\bCompleted\s+(.+?)\s+successfully\b/i);
+      if (completedMatch) {
+        const step = mapStepName(completedMatch[1]);
+        setStepRc(step, 0, 1);
+        continue;
+      }
+
+      const failedMatch = line.match(/\b(.+?)\s+failed with exit\s+([0-9-]+)\b/i);
+      if (failedMatch) {
+        const step = mapStepName(failedMatch[1]);
+        const parsedRc = Number(failedMatch[2]);
+        setStepRc(step, Number.isFinite(parsedRc) ? parsedRc : null, 1);
+        continue;
+      }
+
+      const stepFailedMatch = line.match(/\bStep\s+(.+?)\s+failed\b/i);
+      if (stepFailedMatch) {
+        const step = mapStepName(stepFailedMatch[1]);
+        if (step) {
+          const fallbackRc = stepRcs[step] ?? 1;
+          setStepRc(step, fallbackRc, 1);
         }
       }
     }
+  }
+
+  if (rc === 0) {
+    (["screener", "backtest", "metrics"] as const).forEach((step) => {
+      if (stepRcs[step] === null) {
+        stepRcs[step] = 0;
+      }
+    });
   }
 
   return { start, end, durationSeconds, rc, stepRcs };
@@ -647,6 +706,7 @@ const fetchText = async (path: string): Promise<string | null> => {
   try {
     const response = await fetch(path, {
       headers: { Accept: "text/plain" },
+      cache: "no-store",
     });
     if (!response.ok) {
       return null;
@@ -789,8 +849,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
           fetchJson<PipelineTaskRunResponse>("/api/pipeline/task"),
           fetchJson<ExecuteTaskRunResponse>("/api/execute/task"),
           fetchJson<ExecuteOrdersSummaryResponse>("/api/execute/orders-summary"),
-          fetchText("/api/logs/pipeline.log"),
-          fetchText("/api/logs/execute_trades.log"),
+          fetchText(`/api/logs/pipeline.log?ts=${Date.now()}`),
+          fetchText(`/api/logs/execute_trades.log?ts=${Date.now()}`),
         ]);
 
       if (!isMounted) {

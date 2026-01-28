@@ -3491,6 +3491,11 @@ def data_exports(filename: str):
 def log_exports(filename: str):
     if filename not in LOG_EXPORT_ALLOWLIST:
         abort(404)
+    def _no_cache(response: Response) -> Response:
+        response.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     if filename == "pipeline.log":
         remote_payload = _fetch_pythonanywhere_file(
             os.environ.get("PYTHONANYWHERE_PIPELINE_LOG_URL"),
@@ -3498,7 +3503,7 @@ def log_exports(filename: str):
         )
         if remote_payload:
             remote_text, _ = remote_payload
-            return Response(remote_text, mimetype="text/plain")
+            return _no_cache(Response(remote_text, mimetype="text/plain"))
     if filename == "execute_trades.log":
         remote_payload = _fetch_pythonanywhere_file(
             os.environ.get("PYTHONANYWHERE_EXECUTE_LOG_URL"),
@@ -3506,11 +3511,11 @@ def log_exports(filename: str):
         )
         if remote_payload:
             remote_text, _ = remote_payload
-            return Response(remote_text, mimetype="text/plain")
+            return _no_cache(Response(remote_text, mimetype="text/plain"))
     base = Path(BASE_DIR) / "logs"
     if not (base / filename).exists():
         abort(404)
-    return send_from_directory(base, filename)
+    return _no_cache(send_from_directory(base, filename))
 
 
 @app.server.route("/api/health")
