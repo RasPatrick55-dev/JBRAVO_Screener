@@ -223,6 +223,11 @@ const formatSignedPercent = (value: number | null) => {
   return `${sign}${percentFormatter.format(value)}%`;
 };
 
+const normalizeSymbol = (value: string | null | undefined) => {
+  const trimmed = value?.trim() ?? "";
+  return trimmed ? trimmed.toUpperCase() : "--";
+};
+
 const logoUrlForSymbol = (symbol: string | null | undefined) => {
   if (!symbol) {
     return undefined;
@@ -941,7 +946,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const monitoringPositions = useMemo(
     () =>
       openTrades.map((trade) => {
-        const symbol = trade.symbol ?? "--";
+        const symbol = normalizeSymbol(trade.symbol ?? null);
         const qty = parseNumber(trade.qty ?? null);
         const entryPrice = parseNumber(trade.entry_price ?? null);
         const exitPrice = parseNumber(trade.exit_price ?? null);
@@ -974,9 +979,11 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     if (!positions || positions.length === 0) {
       return [];
     }
-    return positions.map((position) => ({
-      symbol: position.symbol ?? "--",
-      logoUrl: position.logoUrl ?? logoUrlForSymbol(position.symbol ?? "--"),
+    return positions.map((position) => {
+      const symbol = normalizeSymbol(position.symbol ?? null);
+      return {
+        symbol,
+        logoUrl: position.logoUrl ?? logoUrlForSymbol(symbol),
       qty: typeof position.qty === "number" ? position.qty : Number.NaN,
       entryPrice: typeof position.entryPrice === "number" ? position.entryPrice : Number.NaN,
       currentPrice:
@@ -987,7 +994,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       percentPL: typeof position.percentPL === "number" ? position.percentPL : Number.NaN,
       dollarPL: typeof position.dollarPL === "number" ? position.dollarPL : Number.NaN,
       costBasis: typeof position.costBasis === "number" ? position.costBasis : Number.NaN,
-    }));
+      };
+    });
   }, [monitoringSnapshot?.positions]);
   const hasMonitoringApi = monitoringSnapshot?.ok === true;
 

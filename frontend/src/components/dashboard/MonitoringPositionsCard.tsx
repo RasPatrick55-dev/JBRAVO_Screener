@@ -106,7 +106,7 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
       </div>
 
       <div className="mt-3 flex flex-col gap-3">
-        <div className="hidden grid-cols-[minmax(0,1fr)_100px_100px_90px_110px] items-center text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-200/70 sm:grid">
+        <div className="hidden grid-cols-[minmax(0,1fr)_70px_60px_60px_70px] items-center text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-200/70 sm:grid">
           <span>Position</span>
           <span className="text-right">Price</span>
           <span className="text-right">P/L Trend</span>
@@ -116,7 +116,8 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
 
         <div className="flex flex-col gap-2.5">
           {hasPositions ? (
-            positions.map((position) => {
+            positions.map((position, index) => {
+              const displaySymbol = position.symbol?.trim() ? position.symbol : "--";
               const toneClass = plToneClass(position.percentPL);
               const plSparkline = plSparklineFor(position);
               const plTone =
@@ -125,15 +126,15 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
                   : "rgb(52,211,153)";
               return (
                 <div
-                  key={position.symbol}
+                  key={`${displaySymbol}-${index}`}
                   className="rounded-xl border border-emerald-400/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(34,211,238,0.35)] sm:p-3"
                 >
-                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[minmax(0,1fr)_100px_100px_90px_110px] sm:items-center">
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[minmax(0,1fr)_70px_60px_60px_70px] sm:items-center">
                     <div className="flex items-center gap-2">
-                      <StockLogo symbol={position.symbol} />
+                      <StockLogo symbol={displaySymbol} />
                       <div className="min-w-0">
                         <div className="truncate text-[13px] font-bold leading-[18px] text-slate-100">
-                          {position.symbol}
+                          {displaySymbol}
                         </div>
                       </div>
                     </div>
@@ -141,7 +142,7 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
                       {formatCurrency(position.currentPrice)}
                     </div>
                     <div className="hidden items-center justify-end sm:flex">
-                      <Sparkline data={plSparkline} width={80} stroke={plTone} />
+                      <Sparkline data={plSparkline} width={60} stroke={plTone} />
                     </div>
                     <div
                       className={`hidden text-right text-[12px] font-semibold leading-[16px] sm:block ${toneClass}`}

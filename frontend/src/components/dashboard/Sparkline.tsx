@@ -20,9 +20,14 @@ export default function Sparkline({
   stroke = defaultStroke,
   strokeWidth = defaultStrokeWidth,
 }: SparklineProps) {
+  const resolvedWidth = width ?? defaultWidth;
+  const resolvedHeight = height ?? defaultHeight;
   if (!data || data.length === 0) {
     return (
-      <div className="flex h-[32px] w-[120px] items-center justify-center text-[11px] leading-[16px] text-[rgb(107,114,128)]">
+      <div
+        className="flex items-center justify-center text-[11px] leading-[16px] text-[rgb(107,114,128)]"
+        style={{ width: resolvedWidth, height: resolvedHeight }}
+      >
         --
       </div>
     );
@@ -31,7 +36,12 @@ export default function Sparkline({
   const chartData = data.map((value, index) => ({ index, value }));
 
   return (
-    <LineChart width={width} height={height} data={chartData} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
+    <LineChart
+      width={resolvedWidth}
+      height={resolvedHeight}
+      data={chartData}
+      margin={{ top: 0, right: 0, bottom: 0, left: 0 }}
+    >
       <Line
         type="monotone"
         dataKey="value"
