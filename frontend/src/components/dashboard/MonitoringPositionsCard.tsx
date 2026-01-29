@@ -6,6 +6,7 @@ import { formatCurrency, formatSignedCurrency, formatSignedPercent } from "./for
 
 export interface Position {
   symbol: string;
+  logoUrl?: string;
   qty?: number;
   entryPrice?: number;
   currentPrice: number;
@@ -35,6 +36,21 @@ const SummaryTile = ({ label, value, valueTone }: { label: string; value: string
       <div className={`mt-1 text-[13px] leading-[18px] ${valueTone}`}>{value}</div>
     </div>
   );
+};
+
+const symbolFromLogoUrl = (logoUrl: string | undefined) => {
+  if (!logoUrl) {
+    return null;
+  }
+  const tickerMatch = logoUrl.match(/\/ticker\/([^/?#]+)/i);
+  if (tickerMatch?.[1]) {
+    return tickerMatch[1].toUpperCase();
+  }
+  const apiMatch = logoUrl.match(/\/api\/logos\/([^/.?#]+)/i);
+  if (apiMatch?.[1]) {
+    return apiMatch[1].toUpperCase();
+  }
+  return null;
 };
 
 export default function MonitoringPositionsCard({ positions }: MonitoringPositionsCardProps) {
@@ -117,7 +133,11 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
         <div className="flex flex-col gap-2.5">
           {hasPositions ? (
             positions.map((position, index) => {
-              const displaySymbol = position.symbol?.trim() ? position.symbol : "--";
+              const trimmedSymbol = position.symbol?.trim() ?? "";
+              const displaySymbol =
+                (trimmedSymbol ? trimmedSymbol.toUpperCase() : "") ||
+                symbolFromLogoUrl(position.logoUrl) ||
+                "--";
               const toneClass = plToneClass(position.percentPL);
               const plSparkline = plSparklineFor(position);
               const plTone =

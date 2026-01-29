@@ -981,11 +981,12 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     }
     return positions.map((position) => {
       const symbol = normalizeSymbol(position.symbol ?? null);
+      const logoUrl = position.logoUrl ?? logoUrlForSymbol(symbol);
       return {
         symbol,
-        logoUrl: position.logoUrl ?? logoUrlForSymbol(symbol),
-      qty: typeof position.qty === "number" ? position.qty : Number.NaN,
-      entryPrice: typeof position.entryPrice === "number" ? position.entryPrice : Number.NaN,
+        logoUrl,
+        qty: typeof position.qty === "number" ? position.qty : Number.NaN,
+        entryPrice: typeof position.entryPrice === "number" ? position.entryPrice : Number.NaN,
       currentPrice:
         typeof position.currentPrice === "number" ? position.currentPrice : Number.NaN,
       sparklineData: Array.isArray(position.sparklineData)
