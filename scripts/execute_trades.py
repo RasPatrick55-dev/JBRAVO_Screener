@@ -2055,8 +2055,12 @@ class ExecutorConfig:
     limit_buffer_pct: float = 0.5
     max_gap_pct: float = _env_float("MAX_GAP_PCT", 3.0)
     ref_buffer_pct: float = _env_float("REF_BUFFER_PCT", 0.75)
+    gap_refboost_pct: float = 1.0
+    gap_marketable_pct: float = 3.0
+    marketable_bps: int = 25
     trailing_percent: float = 3.0
     cancel_after_min: int = 30
+    poll_detach_secs: int = 60
     max_poll_secs: int = 60
     extended_hours: bool = True
     time_window: str = "auto"
@@ -2206,6 +2210,41 @@ class ExecutionMetrics:
     @property
     def skips(self) -> Counter:
         return self.skipped_reasons
+
+
+@dataclass
+class PreparedOrder:
+    symbol: str
+    qty: int
+    limit_price: float
+    limit_raw: float
+    price_src: str
+    anchor_price: Optional[float] = None
+    prev_close: Optional[float] = None
+    ref_trade: Optional[float] = None
+    gap_pct: Optional[float] = None
+    ref_buffer_pct: Optional[float] = None
+    marketable_bps: Optional[int] = None
+
+
+@dataclass
+class SubmittedOrderState:
+    order_id: str
+    symbol: str
+    qty: int
+    limit_price: float
+    submitted_at: datetime
+    submit_ts: float
+    price_src: str
+    anchor_price: Optional[float] = None
+    current_limit: float = 0.0
+    trail_attached: bool = False
+    filled_qty: float = 0.0
+    filled_avg_price: Optional[float] = None
+    status: str = "open"
+    chase_attempts: int = 0
+    chase_halted: bool = False
+    next_chase_ts: Optional[float] = None
 
 
 def compute_limit_price(row: Dict[str, Any], buffer_bps: int = 75) -> float:
@@ -3994,6 +4033,9 @@ class TradeExecutor:
         limit_buffer_ratio = max(0.0, float(self.config.limit_buffer_pct)) / 100.0
         max_gap_ratio = max(0.0, float(self.config.max_gap_pct)) / 100.0
         ref_buffer_ratio = max(0.0, float(self.config.ref_buffer_pct)) / 100.0
+        gap_refboost_pct = max(0.0, float(getattr(self.config, "gap_refboost_pct", 1.0)))
+        gap_marketable_pct = max(0.0, float(getattr(self.config, "gap_marketable_pct", 3.0)))
+        marketable_bps = max(0, int(getattr(self.config, "marketable_bps", 25)))
         premarket_active = resolved_window == "premarket" and self.config.extended_hours
         preferred_feed = (
             os.getenv("LIMIT_PRICE_FEED") or os.getenv("ALPACA_DATA_FEED") or None
@@ -4002,7 +4044,7 @@ class TradeExecutor:
         price_mode = (self.config.price_source or "entry").lower()
         min_prevclose = max(1.0, float(self.config.min_price or 0.0))
 
-        submitted_new = 0
+        prepared_orders: list[PreparedOrder] = []
         for record in candidates:
             symbol = record.get("symbol", "").upper()
             if not symbol:
@@ -4010,11 +4052,6 @@ class TradeExecutor:
             if symbol in open_order_symbols:
                 self.record_skip_reason("OPEN_ORDER", symbol=symbol)
                 continue
-            if submitted_new >= allowed_new:
-                break
-            if len(existing_positions) + submitted_new >= max_positions:
-                self.record_skip_reason("MAX_POSITIONS", symbol=symbol)
-                break
 
             anchor_label = "entry"
             anchor_price: Optional[float] = None
@@ -4166,9 +4203,35 @@ class TradeExecutor:
             if mode in {"prevclose", "blended"}:
                 anchor_val = max(0.0, float(anchor_price or 0.0))
                 reference_val = price_ref if price_ref > 0 else anchor_val
+                gap_pct = None
+                effective_ref_buffer_pct = float(self.config.ref_buffer_pct)
+                gap_mode = "default"
+                if anchor_val > 0 and reference_val > 0:
+                    gap_pct = (reference_val - anchor_val) / anchor_val * 100
+                    if gap_pct >= gap_marketable_pct:
+                        gap_mode = "marketable"
+                    elif gap_pct >= gap_refboost_pct:
+                        gap_mode = "refboost"
+                        effective_ref_buffer_pct = max(effective_ref_buffer_pct, 1.0)
+                    if gap_mode != "default":
+                        self.log_info(
+                            "GAP_DETECTED",
+                            symbol=symbol,
+                            gap_pct=f"{gap_pct:.2f}",
+                            mode=gap_mode,
+                            prev_close=f"{anchor_val:.4f}",
+                            ref_trade=f"{reference_val:.4f}",
+                            ref_buffer_pct=f"{effective_ref_buffer_pct:.2f}",
+                            marketable_bps=str(marketable_bps),
+                        )
                 limit_cap = anchor_val * (1 + max_gap_ratio)
-                ref_buffered = reference_val * (1 + ref_buffer_ratio)
-                limit_px = min(limit_cap, ref_buffered)
+                if gap_mode == "marketable":
+                    limit_px = reference_val * (1 + marketable_bps / 10_000)
+                    limit_source = "gap_marketable"
+                else:
+                    effective_ref_buffer_ratio = max(0.0, effective_ref_buffer_pct) / 100.0
+                    ref_buffered = reference_val * (1 + effective_ref_buffer_ratio)
+                    limit_px = min(limit_cap, ref_buffered)
                 if limit_px > anchor_val * 1.5:
                     self.record_skip_reason(
                         "PRICE_BOUNDS",
@@ -4191,7 +4254,7 @@ class TradeExecutor:
                     reference_val,
                     limit_px,
                     max_gap_ratio * 100,
-                    ref_buffer_ratio * 100,
+                    effective_ref_buffer_pct,
                     price_ref_src,
                 )
             elif premarket_active:
@@ -4294,21 +4357,39 @@ class TradeExecutor:
                     self.metrics.exit_reason = "DRY_RUN"
                 continue
 
-            outcome = self.execute_order(
-                symbol,
-                qty,
-                rounded_limit,
-                raw_limit=limit_price,
-                price_src=price_src,
-                anchor_price=anchor_price,
-                preferred_feed=preferred_feed,
+            prepared_orders.append(
+                PreparedOrder(
+                    symbol=symbol,
+                    qty=qty,
+                    limit_price=rounded_limit,
+                    limit_raw=limit_price,
+                    price_src=price_src,
+                    anchor_price=anchor_price,
+                    prev_close=anchor_price,
+                    ref_trade=price_ref if price_ref > 0 else None,
+                    gap_pct=gap_pct if mode in {"prevclose", "blended"} else None,
+                    ref_buffer_pct=effective_ref_buffer_pct if mode in {"prevclose", "blended"} else None,
+                    marketable_bps=marketable_bps,
+                )
             )
-            if outcome.get("filled_qty", 0) > 0:
-                existing_positions.add(symbol)
-                account_buying_power = max(0.0, account_buying_power - notional)
-            if outcome.get("submitted"):
-                open_order_symbols.add(symbol)
-                submitted_new += 1
+
+        if prepared_orders:
+            submit_at = datetime.now(timezone.utc).isoformat()
+            self.log_info(
+                "OPEN_BURST_SUBMIT",
+                symbols=[order.symbol for order in prepared_orders],
+                n=len(prepared_orders),
+                submit_at=submit_at,
+            )
+            submitted_states: list[SubmittedOrderState] = []
+            for prepared in prepared_orders:
+                submitted = self.submit_prepared_order(prepared)
+                if submitted is None:
+                    continue
+                submitted_states.append(submitted)
+                open_order_symbols.add(prepared.symbol)
+            if submitted_states:
+                self.poll_submitted_orders(submitted_states, preferred_feed=preferred_feed)
 
         if not self.metrics.exit_reason or self.metrics.exit_reason == "UNKNOWN":
             if self.metrics.orders_submitted > 0:
@@ -4537,6 +4618,22 @@ class TradeExecutor:
             return None
         return parsed.to_pydatetime()
 
+    @staticmethod
+    def _coerce_datetime(value: Any) -> Optional[datetime]:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+        try:
+            parsed = isoparse(str(value))
+        except Exception:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
     def _fetch_reference_price(
         self, symbol: str, preferred_feed: str | None
     ) -> tuple[Optional[float], Optional[datetime], str]:
@@ -4585,6 +4682,346 @@ class TradeExecutor:
         if symbol.upper() in positions:
             return True
         return len(positions) < max_positions
+
+    def submit_prepared_order(self, prepared: PreparedOrder) -> Optional[SubmittedOrderState]:
+        outcome_limit = normalize_price_for_alpaca(prepared.limit_price, "buy")
+        limit_price = _round_limit_price(outcome_limit)
+        if getattr(self.config, "diagnostic", False):
+            self.log_info(
+                "DIAGNOSTIC_SKIP_SUBMIT",
+                symbol=prepared.symbol,
+                qty=str(prepared.qty),
+                limit=f"{limit_price:.4f}",
+                limit_raw=f"{prepared.limit_raw:.8f}",
+                price_src=str(prepared.price_src or ""),
+            )
+            return None
+        order_request = LimitOrderRequest(
+            symbol=prepared.symbol,
+            qty=prepared.qty,
+            side=OrderSide.BUY,
+            type="limit",
+            limit_price=limit_price,
+            time_in_force=TimeInForce.DAY,
+            extended_hours=self.config.extended_hours,
+        )
+        _enforce_order_price_ticks(order_request)
+        setattr(order_request, "_normalized_limit", True)
+        self.log_info(
+            "BUY_INIT",
+            symbol=prepared.symbol,
+            qty=str(prepared.qty),
+            limit=f"{limit_price:.4f}",
+            limit_raw=f"{prepared.limit_raw:.8f}",
+            price_src=str(prepared.price_src or ""),
+        )
+        submitted_order = self.submit_with_retries(order_request)
+        if submitted_order is None:
+            self.record_skip_reason("API_FAIL", symbol=prepared.symbol, detail="submit_failed")
+            return None
+        order_id = str(getattr(submitted_order, "id", ""))
+        self.metrics.orders_submitted += 1
+        extended_hours_flag = "true" if self.config.extended_hours else "false"
+        self.log_info(
+            "BUY_SUBMIT",
+            symbol=prepared.symbol,
+            qty=str(prepared.qty),
+            limit=f"{limit_price:.4f}",
+            limit_raw=f"{prepared.limit_raw:.8f}",
+            ext=extended_hours_flag,
+            order_id=order_id or "",
+            price_src=str(prepared.price_src or ""),
+        )
+        submitted_at = getattr(submitted_order, "submitted_at", None)
+        if submitted_at is None:
+            submitted_at = getattr(submitted_order, "created_at", None)
+        request_payload = {
+            "limit_price": limit_price,
+            "extended_hours": bool(self.config.extended_hours),
+            "time_in_force": str(getattr(order_request, "time_in_force", "day")),
+            "qty": prepared.qty,
+        }
+        log_trade_event_db(
+            event_type="BUY_SUBMIT",
+            symbol=prepared.symbol,
+            qty=prepared.qty,
+            order_id=order_id,
+            status="submitted",
+            entry_price=limit_price,
+            entry_time=submitted_at or datetime.now(timezone.utc),
+            raw={
+                "event_type": "BUY_SUBMIT",
+                "submitted_at": _isoformat_or_none(submitted_at),
+                "request": request_payload,
+                "response": _order_snapshot(submitted_order),
+            },
+        )
+        submit_dt = self._coerce_datetime(submitted_at) or datetime.now(timezone.utc)
+        submit_ts = time.time()
+        chase_enabled = bool(self.config.chase_enabled)
+        chase_interval = max(1, int(self.config.chase_interval_minutes)) * 60
+        next_chase_ts = submit_ts + chase_interval if chase_enabled else None
+        return SubmittedOrderState(
+            order_id=order_id,
+            symbol=prepared.symbol,
+            qty=prepared.qty,
+            limit_price=limit_price,
+            submitted_at=submit_dt,
+            submit_ts=submit_ts,
+            price_src=prepared.price_src,
+            anchor_price=prepared.anchor_price,
+            current_limit=limit_price,
+            next_chase_ts=next_chase_ts,
+        )
+
+    def _maybe_chase_order(
+        self,
+        state: SubmittedOrderState,
+        *,
+        preferred_feed: str | None = None,
+    ) -> None:
+        chase_enabled = bool(self.config.chase_enabled)
+        if not chase_enabled:
+            return
+        if state.next_chase_ts is None:
+            return
+        now_ts = time.time()
+        if now_ts < state.next_chase_ts:
+            return
+        max_chase_count = max(0, int(self.config.max_chase_count))
+        if state.chase_attempts >= max_chase_count:
+            state.next_chase_ts = None
+            return
+        if state.anchor_price is None or state.anchor_price <= 0:
+            self.log_info("SKIP_CHASE", symbol=state.symbol, reason="no_anchor")
+            state.chase_halted = True
+            state.next_chase_ts = None
+            return
+        if not self._has_capacity_for_symbol(state.symbol):
+            self.log_info("SKIP_CHASE", symbol=state.symbol, reason="max_positions")
+            state.chase_halted = True
+            state.next_chase_ts = None
+            return
+        ref_price, ref_ts, ref_src = self._fetch_reference_price(state.symbol, preferred_feed)
+        if ref_price is None or ref_price <= 0:
+            self.log_info("SKIP_CHASE", symbol=state.symbol, reason="no_reference")
+            state.chase_halted = True
+            state.next_chase_ts = None
+            return
+        if ref_ts is None or datetime.now(timezone.utc) - ref_ts > timedelta(
+            minutes=max(5, self.config.chase_interval_minutes * 2)
+        ):
+            self.log_info("SKIP_CHASE", symbol=state.symbol, reason="stale_reference")
+            state.chase_halted = True
+            state.next_chase_ts = None
+            return
+        chase_gap_ratio = max(0.0, float(self.config.max_chase_gap_pct)) / 100.0
+        chase_buffer_ratio = max(0.0, float(self.config.ref_buffer_pct)) / 100.0
+        candidate_limit = min(
+            ref_price * (1 + chase_buffer_ratio),
+            state.anchor_price * (1 + chase_gap_ratio),
+        )
+        normalized_candidate = normalize_price_for_alpaca(candidate_limit, "buy")
+        candidate_limit = _round_limit_price(normalized_candidate)
+        if candidate_limit <= state.current_limit:
+            self.log_info("SKIP_CHASE", symbol=state.symbol, reason="no_improvement")
+            state.next_chase_ts = now_ts + max(1, int(self.config.chase_interval_minutes)) * 60
+            return
+
+        self.cancel_order(state.order_id, state.symbol)
+        self.metrics.orders_canceled += 1
+        state.chase_attempts += 1
+        request = LimitOrderRequest(
+            symbol=state.symbol,
+            qty=state.qty,
+            side=OrderSide.BUY,
+            type="limit",
+            limit_price=candidate_limit,
+            time_in_force=TimeInForce.DAY,
+            extended_hours=self.config.extended_hours,
+        )
+        _enforce_order_price_ticks(request)
+        setattr(request, "_normalized_limit", True)
+        chased_order = self.submit_with_retries(request)
+        if chased_order is None:
+            self.log_info("SKIP_CHASE", symbol=state.symbol, reason="submit_failed")
+            state.next_chase_ts = None
+            return
+        chase_order_id = str(getattr(chased_order, "id", state.order_id))
+        self.metrics.orders_submitted += 1
+        self.log_info(
+            "CHASE_SUBMIT",
+            symbol=state.symbol,
+            limit=f"{candidate_limit:.4f}",
+            attempt=str(state.chase_attempts),
+            source=ref_src or "",
+            order_id=chase_order_id,
+        )
+        chased_submitted_at = getattr(chased_order, "submitted_at", None) or getattr(
+            chased_order, "created_at", None
+        )
+        log_trade_event_db(
+            event_type="BUY_SUBMIT",
+            symbol=state.symbol,
+            qty=state.qty,
+            order_id=chase_order_id,
+            status="submitted",
+            entry_price=candidate_limit,
+            entry_time=chased_submitted_at or datetime.now(timezone.utc),
+            raw={
+                "event_type": "BUY_SUBMIT",
+                "submitted_at": _isoformat_or_none(chased_submitted_at),
+                "request": {
+                    "limit_price": candidate_limit,
+                    "extended_hours": bool(self.config.extended_hours),
+                    "time_in_force": str(getattr(request, "time_in_force", "day")),
+                    "qty": state.qty,
+                    "chase_attempt": state.chase_attempts,
+                },
+                "response": _order_snapshot(chased_order),
+            },
+        )
+        state.order_id = chase_order_id
+        state.submit_ts = time.time()
+        state.submitted_at = self._coerce_datetime(chased_submitted_at) or datetime.now(timezone.utc)
+        state.current_limit = candidate_limit
+        chase_interval = max(1, int(self.config.chase_interval_minutes)) * 60
+        state.next_chase_ts = state.submit_ts + chase_interval
+
+    def poll_submitted_orders(
+        self,
+        submitted_orders: Sequence[SubmittedOrderState],
+        *,
+        preferred_feed: str | None = None,
+    ) -> None:
+        if self.client is None or not submitted_orders:
+            return
+        poll_detach_secs = max(
+            0,
+            int(
+                getattr(self.config, "poll_detach_secs", None)
+                or getattr(self.config, "max_poll_secs", 0)
+                or 0
+            ),
+        )
+        cancel_after_min = int(getattr(self.config, "cancel_after_min", 0) or 0)
+        start_ts = time.time()
+        remaining: dict[str, SubmittedOrderState] = {
+            order.order_id: order for order in submitted_orders if order.order_id
+        }
+        while remaining:
+            now = datetime.now(timezone.utc)
+            if poll_detach_secs > 0 and time.time() - start_ts >= poll_detach_secs:
+                for order in remaining.values():
+                    waited_secs = max(0.0, time.time() - order.submit_ts)
+                    self.log_info(
+                        "POLL_DETACH",
+                        order_id=order.order_id,
+                        symbol=order.symbol,
+                        waited_secs=f"{waited_secs:.1f}",
+                        cancel_after_min=str(cancel_after_min),
+                    )
+                for order in remaining.values():
+                    until_utc = None
+                    if cancel_after_min > 0:
+                        until_utc = (
+                            order.submitted_at + timedelta(minutes=cancel_after_min)
+                        ).isoformat()
+                    self.log_info(
+                        "ORDER_RESTING",
+                        order_id=order.order_id,
+                        symbol=order.symbol,
+                        until_utc=until_utc or "",
+                    )
+                earliest_deadline = None
+                if cancel_after_min > 0:
+                    earliest_deadline = min(
+                        order.submitted_at + timedelta(minutes=cancel_after_min)
+                        for order in remaining.values()
+                    )
+                self.log_info(
+                    "ORDERS_RESTING",
+                    count=len(remaining),
+                    until_utc=earliest_deadline.isoformat() if earliest_deadline else "",
+                )
+                break
+            for order_id, state in list(remaining.items()):
+                try:
+                    log_info("alpaca.get_order", order_id=order_id)
+                    order = self.client.get_order_by_id(order_id)
+                except Exception as exc:
+                    _warn_context("alpaca.get_order", f"{order_id}: {exc}")
+                    continue
+                state.status = str(getattr(order, "status", "")).lower()
+                state.filled_qty = float(getattr(order, "filled_qty", state.filled_qty) or 0)
+                state.filled_avg_price = getattr(order, "filled_avg_price", state.filled_avg_price)
+                if state.status == "filled" or state.filled_qty >= state.qty:
+                    latency = time.time() - state.submit_ts
+                    self.metrics.orders_filled += 1
+                    self.metrics.record_latency(latency)
+                    self.log_info(
+                        "BUY_FILL",
+                        symbol=state.symbol,
+                        qty=f"{state.filled_qty:.0f}",
+                        filled_qty=f"{state.filled_qty:.0f}",
+                        avg_price=f"{float(state.filled_avg_price or 0):.2f}",
+                        order_id=order_id,
+                    )
+                    filled_at = getattr(order, "filled_at", None)
+                    self._record_buy_execution(
+                        state.symbol,
+                        state.filled_qty,
+                        state.filled_avg_price,
+                        order_id,
+                        state.status or "filled",
+                        filled_at,
+                    )
+                    self.attach_trailing_stop(state.symbol, state.filled_qty, state.filled_avg_price, order_id)
+                    remaining.pop(order_id, None)
+                    continue
+                if state.status in {"canceled", "expired", "rejected"}:
+                    if state.filled_qty > 0:
+                        latency = time.time() - state.submit_ts
+                        self.metrics.orders_filled += 1
+                        self.metrics.record_latency(latency)
+                        self.log_info(
+                            "BUY_FILL",
+                            symbol=state.symbol,
+                            qty=f"{state.filled_qty:.0f}",
+                            filled_qty=f"{state.filled_qty:.0f}",
+                            avg_price=f"{float(state.filled_avg_price or 0):.2f}",
+                            partial="true",
+                            order_id=order_id,
+                        )
+                        filled_at = getattr(order, "filled_at", None)
+                        self._record_buy_execution(
+                            state.symbol,
+                            state.filled_qty,
+                            state.filled_avg_price,
+                            order_id,
+                            state.status,
+                            filled_at,
+                        )
+                        self.attach_trailing_stop(state.symbol, state.filled_qty, state.filled_avg_price, order_id)
+                    remaining.pop(order_id, None)
+                    continue
+                if cancel_after_min > 0:
+                    cancel_deadline = state.submitted_at + timedelta(minutes=cancel_after_min)
+                    if now >= cancel_deadline:
+                        self.cancel_order(order_id, state.symbol)
+                        self.metrics.orders_canceled += 1
+                        remaining.pop(order_id, None)
+                        self.log_info(
+                            "BUY_CANCELLED",
+                            symbol=state.symbol,
+                            remaining_qty=f"{max(state.qty - state.filled_qty, 0):.0f}",
+                            status=state.status,
+                            order_id=order_id,
+                        )
+                        continue
+                self._maybe_chase_order(state, preferred_feed=preferred_feed)
+            if remaining:
+                self.sleep(5)
 
     def execute_order(
         self,
@@ -4674,10 +5111,22 @@ class TradeExecutor:
             },
         )
 
-        fill_deadline = datetime.now(timezone.utc) + timedelta(minutes=self.config.cancel_after_min)
+        cancel_after_min = int(getattr(self.config, "cancel_after_min", 0) or 0)
+        fill_deadline = (
+            datetime.now(timezone.utc) + timedelta(minutes=cancel_after_min)
+            if cancel_after_min > 0
+            else None
+        )
         submit_ts = time.time()
-        max_poll_seconds = max(0, int(getattr(self.config, "max_poll_secs", 0) or 0))
-        poll_timeout_ts = submit_ts + max_poll_seconds if max_poll_seconds > 0 else None
+        poll_detach_secs = max(
+            0,
+            int(
+                getattr(self.config, "poll_detach_secs", None)
+                or getattr(self.config, "max_poll_secs", 0)
+                or 0
+            ),
+        )
+        poll_timeout_ts = submit_ts + poll_detach_secs if poll_detach_secs > 0 else None
         current_limit = limit_price
 
         filled_qty = 0.0
@@ -4785,7 +5234,9 @@ class TradeExecutor:
             )
             return chase_order_id, time.time(), candidate_limit
 
-        while datetime.now(timezone.utc) < fill_deadline:
+        while True:
+            if fill_deadline is not None and datetime.now(timezone.utc) >= fill_deadline:
+                break
             try:
                 log_info("alpaca.get_order", order_id=order_id)
                 order = self.client.get_order_by_id(order_id)
@@ -4794,10 +5245,13 @@ class TradeExecutor:
                 break
             now_ts = time.time()
             if poll_timeout_ts is not None and now_ts >= poll_timeout_ts:
-                LOGGER.warning(
-                    "[WARN] POLL_TIMEOUT order_id=%s waited_secs=%.1f",
-                    order_id,
-                    now_ts - submit_ts,
+                waited_secs = max(0.0, now_ts - submit_ts)
+                self.log_info(
+                    "POLL_DETACH",
+                    order_id=order_id,
+                    symbol=symbol,
+                    waited_secs=f"{waited_secs:.1f}",
+                    cancel_after_min=str(cancel_after_min),
                 )
                 break
             last_order_snapshot = order
@@ -4872,7 +5326,9 @@ class TradeExecutor:
 
         # Deadline reached or not fully filled
         remaining = max(qty - filled_qty, 0)
-        if remaining > 0:
+        now_dt = datetime.now(timezone.utc)
+        cancel_due = bool(fill_deadline and now_dt >= fill_deadline)
+        if remaining > 0 and cancel_due:
             self.cancel_order(order_id, symbol)
             self.metrics.orders_canceled += 1
             self.log_info(
@@ -4881,6 +5337,14 @@ class TradeExecutor:
                 remaining_qty=f"{remaining:.0f}",
                 status=status,
                 order_id=order_id,
+            )
+        elif remaining > 0:
+            until_utc = fill_deadline.isoformat() if fill_deadline else ""
+            self.log_info(
+                "ORDER_RESTING",
+                order_id=order_id,
+                symbol=symbol,
+                until_utc=until_utc,
             )
         if filled_qty > 0:
             latency = time.time() - submit_ts
@@ -5361,6 +5825,24 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--gap-refboost-pct",
+        type=float,
+        default=ExecutorConfig.gap_refboost_pct,
+        help="Gap percent above prevclose that triggers ref-buffer boost (default 1.0)",
+    )
+    parser.add_argument(
+        "--gap-marketable-pct",
+        type=float,
+        default=ExecutorConfig.gap_marketable_pct,
+        help="Gap percent above prevclose that triggers marketable limit (default 3.0)",
+    )
+    parser.add_argument(
+        "--marketable-bps",
+        type=int,
+        default=ExecutorConfig.marketable_bps,
+        help="Basis points above ref trade for marketable limit price (default 25)",
+    )
+    parser.add_argument(
         "--trailing-percent",
         type=float,
         default=ExecutorConfig.trailing_percent,
@@ -5376,7 +5858,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--max-poll-secs",
         type=int,
         default=ExecutorConfig.max_poll_secs,
-        help="Maximum seconds to poll an order before emitting a timeout warning and moving on",
+        help="Seconds to poll an order before detaching (no cancel) and moving on",
     )
     parser.add_argument(
         "--extended-hours",
@@ -5560,7 +6042,11 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         limit_buffer_pct=args.limit_buffer_pct,
         max_gap_pct=args.max_gap_pct,
         ref_buffer_pct=args.ref_buffer_pct,
+        gap_refboost_pct=args.gap_refboost_pct,
+        gap_marketable_pct=args.gap_marketable_pct,
+        marketable_bps=args.marketable_bps,
         cancel_after_min=args.cancel_after_min,
+        poll_detach_secs=args.max_poll_secs,
         max_poll_secs=args.max_poll_secs,
         extended_hours=args.extended_hours,
         dry_run=args.dry_run,
