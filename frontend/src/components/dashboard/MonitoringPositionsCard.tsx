@@ -122,7 +122,7 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
       </div>
 
       <div className="mt-3 flex flex-col gap-3">
-        <div className="hidden grid-cols-[minmax(0,1fr)_70px_60px_60px_70px] items-center text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-200/70 sm:grid">
+        <div className="hidden grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] items-center text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-200/70 sm:grid">
           <span>Position</span>
           <span className="text-right">Price</span>
           <span className="text-right">P/L Trend</span>
@@ -149,11 +149,11 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
                   key={`${displaySymbol}-${index}`}
                   className="rounded-xl border border-emerald-400/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(34,211,238,0.35)] sm:p-3"
                 >
-                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[minmax(0,1fr)_70px_60px_60px_70px] sm:items-center">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] sm:items-center">
                     <div className="flex items-center gap-2">
                       <StockLogo symbol={displaySymbol} />
-                      <div className="min-w-0">
-                        <div className="truncate text-[13px] font-bold leading-[18px] text-slate-100">
+                      <div className="min-w-[44px] flex-shrink-0">
+                        <div className="text-[13px] font-bold leading-[18px] text-slate-100">
                           {displaySymbol}
                         </div>
                       </div>
@@ -162,7 +162,7 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
                       {formatCurrency(position.currentPrice)}
                     </div>
                     <div className="hidden items-center justify-end sm:flex">
-                      <Sparkline data={plSparkline} width={60} stroke={plTone} />
+                      <Sparkline data={plSparkline} width={64} stroke={plTone} />
                     </div>
                     <div
                       className={`hidden text-right text-[12px] font-semibold leading-[16px] sm:block ${toneClass}`}
