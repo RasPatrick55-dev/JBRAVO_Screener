@@ -3924,6 +3924,12 @@ class TradeExecutor:
         self.metrics.allowed_new_positions = allowed_new
         self.metrics.slots_total = slots_total
         LOGGER.info(
+            "POSITION_SLOTS burst_mode=True open_positions=%d open_buy_orders=%d slots_available=%d",
+            open_count,
+            open_buy_order_count,
+            slots_total,
+        )
+        LOGGER.info(
             "POSITION_LIMIT max_total=%d open=%d slots_total=%d max_new=%d allowed_new=%d",
             max_positions,
             open_count,
@@ -3967,8 +3973,6 @@ class TradeExecutor:
             self._log_diagnostic_snapshot()
             self.log_summary()
             return 0
-        if len(queue) > allowed_new:
-            queue = queue[:allowed_new]
         slot_hint = max(1, min(allowed_new, len(queue)))
         candidates = queue
         try:
@@ -4045,7 +4049,10 @@ class TradeExecutor:
         min_prevclose = max(1.0, float(self.config.min_price or 0.0))
 
         prepared_orders: list[PreparedOrder] = []
+        submitted_count = 0
         for record in candidates:
+            if submitted_count >= allowed_new:
+                break
             symbol = record.get("symbol", "").upper()
             if not symbol:
                 continue
@@ -4343,6 +4350,7 @@ class TradeExecutor:
                 )
                 if not self.metrics.exit_reason or self.metrics.exit_reason == "UNKNOWN":
                     self.metrics.exit_reason = "DIAGNOSTIC"
+                submitted_count += 1
                 continue
 
             if self.config.dry_run:
@@ -4355,6 +4363,7 @@ class TradeExecutor:
                 )
                 if not self.metrics.exit_reason or self.metrics.exit_reason == "UNKNOWN":
                     self.metrics.exit_reason = "DRY_RUN"
+                submitted_count += 1
                 continue
 
             prepared_orders.append(
@@ -4372,6 +4381,7 @@ class TradeExecutor:
                     marketable_bps=marketable_bps,
                 )
             )
+            submitted_count += 1
 
         if prepared_orders:
             submit_at = datetime.now(timezone.utc).isoformat()
