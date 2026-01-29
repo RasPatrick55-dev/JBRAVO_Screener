@@ -151,7 +151,7 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
                 >
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] sm:items-center">
                     <div className="flex items-center gap-2">
-                      <StockLogo symbol={displaySymbol} />
+                      <StockLogo symbol={displaySymbol} logoUrl={position.logoUrl} />
                       <div className="min-w-[44px] flex-shrink-0">
                         <div className="text-[13px] font-bold leading-[18px] text-slate-100">
                           {displaySymbol}

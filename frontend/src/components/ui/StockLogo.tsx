@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface StockLogoProps {
   symbol: string;
+  logoUrl?: string;
 }
 
 const logoToken =
@@ -14,14 +15,21 @@ const logoToken =
  * Set REACT_APP_LOGO_DEV_API_KEY (and VITE_LOGO_DEV_API_KEY for Vite builds)
  * in the repo .env to enable Logo.dev stock ticker logos.
  */
-export default function StockLogo({ symbol }: StockLogoProps) {
+export default function StockLogo({ symbol, logoUrl }: StockLogoProps) {
   const trimmed = symbol.trim().toUpperCase();
-  const logoSrc = logoToken
-    ? `https://img.logo.dev/ticker/${trimmed}?token=${logoToken}&size=64&retina=true`
-    : "/images/placeholder-stock-logo.png";
+  const resolvedLogoUrl = logoUrl?.trim() || "";
+  const logoSrc = resolvedLogoUrl
+    ? resolvedLogoUrl
+    : logoToken
+      ? `https://img.logo.dev/ticker/${trimmed}?token=${logoToken}&size=64&retina=true`
+      : "/images/placeholder-stock-logo.png";
   const [status, setStatus] = useState<"loading" | "loaded" | "fallback">(
-    logoToken ? "loading" : "fallback"
+    resolvedLogoUrl || logoToken ? "loading" : "fallback"
   );
+
+  useEffect(() => {
+    setStatus(resolvedLogoUrl || logoToken ? "loading" : "fallback");
+  }, [resolvedLogoUrl, trimmed]);
 
   return (
     <div className="relative h-8 w-8 flex-shrink-0">
