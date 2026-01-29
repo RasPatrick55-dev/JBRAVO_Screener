@@ -18,18 +18,19 @@ const logoToken =
 export default function StockLogo({ symbol, logoUrl }: StockLogoProps) {
   const trimmed = symbol.trim().toUpperCase();
   const resolvedLogoUrl = logoUrl?.trim() || "";
-  const logoSrc = resolvedLogoUrl
+  const useLogoUrl = resolvedLogoUrl.toLowerCase().includes("logo.dev");
+  const logoSrc = useLogoUrl
     ? resolvedLogoUrl
     : logoToken
       ? `https://img.logo.dev/ticker/${trimmed}?token=${logoToken}&size=64&retina=true`
       : "/images/placeholder-stock-logo.png";
   const [status, setStatus] = useState<"loading" | "loaded" | "fallback">(
-    resolvedLogoUrl || logoToken ? "loading" : "fallback"
+    useLogoUrl || logoToken ? "loading" : "fallback"
   );
 
   useEffect(() => {
-    setStatus(resolvedLogoUrl || logoToken ? "loading" : "fallback");
-  }, [resolvedLogoUrl, trimmed]);
+    setStatus(useLogoUrl || logoToken ? "loading" : "fallback");
+  }, [useLogoUrl, trimmed]);
 
   return (
     <div className="relative h-8 w-8 flex-shrink-0">
@@ -46,6 +47,10 @@ export default function StockLogo({ symbol, logoUrl }: StockLogoProps) {
           setStatus("loaded");
         }}
         onError={(event) => {
+          if (!useLogoUrl && logoToken) {
+            event.currentTarget.src = `https://img.logo.dev/ticker/${trimmed}?token=${logoToken}&size=64&retina=true`;
+            return;
+          }
           event.currentTarget.src = "/images/placeholder-stock-logo.png";
           setStatus("fallback");
         }}
