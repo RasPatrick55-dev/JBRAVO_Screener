@@ -879,6 +879,7 @@ SKIP_REASON_ORDER: tuple[str, ...] = (
     "CASH",
     "ZERO_QTY",
     "PRICE_BOUNDS",
+    "DAILY_ENTRY_LIMIT",
     "MAX_POSITIONS",
     "API_FAIL",
     "DATA_MISSING",
@@ -3899,43 +3900,34 @@ class TradeExecutor:
                 "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
             )
 
-        existing_positions = self.fetch_existing_positions()
         open_order_symbols, open_buy_order_count, open_order_total = self.fetch_open_order_symbols()
         self.metrics.open_buy_orders = open_buy_order_count
         self.metrics.open_orders = open_order_total
         account_buying_power = self.fetch_buying_power()
         try:
-            max_positions = int(self.config.max_positions)
+            max_daily_entries = int(self.config.max_positions)
         except (TypeError, ValueError):
-            max_positions = 0
-        max_positions = max(1, max_positions)
-        self.metrics.max_total_positions = max_positions
-        self.metrics.configured_max_positions = max_positions
-        self.metrics.risk_limited_max_positions = max_positions
-        try:
-            max_new_positions = int(self.config.max_new_positions)
-        except (TypeError, ValueError):
-            max_new_positions = max_positions
-        max_new_positions = max(1, max_new_positions)
-        open_count = len(existing_positions)
-        slots_total = max(0, max_positions - open_count)
-        allowed_new = min(slots_total, max_new_positions)
-        self.metrics.open_positions = open_count
-        self.metrics.allowed_new_positions = allowed_new
-        self.metrics.slots_total = slots_total
+            max_daily_entries = 0
+        max_daily_entries = max(1, max_daily_entries)
+        self.metrics.max_total_positions = max_daily_entries
+        self.metrics.configured_max_positions = max_daily_entries
+        self.metrics.risk_limited_max_positions = max_daily_entries
+        entries_submitted_today = self.count_daily_buy_submits()
+        remaining_slots = max_daily_entries - entries_submitted_today
+        daily_slots_remaining = max(0, remaining_slots)
+        self.metrics.open_positions = 0
+        self.metrics.allowed_new_positions = daily_slots_remaining
+        self.metrics.slots_total = daily_slots_remaining
         LOGGER.info(
-            "POSITION_SLOTS burst_mode=True open_positions=%d open_buy_orders=%d slots_available=%d",
-            open_count,
-            open_buy_order_count,
-            slots_total,
+            "DAILY_ENTRY_STATE submitted_today=%d max_daily_entries=%d remaining=%d",
+            entries_submitted_today,
+            max_daily_entries,
+            remaining_slots,
         )
         LOGGER.info(
-            "POSITION_LIMIT max_total=%d open=%d slots_total=%d max_new=%d allowed_new=%d",
-            max_positions,
-            open_count,
-            slots_total,
-            max_new_positions,
-            allowed_new,
+            "POSITION_SLOTS burst_mode=True daily_entries_submitted=%d daily_slots_remaining=%d",
+            entries_submitted_today,
+            daily_slots_remaining,
         )
         if not candidates:
             self.metrics.exit_reason = "NO_CANDIDATES"
@@ -3945,36 +3937,19 @@ class TradeExecutor:
             self._log_diagnostic_snapshot()
             self.log_summary()
             return 0
-        if slots_total <= 0:
-            self.record_skip_reason("MAX_POSITIONS", count=max(1, len(candidates)))
-            self.metrics.exit_reason = "MAX_POSITIONS"
-            self.persist_metrics()
-            self._log_diagnostic_snapshot()
-            self.log_summary()
-            return 0
-        queue: list[dict[str, Any]] = []
-        for record in candidates:
-            symbol = str(record.get("symbol", "")).upper()
-            if not symbol:
-                continue
-            if symbol in existing_positions:
-                self.record_skip_reason("EXISTING_POSITION", symbol=symbol)
-                continue
-            queue.append(record)
-        if not queue:
+        if remaining_slots <= 0:
             LOGGER.info(
-                "No available slots after filtering existing positions (holdings=%d max=%d)",
-                open_count,
-                max_positions,
+                "DAILY_ENTRY_LIMIT reached submitted_today=%d max_daily_entries=%d",
+                entries_submitted_today,
+                max_daily_entries,
             )
-            if not self.metrics.exit_reason or self.metrics.exit_reason == "UNKNOWN":
-                self.metrics.exit_reason = "NO_SLOTS"
+            self.record_skip_reason("DAILY_ENTRY_LIMIT", count=max(1, len(candidates)))
+            self.metrics.exit_reason = "DAILY_ENTRY_LIMIT"
             self.persist_metrics()
             self._log_diagnostic_snapshot()
             self.log_summary()
             return 0
-        slot_hint = max(1, min(allowed_new, len(queue)))
-        candidates = queue
+        slot_hint = max(1, min(daily_slots_remaining, len(candidates)))
         try:
             allocation_pct = float(self.config.allocation_pct)
         except (TypeError, ValueError):
@@ -3983,7 +3958,7 @@ class TradeExecutor:
 
         self._log_top_candidates(
             candidates,
-            max_positions=max_positions,
+            max_positions=max_daily_entries,
             base_alloc_pct=allocation_pct,
             source_df=weighted_df,
         )
@@ -4051,7 +4026,7 @@ class TradeExecutor:
         prepared_orders: list[PreparedOrder] = []
         submitted_count = 0
         for record in candidates:
-            if submitted_count >= allowed_new:
+            if submitted_count >= daily_slots_remaining:
                 break
             symbol = record.get("symbol", "").upper()
             if not symbol:
@@ -4384,11 +4359,14 @@ class TradeExecutor:
             submitted_count += 1
 
         if prepared_orders:
+            LOGGER.info("OPEN_BURST_SUBMIT n=%d mode=daily", daily_slots_remaining)
             submit_at = datetime.now(timezone.utc).isoformat()
             self.log_info(
                 "OPEN_BURST_SUBMIT",
+                mode="daily",
+                n=daily_slots_remaining,
+                prepared=len(prepared_orders),
                 symbols=[order.symbol for order in prepared_orders],
-                n=len(prepared_orders),
                 submit_at=submit_at,
             )
             submitted_states: list[SubmittedOrderState] = []
@@ -4493,6 +4471,55 @@ class TradeExecutor:
         except Exception as exc:
             _warn_context("alpaca.get_orders failed", str(exc))
         return symbols, open_buy_orders, total_orders
+
+    def count_daily_buy_submits(self) -> int:
+        if not db.db_enabled():
+            LOGGER.warning("[WARN] DAILY_ENTRY_COUNT_UNAVAILABLE reason=db_disabled")
+            return 0
+        engine = db.get_db_conn()
+        if engine is None:
+            LOGGER.warning("[WARN] DAILY_ENTRY_COUNT_UNAVAILABLE reason=db_unavailable")
+            return 0
+        info_query = """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'executed_trades'
+              AND column_name = 'event'
+            LIMIT 1
+        """
+        canonical_query = """
+            SELECT COUNT(*)
+            FROM executed_trades
+            WHERE event = 'BUY_SUBMIT'
+              AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC')
+        """
+        fallback_query = """
+            SELECT COUNT(*)
+            FROM executed_trades
+            WHERE COALESCE(
+                NULLIF(UPPER(raw->>'event_type'), ''),
+                NULLIF(UPPER(raw->>'event'), ''),
+                NULLIF(UPPER(status), '')
+            ) = 'BUY_SUBMIT'
+              AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC')
+        """
+        try:
+            with engine:
+                with engine.cursor() as cursor:
+                    cursor.execute(info_query)
+                    has_event_column = cursor.fetchone() is not None
+                    cursor.execute(canonical_query if has_event_column else fallback_query)
+                    result = cursor.fetchone()
+                    return int(result[0] if result else 0)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("[WARN] DAILY_ENTRY_COUNT_FAILED err=%s", exc)
+            return 0
+        finally:
+            try:
+                engine.close()
+            except Exception:
+                pass
 
     def fetch_buying_power(self) -> float:
         def _extract(snapshot: Mapping[str, Any], source: str) -> Optional[float]:
@@ -4682,16 +4709,7 @@ class TradeExecutor:
         return trade_price, self._parse_snapshot_time(trade_ts), f"trade[{str(trade_feed or 'default').strip()}]"
 
     def _has_capacity_for_symbol(self, symbol: str) -> bool:
-        try:
-            max_positions = int(self.config.max_positions)
-        except (TypeError, ValueError):
-            return True
-        if max_positions <= 0:
-            return True
-        positions = self.fetch_existing_positions()
-        if symbol.upper() in positions:
-            return True
-        return len(positions) < max_positions
+        return True
 
     def submit_prepared_order(self, prepared: PreparedOrder) -> Optional[SubmittedOrderState]:
         outcome_limit = normalize_price_for_alpaca(prepared.limit_price, "buy")
@@ -5798,13 +5816,13 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--max-positions",
         type=int,
         default=ExecutorConfig.max_positions,
-        help="Maximum concurrent positions the executor will open",
+        help="Maximum BUY entries allowed per calendar trading day",
     )
     parser.add_argument(
         "--max-new-positions",
         type=int,
         default=ExecutorConfig.max_new_positions,
-        help="Maximum new positions the executor will attempt to open per run",
+        help="Deprecated (daily entry limit uses --max-positions)",
     )
     parser.add_argument(
         "--entry-buffer-bps",
@@ -6461,7 +6479,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         args = parse_args(argv)
         log_info("ALLOC_WEIGHT_MODE", key=args.alloc_weight_key)
         LOGGER.info(
-            "[INFO] EXEC_CONFIG ext_hours=%s alloc=%.2f max_pos=%d trail_pct=%.1f",
+            "[INFO] EXEC_CONFIG ext_hours=%s alloc=%.2f max_daily_entries=%d trail_pct=%.1f",
             args.extended_hours,
             args.allocation_pct,
             args.max_positions,
