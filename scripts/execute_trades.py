@@ -4492,7 +4492,13 @@ class TradeExecutor:
             SELECT COUNT(*)
             FROM executed_trades
             WHERE event = 'BUY_SUBMIT'
-              AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC')
+              AND created_at >= timezone(
+                    'UTC',
+                    date_trunc(
+                      'day',
+                      timezone('America/New_York', now())
+                    )
+                  )
         """
         fallback_query = """
             SELECT COUNT(*)
@@ -4502,7 +4508,13 @@ class TradeExecutor:
                 NULLIF(UPPER(raw->>'event'), ''),
                 NULLIF(UPPER(status), '')
             ) = 'BUY_SUBMIT'
-              AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC')
+              AND created_at >= timezone(
+                    'UTC',
+                    date_trunc(
+                      'day',
+                      timezone('America/New_York', now())
+                    )
+                  )
         """
         try:
             with engine:
@@ -4511,7 +4523,22 @@ class TradeExecutor:
                     has_event_column = cursor.fetchone() is not None
                     cursor.execute(canonical_query if has_event_column else fallback_query)
                     result = cursor.fetchone()
-                    return int(result[0] if result else 0)
+                    submitted_today = int(result[0] if result else 0)
+                    ny_today = datetime.now(ZoneInfo("America/New_York")).date()
+                    try:
+                        max_daily_entries = int(self.config.max_positions)
+                    except (TypeError, ValueError):
+                        max_daily_entries = 0
+                    max_daily_entries = max(1, max_daily_entries)
+                    remaining_slots = max_daily_entries - submitted_today
+                    LOGGER.info(
+                        "DAILY_ENTRY_STATE ny_date=%s submitted_today=%d max_daily_entries=%d remaining=%d",
+                        ny_today,
+                        submitted_today,
+                        max_daily_entries,
+                        remaining_slots,
+                    )
+                    return submitted_today
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning("[WARN] DAILY_ENTRY_COUNT_FAILED err=%s", exc)
             return 0
