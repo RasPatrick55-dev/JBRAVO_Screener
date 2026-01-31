@@ -153,9 +153,9 @@ const navLabels = [
 ];
 
 const statusDotTone: Record<StatusTone, string> = {
-  success: "bg-emerald-500",
+  success: "jbravo-status-dot-success",
   warning: "bg-amber-500",
-  error: "bg-rose-500",
+  error: "jbravo-status-dot-error",
   info: "bg-sky-500",
   neutral: "bg-slate-400",
 };

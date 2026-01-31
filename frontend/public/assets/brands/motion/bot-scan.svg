@@ -1,0 +1,40 @@
+<svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bot-gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+    <radialGradient id="scan-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22c55e" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#22c55e" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  
+  <ellipse cx="40" cy="40" rx="30" ry="30" fill="#0d1117" stroke="url(#bot-gold)" stroke-width="3" />
+  <ellipse cx="40" cy="40" rx="25" ry="25" fill="#1a1f2e" />
+  
+  <ellipse cx="40" cy="38" rx="18" ry="8" fill="#0a0e14" opacity="0.9" />
+  
+  <line x1="22" y1="38" x2="58" y2="38" stroke="#22c55e" stroke-width="2" stroke-linecap="round">
+    <animate attributeName="y1" values="32;44;32" dur="2s" repeatCount="indefinite" />
+    <animate attributeName="y2" values="32;44;32" dur="2s" repeatCount="indefinite" />
+    <animate attributeName="opacity" values="0.3;1;0.3" dur="2s" repeatCount="indefinite" />
+  </line>
+  
+  <ellipse cx="40" cy="38" rx="20" ry="10" fill="url(#scan-glow)">
+    <animate attributeName="cy" values="32;44;32" dur="2s" repeatCount="indefinite" />
+    <animate attributeName="opacity" values="0;0.6;0" dur="2s" repeatCount="indefinite" />
+  </ellipse>
+  
+  <line x1="40" y1="8" x2="40" y2="12" stroke="url(#bot-gold)" stroke-width="2" stroke-linecap="round" />
+  <circle cx="40" cy="8" r="3" fill="#22c55e" opacity="0.9">
+    <animate attributeName="opacity" values="0.9;0.3;0.9" dur="1s" repeatCount="indefinite" />
+  </circle>
+  
+  <line x1="28" y1="50" x2="52" y2="50" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" opacity="0.6" />
+  
+  <circle cx="40" cy="62" r="2" fill="#22c55e" opacity="0.8">
+    <animate attributeName="opacity" values="0.8;0.3;0.8" dur="1.5s" repeatCount="indefinite" />
+  </circle>
+</svg>

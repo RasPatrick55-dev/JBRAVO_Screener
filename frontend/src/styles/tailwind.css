@@ -5,6 +5,13 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --jbravo-green: #22c55e;
+    --jbravo-gold: #f59e0b;
+    --jbravo-red: #ef4444;
+    --jbravo-bg: #0a0e1a;
+  }
+
   body {
     font-family: "Manrope", ui-sans-serif, system-ui, sans-serif;
   }
@@ -18,6 +25,72 @@
   .market-status {
     animation: marketGlow 2.4s ease-in-out infinite;
     text-shadow: 0 0 0 var(--market-glow, rgba(255, 255, 255, 0));
+  }
+
+  .jbravo-active-tab {
+    background-color: rgba(34, 197, 94, 0.12);
+    color: var(--jbravo-green);
+  }
+
+  .dark .jbravo-active-tab {
+    background-color: rgba(245, 158, 11, 0.2);
+    color: var(--jbravo-gold);
+  }
+
+  .jbravo-status-success {
+    background-color: rgba(34, 197, 94, 0.12);
+    color: var(--jbravo-green);
+    --tw-ring-color: rgba(34, 197, 94, 0.35);
+  }
+
+  .dark .jbravo-status-success {
+    background-color: rgba(34, 197, 94, 0.2);
+    color: var(--jbravo-green);
+    --tw-ring-color: rgba(34, 197, 94, 0.55);
+  }
+
+  .jbravo-status-error {
+    background-color: rgba(239, 68, 68, 0.12);
+    color: var(--jbravo-red);
+    --tw-ring-color: rgba(239, 68, 68, 0.35);
+  }
+
+  .dark .jbravo-status-error {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: var(--jbravo-red);
+    --tw-ring-color: rgba(239, 68, 68, 0.55);
+  }
+
+  .jbravo-status-dot-success {
+    background-color: var(--jbravo-green);
+  }
+
+  .jbravo-status-dot-error {
+    background-color: var(--jbravo-red);
+  }
+
+  .jbravo-chip-success {
+    background-color: rgba(34, 197, 94, 0.2);
+    color: var(--jbravo-green);
+    outline-color: rgba(34, 197, 94, 0.6);
+  }
+
+  .jbravo-chip-error {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: var(--jbravo-red);
+    outline-color: rgba(239, 68, 68, 0.6);
+  }
+
+  .jbravo-text-success {
+    color: var(--jbravo-green);
+  }
+
+  .jbravo-text-error {
+    color: var(--jbravo-red);
+  }
+
+  .jbravo-border-success {
+    border-color: rgba(34, 197, 94, 0.6);
   }
 
   @keyframes marketGlow {

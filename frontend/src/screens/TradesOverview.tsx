@@ -485,7 +485,12 @@ export default function TradesOverview({ activeTab, onTabSelect }: TradesOvervie
                 {recentTrades.length ? (
                   recentTrades.map((trade, index) => {
                     const pnlValue = trade.netPnl ?? trade.pnl ?? 0;
-                    const pnlTone = pnlValue > 0 ? "text-emerald-600" : pnlValue < 0 ? "text-rose-600" : "text-slate-500";
+                    const pnlTone =
+                      pnlValue > 0
+                        ? "jbravo-text-success"
+                        : pnlValue < 0
+                          ? "jbravo-text-error"
+                          : "text-slate-500";
                     const statusLabel = pnlValue > 0 ? "Win" : pnlValue < 0 ? "Loss" : "Flat";
                     const statusTone: StatusTone = pnlValue > 0 ? "success" : pnlValue < 0 ? "error" : "neutral";
                     return (

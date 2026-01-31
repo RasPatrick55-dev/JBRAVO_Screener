@@ -1,0 +1,32 @@
+<svg width="160" height="60" viewBox="0 0 160 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="profit-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22c55e" stop-opacity="0.2" />
+      <stop offset="50%" stop-color="#22c55e" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#22c55e" stop-opacity="0.2" />
+    </linearGradient>
+    <filter id="profit-blur">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3" />
+    </filter>
+  </defs>
+  
+  <line x1="10" y1="30" x2="150" y2="30" stroke="url(#profit-gradient)" stroke-width="4" stroke-linecap="round">
+    <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite" />
+  </line>
+  
+  <line x1="10" y1="30" x2="150" y2="30" stroke="#22c55e" stroke-width="8" stroke-linecap="round" filter="url(#profit-blur)" opacity="0.4">
+    <animate attributeName="opacity" values="0.2;0.6;0.2" dur="2s" repeatCount="indefinite" />
+  </line>
+  
+  <circle cx="30" cy="30" r="4" fill="#22c55e" opacity="0.8">
+    <animate attributeName="cx" values="10;150;10" dur="3s" repeatCount="indefinite" />
+    <animate attributeName="opacity" values="0;1;0" dur="3s" repeatCount="indefinite" />
+  </circle>
+  
+  <circle cx="10" cy="30" r="3" fill="#22c55e">
+    <animate attributeName="opacity" values="0.3;0.9;0.3" dur="2s" repeatCount="indefinite" />
+  </circle>
+  <circle cx="150" cy="30" r="3" fill="#22c55e">
+    <animate attributeName="opacity" values="0.3;0.9;0.3" dur="2s" begin="1s" repeatCount="indefinite" />
+  </circle>
+</svg>

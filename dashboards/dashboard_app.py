@@ -514,6 +514,7 @@ def _serialize_record(value: Any) -> Any:
 # React build output for the new Dashboard UI
 REACT_BUILD_DIR = Path(BASE_DIR) / "frontend" / "dist"
 REACT_ASSET_DIR = REACT_BUILD_DIR / "assets"
+BRAND_ASSET_DIR = Path(BASE_DIR) / "assets"
 
 # Absolute paths to CSV data files used throughout the dashboard
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
@@ -3014,6 +3015,7 @@ app = Dash(
     ],
     url_base_pathname=DASH_BASE_PATH,
     suppress_callback_exceptions=True,
+    title="JBRAVO Trading Bot",
 )
 
 server = app.server
@@ -3042,12 +3044,13 @@ def react_assets(filename: str):
 
 @server.route("/assets/<path:filename>")
 def react_asset_bundle(filename: str):
-    if not REACT_ASSET_DIR.exists():
-        abort(404)
-    file_path = REACT_ASSET_DIR / filename
-    if not file_path.exists():
-        abort(404)
-    return send_from_directory(REACT_ASSET_DIR, filename)
+    file_path = REACT_ASSET_DIR / filename if REACT_ASSET_DIR.exists() else None
+    if file_path and file_path.exists():
+        return send_from_directory(REACT_ASSET_DIR, filename)
+    brand_path = BRAND_ASSET_DIR / filename
+    if brand_path.exists():
+        return send_from_directory(BRAND_ASSET_DIR, filename)
+    abort(404)
 
 
 @server.route("/health/overview")
@@ -3560,7 +3563,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-overview",
                 id="tab-overview",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3568,7 +3571,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-pipeline",
                 id="tab-pipeline",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3576,7 +3579,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-ml",
                 id="tab-ml",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3584,7 +3587,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-screener-health",
                 id="tab-screener-health",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3592,7 +3595,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-screener",
                 id="tab-screener",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3600,7 +3603,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-execute",
                 id="tab-execute",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3608,7 +3611,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-activities",
                 id="tab-activities",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3616,7 +3619,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-account",
                 id="tab-account",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3624,7 +3627,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-symbol-performance",
                 id="tab-symbol-performance",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3632,7 +3635,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-monitor",
                 id="tab-monitor",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3640,7 +3643,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-trades",
                 id="tab-trades",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
             dbc.Tab(
@@ -3648,7 +3651,7 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
                 tab_id="tab-trade-performance",
                 id="tab-trade-performance",
                 tab_style={"backgroundColor": "#343a40", "color": "#ccc"},
-                active_tab_style={"backgroundColor": "#17a2b8", "color": "#fff"},
+                active_tab_style={"backgroundColor": "#22c55e", "color": "#fff"},
                 className="custom-tab",
             ),
         ],
@@ -3662,7 +3665,7 @@ app.layout = dbc.Container(
         dbc.Row(
             dbc.Col(
                 html.H1(
-                    "JBravo Swing Trading Dashboard",
+                    "JBRAVO Trading Bot",
                     className="text-center my-4 text-light",
                 )
             )

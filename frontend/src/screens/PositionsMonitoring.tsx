@@ -489,9 +489,9 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
                   positions.map((position, index) => {
                     const pnlTone =
                       position.realizedPnl !== null && position.realizedPnl < 0
-                        ? "text-rose-600"
+                        ? "jbravo-text-error"
                         : position.realizedPnl !== null && position.realizedPnl > 0
-                          ? "text-emerald-600"
+                          ? "jbravo-text-success"
                           : "text-slate-500";
                     return (
                       <div

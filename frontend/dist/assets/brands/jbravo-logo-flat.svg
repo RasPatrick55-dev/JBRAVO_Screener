@@ -1,0 +1,65 @@
+<svg width="550" height="180" viewBox="0 0 550 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gold-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+    <linearGradient id="j-green-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4ade80" />
+      <stop offset="100%" stop-color="#22c55e" />
+    </linearGradient>
+    
+  </defs>
+  
+  <g opacity="0.95" >
+    <rect x="25" y="70" width="9" height="25" fill="#15803d" rx="1" />
+    <rect x="38" y="60" width="9" height="35" fill="#16a34a" rx="1" />
+    <rect x="51" y="48" width="9" height="47" fill="#22c55e" rx="1" />
+    <rect x="64" y="38" width="9" height="57" fill="#4ade80" rx="1" />
+    <path d="M 68 33 L 78 20 L 88 33 L 83 33 L 83 43 L 73 43 L 73 33 Z" fill="url(#gold-gradient)" />
+  </g>
+  
+  <path d="M 95 35 L 118 35 L 118 82 Q 118 95 106.5 95 Q 95 95 95 82 L 95 78 L 105 78 L 105 82 Q 105 85 106.5 85 Q 108 85 108 82 L 108 35" fill="url(#j-green-gradient)"  />
+  
+  <path d="M 133 35 L 166 35 Q 179 35 179 47 Q 179 54 173 57.5 Q 180 61 180 70 Q 180 82 166 82 L 133 82 Z M 146 44 L 146 53 L 162 53 Q 167 53 167 48.5 Q 167 44 162 44 Z M 146 62 L 146 73 L 163 73 Q 168 73 168 67.5 Q 168 62 163 62 Z" fill="url(#gold-gradient)"  />
+  
+  <path d="M 192 35 L 225 35 Q 238 35 238 47 Q 238 57 225 59 L 241 82 L 226 82 L 212 61 L 205 61 L 205 82 L 192 82 Z M 205 44 L 205 52 L 220 52 Q 225 52 225 48 Q 225 44 220 44 Z" fill="url(#gold-gradient)"  />
+  
+  <g fill="url(#gold-gradient)" >
+    <rect x="262" y="35" width="13" height="20" rx="1.5" />
+    <path d="M 252 82 L 259 60 L 288 60 L 295 82 L 281 82 L 279.5 74 L 267.5 74 L 266 82 Z M 270 66 L 277 66 L 273.5 50 Z" />
+  </g>
+  
+  <path d="M 307 35 L 321 35 L 334 72 L 347 35 L 361 35 L 341 82 L 328 82 Z" fill="url(#gold-gradient)"  />
+  
+  <g transform="translate(365, 35)">
+    <ellipse cx="18" cy="23.5" rx="18" ry="23.5" fill="#0d1117" stroke="url(#gold-gradient)" stroke-width="3" />
+    <ellipse cx="18" cy="23.5" rx="15" ry="20" fill="#1a1f2e" />
+    <ellipse cx="18" cy="21" rx="11" ry="6" fill="#0a0e14" opacity="0.9" />
+    <g opacity="0.95">
+      <rect x="10" y="19" width="2" height="5" fill="#15803d" rx="0.3" />
+      <rect x="13" y="17.5" width="2" height="7" fill="#22c55e" rx="0.3" />
+      <rect x="21" y="17.5" width="2" height="7" fill="#dc2626" rx="0.3" />
+      <rect x="24" y="19" width="2" height="5" fill="#ef4444" rx="0.3" />
+    </g>
+    <line x1="18" y1="-2" x2="18" y2="2" stroke="url(#gold-gradient)" stroke-width="1.5" stroke-linecap="round" />
+    <circle cx="18" cy="-2" r="2" fill="#22c55e" opacity="0.9" />
+    <line x1="10" y1="30" x2="26" y2="30" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round" opacity="0.6" />
+    <circle cx="18" cy="38" r="1.5" fill="#22c55e" opacity="0.8" />
+  </g>
+  
+  <g fill="url(#gold-gradient)"  transform="translate(133, 100)">
+    <path d="M 0 0 h 11 v 4 h -3.5 v 11 h -4 v -11 h -3.5 z" />
+    <path d="M 23 0 h 8 q 3 0 3 3 q 0 2.5 -2 3 l 2.5 9 h -4.5 l -2 -8 h -1 v 8 h -4 v -15 z m 4 3.5 v 2.5 h 3 q 1 0 1 -1.25 q 0 -1.25 -1 -1.25 z" />
+    <path d="M 50 0 h 4.5 l 5.5 15 h -4.5 l -0.8 -3 h -4.4 l -0.8 3 h -4.5 z m 3.5 8.5 l -1.25 -4 l -1.25 4 z" />
+    <path d="M 73 0 h 6 q 4 0 4 7.5 q 0 7.5 -4 7.5 h -6 z m 4 3.5 v 8 h 2 q 1.5 0 1.5 -4 q 0 -4 -1.5 -4 z" />
+    <path d="M 97 0 h 4 v 15 h -4 z" />
+    <path d="M 113 0 h 4.5 l 3.5 8 v -8 h 4 v 15 h -4.5 l -3.5 -8 v 8 h -4 z" />
+    <path d="M 137 0 h 8 v 4 h -4 v 2.5 h 3 v 3.5 h -3 v 1.5 h 4 v 3.5 h -8 z" />
+    <path d="M 165 0 h 7 q 2.5 0 2.5 3 q 0 1.5 -1 2 q 1.2 0.5 1.2 2.5 q 0 3 -2.7 3 h -7 z m 4 3.5 v 2 h 2 q 0.8 0 0.8 -1 q 0 -1 -0.8 -1 z m 0 5.5 v 2.5 h 2.5 q 1 0 1 -1.25 q 0 -1.25 -1 -1.25 z" />
+    <path d="M 187 0 h 8 v 15 h -8 z m 4 3.5 v 8 h 0" />
+    <ellipse cx="191" cy="7.5" rx="4" ry="7.5" fill="none" stroke="url(#gold-gradient)" stroke-width="4" />
+    <path d="M 209 0 h 11 v 4 h -3.5 v 11 h -4 v -11 h -3.5 z" />
+  </g>
+</svg>

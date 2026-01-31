@@ -15,8 +15,8 @@ export default function LogViewer({ title, entries, statusLabel, actionLabel }: 
         <div className="flex items-center gap-2">
           <div className="text-sm font-semibold text-slate-800">{title}</div>
           {statusLabel ? (
-            <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            <span className="inline-flex items-center gap-1 text-xs jbravo-text-success">
+              <span className="h-2 w-2 rounded-full jbravo-status-dot-success" />
               {statusLabel}
             </span>
           ) : null}

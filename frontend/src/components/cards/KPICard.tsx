@@ -1,9 +1,9 @@
 import type { KPICardProps, StatusTone } from "../../types/ui";
 
 const detailStyles: Record<StatusTone, string> = {
-  success: "text-emerald-600",
+  success: "jbravo-text-success",
   warning: "text-amber-600",
-  error: "text-rose-600",
+  error: "jbravo-text-error",
   info: "text-sky-600",
   neutral: "text-slate-500",
 };

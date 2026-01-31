@@ -55,11 +55,15 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center justify-between lg:justify-start">
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-sm font-bold text-white">
-                  JB
+                <div className="flex items-center justify-center">
+                  <img
+                    src="/assets/brands/jbravo-logo-flat.svg"
+                    alt="JBRAVO Trading Bot"
+                    className="h-10 w-auto max-w-[140px]"
+                  />
                 </div>
                 <div className="text-sm font-semibold tracking-wide text-slate-900 dark:text-slate-100">
-                  JBRAVO Trading
+                  JBRAVO Trading Bot
                 </div>
               </div>
               <div className="flex items-center gap-2 lg:hidden">
@@ -79,7 +83,7 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
                   className={
                     "whitespace-nowrap rounded-full px-3 py-1 transition-colors " +
                     (tab.isActive
-                      ? "bg-blue-50 text-blue-700 dark:bg-cyan-500/15 dark:text-cyan-200"
+                      ? "jbravo-active-tab"
                       : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100")
                   }
                 >

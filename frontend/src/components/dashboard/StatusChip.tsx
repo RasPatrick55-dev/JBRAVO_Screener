@@ -3,9 +3,9 @@ import type { ReactNode } from "react";
 export type StatusChipTone = "success" | "active" | "error" | "neutral";
 
 const toneStyles: Record<StatusChipTone, string> = {
-  success: "text-emerald-200 outline-emerald-400 bg-emerald-500/20",
+  success: "jbravo-chip-success",
   active: "text-cyan-200 outline-cyan-400 bg-cyan-500/20",
-  error: "text-rose-200 outline-rose-400 bg-rose-500/20",
+  error: "jbravo-chip-error",
   neutral: "text-slate-200 outline-slate-400 bg-slate-500/20",
 };
 

@@ -37,7 +37,7 @@ export default function StockLogo({ symbol, logoUrl }: StockLogoProps) {
       <img
         src={logoSrc}
         alt={`${trimmed} logo`}
-        className="h-8 w-8 rounded-md border border-emerald-300/60 bg-slate-950/80 object-contain p-1 shadow-[0_0_10px_rgba(16,185,129,0.25)]"
+        className="h-8 w-8 rounded-md border jbravo-border-success bg-slate-950/80 object-contain p-1 shadow-[0_0_10px_rgba(34,197,94,0.25)]"
         onLoad={(event) => {
           if (event.currentTarget.naturalWidth < 2 || event.currentTarget.naturalHeight < 2) {
             event.currentTarget.src = "/images/placeholder-stock-logo.png";
@@ -60,7 +60,7 @@ export default function StockLogo({ symbol, logoUrl }: StockLogoProps) {
         className={
           "absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full " +
           (status === "loaded"
-            ? "bg-emerald-300"
+            ? "jbravo-status-dot-success"
             : status === "fallback"
               ? "bg-amber-300"
               : "bg-cyan-300")

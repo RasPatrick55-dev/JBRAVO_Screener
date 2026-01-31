@@ -24,7 +24,7 @@ const plToneClass = (value: number | null | undefined) => {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "text-slate-300";
   }
-  return value >= 0 ? "text-emerald-300" : "text-rose-300";
+  return value >= 0 ? "jbravo-text-success" : "jbravo-text-error";
 };
 
 const SummaryTile = ({ label, value, valueTone }: { label: string; value: string; valueTone: string }) => {
@@ -142,8 +142,8 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
               const plSparkline = plSparklineFor(position);
               const plTone =
                 plSparkline.length > 0 && plSparkline[plSparkline.length - 1] < 0
-                  ? "rgb(248,113,113)"
-                  : "rgb(52,211,153)";
+                  ? "var(--jbravo-red)"
+                  : "var(--jbravo-green)";
               return (
                 <div
                   key={`${displaySymbol}-${index}`}

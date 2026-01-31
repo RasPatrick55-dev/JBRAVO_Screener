@@ -1,0 +1,25 @@
+<svg width="50" height="50" viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="icon-gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+  </defs>
+  
+  <g transform="translate(7, 7)">
+    <ellipse cx="18" cy="18" rx="18" ry="18" fill="#0d1117" stroke="url(#icon-gold)" stroke-width="3" />
+    <ellipse cx="18" cy="18" rx="14.5" ry="14.5" fill="#1a1f2e" />
+    <ellipse cx="18" cy="16" rx="11" ry="5.5" fill="#0a0e14" opacity="0.9" />
+    <g opacity="0.95">
+      <rect x="10" y="14" width="2" height="5" fill="#15803d" rx="0.3" />
+      <rect x="13" y="12.5" width="2" height="7" fill="#22c55e" rx="0.3" />
+      <rect x="21" y="12.5" width="2" height="7" fill="#dc2626" rx="0.3" />
+      <rect x="24" y="14" width="2" height="5" fill="#ef4444" rx="0.3" />
+    </g>
+    <line x1="18" y1="-1" x2="18" y2="2" stroke="url(#icon-gold)" stroke-width="1.5" stroke-linecap="round" />
+    <circle cx="18" cy="-1" r="2" fill="#22c55e" opacity="0.9" />
+    <line x1="10" y1="24" x2="26" y2="24" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round" opacity="0.6" />
+    <circle cx="18" cy="30" r="1.5" fill="#22c55e" opacity="0.8" />
+  </g>
+</svg>
