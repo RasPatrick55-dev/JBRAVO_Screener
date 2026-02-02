@@ -1187,6 +1187,15 @@ def _ny_now() -> datetime:
     return datetime.now(NY)
 
 
+def _parse_clock_dt(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    try:
+        return isoparse(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_hhmm(raw: str | None, default: tuple[int, int]) -> tuple[int, int]:
     if isinstance(raw, str):
         candidate = raw.strip()
@@ -1378,11 +1387,13 @@ def _wait_until_submit_at(target: Optional[str]) -> None:
         return
     while now_ny < target_dt:
         remaining = (target_dt - now_ny).total_seconds()
-        LOGGER.info(
-            "[INFO] WAIT_UNTIL submit_at_ny=%s remaining=%ds",
-            value,
-            int(max(1, math.ceil(remaining))),
-        )
+        remaining_seconds = int(max(1, math.ceil(remaining)))
+        if remaining_seconds <= 60 or remaining_seconds % 300 == 0:
+            LOGGER.info(
+                "[INFO] WAIT_UNTIL submit_at_ny=%s remaining=%ds",
+                value,
+                remaining_seconds,
+            )
         sleep_for = min(60, max(5, remaining / 4))
         time.sleep(sleep_for)
         now_ny = datetime.now(ny)
@@ -6261,6 +6272,44 @@ def run_executor(
             base_alloc_pct=base_alloc_pct,
             source_df=candidates_df,
         )
+
+        clock = loader._get_trading_clock()
+        now_ny = _ny_now()
+        clock_ts = _parse_clock_dt(getattr(clock, "timestamp", None) if clock is not None else None)
+        if clock_ts is not None:
+            now_ny = clock_ts.astimezone(NY)
+        ny_date = now_ny.date()
+        is_open = bool(getattr(clock, "is_open", False)) if clock is not None else False
+        next_open_raw = getattr(clock, "next_open", None) if clock is not None else None
+        next_open_dt = _parse_clock_dt(next_open_raw)
+        next_open_date = next_open_dt.astimezone(NY).date() if next_open_dt else None
+        next_close_dt = _parse_clock_dt(getattr(clock, "next_close", None) if clock is not None else None)
+        next_close_date = next_close_dt.astimezone(NY).date() if next_close_dt else None
+        session = str(getattr(clock, "session", "") or "").lower() if clock is not None else ""
+
+        def _exit_market_closed() -> int:
+            LOGGER.info(
+                "MARKET_DAY_CLOSED ny_date=%s is_open=%s next_open=%s",
+                ny_date.isoformat(),
+                str(bool(is_open)).lower(),
+                "" if next_open_raw is None else str(next_open_raw),
+            )
+            metrics.exit_reason = "MARKET_DAY_CLOSED"
+            metrics.orders_submitted = 0
+            metrics.orders_filled = 0
+            loader.persist_metrics()
+            loader.log_summary()
+            return 0
+
+        if ny_date.weekday() >= 5:
+            return _exit_market_closed()
+
+        if clock is not None and not is_open:
+            session_allows = session and session not in {"closed", "holiday"}
+            next_open_not_today = next_open_date is not None and next_open_date != ny_date
+            next_close_not_today = next_close_date is not None and next_close_date != ny_date
+            if not session_allows and next_open_not_today and (next_close_date is None or next_close_not_today):
+                return _exit_market_closed()
 
         _wait_until_submit_at(config.submit_at_ny)
         configured_window = config.time_window or "auto"
