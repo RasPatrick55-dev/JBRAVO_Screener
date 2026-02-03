@@ -91,6 +91,209 @@ def _pythonanywhere_username() -> Optional[str]:
     return os.environ.get("PYTHONANYWHERE_USERNAME") or os.environ.get("PYTHONANYWHERE_USER")
 
 
+def _pythonanywhere_api_base() -> str:
+    return (os.environ.get("PYTHONANYWHERE_API_BASE_URL") or "https://www.pythonanywhere.com/api/v0/user").rstrip("/")
+
+
+def _pythonanywhere_api_get_json(path: str) -> Optional[Any]:
+    token = _pythonanywhere_token()
+    username = _pythonanywhere_username()
+    if not token or not username:
+        return None
+    cleaned = path.lstrip("/")
+    url = f"{_pythonanywhere_api_base()}/{username}/{cleaned}"
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": f"Token {token}"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status != 200:
+                return None
+            return json.loads(resp.read().decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+
+
+def _pythonanywhere_usage_snapshot() -> Optional[dict[str, Any]]:
+    remote_url = os.environ.get("PYTHONANYWHERE_USAGE_URL")
+    remote_path = os.environ.get("PYTHONANYWHERE_USAGE_PATH")
+    if not remote_url and not remote_path:
+        username = _pythonanywhere_username()
+        if username:
+            remote_path = f"/home/{username}/JBRAVO_Screener/data/pythonanywhere_usage.json"
+    if not remote_url and not remote_path:
+        return None
+    payload = _fetch_pythonanywhere_file(remote_url, remote_path)
+    if not payload:
+        return None
+    text, source = payload
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    parsed["_source"] = source
+    return parsed
+
+
+def _percent_used(used: Optional[float], limit: Optional[float]) -> Optional[float]:
+    if used is None or limit is None or limit <= 0:
+        return None
+    return max(0.0, min(100.0, (used / limit) * 100))
+
+
+def _pythonanywhere_cpu_usage() -> Optional[dict[str, Any]]:
+    payload = _pythonanywhere_api_get_json("cpu/")
+    if not isinstance(payload, dict):
+        return None
+    cpu_seconds = _to_float(payload.get("daily_cpu_total_usage_seconds"))
+    cpu_limit = _to_float(payload.get("daily_cpu_limit_seconds"))
+    if cpu_seconds is None:
+        cpu_seconds = _to_float(payload.get("cpu_seconds"))
+    if cpu_limit is None:
+        cpu_limit = _to_float(payload.get("cpu_limit"))
+    percent = _percent_used(cpu_seconds, cpu_limit)
+    if percent is None:
+        return None
+    return {
+        "label": "CPU Usage",
+        "value": round(percent),
+        "used": cpu_seconds,
+        "limit": cpu_limit,
+        "unit": "sec",
+        "next_reset_time": payload.get("next_reset_time"),
+        "source": "pythonanywhere",
+    }
+
+
+def _pythonanywhere_file_storage_usage() -> Optional[dict[str, Any]]:
+    snapshot = _pythonanywhere_usage_snapshot()
+    if snapshot:
+        storage = snapshot.get("file_storage") or snapshot.get("storage")
+        if isinstance(storage, dict):
+            percent = _to_float(storage.get("percent"))
+            used_bytes = _to_float(storage.get("used_bytes") or storage.get("used"))
+            limit_bytes = _to_float(storage.get("limit_bytes") or storage.get("limit"))
+            if percent is None:
+                percent = _percent_used(used_bytes, limit_bytes)
+            if percent is not None:
+                return {
+                    "label": "File Storage",
+                    "value": round(percent),
+                    "used": used_bytes,
+                    "limit": limit_bytes,
+                    "unit": "bytes",
+                    "source": snapshot.get("_source"),
+                }
+
+    direct_pct = _to_float(os.environ.get("PYTHONANYWHERE_FILE_STORAGE_PCT"))
+    if direct_pct is not None:
+        return {
+            "label": "File Storage",
+            "value": round(max(0.0, min(100.0, direct_pct))),
+            "source": "env",
+        }
+    return None
+
+
+def _pythonanywhere_postgres_usage() -> Optional[dict[str, Any]]:
+    snapshot = _pythonanywhere_usage_snapshot()
+    if snapshot:
+        storage = snapshot.get("postgres_storage") or snapshot.get("postgres")
+        if isinstance(storage, dict):
+            percent = _to_float(storage.get("percent"))
+            used_bytes = _to_float(storage.get("used_bytes") or storage.get("used"))
+            limit_bytes = _to_float(storage.get("limit_bytes") or storage.get("limit"))
+            if percent is None:
+                percent = _percent_used(used_bytes, limit_bytes)
+            if percent is not None:
+                return {
+                    "label": "Postgres Storage",
+                    "value": round(percent),
+                    "used": used_bytes,
+                    "limit": limit_bytes,
+                    "unit": "bytes",
+                    "source": snapshot.get("_source"),
+                }
+
+    direct_pct = _to_float(os.environ.get("PYTHONANYWHERE_POSTGRES_PCT"))
+    if direct_pct is not None:
+        return {
+            "label": "Postgres Storage",
+            "value": round(max(0.0, min(100.0, direct_pct))),
+            "source": "env",
+        }
+    return None
+
+
+def _pythonanywhere_schedule_tasks() -> list[dict[str, Any]]:
+    payload = _pythonanywhere_api_get_json("schedule/")
+    if not isinstance(payload, list):
+        return []
+    return [task for task in payload if isinstance(task, dict)]
+
+
+def _task_name_from_command(command: str) -> Optional[str]:
+    normalized = command.lower()
+    if "run_pipeline" in normalized:
+        return "Run Pipeline"
+    if "backtest" in normalized:
+        return "Screener Backtest"
+    if "metrics" in normalized:
+        return "Metrics Update"
+    if "execute_trades" in normalized:
+        return "Execute Trades"
+    return None
+
+
+def _format_task_time(task: Mapping[str, Any]) -> str:
+    printable = str(task.get("printable_time") or "").strip()
+    interval = str(task.get("interval") or "").lower()
+    minute = task.get("minute")
+    hour = task.get("hour")
+    tz_label = os.environ.get("PYTHONANYWHERE_TASK_TZ") or "UTC"
+
+    if printable:
+        return f"{printable} {tz_label}".strip()
+
+    if interval == "hourly":
+        try:
+            minute_int = int(minute)
+            return f"**:{minute_int:02d} {tz_label}"
+        except Exception:
+            return f"**:00 {tz_label}"
+
+    if interval in {"daily", "weekly", "monthly"}:
+        try:
+            hour_int = int(hour)
+            minute_int = int(minute)
+            return f"{hour_int:02d}:{minute_int:02d} {tz_label}"
+        except Exception:
+            return f"--:-- {tz_label}"
+
+    return "--:--"
+
+
+def _normalize_schedule_task(task: Mapping[str, Any]) -> dict[str, Any]:
+    description = str(task.get("description") or "").strip()
+    command = str(task.get("command") or "").strip()
+    name = description or _task_name_from_command(command) or "Scheduled Task"
+    interval = str(task.get("interval") or "").lower()
+    frequency = interval.capitalize() if interval else "Schedule"
+    if interval == "daily":
+        frequency = "Daily"
+    elif interval == "hourly":
+        frequency = "Hourly"
+    elif interval == "weekly":
+        frequency = "Weekly"
+    elif interval == "monthly":
+        frequency = "Monthly"
+    return {
+        "name": name,
+        "frequency": frequency,
+        "time": _format_task_time(task),
+    }
+
+
 def _fetch_pythonanywhere_file(
     remote_url: Optional[str], remote_path: Optional[str]
 ) -> Optional[tuple[str, str]]:
@@ -500,6 +703,26 @@ def _account_latest_db() -> dict[str, Any]:
             row["source"] = source
             return row
     return {}
+
+
+def _account_latest_alpaca() -> dict[str, Any]:
+    if trading_client is None:
+        return {}
+    try:
+        account = trading_client.get_account()
+    except Exception as exc:
+        logger.warning("[WARN] ALPACA_ACCOUNT_FETCH_FAILED err=%s", exc)
+        return {}
+    return {
+        "taken_at": datetime.now(timezone.utc).isoformat(),
+        "account_id": getattr(account, "id", None) or getattr(account, "account_id", None),
+        "status": getattr(account, "status", None),
+        "equity": _to_float(getattr(account, "equity", None)),
+        "cash": _to_float(getattr(account, "cash", None)),
+        "buying_power": _to_float(getattr(account, "buying_power", None)),
+        "portfolio_value": _to_float(getattr(account, "portfolio_value", None)),
+        "source": "alpaca",
+    }
 
 
 def _serialize_record(value: Any) -> Any:
@@ -3086,6 +3309,28 @@ def api_time():
     return response
 
 
+@server.route("/api/pythonanywhere/resources")
+def api_pythonanywhere_resources():
+    resources: list[dict[str, Any]] = []
+    cpu = _pythonanywhere_cpu_usage()
+    if cpu:
+        resources.append(cpu)
+    file_usage = _pythonanywhere_file_storage_usage()
+    if file_usage:
+        resources.append(file_usage)
+    postgres_usage = _pythonanywhere_postgres_usage()
+    if postgres_usage:
+        resources.append(postgres_usage)
+    return jsonify({"ok": bool(resources), "resources": resources})
+
+
+@server.route("/api/pythonanywhere/tasks")
+def api_pythonanywhere_tasks():
+    tasks = _pythonanywhere_schedule_tasks()
+    normalized = [_normalize_schedule_task(task) for task in tasks]
+    return jsonify({"ok": bool(normalized), "tasks": normalized})
+
+
 @server.route("/api/logos/<symbol>")
 def api_logo(symbol: str):
     safe_symbol = quote(symbol.upper(), safe=".-")
@@ -3104,6 +3349,10 @@ def api_logo(symbol: str):
 
 @server.route("/api/account/overview")
 def api_account_overview():
+    live_row = _account_latest_alpaca()
+    if live_row:
+        snapshot = {key: _serialize_record(value) for key, value in live_row.items()}
+        return jsonify({"ok": True, "snapshot": snapshot})
     row = _account_latest_db()
     if not row:
         return jsonify({"ok": False, "snapshot": {}})

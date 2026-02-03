@@ -3,6 +3,11 @@ import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import ProcessStatusCards, {
   type ProcessStatusCardsProps,
 } from "../components/dashboard/ProcessStatusCards";
+import AlpacaCard from "../components/dashboard/AlpacaCard";
+import PythonAnywhereResources from "../components/dashboard/PythonAnywhereResources";
+import MLDailyImprovements from "../components/dashboard/MLDailyImprovements";
+import LatestLogsTable from "../components/dashboard/LatestLogsTable";
+import PythonAnywhereTasksTable from "../components/dashboard/PythonAnywhereTasksTable";
 import type { LogEntry, StatusTone, SystemStatusItem } from "../types/ui";
 
 type HealthOverviewResponse = {
@@ -134,6 +139,33 @@ type ExecuteOrdersSummaryResponse = {
   source?: string | null;
 };
 
+type PythonAnywhereResource = {
+  label: string;
+  value: number;
+  used?: number | null;
+  limit?: number | null;
+  unit?: string | null;
+  source?: string | null;
+};
+
+type PythonAnywhereResourcesResponse = {
+  ok?: boolean;
+  resources?: PythonAnywhereResource[];
+  source?: string | null;
+};
+
+type PythonAnywhereTask = {
+  name: string;
+  frequency: string;
+  time: string;
+};
+
+type PythonAnywhereTasksResponse = {
+  ok?: boolean;
+  tasks?: PythonAnywhereTask[];
+  source?: string | null;
+};
+
 type OpenPositionsSummary = {
   count: number | null;
   pnl: number | null;
@@ -150,6 +182,26 @@ const navLabels = [
   "Execute",
   "Screener",
   "ML Pipeline",
+];
+
+const pythonAnywhereResourceDefaults = [
+  { label: "CPU Usage", value: 10 },
+  { label: "File Storage", value: 35 },
+  { label: "Postgres Storage", value: 10 },
+];
+
+const mlDailyImprovementsDefaults = [
+  { label: "Plume", active: true },
+  { label: "Fun", active: true },
+  { label: "Perth", active: false },
+  { label: "Process", active: false },
+  { label: "JF", active: false },
+];
+
+const pythonAnywhereTasksDefaults = [
+  { name: "Run Pipeline", frequency: "Daily", time: "03:45 UTC" },
+  { name: "Screener Backtest", frequency: "Daily", time: "04:00 UTC" },
+  { name: "Metrics Update", frequency: "Hourly", time: "**:15 UTC" },
 ];
 
 const statusDotTone: Record<StatusTone, string> = {
@@ -828,35 +880,42 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const [pipelineLogText, setPipelineLogText] = useState<string | null>(null);
   const [executeLogText, setExecuteLogText] = useState<string | null>(null);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [pythonAnywhereResources, setPythonAnywhereResources] =
+    useState<PythonAnywhereResource[] | null>(null);
+  const [pythonAnywhereTasks, setPythonAnywhereTasks] = useState<PythonAnywhereTask[] | null>(null);
 
   useEffect(() => {
     let isMounted = true;
     const load = async () => {
-        const [
-          overview,
-          health,
-          accountPayload,
-          tradesPayload,
-          executePayload,
-          monitoringPayload,
-          taskRunPayload,
-          executeTaskPayload,
-          executeOrdersPayload,
-          pipelineLog,
-          executeLog,
-        ] = await Promise.all([
-          fetchJson<HealthOverviewResponse>("/health/overview"),
-          fetchJson<ApiHealthResponse>("/api/health"),
-          fetchJson<AccountOverviewResponse>("/api/account/overview"),
-          fetchJson<TradesOverviewResponse>("/api/trades/overview"),
-          fetchJson<ExecutionSnapshot>("/api/execute/overview"),
-          fetchJson<MonitoringPositionsResponse>("/api/positions/monitoring"),
-          fetchJson<PipelineTaskRunResponse>("/api/pipeline/task"),
-          fetchJson<ExecuteTaskRunResponse>("/api/execute/task"),
-          fetchJson<ExecuteOrdersSummaryResponse>("/api/execute/orders-summary"),
-          fetchText(`/api/logs/pipeline.log?ts=${Date.now()}`),
-          fetchText(`/api/logs/execute_trades.log?ts=${Date.now()}`),
-        ]);
+      const [
+        overview,
+        health,
+        accountPayload,
+        tradesPayload,
+        executePayload,
+        monitoringPayload,
+        taskRunPayload,
+        executeTaskPayload,
+        executeOrdersPayload,
+        pythonAnywhereResourcesPayload,
+        pythonAnywhereTasksPayload,
+        pipelineLog,
+        executeLog,
+      ] = await Promise.all([
+        fetchJson<HealthOverviewResponse>("/health/overview"),
+        fetchJson<ApiHealthResponse>("/api/health"),
+        fetchJson<AccountOverviewResponse>("/api/account/overview"),
+        fetchJson<TradesOverviewResponse>("/api/trades/overview"),
+        fetchJson<ExecutionSnapshot>("/api/execute/overview"),
+        fetchJson<MonitoringPositionsResponse>("/api/positions/monitoring"),
+        fetchJson<PipelineTaskRunResponse>("/api/pipeline/task"),
+        fetchJson<ExecuteTaskRunResponse>("/api/execute/task"),
+        fetchJson<ExecuteOrdersSummaryResponse>("/api/execute/orders-summary"),
+        fetchJson<PythonAnywhereResourcesResponse>("/api/pythonanywhere/resources"),
+        fetchJson<PythonAnywhereTasksResponse>("/api/pythonanywhere/tasks"),
+        fetchText(`/api/logs/pipeline.log?ts=${Date.now()}`),
+        fetchText(`/api/logs/execute_trades.log?ts=${Date.now()}`),
+      ]);
 
       if (!isMounted) {
         return;
@@ -866,19 +925,21 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       setHealthSnapshot(health);
       setAccountSnapshot(accountPayload?.snapshot ?? null);
       setTradesOverview(tradesPayload);
-        setExecuteSnapshot(executePayload);
-        setMonitoringSnapshot(monitoringPayload);
-        setPipelineTaskRun(taskRunPayload);
-        setExecuteTaskRun(executeTaskPayload);
-        setExecuteOrdersSummary(executeOrdersPayload);
-        setPipelineLogText(pipelineLog);
-        setExecuteLogText(executeLog);
-        setLogEntries(
-          buildLogEntries([
-            { source: "pipeline", text: pipelineLog },
-            { source: "execute", text: executeLog },
-          ])
-        );
+      setExecuteSnapshot(executePayload);
+      setMonitoringSnapshot(monitoringPayload);
+      setPipelineTaskRun(taskRunPayload);
+      setExecuteTaskRun(executeTaskPayload);
+      setExecuteOrdersSummary(executeOrdersPayload);
+      setPythonAnywhereResources(pythonAnywhereResourcesPayload?.resources ?? null);
+      setPythonAnywhereTasks(pythonAnywhereTasksPayload?.tasks ?? null);
+      setPipelineLogText(pipelineLog);
+      setExecuteLogText(executeLog);
+      setLogEntries(
+        buildLogEntries([
+          { source: "pipeline", text: pipelineLog },
+          { source: "execute", text: executeLog },
+        ])
+      );
     };
 
     load();
@@ -1398,6 +1459,29 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   ];
 
   const displayEntries = logEntries.length ? logEntries : emptyEntries;
+  const alpacaEquity = formatCurrency(
+    parseNumber(accountSnapshot?.equity ?? accountSnapshot?.portfolio_value ?? null)
+  );
+  const latestLogsRows = displayEntries.slice(0, 3).map((entry) => ({
+    date: entry.time,
+    category: entry.level,
+    text: entry.message,
+  }));
+  const pythonAnywhereResourceRows = useMemo(() => {
+    if (!pythonAnywhereResources?.length) {
+      return pythonAnywhereResourceDefaults;
+    }
+    return pythonAnywhereResourceDefaults.map((fallback) => {
+      const match = pythonAnywhereResources.find(
+        (resource) => resource.label.toLowerCase() === fallback.label.toLowerCase()
+      );
+      return match ? { label: fallback.label, value: match.value } : fallback;
+    });
+  }, [pythonAnywhereResources]);
+  const pythonAnywhereTaskRows = useMemo(() => {
+    const source = pythonAnywhereTasks?.length ? pythonAnywhereTasks : pythonAnywhereTasksDefaults;
+    return source;
+  }, [pythonAnywhereTasks]);
 
   const currentTab = activeTab ?? "Dashboard";
   const navTabs = useMemo(
@@ -1420,6 +1504,18 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
             </div>
             <div className="mt-4">
               <ProcessStatusCards {...processStatusCards} />
+            </div>
+          </section>
+
+          <section className="mt-6">
+            <div className="grid gap-4 lg:grid-cols-3">
+              <AlpacaCard value={alpacaEquity} />
+              <PythonAnywhereResources resources={pythonAnywhereResourceRows} />
+              <MLDailyImprovements items={mlDailyImprovementsDefaults} />
+            </div>
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <LatestLogsTable rows={latestLogsRows} />
+              <PythonAnywhereTasksTable rows={pythonAnywhereTaskRows} />
             </div>
           </section>
         </div>

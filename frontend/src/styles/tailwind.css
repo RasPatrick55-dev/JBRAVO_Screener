@@ -10,6 +10,27 @@
     --jbravo-gold: #f59e0b;
     --jbravo-red: #ef4444;
     --jbravo-bg: #0a0e1a;
+    --ds-surface: #ffffff;
+    --ds-text-secondary: #64748b;
+    --ds-text-financial: #0f172a;
+    --ds-progress-rail: #e2e8f0;
+    --ds-progress-fill: #0f172a;
+    --ds-ml-dot-active: #22c55e;
+    --ds-ml-dot-inactive: #cbd5e1;
+    --ds-shadow-card: 0 6px 16px -12px rgba(15, 23, 42, 0.35), 0 2px 6px -4px rgba(15, 23, 42, 0.25);
+    --ds-space-sm: 0.5rem;
+    --ds-space-md: 1rem;
+  }
+
+  .dark {
+    --ds-surface: #0f172a;
+    --ds-text-secondary: #94a3b8;
+    --ds-text-financial: #f8fafc;
+    --ds-progress-rail: #1e293b;
+    --ds-progress-fill: #f8fafc;
+    --ds-ml-dot-active: #34d399;
+    --ds-ml-dot-inactive: #334155;
+    --ds-shadow-card: 0 12px 28px -18px rgba(0, 0, 0, 0.8), 0 6px 12px -10px rgba(0, 0, 0, 0.5);
   }
 
   body {
@@ -20,6 +41,46 @@
 @layer utilities {
   .font-cousine {
     font-family: "Cousine", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  .bg-surface {
+    background-color: var(--ds-surface);
+  }
+
+  .text-secondary {
+    color: var(--ds-text-secondary);
+  }
+
+  .text-financial {
+    color: var(--ds-text-financial);
+  }
+
+  .bg-progress-rail {
+    background-color: var(--ds-progress-rail);
+  }
+
+  .bg-progress-fill {
+    background-color: var(--ds-progress-fill);
+  }
+
+  .bg-ml-dot-active {
+    background-color: var(--ds-ml-dot-active);
+  }
+
+  .bg-ml-dot-inactive {
+    background-color: var(--ds-ml-dot-inactive);
+  }
+
+  .shadow-card {
+    box-shadow: var(--ds-shadow-card);
+  }
+
+  .p-md {
+    padding: var(--ds-space-md);
+  }
+
+  .gap-sm {
+    gap: var(--ds-space-sm);
   }
 
   .market-status {
