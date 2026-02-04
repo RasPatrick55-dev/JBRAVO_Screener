@@ -372,20 +372,45 @@ const formatDateUtc = (value: string | null | undefined) => {
 };
 
 const labelLogSource = (source: string) => {
-  const normalized = source.trim().toLowerCase();
+  const raw = source.trim();
+  if (!raw) {
+    return "task";
+  }
+  const normalized = raw.toLowerCase();
+
+  const scriptMatches = Array.from(raw.matchAll(/([A-Za-z0-9_./\\-]+\.py)\b/g));
+  if (scriptMatches.length) {
+    const match = scriptMatches[scriptMatches.length - 1][1];
+    const base = match.split(/[/\\]/).pop() ?? match;
+    const aliasMap: Record<string, string> = {
+      "pythonanywhere_usage.py": "PA Usage",
+      "run_pipeline.py": "Run Pipeline",
+      "execute_trades.py": "Execute Trades",
+      "monitor_positions.py": "Monitor Positions",
+      "update_dashboard_data.py": "Dash Update",
+    };
+    return aliasMap[base] ?? base;
+  }
+
   if (normalized.includes("pipeline")) {
-    return "run_pipeline.py";
+    return "Run Pipeline";
   }
   if (normalized.includes("execute")) {
-    return "execute_trades.py";
+    return "Execute Trades";
   }
   if (normalized.includes("monitor")) {
-    return "monitor_positions.py";
+    return "Monitor Positions";
+  }
+  if (normalized.startsWith("bash") || normalized.startsWith("sh")) {
+    return "Shell Task";
+  }
+  if (normalized.startsWith("python")) {
+    return "Python Task";
   }
   if (normalized.endsWith(".log")) {
     return normalized.replace(/\.log$/i, ".py");
   }
-  return source;
+  return raw.length > 24 ? `${raw.slice(0, 21)}...` : raw;
 };
 
 const formatDuration = (start: string | null | undefined, end: string | null | undefined) => {

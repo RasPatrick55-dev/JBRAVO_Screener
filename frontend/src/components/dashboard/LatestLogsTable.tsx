@@ -73,7 +73,9 @@ export default function LatestLogsTable({ title = "Latest Logs", rows }: LatestL
                     <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 sm:hidden">
                       Script
                     </span>
-                    <span className="break-words">{row.script}</span>
+                    <span className="break-words" title={row.script}>
+                      {row.script}
+                    </span>
                   </td>
                   <td className="block text-[12px] text-slate-100 sm:table-cell sm:py-2 sm:align-top">
                     <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 sm:hidden">
