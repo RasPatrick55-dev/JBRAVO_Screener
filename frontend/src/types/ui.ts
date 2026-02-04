@@ -46,6 +46,7 @@ export interface LogEntry {
   time: string;
   level: "INFO" | "WARN" | "ERROR" | "SUCCESS";
   message: string;
+  source?: string;
 }
 
 export interface LogViewerProps {

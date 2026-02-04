@@ -43,26 +43,40 @@ export default function PythonAnywhereTasksTable({
         </div>
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-xl border border-emerald-400/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(16,185,129,0.35)] sm:p-3">
-        <table className="w-full min-w-[360px] font-cousine text-sm text-emerald-50">
-          <thead className="text-left text-[11px] font-bold uppercase tracking-[0.08em] text-emerald-100/70">
+      <div className="mt-4 overflow-x-hidden rounded-xl border border-emerald-400/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(16,185,129,0.35)] sm:p-3">
+        <table className="w-full table-fixed font-cousine text-sm text-emerald-50">
+          <thead className="hidden text-left text-[11px] font-bold uppercase tracking-[0.08em] text-emerald-100/70 sm:table-header-group">
             <tr>
-              <th className="pb-2 pr-4 font-semibold">Task Name</th>
-              <th className="pb-2 pr-4 font-semibold">Frequency</th>
-              <th className="pb-2 font-semibold">Time</th>
+              <th className="pb-2 pr-4 font-semibold sm:w-[48%]">Task Name</th>
+              <th className="pb-2 pr-4 font-semibold sm:w-[26%]">Frequency</th>
+              <th className="pb-2 font-semibold sm:w-[26%]">Time</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-emerald-900/60">
+          <tbody>
             {rows.length ? (
               rows.map((row, index) => (
-                <tr key={`${row.name}-${index}`}>
-                  <td className="py-2 pr-4 align-top text-[12px] text-emerald-100">
-                    {row.name}
+                <tr
+                  key={`${row.name}-${index}`}
+                  className="block border-b border-emerald-900/60 py-3 last:border-0 sm:table-row sm:py-0"
+                >
+                  <td className="block pb-3 text-[12px] text-emerald-100 sm:table-cell sm:py-2 sm:pr-4 sm:align-top">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-100/70 sm:hidden">
+                      Task Name
+                    </span>
+                    <span className="break-words">{row.name}</span>
                   </td>
-                  <td className="py-2 pr-4 align-top text-[12px] text-emerald-200/80">
+                  <td className="block pb-3 text-[12px] text-emerald-200/80 sm:table-cell sm:py-2 sm:pr-4 sm:align-top">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-100/70 sm:hidden">
+                      Frequency
+                    </span>
                     {row.frequency}
                   </td>
-                  <td className="py-2 align-top text-[12px] text-emerald-50">{row.time}</td>
+                  <td className="block text-[12px] text-emerald-50 sm:table-cell sm:py-2 sm:align-top">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-100/70 sm:hidden">
+                      Time
+                    </span>
+                    {row.time}
+                  </td>
                 </tr>
               ))
             ) : (

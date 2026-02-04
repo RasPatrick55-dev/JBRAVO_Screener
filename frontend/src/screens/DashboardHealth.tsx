@@ -308,6 +308,25 @@ const formatDateTime = (value: string | null | undefined) => {
   });
 };
 
+const formatLogDateTime = (date: string | null | undefined, time: string | null | undefined) => {
+  if (!date || !time) {
+    return "--";
+  }
+  const parsed = Date.parse(`${date}T${time}Z`);
+  if (Number.isNaN(parsed)) {
+    return `${date} ${time}`;
+  }
+  const formatted = new Date(parsed).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  });
+  return `${formatted} UTC`;
+};
+
 const formatTimeUtc = (value: string | null | undefined) => {
   if (!value) {
     return "--";
@@ -339,6 +358,20 @@ const formatDateUtc = (value: string | null | undefined) => {
     year: "numeric",
     timeZone: "UTC",
   });
+};
+
+const labelLogSource = (source: string) => {
+  const normalized = source.trim().toLowerCase();
+  if (normalized.includes("pipeline")) {
+    return "run_pipeline.py";
+  }
+  if (normalized.includes("execute")) {
+    return "execute_trades.py";
+  }
+  if (normalized.endsWith(".log")) {
+    return normalized.replace(/\.log$/i, ".py");
+  }
+  return source;
 };
 
 const formatDuration = (start: string | null | undefined, end: string | null | undefined) => {
@@ -798,28 +831,31 @@ const buildLogEntries = (sources: Array<{ text: string | null; source: string }>
   const pattern =
     /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,\d+)?(?:\s+-\s+[^-]+\s+-\s+)?\s*(?:\[(\w+)\])?\s*(.*)$/;
 
-  sources.forEach(({ text }) => {
+  sources.forEach(({ text, source }) => {
     if (!text) {
       return;
     }
+    const sourceLabel = labelLogSource(source);
     const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
     const sample = lines.slice(-Math.max(limit, 12));
     sample.forEach((line) => {
       const match = line.match(pattern);
       if (match) {
         const [, date, time, level, message] = match;
-        const timestampMs = new Date(`${date}T${time}`).getTime() || 0;
+        const timestampMs = Date.parse(`${date}T${time}Z`) || 0;
         entries.push({
-          time,
+          time: formatLogDateTime(date, time),
           level: normalizeLogLevel(level),
           message: message.trim() || "(no message)",
+          source: sourceLabel,
           timestampMs,
         });
       } else {
         entries.push({
-          time: "--:--:--",
+          time: "--",
           level: "INFO",
           message: line.trim(),
+          source: sourceLabel,
           timestampMs: 0,
         });
       }
@@ -1455,7 +1491,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   }, [healthSnapshot?.freshness?.age_seconds]);
 
   const emptyEntries: LogEntry[] = [
-    { time: "--:--:--", level: "INFO", message: "No recent activity logged." },
+    { time: "--", level: "INFO", message: "No recent activity logged." },
   ];
 
   const displayEntries = logEntries.length ? logEntries : emptyEntries;
@@ -1463,9 +1499,10 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     parseNumber(accountSnapshot?.equity ?? accountSnapshot?.portfolio_value ?? null)
   );
   const latestLogsRows = displayEntries.slice(0, 3).map((entry) => ({
-    date: entry.time,
-    category: entry.level,
+    dateTime: entry.time,
+    script: entry.source ?? "--",
     text: entry.message,
+    level: entry.level,
   }));
   const pythonAnywhereResourceRows = useMemo(() => {
     if (!pythonAnywhereResources?.length) {
