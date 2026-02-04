@@ -155,14 +155,14 @@ def _pythonanywhere_cpu_usage() -> Optional[dict[str, Any]]:
     percent = _percent_used(cpu_seconds, cpu_limit)
     if percent is None:
         return None
-    return {
-        "label": "CPU Usage",
-        "value": round(percent),
-        "used": cpu_seconds,
-        "limit": cpu_limit,
-        "unit": "sec",
-        "next_reset_time": payload.get("next_reset_time"),
-        "source": "pythonanywhere",
+        return {
+            "label": "CPU Usage",
+            "value": math.floor(percent),
+            "used": cpu_seconds,
+            "limit": cpu_limit,
+            "unit": "sec",
+            "next_reset_time": payload.get("next_reset_time"),
+            "source": "pythonanywhere",
     }
 
 
@@ -179,7 +179,7 @@ def _pythonanywhere_file_storage_usage() -> Optional[dict[str, Any]]:
             if percent is not None:
                 return {
                     "label": "File Storage",
-                    "value": round(percent),
+                    "value": math.floor(percent),
                     "used": used_bytes,
                     "limit": limit_bytes,
                     "unit": "bytes",
@@ -209,7 +209,7 @@ def _pythonanywhere_postgres_usage() -> Optional[dict[str, Any]]:
             if percent is not None:
                 return {
                     "label": "Postgres Storage",
-                    "value": round(percent),
+                    "value": math.floor(percent),
                     "used": used_bytes,
                     "limit": limit_bytes,
                     "unit": "bytes",
