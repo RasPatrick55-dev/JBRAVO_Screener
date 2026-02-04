@@ -88,7 +88,29 @@ def directory_size_bytes(path: Path) -> Optional[int]:
         return total
 
 
-def postgres_size_bytes() -> Optional[int]:
+def pythonanywhere_quota_bytes() -> Optional[int]:
+    try:
+        output = subprocess.check_output(
+            [
+                "bash",
+                "-lc",
+                "du -s -B 1 /tmp ~/.[!.]* ~/* 2>/dev/null | awk '{s+=$1}END{print s}'",
+            ],
+            text=True,
+        )
+        value = output.strip()
+        return int(value) if value.isdigit() else None
+    except Exception:
+        return None
+
+
+def storage_used_bytes(storage_path: Path, mode: str) -> Optional[int]:
+    if mode == "pythonanywhere":
+        return pythonanywhere_quota_bytes() or directory_size_bytes(storage_path)
+    return directory_size_bytes(storage_path)
+
+
+def postgres_size_bytes(mode: str = "database") -> Optional[int]:
     if db is None:
         return None
     conn = db.get_db_conn()
@@ -96,7 +118,10 @@ def postgres_size_bytes() -> Optional[int]:
         return None
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT pg_database_size(current_database()) AS size_bytes")
+            if mode == "total":
+                cursor.execute("SELECT SUM(pg_database_size(datname)) AS size_bytes FROM pg_database")
+            else:
+                cursor.execute("SELECT pg_database_size(current_database()) AS size_bytes")
             row = cursor.fetchone()
             if not row:
                 return None
@@ -110,15 +135,21 @@ def postgres_size_bytes() -> Optional[int]:
             pass
 
 
-def build_payload(storage_path: Path, storage_limit: Optional[str], postgres_limit: Optional[str]) -> dict:
-    used_bytes = directory_size_bytes(storage_path)
+def build_payload(
+    storage_path: Path,
+    storage_limit: Optional[str],
+    postgres_limit: Optional[str],
+    storage_mode: str,
+    postgres_mode: str,
+) -> dict:
+    used_bytes = storage_used_bytes(storage_path, storage_mode)
     limit_bytes = parse_size_to_bytes(storage_limit)
     storage_percent = percent_used(
         float(used_bytes) if used_bytes is not None else None,
         float(limit_bytes) if limit_bytes is not None else None,
     )
 
-    pg_used_bytes = postgres_size_bytes()
+    pg_used_bytes = postgres_size_bytes(postgres_mode)
     pg_limit_bytes = parse_size_to_bytes(postgres_limit)
     pg_percent = percent_used(
         float(pg_used_bytes) if pg_used_bytes is not None else None,
@@ -132,11 +163,13 @@ def build_payload(storage_path: Path, storage_limit: Optional[str], postgres_lim
             "limit_bytes": limit_bytes,
             "percent": round(storage_percent, 2) if storage_percent is not None else None,
             "path": str(storage_path),
+            "mode": storage_mode,
         },
         "postgres_storage": {
             "used_bytes": pg_used_bytes,
             "limit_bytes": pg_limit_bytes,
             "percent": round(pg_percent, 2) if pg_percent is not None else None,
+            "mode": postgres_mode,
         },
         "version": 1,
     }
@@ -157,6 +190,13 @@ def main() -> int:
         help="Path to measure for file storage usage.",
     )
     parser.add_argument(
+        "--storage-mode",
+        default=os.getenv("PYTHONANYWHERE_STORAGE_MODE")
+        or ("pythonanywhere" if os.getenv("PYTHONANYWHERE_DOMAIN") or os.getenv("PYTHONANYWHERE_API_TOKEN") else "path"),
+        choices=["path", "pythonanywhere"],
+        help="Storage usage mode: 'path' (default) or 'pythonanywhere' quota calculation.",
+    )
+    parser.add_argument(
         "--storage-limit",
         default=os.getenv("PYTHONANYWHERE_STORAGE_LIMIT_BYTES")
         or os.getenv("PYTHONANYWHERE_STORAGE_LIMIT"),
@@ -168,6 +208,12 @@ def main() -> int:
         or os.getenv("PYTHONANYWHERE_POSTGRES_LIMIT"),
         help="Optional Postgres storage limit (bytes or 1g/512m).",
     )
+    parser.add_argument(
+        "--postgres-mode",
+        default=os.getenv("PYTHONANYWHERE_POSTGRES_MODE") or "database",
+        choices=["database", "total"],
+        help="Postgres usage mode: 'database' (current DB) or 'total' (sum of all DBs).",
+    )
 
     args = parser.parse_args()
 
@@ -178,6 +224,8 @@ def main() -> int:
         storage_path=Path(args.storage_path).expanduser(),
         storage_limit=args.storage_limit,
         postgres_limit=args.postgres_limit,
+        storage_mode=args.storage_mode,
+        postgres_mode=args.postgres_mode,
     )
     output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
