@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,58 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     db = None  # type: ignore
 DEFAULT_OUTPUT = BASE_DIR / "data" / "pythonanywhere_usage.json"
+DEFAULT_API_BASE = "https://www.pythonanywhere.com/api/v0/user"
+
+
+def _pythonanywhere_token() -> Optional[str]:
+    return os.getenv("PYTHONANYWHERE_API_TOKEN") or os.getenv("API_TOKEN")
+
+
+def _pythonanywhere_username() -> Optional[str]:
+    return os.getenv("PYTHONANYWHERE_USERNAME") or os.getenv("PYTHONANYWHERE_USER")
+
+
+def _pythonanywhere_api_base() -> str:
+    return (os.getenv("PYTHONANYWHERE_API_BASE_URL") or DEFAULT_API_BASE).rstrip("/")
+
+
+def _pythonanywhere_api_get_json(path: str) -> Optional[dict]:
+    token = _pythonanywhere_token()
+    username = _pythonanywhere_username()
+    if not token or not username:
+        return None
+    cleaned = path.lstrip("/")
+    url = f"{_pythonanywhere_api_base()}/{username}/{cleaned}"
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": f"Token {token}"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status != 200:
+                return None
+            return json.loads(resp.read().decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+
+
+def pythonanywhere_cpu_usage() -> Optional[dict]:
+    payload = _pythonanywhere_api_get_json("cpu/")
+    if not isinstance(payload, dict):
+        return None
+    used = payload.get("daily_cpu_total_usage_seconds")
+    limit = payload.get("daily_cpu_limit_seconds")
+    try:
+        used_val = float(used) if used is not None else None
+        limit_val = float(limit) if limit is not None else None
+    except (TypeError, ValueError):
+        used_val = None
+        limit_val = None
+    percent = percent_used(used_val, limit_val)
+    return {
+        "used_seconds": used_val,
+        "limit_seconds": limit_val,
+        "percent": round(percent, 2) if percent is not None else None,
+        "next_reset_time": payload.get("next_reset_time"),
+        "source": "pythonanywhere",
+    }
 
 
 def parse_size_to_bytes(value: Optional[str]) -> Optional[int]:
@@ -160,6 +213,7 @@ def build_payload(
     storage_mode: str,
     postgres_mode: str,
 ) -> dict:
+    cpu_payload = pythonanywhere_cpu_usage()
     used_bytes = storage_used_bytes(storage_path, storage_mode)
     limit_bytes = parse_size_to_bytes(storage_limit)
     storage_percent = percent_used(
@@ -175,6 +229,7 @@ def build_payload(
     )
 
     return {
+        "cpu": cpu_payload,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "file_storage": {
             "used_bytes": used_bytes,

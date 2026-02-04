@@ -144,26 +144,51 @@ def _percent_used(used: Optional[float], limit: Optional[float]) -> Optional[flo
 
 def _pythonanywhere_cpu_usage() -> Optional[dict[str, Any]]:
     payload = _pythonanywhere_api_get_json("cpu/")
-    if not isinstance(payload, dict):
-        return None
-    cpu_seconds = _to_float(payload.get("daily_cpu_total_usage_seconds"))
-    cpu_limit = _to_float(payload.get("daily_cpu_limit_seconds"))
-    if cpu_seconds is None:
-        cpu_seconds = _to_float(payload.get("cpu_seconds"))
-    if cpu_limit is None:
-        cpu_limit = _to_float(payload.get("cpu_limit"))
+    cpu_seconds = None
+    cpu_limit = None
+    next_reset = None
+    if isinstance(payload, dict):
+        cpu_seconds = _to_float(payload.get("daily_cpu_total_usage_seconds"))
+        cpu_limit = _to_float(payload.get("daily_cpu_limit_seconds"))
+        if cpu_seconds is None:
+            cpu_seconds = _to_float(payload.get("cpu_seconds"))
+        if cpu_limit is None:
+            cpu_limit = _to_float(payload.get("cpu_limit"))
+        next_reset = payload.get("next_reset_time")
+
     percent = _percent_used(cpu_seconds, cpu_limit)
-    if percent is None:
-        return None
+    if percent is not None:
         return {
             "label": "CPU Usage",
             "value": math.floor(percent),
             "used": cpu_seconds,
             "limit": cpu_limit,
             "unit": "sec",
-            "next_reset_time": payload.get("next_reset_time"),
+            "next_reset_time": next_reset,
             "source": "pythonanywhere",
-    }
+        }
+
+    snapshot = _pythonanywhere_usage_snapshot()
+    if snapshot:
+        cpu = snapshot.get("cpu") or snapshot.get("cpu_usage")
+        if isinstance(cpu, dict):
+            cpu_seconds = _to_float(cpu.get("used_seconds") or cpu.get("used"))
+            cpu_limit = _to_float(cpu.get("limit_seconds") or cpu.get("limit"))
+            percent = _to_float(cpu.get("percent"))
+            if percent is None:
+                percent = _percent_used(cpu_seconds, cpu_limit)
+            if percent is not None:
+                return {
+                    "label": "CPU Usage",
+                    "value": math.floor(percent),
+                    "used": cpu_seconds,
+                    "limit": cpu_limit,
+                    "unit": "sec",
+                    "next_reset_time": cpu.get("next_reset_time"),
+                    "source": "snapshot",
+                }
+
+    return None
 
 
 def _pythonanywhere_file_storage_usage() -> Optional[dict[str, Any]]:
