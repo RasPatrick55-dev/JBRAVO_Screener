@@ -80,7 +80,7 @@ export default function LatestLogsTable({
         </div>
       </div>
 
-      <div className="mt-4 overflow-x-hidden rounded-xl border border-slate-500/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(148,163,184,0.35)] sm:p-3">
+      <div className="mt-4 max-h-[360px] overflow-x-hidden overflow-y-auto rounded-xl border border-slate-500/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(148,163,184,0.35)] sm:p-3">
         <table className="w-full table-fixed font-cousine text-sm text-slate-200">
           <thead className="hidden text-left text-[11px] font-bold uppercase tracking-[0.08em] text-slate-200/70 sm:table-header-group">
             <tr>

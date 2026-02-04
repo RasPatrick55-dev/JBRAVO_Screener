@@ -885,7 +885,11 @@ const parseLogLine = (line: string) => {
   return null;
 };
 
-const buildLogEntries = (sources: Array<{ text: string | null; source: string }>, limit = 8) => {
+const buildLogEntries = (
+  sources: Array<{ text: string | null; source: string }>,
+  maxLinesPerSource = 240,
+  maxAgeHours = 48
+) => {
   const entries: ParsedLogEntry[] = [];
 
   sources.forEach(({ text, source }) => {
@@ -894,7 +898,7 @@ const buildLogEntries = (sources: Array<{ text: string | null; source: string }>
     }
     const sourceLabel = labelLogSource(source);
     const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
-    const sample = lines.slice(-Math.max(limit, 12));
+    const sample = lines.slice(-Math.max(maxLinesPerSource, 12));
     sample.forEach((line) => {
       const parsed = parseLogLine(line);
       if (parsed) {
@@ -919,8 +923,14 @@ const buildLogEntries = (sources: Array<{ text: string | null; source: string }>
     });
   });
 
-  entries.sort((a, b) => b.timestampMs - a.timestampMs);
-  return entries.slice(0, limit).map(({ timestampMs, ...entry }) => entry);
+  let filtered = entries;
+  if (maxAgeHours && Number.isFinite(maxAgeHours)) {
+    const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
+    filtered = entries.filter((entry) => entry.timestampMs > 0 && entry.timestampMs >= cutoff);
+  }
+
+  filtered.sort((a, b) => b.timestampMs - a.timestampMs);
+  return filtered.map(({ timestampMs, ...entry }) => entry);
 };
 
 const computePipelineScore = (health: ApiHealthResponse | null) => {
@@ -1041,7 +1051,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         { source: "monitor", text: monitorLog },
       ];
       const logSources = pythonAnyLogSources.length ? pythonAnyLogSources : fallbackSources;
-      setLogEntries(buildLogEntries(logSources));
+      setLogEntries(buildLogEntries(logSources, 400, 48));
     };
 
     load();
@@ -1564,7 +1574,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const alpacaEquity = formatCurrency(
     parseNumber(accountSnapshot?.equity ?? accountSnapshot?.portfolio_value ?? null)
   );
-  const latestLogsRows = displayEntries.slice(0, 5).map((entry) => ({
+  const latestLogsRows = displayEntries.map((entry) => ({
     dateTime: entry.time,
     script: entry.source ?? "--",
     text: entry.message,
