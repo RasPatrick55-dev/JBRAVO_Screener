@@ -73,6 +73,7 @@ DATA_EXPORT_ALLOWLIST: set[str] = set()
 LOG_EXPORT_ALLOWLIST = {
     "pipeline.log",
     "execute_trades.log",
+    "monitor.log",
 }
 
 _DAILY_BARS_CACHE: dict[str, Any] = {"mtime": None, "df": None}
@@ -3760,6 +3761,14 @@ def log_exports(filename: str):
         remote_payload = _fetch_pythonanywhere_file(
             os.environ.get("PYTHONANYWHERE_EXECUTE_LOG_URL"),
             os.environ.get("PYTHONANYWHERE_EXECUTE_LOG_PATH"),
+        )
+        if remote_payload:
+            remote_text, _ = remote_payload
+            return _no_cache(Response(remote_text, mimetype="text/plain"))
+    if filename == "monitor.log":
+        remote_payload = _fetch_pythonanywhere_file(
+            os.environ.get("PYTHONANYWHERE_MONITOR_LOG_URL"),
+            os.environ.get("PYTHONANYWHERE_MONITOR_LOG_PATH"),
         )
         if remote_payload:
             remote_text, _ = remote_payload

@@ -368,6 +368,9 @@ const labelLogSource = (source: string) => {
   if (normalized.includes("execute")) {
     return "execute_trades.py";
   }
+  if (normalized.includes("monitor")) {
+    return "monitor_positions.py";
+  }
   if (normalized.endsWith(".log")) {
     return normalized.replace(/\.log$/i, ".py");
   }
@@ -826,10 +829,28 @@ const normalizeLogLevel = (rawLevel: string | undefined): LogEntry["level"] => {
   return "INFO";
 };
 
+const parseLogLine = (line: string) => {
+  const patterns = [
+    /^\[(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,\d+)?\]\s*(?:\[(\w+)\])?\s*(.*)$/,
+    /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,\d+)?(?:\s+-\s+(\w+)\s+-\s+)?\s*(?:\[(\w+)\])?\s*(.*)$/,
+  ];
+  for (const pattern of patterns) {
+    const match = line.match(pattern);
+    if (!match) {
+      continue;
+    }
+    if (pattern === patterns[0]) {
+      const [, date, time, level, message] = match;
+      return { date, time, level, message };
+    }
+    const [, date, time, levelA, levelB, message] = match;
+    return { date, time, level: levelA || levelB, message };
+  }
+  return null;
+};
+
 const buildLogEntries = (sources: Array<{ text: string | null; source: string }>, limit = 8) => {
   const entries: ParsedLogEntry[] = [];
-  const pattern =
-    /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,\d+)?(?:\s+-\s+[^-]+\s+-\s+)?\s*(?:\[(\w+)\])?\s*(.*)$/;
 
   sources.forEach(({ text, source }) => {
     if (!text) {
@@ -839,14 +860,14 @@ const buildLogEntries = (sources: Array<{ text: string | null; source: string }>
     const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
     const sample = lines.slice(-Math.max(limit, 12));
     sample.forEach((line) => {
-      const match = line.match(pattern);
-      if (match) {
-        const [, date, time, level, message] = match;
-        const timestampMs = Date.parse(`${date}T${time}Z`) || 0;
+      const parsed = parseLogLine(line);
+      if (parsed) {
+        const cleanedMessage = parsed.message.trim().replace(/^[\s:=-]+/, "").trim();
+        const timestampMs = Date.parse(`${parsed.date}T${parsed.time}Z`) || 0;
         entries.push({
-          time: formatLogDateTime(date, time),
-          level: normalizeLogLevel(level),
-          message: message.trim() || "(no message)",
+          time: formatLogDateTime(parsed.date, parsed.time),
+          level: normalizeLogLevel(parsed.level),
+          message: cleanedMessage || "(no message)",
           source: sourceLabel,
           timestampMs,
         });
@@ -937,6 +958,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         pythonAnywhereTasksPayload,
         pipelineLog,
         executeLog,
+        monitorLog,
       ] = await Promise.all([
         fetchJson<HealthOverviewResponse>("/health/overview"),
         fetchJson<ApiHealthResponse>("/api/health"),
@@ -951,6 +973,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         fetchJson<PythonAnywhereTasksResponse>("/api/pythonanywhere/tasks"),
         fetchText(`/api/logs/pipeline.log?ts=${Date.now()}`),
         fetchText(`/api/logs/execute_trades.log?ts=${Date.now()}`),
+        fetchText(`/api/logs/monitor.log?ts=${Date.now()}`),
       ]);
 
       if (!isMounted) {
@@ -974,6 +997,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         buildLogEntries([
           { source: "pipeline", text: pipelineLog },
           { source: "execute", text: executeLog },
+          { source: "monitor", text: monitorLog },
         ])
       );
     };
