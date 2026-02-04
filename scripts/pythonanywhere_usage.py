@@ -110,6 +110,18 @@ def storage_used_bytes(storage_path: Path, mode: str) -> Optional[int]:
     return directory_size_bytes(storage_path)
 
 
+def _postgres_wal_bytes(conn) -> Optional[int]:
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COALESCE(SUM(size), 0) FROM pg_ls_waldir()")
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return int(row[0]) if row[0] is not None else None
+    except Exception:
+        return None
+
+
 def postgres_size_bytes(mode: str = "database") -> Optional[int]:
     if db is None:
         return None
@@ -118,14 +130,20 @@ def postgres_size_bytes(mode: str = "database") -> Optional[int]:
         return None
     try:
         with conn.cursor() as cursor:
-            if mode == "total":
+            if mode in {"total", "total_wal"}:
                 cursor.execute("SELECT SUM(pg_database_size(datname)) AS size_bytes FROM pg_database")
             else:
                 cursor.execute("SELECT pg_database_size(current_database()) AS size_bytes")
             row = cursor.fetchone()
             if not row:
                 return None
-            return int(row[0]) if row[0] is not None else None
+            base_size = int(row[0]) if row[0] is not None else None
+            if base_size is None:
+                return None
+            if mode in {"database_wal", "total_wal"}:
+                wal_bytes = _postgres_wal_bytes(conn) or 0
+                return base_size + wal_bytes
+            return base_size
     except Exception:
         return None
     finally:
@@ -211,8 +229,11 @@ def main() -> int:
     parser.add_argument(
         "--postgres-mode",
         default=os.getenv("PYTHONANYWHERE_POSTGRES_MODE") or "database",
-        choices=["database", "total"],
-        help="Postgres usage mode: 'database' (current DB) or 'total' (sum of all DBs).",
+        choices=["database", "total", "database_wal", "total_wal"],
+        help=(
+            "Postgres usage mode: 'database' (current DB), 'total' (all DBs), "
+            "'database_wal' (current DB + WAL), or 'total_wal' (all DBs + WAL)."
+        ),
     )
 
     args = parser.parse_args()
