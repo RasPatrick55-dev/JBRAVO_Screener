@@ -166,6 +166,17 @@ type PythonAnywhereTasksResponse = {
   source?: string | null;
 };
 
+type PythonAnywhereLogSource = {
+  source: string;
+  text: string;
+};
+
+type PythonAnywhereLogsResponse = {
+  ok?: boolean;
+  sources?: PythonAnywhereLogSource[];
+  source?: string | null;
+};
+
 type OpenPositionsSummary = {
   count: number | null;
   pnl: number | null;
@@ -956,6 +967,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         executeOrdersPayload,
         pythonAnywhereResourcesPayload,
         pythonAnywhereTasksPayload,
+        pythonAnywhereLogsPayload,
         pipelineLog,
         executeLog,
         monitorLog,
@@ -971,6 +983,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         fetchJson<ExecuteOrdersSummaryResponse>("/api/execute/orders-summary"),
         fetchJson<PythonAnywhereResourcesResponse>("/api/pythonanywhere/resources"),
         fetchJson<PythonAnywhereTasksResponse>("/api/pythonanywhere/tasks"),
+        fetchJson<PythonAnywhereLogsResponse>("/api/pythonanywhere/logs"),
         fetchText(`/api/logs/pipeline.log?ts=${Date.now()}`),
         fetchText(`/api/logs/execute_trades.log?ts=${Date.now()}`),
         fetchText(`/api/logs/monitor.log?ts=${Date.now()}`),
@@ -993,13 +1006,17 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       setPythonAnywhereTasks(pythonAnywhereTasksPayload?.tasks ?? null);
       setPipelineLogText(pipelineLog);
       setExecuteLogText(executeLog);
-      setLogEntries(
-        buildLogEntries([
-          { source: "pipeline", text: pipelineLog },
-          { source: "execute", text: executeLog },
-          { source: "monitor", text: monitorLog },
-        ])
-      );
+      const pythonAnyLogSources =
+        pythonAnywhereLogsPayload?.sources?.filter(
+          (source) => source && typeof source.text === "string" && source.text.trim()
+        ) ?? [];
+      const fallbackSources = [
+        { source: "pipeline", text: pipelineLog },
+        { source: "execute", text: executeLog },
+        { source: "monitor", text: monitorLog },
+      ];
+      const logSources = pythonAnyLogSources.length ? pythonAnyLogSources : fallbackSources;
+      setLogEntries(buildLogEntries(logSources));
     };
 
     load();

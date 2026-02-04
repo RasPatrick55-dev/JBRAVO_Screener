@@ -233,6 +233,13 @@ def _pythonanywhere_schedule_tasks() -> list[dict[str, Any]]:
     return [task for task in payload if isinstance(task, dict)]
 
 
+def _pythonanywhere_always_on_tasks() -> list[dict[str, Any]]:
+    payload = _pythonanywhere_api_get_json("always_on/")
+    if not isinstance(payload, list):
+        return []
+    return [task for task in payload if isinstance(task, dict)]
+
+
 def _task_name_from_command(command: str) -> Optional[str]:
     normalized = command.lower()
     if "run_pipeline" in normalized:
@@ -293,6 +300,76 @@ def _normalize_schedule_task(task: Mapping[str, Any]) -> dict[str, Any]:
         "frequency": frequency,
         "time": _format_task_time(task),
     }
+
+
+def _tail_text_lines(text: str, limit: int = 160) -> str:
+    if not text:
+        return ""
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) <= limit:
+        return "\n".join(lines)
+    return "\n".join(lines[-limit:])
+
+
+def _task_log_source_label(task: Mapping[str, Any], logfile: str | None = None) -> str:
+    command = str(task.get("command") or task.get("script") or "").strip()
+    description = str(task.get("description") or "").strip()
+    if command:
+        return command
+    if description:
+        return description
+    if logfile:
+        return str(logfile)
+    return "task"
+
+
+def _task_logfile_from_detail(kind: str, task_id: Any) -> Optional[str]:
+    if task_id is None:
+        return None
+    try:
+        task_id_str = str(task_id)
+    except Exception:
+        return None
+    detail = _pythonanywhere_api_get_json(f"{kind}/{task_id_str}/")
+    if isinstance(detail, dict):
+        logfile = detail.get("logfile") or detail.get("log_file")
+        if logfile:
+            return str(logfile)
+    return None
+
+
+def _pythonanywhere_log_sources() -> list[dict[str, str]]:
+    tasks: list[tuple[dict[str, Any], str]] = []
+    tasks.extend([(task, "schedule") for task in _pythonanywhere_schedule_tasks()])
+    tasks.extend([(task, "always_on") for task in _pythonanywhere_always_on_tasks()])
+
+    seen_logs: set[str] = set()
+    sources: list[dict[str, str]] = []
+    for task, kind in tasks:
+        logfile = task.get("logfile") or task.get("log_file")
+        if not logfile and kind in {"schedule", "always_on"}:
+            logfile = _task_logfile_from_detail(kind, task.get("id"))
+        if not logfile:
+            continue
+        logfile_str = str(logfile)
+        if logfile_str in seen_logs:
+            continue
+        seen_logs.add(logfile_str)
+
+        payload = _fetch_pythonanywhere_file(None, logfile_str)
+        if not payload:
+            continue
+        text, _ = payload
+        trimmed = _tail_text_lines(text)
+        if not trimmed:
+            continue
+        sources.append(
+            {
+                "source": _task_log_source_label(task, logfile_str),
+                "text": trimmed,
+            }
+        )
+    return sources
 
 
 def _fetch_pythonanywhere_file(
@@ -3330,6 +3407,12 @@ def api_pythonanywhere_tasks():
     tasks = _pythonanywhere_schedule_tasks()
     normalized = [_normalize_schedule_task(task) for task in tasks]
     return jsonify({"ok": bool(normalized), "tasks": normalized})
+
+
+@server.route("/api/pythonanywhere/logs")
+def api_pythonanywhere_logs():
+    sources = _pythonanywhere_log_sources()
+    return jsonify({"ok": bool(sources), "sources": sources, "source": "pythonanywhere"})
 
 
 @server.route("/api/logos/<symbol>")
