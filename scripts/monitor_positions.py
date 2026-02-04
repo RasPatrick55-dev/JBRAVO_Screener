@@ -1,5 +1,6 @@
 # monitor_positions.py
 
+import argparse
 import json
 import os
 import sys
@@ -63,6 +64,17 @@ METRIC_KEYS = [
     "stop_attach_failed",
     "stop_coverage_pct",
 ]
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    value_norm = value.strip().lower()
+    if value_norm in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value_norm in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
 
 
 def _default_metrics(date_str: str | None = None) -> dict:
@@ -214,6 +226,36 @@ def record_heartbeat(
 
 def is_debug_mode() -> bool:
     return os.getenv("JBRAVO_MONITOR_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _build_monitor_config() -> dict:
+    return {
+        "MONITOR_DISABLE_SELLS": env_bool("MONITOR_DISABLE_SELLS", default=False),
+        "MONITOR_ENABLE_LIVE_PRICES": env_bool("MONITOR_ENABLE_LIVE_PRICES", default=False),
+        "MONITOR_ENABLE_EXIT_SIGNALS_V2": env_bool("MONITOR_ENABLE_EXIT_SIGNALS_V2", default=False),
+        "MONITOR_ENABLE_BREAKEVEN_TIGHTEN": env_bool("MONITOR_ENABLE_BREAKEVEN_TIGHTEN", default=False),
+        "MONITOR_ENABLE_TIMEDECAY_TIGHTEN": env_bool("MONITOR_ENABLE_TIMEDECAY_TIGHTEN", default=False),
+    }
+
+
+def assert_paper_mode() -> None:
+    base_url = (os.getenv("APCA_API_BASE_URL") or "").strip()
+    if "paper-api.alpaca.markets" not in base_url.lower():
+        logger.error(
+            "[FATAL] Refusing to run: APCA_API_BASE_URL must be paper (%s)",
+            base_url or "missing",
+        )
+        raise SystemExit(2)
+
+
+def _kill_switch_triggered(kill_switch_path: Path | None) -> bool:
+    if not kill_switch_path:
+        return False
+    try:
+        return kill_switch_path.exists()
+    except Exception as exc:
+        logger.warning("Kill switch check failed for %s: %s", kill_switch_path, exc)
+        return False
 
 
 def evaluate_exit_signals_for_debug(position: dict, indicators: dict) -> list[str]:
@@ -1891,7 +1933,7 @@ def process_positions_cycle():
     return positions
 
 
-def monitor_positions():
+def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None = None) -> str:
     logger.info("[MONITOR_START] Starting real-time position monitoring (pid=%s)", os.getpid())
     write_status(
         status="starting",
@@ -1901,6 +1943,16 @@ def monitor_positions():
         stop_coverage_pct=0.0,
     )
     while True:
+        if _kill_switch_triggered(kill_switch_path):
+            logger.warning("Kill switch detected at %s; exiting monitor loop", kill_switch_path)
+            write_status(
+                status="stopped",
+                positions_count=0,
+                trailing_count=0,
+                protective_orders_count=0,
+                stop_coverage_pct=0.0,
+            )
+            return "killed"
         positions: list = []
         trailing_stops_count = 0
         protective_orders_count = 0
@@ -1936,17 +1988,67 @@ def monitor_positions():
             status=loop_status,
         )
 
+        if run_once:
+            return "once"
+
         sleep_time = SLEEP_INTERVAL if market_hours else OFF_HOUR_SLEEP_INTERVAL
         time.sleep(sleep_time)
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Monitor positions and manage exits.")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single monitor cycle and exit.",
+    )
+    parser.add_argument(
+        "--kill-switch",
+        default=None,
+        help="Path to kill switch file; if present, exit gracefully.",
+    )
+    args = parser.parse_args(argv)
+
+    assert_paper_mode()
+
+    config = _build_monitor_config()
+    config["once"] = bool(args.once)
+    config["kill_switch"] = args.kill_switch
+    logger.info("MONITOR_CONFIG %s", json.dumps(config, sort_keys=True))
+
+    kill_switch_path = None
+    if args.kill_switch:
+        kill_switch_path = Path(args.kill_switch).expanduser().resolve()
+
     logger.info("Starting monitor_positions.py")
     if is_debug_mode():
         run_debug_smoke_test()
+
+    if args.once:
+        try:
+            monitor_positions(run_once=True, kill_switch_path=kill_switch_path)
+        except Exception:
+            logger.exception("Monitoring loop error")
+        return
+
     while True:
         try:
-            monitor_positions()
-        except Exception as e:
+            result = monitor_positions(run_once=False, kill_switch_path=kill_switch_path)
+            if result in {"killed", "once"}:
+                return
+        except Exception:
             logger.exception("Monitoring loop error")
+        if _kill_switch_triggered(kill_switch_path):
+            write_status(
+                status="stopped",
+                positions_count=0,
+                trailing_count=0,
+                protective_orders_count=0,
+                stop_coverage_pct=0.0,
+            )
+            return
         time.sleep(300)
+
+
+if __name__ == "__main__":
+    main()
