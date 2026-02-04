@@ -1564,7 +1564,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const alpacaEquity = formatCurrency(
     parseNumber(accountSnapshot?.equity ?? accountSnapshot?.portfolio_value ?? null)
   );
-  const latestLogsRows = displayEntries.slice(0, 3).map((entry) => ({
+  const latestLogsRows = displayEntries.slice(0, 5).map((entry) => ({
     dateTime: entry.time,
     script: entry.source ?? "--",
     text: entry.message,

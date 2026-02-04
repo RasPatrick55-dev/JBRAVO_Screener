@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import type { LogEntry } from "../../types/ui";
 
 interface LatestLogsRow {
@@ -10,40 +11,72 @@ interface LatestLogsRow {
 interface LatestLogsTableProps {
   title?: string;
   rows: LatestLogsRow[];
+  enableFilter?: boolean;
 }
 
-export default function LatestLogsTable({ title = "Latest Logs", rows }: LatestLogsTableProps) {
+export default function LatestLogsTable({
+  title = "Latest Logs",
+  rows,
+  enableFilter = true,
+}: LatestLogsTableProps) {
   const levelTone: Record<NonNullable<LatestLogsRow["level"]>, string> = {
     INFO: "border-sky-500/30 bg-sky-500/15 text-sky-200",
     WARN: "border-amber-500/30 bg-amber-500/15 text-amber-200",
     ERROR: "border-rose-500/30 bg-rose-500/15 text-rose-200",
     SUCCESS: "border-emerald-500/30 bg-emerald-500/15 text-emerald-200",
   };
+  const scriptOptions = useMemo(() => {
+    const options = Array.from(new Set(rows.map((row) => row.script).filter(Boolean)));
+    return ["All Scripts", ...options];
+  }, [rows]);
+  const [selectedScript, setSelectedScript] = useState("All Scripts");
+  const filteredRows =
+    selectedScript === "All Scripts"
+      ? rows
+      : rows.filter((row) => row.script === selectedScript);
 
   return (
     <div className="flex h-full flex-col rounded-2xl border border-slate-400/30 bg-gradient-to-br from-slate-950/95 via-slate-900/85 to-slate-800/70 p-4 shadow-[0_18px_40px_-24px_rgba(148,163,184,0.4)] sm:p-5">
       <div className="rounded-xl border border-slate-500/40 bg-gradient-to-r from-slate-950/90 via-slate-900/90 to-slate-800/80 p-2.5 shadow-[0_0_24px_-12px_rgba(148,163,184,0.45)] sm:p-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-500/20 text-slate-200">
-            <svg
-              className="h-5 w-5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M4 4h16v12H7l-3 3V4z" />
-              <path d="M8 8h8" />
-              <path d="M8 12h6" />
-            </svg>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-500/20 text-slate-200">
+              <svg
+                className="h-5 w-5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M4 4h16v12H7l-3 3V4z" />
+                <path d="M8 8h8" />
+                <path d="M8 12h6" />
+              </svg>
+            </div>
+            <div className="flex flex-col">
+              <h3 className="text-[15px] font-bold leading-[22px] text-white">{title}</h3>
+              <span className="text-[11px] text-slate-200/70">Recent system events</span>
+            </div>
           </div>
-          <div className="flex flex-col">
-            <h3 className="text-[15px] font-bold leading-[22px] text-white">{title}</h3>
-            <span className="text-[11px] text-slate-200/70">Recent system events</span>
-          </div>
+          {enableFilter ? (
+            <label className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-200/70">
+              Script
+              <select
+                className="rounded-lg border border-slate-500/40 bg-slate-950/80 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-100"
+                value={selectedScript}
+                onChange={(event) => setSelectedScript(event.target.value)}
+              >
+                {scriptOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
       </div>
 
@@ -57,8 +90,8 @@ export default function LatestLogsTable({ title = "Latest Logs", rows }: LatestL
             </tr>
           </thead>
           <tbody>
-            {rows.length ? (
-              rows.map((row, index) => (
+            {filteredRows.length ? (
+              filteredRows.map((row, index) => (
                 <tr
                   key={`${row.dateTime}-${row.script}-${index}`}
                   className="block border-b border-slate-800/70 py-3 last:border-0 sm:table-row sm:py-0"
