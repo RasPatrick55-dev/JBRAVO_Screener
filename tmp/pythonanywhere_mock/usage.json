@@ -1,0 +1,15 @@
+{
+  "file_storage": {
+    "limit_bytes": 1073741824,
+    "path": ".",
+    "percent": 80.32,
+    "used_bytes": 862428739
+  },
+  "generated_at": "2026-02-03T19:53:15.683752+00:00",
+  "postgres_storage": {
+    "limit_bytes": 1073741824,
+    "percent": 20.97,
+    "used_bytes": 225207151
+  },
+  "version": 1
+}
