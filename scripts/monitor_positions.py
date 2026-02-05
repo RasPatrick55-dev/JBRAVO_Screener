@@ -40,7 +40,6 @@ from tempfile import NamedTemporaryFile
 
 import pytz
 from utils.alerts import send_alert
-from scripts import db
 
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
@@ -158,7 +157,18 @@ MONITOR_DB_EVENT_TYPES = {
 
 
 def db_logging_enabled() -> bool:
-    return env_bool(MONITOR_DB_LOGGING_ENV, default=False)
+    if not env_bool(MONITOR_DB_LOGGING_ENV, default=False):
+        return False
+    try:
+        from scripts import db as db_module
+    except Exception as exc:
+        logger.warning("DB_LOGGING_DISABLED err=%s", exc)
+        return False
+    try:
+        return bool(db_module.db_enabled())
+    except Exception as exc:
+        logger.warning("DB_LOGGING_DISABLED err=%s", exc)
+        return False
 
 
 def _sanitize_raw_payload(raw: dict | None) -> dict:
@@ -193,10 +203,15 @@ def db_log_event(
     if not db_logging_enabled():
         return False
 
+    event_label = (event_type or "").upper()
+    if event_label not in set(MONITOR_DB_EVENT_TYPES.values()):
+        logger.warning("DB_EVENT_SKIP invalid_event_type=%s", event_label or "")
+        return False
+
     event_time_value = event_time or datetime.now(timezone.utc)
     raw_payload = _sanitize_raw_payload(raw)
     payload = {
-        "event_type": (event_type or "").upper(),
+        "event_type": event_label,
         "symbol": symbol,
         "qty": qty,
         "order_id": order_id,
@@ -204,8 +219,16 @@ def db_log_event(
         "event_time": event_time_value.isoformat(),
     }
     try:
-        ok = db.insert_order_event(
-            event_type=payload["event_type"],
+        from scripts import db as db_module
+    except Exception as exc:
+        fail_payload = dict(payload)
+        fail_payload["error"] = str(exc)
+        _log_db_event("DB_EVENT_FAIL", fail_payload, level="warning")
+        increment_metric("db_event_fail")
+        return False
+    try:
+        ok = db_module.insert_order_event(
+            event_type=event_label,
             symbol=symbol,
             qty=qty,
             order_id=order_id,
@@ -2408,6 +2431,13 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
     entry_time = getattr(position, "created_at", datetime.now(timezone.utc)).isoformat()
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
     db_enabled = db_logging_enabled()
+    db_module = None
+    if db_enabled:
+        try:
+            from scripts import db as db_module
+        except Exception as exc:
+            logger.warning("DB_LOGGING_IMPORT_FAIL err=%s", exc)
+            db_enabled = False
     partial_exit = False
     if str(reason_code or "").lower() == "partial_gain":
         partial_exit = True
@@ -2547,21 +2577,22 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
                 exit_reason = (exit_reason or "").strip()
                 if len(exit_reason) > 200:
                     exit_reason = exit_reason[:200]
-                try:
-                    db.close_trade_on_sell_fill(
-                        symbol,
-                        order_id_value,
-                        final_ts,
-                        exit_price,
-                        exit_reason,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "DB_TRADE_CLOSE_FAILED symbol=%s order_id=%s err=%s",
-                        symbol,
-                        order_id_value or "",
-                        exc,
-                    )
+                if db_module is not None:
+                    try:
+                        db_module.close_trade_on_sell_fill(
+                            symbol,
+                            order_id_value,
+                            final_ts,
+                            exit_price,
+                            exit_reason,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "DB_TRADE_CLOSE_FAILED symbol=%s order_id=%s err=%s",
+                            symbol,
+                            order_id_value or "",
+                            exc,
+                        )
                 pnl_value = None
                 try:
                     pnl_value = (float(exit_price) - float(entry_price)) * float(order_qty)
@@ -2584,15 +2615,16 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
                     "reason": reason,
                     "reason_code": reason_code,
                 }
-                try:
-                    db.insert_executed_trade(executed_payload)
-                except Exception as exc:
-                    logger.warning(
-                        "DB_EXECUTED_TRADE_FAILED symbol=%s order_id=%s err=%s",
-                        symbol,
-                        order_id_value or "",
-                        exc,
-                    )
+                if db_module is not None:
+                    try:
+                        db_module.insert_executed_trade(executed_payload)
+                    except Exception as exc:
+                        logger.warning(
+                            "DB_EXECUTED_TRADE_FAILED symbol=%s order_id=%s err=%s",
+                            symbol,
+                            order_id_value or "",
+                            exc,
+                        )
         logger.info(
             "[EXIT] Limit sell %s qty %s at %.2f due to %s",
             symbol,
