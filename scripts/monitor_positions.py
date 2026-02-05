@@ -40,6 +40,7 @@ from tempfile import NamedTemporaryFile
 
 import pytz
 from utils.alerts import send_alert
+from scripts import db
 
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
@@ -124,6 +125,8 @@ METRIC_KEYS = [
     "time_decay_tightens",
     "live_price_ok",
     "live_price_fail",
+    "db_event_ok",
+    "db_event_fail",
 ]
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -136,6 +139,97 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value_norm in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+MONITOR_DB_LOGGING_ENV = "MONITOR_ENABLE_DB_LOGGING"
+
+# Monitor DB event vocabulary (aligned with execute_trades where possible).
+# New values here are additive and do not change behavior unless DB logging is enabled.
+MONITOR_DB_EVENT_TYPES = {
+    "sell_submit": "SELL_SUBMIT",
+    "sell_fill": "SELL_FILL",
+    "sell_cancelled": "SELL_CANCELLED",
+    "sell_rejected": "SELL_REJECTED",
+    "sell_expired": "SELL_EXPIRED",
+    "trail_submit": "TRAIL_SUBMIT",
+    "trail_adjust": "TRAIL_ADJUST",
+    "trail_cancel": "TRAIL_CANCEL",
+}
+
+
+def db_logging_enabled() -> bool:
+    return env_bool(MONITOR_DB_LOGGING_ENV, default=False)
+
+
+def _sanitize_raw_payload(raw: dict | None) -> dict:
+    payload = dict(raw or {})
+    payload["source"] = "monitor_positions"
+    if "dryrun" in payload:
+        payload["dryrun"] = bool(payload["dryrun"])
+    try:
+        return json.loads(json.dumps(payload, default=str))
+    except Exception:
+        return {"source": "monitor_positions", "raw": str(payload)}
+
+
+def _log_db_event(message: str, payload: dict, *, level: str = "info") -> None:
+    line = "%s %s" % (message, json.dumps(payload, sort_keys=True, default=str))
+    if level == "warning":
+        logger.warning(line)
+    else:
+        logger.info(line)
+
+
+def db_log_event(
+    *,
+    event_type: str,
+    symbol: str,
+    qty: float | int | None,
+    order_id: str | None,
+    status: str | None,
+    event_time: datetime | None = None,
+    raw: dict | None = None,
+) -> bool:
+    if not db_logging_enabled():
+        return False
+
+    event_time_value = event_time or datetime.now(timezone.utc)
+    raw_payload = _sanitize_raw_payload(raw)
+    payload = {
+        "event_type": (event_type or "").upper(),
+        "symbol": symbol,
+        "qty": qty,
+        "order_id": order_id,
+        "status": status,
+        "event_time": event_time_value.isoformat(),
+    }
+    try:
+        ok = db.insert_order_event(
+            event_type=payload["event_type"],
+            symbol=symbol,
+            qty=qty,
+            order_id=order_id,
+            status=status,
+            event_time=event_time_value,
+            raw=raw_payload,
+        )
+    except Exception as exc:
+        fail_payload = dict(payload)
+        fail_payload["error"] = str(exc)
+        _log_db_event("DB_EVENT_FAIL", fail_payload, level="warning")
+        increment_metric("db_event_fail")
+        return False
+
+    if ok:
+        _log_db_event("DB_EVENT_OK", payload)
+        increment_metric("db_event_ok")
+        return True
+
+    fail_payload = dict(payload)
+    fail_payload["error"] = "insert_failed"
+    _log_db_event("DB_EVENT_FAIL", fail_payload, level="warning")
+    increment_metric("db_event_fail")
+    return False
 
 
 def _stringify_value(value):
@@ -379,6 +473,7 @@ def _build_monitor_config() -> dict:
         "MONITOR_ENABLE_EXIT_SIGNALS_V2": env_bool("MONITOR_ENABLE_EXIT_SIGNALS_V2", default=False),
         "MONITOR_ENABLE_BREAKEVEN_TIGHTEN": env_bool("MONITOR_ENABLE_BREAKEVEN_TIGHTEN", default=False),
         "MONITOR_ENABLE_TIMEDECAY_TIGHTEN": env_bool("MONITOR_ENABLE_TIMEDECAY_TIGHTEN", default=False),
+        "MONITOR_ENABLE_DB_LOGGING": env_bool(MONITOR_DB_LOGGING_ENV, default=False),
     }
 
 
@@ -1652,6 +1747,22 @@ def _attach_long_protective_stop(position, trail_percent: float) -> bool:
                 "reason": "attach_stop_long",
             },
         )
+        db_log_event(
+            event_type=MONITOR_DB_EVENT_TYPES["trail_submit"],
+            symbol=symbol,
+            qty=qty,
+            order_id=str(getattr(order, "id", "") or "") or None,
+            status=str(getattr(order, "status", "submitted")),
+            event_time=datetime.now(timezone.utc),
+            raw={
+                "reason": "attach_stop_long",
+                "order_type": "trailing_stop",
+                "trail_percent": float(trail_percent),
+                "side": "sell",
+                "time_in_force": "gtc",
+                "dryrun": bool(getattr(order, "dryrun", False)),
+            },
+        )
         logger.info(
             "STOP_ATTACH_OK symbol=%s side=long type=trailing_sell order_id=%s",
             symbol,
@@ -1708,6 +1819,22 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
                 "reason": "attach_stop_short_trailing",
             },
         )
+        db_log_event(
+            event_type=MONITOR_DB_EVENT_TYPES["trail_submit"],
+            symbol=symbol,
+            qty=qty_abs,
+            order_id=str(getattr(order, "id", "") or "") or None,
+            status=str(getattr(order, "status", "submitted")),
+            event_time=datetime.now(timezone.utc),
+            raw={
+                "reason": "attach_stop_short_trailing",
+                "order_type": "trailing_stop",
+                "trail_percent": float(trail_percent),
+                "side": "buy",
+                "time_in_force": "gtc",
+                "dryrun": bool(getattr(order, "dryrun", False)),
+            },
+        )
         logger.info(
             "STOP_ATTACH_OK symbol=%s side=short type=trailing_buy order_id=%s",
             symbol,
@@ -1748,6 +1875,22 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
                 "qty": qty_abs,
                 "order_type": "stop",
                 "reason": "attach_stop_short_fallback",
+            },
+        )
+        db_log_event(
+            event_type=MONITOR_DB_EVENT_TYPES["trail_submit"],
+            symbol=symbol,
+            qty=qty_abs,
+            order_id=str(getattr(order, "id", "") or "") or None,
+            status=str(getattr(order, "status", "submitted")),
+            event_time=datetime.now(timezone.utc),
+            raw={
+                "reason": "attach_stop_short_fallback",
+                "order_type": "stop",
+                "stop_price": stop_price,
+                "side": "buy",
+                "time_in_force": "gtc",
+                "dryrun": bool(getattr(order, "dryrun", False)),
             },
         )
         logger.info(
@@ -1883,6 +2026,22 @@ def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> Non
                 "qty": qty,
                 "order_type": "trailing_stop",
                 "reason": "trailing_stop_submit",
+            },
+        )
+        db_log_event(
+            event_type=MONITOR_DB_EVENT_TYPES["trail_submit"],
+            symbol=symbol,
+            qty=qty,
+            order_id=str(getattr(order, "id", "") or "") or None,
+            status=str(getattr(order, "status", "submitted")),
+            event_time=datetime.now(timezone.utc),
+            raw={
+                "reason": "trailing_stop_submit",
+                "order_type": "trailing_stop",
+                "trail_percent": float(trail_percent),
+                "side": "sell",
+                "time_in_force": "gtc",
+                "dryrun": bool(getattr(order, "dryrun", False)),
             },
         )
         logger.info(
@@ -2086,6 +2245,21 @@ def manage_trailing_stop(position):
             json.dumps(payload, sort_keys=True),
         )
         cancel_order_safe(trailing_order.id, symbol, reason="adjust_trailing_stop")
+        db_log_event(
+            event_type=MONITOR_DB_EVENT_TYPES["trail_cancel"],
+            symbol=symbol,
+            qty=use_qty,
+            order_id=str(getattr(trailing_order, "id", "") or "") or None,
+            status="canceled",
+            event_time=datetime.now(timezone.utc),
+            raw={
+                "reason": "adjust_trailing_stop",
+                "order_type": "trailing_stop",
+                "from_trail": round(current_trail_pct, 4),
+                "to_trail": round(effective_target, 4),
+                "dryrun": env_bool("MONITOR_DISABLE_SELLS", default=False),
+            },
+        )
         if low_signal_tighten:
             logger.info(
                 "STOP_TIGHTEN signal_quality=LOW symbol=%s old_trail=%.2f new_trail=%.2f reason=low_signal_profit_lock",
@@ -2108,13 +2282,30 @@ def manage_trailing_stop(position):
             time_in_force=TimeInForce.GTC,
             trail_percent=str(effective_target),
         )
-        broker_submit_order(
+        new_order = broker_submit_order(
             request,
             {
                 "symbol": symbol,
                 "qty": use_qty,
                 "order_type": "trailing_stop",
                 "reason": f"tighten_trailing_stop:{reason_detail}",
+            },
+        )
+        db_log_event(
+            event_type=MONITOR_DB_EVENT_TYPES["trail_adjust"],
+            symbol=symbol,
+            qty=use_qty,
+            order_id=str(getattr(new_order, "id", "") or "") or None,
+            status=str(getattr(new_order, "status", "submitted")),
+            event_time=datetime.now(timezone.utc),
+            raw={
+                "reason": reason_detail,
+                "order_type": "trailing_stop",
+                "from_trail": round(current_trail_pct, 4),
+                "to_trail": round(effective_target, 4),
+                "gain_pct": round(gain_pct, 4),
+                "days_held": int(days_held),
+                "dryrun": bool(getattr(new_order, "dryrun", False)),
             },
         )
         if "breakeven_lock" in base_reason:
@@ -2165,6 +2356,19 @@ def check_pending_orders():
                             "reason": "redundant_trailing_stop",
                         },
                     )
+                    db_log_event(
+                        event_type=MONITOR_DB_EVENT_TYPES["trail_cancel"],
+                        symbol=getattr(order, "symbol", "") or "",
+                        qty=getattr(order, "qty", None),
+                        order_id=str(getattr(order, "id", "") or "") or None,
+                        status="canceled",
+                        event_time=datetime.now(timezone.utc),
+                        raw={
+                            "reason": "redundant_trailing_stop",
+                            "order_type": "trailing_stop",
+                            "dryrun": env_bool("MONITOR_DISABLE_SELLS", default=False),
+                        },
+                    )
                     logger.info(
                         f"Cancelled redundant trailing stop {order.id} for {order.symbol}"
                     )
@@ -2203,6 +2407,15 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
     exit_price = round_price(float(getattr(position, "current_price", entry_price)))
     entry_time = getattr(position, "created_at", datetime.now(timezone.utc)).isoformat()
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
+    db_enabled = db_logging_enabled()
+    partial_exit = False
+    if str(reason_code or "").lower() == "partial_gain":
+        partial_exit = True
+    elif qty_override is not None:
+        try:
+            partial_exit = float(qty_override) < float(qty)
+        except Exception:
+            partial_exit = True
 
     desired_qty = int(qty_override) if qty_override is not None else int(qty)
     if getattr(position, "qty_available", None) and int(position.qty_available) >= desired_qty:
@@ -2264,6 +2477,31 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
                 "reason_code": reason_code,
             },
         )
+        order_id_value = str(getattr(order, "id", "") or "") or None
+        is_dryrun = bool(getattr(order, "dryrun", False))
+        if db_enabled:
+            db_log_event(
+                event_type=MONITOR_DB_EVENT_TYPES["sell_submit"],
+                symbol=symbol,
+                qty=order_qty,
+                order_id=order_id_value,
+                status="submitted",
+                event_time=submit_ts,
+                raw={
+                    "reason": reason,
+                    "reason_code": reason_code,
+                    "limit_price": exit_price,
+                    "qty": order_qty,
+                    "side": "sell",
+                    "order_type": "limit",
+                    "extended_hours": bool(is_extended_hours(now_et)),
+                    "time_in_force": "day",
+                    "entry_price": entry_price,
+                    "entry_time": entry_time,
+                    "partial": partial_exit,
+                    "dryrun": is_dryrun,
+                },
+            )
         log_exit_submit(symbol, order_qty, "limit", reason_code)
         if getattr(order, "dryrun", False):
             status = "dryrun"
@@ -2272,6 +2510,89 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
             status = wait_for_order_terminal(str(getattr(order, "id", "")))
             latency_ms = int((datetime.now(timezone.utc) - submit_ts).total_seconds() * 1000)
         log_exit_final(status, latency_ms)
+        final_status = str(status or "")
+        status_norm = final_status.lower()
+        final_ts = datetime.now(timezone.utc)
+        if status_norm == "filled":
+            final_event_type = MONITOR_DB_EVENT_TYPES["sell_fill"]
+        elif status_norm in {"canceled", "cancelled"}:
+            final_event_type = MONITOR_DB_EVENT_TYPES["sell_cancelled"]
+        elif status_norm == "expired":
+            final_event_type = MONITOR_DB_EVENT_TYPES["sell_expired"]
+        else:
+            final_event_type = MONITOR_DB_EVENT_TYPES["sell_rejected"]
+        if db_enabled:
+            db_log_event(
+                event_type=final_event_type,
+                symbol=symbol,
+                qty=order_qty,
+                order_id=order_id_value,
+                status=final_status,
+                event_time=final_ts,
+                raw={
+                    "reason": reason,
+                    "reason_code": reason_code,
+                    "limit_price": exit_price,
+                    "qty": order_qty,
+                    "side": "sell",
+                    "order_type": "limit",
+                    "entry_price": entry_price,
+                    "entry_time": entry_time,
+                    "partial": partial_exit,
+                    "dryrun": is_dryrun,
+                },
+            )
+            if status_norm == "filled" and not partial_exit and not is_dryrun:
+                exit_reason = f"{reason_code}:{reason}" if reason_code else str(reason)
+                exit_reason = (exit_reason or "").strip()
+                if len(exit_reason) > 200:
+                    exit_reason = exit_reason[:200]
+                try:
+                    db.close_trade_on_sell_fill(
+                        symbol,
+                        order_id_value,
+                        final_ts,
+                        exit_price,
+                        exit_reason,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "DB_TRADE_CLOSE_FAILED symbol=%s order_id=%s err=%s",
+                        symbol,
+                        order_id_value or "",
+                        exc,
+                    )
+                pnl_value = None
+                try:
+                    pnl_value = (float(exit_price) - float(entry_price)) * float(order_qty)
+                except Exception:
+                    pnl_value = None
+                executed_payload = {
+                    "symbol": symbol,
+                    "qty": float(order_qty),
+                    "entry_time": entry_time,
+                    "entry_price": float(entry_price),
+                    "exit_time": final_ts.isoformat(),
+                    "exit_price": float(exit_price),
+                    "pnl": pnl_value,
+                    "net_pnl": pnl_value,
+                    "order_id": order_id_value,
+                    "status": final_status,
+                    "event_type": final_event_type,
+                    "side": "sell",
+                    "order_type": "limit",
+                    "reason": reason,
+                    "reason_code": reason_code,
+                }
+                try:
+                    db.insert_executed_trade(executed_payload)
+                except Exception as exc:
+                    logger.warning(
+                        "DB_EXECUTED_TRADE_FAILED symbol=%s order_id=%s err=%s",
+                        symbol,
+                        order_id_value or "",
+                        exc,
+                    )
         logger.info(
             "[EXIT] Limit sell %s qty %s at %.2f due to %s",
             symbol,
@@ -2290,7 +2611,7 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
             "limit",
             reason,
             "sell",
-            order_id=getattr(order, "id", None),
+            order_id=order_id_value,
         )
     except Exception as e:
         logger.error("Error submitting sell order for %s: %s", symbol, e)
