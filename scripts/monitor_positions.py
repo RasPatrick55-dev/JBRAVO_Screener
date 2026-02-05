@@ -1150,6 +1150,7 @@ def fetch_indicators(symbol):
     macd = ema12 - ema26
     bars["MACD"] = macd
     bars["MACD_signal"] = macd.ewm(span=9, adjust=False).mean()
+    bars["MACD_hist"] = bars["MACD"] - bars["MACD_signal"]
 
     last = bars.iloc[-1]
     prev = bars.iloc[-2] if len(bars) >= 2 else last
@@ -1158,13 +1159,22 @@ def fetch_indicators(symbol):
         "open": float(last["open"]),
         "high": float(last["high"]),
         "low": float(last["low"]),
+        "close_prev": float(prev["close"]),
+        "open_prev": float(prev["open"]),
+        "high_prev": float(prev["high"]),
+        "low_prev": float(prev["low"]),
         "SMA9": float(last["SMA9"]),
+        "SMA9_prev": float(prev["SMA9"]),
         "EMA20": float(last["EMA20"]),
+        "EMA20_prev": float(prev["EMA20"]),
         "RSI": float(last["RSI"]),
+        "RSI_prev": float(prev["RSI"]),
         "MACD": float(last["MACD"]),
         "MACD_signal": float(last["MACD_signal"]),
+        "MACD_hist": float(last["MACD_hist"]),
         "MACD_prev": float(prev["MACD"]),
         "MACD_signal_prev": float(prev["MACD_signal"]),
+        "MACD_hist_prev": float(prev["MACD_hist"]),
     }
 
 
@@ -1188,6 +1198,28 @@ def is_shooting_star(indicators: dict) -> bool:
     long_upper = upper_shadow > 2 * real_body
     tiny_lower = lower_shadow <= 0.2 * real_body
     return is_red and long_upper and tiny_lower
+
+
+def is_bearish_engulfing(indicators: dict) -> bool:
+    open_prev = indicators.get("open_prev")
+    close_prev = indicators.get("close_prev")
+    open_price = indicators.get("open")
+    close_price = indicators.get("close")
+
+    if None in {open_prev, close_prev, open_price, close_price}:
+        return False
+
+    if close_prev <= open_prev:
+        return False
+    if close_price >= open_price:
+        return False
+
+    prev_body = abs(close_prev - open_prev)
+    curr_body = abs(close_price - open_price)
+    if prev_body == 0 or curr_body == 0:
+        return False
+
+    return open_price >= close_prev and close_price <= open_prev
 
 
 def check_sell_signal(symbol: str, indicators: dict) -> list:
@@ -1227,6 +1259,74 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
         RSI_HIGH_MEMORY[symbol] = {"price": price, "rsi": rsi}
     elif symbol not in RSI_HIGH_MEMORY:
         RSI_HIGH_MEMORY[symbol] = state
+
+    enable_v2 = env_bool("MONITOR_ENABLE_EXIT_SIGNALS_V2", default=False)
+    v2_reasons: list[str] = []
+
+    def _num(value):
+        if value is None:
+            return None
+        try:
+            if pd.isna(value):
+                return None
+        except Exception:
+            pass
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    rsi_now = _num(indicators.get("RSI"))
+    rsi_prev = _num(indicators.get("RSI_prev", rsi_now))
+    if rsi_now is not None and rsi_prev is not None:
+        if rsi_prev >= 70 and rsi_now < rsi_prev:
+            v2_reasons.append("RSI reversal")
+
+    close_prev = _num(indicators.get("close_prev", price))
+    ema20_prev = _num(indicators.get("EMA20_prev", ema20))
+    if close_prev is not None and ema20_prev is not None:
+        if price < ema20 and close_prev >= ema20_prev:
+            v2_reasons.append("EMA20 cross-down")
+
+    sma9 = _num(indicators.get("SMA9"))
+    sma9_prev = _num(indicators.get("SMA9_prev", sma9))
+    if sma9 is not None and sma9_prev is not None and ema20_prev is not None:
+        if sma9 < ema20 and sma9_prev >= ema20_prev:
+            v2_reasons.append("SMA9/EMA20 cross-down")
+
+    macd_val = _num(indicators.get("MACD"))
+    macd_signal = _num(indicators.get("MACD_signal"))
+    if macd_val is not None and macd_signal is not None:
+        macd_hist = _num(indicators.get("MACD_hist", macd_val - macd_signal))
+        macd_hist_prev = _num(indicators.get("MACD_hist_prev"))
+        if macd_hist_prev is None:
+            prev_macd = _num(indicators.get("MACD_prev", macd_val))
+            prev_signal = _num(indicators.get("MACD_signal_prev", macd_signal))
+            if prev_macd is not None and prev_signal is not None:
+                macd_hist_prev = prev_macd - prev_signal
+        if macd_hist is not None and macd_hist_prev is not None:
+            if (macd_hist < macd_hist_prev and macd_hist_prev > 0) or (
+                macd_hist < 0 <= macd_hist_prev
+            ):
+                v2_reasons.append("MACD fade")
+
+    if is_shooting_star(indicators):
+        v2_reasons.append("Shooting star")
+    if is_bearish_engulfing(indicators):
+        v2_reasons.append("Bearish engulfing")
+
+    if v2_reasons:
+        logger.info(
+            "EXIT_SIGNALS_V2 symbol=%s enabled=%s reasons=%s",
+            symbol,
+            enable_v2,
+            ";".join(v2_reasons),
+        )
+
+    if enable_v2:
+        for reason in v2_reasons:
+            if reason not in reasons:
+                reasons.append(reason)
 
     return reasons
 
