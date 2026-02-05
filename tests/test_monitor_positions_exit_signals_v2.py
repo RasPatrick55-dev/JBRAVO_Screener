@@ -57,6 +57,7 @@ class TestMonitorExitSignalsV2(unittest.TestCase):
             prefix = "EXIT_SIGNAL_V2 "
             idx = message.find(prefix)
             if idx != -1:
+                self.assertNotIn("EXIT_SIGNALS_V2", message)
                 return json.loads(message[idx + len(prefix):])
         self.fail("EXIT_SIGNAL_V2 log entry not found")
 
@@ -71,43 +72,58 @@ class TestMonitorExitSignalsV2(unittest.TestCase):
             "close_prev",
             "rsi_now",
             "rsi_prev",
+            "rsi_reversal_drop",
+            "rsi_reversal_floor",
             "sma9",
             "sma9_prev",
             "ema20",
             "ema20_prev",
+            "macd",
+            "macd_signal",
             "macd_hist",
             "macd_hist_prev",
-            "patterns",
-            "thresholds",
+            "shooting_star",
+            "bearish_engulfing",
         }
         self.assertTrue(required_keys.issubset(payload), "EXIT_SIGNAL_V2 payload missing keys")
+        for key in payload.keys():
+            self.assertEqual(key, key.lower())
+            self.assertNotIn(" ", key)
         self.assertEqual(payload["symbol"], "AAPL")
         self.assertIsInstance(payload["enabled"], bool)
         self.assertTrue(payload["enabled"])
         self.assertIsInstance(payload["v2_reasons"], list)
         self.assertIsInstance(payload["baseline_reasons"], list)
         self.assertIsInstance(payload["final_reasons"], list)
+        self.assertEqual(
+            payload["baseline_reasons"],
+            list(dict.fromkeys(payload["baseline_reasons"])),
+        )
+        self.assertEqual(
+            payload["final_reasons"],
+            list(dict.fromkeys(payload["final_reasons"])),
+        )
+        for reason in payload["baseline_reasons"]:
+            self.assertIn(reason, payload["final_reasons"])
         for key in (
             "price",
             "close_prev",
             "rsi_now",
             "rsi_prev",
+            "rsi_reversal_drop",
+            "rsi_reversal_floor",
             "sma9",
             "sma9_prev",
             "ema20",
             "ema20_prev",
+            "macd",
+            "macd_signal",
             "macd_hist",
             "macd_hist_prev",
         ):
             self.assertIsInstance(payload[key], (int, float))
-        self.assertIsInstance(payload["patterns"], dict)
-        self.assertIsInstance(payload["thresholds"], dict)
-        self.assertIn("shooting_star", payload["patterns"])
-        self.assertIn("bearish_engulfing", payload["patterns"])
-        self.assertIsInstance(payload["patterns"]["shooting_star"], bool)
-        self.assertIsInstance(payload["patterns"]["bearish_engulfing"], bool)
-        self.assertIn("RSI_REVERSAL_DROP", payload["thresholds"])
-        self.assertIn("RSI_REVERSAL_FLOOR", payload["thresholds"])
+        self.assertIsInstance(payload["shooting_star"], bool)
+        self.assertIsInstance(payload["bearish_engulfing"], bool)
 
     def _run_check(self, indicators: dict) -> tuple[list[str], dict]:
         with self.assertLogs("scripts.monitor_positions", level="INFO") as log_ctx:
@@ -120,8 +136,10 @@ class TestMonitorExitSignalsV2(unittest.TestCase):
         indicators = self._base_indicators()
         indicators.update({"RSI_prev": 75.0, "RSI": 50.0})
         reasons, payload = self._run_check(indicators)
+        self.assertEqual(payload["baseline_reasons"], [])
         self.assertIn("RSI reversal", reasons)
         self.assertIn("RSI reversal", payload["v2_reasons"])
+        self.assertIn("RSI reversal", payload["final_reasons"])
 
     def test_rsi_reversal_small_drop_not_trigger(self):
         indicators = self._base_indicators()

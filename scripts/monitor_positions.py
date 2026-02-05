@@ -1287,7 +1287,11 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
     elif symbol not in RSI_HIGH_MEMORY:
         RSI_HIGH_MEMORY[symbol] = state
 
-    baseline_reasons = list(reasons)
+    def dedupe_preserve_order(items: list[str]) -> list[str]:
+        return list(dict.fromkeys(items))
+
+    baseline_reasons = dedupe_preserve_order(list(reasons))
+    reasons = list(baseline_reasons)
     enable_v2 = env_bool("MONITOR_ENABLE_EXIT_SIGNALS_V2", default=False)
     v2_reasons: list[str] = []
 
@@ -1347,43 +1351,43 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
     if bear_engulf:
         v2_reasons.append("Bearish engulfing")
 
-    final_reasons = list(reasons)
+    v2_reasons = dedupe_preserve_order(list(v2_reasons))
     if enable_v2:
         for reason in v2_reasons:
-            if reason not in final_reasons:
-                final_reasons.append(reason)
+            if reason not in reasons:
+                reasons.append(reason)
+        reasons = dedupe_preserve_order(reasons)
+        final_reasons = list(reasons)
 
         payload = {
             "symbol": symbol,
             "enabled": True,
-            "v2_reasons": list(v2_reasons),
             "baseline_reasons": list(baseline_reasons),
+            "v2_reasons": list(v2_reasons),
             "final_reasons": list(final_reasons),
             "price": _num(price),
             "close_prev": _num(indicators.get("close_prev", price)),
             "rsi_now": rsi_now,
             "rsi_prev": rsi_prev,
+            "rsi_reversal_drop": float(RSI_REVERSAL_DROP),
+            "rsi_reversal_floor": float(RSI_REVERSAL_FLOOR),
+            "shooting_star": bool(shooting_star),
+            "bearish_engulfing": bool(bear_engulf),
             "sma9": _num(indicators.get("SMA9")),
             "sma9_prev": _num(indicators.get("SMA9_prev")),
             "ema20": _num(ema20),
             "ema20_prev": _num(indicators.get("EMA20_prev", ema20)),
+            "macd": macd_val,
+            "macd_signal": macd_signal,
             "macd_hist": macd_hist,
             "macd_hist_prev": macd_hist_prev,
-            "patterns": {
-                "shooting_star": bool(shooting_star),
-                "bearish_engulfing": bool(bear_engulf),
-            },
-            "thresholds": {
-                "RSI_REVERSAL_DROP": float(RSI_REVERSAL_DROP),
-                "RSI_REVERSAL_FLOOR": float(RSI_REVERSAL_FLOOR),
-            },
         }
         logger.info(
             "EXIT_SIGNAL_V2 %s",
             json.dumps(payload, sort_keys=True),
         )
 
-        reasons = final_reasons
+        reasons = list(final_reasons)
 
     return reasons
 
