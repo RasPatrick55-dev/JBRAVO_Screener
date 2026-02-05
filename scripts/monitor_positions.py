@@ -203,12 +203,12 @@ def broker_close_position(symbol: str, context: dict | None = None) -> bool:
 
 def _default_metrics(date_str: str | None = None) -> dict:
     payload = {key: 0 for key in METRIC_KEYS}
-    payload["date"] = date_str or datetime.utcnow().date().isoformat()
+    payload["date"] = date_str or datetime.now(timezone.utc).date().isoformat()
     return payload
 
 
 def _load_metrics() -> dict:
-    today = datetime.utcnow().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     if METRICS_PATH.exists():
         try:
             data = json.loads(METRICS_PATH.read_text())
@@ -288,7 +288,7 @@ def _persist_metrics() -> None:
 
 
 def increment_metric(name: str, delta: int = 1) -> None:
-    today = datetime.utcnow().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     if MONITOR_METRICS.get("date") != today:
         MONITOR_METRICS.clear()
         MONITOR_METRICS.update(_default_metrics(today))
@@ -334,7 +334,7 @@ def record_heartbeat(
         float(stop_coverage_pct or 0.0),
         status,
     )
-    today = datetime.utcnow().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     if MONITOR_METRICS.get("date") != today:
         MONITOR_METRICS.clear()
         MONITOR_METRICS.update(_default_metrics(today))
@@ -630,7 +630,10 @@ def log_if_stale(file_path: str, name: str, threshold_minutes: int = 15):
         logger.warning("%s missing: %s", name, file_path)
         send_alert(f"{name} missing: {file_path}")
         return
-    age = datetime.utcnow() - datetime.utcfromtimestamp(os.path.getmtime(file_path))
+    age = datetime.now(timezone.utc) - datetime.fromtimestamp(
+        os.path.getmtime(file_path),
+        timezone.utc,
+    )
     if age > timedelta(minutes=threshold_minutes):
         minutes = age.total_seconds() / 60
         msg = f"{name} is stale ({minutes:.1f} minutes old)"
@@ -646,9 +649,9 @@ def round_price(value: float) -> float:
 def wait_for_order_terminal(order_id: str, poll_interval: int = 10, timeout_seconds: int = 600) -> str:
     """Poll until ``order_id`` reaches a terminal state or times out."""
 
-    deadline = datetime.utcnow() + timedelta(seconds=timeout_seconds)
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
     status = "unknown"
-    while datetime.utcnow() <= deadline:
+    while datetime.now(timezone.utc) <= deadline:
         try:
             order = trading_client.get_order_by_id(order_id)
             status_obj = getattr(order, "status", "unknown")
@@ -1941,7 +1944,7 @@ def manage_trailing_stop(position):
     )
     effective_target = min(current_trail_pct, target_trail_pct)
 
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc)
     low_signal_tighten = False
     if (
         ml_signal_quality == "LOW"
@@ -2140,7 +2143,7 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
     qty = position.qty
     entry_price = float(position.avg_entry_price)
     exit_price = round_price(float(getattr(position, "current_price", entry_price)))
-    entry_time = getattr(position, "created_at", datetime.utcnow()).isoformat()
+    entry_time = getattr(position, "created_at", datetime.now(timezone.utc)).isoformat()
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
 
     desired_qty = int(qty_override) if qty_override is not None else int(qty)
@@ -2192,7 +2195,7 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
             time_in_force="day",
             extended_hours=is_extended_hours(now_et),
         )
-        submit_ts = datetime.utcnow()
+        submit_ts = datetime.now(timezone.utc)
         order = broker_submit_order(
             order_request,
             {
@@ -2209,7 +2212,7 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
             latency_ms = 0
         else:
             status = wait_for_order_terminal(str(getattr(order, "id", "")))
-            latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
+            latency_ms = int((datetime.now(timezone.utc) - submit_ts).total_seconds() * 1000)
         log_exit_final(status, latency_ms)
         logger.info(
             "[EXIT] Limit sell %s qty %s at %.2f due to %s",
