@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+import types
 from datetime import datetime, timedelta, timezone, time as dt_time
 from pathlib import Path
 import pandas as pd
@@ -75,6 +76,89 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value_norm in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+def _stringify_value(value):
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        return value.value
+    return value
+
+
+def _order_request_summary(order_request) -> dict:
+    if order_request is None:
+        return {}
+    payload = {"order_request": order_request.__class__.__name__}
+    for field in (
+        "symbol",
+        "qty",
+        "side",
+        "type",
+        "order_type",
+        "limit_price",
+        "stop_price",
+        "trail_percent",
+        "time_in_force",
+        "extended_hours",
+    ):
+        if hasattr(order_request, field):
+            payload[field] = _stringify_value(getattr(order_request, field))
+    return payload
+
+
+def _build_dryrun_payload(context: dict | None, order_request=None) -> dict:
+    payload = dict(context or {})
+    for key, value in _order_request_summary(order_request).items():
+        payload.setdefault(key, value)
+    return payload
+
+
+def _dryrun_order_stub(payload: dict) -> types.SimpleNamespace:
+    stub = {
+        "id": f"dryrun-{int(time.time() * 1000)}",
+        "status": "accepted",
+        "dryrun": True,
+    }
+    for key in ("symbol", "qty", "side", "order_type", "type"):
+        if key in payload and payload[key] is not None:
+            stub[key] = payload[key]
+    return types.SimpleNamespace(**stub)
+
+
+def broker_submit_order(order_request, context: dict | None = None):
+    payload = _build_dryrun_payload(context, order_request)
+    if env_bool("MONITOR_DISABLE_SELLS", default=False):
+        logger.info("DRYRUN_SUBMIT %s", payload)
+        return _dryrun_order_stub(payload)
+    return trading_client.submit_order(order_data=order_request)
+
+
+def broker_cancel_order(order_id: str, context: dict | None = None) -> bool:
+    payload = dict(context or {})
+    payload.setdefault("order_id", order_id)
+    if env_bool("MONITOR_DISABLE_SELLS", default=False):
+        logger.info("DRYRUN_CANCEL %s", payload)
+        return True
+    if hasattr(trading_client, "cancel_order_by_id"):
+        trading_client.cancel_order_by_id(order_id)
+        return True
+    if hasattr(trading_client, "cancel_order"):
+        trading_client.cancel_order(order_id)
+        return True
+    return False
+
+
+def broker_close_position(symbol: str, context: dict | None = None) -> bool:
+    payload = dict(context or {})
+    payload.setdefault("symbol", symbol)
+    if env_bool("MONITOR_DISABLE_SELLS", default=False):
+        logger.info("DRYRUN_CLOSE %s", payload)
+        return True
+    if hasattr(trading_client, "close_position"):
+        trading_client.close_position(symbol)
+        return True
+    return False
 
 
 def _default_metrics(date_str: str | None = None) -> dict:
@@ -543,25 +627,22 @@ def wait_for_order_terminal(order_id: str, poll_interval: int = 10, timeout_seco
     return status
 
 
-def cancel_order_safe(order_id: str, symbol: str):
+def cancel_order_safe(order_id: str, symbol: str, reason: str | None = None):
     """Attempt to cancel ``order_id`` using available client methods."""
-    if hasattr(trading_client, "cancel_order_by_id"):
-        try:
-            trading_client.cancel_order_by_id(order_id)
+    context = {"symbol": symbol, "reason": reason}
+    try:
+        success = broker_cancel_order(order_id, context)
+        if success:
             return
-        except Exception as exc:  # pragma: no cover - API errors
-            logger.error("Failed to cancel order %s: %s", order_id, exc)
-    elif hasattr(trading_client, "cancel_order"):
-        try:
-            trading_client.cancel_order(order_id)
-            return
-        except Exception as exc:  # pragma: no cover - API errors
-            logger.error("Failed to cancel order %s: %s", order_id, exc)
-    if hasattr(trading_client, "close_position"):
-        try:
-            trading_client.close_position(symbol)
-        except Exception as exc:  # pragma: no cover - API errors
-            logger.error("Failed to close position %s: %s", symbol, exc)
+    except Exception as exc:  # pragma: no cover - API errors
+        logger.error("Failed to cancel order %s: %s", order_id, exc)
+    try:
+        broker_close_position(
+            symbol,
+            {"symbol": symbol, "reason": reason, "action": "close_position_after_cancel_failure"},
+        )
+    except Exception as exc:  # pragma: no cover - API errors
+        logger.error("Failed to close position %s: %s", symbol, exc)
 
 
 def ensure_column_exists(df: pd.DataFrame, column: str, default=None) -> pd.DataFrame:
@@ -1265,7 +1346,15 @@ def _attach_long_protective_stop(position, trail_percent: float) -> bool:
             time_in_force=TimeInForce.GTC,
             trail_percent=str(trail_percent),
         )
-        order = trading_client.submit_order(order_data=request)
+        order = broker_submit_order(
+            request,
+            {
+                "symbol": symbol,
+                "qty": qty,
+                "order_type": "trailing_stop",
+                "reason": "attach_stop_long",
+            },
+        )
         logger.info(
             "STOP_ATTACH_OK symbol=%s side=long type=trailing_sell order_id=%s",
             symbol,
@@ -1313,7 +1402,15 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
             time_in_force=TimeInForce.GTC,
             trail_percent=str(trail_percent),
         )
-        order = trading_client.submit_order(order_data=request)
+        order = broker_submit_order(
+            request,
+            {
+                "symbol": symbol,
+                "qty": qty_abs,
+                "order_type": "trailing_stop",
+                "reason": "attach_stop_short_trailing",
+            },
+        )
         logger.info(
             "STOP_ATTACH_OK symbol=%s side=short type=trailing_buy order_id=%s",
             symbol,
@@ -1347,7 +1444,15 @@ def _attach_short_protective_stop(position, trail_percent: float) -> bool:
             stop_price=stop_price,
             time_in_force=TimeInForce.GTC,
         )
-        order = trading_client.submit_order(order_data=request)
+        order = broker_submit_order(
+            request,
+            {
+                "symbol": symbol,
+                "qty": qty_abs,
+                "order_type": "stop",
+                "reason": "attach_stop_short_fallback",
+            },
+        )
         logger.info(
             "STOP_ATTACH_OK symbol=%s side=short type=stop_buy order_id=%s",
             symbol,
@@ -1474,7 +1579,15 @@ def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> Non
             time_in_force=TimeInForce.GTC,
             trail_percent=str(trail_percent),
         )
-        order = trading_client.submit_order(order_data=request)
+        order = broker_submit_order(
+            request,
+            {
+                "symbol": symbol,
+                "qty": qty,
+                "order_type": "trailing_stop",
+                "reason": "trailing_stop_submit",
+            },
+        )
         logger.info(
             f"Placed trailing stop for {symbol}: qty={qty}, trail_pct={trail_percent}"
         )
@@ -1524,7 +1637,14 @@ def manage_trailing_stop(position):
     if len(trailing_stops) > 1:
         for order in trailing_stops[1:]:
             try:
-                trading_client.cancel_order_by_id(order.id)
+                broker_cancel_order(
+                    order.id,
+                    {
+                        "symbol": symbol,
+                        "order_id": getattr(order, "id", None),
+                        "reason": "redundant_trailing_stop",
+                    },
+                )
                 logger.info(
                     f"Cancelled redundant trailing-stop order {order.id} for {symbol}"
                 )
@@ -1621,7 +1741,7 @@ def manage_trailing_stop(position):
         return
 
     try:
-        cancel_order_safe(trailing_order.id, symbol)
+        cancel_order_safe(trailing_order.id, symbol, reason="adjust_trailing_stop")
         reason_detail = (
             "low_signal_profit_lock"
             if low_signal_tighten
@@ -1653,7 +1773,15 @@ def manage_trailing_stop(position):
             time_in_force=TimeInForce.GTC,
             trail_percent=str(effective_target),
         )
-        trading_client.submit_order(order_data=request)
+        broker_submit_order(
+            request,
+            {
+                "symbol": symbol,
+                "qty": use_qty,
+                "order_type": "trailing_stop",
+                "reason": f"tighten_trailing_stop:{reason_detail}",
+            },
+        )
         logger.info(
             "Adjusted trailing stop for %s from %.2f%% to %.2f%% (gain: %.2f%%).",
             symbol,
@@ -1667,7 +1795,10 @@ def manage_trailing_stop(position):
     except Exception as e:
         logger.error("Failed to adjust trailing stop for %s: %s", symbol, e)
         try:
-            trading_client.close_position(symbol)
+            broker_close_position(
+                symbol,
+                {"symbol": symbol, "reason": "adjust_trailing_stop_failure"},
+            )
         except Exception as exc:  # pragma: no cover - API errors
             logger.error("Failed to close position %s: %s", symbol, exc)
 
@@ -1687,7 +1818,14 @@ def check_pending_orders():
         for order in trailing_stops:
             if order.symbol in unique_symbols:
                 try:
-                    trading_client.cancel_order_by_id(order.id)
+                    broker_cancel_order(
+                        order.id,
+                        {
+                            "symbol": getattr(order, "symbol", None),
+                            "order_id": getattr(order, "id", None),
+                            "reason": "redundant_trailing_stop",
+                        },
+                    )
                     logger.info(
                         f"Cancelled redundant trailing stop {order.id} for {order.symbol}"
                     )
@@ -1777,10 +1915,23 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
             extended_hours=is_extended_hours(now_et),
         )
         submit_ts = datetime.utcnow()
-        order = trading_client.submit_order(order_request)
+        order = broker_submit_order(
+            order_request,
+            {
+                "symbol": symbol,
+                "qty": order_qty,
+                "order_type": "limit",
+                "reason": reason,
+                "reason_code": reason_code,
+            },
+        )
         log_exit_submit(symbol, order_qty, "limit", reason_code)
-        status = wait_for_order_terminal(str(getattr(order, "id", "")))
-        latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
+        if getattr(order, "dryrun", False):
+            status = "dryrun"
+            latency_ms = 0
+        else:
+            status = wait_for_order_terminal(str(getattr(order, "id", "")))
+            latency_ms = int((datetime.utcnow() - submit_ts).total_seconds() * 1000)
         log_exit_final(status, latency_ms)
         logger.info(
             "[EXIT] Limit sell %s qty %s at %.2f due to %s",
@@ -1806,7 +1957,10 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
         logger.error("Error submitting sell order for %s: %s", symbol, e)
         increment_metric("api_errors")
         try:
-            trading_client.close_position(symbol)
+            broker_close_position(
+                symbol,
+                {"symbol": symbol, "reason": reason, "reason_code": reason_code},
+            )
         except Exception as exc:  # pragma: no cover - API errors
             logger.error("Failed to close position %s: %s", symbol, exc)
 
@@ -1849,7 +2003,7 @@ def process_positions_cycle():
             trailing_order = get_trailing_stop_order(symbol)
             if trailing_order:
                 try:
-                    cancel_order_safe(trailing_order.id, symbol)
+                    cancel_order_safe(trailing_order.id, symbol, reason="max_hold_exit")
                     logger.info(
                         "Cancelled trailing stop for %s due to max hold exit",
                         symbol,
@@ -1893,7 +2047,7 @@ def process_positions_cycle():
         ):
             trailing_order = get_trailing_stop_order(symbol)
             if trailing_order:
-                cancel_order_safe(trailing_order.id, symbol)
+                cancel_order_safe(trailing_order.id, symbol, reason="partial_exit")
             half_qty = max(1, int(float(position.qty) / 2))
             submit_sell_market_order(
                 position,
@@ -1915,7 +2069,7 @@ def process_positions_cycle():
             trailing_order = get_trailing_stop_order(symbol)
             if trailing_order:
                 try:
-                    cancel_order_safe(trailing_order.id, symbol)
+                    cancel_order_safe(trailing_order.id, symbol, reason="signal_exit")
                 except Exception as e:
                     logger.error(
                         "Failed to cancel trailing stop for %s: %s", symbol, e
@@ -1943,6 +2097,7 @@ def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None =
         stop_coverage_pct=0.0,
     )
     while True:
+        logger.info("CYCLE_START pid=%s", os.getpid())
         if _kill_switch_triggered(kill_switch_path):
             logger.warning("Kill switch detected at %s; exiting monitor loop", kill_switch_path)
             write_status(
@@ -1975,6 +2130,7 @@ def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None =
             check_pending_orders()
 
             logger.info("Updated open_positions.csv successfully.")
+            loop_status = "ok"
         except Exception as e:
             logger.exception("Monitoring loop error")
             increment_metric("api_errors")
@@ -1987,9 +2143,11 @@ def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None =
             stop_coverage_pct,
             status=loop_status,
         )
+        cycle_rc = 0 if loop_status == "ok" else 1
+        logger.info("CYCLE_END rc=%s status=%s", cycle_rc, loop_status)
 
         if run_once:
-            return "once"
+            return loop_status
 
         sleep_time = SLEEP_INTERVAL if market_hours else OFF_HOUR_SLEEP_INTERVAL
         time.sleep(sleep_time)
@@ -2026,9 +2184,12 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.once:
         try:
-            monitor_positions(run_once=True, kill_switch_path=kill_switch_path)
+            status = monitor_positions(run_once=True, kill_switch_path=kill_switch_path)
+            if status not in {"ok", "killed"}:
+                raise SystemExit(1)
         except Exception:
             logger.exception("Monitoring loop error")
+            raise SystemExit(1)
         return
 
     while True:
