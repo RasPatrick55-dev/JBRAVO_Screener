@@ -49,38 +49,58 @@ logfile = os.path.join(BASE_DIR, "logs", "monitor.log")
 
 def configure_logging() -> None:
     root = logging.getLogger()
+    level_name = (os.getenv("MONITOR_LOG_LEVEL") or "INFO").strip().upper()
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+    }
+    desired_level = level_map.get(level_name, logging.INFO)
     has_file = False
     has_stream = False
     for handler in root.handlers:
         if getattr(handler, "name", "") == "jbravo_monitor_file":
             has_file = True
+            handler.setLevel(desired_level)
         if isinstance(handler, logging.FileHandler):
             base = getattr(handler, "baseFilename", "")
             if base and os.path.basename(base).lower() == "monitor.log":
                 has_file = True
+                handler.setLevel(desired_level)
         if getattr(handler, "name", "") == "jbravo_monitor_stream":
             has_stream = True
+            handler.setLevel(desired_level)
         if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) is sys.stdout:
             has_stream = True
+            handler.setLevel(desired_level)
 
-    if root.level == logging.NOTSET:
-        root.setLevel(logging.INFO)
+    if root.level == logging.NOTSET or root.level > desired_level:
+        root.setLevel(desired_level)
 
     formatter = logging.Formatter("[%(asctime)s] [%(levelname)s]: %(message)s")
 
     if not has_file:
         file_handler = logging.FileHandler(logfile)
         file_handler.setFormatter(formatter)
-        file_handler.setLevel(logging.INFO)
+        file_handler.setLevel(desired_level)
         file_handler.name = "jbravo_monitor_file"
         root.addHandler(file_handler)
 
     if not has_stream:
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(formatter)
-        stream_handler.setLevel(logging.INFO)
+        stream_handler.setLevel(desired_level)
         stream_handler.name = "jbravo_monitor_stream"
         root.addHandler(stream_handler)
+
+    if not getattr(configure_logging, "_ready_logged", False):
+        logging.getLogger(__name__).warning(
+            "LOGGING_READY root_level=%s desired=%s",
+            logging.getLevelName(root.level),
+            logging.getLevelName(desired_level),
+        )
+        configure_logging._ready_logged = True
 
 
 configure_logging()
