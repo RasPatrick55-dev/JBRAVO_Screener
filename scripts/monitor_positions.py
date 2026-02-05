@@ -45,11 +45,45 @@ os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
 logfile = os.path.join(BASE_DIR, "logs", "monitor.log")
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)s]: %(message)s",
-    handlers=[logging.FileHandler(logfile), logging.StreamHandler(sys.stdout)],
-)
+
+
+def configure_logging() -> None:
+    root = logging.getLogger()
+    has_file = False
+    has_stream = False
+    for handler in root.handlers:
+        if getattr(handler, "name", "") == "jbravo_monitor_file":
+            has_file = True
+        if isinstance(handler, logging.FileHandler):
+            base = getattr(handler, "baseFilename", "")
+            if base and os.path.basename(base).lower() == "monitor.log":
+                has_file = True
+        if getattr(handler, "name", "") == "jbravo_monitor_stream":
+            has_stream = True
+        if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) is sys.stdout:
+            has_stream = True
+
+    if root.level == logging.NOTSET:
+        root.setLevel(logging.INFO)
+
+    formatter = logging.Formatter("[%(asctime)s] [%(levelname)s]: %(message)s")
+
+    if not has_file:
+        file_handler = logging.FileHandler(logfile)
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.INFO)
+        file_handler.name = "jbravo_monitor_file"
+        root.addHandler(file_handler)
+
+    if not has_stream:
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(formatter)
+        stream_handler.setLevel(logging.INFO)
+        stream_handler.name = "jbravo_monitor_stream"
+        root.addHandler(stream_handler)
+
+
+configure_logging()
 logger = logging.getLogger(__name__)
 logger.info("Monitoring service active.")
 
@@ -65,6 +99,9 @@ METRIC_KEYS = [
     "api_errors",
     "stop_attach_failed",
     "stop_coverage_pct",
+    "stop_tighten_skipped",
+    "breakeven_tightens",
+    "time_decay_tightens",
     "live_price_ok",
     "live_price_fail",
 ]
@@ -863,6 +900,9 @@ TRAIL_TIGHTEST_PERCENT = float(os.getenv("TRAIL_TIGHTEST_PERCENT", "1"))
 GAIN_THRESHOLD_ADJUST = float(os.getenv("GAIN_THRESHOLD_ADJUST", "10"))
 PARTIAL_GAIN_THRESHOLD = float(os.getenv("PARTIAL_GAIN_THRESHOLD", "5"))
 MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "7"))
+BREAKEVEN_THRESHOLD_PCT = float(os.getenv("BREAKEVEN_THRESHOLD_PCT", "2.0"))
+TIMEDECAY_START_DAYS = int(os.getenv("TIMEDECAY_START_DAYS", "2"))
+TIMEDECAY_STEP_PCT = float(os.getenv("TIMEDECAY_STEP_PCT", "0.5"))
 LOW_SIGNAL_GAIN_THRESHOLD = float(os.getenv("LOW_SIGNAL_GAIN_THRESHOLD", "4"))
 LOW_SIGNAL_TIGHTEN_DELTA = float(os.getenv("LOW_SIGNAL_TIGHTEN_DELTA", "0.75"))
 LOW_SIGNAL_TIGHTEN_MIN = float(os.getenv("LOW_SIGNAL_TIGHTEN_MIN", "0.5"))
@@ -898,6 +938,51 @@ def _is_low_signal_cooldown(symbol: str, now: datetime) -> bool:
 def _mark_low_signal_cooldown(symbol: str, now: datetime) -> None:
     LOW_SIGNAL_STOP_COOLDOWNS[symbol] = now.isoformat()
     _save_stop_cooldowns(LOW_SIGNAL_STOP_COOLDOWNS)
+
+
+def compute_target_trail_pct(
+    gain_pct: float,
+    days_held: int,
+    current_trail_pct: float | None,
+) -> tuple[float, str]:
+    """Return the tightened trailing stop percent and reason detail."""
+
+    if gain_pct >= GAIN_THRESHOLD_ADJUST:
+        target = TRAIL_TIGHTEST_PERCENT
+    elif gain_pct >= PARTIAL_GAIN_THRESHOLD:
+        target = TRAIL_TIGHT_PERCENT
+    else:
+        target = TRAIL_START_PERCENT
+
+    reason_parts: list[str] = []
+    eps = 1e-6
+
+    if env_bool("MONITOR_ENABLE_BREAKEVEN_TIGHTEN", default=False):
+        if gain_pct >= BREAKEVEN_THRESHOLD_PCT:
+            tightened = min(target, float(gain_pct))
+            if tightened + eps < target:
+                target = tightened
+                reason_parts.append("breakeven_lock")
+
+    if env_bool("MONITOR_ENABLE_TIMEDECAY_TIGHTEN", default=False):
+        extra_days = int(days_held) - TIMEDECAY_START_DAYS
+        if extra_days > 0:
+            reduction = TIMEDECAY_STEP_PCT * extra_days
+            tightened = max(TRAIL_TIGHTEST_PERCENT, target - reduction)
+            if tightened + eps < target:
+                target = tightened
+                reason_parts.append("time_decay")
+
+    if current_trail_pct is not None:
+        try:
+            current_val = float(current_trail_pct)
+            if current_val + eps < target:
+                target = current_val
+        except (TypeError, ValueError):
+            pass
+
+    reason_detail = "+".join(reason_parts) if reason_parts else "profit_tier"
+    return float(target), reason_detail
 
 
 def is_extended_hours(now_et: dt_time) -> bool:
@@ -1745,17 +1830,15 @@ def manage_trailing_stop(position):
         getattr(trailing_order, "trail_percent", "n/a"),
     )
 
-    def desired_trail_pct(gain: float) -> float:
-        if gain >= 10:
-            return TRAIL_TIGHTEST_PERCENT
-        if gain >= 5:
-            return TRAIL_TIGHT_PERCENT
-        return TRAIL_START_PERCENT
-
     current_trail_pct = float(
         getattr(trailing_order, "trail_percent", TRAIL_START_PERCENT) or TRAIL_START_PERCENT
     )
-    target_trail_pct = desired_trail_pct(gain_pct)
+    days_held = calculate_days_held(position)
+    target_trail_pct, base_reason = compute_target_trail_pct(
+        gain_pct,
+        days_held,
+        current_trail_pct,
+    )
     effective_target = min(current_trail_pct, target_trail_pct)
 
     now_utc = datetime.utcnow()
@@ -1782,7 +1865,7 @@ def manage_trailing_stop(position):
             LOW_SIGNAL_STOP_COOLDOWNS.get(symbol),
         )
 
-    if abs(current_trail_pct - effective_target) < 1e-6:
+    if effective_target >= current_trail_pct - 0.05:
         logger.info(
             "No trailing stop adjustment needed for %s (gain: %.2f%%; trail %.2f%%)",
             symbol,
@@ -1791,17 +1874,57 @@ def manage_trailing_stop(position):
         )
         return
 
+    existing_stop = None
+    stop_price = getattr(trailing_order, "stop_price", None)
+    if stop_price is not None:
+        try:
+            existing_stop = float(stop_price)
+        except (TypeError, ValueError):
+            existing_stop = None
+    if existing_stop is None:
+        hwm = getattr(trailing_order, "hwm", None)
+        if hwm is None:
+            hwm = getattr(trailing_order, "high_water_mark", None)
+        trail_pct_val = getattr(trailing_order, "trail_percent", None)
+        try:
+            if hwm is not None and trail_pct_val is not None:
+                existing_stop = float(hwm) * (1 - float(trail_pct_val) / 100.0)
+        except (TypeError, ValueError):
+            existing_stop = None
+
+    if existing_stop is not None:
+        proposed_initial_stop = current * (1 - effective_target / 100.0)
+        if proposed_initial_stop < existing_stop - 0.01:
+            payload = {
+                "symbol": symbol,
+                "reason": "would_lower_stop",
+                "existing_stop": round(existing_stop, 4),
+                "proposed_stop": round(proposed_initial_stop, 4),
+            }
+            logger.info(
+                "STOP_TIGHTEN_SKIP %s",
+                json.dumps(payload, sort_keys=True),
+            )
+            increment_metric("stop_tighten_skipped")
+            return
+
     try:
-        cancel_order_safe(trailing_order.id, symbol, reason="adjust_trailing_stop")
-        reason_detail = (
-            "low_signal_profit_lock"
-            if low_signal_tighten
-            else "+10% gain"
-            if effective_target == TRAIL_TIGHTEST_PERCENT
-            else "+5% gain"
-            if effective_target == TRAIL_TIGHT_PERCENT
-            else "default"
+        reason_detail = base_reason
+        if low_signal_tighten:
+            reason_detail = f"{reason_detail}+low_signal"
+        payload = {
+            "symbol": symbol,
+            "from": round(current_trail_pct, 4),
+            "to": round(effective_target, 4),
+            "gain_pct": round(gain_pct, 4),
+            "days_held": int(days_held),
+            "reason": reason_detail,
+        }
+        logger.info(
+            "STOP_TIGHTEN %s",
+            json.dumps(payload, sort_keys=True),
         )
+        cancel_order_safe(trailing_order.id, symbol, reason="adjust_trailing_stop")
         if low_signal_tighten:
             logger.info(
                 "STOP_TIGHTEN signal_quality=LOW symbol=%s old_trail=%.2f new_trail=%.2f reason=low_signal_profit_lock",
@@ -1833,6 +1956,10 @@ def manage_trailing_stop(position):
                 "reason": f"tighten_trailing_stop:{reason_detail}",
             },
         )
+        if "breakeven_lock" in base_reason:
+            increment_metric("breakeven_tightens")
+        if "time_decay" in base_reason:
+            increment_metric("time_decay_tightens")
         logger.info(
             "Adjusted trailing stop for %s from %.2f%% to %.2f%% (gain: %.2f%%).",
             symbol,
