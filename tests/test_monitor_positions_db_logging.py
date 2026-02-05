@@ -206,3 +206,21 @@ class TestMonitorDbLogging(unittest.TestCase):
         self.assertEqual(int(monitor.MONITOR_METRICS.get("db_event_fail", 0)), start_fail + 1)
         monitor.MONITOR_METRICS["db_event_ok"] = start_ok
         monitor.MONITOR_METRICS["db_event_fail"] = start_fail
+
+    def test_invalid_event_type_increments_fail(self):
+        monitor = self.monitor
+        start_ok = int(monitor.MONITOR_METRICS.get("db_event_ok", 0))
+        start_fail = int(monitor.MONITOR_METRICS.get("db_event_fail", 0))
+        with mock.patch.object(monitor, "db_logging_enabled", return_value=True):
+            ok = monitor.db_log_event(
+                event_type="NOT_REAL",
+                symbol="AAPL",
+                qty=1,
+                order_id="OID-X",
+                status="submitted",
+            )
+        self.assertFalse(ok)
+        self.assertEqual(int(monitor.MONITOR_METRICS.get("db_event_ok", 0)), start_ok)
+        self.assertEqual(int(monitor.MONITOR_METRICS.get("db_event_fail", 0)), start_fail + 1)
+        monitor.MONITOR_METRICS["db_event_ok"] = start_ok
+        monitor.MONITOR_METRICS["db_event_fail"] = start_fail

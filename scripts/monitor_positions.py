@@ -182,12 +182,12 @@ def _sanitize_raw_payload(raw: dict | None) -> dict:
         return {"source": "monitor_positions", "raw": str(payload)}
 
 
-def _log_db_event(message: str, payload: dict, *, level: str = "info") -> None:
-    line = "%s %s" % (message, json.dumps(payload, sort_keys=True, default=str))
-    if level == "warning":
-        logger.warning(line)
-    else:
-        logger.info(line)
+def _log_db_event(message: str, payload: dict, *, level: str | None = None) -> None:
+    rendered = json.dumps(payload, sort_keys=True, default=str)
+    if message == "DB_EVENT_OK":
+        logger.info("DB_EVENT_OK %s", rendered)
+        return
+    logger.warning("DB_EVENT_FAIL %s", rendered)
 
 
 def db_log_event(
@@ -205,7 +205,17 @@ def db_log_event(
 
     event_label = (event_type or "").upper()
     if event_label not in set(MONITOR_DB_EVENT_TYPES.values()):
-        logger.warning("DB_EVENT_SKIP invalid_event_type=%s", event_label or "")
+        fail_payload = {
+            "event_type": event_label or "",
+            "symbol": symbol,
+            "qty": qty,
+            "order_id": order_id,
+            "status": status,
+            "event_time": (event_time or datetime.now(timezone.utc)).isoformat(),
+            "err": "invalid_event_type",
+        }
+        _log_db_event("DB_EVENT_FAIL", fail_payload)
+        increment_metric("db_event_fail")
         return False
 
     event_time_value = event_time or datetime.now(timezone.utc)
@@ -222,8 +232,8 @@ def db_log_event(
         from scripts import db as db_module
     except Exception as exc:
         fail_payload = dict(payload)
-        fail_payload["error"] = str(exc)
-        _log_db_event("DB_EVENT_FAIL", fail_payload, level="warning")
+        fail_payload["err"] = str(exc)
+        _log_db_event("DB_EVENT_FAIL", fail_payload)
         increment_metric("db_event_fail")
         return False
     try:
@@ -238,8 +248,8 @@ def db_log_event(
         )
     except Exception as exc:
         fail_payload = dict(payload)
-        fail_payload["error"] = str(exc)
-        _log_db_event("DB_EVENT_FAIL", fail_payload, level="warning")
+        fail_payload["err"] = str(exc)
+        _log_db_event("DB_EVENT_FAIL", fail_payload)
         increment_metric("db_event_fail")
         return False
 
@@ -249,8 +259,8 @@ def db_log_event(
         return True
 
     fail_payload = dict(payload)
-    fail_payload["error"] = "insert_failed"
-    _log_db_event("DB_EVENT_FAIL", fail_payload, level="warning")
+    fail_payload["err"] = "insert_failed"
+    _log_db_event("DB_EVENT_FAIL", fail_payload)
     increment_metric("db_event_fail")
     return False
 
