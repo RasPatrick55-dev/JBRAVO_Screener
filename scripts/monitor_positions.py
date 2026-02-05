@@ -926,6 +926,8 @@ MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "7"))
 BREAKEVEN_THRESHOLD_PCT = float(os.getenv("BREAKEVEN_THRESHOLD_PCT", "2.0"))
 TIMEDECAY_START_DAYS = int(os.getenv("TIMEDECAY_START_DAYS", "2"))
 TIMEDECAY_STEP_PCT = float(os.getenv("TIMEDECAY_STEP_PCT", "0.5"))
+RSI_REVERSAL_DROP = float(os.getenv("RSI_REVERSAL_DROP", "20"))
+RSI_REVERSAL_FLOOR = float(os.getenv("RSI_REVERSAL_FLOOR", "50"))
 LOW_SIGNAL_GAIN_THRESHOLD = float(os.getenv("LOW_SIGNAL_GAIN_THRESHOLD", "4"))
 LOW_SIGNAL_TIGHTEN_DELTA = float(os.getenv("LOW_SIGNAL_TIGHTEN_DELTA", "0.75"))
 LOW_SIGNAL_TIGHTEN_MIN = float(os.getenv("LOW_SIGNAL_TIGHTEN_MIN", "0.5"))
@@ -1250,6 +1252,8 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
     price = indicators["close"]
     ema20 = indicators["EMA20"]
     rsi = indicators["RSI"]
+    shooting_star = is_shooting_star(indicators)
+    bear_engulf = is_bearish_engulfing(indicators)
 
     reasons = []
     if price < ema20:
@@ -1272,7 +1276,7 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
             else:
                 logger.info("MACD remains below signal for %s", symbol)
 
-    if is_shooting_star(indicators):
+    if shooting_star:
         reasons.append("Shooting star")
 
     state = RSI_HIGH_MEMORY.get(symbol, {"price": price, "rsi": rsi})
@@ -1283,6 +1287,7 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
     elif symbol not in RSI_HIGH_MEMORY:
         RSI_HIGH_MEMORY[symbol] = state
 
+    baseline_reasons = list(reasons)
     enable_v2 = env_bool("MONITOR_ENABLE_EXIT_SIGNALS_V2", default=False)
     v2_reasons: list[str] = []
 
@@ -1302,7 +1307,10 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
     rsi_now = _num(indicators.get("RSI"))
     rsi_prev = _num(indicators.get("RSI_prev", rsi_now))
     if rsi_now is not None and rsi_prev is not None:
-        if rsi_prev >= 70 and rsi_now < rsi_prev:
+        if rsi_prev >= 70 and (
+            rsi_now <= RSI_REVERSAL_FLOOR
+            or (rsi_prev - rsi_now) >= RSI_REVERSAL_DROP
+        ):
             v2_reasons.append("RSI reversal")
 
     close_prev = _num(indicators.get("close_prev", price))
@@ -1319,9 +1327,10 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
 
     macd_val = _num(indicators.get("MACD"))
     macd_signal = _num(indicators.get("MACD_signal"))
+    macd_hist = None
+    macd_hist_prev = _num(indicators.get("MACD_hist_prev"))
     if macd_val is not None and macd_signal is not None:
         macd_hist = _num(indicators.get("MACD_hist", macd_val - macd_signal))
-        macd_hist_prev = _num(indicators.get("MACD_hist_prev"))
         if macd_hist_prev is None:
             prev_macd = _num(indicators.get("MACD_prev", macd_val))
             prev_signal = _num(indicators.get("MACD_signal_prev", macd_signal))
@@ -1333,23 +1342,48 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
             ):
                 v2_reasons.append("MACD fade")
 
-    if is_shooting_star(indicators):
+    if shooting_star:
         v2_reasons.append("Shooting star")
-    if is_bearish_engulfing(indicators):
+    if bear_engulf:
         v2_reasons.append("Bearish engulfing")
 
-    if v2_reasons:
-        logger.info(
-            "EXIT_SIGNALS_V2 symbol=%s enabled=%s reasons=%s",
-            symbol,
-            enable_v2,
-            ";".join(v2_reasons),
-        )
-
+    final_reasons = list(reasons)
     if enable_v2:
         for reason in v2_reasons:
-            if reason not in reasons:
-                reasons.append(reason)
+            if reason not in final_reasons:
+                final_reasons.append(reason)
+
+        payload = {
+            "symbol": symbol,
+            "enabled": True,
+            "v2_reasons": list(v2_reasons),
+            "baseline_reasons": list(baseline_reasons),
+            "final_reasons": list(final_reasons),
+            "price": _num(price),
+            "close_prev": _num(indicators.get("close_prev", price)),
+            "rsi_now": rsi_now,
+            "rsi_prev": rsi_prev,
+            "sma9": _num(indicators.get("SMA9")),
+            "sma9_prev": _num(indicators.get("SMA9_prev")),
+            "ema20": _num(ema20),
+            "ema20_prev": _num(indicators.get("EMA20_prev", ema20)),
+            "macd_hist": macd_hist,
+            "macd_hist_prev": macd_hist_prev,
+            "patterns": {
+                "shooting_star": bool(shooting_star),
+                "bearish_engulfing": bool(bear_engulf),
+            },
+            "thresholds": {
+                "RSI_REVERSAL_DROP": float(RSI_REVERSAL_DROP),
+                "RSI_REVERSAL_FLOOR": float(RSI_REVERSAL_FLOOR),
+            },
+        }
+        logger.info(
+            "EXIT_SIGNAL_V2 %s",
+            json.dumps(payload, sort_keys=True),
+        )
+
+        reasons = final_reasons
 
     return reasons
 
