@@ -2194,12 +2194,23 @@ def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None =
         try:
             now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ)
             market_hours = TRADING_START_HOUR <= now_et.hour < TRADING_END_HOUR
+            logger.info(
+                "MARKET_WINDOW now_et=%s market_hours=%s start=%s end=%s",
+                now_et.isoformat(),
+                market_hours,
+                TRADING_START_HOUR,
+                TRADING_END_HOUR,
+            )
 
             log_if_stale(open_pos_path, "open_positions.csv", threshold_minutes=10)
 
             if market_hours:
+                logger.info("CYCLE_PATH process_positions_cycle")
                 positions = process_positions_cycle() or []
             else:
+                logger.info("CYCLE_PATH update_open_positions")
+                if env_bool("MONITOR_ENABLE_LIVE_PRICES", default=False):
+                    logger.info("LIVE_PRICE_SKIP reason=off_hours")
                 positions = update_open_positions() or []
 
             protective_orders_count, stop_coverage_pct, trailing_stops_count = enforce_stop_coverage(positions)
