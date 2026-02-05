@@ -13,6 +13,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.trading.requests import (
@@ -64,6 +65,8 @@ METRIC_KEYS = [
     "api_errors",
     "stop_attach_failed",
     "stop_coverage_pct",
+    "live_price_ok",
+    "live_price_fail",
 ]
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -976,6 +979,54 @@ def update_open_positions():
     return positions
 
 
+def _alpaca_data_feed() -> Optional[str]:
+    feed_env = (os.getenv("ALPACA_DATA_FEED") or "").strip()
+    if not feed_env:
+        return None
+    upper = feed_env.upper()
+    if upper in {"IEX", "SIP"}:
+        return upper.lower()
+    return feed_env
+
+
+def get_latest_trade_prices(symbols: list[str]) -> dict[str, float]:
+    if not symbols:
+        return {}
+    if data_client is None:
+        logger.error("LIVE_PRICE_FAIL err=data_client_unavailable")
+        increment_metric("live_price_fail")
+        return {}
+    feed = _alpaca_data_feed()
+    try:
+        if feed:
+            request = StockLatestTradeRequest(symbol_or_symbols=symbols, feed=feed)
+        else:
+            request = StockLatestTradeRequest(symbol_or_symbols=symbols)
+        latest_trades = data_client.get_stock_latest_trade(request) or {}
+        prices: dict[str, float] = {}
+        for symbol, trade in latest_trades.items():
+            price = getattr(trade, "price", None)
+            if price is None:
+                continue
+            try:
+                prices[str(symbol)] = float(price)
+            except (TypeError, ValueError):
+                continue
+        missing = max(0, len(symbols) - len(prices))
+        logger.info(
+            "LIVE_PRICE_OK symbols=%s used=%s missing=%s",
+            len(symbols),
+            len(prices),
+            missing,
+        )
+        increment_metric("live_price_ok")
+        return prices
+    except Exception as exc:
+        logger.error("LIVE_PRICE_FAIL err=%s", exc)
+        increment_metric("live_price_fail")
+        return {}
+
+
 def fetch_indicators(symbol):
     """Fetch recent daily bars and compute indicators."""
     try:
@@ -1613,7 +1664,7 @@ def manage_trailing_stop(position):
     qty = position.qty
     logger.info(f"Evaluating trailing stop for {symbol} – qty: {qty}")
     entry = float(position.avg_entry_price)
-    current = float(position.current_price)
+    current = float(getattr(position, "live_price", position.current_price))
     gain_pct = (current - entry) / entry * 100 if entry else 0
     ml_signal_quality = ML_RISK_STATE.get("signal_quality", "MEDIUM")
     if not qty or float(qty) <= 0:
@@ -1982,6 +2033,15 @@ def process_positions_cycle():
     positions = get_open_positions()
     save_positions_csv(positions, csv_path)
 
+    use_live = env_bool("MONITOR_ENABLE_LIVE_PRICES", default=False)
+    latest_prices: dict[str, float] = {}
+    if use_live and positions:
+        symbols = sorted({p.symbol for p in positions if getattr(p, "symbol", None)})
+        latest_prices = get_latest_trade_prices(symbols)
+        missing_count = max(0, len(symbols) - len(latest_prices))
+        if missing_count:
+            logger.info("LIVE_PRICE_MISSING count=%s", missing_count)
+
     existing_symbols = set(existing_positions_df.get("symbol", []))
     current_symbols = set(p.symbol for p in positions)
     closed_symbols = existing_symbols - current_symbols
@@ -1993,6 +2053,12 @@ def process_positions_cycle():
         return positions
     for position in positions:
         symbol = position.symbol
+        live_price = latest_prices.get(symbol)
+        if live_price is not None:
+            try:
+                setattr(position, "live_price", float(live_price))
+            except Exception:
+                pass
         days_held = calculate_days_held(position)
         logger.info("%s held for %d days", symbol, days_held)
         if days_held >= MAX_HOLD_DAYS:
@@ -2026,6 +2092,17 @@ def process_positions_cycle():
                 symbol,
             )
             continue
+        current_price = None
+        if live_price is not None:
+            current_price = float(live_price)
+        else:
+            fallback_price = getattr(position, "current_price", None)
+            if fallback_price is None:
+                fallback_price = indicators.get("close") if indicators else None
+            if fallback_price is not None:
+                current_price = float(fallback_price)
+        if indicators and current_price is not None:
+            indicators["close"] = float(current_price)
 
         apply_debug_overrides(symbol, indicators, position, DEBUG_STATE)
 
