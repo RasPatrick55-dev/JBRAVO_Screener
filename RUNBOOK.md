@@ -20,6 +20,28 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
+## Monitor DB logging (Epic C)
+
+* Supported DB env vars (see `scripts/db.py`): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`/`DB_USERNAME`, `DB_PASSWORD`/`DB_PASS`, `DB_SSLMODE`, `DB_CONNECT_TIMEOUT`, `DATABASE_URL`, `DB_DISABLED`.
+* Migration (idempotent):
+
+```
+python -m scripts.db_migrate --action upgrade
+```
+
+* One-cycle safe run (sells disabled, DB logging on):
+
+```
+MONITOR_DISABLE_SELLS=true MONITOR_ENABLE_DB_LOGGING=true MONITOR_ENABLE_LIVE_PRICES=true \
+python -m scripts.monitor_positions --once
+```
+
+* Verify recent DB events:
+
+```
+python -m scripts.verify_monitor_db_events --since-minutes 120 --limit 20
+```
+
 ## Frontend build (PythonAnywhere)
 
 The Vite frontend lives in `frontend/` and is served from `frontend/dist` by
