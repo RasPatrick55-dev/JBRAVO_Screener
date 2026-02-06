@@ -51,6 +51,38 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 rows = cursor.fetchall()
 
+                cursor.execute(
+                    """
+                    SELECT MAX(event_time)
+                    FROM order_events
+                    WHERE event_time >= now() - interval '24 hours'
+                    """
+                )
+                max_row = cursor.fetchone()
+                max_event_time = max_row[0] if max_row else None
+
+                cursor.execute(
+                    """
+                    SELECT event_type, COUNT(*)
+                    FROM order_events
+                    WHERE event_time >= now() - interval '24 hours'
+                    GROUP BY event_type
+                    ORDER BY COUNT(*) DESC
+                    """
+                )
+                counts_rows = cursor.fetchall()
+
+                cursor.execute(
+                    """
+                    SELECT event_time, symbol, order_id, status, raw
+                    FROM order_events
+                    WHERE event_type = 'SELL_SUBMIT'
+                    ORDER BY event_time DESC
+                    LIMIT 3
+                    """
+                )
+                recent_submit_rows = cursor.fetchall()
+
         events = []
         for row in rows:
             events.append(
@@ -64,10 +96,39 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
 
+        counts_24h: dict[str, int] = {}
+        for row in counts_rows:
+            counts_24h[str(row[0])] = int(row[1])
+
+        recent_submits = []
+        for row in recent_submit_rows:
+            raw_value = row[4]
+            if isinstance(raw_value, str):
+                try:
+                    raw_value = json.loads(raw_value)
+                except Exception:
+                    raw_value = {}
+            if not isinstance(raw_value, dict):
+                raw_value = {}
+            raw_keys = sorted(raw_value.keys())
+            recent_submits.append(
+                {
+                    "event_time": row[0].isoformat() if row[0] else None,
+                    "symbol": row[1],
+                    "order_id": row[2],
+                    "status": row[3],
+                    "exit_reason_code_present": bool(raw_value.get("exit_reason_code")),
+                    "raw_keys": raw_keys,
+                }
+            )
+
         summary = {
             "since_minutes": since_minutes,
             "order_events_count": event_count,
             "events": events,
+            "max_event_time_24h": max_event_time.isoformat() if max_event_time else None,
+            "counts_24h": counts_24h,
+            "recent_sell_submit": recent_submits,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
         _emit_summary(summary)

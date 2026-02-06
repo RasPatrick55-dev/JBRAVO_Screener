@@ -190,6 +190,21 @@ def _log_db_event(message: str, payload: dict, *, level: str | None = None) -> N
     logger.warning("DB_EVENT_FAIL %s", rendered)
 
 
+def _exit_summary_from_raw(raw_payload: dict | None) -> dict:
+    if not isinstance(raw_payload, dict):
+        return {
+            "exit_reason_code": None,
+            "exit_snapshot_present": False,
+            "raw_keys": [],
+        }
+    exit_snapshot = raw_payload.get("exit_snapshot")
+    return {
+        "exit_reason_code": raw_payload.get("exit_reason_code"),
+        "exit_snapshot_present": exit_snapshot is not None,
+        "raw_keys": sorted(raw_payload.keys()),
+    }
+
+
 def db_log_event(
     *,
     event_type: str,
@@ -203,6 +218,9 @@ def db_log_event(
     if not db_logging_enabled():
         return False
 
+    raw_payload = _sanitize_raw_payload(raw)
+    exit_summary = _exit_summary_from_raw(raw_payload)
+
     event_label = (event_type or "").upper()
     if event_label not in set(MONITOR_DB_EVENT_TYPES.values()):
         fail_payload = {
@@ -213,13 +231,13 @@ def db_log_event(
             "status": status,
             "event_time": (event_time or datetime.now(timezone.utc)).isoformat(),
             "err": "invalid_event_type",
+            **exit_summary,
         }
         _log_db_event("DB_EVENT_FAIL", fail_payload)
         increment_metric("db_event_fail")
         return False
 
     event_time_value = event_time or datetime.now(timezone.utc)
-    raw_payload = _sanitize_raw_payload(raw)
     payload = {
         "event_type": event_label,
         "symbol": symbol,
@@ -227,6 +245,7 @@ def db_log_event(
         "order_id": order_id,
         "status": status,
         "event_time": event_time_value.isoformat(),
+        **exit_summary,
     }
     try:
         from scripts import db as db_module
@@ -253,7 +272,7 @@ def db_log_event(
         increment_metric("db_event_fail")
         return False
 
-    if ok:
+    if ok is True:
         _log_db_event("DB_EVENT_OK", payload)
         increment_metric("db_event_ok")
         return True
@@ -2792,7 +2811,9 @@ def submit_sell_market_order(
             },
         )
         order_id_value = str(getattr(order, "id", "") or "") or None
-        is_dryrun = bool(getattr(order, "dryrun", False))
+        is_dryrun = bool(
+            getattr(order, "dryrun", env_bool("MONITOR_DISABLE_SELLS", default=False))
+        )
         if db_enabled:
             db_log_event(
                 event_type=MONITOR_DB_EVENT_TYPES["sell_submit"],
