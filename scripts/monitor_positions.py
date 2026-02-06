@@ -292,6 +292,35 @@ def _stringify_value(value):
     return value
 
 
+def enum_str(value) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "value"):
+        value = value.value
+    text = str(value).strip().lower()
+    if text.startswith("orderside."):
+        return text[len("orderside.") :]
+    if text.startswith("ordertype."):
+        return text[len("ordertype.") :]
+    return text
+
+
+def order_attr_str(order, attr_names: tuple[str, ...]) -> str:
+    for name in attr_names:
+        if not hasattr(order, name):
+            continue
+        try:
+            value = getattr(order, name)
+        except Exception:
+            continue
+        if value is None:
+            continue
+        text = enum_str(value)
+        if text:
+            return text
+    return ""
+
+
 def _order_request_summary(order_request) -> dict:
     if order_request is None:
         return {}
@@ -1860,22 +1889,19 @@ def get_open_orders(symbol):
 def get_trailing_stop_order(symbol):
     orders = get_open_orders(symbol)
     for o in orders:
-        if getattr(o, "order_type", "") == "trailing_stop":
+        if order_attr_str(o, ("order_type", "type")) == "trailing_stop":
             return o
     return None
 
 
 def _normalize_order_side(order) -> str:
-    side_value = getattr(order, "side", "")
-    if hasattr(side_value, "value"):
-        side_value = side_value.value
-    return str(side_value).lower()
+    return order_attr_str(order, ("side",))
 
 
 def _is_protective_order(order, expected_side: str) -> bool:
-    side = str(getattr(order, "side", "")).lower()
-    order_type = str(getattr(order, "order_type", "")).lower()
-    status = str(getattr(order, "status", "")).lower()
+    side = order_attr_str(order, ("side",))
+    order_type = order_attr_str(order, ("order_type", "type"))
+    status = order_attr_str(order, ("status",))
 
     stop_like = "trailing" in order_type or "stop" in order_type
     is_open = any(state in status for state in ["open", "new", "accepted", "held", "partially_filled"])
@@ -1886,14 +1912,11 @@ def _is_protective_order(order, expected_side: str) -> bool:
 
 
 def _normalize_order_status(order) -> str:
-    status_value = getattr(order, "status", "")
-    if hasattr(status_value, "value"):
-        status_value = status_value.value
-    return str(status_value).lower()
+    return order_attr_str(order, ("status",))
 
 
 def _is_open_protective_order(order) -> bool:
-    order_type = str(getattr(order, "order_type", "")).lower()
+    order_type = order_attr_str(order, ("order_type", "type"))
     if "stop" not in order_type and "trailing" not in order_type:
         return False
 
@@ -1911,10 +1934,13 @@ def last_filled_trailing_stop(symbol):
         closed_orders = [
             o
             for o in orders
-            if getattr(o, "status", "").lower() in ("filled", "canceled", "rejected")
+            if order_attr_str(o, ("status",)) in ("filled", "canceled", "rejected")
         ]
         for o in closed_orders:
-            if getattr(o, "order_type", "") == "trailing_stop" and getattr(o, "status", "").lower() == "filled":
+            if (
+                order_attr_str(o, ("order_type", "type")) == "trailing_stop"
+                and order_attr_str(o, ("status",)) == "filled"
+            ):
                 return o
     except Exception as e:
         logger.error("Failed to fetch order history for %s: %s", symbol, e)
@@ -1926,7 +1952,11 @@ def count_open_trailing_stops() -> int:
     request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
     try:
         orders = trading_client.get_orders(request)
-        count = sum(1 for order in orders if getattr(order, "order_type", "") == "trailing_stop")
+        count = sum(
+            1
+            for order in orders
+            if order_attr_str(order, ("order_type", "type")) == "trailing_stop"
+        )
         logger.info("[MONITOR] Open trailing stops: %s", count)
         return int(count)
     except Exception as exc:
@@ -2248,7 +2278,7 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
 
         protective_open_orders.append(order)
 
-        otype = str(getattr(order, "order_type", "")).lower()
+        otype = order_attr_str(order, ("order_type", "type"))
         if "trailing" in otype:
             trailing_stops_count += 1
 
@@ -2316,7 +2346,9 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
 def has_pending_sell_order(symbol):
     orders = get_open_orders(symbol)
     for o in orders:
-        if o.side == OrderSide.SELL and getattr(o, "order_type", "") != "trailing_stop":
+        side = order_attr_str(o, ("side",))
+        order_type = order_attr_str(o, ("order_type", "type"))
+        if side == "sell" and order_type != "trailing_stop":
             return True
     return False
 
@@ -2399,7 +2431,9 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
         existing_orders = []
 
     trailing_stops = [
-        order for order in existing_orders if getattr(order, "order_type", "") == "trailing_stop"
+        order
+        for order in existing_orders
+        if order_attr_str(order, ("order_type", "type")) == "trailing_stop"
     ]
 
     if len(trailing_stops) > 1:
@@ -2662,7 +2696,9 @@ def check_pending_orders():
             f"Fetched open orders for all symbols: {len(open_orders)} found.")
 
         trailing_stops = [
-            o for o in open_orders if getattr(o, "order_type", "") == "trailing_stop"
+            o
+            for o in open_orders
+            if order_attr_str(o, ("order_type", "type")) == "trailing_stop"
         ]
         unique_symbols = set()
         for order in trailing_stops:
