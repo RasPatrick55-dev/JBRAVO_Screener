@@ -321,6 +321,48 @@ def order_attr_str(order, attr_names: tuple[str, ...]) -> str:
     return ""
 
 
+def get_protective_trailing_stop_for_symbol(symbol: str, orders: list) -> object | None:
+    best_order = None
+    best_qty = None
+    for order in orders or []:
+        if getattr(order, "symbol", None) != symbol:
+            continue
+        if order_attr_str(order, ("order_type", "type")) != "trailing_stop":
+            continue
+        if order_attr_str(order, ("side",)) != "sell":
+            continue
+        status = order_attr_str(order, ("status",))
+        if status not in {"open", "new", "accepted"}:
+            continue
+        qty_value = getattr(order, "qty", None)
+        try:
+            qty = float(qty_value)
+        except (TypeError, ValueError):
+            qty = None
+        if qty is None:
+            if best_order is None:
+                best_order = order
+            continue
+        if best_qty is None or qty > best_qty:
+            best_order = order
+            best_qty = qty
+    return best_order
+
+
+def is_fully_covered(position, stop_order) -> bool:
+    if position is None or stop_order is None:
+        return False
+    try:
+        pos_qty = abs(float(getattr(position, "qty", 0) or 0))
+    except (TypeError, ValueError):
+        return False
+    try:
+        stop_qty = float(getattr(stop_order, "qty", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return stop_qty + 1e-6 >= pos_qty
+
+
 def _order_request_summary(order_request) -> dict:
     if order_request is None:
         return {}
@@ -869,13 +911,13 @@ def wait_for_order_terminal(order_id: str, poll_interval: int = 10, timeout_seco
     return status
 
 
-def cancel_order_safe(order_id: str, symbol: str, reason: str | None = None):
+def cancel_order_safe(order_id: str, symbol: str, reason: str | None = None) -> bool:
     """Attempt to cancel ``order_id`` using available client methods."""
     context = {"symbol": symbol, "reason": reason}
     try:
         success = broker_cancel_order(order_id, context)
         if success:
-            return
+            return True
     except Exception as exc:  # pragma: no cover - API errors
         logger.error("Failed to cancel order %s: %s", order_id, exc)
     try:
@@ -885,6 +927,7 @@ def cancel_order_safe(order_id: str, symbol: str, reason: str | None = None):
         )
     except Exception as exc:  # pragma: no cover - API errors
         logger.error("Failed to close position %s: %s", symbol, exc)
+    return False
 
 
 def ensure_column_exists(df: pd.DataFrame, column: str, default=None) -> pd.DataFrame:
@@ -2279,7 +2322,7 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
         protective_open_orders.append(order)
 
         otype = order_attr_str(order, ("order_type", "type"))
-        if "trailing" in otype:
+        if otype == "trailing_stop":
             trailing_stops_count += 1
 
         symbol = getattr(order, "symbol", "")
@@ -2297,6 +2340,14 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
         side = _determine_position_side(position)
         expected_side = "sell" if side == "long" else "buy"
         symbol_orders = orders_by_symbol.get(symbol, [])
+        trailing_stop = get_protective_trailing_stop_for_symbol(symbol, symbol_orders)
+        if trailing_stop and is_fully_covered(position, trailing_stop):
+            _mark_symbol_protected(
+                symbol, [str(getattr(trailing_stop, "id", ""))]
+            )
+            protected_symbols.add(symbol)
+            continue
+
         protective_orders = [
             order
             for order in symbol_orders
@@ -2471,8 +2522,20 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
 
     trailing_order = trailing_stops[0]
 
-    available_qty = int(getattr(position, "qty_available", 0))
+    available_qty = int(getattr(position, "qty_available", 0) or 0)
+    try:
+        pos_qty_abs = abs(int(float(getattr(position, "qty", 0) or 0)))
+    except Exception:
+        pos_qty_abs = 0
     if available_qty <= 0:
+        logger.info(
+            "QTY_RESERVED symbol=%s pos_qty=%s qty_available=%s reason=protected_order",
+            symbol,
+            pos_qty_abs,
+            available_qty,
+        )
+    use_qty = pos_qty_abs if pos_qty_abs > 0 else available_qty
+    if use_qty <= 0:
         logger.warning(
             f"Insufficient available qty for {symbol}: {available_qty}"
         )
@@ -2483,7 +2546,6 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
             "skipped",
         )
         return
-    use_qty = available_qty
 
     logger.debug(
         f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}."
@@ -2598,7 +2660,14 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
             "STOP_TIGHTEN %s",
             json.dumps(payload, sort_keys=True),
         )
-        cancel_order_safe(trailing_order.id, symbol, reason="adjust_trailing_stop")
+        canceled = cancel_order_safe(trailing_order.id, symbol, reason="adjust_trailing_stop")
+        if not canceled:
+            logger.warning(
+                "STOP_TIGHTEN_CANCEL_FAILED symbol=%s order_id=%s",
+                symbol,
+                getattr(trailing_order, "id", None),
+            )
+            return
         db_log_event(
             event_type=MONITOR_DB_EVENT_TYPES["trail_cancel"],
             symbol=symbol,
