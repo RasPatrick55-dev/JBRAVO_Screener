@@ -507,6 +507,9 @@ def _build_monitor_config() -> dict:
         "MONITOR_ENABLE_BREAKEVEN_TIGHTEN": env_bool("MONITOR_ENABLE_BREAKEVEN_TIGHTEN", default=False),
         "MONITOR_ENABLE_TIMEDECAY_TIGHTEN": env_bool("MONITOR_ENABLE_TIMEDECAY_TIGHTEN", default=False),
         "MONITOR_ENABLE_DB_LOGGING": env_bool(MONITOR_DB_LOGGING_ENV, default=False),
+        "MONITOR_ENABLE_EXIT_INTELLIGENCE": env_bool(
+            "MONITOR_ENABLE_EXIT_INTELLIGENCE", default=False
+        ),
     }
 
 
@@ -1050,10 +1053,17 @@ TRAIL_TIGHT_PERCENT = float(os.getenv("TRAIL_TIGHT_PERCENT", "2"))
 TRAIL_TIGHTEST_PERCENT = float(os.getenv("TRAIL_TIGHTEST_PERCENT", "1"))
 GAIN_THRESHOLD_ADJUST = float(os.getenv("GAIN_THRESHOLD_ADJUST", "10"))
 PARTIAL_GAIN_THRESHOLD = float(os.getenv("PARTIAL_GAIN_THRESHOLD", "5"))
+PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", str(PARTIAL_GAIN_THRESHOLD)))
 MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "7"))
 BREAKEVEN_THRESHOLD_PCT = float(os.getenv("BREAKEVEN_THRESHOLD_PCT", "2.0"))
 TIMEDECAY_START_DAYS = int(os.getenv("TIMEDECAY_START_DAYS", "2"))
 TIMEDECAY_STEP_PCT = float(os.getenv("TIMEDECAY_STEP_PCT", "0.5"))
+MOMENTUM_STALL_PCT = float(os.getenv("MOMENTUM_STALL_PCT", "0.5"))
+RSI_OVERBOUGHT = float(os.getenv("RSI_OVERBOUGHT", "70"))
+RSI_REVERSAL_THRESHOLD = float(os.getenv("RSI_REVERSAL_THRESHOLD", "50"))
+RISK_OFF_SCORE_CUTOFF = float(os.getenv("RISK_OFF_SCORE_CUTOFF", "0.7"))
+EXIT_SIGNAL_TIGHTEN_CONFIDENCE = float(os.getenv("EXIT_SIGNAL_TIGHTEN_CONFIDENCE", "0.7"))
+EXIT_SIGNAL_TIGHTEN_DELTA = float(os.getenv("EXIT_SIGNAL_TIGHTEN_DELTA", "0.5"))
 RSI_REVERSAL_DROP = float(os.getenv("RSI_REVERSAL_DROP", "20"))
 RSI_REVERSAL_FLOOR = float(os.getenv("RSI_REVERSAL_FLOOR", "50"))
 LOW_SIGNAL_GAIN_THRESHOLD = float(os.getenv("LOW_SIGNAL_GAIN_THRESHOLD", "4"))
@@ -1093,12 +1103,12 @@ def _mark_low_signal_cooldown(symbol: str, now: datetime) -> None:
     _save_stop_cooldowns(LOW_SIGNAL_STOP_COOLDOWNS)
 
 
-def compute_target_trail_pct(
+def compute_target_trail_pct_legacy(
     gain_pct: float,
     days_held: int,
     current_trail_pct: float | None,
 ) -> tuple[float, str]:
-    """Return the tightened trailing stop percent and reason detail."""
+    """Return the tightened trailing stop percent and reason detail (legacy)."""
 
     if gain_pct >= GAIN_THRESHOLD_ADJUST:
         target = TRAIL_TIGHTEST_PERCENT
@@ -1138,12 +1148,84 @@ def compute_target_trail_pct(
     return float(target), reason_detail
 
 
+def _compute_target_trail_meta(
+    position,
+    indicators: dict | None,
+    exit_signals: list[dict] | None,
+) -> tuple[float, list[str]]:
+    indicators = indicators or {}
+    entry_price = float(getattr(position, "avg_entry_price", 0) or 0)
+    current_price = indicators.get("close")
+    if current_price is None:
+        current_price = getattr(position, "live_price", None)
+    if current_price is None:
+        current_price = getattr(position, "current_price", entry_price)
+    try:
+        current_price = float(current_price)
+    except (TypeError, ValueError):
+        current_price = float(entry_price or 0)
+
+    gain_pct = (current_price - entry_price) / entry_price * 100 if entry_price else 0.0
+    days_held = calculate_days_held(position)
+
+    if gain_pct >= GAIN_THRESHOLD_ADJUST:
+        target = TRAIL_TIGHTEST_PERCENT
+    elif gain_pct >= PARTIAL_GAIN_THRESHOLD:
+        target = TRAIL_TIGHT_PERCENT
+    else:
+        target = TRAIL_START_PERCENT
+
+    reasons: list[str] = []
+    eps = 1e-6
+
+    if env_bool("MONITOR_ENABLE_BREAKEVEN_TIGHTEN", default=False):
+        if gain_pct >= BREAKEVEN_THRESHOLD_PCT:
+            tightened = min(target, float(gain_pct))
+            if tightened + eps < target:
+                target = tightened
+                reasons.append("breakeven_lock")
+
+    if env_bool("MONITOR_ENABLE_TIMEDECAY_TIGHTEN", default=False):
+        extra_days = int(days_held) - TIMEDECAY_START_DAYS
+        if extra_days > 0:
+            reduction = TIMEDECAY_STEP_PCT * extra_days
+            tightened = max(TRAIL_TIGHTEST_PERCENT, target - reduction)
+            if tightened + eps < target:
+                target = tightened
+                reasons.append("time_decay")
+
+    signal_conf = EXIT_SIGNAL_TIGHTEN_CONFIDENCE
+    signal_delta = EXIT_SIGNAL_TIGHTEN_DELTA
+    has_high_conf = False
+    for signal in exit_signals or []:
+        try:
+            if float(signal.get("confidence", 0)) >= signal_conf:
+                has_high_conf = True
+                break
+        except (TypeError, ValueError):
+            continue
+    if has_high_conf and signal_delta > 0:
+        tightened = max(TRAIL_TIGHTEST_PERCENT, target - signal_delta)
+        if tightened + eps < target:
+            target = tightened
+            reasons.append("exit_signal")
+
+    return float(target), reasons
+
+
+def compute_target_trail_pct(position, indicators: dict | None, exit_signals: list[dict] | None) -> float:
+    """Return the tightened trailing stop percent (exit intelligence)."""
+
+    target, _reasons = _compute_target_trail_meta(position, indicators, exit_signals)
+    return float(target)
+
+
 def is_extended_hours(now_et: dt_time) -> bool:
     """Return True if ``now_et`` falls within pre/post market."""
     return dt_time(4, 0) <= now_et < dt_time(9, 30) or now_et >= dt_time(16, 0)
 
 
-def calculate_days_held(position) -> int:
+def calculate_days_held(position, now_utc: datetime | None = None) -> int:
     """Return the number of days the position has been held."""
     entry_ts = getattr(position, "created_at", None)
     if entry_ts is None:
@@ -1152,7 +1234,10 @@ def calculate_days_held(position) -> int:
         entry_dt = pd.to_datetime(entry_ts, utc=True)
     except Exception:
         return 0
-    return (datetime.now(timezone.utc) - entry_dt).days
+    now = now_utc or datetime.now(timezone.utc)
+    if getattr(now, "tzinfo", None) is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return (now - entry_dt).days
 
 
 # Fetch current positions
@@ -1518,6 +1603,181 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
         reasons = list(final_reasons)
 
     return reasons
+
+
+def _safe_float(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_risk_score(position, indicators: dict | None) -> float | None:
+    indicators = indicators or {}
+    for key in ("risk_score", "ml_risk_score", "risk_score_pct"):
+        if key in indicators:
+            return _safe_float(indicators.get(key))
+    value = getattr(position, "risk_score", None)
+    return _safe_float(value)
+
+
+def evaluate_exit_signals(position, indicators, now_utc) -> list[dict]:
+    """Return canonical exit signals for the current position."""
+
+    indicators = indicators or {}
+    entry_price = _safe_float(getattr(position, "avg_entry_price", 0) or 0) or 0.0
+    current_price = _safe_float(indicators.get("close"))
+    if current_price is None:
+        current_price = _safe_float(getattr(position, "live_price", None))
+    if current_price is None:
+        current_price = _safe_float(getattr(position, "current_price", entry_price))
+    current_price = current_price or 0.0
+
+    gain_pct = (current_price - entry_price) / entry_price * 100 if entry_price else 0.0
+    days_held = calculate_days_held(position)
+    risk_score = _extract_risk_score(position, indicators)
+
+    signals: list[dict] = []
+
+    rsi_now = _safe_float(indicators.get("RSI"))
+    rsi_prev = _safe_float(indicators.get("RSI_prev", rsi_now))
+    sma9 = _safe_float(indicators.get("SMA9"))
+    ema20 = _safe_float(indicators.get("EMA20"))
+    if (
+        rsi_now is not None
+        and rsi_prev is not None
+        and sma9 is not None
+        and ema20 is not None
+        and rsi_prev >= RSI_OVERBOUGHT
+        and rsi_now <= RSI_REVERSAL_THRESHOLD
+        and sma9 < ema20
+    ):
+        signals.append(
+            {
+                "code": "SIGNAL_REVERSAL",
+                "confidence": 0.85,
+                "detail": f"RSI {rsi_prev:.1f}->{rsi_now:.1f} with SMA9<EMA20",
+                "priority": 1,
+            }
+        )
+
+    high_now = _safe_float(indicators.get("high"))
+    high_prev = _safe_float(indicators.get("high_prev", high_now))
+    close_prev = _safe_float(indicators.get("close_prev", current_price))
+    if high_now and current_price and close_prev is not None and high_prev is not None:
+        stall_ratio = MOMENTUM_STALL_PCT / 100.0
+        near_high = (high_now - current_price) / high_now <= stall_ratio
+        not_advancing = current_price <= close_prev and high_now <= high_prev * (1 + stall_ratio)
+        if near_high and not_advancing:
+            signals.append(
+                {
+                    "code": "MOMENTUM_FADE",
+                    "confidence": 0.65,
+                    "detail": f"stall near high {high_now:.2f}",
+                    "priority": 3,
+                }
+            )
+
+    if days_held > MAX_HOLD_DAYS:
+        signals.append(
+            {
+                "code": "TIME_STOP",
+                "confidence": 0.7,
+                "detail": f"days_held={days_held} > {MAX_HOLD_DAYS}",
+                "priority": 4,
+            }
+        )
+
+    if gain_pct >= PROFIT_TARGET_PCT:
+        signals.append(
+            {
+                "code": "PROFIT_TARGET_HIT",
+                "confidence": 0.6,
+                "detail": f"gain_pct={gain_pct:.2f} >= {PROFIT_TARGET_PCT:.2f}",
+                "priority": 5,
+            }
+        )
+
+    if risk_score is not None and risk_score >= RISK_OFF_SCORE_CUTOFF:
+        signals.append(
+            {
+                "code": "RISK_OFF",
+                "confidence": 0.8,
+                "detail": f"risk_score={risk_score:.2f}",
+                "priority": 2,
+            }
+        )
+
+    return signals
+
+
+def _select_primary_exit_signal(signals: list[dict]) -> dict | None:
+    if not signals:
+        return None
+    return sorted(
+        signals,
+        key=lambda item: (item.get("priority", 999), -float(item.get("confidence", 0))),
+    )[0]
+
+
+def _signals_from_legacy_reasons(reasons: list[str]) -> list[dict]:
+    if not reasons:
+        return []
+    detail = "; ".join(reasons)
+    return [
+        {
+            "code": "SIGNAL_REVERSAL",
+            "confidence": 0.55,
+            "detail": detail,
+            "priority": 3,
+        }
+    ]
+
+
+def _build_exit_snapshot(
+    position,
+    indicators: dict | None,
+    exit_signals: list[dict] | None,
+    trail_pct: float | None,
+    risk_score: float | None,
+) -> dict:
+    indicators = indicators or {}
+    entry_price = _safe_float(getattr(position, "avg_entry_price", 0) or 0) or 0.0
+    current_price = _safe_float(indicators.get("close"))
+    if current_price is None:
+        current_price = _safe_float(getattr(position, "live_price", None))
+    if current_price is None:
+        current_price = _safe_float(getattr(position, "current_price", entry_price))
+    current_price = current_price or 0.0
+
+    gain_pct = (current_price - entry_price) / entry_price * 100 if entry_price else 0.0
+    days_held = calculate_days_held(position)
+
+    max_runup_pct = None
+    max_drawdown_pct = None
+    high_price = _safe_float(indicators.get("high"))
+    low_price = _safe_float(indicators.get("low"))
+    if entry_price and high_price is not None:
+        max_runup_pct = (high_price - entry_price) / entry_price * 100
+    if entry_price and low_price is not None:
+        max_drawdown_pct = (low_price - entry_price) / entry_price * 100
+
+    return {
+        "gain_pct": round(gain_pct, 4),
+        "days_held": int(days_held),
+        "max_runup_pct": None if max_runup_pct is None else round(max_runup_pct, 4),
+        "max_drawdown_pct": None if max_drawdown_pct is None else round(max_drawdown_pct, 4),
+        "signals": list(exit_signals or []),
+        "trail_pct": None if trail_pct is None else float(trail_pct),
+        "risk_score": None if risk_score is None else float(risk_score),
+    }
 
 
 def apply_debug_overrides(symbol: str, indicators: dict, position, state: dict) -> None:
@@ -2093,14 +2353,14 @@ def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> Non
         increment_metric("api_errors")
 
 
-def manage_trailing_stop(position):
+def manage_trailing_stop(position, indicators: dict | None = None, exit_signals: list[dict] | None = None):
     symbol = position.symbol
     logger.info(f"Evaluating trailing stop for {symbol}")
     if symbol.upper() == "ARQQ":
         # Explicit log entry requested to verify ARQQ trailing stop evaluation
         logger.info("Evaluating trailing stop for ARQQ")
     qty = position.qty
-    logger.info(f"Evaluating trailing stop for {symbol} – qty: {qty}")
+    logger.info(f"Evaluating trailing stop for {symbol} - qty: {qty}")
     entry = float(position.avg_entry_price)
     current = float(getattr(position, "live_price", position.current_price))
     gain_pct = (current - entry) / entry * 100 if entry else 0
@@ -2187,11 +2447,20 @@ def manage_trailing_stop(position):
         getattr(trailing_order, "trail_percent", TRAIL_START_PERCENT) or TRAIL_START_PERCENT
     )
     days_held = calculate_days_held(position)
-    target_trail_pct, base_reason = compute_target_trail_pct(
-        gain_pct,
-        days_held,
-        current_trail_pct,
-    )
+    exit_intel_enabled = env_bool("MONITOR_ENABLE_EXIT_INTELLIGENCE", default=False)
+    if exit_intel_enabled:
+        target_trail_pct, reason_parts = _compute_target_trail_meta(
+            position,
+            indicators,
+            exit_signals,
+        )
+        reason_detail = "+".join(reason_parts) if reason_parts else "profit_tier"
+    else:
+        target_trail_pct, reason_detail = compute_target_trail_pct_legacy(
+            gain_pct,
+            days_held,
+            current_trail_pct,
+        )
     effective_target = min(current_trail_pct, target_trail_pct)
 
     now_utc = datetime.now(timezone.utc)
@@ -2262,7 +2531,6 @@ def manage_trailing_stop(position):
             return
 
     try:
-        reason_detail = base_reason
         if low_signal_tighten:
             reason_detail = f"{reason_detail}+low_signal"
         payload = {
@@ -2341,9 +2609,9 @@ def manage_trailing_stop(position):
                 "dryrun": bool(getattr(new_order, "dryrun", False)),
             },
         )
-        if "breakeven_lock" in base_reason:
+        if "breakeven_lock" in reason_detail:
             increment_metric("breakeven_tightens")
-        if "time_decay" in base_reason:
+        if "time_decay" in reason_detail:
             increment_metric("time_decay_tightens")
         logger.info(
             "Adjusted trailing stop for %s from %.2f%% to %.2f%% (gain: %.2f%%).",
@@ -2432,7 +2700,15 @@ def check_pending_orders():
 # Execute sell orders
 
 
-def submit_sell_market_order(position, reason: str, reason_code: str, qty_override: Optional[int] = None):
+def submit_sell_market_order(
+    position,
+    reason: str,
+    reason_code: str,
+    qty_override: Optional[int] = None,
+    *,
+    exit_signals: list[dict] | None = None,
+    exit_snapshot: dict | None = None,
+):
     """Submit a limit sell order compatible with extended hours."""
     symbol = position.symbol
     qty = position.qty
@@ -2449,9 +2725,7 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
             logger.warning("DB_LOGGING_IMPORT_FAIL err=%s", exc)
             db_enabled = False
     partial_exit = False
-    if str(reason_code or "").lower() == "partial_gain":
-        partial_exit = True
-    elif qty_override is not None:
+    if qty_override is not None:
         try:
             partial_exit = float(qty_override) < float(qty)
         except Exception:
@@ -2530,6 +2804,8 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
                 raw={
                     "reason": reason,
                     "reason_code": reason_code,
+                    "exit_reason_code": reason_code,
+                    "exit_reason_detail": reason,
                     "limit_price": exit_price,
                     "qty": order_qty,
                     "side": "sell",
@@ -2540,6 +2816,8 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
                     "entry_time": entry_time,
                     "partial": partial_exit,
                     "dryrun": is_dryrun,
+                    "exit_signals": list(exit_signals or []),
+                    "exit_snapshot": exit_snapshot,
                 },
             )
         log_exit_submit(symbol, order_qty, "limit", reason_code)
@@ -2572,6 +2850,8 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
                 raw={
                     "reason": reason,
                     "reason_code": reason_code,
+                    "exit_reason_code": reason_code,
+                    "exit_reason_detail": reason,
                     "limit_price": exit_price,
                     "qty": order_qty,
                     "side": "sell",
@@ -2580,6 +2860,8 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
                     "entry_time": entry_time,
                     "partial": partial_exit,
                     "dryrun": is_dryrun,
+                    "exit_signals": list(exit_signals or []),
+                    "exit_snapshot": exit_snapshot,
                 },
             )
             if status_norm == "filled" and not partial_exit and not is_dryrun:
@@ -2624,6 +2906,10 @@ def submit_sell_market_order(position, reason: str, reason_code: str, qty_overri
                     "order_type": "limit",
                     "reason": reason,
                     "reason_code": reason_code,
+                    "exit_reason_code": reason_code,
+                    "exit_reason_detail": reason,
+                    "exit_signals": list(exit_signals or []),
+                    "exit_snapshot": exit_snapshot,
                 }
                 if db_module is not None:
                     try:
@@ -2712,13 +2998,19 @@ def process_positions_cycle():
                 pass
         days_held = calculate_days_held(position)
         logger.info("%s held for %d days", symbol, days_held)
+        exit_intel_enabled = env_bool("MONITOR_ENABLE_EXIT_INTELLIGENCE", default=False)
         if days_held >= MAX_HOLD_DAYS:
             if has_pending_sell_order(symbol):
                 logger.info("Sell order already pending for %s", symbol)
                 continue
 
             trailing_order = get_trailing_stop_order(symbol)
+            trail_pct = None
             if trailing_order:
+                try:
+                    trail_pct = float(getattr(trailing_order, "trail_percent", None))
+                except Exception:
+                    trail_pct = None
                 try:
                     cancel_order_safe(trailing_order.id, symbol, reason="max_hold_exit")
                     logger.info(
@@ -2730,7 +3022,39 @@ def process_positions_cycle():
                         "Failed to cancel trailing stop for %s: %s", symbol, e
                     )
             increment_metric("exits_max_hold")
-            submit_sell_market_order(position, reason=f"Max Hold {days_held}d", reason_code="max_hold")
+            exit_signals = None
+            exit_snapshot = None
+            if exit_intel_enabled:
+                exit_signals = evaluate_exit_signals(position, {}, datetime.now(timezone.utc))
+                if not exit_signals:
+                    exit_signals = [
+                        {
+                            "code": "TIME_STOP",
+                            "confidence": 0.7,
+                            "detail": f"days_held={days_held} > {MAX_HOLD_DAYS}",
+                            "priority": 4,
+                        }
+                    ]
+                primary_signal = _select_primary_exit_signal(exit_signals) or exit_signals[0]
+                reason_detail = str(primary_signal.get("detail", ""))
+                reason_code = str(primary_signal.get("code", "TIME_STOP"))
+                exit_snapshot = _build_exit_snapshot(
+                    position,
+                    {},
+                    exit_signals,
+                    trail_pct,
+                    _extract_risk_score(position, {}),
+                )
+            else:
+                reason_detail = f"Max Hold {days_held}d"
+                reason_code = "max_hold"
+            submit_sell_market_order(
+                position,
+                reason=reason_detail,
+                reason_code=reason_code,
+                exit_signals=exit_signals,
+                exit_snapshot=exit_snapshot,
+            )
             if symbol in PARTIAL_EXIT_TAKEN:
                 PARTIAL_EXIT_TAKEN.pop(symbol, None)
                 _save_partial_state(PARTIAL_EXIT_TAKEN)
@@ -2768,49 +3092,136 @@ def process_positions_cycle():
         entry_price = float(position.avg_entry_price)
         gain_pct = (indicators["close"] - entry_price) / entry_price * 100 if entry_price else 0
 
+        partial_trigger = PROFIT_TARGET_PCT if exit_intel_enabled else PARTIAL_GAIN_THRESHOLD
         if (
-            gain_pct >= PARTIAL_GAIN_THRESHOLD
+            gain_pct >= partial_trigger
             and not PARTIAL_EXIT_TAKEN.get(symbol)
             and not has_pending_sell_order(symbol)
         ):
             trailing_order = get_trailing_stop_order(symbol)
+            trail_pct = None
             if trailing_order:
+                try:
+                    trail_pct = float(getattr(trailing_order, "trail_percent", None))
+                except Exception:
+                    trail_pct = None
                 cancel_order_safe(trailing_order.id, symbol, reason="partial_exit")
             half_qty = max(1, int(float(position.qty) / 2))
+            exit_signals = None
+            exit_snapshot = None
+            if exit_intel_enabled:
+                exit_signals = evaluate_exit_signals(position, indicators, datetime.now(timezone.utc))
+                if not any(signal.get("code") == "PROFIT_TARGET_HIT" for signal in exit_signals):
+                    exit_signals.append(
+                        {
+                            "code": "PROFIT_TARGET_HIT",
+                            "confidence": 0.6,
+                            "detail": f"gain_pct={gain_pct:.2f} >= {partial_trigger:.2f}",
+                            "priority": 5,
+                        }
+                    )
+                primary_signal = _select_primary_exit_signal(exit_signals) or exit_signals[0]
+                reason_detail = str(primary_signal.get("detail", ""))
+                reason_code = str(primary_signal.get("code", "PROFIT_TARGET_HIT"))
+                exit_snapshot = _build_exit_snapshot(
+                    position,
+                    indicators,
+                    exit_signals,
+                    trail_pct,
+                    _extract_risk_score(position, indicators),
+                )
+            else:
+                reason_detail = f"Partial exit at +{PARTIAL_GAIN_THRESHOLD:.0f}% gain"
+                reason_code = "partial_gain"
             submit_sell_market_order(
                 position,
-                reason=f"Partial exit at +{PARTIAL_GAIN_THRESHOLD:.0f}% gain",
-                reason_code="partial_gain",
+                reason=reason_detail,
+                reason_code=reason_code,
                 qty_override=half_qty,
+                exit_signals=exit_signals,
+                exit_snapshot=exit_snapshot,
             )
             PARTIAL_EXIT_TAKEN[symbol] = True
             _save_partial_state(PARTIAL_EXIT_TAKEN)
             logger.info("Partial exit recorded for %s; awaiting trailing re-attachment.", symbol)
             continue
 
-        reasons = check_sell_signal(symbol, indicators)
-        if reasons:
-            if has_pending_sell_order(symbol):
-                logger.info("Sell order already pending for %s", symbol)
-                continue
-
-            trailing_order = get_trailing_stop_order(symbol)
-            if trailing_order:
-                try:
-                    cancel_order_safe(trailing_order.id, symbol, reason="signal_exit")
-                except Exception as e:
-                    logger.error(
-                        "Failed to cancel trailing stop for %s: %s", symbol, e
+        if exit_intel_enabled:
+            exit_signals = evaluate_exit_signals(position, indicators, datetime.now(timezone.utc))
+            actionable_signals = [
+                signal
+                for signal in exit_signals
+                if signal.get("code") not in {"PROFIT_TARGET_HIT", "TIME_STOP"}
+            ]
+            if actionable_signals:
+                if has_pending_sell_order(symbol):
+                    logger.info("Sell order already pending for %s", symbol)
+                else:
+                    trailing_order = get_trailing_stop_order(symbol)
+                    trail_pct = None
+                    if trailing_order:
+                        try:
+                            trail_pct = float(getattr(trailing_order, "trail_percent", None))
+                        except Exception:
+                            trail_pct = None
+                        try:
+                            cancel_order_safe(trailing_order.id, symbol, reason="signal_exit")
+                        except Exception as e:
+                            logger.error(
+                                "Failed to cancel trailing stop for %s: %s", symbol, e
+                            )
+                    primary_signal = _select_primary_exit_signal(actionable_signals) or actionable_signals[0]
+                    exit_snapshot = _build_exit_snapshot(
+                        position,
+                        indicators,
+                        actionable_signals,
+                        trail_pct,
+                        _extract_risk_score(position, indicators),
                     )
-            reason_text = "; ".join(reasons)
-            increment_metric("exits_signal")
-            submit_sell_market_order(position, reason=reason_text, reason_code="monitor")
-            if symbol in PARTIAL_EXIT_TAKEN:
-                PARTIAL_EXIT_TAKEN.pop(symbol, None)
-                _save_partial_state(PARTIAL_EXIT_TAKEN)
+                    increment_metric("exits_signal")
+                    submit_sell_market_order(
+                        position,
+                        reason=str(primary_signal.get("detail", "")),
+                        reason_code=str(primary_signal.get("code", "SIGNAL_REVERSAL")),
+                        exit_signals=actionable_signals,
+                        exit_snapshot=exit_snapshot,
+                    )
+                    if symbol in PARTIAL_EXIT_TAKEN:
+                        PARTIAL_EXIT_TAKEN.pop(symbol, None)
+                        _save_partial_state(PARTIAL_EXIT_TAKEN)
+            else:
+                logger.info(f"No sell signal for {symbol}; managing trailing stop.")
+                manage_trailing_stop(position, indicators=indicators, exit_signals=exit_signals)
         else:
-            logger.info(f"No sell signal for {symbol}; managing trailing stop.")
-            manage_trailing_stop(position)
+            reasons = check_sell_signal(symbol, indicators)
+            if reasons:
+                if has_pending_sell_order(symbol):
+                    logger.info("Sell order already pending for %s", symbol)
+                    continue
+
+                trailing_order = get_trailing_stop_order(symbol)
+                if trailing_order:
+                    try:
+                        cancel_order_safe(trailing_order.id, symbol, reason="signal_exit")
+                    except Exception as e:
+                        logger.error(
+                            "Failed to cancel trailing stop for %s: %s", symbol, e
+                        )
+                reason_text = "; ".join(reasons)
+                increment_metric("exits_signal")
+                submit_sell_market_order(
+                    position,
+                    reason=reason_text,
+                    reason_code="monitor",
+                    exit_signals=None,
+                    exit_snapshot=None,
+                )
+                if symbol in PARTIAL_EXIT_TAKEN:
+                    PARTIAL_EXIT_TAKEN.pop(symbol, None)
+                    _save_partial_state(PARTIAL_EXIT_TAKEN)
+            else:
+                logger.info(f"No sell signal for {symbol}; managing trailing stop.")
+                manage_trailing_stop(position)
 
     return positions
 

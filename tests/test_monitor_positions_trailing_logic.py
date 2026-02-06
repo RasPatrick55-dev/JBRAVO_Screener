@@ -27,7 +27,7 @@ class TestMonitorTrailingLogic(unittest.TestCase):
         sys.modules.pop("scripts.monitor_positions", None)
 
     def test_profit_tier_default(self):
-        target, reason = self.monitor.compute_target_trail_pct(
+        target, reason = self.monitor.compute_target_trail_pct_legacy(
             gain_pct=1.0,
             days_held=1,
             current_trail_pct=self.monitor.TRAIL_START_PERCENT,
@@ -37,7 +37,7 @@ class TestMonitorTrailingLogic(unittest.TestCase):
 
     def test_breakeven_tighten(self):
         with mock.patch.dict(os.environ, {"MONITOR_ENABLE_BREAKEVEN_TIGHTEN": "true"}):
-            target, reason = self.monitor.compute_target_trail_pct(
+            target, reason = self.monitor.compute_target_trail_pct_legacy(
                 gain_pct=2.5,
                 days_held=1,
                 current_trail_pct=3.0,
@@ -47,7 +47,7 @@ class TestMonitorTrailingLogic(unittest.TestCase):
 
     def test_time_decay_tighten(self):
         with mock.patch.dict(os.environ, {"MONITOR_ENABLE_TIMEDECAY_TIGHTEN": "true"}):
-            target, reason = self.monitor.compute_target_trail_pct(
+            target, reason = self.monitor.compute_target_trail_pct_legacy(
                 gain_pct=1.0,
                 days_held=5,
                 current_trail_pct=None,
@@ -56,7 +56,7 @@ class TestMonitorTrailingLogic(unittest.TestCase):
         self.assertIn("time_decay", reason)
 
     def test_ratchet_only(self):
-        target, reason = self.monitor.compute_target_trail_pct(
+        target, reason = self.monitor.compute_target_trail_pct_legacy(
             gain_pct=1.0,
             days_held=1,
             current_trail_pct=1.5,
