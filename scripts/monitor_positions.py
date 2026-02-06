@@ -120,6 +120,7 @@ METRIC_KEYS = [
     "stop_attach_failed",
     "stop_coverage_pct",
     "stop_tighten_skipped",
+    "stop_tighten_cooldown",
     "breakeven_tightens",
     "time_decay_tightens",
     "live_price_ok",
@@ -319,6 +320,39 @@ def order_attr_str(order, attr_names: tuple[str, ...]) -> str:
         if text:
             return text
     return ""
+
+
+def _order_timestamp(order) -> datetime | None:
+    for field in ("submitted_at", "created_at", "created_at_utc", "updated_at", "updated_at_utc"):
+        value = getattr(order, field, None)
+        if not value:
+            continue
+        if isinstance(value, datetime):
+            return value
+        try:
+            ts = pd.to_datetime(value, utc=True)
+        except Exception:
+            continue
+        if ts is None or getattr(ts, "to_pydatetime", None) is None:
+            continue
+        if pd.isna(ts):
+            continue
+        try:
+            return ts.to_pydatetime()
+        except Exception:
+            continue
+    return None
+
+
+def _order_sort_key(order) -> tuple[datetime, str]:
+    ts = _order_timestamp(order)
+    if ts is None:
+        ts = datetime.min.replace(tzinfo=timezone.utc)
+    elif ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    else:
+        ts = ts.astimezone(timezone.utc)
+    return ts, str(getattr(order, "id", "") or "")
 
 
 def get_protective_trailing_stop_for_symbol(symbol: str, orders: list) -> object | None:
@@ -1043,6 +1077,7 @@ DEBUG_STATE: dict[str, object] = {
 }
 
 LOW_SIGNAL_STOP_COOLDOWN_PATH = Path(BASE_DIR) / "data" / "monitor_stop_cooldowns.json"
+TIGHTEN_COOLDOWN_PATH = Path(BASE_DIR) / "data" / "tighten_cooldowns.json"
 
 
 def _load_stop_cooldowns() -> dict[str, str]:
@@ -1059,7 +1094,22 @@ def _save_stop_cooldowns(state: dict[str, str]) -> None:
         logger.error("Unable to persist stop cooldowns: %s", exc)
 
 
+def _load_tighten_cooldowns() -> dict[str, str]:
+    try:
+        return json.loads(TIGHTEN_COOLDOWN_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_tighten_cooldowns(state: dict[str, str]) -> None:
+    try:
+        TIGHTEN_COOLDOWN_PATH.write_text(json.dumps(state, indent=2))
+    except Exception as exc:
+        logger.error("Unable to persist tighten cooldowns: %s", exc)
+
+
 LOW_SIGNAL_STOP_COOLDOWNS = _load_stop_cooldowns()
+TIGHTEN_COOLDOWNS = _load_tighten_cooldowns()
 STOP_ATTACH_COOLDOWN_HOURS = int(os.getenv("STOP_ATTACH_COOLDOWN_HOURS", "24"))
 
 
@@ -1155,6 +1205,8 @@ RSI_REVERSAL_THRESHOLD = float(os.getenv("RSI_REVERSAL_THRESHOLD", "50"))
 RISK_OFF_SCORE_CUTOFF = float(os.getenv("RISK_OFF_SCORE_CUTOFF", "0.7"))
 EXIT_SIGNAL_TIGHTEN_CONFIDENCE = float(os.getenv("EXIT_SIGNAL_TIGHTEN_CONFIDENCE", "0.7"))
 EXIT_SIGNAL_TIGHTEN_DELTA = float(os.getenv("EXIT_SIGNAL_TIGHTEN_DELTA", "0.5"))
+TIGHTEN_COOLDOWN_MINUTES = int(os.getenv("MONITOR_TIGHTEN_COOLDOWN_MINUTES", "15"))
+TIGHTEN_COOLDOWN_EPS_PCT = float(os.getenv("MONITOR_TIGHTEN_COOLDOWN_EPS_PCT", "0.05"))
 RSI_REVERSAL_DROP = float(os.getenv("RSI_REVERSAL_DROP", "20"))
 RSI_REVERSAL_FLOOR = float(os.getenv("RSI_REVERSAL_FLOOR", "50"))
 LOW_SIGNAL_GAIN_THRESHOLD = float(os.getenv("LOW_SIGNAL_GAIN_THRESHOLD", "4"))
@@ -1192,6 +1244,11 @@ def _is_low_signal_cooldown(symbol: str, now: datetime) -> bool:
 def _mark_low_signal_cooldown(symbol: str, now: datetime) -> None:
     LOW_SIGNAL_STOP_COOLDOWNS[symbol] = now.isoformat()
     _save_stop_cooldowns(LOW_SIGNAL_STOP_COOLDOWNS)
+
+
+def _mark_tighten_cooldown(symbol: str, now: datetime) -> None:
+    TIGHTEN_COOLDOWNS[symbol] = now.isoformat()
+    _save_tighten_cooldowns(TIGHTEN_COOLDOWNS)
 
 
 def compute_target_trail_pct_legacy(
@@ -2602,7 +2659,8 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
             LOW_SIGNAL_STOP_COOLDOWNS.get(symbol),
         )
 
-    if effective_target >= current_trail_pct - 0.05:
+    tighten_eps = max(0.0, float(TIGHTEN_COOLDOWN_EPS_PCT))
+    if effective_target >= current_trail_pct - tighten_eps:
         logger.info(
             "No trailing stop adjustment needed for %s (gain: %.2f%%; trail %.2f%%)",
             symbol,
@@ -2643,6 +2701,25 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
                 json.dumps(payload, sort_keys=True),
             )
             increment_metric("stop_tighten_skipped")
+            return
+
+    cooldown_minutes = max(0, int(TIGHTEN_COOLDOWN_MINUTES))
+    last_tighten = _parse_iso_datetime(TIGHTEN_COOLDOWNS.get(symbol))
+    if last_tighten is not None:
+        if last_tighten.tzinfo is None:
+            last_tighten = last_tighten.replace(tzinfo=timezone.utc)
+        minutes_since = (now_utc - last_tighten).total_seconds() / 60.0
+        if minutes_since < cooldown_minutes:
+            logger.info(
+                "STOP_TIGHTEN_COOLDOWN symbol=%s last=%s minutes_since=%.2f cooldown_min=%s target=%.4f current=%.4f",
+                symbol,
+                last_tighten.isoformat(),
+                minutes_since,
+                cooldown_minutes,
+                effective_target,
+                current_trail_pct,
+            )
+            increment_metric("stop_tighten_cooldown")
             return
 
     try:
@@ -2731,6 +2808,7 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
                 "dryrun": bool(getattr(new_order, "dryrun", False)),
             },
         )
+        new_order_id = str(getattr(new_order, "id", "") or "") or None
         if "breakeven_lock" in reason_detail:
             increment_metric("breakeven_tightens")
         if "time_decay" in reason_detail:
@@ -2742,9 +2820,10 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
             effective_target,
             gain_pct,
         )
-        log_trailing_stop_event(symbol, effective_target, None, "adjusted")
+        log_trailing_stop_event(symbol, effective_target, new_order_id, "adjusted")
         if low_signal_tighten:
             _mark_low_signal_cooldown(symbol, now_utc)
+        _mark_tighten_cooldown(symbol, now_utc)
     except Exception as e:
         logger.error("Failed to adjust trailing stop for %s: %s", symbol, e)
         try:
@@ -2764,48 +2843,64 @@ def check_pending_orders():
         logger.info(
             f"Fetched open orders for all symbols: {len(open_orders)} found.")
 
-        trailing_stops = [
-            o
-            for o in open_orders
-            if order_attr_str(o, ("order_type", "type")) == "trailing_stop"
-        ]
-        unique_symbols = set()
-        for order in trailing_stops:
-            if order.symbol in unique_symbols:
+        trailing_by_key: dict[tuple[str, str], list] = {}
+        for order in open_orders:
+            if order_attr_str(order, ("order_type", "type")) != "trailing_stop":
+                continue
+            side = order_attr_str(order, ("side",))
+            if side not in {"sell", "buy"}:
+                continue
+            symbol = getattr(order, "symbol", "")
+            if not symbol:
+                continue
+            trailing_by_key.setdefault((symbol, side), []).append(order)
+
+        for (symbol, side), orders in trailing_by_key.items():
+            if len(orders) <= 1:
+                continue
+            keep_order = max(orders, key=_order_sort_key)
+            keep_id = str(getattr(keep_order, "id", "") or "") or None
+            for order in orders:
+                if order is keep_order:
+                    continue
+                cancel_id = str(getattr(order, "id", "") or "") or None
                 try:
                     broker_cancel_order(
                         order.id,
                         {
                             "symbol": getattr(order, "symbol", None),
                             "order_id": getattr(order, "id", None),
-                            "reason": "redundant_trailing_stop",
+                            "reason": "redundant_cleanup",
+                            "keep_id": keep_id,
                         },
                     )
                     db_log_event(
                         event_type=MONITOR_DB_EVENT_TYPES["trail_cancel"],
-                        symbol=getattr(order, "symbol", "") or "",
+                        symbol=symbol,
                         qty=getattr(order, "qty", None),
-                        order_id=str(getattr(order, "id", "") or "") or None,
+                        order_id=cancel_id,
                         status="canceled",
                         event_time=datetime.now(timezone.utc),
                         raw={
-                            "reason": "redundant_trailing_stop",
+                            "reason": "redundant_cleanup",
                             "order_type": "trailing_stop",
+                            "keep_id": keep_id,
                             "dryrun": env_bool("MONITOR_DISABLE_SELLS", default=False),
                         },
                     )
                     logger.info(
-                        f"Cancelled redundant trailing stop {order.id} for {order.symbol}"
+                        "TRAIL_REDUNDANT_CANCEL symbol=%s keep=%s cancel=%s reason=duplicate_open_trailing_stop",
+                        symbol,
+                        keep_id,
+                        cancel_id,
                     )
                 except Exception as exc:
                     logger.error(
                         "Failed to cancel trailing stop %s for %s: %s",
-                        order.id,
-                        order.symbol,
+                        getattr(order, "id", None),
+                        symbol,
                         exc,
                     )
-            else:
-                unique_symbols.add(order.symbol)
 
         for order in open_orders:
             try:

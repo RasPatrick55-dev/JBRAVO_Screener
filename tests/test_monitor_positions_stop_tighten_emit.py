@@ -49,13 +49,20 @@ class TestMonitorStopTightenEmit(unittest.TestCase):
             stop_price=99.0,
         )
 
-        with mock.patch.dict(os.environ, {"MONITOR_ENABLE_BREAKEVEN_TIGHTEN": "true"}), \
-            mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]), \
-            mock.patch.object(monitor, "cancel_order_safe", return_value=None), \
-            mock.patch.object(monitor, "broker_submit_order", return_value=SimpleNamespace(id="DRYRUN")), \
-            mock.patch.object(monitor, "_persist_metrics", return_value=None):
-            with self.assertLogs(monitor.logger, level="INFO") as log_ctx:
-                monitor.manage_trailing_stop(position)
+        original_cooldowns = dict(monitor.TIGHTEN_COOLDOWNS)
+        monitor.TIGHTEN_COOLDOWNS.clear()
+        try:
+            with mock.patch.dict(os.environ, {"MONITOR_ENABLE_BREAKEVEN_TIGHTEN": "true"}), \
+                mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]), \
+                mock.patch.object(monitor, "cancel_order_safe", return_value=True), \
+                mock.patch.object(monitor, "broker_submit_order", return_value=SimpleNamespace(id="DRYRUN")), \
+                mock.patch.object(monitor, "_persist_metrics", return_value=None), \
+                mock.patch.object(monitor, "_save_tighten_cooldowns", return_value=None):
+                with self.assertLogs(monitor.logger, level="INFO") as log_ctx:
+                    monitor.manage_trailing_stop(position)
+        finally:
+            monitor.TIGHTEN_COOLDOWNS.clear()
+            monitor.TIGHTEN_COOLDOWNS.update(original_cooldowns)
 
         tighten_line = next(
             (

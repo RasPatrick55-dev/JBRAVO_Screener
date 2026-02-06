@@ -3,13 +3,13 @@ import os
 import sys
 import types
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from alpaca.trading.enums import OrderSide, OrderStatus, OrderType
 
 
-class TestMonitorTightenReservedQty(unittest.TestCase):
+class TestMonitorTightenCooldown(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._orig_env = os.environ.copy()
@@ -18,6 +18,7 @@ class TestMonitorTightenReservedQty(unittest.TestCase):
         os.environ["APCA_API_BASE_URL"] = "https://paper-api.alpaca.markets"
         os.environ["APCA_DATA_API_BASE_URL"] = "https://data.alpaca.markets"
         os.environ["ALPACA_DATA_FEED"] = "iex"
+        os.environ["MONITOR_TIGHTEN_COOLDOWN_MINUTES"] = "15"
 
         sys.modules.pop("scripts.monitor_positions", None)
         cls.monitor = importlib.import_module("scripts.monitor_positions")
@@ -28,7 +29,7 @@ class TestMonitorTightenReservedQty(unittest.TestCase):
         os.environ.update(cls._orig_env)
         sys.modules.pop("scripts.monitor_positions", None)
 
-    def test_tighten_with_reserved_qty(self):
+    def test_tighten_cooldown_blocks_adjust(self):
         position = types.SimpleNamespace(
             symbol="AAPL",
             qty=5,
@@ -50,53 +51,33 @@ class TestMonitorTightenReservedQty(unittest.TestCase):
             stop_price=None,
         )
 
-        cancel_mock = mock.Mock(return_value=True)
-        submit_mock = mock.Mock(
-            return_value=types.SimpleNamespace(
-                id="OID-2",
-                status="submitted",
-                dryrun=False,
-            )
-        )
-        parent = mock.Mock()
-        parent.attach_mock(cancel_mock, "cancel")
-        parent.attach_mock(submit_mock, "submit")
-
+        now_utc = datetime.now(timezone.utc)
         original_cooldowns = dict(self.monitor.TIGHTEN_COOLDOWNS)
         self.monitor.TIGHTEN_COOLDOWNS.clear()
+        self.monitor.TIGHTEN_COOLDOWNS["AAPL"] = (now_utc - timedelta(minutes=5)).isoformat()
+
+        cancel_mock = mock.Mock(return_value=True)
+        metric_mock = mock.Mock()
+
         try:
             with mock.patch.object(
                 self.monitor.trading_client, "get_orders", return_value=[trailing_order]
             ), mock.patch.object(
-                self.monitor, "broker_cancel_order", cancel_mock
+                self.monitor, "cancel_order_safe", cancel_mock
             ), mock.patch.object(
-                self.monitor, "broker_submit_order", submit_mock
-            ), mock.patch.object(
-                self.monitor, "log_trailing_stop_event"
-            ) as log_attach, mock.patch.object(
-                self.monitor, "_save_tighten_cooldowns"
-            ):
+                self.monitor, "increment_metric", metric_mock
+            ), self.assertLogs(self.monitor.logger, level="INFO") as log_ctx:
                 self.monitor.manage_trailing_stop(position)
         finally:
             self.monitor.TIGHTEN_COOLDOWNS.clear()
             self.monitor.TIGHTEN_COOLDOWNS.update(original_cooldowns)
 
-        self.assertTrue(cancel_mock.called)
-        self.assertTrue(submit_mock.called)
-        call_names = [call_item[0] for call_item in parent.mock_calls]
-        self.assertIn("cancel", call_names)
-        self.assertIn("submit", call_names)
-        self.assertLess(call_names.index("cancel"), call_names.index("submit"))
-
-        submit_args = submit_mock.call_args[0]
-        request = submit_args[0]
-        self.assertEqual(int(float(getattr(request, "qty", 0))), 5)
-        self.assertTrue(log_attach.called)
+        self.assertFalse(cancel_mock.called)
         self.assertTrue(
-            any(
-                call_args[0][2] == "OID-2" and call_args[0][3] == "adjusted"
-                for call_args in log_attach.call_args_list
-            )
+            any("STOP_TIGHTEN_COOLDOWN" in message for message in log_ctx.output)
+        )
+        self.assertTrue(
+            any(call_args[0][0] == "stop_tighten_cooldown" for call_args in metric_mock.call_args_list)
         )
 
 

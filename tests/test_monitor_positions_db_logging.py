@@ -98,17 +98,24 @@ class TestMonitorDbLogging(unittest.TestCase):
             stop_price=99.0,
         )
 
-        with mock.patch.object(monitor, "db_logging_enabled", return_value=True), \
-            mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event, \
-            mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]), \
-            mock.patch.object(monitor, "cancel_order_safe", return_value=None), \
-            mock.patch.object(
-                monitor,
-                "broker_submit_order",
-                return_value=SimpleNamespace(id="TS-2", status="accepted", dryrun=False),
-            ), \
-            mock.patch.object(monitor, "_persist_metrics", return_value=None):
-            monitor.manage_trailing_stop(position)
+        original_cooldowns = dict(monitor.TIGHTEN_COOLDOWNS)
+        monitor.TIGHTEN_COOLDOWNS.clear()
+        try:
+            with mock.patch.object(monitor, "db_logging_enabled", return_value=True), \
+                mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event, \
+                mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]), \
+                mock.patch.object(monitor, "cancel_order_safe", return_value=True), \
+                mock.patch.object(
+                    monitor,
+                    "broker_submit_order",
+                    return_value=SimpleNamespace(id="TS-2", status="accepted", dryrun=False),
+                ), \
+                mock.patch.object(monitor, "_persist_metrics", return_value=None), \
+                mock.patch.object(monitor, "_save_tighten_cooldowns", return_value=None):
+                monitor.manage_trailing_stop(position)
+        finally:
+            monitor.TIGHTEN_COOLDOWNS.clear()
+            monitor.TIGHTEN_COOLDOWNS.update(original_cooldowns)
 
         event_types = [call.kwargs.get("event_type") for call in insert_event.call_args_list]
         self.assertIn(monitor.MONITOR_DB_EVENT_TYPES["trail_cancel"], event_types)
