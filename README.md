@@ -62,6 +62,10 @@ touch /var/www/raspatrick_pythonanywhere_com_wsgi.py
 Set `VITE_LOGO_DEV_API_KEY` in `frontend/.env` before building. Keep
 `frontend/.env` local (it is ignored by git).
 
+For the live Positions tab integration (Alpaca trailing-stop mapping, activity-based days-held, captured P/L formula, and monitoring logs behavior), see:
+
+- `docs/deployment/positions_tab_live_data.md`
+
 ## Dashboard Metrics
 
 The dashboard surfaces executor state in the Ops Summary. Metrics map to the executor JSON as follows:

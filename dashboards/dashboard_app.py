@@ -28,7 +28,7 @@ import inspect
 import pytz
 import re
 import urllib.request
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 from flask import Response, abort, jsonify, send_from_directory, request
@@ -553,6 +553,573 @@ def _logo_url_for_symbol(symbol: str) -> Optional[str]:
     return f"/api/logos/{safe_symbol}.png"
 
 
+DEFAULT_TRAIL_PERCENT = 3.0
+
+_MONITOR_LOG_LINE_PATTERNS = (
+    re.compile(
+        r"^\[(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,\d+)?\]\s*(?:\[(\w+)\])?\s*:?\s*(.*)$"
+    ),
+    re.compile(
+        r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,\d+)?(?:\s+-\s+(\w+)\s+-\s+)?\s*(?:\[(\w+)\])?\s*(.*)$"
+    ),
+)
+
+
+def _normalize_symbol(symbol: Any) -> str:
+    return str(symbol or "").strip().upper()
+
+
+def _days_held_from_timestamp(entry_time: Any) -> int:
+    if entry_time in (None, ""):
+        return 0
+    parsed = pd.to_datetime(entry_time, utc=True, errors="coerce")
+    if parsed is None or pd.isna(parsed):
+        return 0
+    try:
+        entry_dt = parsed.to_pydatetime()
+    except Exception:
+        return 0
+    if entry_dt.tzinfo is None:
+        entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - entry_dt.astimezone(timezone.utc)
+    if delta.total_seconds() <= 0:
+        return 0
+    return max(1, int(delta.total_seconds() // 86400))
+
+
+def _positions_summary(positions: list[dict[str, Any]]) -> dict[str, float]:
+    if not positions:
+        return {
+            "totalShares": 0.0,
+            "totalOpenPL": 0.0,
+            "avgDaysHeld": 0.0,
+            "totalCapturedPL": 0.0,
+        }
+
+    total_shares = 0.0
+    total_open_pl = 0.0
+    total_days = 0.0
+    total_captured_pl = 0.0
+
+    for position in positions:
+        shares = _to_float(position.get("qty"))
+        open_pl = _to_float(position.get("dollarPL"))
+        days_held = _to_float(position.get("daysHeld"))
+        captured_pl = _to_float(position.get("capturedPL"))
+        if shares is not None:
+            total_shares += shares
+        if open_pl is not None:
+            total_open_pl += open_pl
+        if days_held is not None:
+            total_days += days_held
+        if captured_pl is not None:
+            total_captured_pl += captured_pl
+
+    avg_days = total_days / len(positions) if positions else 0.0
+    return {
+        "totalShares": total_shares,
+        "totalOpenPL": total_open_pl,
+        "avgDaysHeld": avg_days,
+        "totalCapturedPL": total_captured_pl,
+    }
+
+
+def _position_db_metrics(symbols: list[str] | None = None) -> dict[str, dict[str, Any]]:
+    if not db.db_enabled():
+        return {}
+
+    normalized_symbols = sorted(
+        {_normalize_symbol(symbol) for symbol in (symbols or []) if _normalize_symbol(symbol)}
+    )
+    metrics: dict[str, dict[str, Any]] = {}
+
+    symbol_filter_sql = "AND symbol = ANY(%(symbols)s)" if normalized_symbols else ""
+    params = {"symbols": normalized_symbols} if normalized_symbols else None
+
+    open_rows = _db_fetch_all(
+        f"""
+        SELECT symbol, MIN(entry_time) AS earliest_entry
+        FROM trades
+        WHERE status = 'OPEN'
+          {symbol_filter_sql}
+        GROUP BY symbol
+        """,
+        params,
+    )
+    for row in open_rows:
+        symbol = _normalize_symbol(row.get("symbol"))
+        if not symbol:
+            continue
+        bucket = metrics.setdefault(symbol, {})
+        bucket["daysHeld"] = _days_held_from_timestamp(row.get("earliest_entry"))
+
+    closed_rows = _db_fetch_all(
+        f"""
+        SELECT symbol, SUM(COALESCE(realized_pnl, 0)) AS captured_pl
+        FROM trades
+        WHERE status = 'CLOSED'
+          {symbol_filter_sql}
+        GROUP BY symbol
+        """,
+        params,
+    )
+    for row in closed_rows:
+        symbol = _normalize_symbol(row.get("symbol"))
+        if not symbol:
+            continue
+        captured_pl = _to_float(row.get("captured_pl"))
+        if captured_pl is None:
+            continue
+        bucket = metrics.setdefault(symbol, {})
+        bucket["capturedPL"] = captured_pl
+
+    trail_rows = _db_fetch_all(
+        f"""
+        SELECT DISTINCT ON (symbol)
+            symbol,
+            event_time,
+            COALESCE(
+                NULLIF(COALESCE(raw, '{{}}'::jsonb)->>'trail_percent', ''),
+                NULLIF(COALESCE(raw, '{{}}'::jsonb)->>'trail_pct', ''),
+                NULLIF(COALESCE(raw, '{{}}'::jsonb)->>'trailPercent', '')
+            ) AS trail_percent,
+            COALESCE(
+                NULLIF(COALESCE(raw, '{{}}'::jsonb)->>'stop_price', ''),
+                NULLIF(COALESCE(raw, '{{}}'::jsonb)->>'stopPrice', ''),
+                NULLIF(COALESCE(raw, '{{}}'::jsonb)->>'trail_price', '')
+            ) AS stop_price
+        FROM order_events
+        WHERE (
+            COALESCE(raw, '{{}}'::jsonb) ? 'trail_percent'
+            OR COALESCE(raw, '{{}}'::jsonb) ? 'trail_pct'
+            OR COALESCE(raw, '{{}}'::jsonb) ? 'trailPercent'
+            OR COALESCE(raw, '{{}}'::jsonb) ? 'stop_price'
+            OR COALESCE(raw, '{{}}'::jsonb) ? 'stopPrice'
+            OR COALESCE(raw, '{{}}'::jsonb) ? 'trail_price'
+            OR event_type ILIKE 'TRAIL%%'
+            OR event_type ILIKE '%%STOP%%'
+        )
+        {f"AND symbol = ANY(%(symbols)s)" if normalized_symbols else ""}
+        ORDER BY symbol, event_time DESC NULLS LAST, event_id DESC
+        """,
+        params,
+    )
+    for row in trail_rows:
+        symbol = _normalize_symbol(row.get("symbol"))
+        if not symbol:
+            continue
+        bucket = metrics.setdefault(symbol, {})
+        trail_percent = _to_float(row.get("trail_percent"))
+        stop_price = _to_float(row.get("stop_price"))
+        if trail_percent is not None:
+            bucket["trailPercent"] = trail_percent
+        if stop_price is not None:
+            bucket["trailingStop"] = stop_price
+
+    return metrics
+
+
+def _enrich_positions_with_db_metrics(
+    positions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, float]]:
+    symbols = [_normalize_symbol(position.get("symbol")) for position in positions]
+    metrics_by_symbol = _position_db_metrics(symbols)
+
+    enriched: list[dict[str, Any]] = []
+    for position in positions:
+        symbol = _normalize_symbol(position.get("symbol"))
+        bucket = metrics_by_symbol.get(symbol, {})
+        qty = _to_float(position.get("qty"))
+        current_price = _to_float(position.get("currentPrice"))
+        entry_price = _to_float(position.get("entryPrice"))
+        base_price = current_price if current_price is not None else entry_price
+
+        existing_trail_percent = _to_float(position.get("trailPercent"))
+        existing_trailing_stop = _to_float(position.get("trailingStop"))
+
+        trail_percent = existing_trail_percent
+        if trail_percent is None:
+            trail_percent = _to_float(bucket.get("trailPercent"))
+        if trail_percent is None or trail_percent <= 0:
+            trail_percent = DEFAULT_TRAIL_PERCENT
+
+        trailing_stop = existing_trailing_stop
+        if trailing_stop is None:
+            trailing_stop = _to_float(bucket.get("trailingStop"))
+        if trailing_stop is None and base_price is not None:
+            trailing_stop = base_price * (1 - (trail_percent / 100.0))
+
+        # Captured P/L represents what this trade would realize if the trailing
+        # stop is triggered at the current stop price.
+        captured_pl = None
+        if trailing_stop is not None and entry_price is not None and qty is not None:
+            captured_pl = (trailing_stop - entry_price) * qty
+        if captured_pl is None:
+            captured_pl = _to_float(position.get("capturedPL"))
+        if captured_pl is None:
+            captured_pl = _to_float(bucket.get("capturedPL"))
+        if captured_pl is None:
+            captured_pl = 0.0
+
+        existing_days_held = _to_float(position.get("daysHeld"))
+        if existing_days_held is not None:
+            days_held = max(0, int(round(existing_days_held)))
+        else:
+            days_held = int(bucket.get("daysHeld") or 0)
+
+        enriched_row = dict(position)
+        enriched_row["qty"] = qty if qty is not None else position.get("qty")
+        enriched_row["daysHeld"] = days_held
+        enriched_row["trailingStop"] = trailing_stop
+        enriched_row["capturedPL"] = captured_pl
+        enriched_row["trailPercent"] = trail_percent
+        enriched.append(enriched_row)
+
+    return enriched, _positions_summary(enriched)
+
+
+def _parse_monitor_log_line(line: str) -> Optional[dict[str, str]]:
+    for index, pattern in enumerate(_MONITOR_LOG_LINE_PATTERNS):
+        match = pattern.match(line)
+        if not match:
+            continue
+        if index == 0:
+            date, time_text, level, message = match.groups()
+        else:
+            date, time_text, level_a, level_b, message = match.groups()
+            level = level_a or level_b
+        return {
+            "date": date,
+            "time": time_text,
+            "level": (level or "").strip(),
+            "message": (message or "").strip(),
+        }
+    return None
+
+
+def _format_monitor_timestamp(date_text: str, time_text: str) -> str:
+    try:
+        parsed = datetime.strptime(f"{date_text} {time_text}", "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        hour = parsed.strftime("%I").lstrip("0") or "0"
+        return f"{parsed.month}/{parsed.day}/{parsed.year}, {hour}:{parsed.strftime('%M')} {parsed.strftime('%p')} UTC"
+    except Exception:
+        return f"{date_text} {time_text} UTC"
+
+
+def _format_utc_datetime_for_monitor(value: datetime) -> str:
+    dt = value
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    hour = dt.strftime("%I").lstrip("0") or "0"
+    return f"{dt.month}/{dt.day}/{dt.year}, {hour}:{dt.strftime('%M')} {dt.strftime('%p')} UTC"
+
+
+def _coerce_datetime_utc(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    try:
+        parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    except Exception:
+        return None
+    if parsed is None or pd.isna(parsed):
+        return None
+    try:
+        converted = parsed.to_pydatetime()
+    except Exception:
+        return None
+    if converted.tzinfo is None:
+        return converted.replace(tzinfo=timezone.utc)
+    return converted.astimezone(timezone.utc)
+
+
+def _float_text(value: Optional[float], digits: int = 2) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.{digits}f}"
+
+
+def _monitor_log_type(level: str, message: str) -> str:
+    level_upper = (level or "").upper()
+    lower = message.lower()
+    if (
+        level_upper.startswith("WARN")
+        or level_upper.startswith("ERR")
+        or "warning" in lower
+        or "threshold" in lower
+        or "approach" in lower
+        or "fail" in lower
+        or "error" in lower
+    ):
+        return "warning"
+    if (
+        level_upper == "SUCCESS"
+        or "opened" in lower
+        or "updated" in lower
+        or "adjusted" in lower
+        or "submitted" in lower
+        or "attach" in lower
+    ):
+        return "success"
+    return "info"
+
+
+def _is_position_log_message(message: str) -> bool:
+    lower = (message or "").lower()
+    return any(
+        keyword in lower
+        for keyword in (
+            "trailing stop",
+            "trail_",
+            "trail ",
+            "position ",
+            "open position",
+            "stop_attach",
+            "alert",
+            "db_event_ok",
+            "db_event_fail",
+        )
+    )
+
+
+def _monitor_log_entries_from_text(text: str | None, limit: int = 80) -> list[dict[str, str]]:
+    if not text:
+        return []
+    entries: list[dict[str, str]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parsed = _parse_monitor_log_line(line)
+        if not parsed:
+            continue
+        message = parsed["message"]
+        if not message or not _is_position_log_message(message):
+            continue
+        sort_dt = _coerce_datetime_utc(f"{parsed['date']}T{parsed['time']}Z")
+        entries.append(
+            {
+                "timestamp": _format_monitor_timestamp(parsed["date"], parsed["time"]),
+                "type": _monitor_log_type(parsed.get("level", ""), message),
+                "message": message,
+                "_ts": sort_dt.isoformat() if sort_dt else "",
+            }
+        )
+    if not entries:
+        return []
+    return list(reversed(entries[-max(1, int(limit)):]))
+
+
+def _fetch_pythonanywhere_monitor_log_text() -> Optional[str]:
+    remote_payload = _fetch_pythonanywhere_file(
+        os.environ.get("PYTHONANYWHERE_MONITOR_LOG_URL"),
+        os.environ.get("PYTHONANYWHERE_MONITOR_LOG_PATH"),
+    )
+    if remote_payload:
+        remote_text, _ = remote_payload
+        return remote_text
+
+    sources = _pythonanywhere_log_sources()
+    if not sources:
+        return None
+
+    preferred_chunks: list[str] = []
+    fallback_chunks: list[str] = []
+    for source in sources:
+        source_label = str(source.get("source") or "")
+        text = str(source.get("text") or "")
+        if not text.strip():
+            continue
+        source_lower = source_label.lower()
+        text_lower = text.lower()
+        if (
+            "monitor" in source_lower
+            or "trailing" in source_lower
+            or "monitor" in text_lower
+            or "trailing stop" in text_lower
+            or "trail_" in text_lower
+        ):
+            preferred_chunks.append(text)
+        else:
+            fallback_chunks.append(text)
+
+    selected = preferred_chunks if preferred_chunks else fallback_chunks[:1]
+    if not selected:
+        return None
+    return "\n".join(selected)
+
+
+def _alpaca_trailing_logs(limit: int = 80, lookback_hours: int = 96) -> list[dict[str, str]]:
+    if trading_client is None:
+        return []
+
+    now_utc = datetime.now(timezone.utc)
+    since_utc = now_utc - timedelta(hours=max(1, int(lookback_hours)))
+    try:
+        order_request = GetOrdersRequest(
+            status="all",
+            after=since_utc,
+            until=now_utc,
+            direction="desc",
+            limit=500,
+        )
+        orders = trading_client.get_orders(filter=order_request) or []
+    except Exception as exc:
+        logger.warning("Failed to fetch Alpaca trailing orders for monitoring logs: %s", exc)
+        return []
+
+    entries: list[dict[str, str]] = []
+    for order in orders:
+        order_type = getattr(order, "type", None)
+        order_type_text = (
+            order_type.value if hasattr(order_type, "value") else str(order_type or "")
+        ).strip().lower()
+
+        raw_trail_pct = _to_float(getattr(order, "trail_percent", None))
+        raw_trail_price = _to_float(getattr(order, "trail_price", None))
+        is_trailing = (
+            "trailing" in order_type_text
+            or raw_trail_pct is not None
+            or raw_trail_price is not None
+        )
+        if not is_trailing:
+            continue
+
+        symbol = _normalize_symbol(getattr(order, "symbol", ""))
+        if not symbol:
+            continue
+
+        status_value = getattr(order, "status", None)
+        status_text = (
+            status_value.value if hasattr(status_value, "value") else str(status_value or "")
+        ).strip().lower() or "unknown"
+
+        qty = _to_float(getattr(order, "qty", None))
+        filled_qty = _to_float(getattr(order, "filled_qty", None))
+        effective_qty = filled_qty if filled_qty is not None and filled_qty > 0 else qty
+        avg_fill = _to_float(getattr(order, "filled_avg_price", None))
+
+        event_dt = (
+            _coerce_datetime_utc(getattr(order, "filled_at", None))
+            or _coerce_datetime_utc(getattr(order, "updated_at", None))
+            or _coerce_datetime_utc(getattr(order, "submitted_at", None))
+            or _coerce_datetime_utc(getattr(order, "created_at", None))
+        )
+        if event_dt is None:
+            continue
+
+        detail_bits: list[str] = []
+        if effective_qty is not None:
+            detail_bits.append(f"qty={_float_text(effective_qty, 0)}")
+        if raw_trail_pct is not None:
+            detail_bits.append(f"trail_pct={_float_text(raw_trail_pct)}%")
+        if raw_trail_price is not None:
+            detail_bits.append(f"trail_price=${_float_text(raw_trail_price)}")
+        if avg_fill is not None:
+            detail_bits.append(f"fill=${_float_text(avg_fill)}")
+        details = ", ".join(detail_bits)
+        detail_suffix = f" ({details})" if details else ""
+
+        message = f"Alpaca trailing stop {status_text} for {symbol}{detail_suffix}"
+        tone = "info"
+        if status_text in {"filled", "partially_filled"}:
+            tone = "success"
+        elif any(
+            token in status_text
+            for token in ("canceled", "expired", "rejected", "suspended", "stopped")
+        ):
+            tone = "warning"
+
+        entries.append(
+            {
+                "timestamp": _format_utc_datetime_for_monitor(event_dt),
+                "type": tone,
+                "message": message,
+                "_ts": event_dt.isoformat(),
+            }
+        )
+
+    if not entries:
+        return []
+
+    entries.sort(key=lambda item: str(item.get("_ts") or ""), reverse=True)
+    return entries[: max(1, int(limit))]
+
+
+def _positions_logs_live(limit: int = 80) -> tuple[list[dict[str, str]], str]:
+    text = _fetch_pythonanywhere_monitor_log_text()
+    logs = _monitor_log_entries_from_text(text, limit=limit)
+    alpaca_logs = _alpaca_trailing_logs(limit=limit)
+
+    merged = logs + alpaca_logs
+    if merged:
+        deduped: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for row in sorted(merged, key=lambda item: str(item.get("_ts") or ""), reverse=True):
+            key = (str(row.get("_ts") or ""), str(row.get("message") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(
+                {
+                    "timestamp": str(row.get("timestamp") or "--"),
+                    "type": str(row.get("type") or "info"),
+                    "message": str(row.get("message") or ""),
+                }
+            )
+            if len(deduped) >= max(1, int(limit)):
+                break
+        source = "pythonanywhere+alpaca" if logs and alpaca_logs else ("pythonanywhere" if logs else "alpaca")
+        return deduped, source
+
+    local_path = Path(BASE_DIR) / "logs" / "monitor.log"
+    if local_path.exists():
+        try:
+            local_text = local_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            local_text = ""
+        local_logs = _monitor_log_entries_from_text(local_text, limit=limit)
+        merged_local = local_logs + alpaca_logs
+        if merged_local:
+            deduped: list[dict[str, str]] = []
+            seen: set[tuple[str, str]] = set()
+            for row in sorted(merged_local, key=lambda item: str(item.get("_ts") or ""), reverse=True):
+                key = (str(row.get("_ts") or ""), str(row.get("message") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(
+                    {
+                        "timestamp": str(row.get("timestamp") or "--"),
+                        "type": str(row.get("type") or "info"),
+                        "message": str(row.get("message") or ""),
+                    }
+                )
+                if len(deduped) >= max(1, int(limit)):
+                    break
+            source = "local-fallback+alpaca" if local_logs and alpaca_logs else ("local-fallback" if local_logs else "alpaca")
+            return deduped, source
+
+    if alpaca_logs:
+        return [
+            {
+                "timestamp": str(row.get("timestamp") or "--"),
+                "type": str(row.get("type") or "info"),
+                "message": str(row.get("message") or ""),
+            }
+            for row in alpaca_logs[: max(1, int(limit))]
+        ], "alpaca"
+
+    return [], "none"
+
+
 def _alpaca_feed() -> Optional[DataFeed]:
     feed_env = (os.getenv("ALPACA_DATA_FEED") or "IEX").strip().upper()
     if feed_env == "IEX":
@@ -637,6 +1204,241 @@ def _positions_from_alpaca() -> list[dict[str, Any]]:
             }
         )
     return output
+
+
+def _active_trailing_stops_from_alpaca(symbols: list[str]) -> dict[str, dict[str, float]]:
+    if trading_client is None:
+        return {}
+
+    normalized_symbols = {_normalize_symbol(symbol) for symbol in symbols if _normalize_symbol(symbol)}
+    now_utc = datetime.now(timezone.utc)
+    since_utc = now_utc - timedelta(days=7)
+
+    try:
+        req = GetOrdersRequest(
+            status="all",
+            after=since_utc,
+            until=now_utc,
+            direction="desc",
+            limit=500,
+        )
+        orders = trading_client.get_orders(filter=req) or []
+    except Exception:
+        return {}
+
+    inactive_statuses = {
+        "canceled",
+        "cancelled",
+        "expired",
+        "rejected",
+        "filled",
+        "done_for_day",
+        "stopped",
+    }
+    by_symbol: dict[str, dict[str, float]] = {}
+    by_symbol_ts: dict[str, datetime] = {}
+
+    for order in orders:
+        symbol = _normalize_symbol(getattr(order, "symbol", ""))
+        if not symbol or (normalized_symbols and symbol not in normalized_symbols):
+            continue
+
+        side_obj = getattr(order, "side", None)
+        side_text = (side_obj.value if hasattr(side_obj, "value") else str(side_obj or "")).strip().lower()
+        if side_text and side_text != "sell":
+            continue
+
+        order_type_obj = getattr(order, "type", None)
+        order_type = (
+            order_type_obj.value if hasattr(order_type_obj, "value") else str(order_type_obj or "")
+        ).strip().lower()
+        trail_percent = _to_float(getattr(order, "trail_percent", None))
+        trail_price = _to_float(getattr(order, "trail_price", None))
+        if "trailing" not in order_type and trail_percent is None and trail_price is None:
+            continue
+
+        status_obj = getattr(order, "status", None)
+        status_text = (
+            status_obj.value if hasattr(status_obj, "value") else str(status_obj or "")
+        ).strip().lower()
+        if status_text in inactive_statuses:
+            continue
+
+        event_dt = (
+            _coerce_datetime_utc(getattr(order, "updated_at", None))
+            or _coerce_datetime_utc(getattr(order, "submitted_at", None))
+            or _coerce_datetime_utc(getattr(order, "created_at", None))
+            or _coerce_datetime_utc(getattr(order, "filled_at", None))
+            or datetime.now(timezone.utc)
+        )
+
+        stop_price = _to_float(getattr(order, "stop_price", None))
+        if stop_price is None:
+            # Fallback when the broker only returns high-water mark + trail percent.
+            hwm = _to_float(getattr(order, "hwm", None))
+            if hwm is not None and trail_percent is not None:
+                stop_price = hwm * (1 - (trail_percent / 100.0))
+
+        previous_ts = by_symbol_ts.get(symbol)
+        if previous_ts is not None and event_dt <= previous_ts:
+            continue
+
+        payload: dict[str, float] = {}
+        if stop_price is not None:
+            payload["trailingStop"] = stop_price
+        if trail_percent is not None:
+            payload["trailPercent"] = trail_percent
+        if not payload:
+            continue
+
+        by_symbol[symbol] = payload
+        by_symbol_ts[symbol] = event_dt
+
+    return by_symbol
+
+
+def _fetch_alpaca_fill_activities(
+    *,
+    symbols: set[str],
+    lookback_days: int = 120,
+    page_size: int = 100,
+    max_pages: int = 24,
+) -> list[dict[str, Any]]:
+    if not API_KEY or not API_SECRET:
+        return []
+
+    base_url = (os.getenv("APCA_API_BASE_URL") or "https://paper-api.alpaca.markets").rstrip("/")
+    now_utc = datetime.now(timezone.utc)
+    after_utc = now_utc - timedelta(days=max(1, int(lookback_days)))
+    headers = {
+        "APCA-API-KEY-ID": API_KEY,
+        "APCA-API-SECRET-KEY": API_SECRET,
+        "Accept": "application/json",
+    }
+
+    events: list[dict[str, Any]] = []
+    page_token: Optional[str] = None
+    for _ in range(max(1, int(max_pages))):
+        params: dict[str, Any] = {
+            "activity_types": "FILL",
+            "after": after_utc.isoformat(),
+            "until": now_utc.isoformat(),
+            "page_size": min(max(1, int(page_size)), 100),
+        }
+        if page_token:
+            params["page_token"] = page_token
+        url = f"{base_url}/v2/account/activities?{urlencode(params)}"
+
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status != 200:
+                    break
+                raw_text = resp.read().decode("utf-8", errors="ignore")
+                try:
+                    payload = json.loads(raw_text)
+                except Exception:
+                    payload = []
+                header_page_token = resp.headers.get("Next-Page-Token") or resp.headers.get(
+                    "next-page-token"
+                )
+        except Exception:
+            break
+
+        if isinstance(payload, list):
+            records = payload
+        elif isinstance(payload, dict) and isinstance(payload.get("activities"), list):
+            records = payload.get("activities", [])
+        else:
+            records = []
+
+        for item in records:
+            if not isinstance(item, Mapping):
+                continue
+            symbol = _normalize_symbol(item.get("symbol"))
+            if not symbol or (symbols and symbol not in symbols):
+                continue
+            ts = _coerce_datetime_utc(
+                item.get("transaction_time")
+                or item.get("processed_at")
+                or item.get("date")
+                or item.get("timestamp")
+            )
+            if ts is None:
+                continue
+            side = str(item.get("side") or "").strip().lower()
+            qty = _to_float(item.get("qty") or item.get("quantity"))
+            if qty is None or qty <= 0:
+                continue
+            events.append({"symbol": symbol, "side": side, "qty": qty, "timestamp": ts})
+
+        payload_token = (
+            str(payload.get("next_page_token"))
+            if isinstance(payload, dict) and payload.get("next_page_token")
+            else None
+        )
+        page_token = header_page_token or payload_token
+        if not page_token:
+            break
+
+    return events
+
+
+def _days_held_map_from_alpaca_activities(alpaca_positions: list[dict[str, Any]]) -> dict[str, int]:
+    symbol_qty: dict[str, float] = {}
+    for position in alpaca_positions:
+        symbol = _normalize_symbol(position.get("symbol"))
+        qty = _to_float(position.get("qty"))
+        if not symbol or qty is None or qty == 0:
+            continue
+        symbol_qty[symbol] = abs(qty)
+    if not symbol_qty:
+        return {}
+
+    fills = _fetch_alpaca_fill_activities(symbols=set(symbol_qty.keys()))
+    if not fills:
+        return {}
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for fill in fills:
+        symbol = _normalize_symbol(fill.get("symbol"))
+        if symbol not in symbol_qty:
+            continue
+        grouped.setdefault(symbol, []).append(fill)
+
+    days_map: dict[str, int] = {}
+    for symbol, open_qty in symbol_qty.items():
+        rows = grouped.get(symbol, [])
+        if not rows:
+            continue
+        rows.sort(key=lambda item: item.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        remaining = float(open_qty)
+        earliest_entry: Optional[datetime] = None
+
+        for row in rows:
+            side = str(row.get("side") or "").lower()
+            qty = _to_float(row.get("qty")) or 0.0
+            ts = row.get("timestamp")
+            if qty <= 0 or not isinstance(ts, datetime):
+                continue
+
+            if side == "sell":
+                remaining += qty
+                continue
+            if side != "buy":
+                continue
+            if remaining <= 0:
+                break
+
+            consumed = min(remaining, qty)
+            if consumed > 0:
+                earliest_entry = ts if earliest_entry is None else min(earliest_entry, ts)
+                remaining -= consumed
+
+        if earliest_entry is not None:
+            days_map[symbol] = _days_held_from_timestamp(earliest_entry)
+
+    return days_map
 
 
 def _fetch_latest_prices(symbols: list[str]) -> dict[str, float]:
@@ -3440,6 +4242,19 @@ def api_pythonanywhere_logs():
     return jsonify({"ok": bool(sources), "sources": sources, "source": "pythonanywhere"})
 
 
+@server.route("/api/positions/logs")
+def api_positions_logs():
+    limit_raw = request.args.get("limit")
+    try:
+        limit = int(limit_raw) if limit_raw is not None else 80
+    except (TypeError, ValueError):
+        limit = 80
+    limit = max(1, min(limit, 200))
+
+    logs, source = _positions_logs_live(limit=limit)
+    return jsonify({"ok": bool(logs), "logs": logs, "source": source})
+
+
 @server.route("/api/logos/<symbol>")
 def api_logo(symbol: str):
     safe_symbol = quote(symbol.upper(), safe=".-")
@@ -3533,6 +4348,8 @@ def api_positions_monitoring():
         if not sparkline_map:
             sparkline_map = _sparkline_from_daily_bars(symbols, points=sparkline_points)
         latest_prices = _fetch_latest_prices(symbols)
+        trailing_stop_map = _active_trailing_stops_from_alpaca(symbols)
+        days_held_map = _days_held_map_from_alpaca_activities(alpaca_positions)
 
         positions: list[dict[str, Any]] = []
         for position in alpaca_positions:
@@ -3561,6 +4378,10 @@ def api_positions_monitoring():
             if percent_pl is None or (abs(percent_pl) < 1e-9 and dollar_pl is not None and abs(dollar_pl) > 1e-9):
                 if cost_basis:
                     percent_pl = (dollar_pl / cost_basis) * 100
+
+            live_trailing = trailing_stop_map.get(_normalize_symbol(symbol), {})
+            trailing_stop = _to_float(live_trailing.get("trailingStop"))
+            trail_percent = _to_float(live_trailing.get("trailPercent"))
             positions.append(
                 {
                     "symbol": symbol,
@@ -3572,6 +4393,9 @@ def api_positions_monitoring():
                     "dollarPL": dollar_pl,
                     "costBasis": cost_basis,
                     "logoUrl": _logo_url_for_symbol(symbol),
+                    "daysHeld": days_held_map.get(_normalize_symbol(symbol)),
+                    "trailingStop": trailing_stop,
+                    "trailPercent": trail_percent,
                     **(
                         {
                             "_debug": {
@@ -3581,6 +4405,9 @@ def api_positions_monitoring():
                                 "currentPrice": current_price,
                                 "latestTradePrice": latest_price,
                                 "sparklineTail": sparkline[-3:] if sparkline else [],
+                                "daysHeldFromActivities": days_held_map.get(_normalize_symbol(symbol)),
+                                "liveTrailingStop": trailing_stop,
+                                "liveTrailPercent": trail_percent,
                             }
                         }
                         if include_debug
@@ -3588,21 +4415,46 @@ def api_positions_monitoring():
                     ),
                 }
             )
-        payload = {"ok": True, "positions": positions, "source": "alpaca"}
+        positions, summary = _enrich_positions_with_db_metrics(positions)
+        payload = {
+            "ok": True,
+            "positions": positions,
+            "summary": summary,
+            "source": "alpaca",
+            "calculationSource": "postgres",
+        }
         if include_debug:
             payload["_debug"] = {
                 "feed": os.getenv("ALPACA_DATA_FEED"),
                 "symbols": symbols,
                 "latestPrices": latest_prices,
+                "trailingStops": trailing_stop_map,
+                "daysHeldFromActivities": days_held_map,
             }
         return jsonify(payload)
 
     open_df = load_open_trades_db()
     if open_df is None or open_df.empty:
-        return jsonify({"ok": True, "positions": []})
+        return jsonify(
+            {
+                "ok": True,
+                "positions": [],
+                "summary": _positions_summary([]),
+                "source": "db",
+                "calculationSource": "postgres",
+            }
+        )
 
     if "symbol" not in open_df.columns:
-        return jsonify({"ok": False, "positions": []})
+        return jsonify(
+            {
+                "ok": False,
+                "positions": [],
+                "summary": _positions_summary([]),
+                "source": "db",
+                "calculationSource": "postgres",
+            }
+        )
 
     aggregated: dict[str, dict[str, Any]] = {}
     for record in open_df.to_dict(orient="records"):
@@ -3676,7 +4528,14 @@ def api_positions_monitoring():
             }
         )
 
-    payload = {"ok": True, "positions": positions, "source": "db"}
+    positions, summary = _enrich_positions_with_db_metrics(positions)
+    payload = {
+        "ok": True,
+        "positions": positions,
+        "summary": summary,
+        "source": "db",
+        "calculationSource": "postgres",
+    }
     if include_debug:
         payload["_debug"] = {"symbols": symbols}
     return jsonify(payload)

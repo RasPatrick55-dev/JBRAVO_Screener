@@ -8,6 +8,7 @@
   :root {
     --jbravo-green: #22c55e;
     --jbravo-gold: #f59e0b;
+    --jbravo-gold-rgb: 245 158 11;
     --jbravo-red: #ef4444;
     --jbravo-bg: #0a0e1a;
     --ds-surface: #ffffff;
@@ -31,6 +32,7 @@
     --ds-ml-dot-active: #34d399;
     --ds-ml-dot-inactive: #334155;
     --ds-shadow-card: 0 12px 28px -18px rgba(0, 0, 0, 0.8), 0 6px 12px -10px rgba(0, 0, 0, 0.5);
+    --jbravo-gold-rgb: 251 191 36;
   }
 
   body {
@@ -150,8 +152,49 @@
     color: var(--jbravo-red);
   }
 
+  .text-accent-green {
+    color: var(--jbravo-green);
+  }
+
+  .text-accent-red {
+    color: var(--jbravo-red);
+  }
+
   .jbravo-border-success {
     border-color: rgba(34, 197, 94, 0.6);
+  }
+
+  .border-techno-gold {
+    border-color: rgb(var(--jbravo-gold-rgb) / 0.5);
+  }
+
+  .divide-techno-gold > :not([hidden]) ~ :not([hidden]) {
+    border-color: rgb(var(--jbravo-gold-rgb) / 0.28);
+  }
+
+  .techno-summary-surface {
+    background: linear-gradient(
+      102deg,
+      rgb(15 23 42 / 0.96) 0%,
+      rgb(30 41 59 / 0.92) 55%,
+      rgb(17 24 39 / 0.96) 100%
+    );
+  }
+
+  .techno-summary-shadow {
+    box-shadow:
+      0 0 0 1px rgb(var(--jbravo-gold-rgb) / 0.2),
+      0 10px 26px -14px rgb(2 6 23 / 0.85),
+      0 0 28px -18px rgb(var(--jbravo-gold-rgb) / 0.9);
+  }
+
+  .text-techno-gold {
+    color: var(--jbravo-gold);
+    text-shadow: 0 0 12px rgb(var(--jbravo-gold-rgb) / 0.42);
+  }
+
+  .text-techno-muted {
+    color: rgb(var(--jbravo-gold-rgb) / 0.45);
   }
 
   @keyframes marketGlow {
