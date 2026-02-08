@@ -42,21 +42,21 @@ export default function PositionSummary({
       <div className="rounded-md border border-techno-gold techno-summary-surface techno-summary-shadow px-4 py-4 sm:hidden">
         <div className="text-sm font-semibold uppercase tracking-[0.08em] text-techno-gold">Total Summary</div>
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <div className="rounded-md border border-techno-gold/40 bg-slate-50/5 px-3 py-2">
+          <div className="rounded-md border border-techno-gold/40 bg-slate-950/45 px-3 py-2 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.08)]">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-techno-muted">Total Shares</div>
             <div className="mt-1 font-cousine text-base tabular-nums text-slate-100">{formatNumber(totalShares)}</div>
           </div>
-          <div className="rounded-md border border-techno-gold/40 bg-slate-50/5 px-3 py-2">
+          <div className="rounded-md border border-techno-gold/40 bg-slate-950/45 px-3 py-2 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.08)]">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-techno-muted">Avg Days</div>
             <div className="mt-1 font-cousine text-base tabular-nums text-slate-100">{formatDays(avgDaysHeld)}</div>
           </div>
-          <div className="rounded-md border border-techno-gold/40 bg-slate-50/5 px-3 py-2">
+          <div className="rounded-md border border-techno-gold/40 bg-slate-950/45 px-3 py-2 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.08)]">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-techno-muted">Open P/L</div>
             <div className={`mt-1 font-cousine text-base tabular-nums ${toneForValue(totalOpenPL)}`}>
               {formatSignedCurrency(totalOpenPL)}
             </div>
           </div>
-          <div className="rounded-md border border-techno-gold/40 bg-slate-50/5 px-3 py-2">
+          <div className="rounded-md border border-techno-gold/40 bg-slate-950/45 px-3 py-2 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.08)]">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-techno-muted">Captured P/L</div>
             <div className={`mt-1 font-cousine text-base tabular-nums ${toneForValue(totalCapturedPL)}`}>
               {formatSignedCurrency(totalCapturedPL)}

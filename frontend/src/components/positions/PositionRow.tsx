@@ -31,7 +31,7 @@ const numericCellClass = "px-3 text-center text-base leading-6 font-cousine tabu
 
 function MobileField({ label, value, toneClass = "text-financial" }: { label: string; value: string; toneClass?: string }) {
   return (
-    <div className="rounded-md border border-slate-200/70 bg-slate-50/40 px-2.5 py-2">
+    <div className="rounded-md border border-techno-gold/40 bg-slate-950/45 px-2.5 py-2 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.08)]">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-secondary">{label}</div>
       <div className={`mt-1 font-cousine text-sm tabular-nums ${toneClass}`}>{value}</div>
     </div>
