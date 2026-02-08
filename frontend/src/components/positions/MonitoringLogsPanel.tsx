@@ -32,7 +32,26 @@ export default function MonitoringLogsPanel({ logs }: MonitoringLogsPanelProps) 
         <StatusChip label="Always On Track" tone="success" />
       </header>
       <div className="max-h-[32rem] overflow-auto">
-        <table className="w-full table-auto text-sm">
+        <div className="divide-y divide-slate-200 sm:hidden">
+          {logs.length > 0 ? (
+            logs.map((log, index) => (
+              <article key={`${log.timestamp}-${index}`} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="font-cousine text-xs tabular-nums text-secondary">{log.timestamp}</p>
+                  <span className={`${badgeToneClass[log.type]} inline-flex rounded-full px-2 py-0.5 text-xs font-semibold capitalize`}>
+                    {log.type}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm text-financial" title={log.message}>
+                  {log.message}
+                </p>
+              </article>
+            ))
+          ) : (
+            <div className="px-4 py-6 text-center text-sm text-secondary">No monitoring alerts available.</div>
+          )}
+        </div>
+        <table className="hidden w-full table-auto text-sm sm:table">
           <caption className="sr-only">Latest trailing stop and open-position alerts</caption>
           <colgroup>
             <col className="w-[34%] sm:w-[28%] lg:w-[22%]" />
