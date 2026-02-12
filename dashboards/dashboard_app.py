@@ -4867,20 +4867,7 @@ def api_positions_monitoring():
 
     sparkline_points = 12
     open_df = load_open_trades_db()
-    if open_df is None or open_df.empty:
-        return _json_no_store(
-            {
-                "ok": bool(db_ready),
-                "positions": [],
-                "summary": _positions_summary([]),
-                "source": "db",
-                "calculationSource": "postgres",
-                "db_source_of_truth": True,
-                "db_ready": bool(db_ready),
-            }
-        )
-
-    if "symbol" not in open_df.columns:
+    if open_df is not None and not open_df.empty and "symbol" not in open_df.columns:
         return _json_no_store(
             {
                 "ok": False,
@@ -4894,24 +4881,89 @@ def api_positions_monitoring():
         )
 
     aggregated: dict[str, dict[str, Any]] = {}
-    for record in open_df.to_dict(orient="records"):
-        symbol = str(record.get("symbol") or "").strip()
-        if not symbol:
-            continue
-        qty = _to_float(record.get("qty"))
-        entry_price = _to_float(record.get("entry_price"))
-        realized_pnl = _to_float(record.get("realized_pnl"))
+    calculation_source = "postgres"
+    db_source_of_truth = True
 
-        bucket = aggregated.setdefault(
-            symbol,
-            {"symbol": symbol, "qty": 0.0, "entry_value": 0.0, "realized_pnl": 0.0, "has_realized": False},
-        )
-        if qty is not None and entry_price is not None:
+    if open_df is not None and not open_df.empty:
+        for record in open_df.to_dict(orient="records"):
+            symbol = str(record.get("symbol") or "").strip()
+            if not symbol:
+                continue
+            qty = _to_float(record.get("qty"))
+            entry_price = _to_float(record.get("entry_price"))
+            realized_pnl = _to_float(record.get("realized_pnl"))
+
+            bucket = aggregated.setdefault(
+                symbol,
+                {
+                    "symbol": symbol,
+                    "qty": 0.0,
+                    "entry_value": 0.0,
+                    "realized_pnl": 0.0,
+                    "has_realized": False,
+                    "dollar_pl": None,
+                    "percent_pl": None,
+                },
+            )
+            if qty is not None and entry_price is not None:
+                bucket["qty"] += qty
+                bucket["entry_value"] += qty * entry_price
+            if realized_pnl is not None:
+                bucket["realized_pnl"] += realized_pnl
+                bucket["has_realized"] = True
+
+    # Emergency fallback: if DB has no OPEN rows, populate from live Alpaca positions.
+    # This avoids blank UI while explicitly surfacing reconciliation state.
+    if not aggregated:
+        for record in _positions_from_alpaca():
+            symbol = _normalize_symbol(record.get("symbol"))
+            if not symbol:
+                continue
+
+            qty = _to_float(record.get("qty"))
+            entry_price = _to_float(record.get("entry_price"))
+            if qty is None or entry_price is None or qty == 0:
+                continue
+
+            dollar_pl = _to_float(record.get("dollar_pl"))
+            percent_pl = _to_float(record.get("percent_pl"))
+
+            bucket = aggregated.setdefault(
+                symbol,
+                {
+                    "symbol": symbol,
+                    "qty": 0.0,
+                    "entry_value": 0.0,
+                    "realized_pnl": 0.0,
+                    "has_realized": False,
+                    "dollar_pl": 0.0,
+                    "percent_pl": None,
+                },
+            )
             bucket["qty"] += qty
             bucket["entry_value"] += qty * entry_price
-        if realized_pnl is not None:
-            bucket["realized_pnl"] += realized_pnl
-            bucket["has_realized"] = True
+            if dollar_pl is not None:
+                bucket["dollar_pl"] = _to_float(bucket.get("dollar_pl")) or 0.0
+                bucket["dollar_pl"] += dollar_pl
+            if percent_pl is not None and bucket.get("percent_pl") is None:
+                bucket["percent_pl"] = percent_pl
+
+        if aggregated:
+            calculation_source = "alpaca"
+            db_source_of_truth = False
+
+    if not aggregated:
+        return _json_no_store(
+            {
+                "ok": bool(db_ready),
+                "positions": [],
+                "summary": _positions_summary([]),
+                "source": "db",
+                "calculationSource": "postgres",
+                "db_source_of_truth": True,
+                "db_ready": bool(db_ready),
+            }
+        )
 
     symbols = list(aggregated.keys())
     sparkline_map = _fetch_alpaca_sparklines(symbols, points=sparkline_points)
@@ -4928,24 +4980,26 @@ def api_positions_monitoring():
     positions = []
 
     for symbol, bucket in aggregated.items():
-        qty = bucket["qty"] if bucket["qty"] > 0 else None
+        raw_qty = _to_float(bucket.get("qty"))
+        qty = raw_qty if raw_qty is not None and raw_qty != 0 else None
         entry_price = (
-            bucket["entry_value"] / bucket["qty"] if bucket["qty"] > 0 else None
+            bucket["entry_value"] / raw_qty if raw_qty is not None and raw_qty != 0 else None
         )
         cost_basis = bucket["entry_value"] if bucket["entry_value"] else None
         sparkline = sparkline_map.get(symbol, [])
         latest_price = latest_prices.get(symbol)
         current_price = latest_price if latest_price is not None else (sparkline[-1] if sparkline else entry_price)
 
-        dollar_pl = None
-        if current_price is not None and entry_price is not None and qty is not None:
+        dollar_pl = _to_float(bucket.get("dollar_pl"))
+        if dollar_pl is None and current_price is not None and entry_price is not None and qty is not None:
             dollar_pl = (current_price - entry_price) * qty
 
-        percent_pl = None
+        percent_pl = _to_float(bucket.get("percent_pl"))
         if dollar_pl is not None and entry_price is not None and qty is not None and qty != 0:
-            cost_basis = entry_price * qty
-            if cost_basis != 0:
-                percent_pl = (dollar_pl / cost_basis) * 100
+            if percent_pl is None:
+                cost_basis = entry_price * qty
+                if cost_basis != 0:
+                    percent_pl = (dollar_pl / cost_basis) * 100
 
         live_trailing = trailing_stop_map.get(_normalize_symbol(symbol), {})
         trailing_stop = _to_float(live_trailing.get("trailingStop"))
@@ -4990,10 +5044,11 @@ def api_positions_monitoring():
         "ok": bool(db_ready),
         "positions": positions,
         "summary": summary,
-        "source": "db+alpaca" if using_alpaca_overlay else "db",
-        "calculationSource": "postgres",
-        "db_source_of_truth": True,
+        "source": ("db+alpaca" if using_alpaca_overlay else "db") if db_source_of_truth else "alpaca-fallback",
+        "calculationSource": calculation_source,
+        "db_source_of_truth": bool(db_source_of_truth),
         "db_ready": bool(db_ready),
+        "reconciliation_required": not bool(db_source_of_truth),
     }
     if include_debug:
         payload["_debug"] = {
