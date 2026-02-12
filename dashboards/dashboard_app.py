@@ -6,7 +6,7 @@ import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 from dash.dash_table.Format import Format, Scheme
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 import subprocess
 import json
 import math
@@ -34,6 +34,7 @@ from typing import Any, Callable, Mapping, Optional
 from flask import Response, abort, jsonify, send_from_directory, request
 from plotly.subplots import make_subplots
 from scripts import db
+from scripts.utils.env import load_env as _load_runtime_env
 
 logger = logging.getLogger(__name__)
 
@@ -1597,6 +1598,395 @@ def _metrics_summary_db() -> dict[str, Any]:
     }
 
 
+_TRADES_RANGE_ORDER = ["d", "w", "m", "y", "all"]
+_TRADES_RANGE_LABELS = {
+    "d": "DAILY",
+    "w": "WEEKLY",
+    "m": "MONTHLY",
+    "y": "YEARLY",
+    "all": "ALL",
+}
+_TRADES_RANGE_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
+
+
+def _parse_trades_range(value: Any, *, default: str = "all") -> str:
+    normalized = str(value or default).strip().lower()
+    mapping = {
+        "d": "d",
+        "day": "d",
+        "daily": "d",
+        "w": "w",
+        "week": "w",
+        "weekly": "w",
+        "m": "m",
+        "month": "m",
+        "monthly": "m",
+        "y": "y",
+        "year": "y",
+        "yearly": "y",
+        "a": "all",
+        "all": "all",
+    }
+    return mapping.get(normalized, default)
+
+
+def _parse_positive_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _trades_api_allow_file_fallback() -> bool:
+    value = str(os.getenv("TRADES_API_ALLOW_FILE_FALLBACK") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _account_api_allow_live_fallback() -> bool:
+    value = str(os.getenv("ACCOUNT_API_ALLOW_LIVE_FALLBACK") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _db_connection_available() -> bool:
+    if not db.db_enabled():
+        return False
+    conn = db.get_db_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            row = cursor.fetchone()
+        return bool(row and row[0] == 1)
+    except Exception:
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _trades_api_db_ready(source: str, source_detail: str) -> bool:
+    if source != "postgres":
+        return False
+    detail = str(source_detail or "")
+    return not detail.startswith("trades-db-")
+
+
+def _load_trades_for_api_from_db(max_rows: int = 100_000) -> tuple[pd.DataFrame, str]:
+    conn = db.get_db_conn()
+    if conn is None:
+        return pd.DataFrame(), "unavailable"
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT to_regclass('public.trades')")
+            row = cursor.fetchone()
+            table_name = row[0] if row else None
+            if table_name is None:
+                return pd.DataFrame(), "missing"
+            cursor.execute(
+                """
+                SELECT
+                    symbol,
+                    qty,
+                    status,
+                    entry_time,
+                    entry_price,
+                    exit_time,
+                    exit_price,
+                    realized_pnl,
+                    exit_reason
+                FROM trades
+                ORDER BY COALESCE(exit_time, entry_time) DESC NULLS LAST
+                LIMIT %(limit)s
+                """,
+                {"limit": int(max_rows)},
+            )
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+        return pd.DataFrame(rows, columns=columns), "ok"
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] TRADES_API_DB_LOAD_FAIL err=%s", exc)
+        return pd.DataFrame(), "error"
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _load_trades_for_api_from_files() -> tuple[pd.DataFrame, str]:
+    sources: list[str] = []
+    frames: list[pd.DataFrame] = []
+
+    for path, label in (
+        (executed_trades_path, "Executed trades"),
+        (trades_log_real_path, "Real trades"),
+        (trades_log_path, "Paper trades"),
+    ):
+        if not os.path.exists(path):
+            continue
+        df, alert = load_csv(path)
+        if alert is not None or df is None or df.empty:
+            continue
+        sources.append(label)
+        frames.append(df.copy())
+
+    if not frames:
+        return pd.DataFrame(), "files"
+
+    if len(frames) == 1:
+        return frames[0], sources[0]
+
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    dedupe_columns = [
+        column
+        for column in ("trade_id", "entry_order_id", "order_id", "symbol", "entry_time", "exit_time", "qty")
+        if column in combined.columns
+    ]
+    if dedupe_columns:
+        combined = combined.drop_duplicates(subset=dedupe_columns, keep="first")
+
+    source_label = " + ".join(list(dict.fromkeys(sources)))
+    return combined, source_label
+
+
+def _series_from_alias(df: pd.DataFrame, aliases: list[str]) -> pd.Series:
+    for alias in aliases:
+        if alias in df.columns:
+            return df[alias]
+    return pd.Series([None] * len(df), index=df.index)
+
+
+def _normalize_trades_api_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "qty",
+                "status",
+                "entry_time",
+                "entry_price",
+                "exit_time",
+                "exit_price",
+                "realized_pnl",
+                "exit_reason",
+                "sort_ts",
+            ]
+        )
+
+    work = frame.copy()
+    work["symbol"] = _series_from_alias(work, ["symbol", "ticker"]).astype(str).str.upper().str.strip()
+    work["qty"] = pd.to_numeric(
+        _series_from_alias(work, ["qty", "filled_qty", "quantity", "shares"]), errors="coerce"
+    )
+    work["status"] = _series_from_alias(work, ["status", "order_status"]).astype(str).str.upper().str.strip()
+    work["entry_time"] = pd.to_datetime(
+        _series_from_alias(work, ["entry_time", "buy_date", "entry_date"]), utc=True, errors="coerce"
+    )
+    work["entry_price"] = pd.to_numeric(
+        _series_from_alias(work, ["entry_price", "avg_entry_price", "avg_entry"]), errors="coerce"
+    )
+    work["exit_time"] = pd.to_datetime(
+        _series_from_alias(work, ["exit_time", "sell_date", "exit_date"]), utc=True, errors="coerce"
+    )
+    work["exit_price"] = pd.to_numeric(
+        _series_from_alias(work, ["exit_price", "price_sold", "sell_price"]), errors="coerce"
+    )
+    work["realized_pnl"] = pd.to_numeric(
+        _series_from_alias(work, ["realized_pnl", "net_pnl", "pnl", "total_pl", "profit_loss_usd"]),
+        errors="coerce",
+    )
+    work["exit_reason"] = _series_from_alias(work, ["exit_reason"]).astype(str).replace({"nan": ""})
+
+    computed_pnl = (work["exit_price"] - work["entry_price"]) * work["qty"]
+    work["realized_pnl"] = work["realized_pnl"].fillna(computed_pnl).fillna(0.0)
+
+    is_closed = work["exit_time"].notna() | work["status"].eq("CLOSED")
+    work = work[is_closed].copy()
+    work = work[work["symbol"].str.len() > 0]
+    work["sort_ts"] = work["exit_time"].fillna(work["entry_time"])
+    work.sort_values("sort_ts", ascending=False, na_position="last", inplace=True)
+    work.reset_index(drop=True, inplace=True)
+    return work
+
+
+def _load_trades_analytics_frame(max_rows: int = 100_000) -> tuple[pd.DataFrame, str, str]:
+    db_frame, db_status = _load_trades_for_api_from_db(max_rows=max_rows)
+    if db_status == "ok":
+        normalized_db = _normalize_trades_api_frame(db_frame)
+        if normalized_db.empty and _trades_api_allow_file_fallback():
+            file_frame, file_source = _load_trades_for_api_from_files()
+            normalized_file = _normalize_trades_api_frame(file_frame)
+            if not normalized_file.empty:
+                detail = f"{file_source};db=ok-empty;fallback=enabled"
+                return normalized_file, "fallback", detail
+        return normalized_db, "postgres", ("trades-empty" if normalized_db.empty else "trades")
+
+    if _trades_api_allow_file_fallback():
+        file_frame, file_source = _load_trades_for_api_from_files()
+        normalized_file = _normalize_trades_api_frame(file_frame)
+        if not normalized_file.empty:
+            detail = f"{file_source};db={db_status};fallback=enabled"
+            return normalized_file, "fallback", detail
+
+    empty = _normalize_trades_api_frame(pd.DataFrame())
+    return empty, "postgres", f"trades-db-{db_status}"
+
+
+def _filter_trades_by_range(frame: pd.DataFrame, range_key: str) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    if range_key == "all":
+        return frame
+    days = _TRADES_RANGE_DAYS.get(range_key)
+    if days is None:
+        return frame
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+    return frame[(frame["sort_ts"].notna()) & (frame["sort_ts"] >= cutoff)]
+
+
+def _build_range_metrics(frame: pd.DataFrame, range_key: str) -> dict[str, Any]:
+    scoped = _filter_trades_by_range(frame, range_key)
+    if scoped.empty:
+        return {
+            "key": range_key,
+            "label": _TRADES_RANGE_LABELS[range_key],
+            "winRatePct": 0.0,
+            "totalPL": 0.0,
+            "topTrade": {"symbol": "--", "pl": 0.0},
+            "worstLoss": {"symbol": "--", "pl": 0.0},
+            "tradesCount": 0,
+        }
+
+    total_trades = int(len(scoped))
+    wins = int((scoped["realized_pnl"] > 0).sum())
+    win_rate_pct = (wins / total_trades) * 100 if total_trades > 0 else 0.0
+    total_pl = float(scoped["realized_pnl"].sum())
+
+    top_row = scoped.loc[scoped["realized_pnl"].idxmax()]
+    worst_row = scoped.loc[scoped["realized_pnl"].idxmin()]
+
+    return {
+        "key": range_key,
+        "label": _TRADES_RANGE_LABELS[range_key],
+        "winRatePct": float(win_rate_pct),
+        "totalPL": total_pl,
+        "topTrade": {
+            "symbol": str(top_row.get("symbol") or "--"),
+            "pl": float(top_row.get("realized_pnl") or 0.0),
+        },
+        "worstLoss": {
+            "symbol": str(worst_row.get("symbol") or "--"),
+            "pl": float(worst_row.get("realized_pnl") or 0.0),
+        },
+        "tradesCount": total_trades,
+    }
+
+
+def _build_leaderboard_rows(
+    frame: pd.DataFrame, range_key: str, mode: str, limit: int
+) -> list[dict[str, Any]]:
+    scoped = _filter_trades_by_range(frame, range_key)
+    if scoped.empty:
+        return []
+
+    grouped = (
+        scoped.groupby("symbol", dropna=False)["realized_pnl"]
+        .sum()
+        .reset_index()
+        .rename(columns={"realized_pnl": "pl"})
+    )
+
+    if mode == "losers":
+        grouped = grouped[grouped["pl"] < 0].sort_values("pl", ascending=True)
+    else:
+        grouped = grouped[grouped["pl"] > 0].sort_values("pl", ascending=False)
+
+    grouped = grouped.head(limit).reset_index(drop=True)
+    rows: list[dict[str, Any]] = []
+    for index, row in grouped.iterrows():
+        rows.append(
+            {
+                "rank": index + 1,
+                "symbol": str(row.get("symbol") or "--"),
+                "pl": float(row.get("pl") or 0.0),
+            }
+        )
+    return rows
+
+
+def _build_latest_trades_rows(frame: pd.DataFrame, limit: int) -> list[dict[str, Any]]:
+    if frame.empty:
+        return []
+
+    scoped = frame.sort_values("sort_ts", ascending=False, na_position="last").head(limit)
+    rows: list[dict[str, Any]] = []
+    for _, row in scoped.iterrows():
+        entry_time = row.get("entry_time")
+        exit_time = row.get("exit_time")
+        hold_days = 0
+        if isinstance(entry_time, pd.Timestamp) and isinstance(exit_time, pd.Timestamp):
+            hold_days = max(0, int((exit_time - entry_time).total_seconds() // 86400))
+
+        qty = row.get("qty")
+        try:
+            qty_value = int(float(qty)) if qty is not None else 0
+        except (TypeError, ValueError):
+            qty_value = 0
+
+        rows.append(
+            {
+                "symbol": str(row.get("symbol") or "--"),
+                "buyDate": _serialize_record(entry_time),
+                "sellDate": _serialize_record(exit_time),
+                "totalDays": hold_days,
+                "totalShares": qty_value,
+                "avgEntryPrice": float(row.get("entry_price") or 0.0),
+                "priceSold": float(row.get("exit_price") or 0.0),
+                "totalPL": float(row.get("realized_pnl") or 0.0),
+            }
+        )
+    return rows
+
+
+def _record_trades_api_request(
+    *, endpoint: str, params: Mapping[str, Any], source: str, rows_returned: int
+) -> bool:
+    conn = db.get_db_conn()
+    if conn is None:
+        return False
+
+    payload = json.dumps({key: _serialize_record(value) for key, value in params.items()})
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO trades_api_requests (endpoint, params, source, rows_returned)
+                    VALUES (%(endpoint)s, CAST(%(params)s AS JSONB), %(source)s, %(rows_returned)s)
+                    """,
+                    {
+                        "endpoint": endpoint,
+                        "params": payload,
+                        "source": source,
+                        "rows_returned": int(rows_returned),
+                    },
+                )
+        return True
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] TRADES_API_RECORD_FAIL endpoint=%s err=%s", endpoint, exc)
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _account_latest_db() -> dict[str, Any]:
     for sql, source in (
         (_ACCOUNT_LATEST_SQL, "v_account_latest"),
@@ -1634,6 +2024,8 @@ def _serialize_record(value: Any) -> Any:
     if isinstance(value, pd.Timestamp):
         return value.to_pydatetime().isoformat()
     if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, Decimal):
         return float(value)
@@ -1898,6 +2290,9 @@ def is_log_stale(path, max_age_hours: int = 24) -> bool:
     except Exception:
         return True
 
+# Load env the same way our scripts do (user config + repo .env), then ensure
+# repo-local .env is also considered for dashboard runtime.
+_load_runtime_env(required_keys=())
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
@@ -4214,6 +4609,14 @@ def api_time():
     return response
 
 
+def _json_no_store(payload: Mapping[str, Any] | list[Any]) -> Response:
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store, max-age=1, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 @server.route("/api/pythonanywhere/resources")
 def api_pythonanywhere_resources():
     resources: list[dict[str, Any]] = []
@@ -4273,15 +4676,45 @@ def api_logo(symbol: str):
 
 @server.route("/api/account/overview")
 def api_account_overview():
-    live_row = _account_latest_alpaca()
-    if live_row:
-        snapshot = {key: _serialize_record(value) for key, value in live_row.items()}
-        return jsonify({"ok": True, "snapshot": snapshot})
     row = _account_latest_db()
-    if not row:
-        return jsonify({"ok": False, "snapshot": {}})
-    snapshot = {key: _serialize_record(value) for key, value in row.items()}
-    return jsonify({"ok": True, "snapshot": snapshot})
+    if row:
+        snapshot = {key: _serialize_record(value) for key, value in row.items()}
+        return _json_no_store(
+            {
+                "ok": True,
+                "snapshot": snapshot,
+                "source": "postgres",
+                "source_detail": str(row.get("source") or "db"),
+                "db_source_of_truth": True,
+                "db_ready": True,
+            }
+        )
+
+    if _account_api_allow_live_fallback():
+        live_row = _account_latest_alpaca()
+        if live_row:
+            snapshot = {key: _serialize_record(value) for key, value in live_row.items()}
+            return _json_no_store(
+                {
+                    "ok": True,
+                    "snapshot": snapshot,
+                    "source": "alpaca-fallback",
+                    "source_detail": "live",
+                    "db_source_of_truth": True,
+                    "db_ready": False,
+                }
+            )
+
+    return _json_no_store(
+        {
+            "ok": False,
+            "snapshot": {},
+            "source": "postgres",
+            "source_detail": "unavailable",
+            "db_source_of_truth": True,
+            "db_ready": False,
+        }
+    )
 
 
 @server.route("/api/trades/overview")
@@ -4301,11 +4734,101 @@ def api_trades_overview():
 
     payload = {
         "ok": bool(metrics or trade_records),
+        "db_source_of_truth": True,
         "metrics": metrics,
         "trades": trade_records,
         "open_positions": {"count": open_count, "realized_pnl": open_pnl},
     }
     return jsonify(payload)
+
+
+@server.route("/api/trades/stats")
+def api_trades_stats():
+    requested_range = _parse_trades_range(request.args.get("range"), default="all")
+    trades_frame, source, source_detail = _load_trades_analytics_frame()
+    db_ready = _trades_api_db_ready(source, source_detail)
+
+    range_keys = _TRADES_RANGE_ORDER if requested_range == "all" else [requested_range]
+    rows = [_build_range_metrics(trades_frame, key) for key in range_keys]
+
+    recorded = _record_trades_api_request(
+        endpoint="/api/trades/stats",
+        params={"range": requested_range, "source_detail": source_detail},
+        source=source,
+        rows_returned=len(rows),
+    )
+    return _json_no_store(
+        {
+            "ok": bool(db_ready),
+            "source": source,
+            "source_detail": source_detail,
+            "db_source_of_truth": True,
+            "db_ready": bool(db_ready),
+            "range": requested_range,
+            "rows": rows,
+            "recorded_to_db": recorded,
+        }
+    )
+
+
+@server.route("/api/trades/leaderboard")
+def api_trades_leaderboard():
+    range_key = _parse_trades_range(request.args.get("range"), default="d")
+    mode_raw = str(request.args.get("mode") or "winners").strip().lower()
+    mode = "losers" if mode_raw == "losers" else "winners"
+    limit = _parse_positive_int(request.args.get("limit"), default=10, minimum=1, maximum=50)
+
+    trades_frame, source, source_detail = _load_trades_analytics_frame()
+    db_ready = _trades_api_db_ready(source, source_detail)
+    rows = _build_leaderboard_rows(trades_frame, range_key=range_key, mode=mode, limit=limit)
+
+    recorded = _record_trades_api_request(
+        endpoint="/api/trades/leaderboard",
+        params={"range": range_key, "mode": mode, "limit": limit, "source_detail": source_detail},
+        source=source,
+        rows_returned=len(rows),
+    )
+    return _json_no_store(
+        {
+            "ok": bool(db_ready),
+            "source": source,
+            "source_detail": source_detail,
+            "db_source_of_truth": True,
+            "db_ready": bool(db_ready),
+            "range": range_key,
+            "mode": mode,
+            "limit": limit,
+            "rows": rows,
+            "recorded_to_db": recorded,
+        }
+    )
+
+
+@server.route("/api/trades/latest")
+def api_trades_latest():
+    limit = _parse_positive_int(request.args.get("limit"), default=25, minimum=1, maximum=200)
+    trades_frame, source, source_detail = _load_trades_analytics_frame()
+    db_ready = _trades_api_db_ready(source, source_detail)
+    rows = _build_latest_trades_rows(trades_frame, limit=limit)
+
+    recorded = _record_trades_api_request(
+        endpoint="/api/trades/latest",
+        params={"limit": limit, "source_detail": source_detail},
+        source=source,
+        rows_returned=len(rows),
+    )
+    return _json_no_store(
+        {
+            "ok": bool(db_ready),
+            "source": source,
+            "source_detail": source_detail,
+            "db_source_of_truth": True,
+            "db_ready": bool(db_ready),
+            "limit": limit,
+            "rows": rows,
+            "recorded_to_db": recorded,
+        }
+    )
 
 
 @server.route("/api/pipeline/task")
@@ -4325,6 +4848,8 @@ def api_execute_task():
 @server.route("/api/positions/monitoring")
 def api_positions_monitoring():
     include_debug = str(request.args.get("debug", "")).lower() in {"1", "true", "yes", "on"}
+    db_ready = _db_connection_available()
+
     def _sparkline_from_daily_bars(
         symbols: list[str], points: int = 12
     ) -> dict[str, list[float]]:
@@ -4340,119 +4865,31 @@ def api_positions_monitoring():
             sparkline_map[symbol] = [float(value) for value in closes if value is not None]
         return sparkline_map
 
-    alpaca_positions = _positions_from_alpaca()
     sparkline_points = 12
-    if alpaca_positions:
-        symbols = [position["symbol"] for position in alpaca_positions]
-        sparkline_map = _fetch_alpaca_sparklines(symbols, points=sparkline_points)
-        if not sparkline_map:
-            sparkline_map = _sparkline_from_daily_bars(symbols, points=sparkline_points)
-        latest_prices = _fetch_latest_prices(symbols)
-        trailing_stop_map = _active_trailing_stops_from_alpaca(symbols)
-        days_held_map = _days_held_map_from_alpaca_activities(alpaca_positions)
-
-        positions: list[dict[str, Any]] = []
-        for position in alpaca_positions:
-            symbol = position["symbol"]
-            sparkline = sparkline_map.get(symbol, [])
-            current_price = position.get("current_price")
-            latest_price = latest_prices.get(symbol)
-            if current_price is None and sparkline:
-                current_price = sparkline[-1]
-            if current_price is None:
-                current_price = latest_price or position.get("entry_price")
-
-            dollar_pl = position.get("dollar_pl")
-            percent_pl = position.get("percent_pl")
-            qty = position.get("qty")
-            entry_price = position.get("entry_price")
-            cost_basis = None
-            if qty is not None and entry_price is not None:
-                cost_basis = qty * entry_price
-
-            price_for_pl = latest_price if latest_price is not None else current_price
-            if price_for_pl is not None and entry_price is not None and qty:
-                computed_pl = (price_for_pl - entry_price) * qty
-                if dollar_pl is None or (abs(dollar_pl) < 1e-9 and abs(computed_pl) > 1e-9):
-                    dollar_pl = computed_pl
-            if percent_pl is None or (abs(percent_pl) < 1e-9 and dollar_pl is not None and abs(dollar_pl) > 1e-9):
-                if cost_basis:
-                    percent_pl = (dollar_pl / cost_basis) * 100
-
-            live_trailing = trailing_stop_map.get(_normalize_symbol(symbol), {})
-            trailing_stop = _to_float(live_trailing.get("trailingStop"))
-            trail_percent = _to_float(live_trailing.get("trailPercent"))
-            positions.append(
-                {
-                    "symbol": symbol,
-                    "qty": qty,
-                    "entryPrice": entry_price,
-                    "currentPrice": current_price,
-                    "sparklineData": sparkline,
-                    "percentPL": percent_pl,
-                    "dollarPL": dollar_pl,
-                    "costBasis": cost_basis,
-                    "logoUrl": _logo_url_for_symbol(symbol),
-                    "daysHeld": days_held_map.get(_normalize_symbol(symbol)),
-                    "trailingStop": trailing_stop,
-                    "trailPercent": trail_percent,
-                    **(
-                        {
-                            "_debug": {
-                                "qty": qty,
-                                "entryPrice": entry_price,
-                                "costBasis": cost_basis,
-                                "currentPrice": current_price,
-                                "latestTradePrice": latest_price,
-                                "sparklineTail": sparkline[-3:] if sparkline else [],
-                                "daysHeldFromActivities": days_held_map.get(_normalize_symbol(symbol)),
-                                "liveTrailingStop": trailing_stop,
-                                "liveTrailPercent": trail_percent,
-                            }
-                        }
-                        if include_debug
-                        else {}
-                    ),
-                }
-            )
-        positions, summary = _enrich_positions_with_db_metrics(positions)
-        payload = {
-            "ok": True,
-            "positions": positions,
-            "summary": summary,
-            "source": "alpaca",
-            "calculationSource": "postgres",
-        }
-        if include_debug:
-            payload["_debug"] = {
-                "feed": os.getenv("ALPACA_DATA_FEED"),
-                "symbols": symbols,
-                "latestPrices": latest_prices,
-                "trailingStops": trailing_stop_map,
-                "daysHeldFromActivities": days_held_map,
-            }
-        return jsonify(payload)
-
     open_df = load_open_trades_db()
     if open_df is None or open_df.empty:
-        return jsonify(
+        return _json_no_store(
             {
-                "ok": True,
+                "ok": bool(db_ready),
                 "positions": [],
                 "summary": _positions_summary([]),
                 "source": "db",
                 "calculationSource": "postgres",
+                "db_source_of_truth": True,
+                "db_ready": bool(db_ready),
             }
         )
 
     if "symbol" not in open_df.columns:
-        return jsonify(
+        return _json_no_store(
             {
                 "ok": False,
                 "positions": [],
                 "summary": _positions_summary([]),
                 "source": "db",
                 "calculationSource": "postgres",
+                "db_source_of_truth": True,
+                "db_ready": bool(db_ready),
             }
         )
 
@@ -4477,7 +4914,17 @@ def api_positions_monitoring():
             bucket["has_realized"] = True
 
     symbols = list(aggregated.keys())
-    sparkline_map = _sparkline_from_daily_bars(symbols, points=sparkline_points)
+    sparkline_map = _fetch_alpaca_sparklines(symbols, points=sparkline_points)
+    alpaca_sparkline = bool(sparkline_map)
+    if not sparkline_map:
+        sparkline_map = _sparkline_from_daily_bars(symbols, points=sparkline_points)
+
+    latest_prices = _fetch_latest_prices(symbols)
+    trailing_stop_map = _active_trailing_stops_from_alpaca(symbols)
+    activity_seed = [{"symbol": symbol, "qty": bucket.get("qty")} for symbol, bucket in aggregated.items()]
+    days_held_map = _days_held_map_from_alpaca_activities(activity_seed)
+    using_alpaca_overlay = bool(alpaca_sparkline or latest_prices or trailing_stop_map or days_held_map)
+
     positions = []
 
     for symbol, bucket in aggregated.items():
@@ -4487,12 +4934,11 @@ def api_positions_monitoring():
         )
         cost_basis = bucket["entry_value"] if bucket["entry_value"] else None
         sparkline = sparkline_map.get(symbol, [])
-        current_price = sparkline[-1] if sparkline else entry_price
+        latest_price = latest_prices.get(symbol)
+        current_price = latest_price if latest_price is not None else (sparkline[-1] if sparkline else entry_price)
 
         dollar_pl = None
-        if bucket["has_realized"]:
-            dollar_pl = bucket["realized_pnl"]
-        elif current_price is not None and entry_price is not None and qty is not None:
+        if current_price is not None and entry_price is not None and qty is not None:
             dollar_pl = (current_price - entry_price) * qty
 
         percent_pl = None
@@ -4500,6 +4946,10 @@ def api_positions_monitoring():
             cost_basis = entry_price * qty
             if cost_basis != 0:
                 percent_pl = (dollar_pl / cost_basis) * 100
+
+        live_trailing = trailing_stop_map.get(_normalize_symbol(symbol), {})
+        trailing_stop = _to_float(live_trailing.get("trailingStop"))
+        trail_percent = _to_float(live_trailing.get("trailPercent"))
 
         positions.append(
             {
@@ -4512,6 +4962,9 @@ def api_positions_monitoring():
                 "dollarPL": dollar_pl,
                 "costBasis": cost_basis,
                 "logoUrl": _logo_url_for_symbol(symbol),
+                "daysHeld": days_held_map.get(_normalize_symbol(symbol)),
+                "trailingStop": trailing_stop,
+                "trailPercent": trail_percent,
                 **(
                     {
                         "_debug": {
@@ -4519,7 +4972,11 @@ def api_positions_monitoring():
                             "entryPrice": entry_price,
                             "costBasis": cost_basis,
                             "currentPrice": current_price,
+                            "latestTradePrice": latest_price,
                             "sparklineTail": sparkline[-3:] if sparkline else [],
+                            "daysHeldFromActivities": days_held_map.get(_normalize_symbol(symbol)),
+                            "liveTrailingStop": trailing_stop,
+                            "liveTrailPercent": trail_percent,
                         }
                     }
                     if include_debug
@@ -4530,15 +4987,24 @@ def api_positions_monitoring():
 
     positions, summary = _enrich_positions_with_db_metrics(positions)
     payload = {
-        "ok": True,
+        "ok": bool(db_ready),
         "positions": positions,
         "summary": summary,
-        "source": "db",
+        "source": "db+alpaca" if using_alpaca_overlay else "db",
         "calculationSource": "postgres",
+        "db_source_of_truth": True,
+        "db_ready": bool(db_ready),
     }
     if include_debug:
-        payload["_debug"] = {"symbols": symbols}
-    return jsonify(payload)
+        payload["_debug"] = {
+            "symbols": symbols,
+            "feed": os.getenv("ALPACA_DATA_FEED"),
+            "latestPrices": latest_prices,
+            "trailingStops": trailing_stop_map,
+            "daysHeldFromActivities": days_held_map,
+            "alpacaOverlayUsed": using_alpaca_overlay,
+        }
+    return _json_no_store(payload)
 
 
 @server.route("/api/execute/overview")

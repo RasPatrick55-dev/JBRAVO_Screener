@@ -170,6 +170,16 @@ TABLE_STATEMENTS = [
         updated_at TIMESTAMPTZ DEFAULT now()
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS trades_api_requests (
+        request_id BIGSERIAL PRIMARY KEY,
+        endpoint TEXT NOT NULL,
+        params JSONB,
+        source TEXT NOT NULL,
+        rows_returned INTEGER,
+        created_at TIMESTAMPTZ DEFAULT now()
+    );
+    """,
 ]
 
 INDEX_STATEMENTS = [
@@ -187,6 +197,7 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);",
     "CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);",
     "CREATE INDEX IF NOT EXISTS idx_trades_exit_time ON trades(exit_time);",
+    "CREATE INDEX IF NOT EXISTS idx_trades_api_requests_created_at ON trades_api_requests(created_at DESC);",
 ]
 
 SCREENER_CANDIDATES_ALTER_STATEMENTS = [

@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Cousine:wght@700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Arimo:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&family=Cousine:wght@700&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -12,8 +12,10 @@
     --jbravo-red: #ef4444;
     --jbravo-bg: #0a0e1a;
     --ds-surface: #ffffff;
+    --ds-text-primary: #0f172a;
     --ds-text-secondary: #64748b;
     --ds-text-financial: #0f172a;
+    --ds-outline-subtle: #e2e8f0;
     --ds-progress-rail: #e2e8f0;
     --ds-progress-fill: #0f172a;
     --ds-ml-dot-active: #22c55e;
@@ -21,12 +23,15 @@
     --ds-shadow-card: 0 6px 16px -12px rgba(15, 23, 42, 0.35), 0 2px 6px -4px rgba(15, 23, 42, 0.25);
     --ds-space-sm: 0.5rem;
     --ds-space-md: 1rem;
+    --ds-space-lg: 1.5rem;
   }
 
   .dark {
     --ds-surface: #0f172a;
+    --ds-text-primary: #f8fafc;
     --ds-text-secondary: #94a3b8;
     --ds-text-financial: #f8fafc;
+    --ds-outline-subtle: #334155;
     --ds-progress-rail: #1e293b;
     --ds-progress-fill: #f8fafc;
     --ds-ml-dot-active: #34d399;
@@ -41,12 +46,20 @@
 }
 
 @layer utilities {
+  .font-arimo {
+    font-family: "Arimo", ui-sans-serif, system-ui, sans-serif;
+  }
+
   .font-cousine {
     font-family: "Cousine", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
   .bg-surface {
     background-color: var(--ds-surface);
+  }
+
+  .text-primary {
+    color: var(--ds-text-primary);
   }
 
   .text-secondary {
@@ -77,12 +90,25 @@
     box-shadow: var(--ds-shadow-card);
   }
 
+  .outline-subtle {
+    outline: 1px solid var(--ds-outline-subtle);
+    outline-offset: -1px;
+  }
+
   .p-md {
     padding: var(--ds-space-md);
   }
 
+  .p-lg {
+    padding: var(--ds-space-lg);
+  }
+
   .gap-sm {
     gap: var(--ds-space-sm);
+  }
+
+  .gap-md {
+    gap: var(--ds-space-md);
   }
 
   .market-status {
