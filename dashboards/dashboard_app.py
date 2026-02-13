@@ -4726,18 +4726,27 @@ def api_trades_overview():
         for record in trades_df.to_dict(orient="records"):
             trade_records.append({key: _serialize_record(value) for key, value in record.items()})
 
-    open_df = load_open_trades_db()
-    open_count = int(len(open_df)) if open_df is not None else 0
+    live_positions = _positions_from_alpaca()
+    open_source = "alpaca"
+    open_count = int(len(live_positions))
     open_pnl = None
-    if isinstance(open_df, pd.DataFrame) and not open_df.empty and "realized_pnl" in open_df.columns:
-        open_pnl = float(open_df["realized_pnl"].fillna(0).sum())
+    if live_positions:
+        open_pnl = float(
+            sum(_to_float(row.get("dollar_pl")) or 0.0 for row in live_positions)
+        )
+    else:
+        open_df = load_open_trades_db()
+        open_source = "db-fallback"
+        open_count = int(len(open_df)) if open_df is not None else 0
+        if isinstance(open_df, pd.DataFrame) and not open_df.empty and "realized_pnl" in open_df.columns:
+            open_pnl = float(open_df["realized_pnl"].fillna(0).sum())
 
     payload = {
         "ok": bool(metrics or trade_records),
         "db_source_of_truth": True,
         "metrics": metrics,
         "trades": trade_records,
-        "open_positions": {"count": open_count, "realized_pnl": open_pnl},
+        "open_positions": {"count": open_count, "realized_pnl": open_pnl, "source": open_source},
     }
     return jsonify(payload)
 
@@ -4867,90 +4876,88 @@ def api_positions_monitoring():
 
     sparkline_points = 12
     open_df = load_open_trades_db()
-    if open_df is not None and not open_df.empty and "symbol" not in open_df.columns:
-        return _json_no_store(
-            {
-                "ok": False,
-                "positions": [],
-                "summary": _positions_summary([]),
-                "source": "db",
-                "calculationSource": "postgres",
-                "db_source_of_truth": True,
-                "db_ready": bool(db_ready),
-            }
-        )
-
     aggregated: dict[str, dict[str, Any]] = {}
-    calculation_source = "postgres"
-    db_source_of_truth = True
+    calculation_source = "alpaca"
+    db_source_of_truth = False
 
-    if open_df is not None and not open_df.empty:
-        for record in open_df.to_dict(orient="records"):
-            symbol = str(record.get("symbol") or "").strip()
-            if not symbol:
-                continue
-            qty = _to_float(record.get("qty"))
-            entry_price = _to_float(record.get("entry_price"))
-            realized_pnl = _to_float(record.get("realized_pnl"))
+    # Open positions are live-source first (Alpaca API).
+    for record in _positions_from_alpaca():
+        symbol = _normalize_symbol(record.get("symbol"))
+        if not symbol:
+            continue
 
-            bucket = aggregated.setdefault(
-                symbol,
-                {
-                    "symbol": symbol,
-                    "qty": 0.0,
-                    "entry_value": 0.0,
-                    "realized_pnl": 0.0,
-                    "has_realized": False,
-                    "dollar_pl": None,
-                    "percent_pl": None,
-                },
-            )
-            if qty is not None and entry_price is not None:
-                bucket["qty"] += qty
-                bucket["entry_value"] += qty * entry_price
-            if realized_pnl is not None:
-                bucket["realized_pnl"] += realized_pnl
-                bucket["has_realized"] = True
+        qty = _to_float(record.get("qty"))
+        entry_price = _to_float(record.get("entry_price"))
+        if qty is None or entry_price is None or qty == 0:
+            continue
 
-    # Emergency fallback: if DB has no OPEN rows, populate from live Alpaca positions.
-    # This avoids blank UI while explicitly surfacing reconciliation state.
+        dollar_pl = _to_float(record.get("dollar_pl"))
+        percent_pl = _to_float(record.get("percent_pl"))
+
+        bucket = aggregated.setdefault(
+            symbol,
+            {
+                "symbol": symbol,
+                "qty": 0.0,
+                "entry_value": 0.0,
+                "realized_pnl": 0.0,
+                "has_realized": False,
+                "dollar_pl": 0.0,
+                "percent_pl": None,
+            },
+        )
+        bucket["qty"] += qty
+        bucket["entry_value"] += qty * entry_price
+        if dollar_pl is not None:
+            bucket["dollar_pl"] = _to_float(bucket.get("dollar_pl")) or 0.0
+            bucket["dollar_pl"] += dollar_pl
+        if percent_pl is not None and bucket.get("percent_pl") is None:
+            bucket["percent_pl"] = percent_pl
+
+    # Fallback to DB OPEN rows only when live API returns no positions.
     if not aggregated:
-        for record in _positions_from_alpaca():
-            symbol = _normalize_symbol(record.get("symbol"))
-            if not symbol:
-                continue
-
-            qty = _to_float(record.get("qty"))
-            entry_price = _to_float(record.get("entry_price"))
-            if qty is None or entry_price is None or qty == 0:
-                continue
-
-            dollar_pl = _to_float(record.get("dollar_pl"))
-            percent_pl = _to_float(record.get("percent_pl"))
-
-            bucket = aggregated.setdefault(
-                symbol,
+        if open_df is not None and not open_df.empty and "symbol" not in open_df.columns:
+            return _json_no_store(
                 {
-                    "symbol": symbol,
-                    "qty": 0.0,
-                    "entry_value": 0.0,
-                    "realized_pnl": 0.0,
-                    "has_realized": False,
-                    "dollar_pl": 0.0,
-                    "percent_pl": None,
-                },
+                    "ok": False,
+                    "positions": [],
+                    "summary": _positions_summary([]),
+                    "source": "db-fallback",
+                    "calculationSource": "postgres",
+                    "db_source_of_truth": True,
+                    "db_ready": bool(db_ready),
+                }
             )
-            bucket["qty"] += qty
-            bucket["entry_value"] += qty * entry_price
-            if dollar_pl is not None:
-                bucket["dollar_pl"] = _to_float(bucket.get("dollar_pl")) or 0.0
-                bucket["dollar_pl"] += dollar_pl
-            if percent_pl is not None and bucket.get("percent_pl") is None:
-                bucket["percent_pl"] = percent_pl
 
-        if aggregated:
-            calculation_source = "alpaca"
-            db_source_of_truth = False
+        if open_df is not None and not open_df.empty:
+            calculation_source = "postgres"
+            db_source_of_truth = True
+            for record in open_df.to_dict(orient="records"):
+                symbol = str(record.get("symbol") or "").strip()
+                if not symbol:
+                    continue
+                qty = _to_float(record.get("qty"))
+                entry_price = _to_float(record.get("entry_price"))
+                realized_pnl = _to_float(record.get("realized_pnl"))
+
+                bucket = aggregated.setdefault(
+                    symbol,
+                    {
+                        "symbol": symbol,
+                        "qty": 0.0,
+                        "entry_value": 0.0,
+                        "realized_pnl": 0.0,
+                        "has_realized": False,
+                        "dollar_pl": None,
+                        "percent_pl": None,
+                    },
+                )
+                if qty is not None and entry_price is not None:
+                    bucket["qty"] += qty
+                    bucket["entry_value"] += qty * entry_price
+                if realized_pnl is not None:
+                    bucket["realized_pnl"] += realized_pnl
+                    bucket["has_realized"] = True
 
     if not aggregated:
         return _json_no_store(
@@ -4958,10 +4965,11 @@ def api_positions_monitoring():
                 "ok": bool(db_ready),
                 "positions": [],
                 "summary": _positions_summary([]),
-                "source": "db",
-                "calculationSource": "postgres",
-                "db_source_of_truth": True,
+                "source": "alpaca",
+                "calculationSource": "alpaca",
+                "db_source_of_truth": False,
                 "db_ready": bool(db_ready),
+                "reconciliation_required": False,
             }
         )
 
@@ -5047,11 +5055,11 @@ def api_positions_monitoring():
         "ok": bool(db_ready),
         "positions": positions,
         "summary": summary,
-        "source": ("db+alpaca" if using_alpaca_overlay else "db") if db_source_of_truth else "alpaca-fallback",
+        "source": "alpaca" if calculation_source == "alpaca" else ("db+alpaca" if using_alpaca_overlay else "db-fallback"),
         "calculationSource": calculation_source,
         "db_source_of_truth": bool(db_source_of_truth),
         "db_ready": bool(db_ready),
-        "reconciliation_required": not bool(db_source_of_truth),
+        "reconciliation_required": bool(positions) and not bool(db_source_of_truth),
     }
     if include_debug:
         payload["_debug"] = {
@@ -5089,8 +5097,13 @@ def api_execute_overview():
             elif "fill" in status_lower or status_lower in {"closed", "filled"}:
                 filled += 1
 
-    open_df = load_open_trades_db()
-    open_count = int(len(open_df)) if open_df is not None else 0
+    live_positions = _positions_from_alpaca()
+    open_count = int(len(live_positions))
+    open_positions_source = "alpaca"
+    if open_count == 0:
+        open_df = load_open_trades_db()
+        open_count = int(len(open_df)) if open_df is not None else 0
+        open_positions_source = "db-fallback"
 
     skip_counts: dict[str, int] = {}
     lines = tail_log(execute_trades_log_path, limit=400)
@@ -5115,6 +5128,7 @@ def api_execute_overview():
         "skip_counts": skip_counts,
         "last_execution": last_exec_ts.isoformat() if last_exec_ts else None,
         "ny_now": ny_now.isoformat(),
+        "open_positions_source": open_positions_source,
     }
     return jsonify(payload)
 

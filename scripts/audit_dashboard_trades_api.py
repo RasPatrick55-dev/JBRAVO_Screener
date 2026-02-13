@@ -36,10 +36,13 @@ RANGE_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
 class AuditContext:
     trades_frame: pd.DataFrame
     latest_metrics: dict[str, Any]
-    open_count: int
-    open_realized_pnl: float
+    db_open_count: int
+    db_open_realized_pnl: float
+    live_open_count: int
+    live_open_unrealized_pnl: float
     account_snapshot_db: dict[str, Any]
-    open_positions_expected: dict[str, dict[str, float]]
+    db_open_positions_expected: dict[str, dict[str, float]]
+    live_open_positions_expected: dict[str, dict[str, float]]
 
 
 @dataclass
@@ -319,7 +322,7 @@ def _load_open_positions_expected() -> dict[str, dict[str, float]]:
         symbol = str(row.get("symbol") or "").strip().upper()
         qty = _to_number(row.get("qty"))
         entry_price = row.get("entry_price")
-        if not symbol or qty <= 0:
+        if not symbol or qty == 0:
             continue
         try:
             entry_price_num = float(entry_price)
@@ -332,13 +335,47 @@ def _load_open_positions_expected() -> dict[str, dict[str, float]]:
     normalized: dict[str, dict[str, float]] = {}
     for symbol, bucket in expected.items():
         qty = float(bucket.get("qty") or 0.0)
-        if qty <= 0:
+        if qty == 0:
             continue
         normalized[symbol] = {
             "qty": qty,
             "entryPrice": float(bucket.get("entry_value") or 0.0) / qty,
         }
     return normalized
+
+
+def _load_live_open_positions_expected() -> tuple[int, float, dict[str, dict[str, float]]]:
+    try:
+        from dashboards.dashboard_app import _positions_from_alpaca
+    except Exception:
+        return 0, 0.0, {}
+
+    rows = _positions_from_alpaca() or []
+    expected: dict[str, dict[str, float]] = {}
+    total_unrealized = 0.0
+    for row in rows:
+        symbol = str((row or {}).get("symbol") or "").strip().upper()
+        qty = _to_number((row or {}).get("qty"))
+        entry_price = _to_number((row or {}).get("entry_price"))
+        dollar_pl = _to_number((row or {}).get("dollar_pl"))
+        if dollar_pl:
+            total_unrealized += dollar_pl
+        if not symbol or qty == 0 or entry_price == 0:
+            continue
+        bucket = expected.setdefault(symbol, {"qty": 0.0, "entry_value": 0.0})
+        bucket["qty"] += qty
+        bucket["entry_value"] += qty * entry_price
+
+    normalized: dict[str, dict[str, float]] = {}
+    for symbol, bucket in expected.items():
+        qty = float(bucket.get("qty") or 0.0)
+        if qty == 0:
+            continue
+        normalized[symbol] = {
+            "qty": qty,
+            "entryPrice": float(bucket.get("entry_value") or 0.0) / qty,
+        }
+    return int(len(rows)), float(total_unrealized), normalized
 
 
 def _build_audit_context() -> AuditContext:
@@ -381,18 +418,22 @@ def _build_audit_context() -> AuditContext:
         }
 
     open_df = _db_query_frame("SELECT realized_pnl FROM trades WHERE status='OPEN'")
-    open_count = int(len(open_df))
-    open_realized_pnl = float(pd.to_numeric(open_df.get("realized_pnl"), errors="coerce").fillna(0).sum())
+    db_open_count = int(len(open_df))
+    db_open_realized_pnl = float(pd.to_numeric(open_df.get("realized_pnl"), errors="coerce").fillna(0).sum())
     account_snapshot_db = _load_account_snapshot_db()
-    open_positions_expected = _load_open_positions_expected()
+    db_open_positions_expected = _load_open_positions_expected()
+    live_open_count, live_open_unrealized_pnl, live_open_positions_expected = _load_live_open_positions_expected()
 
     return AuditContext(
         trades_frame=normalized,
         latest_metrics=latest_metrics,
-        open_count=open_count,
-        open_realized_pnl=open_realized_pnl,
+        db_open_count=db_open_count,
+        db_open_realized_pnl=db_open_realized_pnl,
+        live_open_count=live_open_count,
+        live_open_unrealized_pnl=live_open_unrealized_pnl,
         account_snapshot_db=account_snapshot_db,
-        open_positions_expected=open_positions_expected,
+        db_open_positions_expected=db_open_positions_expected,
+        live_open_positions_expected=live_open_positions_expected,
     )
 
 
@@ -596,13 +637,23 @@ def _audit_overview(report: AuditReport, ctx: AuditContext, *, requester: Any, b
         details.append("db_source_of_truth flag missing")
 
     open_positions = payload.get("open_positions") or {}
-    if _to_int(open_positions.get("count")) != int(ctx.open_count):
+    open_source = str(open_positions.get("source") or "")
+    expected_count = int(ctx.live_open_count)
+    expected_pnl = float(ctx.live_open_unrealized_pnl)
+    if open_source == "db-fallback":
+        expected_count = int(ctx.db_open_count)
+        expected_pnl = float(ctx.db_open_realized_pnl)
+    elif open_source != "alpaca":
         ok = False
-        details.append(f"open_count actual={open_positions.get('count')} expected={ctx.open_count}")
-    if not _float_close(open_positions.get("realized_pnl"), ctx.open_realized_pnl, abs_tol=1e-6):
+        details.append(f"open_source={open_source}")
+
+    if _to_int(open_positions.get("count")) != expected_count:
+        ok = False
+        details.append(f"open_count actual={open_positions.get('count')} expected={expected_count}")
+    if not _float_close(open_positions.get("realized_pnl"), expected_pnl, abs_tol=1e-6):
         ok = False
         details.append(
-            f"open_realized_pnl actual={open_positions.get('realized_pnl')} expected={ctx.open_realized_pnl}"
+            f"open_realized_pnl actual={open_positions.get('realized_pnl')} expected={expected_pnl}"
         )
 
     got_metrics = payload.get("metrics") or {}
@@ -741,7 +792,6 @@ def _audit_positions_monitoring(
 ) -> None:
     endpoint = "/api/positions/monitoring"
     status, payload = _request_json(endpoint, base_url=base_url, flask_client=requester)
-    expected_positions = ctx.open_positions_expected or {}
 
     if status != 200:
         report.add_issue(f"{endpoint}: unexpected HTTP {status}")
@@ -751,15 +801,29 @@ def _audit_positions_monitoring(
     ok = True
     details: list[str] = []
 
-    if payload.get("db_source_of_truth") is not True:
+    calculation_source = str(payload.get("calculationSource") or "")
+    source = str(payload.get("source") or "")
+    db_source_of_truth = payload.get("db_source_of_truth")
+
+    expected_positions = ctx.live_open_positions_expected or {}
+    if calculation_source == "postgres":
+        expected_positions = ctx.db_open_positions_expected or {}
+        if db_source_of_truth is not True:
+            ok = False
+            details.append("db_source_of_truth expected true")
+        if source not in {"db", "db+alpaca", "db-fallback"}:
+            ok = False
+            details.append(f"source={source}")
+    elif calculation_source == "alpaca":
+        if db_source_of_truth not in {False, 0}:
+            ok = False
+            details.append("db_source_of_truth expected false")
+        if source not in {"alpaca", "alpaca-fallback"}:
+            ok = False
+            details.append(f"source={source}")
+    else:
         ok = False
-        details.append("db_source_of_truth flag missing")
-    if payload.get("calculationSource") != "postgres":
-        ok = False
-        details.append(f"calculationSource={payload.get('calculationSource')}")
-    if str(payload.get("source") or "") not in {"db", "db+alpaca"}:
-        ok = False
-        details.append(f"source={payload.get('source')}")
+        details.append(f"calculationSource={calculation_source}")
 
     positions = payload.get("positions")
     if not isinstance(positions, list):
