@@ -25,3 +25,7 @@ frontend/node_modules/
 frontend/dist/
 frontend/.env
 frontend/.env.*
+frontend/tsconfig.tsbuildinfo
+reports/*.json
+docs/ui-reference/*.png
+docs/ui-reference/*.jpg
