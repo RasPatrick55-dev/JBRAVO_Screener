@@ -4990,16 +4990,19 @@ def api_positions_monitoring():
         latest_price = latest_prices.get(symbol)
         current_price = latest_price if latest_price is not None else (sparkline[-1] if sparkline else entry_price)
 
-        dollar_pl = _to_float(bucket.get("dollar_pl"))
-        if dollar_pl is None and current_price is not None and entry_price is not None and qty is not None:
+        dollar_pl = None
+        if current_price is not None and entry_price is not None and qty is not None:
             dollar_pl = (current_price - entry_price) * qty
+        if dollar_pl is None:
+            dollar_pl = _to_float(bucket.get("dollar_pl"))
 
-        percent_pl = _to_float(bucket.get("percent_pl"))
+        percent_pl = None
         if dollar_pl is not None and entry_price is not None and qty is not None and qty != 0:
-            if percent_pl is None:
-                cost_basis = entry_price * qty
-                if cost_basis != 0:
-                    percent_pl = (dollar_pl / cost_basis) * 100
+            cost_basis = entry_price * qty
+            if cost_basis != 0:
+                percent_pl = (dollar_pl / cost_basis) * 100
+        if percent_pl is None:
+            percent_pl = _to_float(bucket.get("percent_pl"))
 
         live_trailing = trailing_stop_map.get(_normalize_symbol(symbol), {})
         trailing_stop = _to_float(live_trailing.get("trailingStop"))
