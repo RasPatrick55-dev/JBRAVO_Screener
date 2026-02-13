@@ -1,6 +1,5 @@
 import MonitoringLogsPanel, { type MonitoringLogItem } from "./MonitoringLogsPanel";
-import { positionTableGridColumns } from "./layout";
-import PositionRow, { type PositionRowProps } from "./PositionRow";
+import PositionRow, { PositionRowMobile, type PositionRowProps } from "./PositionRow";
 import PositionSummary, { type PositionSummaryProps } from "./PositionSummary";
 
 export interface PositionsTabProps {
@@ -23,6 +22,27 @@ const columnLabels = [
 ];
 
 const skeletonKey = ["skeleton-1", "skeleton-2"];
+const desktopColumnWidths = ["14.634%", "12.195%", "12.195%", "12.195%", "12.195%", "12.195%", "12.195%", "12.195%"];
+
+const desktopHeaderCellClass = (index: number) => {
+  if (index === 0) {
+    return "py-3 pl-7 pr-3 text-center text-xs font-semibold uppercase tracking-wide text-secondary";
+  }
+  if (index === columnLabels.length - 1) {
+    return "border-l border-slate-200/50 py-3 pl-3 pr-7 text-center text-xs font-semibold uppercase tracking-wide text-secondary";
+  }
+  return "border-l border-slate-200/50 px-3 py-3 text-center text-xs font-semibold uppercase tracking-wide text-secondary";
+};
+
+const desktopLoadingCellClass = (index: number) => {
+  if (index === 0) {
+    return "py-3.5 pl-7 pr-3 align-middle";
+  }
+  if (index === columnLabels.length - 1) {
+    return "border-l border-slate-200/50 py-3.5 pl-3 pr-7 align-middle";
+  }
+  return "border-l border-slate-200/50 px-3 py-3.5 align-middle";
+};
 
 export default function PositionsTab({
   positions,
@@ -48,56 +68,71 @@ export default function PositionsTab({
 
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-surface shadow-card">
         <div className="overflow-x-auto sm:overflow-x-auto">
-          <div className="min-w-full">
-            <div
-              className={`${positionTableGridColumns} hidden items-center gap-0 divide-x divide-slate-200/50 border-b border-slate-200 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-secondary sm:grid`}
-              role="row"
-            >
-              {columnLabels.map((label) => (
-                <div key={label} className="truncate px-3 text-center">
-                  {label}
-                </div>
-              ))}
-            </div>
-            <div role="rowgroup">
-              {isLoading ? (
-                <>
-                  <div className="space-y-2 px-4 py-3 sm:hidden">
-                    {skeletonKey.map((key) => (
-                      <div key={`mobile-${key}`} className="rounded-lg border border-slate-200 px-3 py-3">
-                        <div className="h-5 w-24 rounded bg-slate-100" />
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          {Array.from({ length: 6 }).map((_, index) => (
-                            <div key={`${key}-${index}`} className="h-10 rounded bg-slate-100" />
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  {skeletonKey.map((key) => (
-                    <div
-                      key={key}
-                      className={`${positionTableGridColumns} hidden items-center gap-0 divide-x divide-slate-200/50 border-b border-slate-200 px-4 py-3.5 sm:grid`}
-                      role="row"
-                    >
-                      {columnLabels.map((label) => (
-                        <div
-                          key={`${key}-${label}`}
-                          className="mx-auto h-4 w-4/5 rounded bg-slate-100"
-                          aria-hidden="true"
-                        />
+          <div className="sm:hidden">
+            {isLoading ? (
+              <div className="space-y-2 px-4 py-3">
+                {skeletonKey.map((key) => (
+                  <div key={`mobile-${key}`} className="rounded-lg border border-slate-200 px-3 py-3">
+                    <div className="h-5 w-24 rounded bg-slate-100" />
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      {Array.from({ length: 6 }).map((_, index) => (
+                        <div key={`${key}-${index}`} className="h-10 rounded bg-slate-100" />
                       ))}
                     </div>
-                  ))}
-                </>
+                  </div>
+                ))}
+              </div>
+            ) : positions.length > 0 ? (
+              positions.map((position, index) => (
+                <PositionRowMobile key={`${position.symbol}-${index}`} {...position} />
+              ))
+            ) : (
+              <div className="px-4 py-8 text-sm text-secondary">No open positions available.</div>
+            )}
+          </div>
+
+          <table className="hidden min-w-full table-fixed sm:table">
+            <caption className="sr-only">Open positions with share count, prices, trailing stop, and profit and loss</caption>
+            <colgroup>
+              {desktopColumnWidths.map((width, index) => (
+                <col key={columnLabels[index]} style={{ width }} />
+              ))}
+            </colgroup>
+            <thead className="border-b border-slate-200">
+              <tr>
+                {columnLabels.map((label, index) => (
+                  <th key={label} scope="col" className={desktopHeaderCellClass(index)}>
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                skeletonKey.map((key) => (
+                  <tr key={key} className="border-b border-slate-200">
+                    {columnLabels.map((label, index) => (
+                      <td key={`${key}-${label}`} className={desktopLoadingCellClass(index)}>
+                        <div className="mx-auto h-4 w-4/5 rounded bg-slate-100" aria-hidden="true" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
               ) : positions.length > 0 ? (
                 positions.map((position, index) => (
                   <PositionRow key={`${position.symbol}-${index}`} {...position} />
                 ))
               ) : (
-                <div className="px-4 py-8 text-sm text-secondary">No open positions available.</div>
+                <tr>
+                  <td colSpan={columnLabels.length} className="px-4 py-8 text-sm text-secondary">
+                    No open positions available.
+                  </td>
+                </tr>
               )}
-            </div>
+            </tbody>
+          </table>
+          <div className="sr-only" aria-live="polite">
+            {isLoading ? "Loading positions" : `${positions.length} open positions loaded`}
           </div>
         </div>
       </section>
