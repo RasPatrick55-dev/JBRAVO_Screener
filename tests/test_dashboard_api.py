@@ -133,3 +133,45 @@ def test_trades_leaderboard_modes_sorting(monkeypatch: pytest.MonkeyPatch, tmp_p
     invalid_payload = invalid_response.get_json()
     assert invalid_payload.get("ok") is False
     assert invalid_payload.get("error") == "invalid_mode"
+
+
+@pytest.mark.alpaca_optional
+def test_trades_leaderboard_limit_honors_requested_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    now = pd.Timestamp.now(tz="UTC")
+    mocked_trades = pd.DataFrame(
+        [
+            {
+                "symbol": f"SYM{index:02d}",
+                "realized_pnl": float(100 - index),
+                "sort_ts": now - pd.Timedelta(minutes=index),
+            }
+            for index in range(30)
+        ]
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_load_trades_analytics_frame",
+        lambda: (mocked_trades.copy(), "postgres", "trades"),
+    )
+    monkeypatch.setattr(module, "_record_trades_api_request", lambda **_: True)
+
+    client = module.app.server.test_client()
+    response = client.get("/api/trades/leaderboard?range=all&mode=winners&limit=20")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    rows = payload.get("rows") or []
+    assert payload.get("mode") == "winners"
+    assert payload.get("range") == "all"
+    assert len(rows) == 20
+    assert len(rows) > 10
+    assert rows[-1].get("rank") == 20
+
+    pls = [float(row.get("pl") or 0.0) for row in rows]
+    assert pls == sorted(pls, reverse=True)

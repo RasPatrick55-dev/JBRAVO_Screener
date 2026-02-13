@@ -4785,9 +4785,14 @@ def api_trades_stats():
 
 @server.route("/api/trades/leaderboard")
 def api_trades_leaderboard():
-    range_key = _parse_trades_range(request.args.get("range"), default="d")
-    mode = str(request.args.get("mode") or "winners").strip().lower()
-    limit = _parse_positive_int(request.args.get("limit"), default=10, minimum=1, maximum=50)
+    range_value = str(request.args.get("range", "all")).strip().lower()
+    mode = str(request.args.get("mode", "winners")).strip().lower()
+    try:
+        limit = int(request.args.get("limit", "10"))
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(50, limit))
+    range_key = _parse_trades_range(range_value, default="all")
     if mode not in {"winners", "losers"}:
         response = _json_no_store(
             {
