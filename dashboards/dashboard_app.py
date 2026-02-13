@@ -1895,16 +1895,19 @@ def _build_leaderboard_rows(
         return []
 
     grouped = (
-        scoped.groupby("symbol", dropna=False)["realized_pnl"]
-        .sum()
+        scoped.groupby("symbol", dropna=False)
+        .agg(pl=("realized_pnl", "sum"), latest_sort_ts=("sort_ts", "max"))
         .reset_index()
-        .rename(columns={"realized_pnl": "pl"})
     )
 
     if mode == "losers":
-        grouped = grouped[grouped["pl"] < 0].sort_values("pl", ascending=True)
+        grouped = grouped[grouped["pl"] < 0].sort_values(
+            ["pl", "latest_sort_ts"], ascending=[True, False], na_position="last"
+        )
     else:
-        grouped = grouped[grouped["pl"] > 0].sort_values("pl", ascending=False)
+        grouped = grouped[grouped["pl"] > 0].sort_values(
+            ["pl", "latest_sort_ts"], ascending=[False, False], na_position="last"
+        )
 
     grouped = grouped.head(limit).reset_index(drop=True)
     rows: list[dict[str, Any]] = []
@@ -4783,9 +4786,21 @@ def api_trades_stats():
 @server.route("/api/trades/leaderboard")
 def api_trades_leaderboard():
     range_key = _parse_trades_range(request.args.get("range"), default="d")
-    mode_raw = str(request.args.get("mode") or "winners").strip().lower()
-    mode = "losers" if mode_raw == "losers" else "winners"
+    mode = str(request.args.get("mode") or "winners").strip().lower()
     limit = _parse_positive_int(request.args.get("limit"), default=10, minimum=1, maximum=50)
+    if mode not in {"winners", "losers"}:
+        response = _json_no_store(
+            {
+                "ok": False,
+                "error": "invalid_mode",
+                "message": "mode must be one of: winners, losers",
+                "range": range_key,
+                "mode": mode,
+                "limit": limit,
+            }
+        )
+        response.status_code = 400
+        return response
 
     trades_frame, source, source_detail = _load_trades_analytics_frame()
     db_ready = _trades_api_db_ready(source, source_detail)

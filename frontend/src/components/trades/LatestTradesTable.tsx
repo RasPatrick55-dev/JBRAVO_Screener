@@ -4,6 +4,8 @@ import type { LatestTradeRow } from "./types";
 interface LatestTradesTableProps {
   rows: LatestTradeRow[];
   isLoading?: boolean;
+  onSymbolSelect?: (symbol: string) => void;
+  getSymbolHref?: (symbol: string) => string | null | undefined;
 }
 
 const formatDate = (value: string): string => {
@@ -22,13 +24,25 @@ const formatDate = (value: string): string => {
   });
 };
 
-export default function LatestTradesTable({ rows, isLoading = false }: LatestTradesTableProps) {
+const symbolTextClass = "font-arimo block truncate text-center font-semibold text-primary";
+const symbolActionClass =
+  `${symbolTextClass} ` +
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
+  "focus-visible:outline-slate-400 dark:focus-visible:outline-slate-500";
+
+export default function LatestTradesTable({
+  rows,
+  isLoading = false,
+  onSymbolSelect,
+  getSymbolHref,
+}: LatestTradesTableProps) {
   return (
     <section className="rounded-2xl bg-surface p-md shadow-card outline-subtle" aria-label="Latest trades">
       <h2 className="font-arimo text-sm font-semibold uppercase tracking-[0.08em] text-primary">LATEST TRADES</h2>
 
       <div className="mt-3 max-h-[336px] overflow-auto">
         <table className="w-full table-fixed">
+          <caption className="sr-only">Latest closed trades with buy/sell dates, shares, and total P/L.</caption>
           <colgroup>
             <col className="w-[12%]" />
             <col className="w-[13%]" />
@@ -90,12 +104,27 @@ export default function LatestTradesTable({ rows, isLoading = false }: LatestTra
               ? rows.map((row, index) => {
                   const pnlTone =
                     row.totalPL > 0 ? "jbravo-text-success" : row.totalPL < 0 ? "jbravo-text-error" : "text-primary";
+                  const symbol = row.symbol.trim().toUpperCase() || "--";
+                  const symbolHref = getSymbolHref?.(symbol);
+
                   return (
                     <tr
                       key={`${row.symbol}-${row.sellDate}-${index}`}
                       className="border-b border-slate-200 text-xs dark:border-slate-700"
                     >
-                      <td className="font-arimo truncate px-1.5 py-2 text-center font-semibold text-primary">{row.symbol}</td>
+                      <th scope="row" className="truncate px-1.5 py-2 text-center">
+                        {symbolHref ? (
+                          <a href={symbolHref} className={symbolActionClass}>
+                            {symbol}
+                          </a>
+                        ) : onSymbolSelect ? (
+                          <button type="button" className={symbolActionClass} onClick={() => onSymbolSelect(symbol)}>
+                            {symbol}
+                          </button>
+                        ) : (
+                          <span className={symbolTextClass}>{symbol}</span>
+                        )}
+                      </th>
                       <td className="font-cousine truncate px-1.5 py-2 text-center text-secondary">{formatDate(row.buyDate)}</td>
                       <td className="font-cousine truncate px-1.5 py-2 text-center text-secondary">{formatDate(row.sellDate)}</td>
                       <td className="font-cousine px-1.5 py-2 text-center text-primary tabular-nums">

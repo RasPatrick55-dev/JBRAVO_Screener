@@ -81,3 +81,55 @@ def test_api_health_matches_loader(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert response.status_code == 200
     payload = json.loads(response.data.decode("utf-8"))
     assert payload == expected
+
+
+@pytest.mark.alpaca_optional
+def test_trades_leaderboard_modes_sorting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    now = pd.Timestamp.now(tz="UTC")
+    mocked_trades = pd.DataFrame(
+        [
+            {"symbol": "AAA", "realized_pnl": 12.0, "sort_ts": now - pd.Timedelta(days=2)},
+            {"symbol": "BBB", "realized_pnl": 40.0, "sort_ts": now - pd.Timedelta(days=1)},
+            {"symbol": "CCC", "realized_pnl": -7.0, "sort_ts": now - pd.Timedelta(days=3)},
+            {"symbol": "DDD", "realized_pnl": -30.0, "sort_ts": now - pd.Timedelta(hours=8)},
+            {"symbol": "EEE", "realized_pnl": 5.0, "sort_ts": now - pd.Timedelta(hours=4)},
+        ]
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_load_trades_analytics_frame",
+        lambda: (mocked_trades.copy(), "postgres", "trades"),
+    )
+    monkeypatch.setattr(module, "_record_trades_api_request", lambda **_: True)
+
+    client = module.app.server.test_client()
+
+    winners_response = client.get("/api/trades/leaderboard?range=all&mode=winners&limit=10")
+    assert winners_response.status_code == 200
+    winners_payload = winners_response.get_json()
+    winners_rows = winners_payload.get("rows") or []
+    assert winners_rows
+    winner_pls = [float(row.get("pl") or 0.0) for row in winners_rows]
+    assert all(pl >= 0 for pl in winner_pls)
+    assert winner_pls == sorted(winner_pls, reverse=True)
+    assert all({"rank", "symbol", "pl"}.issubset(set(row.keys())) for row in winners_rows)
+
+    losers_response = client.get("/api/trades/leaderboard?range=all&mode=losers&limit=10")
+    assert losers_response.status_code == 200
+    losers_payload = losers_response.get_json()
+    losers_rows = losers_payload.get("rows") or []
+    assert losers_rows
+    loser_pls = [float(row.get("pl") or 0.0) for row in losers_rows]
+    assert all(pl <= 0 for pl in loser_pls)
+    assert loser_pls == sorted(loser_pls)
+    assert all({"rank", "symbol", "pl"}.issubset(set(row.keys())) for row in losers_rows)
+
+    invalid_response = client.get("/api/trades/leaderboard?range=all&mode=not-valid&limit=10")
+    assert invalid_response.status_code == 400
+    invalid_payload = invalid_response.get_json()
+    assert invalid_payload.get("ok") is False
+    assert invalid_payload.get("error") == "invalid_mode"
