@@ -111,20 +111,22 @@ def test_trades_leaderboard_modes_sorting(monkeypatch: pytest.MonkeyPatch, tmp_p
     winners_response = client.get("/api/trades/leaderboard?range=all&mode=winners&limit=10")
     assert winners_response.status_code == 200
     winners_payload = winners_response.get_json()
+    assert winners_payload.get("mode") == "winners"
     winners_rows = winners_payload.get("rows") or []
     assert winners_rows
     winner_pls = [float(row.get("pl") or 0.0) for row in winners_rows]
-    assert all(pl >= 0 for pl in winner_pls)
+    assert all(pl > 0 for pl in winner_pls)
     assert winner_pls == sorted(winner_pls, reverse=True)
     assert all({"rank", "symbol", "pl"}.issubset(set(row.keys())) for row in winners_rows)
 
     losers_response = client.get("/api/trades/leaderboard?range=all&mode=losers&limit=10")
     assert losers_response.status_code == 200
     losers_payload = losers_response.get_json()
+    assert losers_payload.get("mode") == "losers"
     losers_rows = losers_payload.get("rows") or []
     assert losers_rows
     loser_pls = [float(row.get("pl") or 0.0) for row in losers_rows]
-    assert all(pl <= 0 for pl in loser_pls)
+    assert all(pl < 0 for pl in loser_pls)
     assert loser_pls == sorted(loser_pls)
     assert all({"rank", "symbol", "pl"}.issubset(set(row.keys())) for row in losers_rows)
 
@@ -162,16 +164,21 @@ def test_trades_leaderboard_limit_honors_requested_value(
     monkeypatch.setattr(module, "_record_trades_api_request", lambda **_: True)
 
     client = module.app.server.test_client()
-    response = client.get("/api/trades/leaderboard?range=all&mode=winners&limit=20")
+    requested_limit = 20
+    available_winners = (
+        mocked_trades.groupby("symbol", dropna=False)["realized_pnl"].sum().gt(0).sum()
+    )
+    response = client.get(f"/api/trades/leaderboard?range=all&mode=winners&limit={requested_limit}")
 
     assert response.status_code == 200
     payload = response.get_json()
     rows = payload.get("rows") or []
     assert payload.get("mode") == "winners"
     assert payload.get("range") == "all"
-    assert len(rows) == 20
+    assert payload.get("limit") == requested_limit
+    assert len(rows) == min(requested_limit, int(available_winners))
     assert len(rows) > 10
-    assert rows[-1].get("rank") == 20
+    assert rows[-1].get("rank") == len(rows)
 
     pls = [float(row.get("pl") or 0.0) for row in rows]
     assert pls == sorted(pls, reverse=True)
