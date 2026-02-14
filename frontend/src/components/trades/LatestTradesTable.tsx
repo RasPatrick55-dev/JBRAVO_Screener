@@ -24,11 +24,54 @@ const formatDate = (value: string): string => {
   });
 };
 
-const symbolTextClass = "font-arimo block truncate text-center font-semibold text-primary";
-const symbolActionClass =
-  `${symbolTextClass} ` +
+const symbolBaseClass = "font-arimo block truncate font-semibold text-primary";
+const symbolDesktopTextClass = `${symbolBaseClass} text-center`;
+const symbolMobileTextClass = `${symbolBaseClass} text-left`;
+const symbolActionFocusClass =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
   "focus-visible:outline-slate-400 dark:focus-visible:outline-slate-500";
+
+const plToneClass = (value: number): string => {
+  if (value > 0) {
+    return "jbravo-text-success";
+  }
+  if (value < 0) {
+    return "jbravo-text-error";
+  }
+  return "text-primary";
+};
+
+const renderSymbol = (
+  symbol: string,
+  symbolHref: string | null | undefined,
+  onSymbolSelect: ((symbol: string) => void) | undefined,
+  className: string
+) => {
+  if (symbolHref) {
+    return (
+      <a href={symbolHref} className={`${className} ${symbolActionFocusClass}`}>
+        {symbol}
+      </a>
+    );
+  }
+  if (onSymbolSelect) {
+    return (
+      <button type="button" className={`${className} ${symbolActionFocusClass}`} onClick={() => onSymbolSelect(symbol)}>
+        {symbol}
+      </button>
+    );
+  }
+  return <span className={className}>{symbol}</span>;
+};
+
+function MobileField({ label, value, toneClass = "text-primary" }: { label: string; value: string; toneClass?: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-surface px-2.5 py-2 dark:border-slate-700">
+      <p className="font-arimo text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary">{label}</p>
+      <p className={`font-cousine mt-1 text-sm font-bold tabular-nums ${toneClass}`}>{value}</p>
+    </div>
+  );
+}
 
 export default function LatestTradesTable({
   rows,
@@ -40,7 +83,62 @@ export default function LatestTradesTable({
     <section className="rounded-2xl bg-surface p-md shadow-card outline-subtle" aria-label="Latest trades">
       <h2 className="font-arimo text-sm font-semibold uppercase tracking-[0.08em] text-primary">LATEST TRADES</h2>
 
-      <div className="mt-3 max-h-[336px] overflow-auto">
+      <div className="mt-3 sm:hidden">
+        {isLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div
+                key={`latest-mobile-skeleton-${index}`}
+                className="rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700"
+              >
+                <div className="h-5 w-full animate-pulse rounded bg-slate-200/80 dark:bg-slate-700/70" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {!isLoading && rows.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-secondary dark:border-slate-700">
+            No recent closed trades available.
+          </div>
+        ) : null}
+
+        {!isLoading && rows.length > 0 ? (
+          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+            {rows.map((row, index) => {
+              const symbol = row.symbol.trim().toUpperCase() || "--";
+              const symbolHref = getSymbolHref?.(symbol);
+              const pnlTone = plToneClass(row.totalPL);
+              return (
+                <article
+                  key={`latest-mobile-${row.symbol}-${row.sellDate}-${index}`}
+                  className="border-b border-slate-200 px-3 py-3 last:border-b-0 dark:border-slate-700"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      {renderSymbol(symbol, symbolHref, onSymbolSelect, symbolMobileTextClass)}
+                    </div>
+                    <span className={`font-cousine text-sm font-bold tabular-nums ${pnlTone}`}>
+                      {formatSignedCurrency(row.totalPL)}
+                    </span>
+                  </div>
+
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <MobileField label="Buy Date" value={formatDate(row.buyDate)} toneClass="text-secondary" />
+                    <MobileField label="Sell Date" value={formatDate(row.sellDate)} toneClass="text-secondary" />
+                    <MobileField label="Total Days" value={formatNumber(row.totalDays)} />
+                    <MobileField label="Total Shares" value={formatNumber(row.totalShares)} />
+                    <MobileField label="Avg Entry Price" value={formatCurrency(row.avgEntryPrice)} />
+                    <MobileField label="Price Sold" value={formatCurrency(row.priceSold)} />
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-3 hidden max-h-[336px] overflow-auto sm:block">
         <table className="w-full table-fixed">
           <caption className="sr-only">Latest closed trades with buy/sell dates, shares, and total P/L.</caption>
           <colgroup>
@@ -102,8 +200,7 @@ export default function LatestTradesTable({
 
             {!isLoading
               ? rows.map((row, index) => {
-                  const pnlTone =
-                    row.totalPL > 0 ? "jbravo-text-success" : row.totalPL < 0 ? "jbravo-text-error" : "text-primary";
+                  const pnlTone = plToneClass(row.totalPL);
                   const symbol = row.symbol.trim().toUpperCase() || "--";
                   const symbolHref = getSymbolHref?.(symbol);
 
@@ -113,17 +210,7 @@ export default function LatestTradesTable({
                       className="border-b border-slate-200 text-xs dark:border-slate-700"
                     >
                       <th scope="row" className="truncate px-1.5 py-2 text-center">
-                        {symbolHref ? (
-                          <a href={symbolHref} className={symbolActionClass}>
-                            {symbol}
-                          </a>
-                        ) : onSymbolSelect ? (
-                          <button type="button" className={symbolActionClass} onClick={() => onSymbolSelect(symbol)}>
-                            {symbol}
-                          </button>
-                        ) : (
-                          <span className={symbolTextClass}>{symbol}</span>
-                        )}
+                        {renderSymbol(symbol, symbolHref, onSymbolSelect, symbolDesktopTextClass)}
                       </th>
                       <td className="font-cousine truncate px-1.5 py-2 text-center text-secondary">{formatDate(row.buyDate)}</td>
                       <td className="font-cousine truncate px-1.5 py-2 text-center text-secondary">{formatDate(row.sellDate)}</td>

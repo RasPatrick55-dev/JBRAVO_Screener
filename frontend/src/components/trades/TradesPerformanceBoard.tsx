@@ -26,6 +26,25 @@ const rangeOrder: Record<RangeKey, number> = {
 
 const metricLabelClass = "font-arimo text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary";
 
+const plToneClass = (value: number): string => {
+  if (value > 0) {
+    return "jbravo-text-success";
+  }
+  if (value < 0) {
+    return "jbravo-text-error";
+  }
+  return "text-primary";
+};
+
+function MobileMetric({ label, value, toneClass = "text-primary" }: { label: string; value: string; toneClass?: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-surface px-2.5 py-2 dark:border-slate-700">
+      <p className={metricLabelClass}>{label}</p>
+      <p className={`font-cousine mt-1 text-sm font-bold tabular-nums ${toneClass}`}>{value}</p>
+    </div>
+  );
+}
+
 export default function TradesPerformanceBoard({
   rows,
   isLoading = false,
@@ -39,7 +58,62 @@ export default function TradesPerformanceBoard({
     <section className="rounded-2xl bg-surface p-md shadow-card outline-subtle" aria-label="Performance board">
       <h2 className="sr-only">Performance board</h2>
 
-      <div className="overflow-auto">
+      <div className="sm:hidden">
+        {isLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div
+                key={`perf-mobile-skeleton-${index}`}
+                className="rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700"
+              >
+                <div className="h-5 w-full animate-pulse rounded bg-slate-200/80 dark:bg-slate-700/70" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {!isLoading && sortedRows.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-secondary dark:border-slate-700">
+            No trade performance metrics yet.
+          </div>
+        ) : null}
+
+        {!isLoading && sortedRows.length > 0 ? (
+          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+            {sortedRows.map((row) => (
+              <article key={`perf-mobile-${row.key}`} className="border-b border-slate-200 px-3 py-3 last:border-b-0 dark:border-slate-700">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="font-arimo text-xs font-semibold uppercase tracking-[0.08em] text-secondary">{row.label}</h3>
+                  <span className="font-cousine text-xs font-semibold tabular-nums text-primary">
+                    {numberFormatter.format(row.tradesCount)} TRADES
+                  </span>
+                </div>
+
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <MobileMetric label="Win Rate" value={`${percentFormatter.format(row.winRatePct)}%`} />
+                  <MobileMetric
+                    label="Total P/L"
+                    value={formatSignedCurrency(row.totalPL)}
+                    toneClass={plToneClass(row.totalPL)}
+                  />
+                  <MobileMetric
+                    label="Top Trade"
+                    value={`${row.topTrade.symbol} ${formatSignedCurrency(row.topTrade.pl)}`}
+                    toneClass={plToneClass(row.topTrade.pl)}
+                  />
+                  <MobileMetric
+                    label="Worst Loss"
+                    value={`${row.worstLoss.symbol} ${formatSignedCurrency(row.worstLoss.pl)}`}
+                    toneClass={plToneClass(row.worstLoss.pl)}
+                  />
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="hidden overflow-auto sm:block">
         <table className="w-full table-fixed">
           <colgroup>
             <col className="w-[15%]" />
@@ -98,20 +172,9 @@ export default function TradesPerformanceBoard({
 
             {!isLoading
               ? sortedRows.map((row) => {
-                  const totalTone =
-                    row.totalPL > 0 ? "jbravo-text-success" : row.totalPL < 0 ? "jbravo-text-error" : "text-primary";
-                  const topTone =
-                    row.topTrade.pl > 0
-                      ? "jbravo-text-success"
-                      : row.topTrade.pl < 0
-                        ? "jbravo-text-error"
-                        : "text-primary";
-                  const worstTone =
-                    row.worstLoss.pl > 0
-                      ? "jbravo-text-success"
-                      : row.worstLoss.pl < 0
-                        ? "jbravo-text-error"
-                        : "text-primary";
+                  const totalTone = plToneClass(row.totalPL);
+                  const topTone = plToneClass(row.topTrade.pl);
+                  const worstTone = plToneClass(row.worstLoss.pl);
                   return (
                     <tr key={row.key} className="align-middle border-b border-slate-200 dark:border-slate-700">
                       <th
