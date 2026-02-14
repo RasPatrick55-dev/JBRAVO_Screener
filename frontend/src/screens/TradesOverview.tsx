@@ -32,7 +32,7 @@ export default function TradesOverview({ activeTab, onTabSelect }: TradesOvervie
   return (
     <div className="dark min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
-      <main className="pt-36 pb-12 sm:pt-32">
+      <main className="pt-52 pb-12 sm:pt-32">
         <div className="mx-auto w-full max-w-[1240px] px-4 sm:px-6 lg:px-8">
           <TradesTab />
         </div>
