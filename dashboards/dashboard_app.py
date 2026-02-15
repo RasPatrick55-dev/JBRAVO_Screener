@@ -27,6 +27,7 @@ import os
 import inspect
 import pytz
 import re
+import urllib.error
 import urllib.request
 from urllib.parse import quote, urlencode
 from pathlib import Path
@@ -2021,6 +2022,772 @@ def _account_latest_alpaca() -> dict[str, Any]:
         "portfolio_value": _to_float(getattr(account, "portfolio_value", None)),
         "source": "alpaca",
     }
+
+
+_ACCOUNT_PERFORMANCE_RANGE_ORDER = ("d", "w", "m", "y")
+_ACCOUNT_PERFORMANCE_LABELS = {
+    "d": "Daily",
+    "w": "Weekly",
+    "m": "Monthly",
+    "y": "Yearly",
+}
+_ACCOUNT_PERFORMANCE_WINDOW_DAYS = {"w": 7, "m": 30, "y": 365}
+_ACCOUNT_OPEN_ORDER_STATUSES = {
+    "accepted",
+    "accepted_for_bidding",
+    "calculated",
+    "held",
+    "new",
+    "partially_filled",
+    "pending_cancel",
+    "pending_new",
+    "pending_replace",
+    "stopped",
+}
+_EXECUTE_LOG_LINE_RE = re.compile(
+    r"^\[(?P<ts>[^\]]+)\]\s+\[(?P<level>[A-Z]+)\]\s*(?P<message>.*)$"
+)
+
+
+def _alpaca_base_url() -> str:
+    return (os.getenv("APCA_API_BASE_URL") or "https://paper-api.alpaca.markets").rstrip("/")
+
+
+def _account_api_is_paper_mode() -> bool:
+    return "paper-api" in _alpaca_base_url().lower()
+
+
+def _alpaca_rest_headers() -> dict[str, str]:
+    if not API_KEY or not API_SECRET:
+        return {}
+    return {
+        "APCA-API-KEY-ID": API_KEY,
+        "APCA-API-SECRET-KEY": API_SECRET,
+        "Accept": "application/json",
+    }
+
+
+def _alpaca_rest_get_json(
+    path: str, *, params: Mapping[str, Any] | None = None, timeout: int = 15
+) -> tuple[Any, str]:
+    headers = _alpaca_rest_headers()
+    if not headers:
+        return {}, "missing_credentials"
+
+    cleaned_path = path if path.startswith("/") else f"/{path}"
+    query_params: dict[str, str] = {}
+    for key, value in (params or {}).items():
+        if value in (None, ""):
+            continue
+        if isinstance(value, bool):
+            query_params[str(key)] = "true" if value else "false"
+        else:
+            query_params[str(key)] = str(value)
+    query = urlencode(query_params)
+    url = f"{_alpaca_base_url()}{cleaned_path}"
+    if query:
+        url = f"{url}?{query}"
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw_text = resp.read().decode("utf-8", errors="ignore")
+        payload = json.loads(raw_text) if raw_text else {}
+        return payload, "ok"
+    except urllib.error.HTTPError as exc:
+        logger.warning("[WARN] ALPACA_HTTP_ERROR path=%s code=%s", path, exc.code)
+        return {}, f"http_{exc.code}"
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] ALPACA_HTTP_FETCH_FAIL path=%s err=%s", path, exc)
+        return {}, "request_failed"
+
+
+def _parse_account_range(value: Any, *, default: str = "all") -> str:
+    normalized = str(value or default).strip().lower()
+    mapping = {
+        "d": "d",
+        "day": "d",
+        "daily": "d",
+        "w": "w",
+        "week": "w",
+        "weekly": "w",
+        "m": "m",
+        "month": "m",
+        "monthly": "m",
+        "y": "y",
+        "year": "y",
+        "yearly": "y",
+        "a": "all",
+        "all": "all",
+    }
+    return mapping.get(normalized, default)
+
+
+def _normalize_account_history_period(value: Any) -> tuple[str, str]:
+    normalized = str(value or "1Y").strip().upper()
+    if normalized in {"ALL", "A", "MAX"}:
+        return "ALL", "all"
+    if normalized in {"1A", "1Y", "YEAR", "YEARLY", "Y"}:
+        return "1Y", "1A"
+    return "1Y", "1A"
+
+
+def _normalize_account_history_timeframe(value: Any) -> str:
+    normalized = str(value or "1D").strip().upper()
+    aliases = {
+        "DAY": "1D",
+        "1DAY": "1D",
+        "1D": "1D",
+        "HOUR": "1H",
+        "1HOUR": "1H",
+        "1H": "1H",
+        "MIN": "1Min",
+        "1MIN": "1Min",
+        "5MIN": "5Min",
+        "15MIN": "15Min",
+    }
+    return aliases.get(normalized, "1D")
+
+
+def _coerce_timestamp_utc(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            epoch = float(value)
+        except (TypeError, ValueError):
+            return None
+        if abs(epoch) > 10_000_000_000:
+            epoch = epoch / 1000.0
+        try:
+            return datetime.fromtimestamp(epoch, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", stripped):
+            return _coerce_timestamp_utc(float(stripped))
+        return _coerce_datetime_utc(stripped)
+    return _coerce_datetime_utc(value)
+
+
+def _portfolio_history_points(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, Mapping):
+        return []
+    timestamps = payload.get("timestamp")
+    equities = payload.get("equity")
+    if not isinstance(timestamps, list) or not isinstance(equities, list):
+        return []
+
+    points: list[dict[str, Any]] = []
+    for raw_ts, raw_equity in zip(timestamps, equities):
+        ts = _coerce_timestamp_utc(raw_ts)
+        equity = _to_float(raw_equity)
+        if ts is None or equity is None:
+            continue
+        points.append({"t": ts.isoformat(), "equity": float(equity), "_dt": ts})
+    points.sort(
+        key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc)
+    )
+    return points
+
+
+def _fetch_account_portfolio_points(
+    *, period: str, timeframe: str
+) -> tuple[list[dict[str, Any]], str]:
+    payload, detail = _alpaca_rest_get_json(
+        "/v2/account/portfolio/history",
+        params={
+            "period": period,
+            "timeframe": timeframe,
+            "intraday_reporting": "market_hours",
+        },
+        timeout=20,
+    )
+    if detail != "ok":
+        return [], detail
+    points = _portfolio_history_points(payload)
+    if not points:
+        return [], "empty_history"
+    return points, "ok"
+
+
+def _account_delta_for_range(
+    points: list[dict[str, Any]], range_key: str
+) -> tuple[float, float, str]:
+    if not points:
+        return 0.0, 0.0, "insufficient_history"
+    latest_point = points[-1]
+    latest_dt = latest_point.get("_dt")
+    latest_equity = _to_float(latest_point.get("equity"))
+    if latest_dt is None or latest_equity is None:
+        return 0.0, 0.0, "insufficient_history"
+
+    baseline: Optional[dict[str, Any]] = None
+    status = "ok"
+    if range_key == "all":
+        if len(points) < 2:
+            return 0.0, 0.0, "insufficient_history"
+        baseline = points[0]
+    elif range_key == "d":
+        if len(points) < 2:
+            return 0.0, 0.0, "insufficient_history"
+        baseline = points[-2]
+    else:
+        window_days = _ACCOUNT_PERFORMANCE_WINDOW_DAYS.get(range_key)
+        if window_days is None:
+            return 0.0, 0.0, "invalid_range"
+        cutoff = latest_dt - timedelta(days=window_days)
+        oldest_dt = points[0].get("_dt")
+        if oldest_dt is None:
+            return 0.0, 0.0, "insufficient_history"
+        if oldest_dt > cutoff:
+            baseline = points[0]
+            status = "partial_history"
+        else:
+            baseline = points[0]
+            for point in points:
+                point_dt = point.get("_dt")
+                if point_dt is None:
+                    continue
+                if point_dt >= cutoff:
+                    baseline = point
+                    break
+
+    if baseline is None:
+        return 0.0, 0.0, "insufficient_history"
+    baseline_index = points.index(baseline)
+    baseline_equity = _to_float(baseline.get("equity"))
+    if baseline_equity is None:
+        return 0.0, 0.0, "insufficient_history"
+
+    # Some Alpaca histories begin with zero-equity placeholders; for returns,
+    # use the first non-zero point at or after baseline if available.
+    if baseline_equity == 0:
+        for candidate in points[baseline_index:]:
+            candidate_equity = _to_float(candidate.get("equity"))
+            if candidate_equity is None or candidate_equity == 0:
+                continue
+            baseline_equity = candidate_equity
+            status = "partial_history" if status == "ok" else status
+            break
+        if baseline_equity == 0:
+            return 0.0, 0.0, "insufficient_history"
+
+    net_change_usd = float(latest_equity - baseline_equity)
+    if baseline_equity == 0:
+        return 0.0, net_change_usd, status
+    net_change_pct = (net_change_usd / baseline_equity) * 100.0
+    return float(net_change_pct), net_change_usd, status
+
+
+def _coerce_json_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return {}
+        try:
+            parsed = json.loads(stripped)
+        except Exception:
+            return {}
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+    return {}
+
+
+def _order_log_level(
+    event_type: str, status: str, message: str, raw_level: str = ""
+) -> str:
+    normalized_raw = str(raw_level or "").strip().lower()
+    if normalized_raw in {"success", "info", "warning"}:
+        return normalized_raw
+    if normalized_raw in {"error", "warn"}:
+        return "warning"
+
+    text = f"{event_type} {status} {message}".lower()
+    if any(token in text for token in ("reject", "cancel", "error", "fail", "expired")):
+        return "warning"
+    if any(token in text for token in ("fill", "submit", "confirmed", "accepted", "new")):
+        return "success"
+    return "info"
+
+
+def _order_event_message(row: Mapping[str, Any], raw: Mapping[str, Any]) -> str:
+    for key in ("message", "msg", "detail", "description", "event"):
+        candidate = raw.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    event_type = str(row.get("event_type") or "EVENT").strip().upper()
+    symbol = str(row.get("symbol") or "").strip().upper()
+    qty = _to_float(row.get("qty"))
+    status = str(row.get("status") or "").strip().lower()
+
+    parts = [event_type]
+    if symbol:
+        parts.append(symbol)
+    if qty is not None:
+        parts.append(f"qty={_float_text(qty, 0)}")
+    if status:
+        parts.append(f"status={status}")
+    return " ".join(parts)
+
+
+def _account_order_logs_from_db(limit: int) -> list[dict[str, Any]]:
+    day_start_utc = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    rows = _db_fetch_all(
+        """
+        SELECT event_time, event_type, symbol, qty, order_id, status, raw
+        FROM order_events
+        WHERE event_time >= %(start_utc)s
+        ORDER BY event_time DESC NULLS LAST
+        LIMIT %(limit)s
+        """,
+        {"start_utc": day_start_utc, "limit": int(limit)},
+    )
+
+    parsed: list[dict[str, Any]] = []
+    for row in rows:
+        ts = _coerce_datetime_utc(row.get("event_time"))
+        if ts is None:
+            continue
+        raw_payload = _coerce_json_mapping(row.get("raw"))
+        message = _order_event_message(row, raw_payload)
+        level = _order_log_level(
+            str(row.get("event_type") or ""),
+            str(row.get("status") or ""),
+            message,
+            str(raw_payload.get("level") or raw_payload.get("severity") or ""),
+        )
+        parsed.append({"ts": ts.isoformat(), "level": level, "message": message, "_ts": ts})
+
+    parsed.sort(
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+    return parsed[: max(1, int(limit))]
+
+
+def _clean_execute_log_message(message: str) -> str:
+    cleaned = (message or "").strip()
+    while cleaned:
+        next_cleaned = re.sub(
+            r"^\[(?:INFO|WARNING|WARN|ERROR|SUCCESS)\]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        if next_cleaned == cleaned:
+            break
+        cleaned = next_cleaned
+    return cleaned
+
+
+def _account_order_logs_from_file(limit: int) -> list[dict[str, Any]]:
+    lines = tail_log(execute_trades_log_path, limit=max(200, int(limit) * 8))
+    if not lines:
+        return []
+
+    day_start_utc = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    parsed: list[dict[str, Any]] = []
+
+    for raw_line in reversed(lines):
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = _EXECUTE_LOG_LINE_RE.match(line)
+        if not match:
+            continue
+        ts = _coerce_datetime_utc(match.group("ts"))
+        if ts is None or ts < day_start_utc:
+            continue
+        level_text = match.group("level")
+        message = _clean_execute_log_message(match.group("message"))
+        parsed.append(
+            {
+                "ts": ts.isoformat(),
+                "level": _order_log_level(level_text, "", message, level_text),
+                "message": message,
+                "_ts": ts,
+            }
+        )
+        if len(parsed) >= max(1, int(limit)):
+            break
+
+    return parsed
+
+
+def _account_order_logs(limit: int) -> tuple[list[dict[str, str]], str]:
+    db_rows = _account_order_logs_from_db(limit)
+    if db_rows:
+        return [
+            {
+                "ts": str(row.get("ts") or ""),
+                "level": str(row.get("level") or "info"),
+                "message": str(row.get("message") or ""),
+            }
+            for row in db_rows[: max(1, int(limit))]
+        ], "postgres:order_events"
+
+    file_rows = _account_order_logs_from_file(limit)
+    if file_rows:
+        return [
+            {
+                "ts": str(row.get("ts") or ""),
+                "level": str(row.get("level") or "info"),
+                "message": str(row.get("message") or ""),
+            }
+            for row in file_rows[: max(1, int(limit))]
+        ], "log-fallback:execute_trades.log"
+
+    return [], "none"
+
+
+def _open_positions_value_from_alpaca() -> Optional[float]:
+    positions = _positions_from_alpaca()
+    if not positions:
+        return None
+    total_value = 0.0
+    for position in positions:
+        qty = _to_float(position.get("qty"))
+        current_price = _to_float(position.get("current_price"))
+        entry_price = _to_float(position.get("entry_price"))
+        ref_price = current_price if current_price is not None else entry_price
+        if qty is None or ref_price is None:
+            continue
+        total_value += abs(qty) * ref_price
+    return float(total_value)
+
+
+def _order_price_or_stop(raw: Mapping[str, Any]) -> Optional[float]:
+    for field in ("limit_price", "stop_price", "trail_price"):
+        value = _to_float(raw.get(field))
+        if value is not None:
+            return value
+    return None
+
+
+def _account_open_orders_from_db(limit: int) -> tuple[list[dict[str, Any]], str]:
+    scan_limit = max(250, int(limit) * 8)
+    rows = _db_fetch_all(
+        """
+        SELECT DISTINCT ON (
+            COALESCE(
+                NULLIF(order_id, ''),
+                symbol || ':' || COALESCE(event_time::text, '')
+            )
+        )
+            symbol,
+            qty,
+            order_id,
+            status,
+            event_type,
+            event_time,
+            raw
+        FROM order_events
+        ORDER BY
+            COALESCE(
+                NULLIF(order_id, ''),
+                symbol || ':' || COALESCE(event_time::text, '')
+            ),
+            event_time DESC NULLS LAST
+        LIMIT %(scan_limit)s
+        """,
+        {"scan_limit": scan_limit},
+    )
+    if not rows:
+        return [], "postgres:order_events_empty"
+
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        status = str(row.get("status") or "").strip().lower()
+        if status and status not in _ACCOUNT_OPEN_ORDER_STATUSES:
+            continue
+
+        raw_payload = _coerce_json_mapping(row.get("raw"))
+        qty = _to_float(row.get("qty"))
+        submitted_at_dt = _coerce_datetime_utc(row.get("event_time"))
+        submitted_at = (
+            submitted_at_dt.isoformat()
+            if submitted_at_dt is not None
+            else str(row.get("event_time") or "")
+        )
+
+        side_value = str(
+            raw_payload.get("side") or raw_payload.get("order_side") or "buy"
+        ).strip().lower()
+        type_value = str(
+            raw_payload.get("type")
+            or raw_payload.get("order_type")
+            or row.get("event_type")
+            or "market"
+        ).strip().lower()
+        if type_value.endswith("_submit"):
+            type_value = type_value.replace("_submit", "")
+
+        output.append(
+            {
+                "symbol": str(row.get("symbol") or "").strip().upper(),
+                "type": type_value,
+                "side": side_value,
+                "qty": float(qty) if qty is not None else 0.0,
+                "price_or_stop": _order_price_or_stop(raw_payload),
+                "submitted_at": submitted_at,
+            }
+        )
+
+    output.sort(key=lambda entry: str(entry.get("submitted_at") or ""), reverse=True)
+    return output[: max(1, int(limit))], "postgres:order_events"
+
+
+def _account_summary_from_db() -> tuple[dict[str, Any] | None, str]:
+    row = _account_latest_db()
+    if not row:
+        return None, "db_unavailable"
+
+    equity = _to_float(row.get("equity")) or 0.0
+    cash = _to_float(row.get("cash")) or 0.0
+    buying_power = _to_float(row.get("buying_power")) or 0.0
+    portfolio_value = _to_float(row.get("portfolio_value"))
+    open_positions_value = (
+        (portfolio_value - cash) if portfolio_value is not None else (equity - cash)
+    )
+    if open_positions_value < 0:
+        open_positions_value = 0.0
+    ratio = float(cash / open_positions_value) if open_positions_value > 0 else None
+
+    taken_value = _serialize_record(row.get("taken_at"))
+    taken_at_utc = str(taken_value) if isinstance(taken_value, str) and taken_value else ""
+    if not taken_at_utc:
+        taken_at_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+    return (
+        {
+            "equity": float(equity),
+            "cash": float(cash),
+            "buying_power": float(buying_power),
+            "open_positions_value": float(open_positions_value),
+            "cash_to_positions_ratio": ratio,
+            "taken_at_utc": taken_at_utc,
+        },
+        f"postgres:{row.get('source') or 'account'}",
+    )
+
+
+def _account_portfolio_points_from_db(
+    *, period: str, timeframe: str
+) -> tuple[list[dict[str, Any]], str]:
+    params: dict[str, Any] = {"limit": 5000}
+    where_clause = ""
+    if str(period).upper() == "1Y":
+        params["start_utc"] = datetime.now(timezone.utc) - timedelta(days=366)
+        where_clause = "AND taken_at >= %(start_utc)s"
+
+    rows = _db_fetch_all(
+        f"""
+        SELECT taken_at, equity
+        FROM alpaca_account_snapshots
+        WHERE equity IS NOT NULL
+          {where_clause}
+        ORDER BY taken_at ASC
+        LIMIT %(limit)s
+        """,
+        params,
+    )
+    if not rows:
+        return [], "db_empty"
+
+    points: list[dict[str, Any]] = []
+    for row in rows:
+        ts = _coerce_datetime_utc(row.get("taken_at"))
+        equity = _to_float(row.get("equity"))
+        if ts is None or equity is None:
+            continue
+        points.append({"t": ts.isoformat(), "equity": float(equity), "_dt": ts})
+
+    if not points:
+        return [], "db_invalid_rows"
+
+    if str(timeframe).upper() == "1D":
+        by_day: dict[str, dict[str, Any]] = {}
+        for point in points:
+            dt = point.get("_dt")
+            if dt is None:
+                continue
+            day_key = dt.date().isoformat()
+            # points are ASC; overwrite to keep end-of-day snapshot
+            by_day[day_key] = point
+        points = list(by_day.values())
+
+    points.sort(
+        key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc)
+    )
+    return points, "ok"
+
+
+def _open_positions_value_from_csv() -> Optional[float]:
+    path = Path(open_positions_path)
+    if not path.exists():
+        return None
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+
+    if "market_value" in df.columns:
+        values = pd.to_numeric(df["market_value"], errors="coerce").dropna()
+        if not values.empty:
+            return float(values.sum())
+
+    qty_series = pd.to_numeric(df.get("qty"), errors="coerce")
+    current_series = pd.to_numeric(df.get("current_price"), errors="coerce")
+    if qty_series is not None and current_series is not None:
+        combined = (qty_series.fillna(0) * current_series.fillna(0)).abs()
+        if not combined.empty:
+            return float(combined.sum())
+    return None
+
+
+def _account_summary_from_csv() -> tuple[dict[str, Any] | None, str]:
+    path = Path(BASE_DIR) / "data" / "account_equity.csv"
+    if not path.exists():
+        return None, "csv_missing"
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return None, "csv_unreadable"
+    if df is None or df.empty:
+        return None, "csv_empty"
+
+    required_cols = {"timestamp", "equity"}
+    if not required_cols.issubset(set(df.columns)):
+        return None, "csv_missing_columns"
+
+    frame = df.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
+    frame["equity"] = pd.to_numeric(frame["equity"], errors="coerce")
+    if "cash" in frame.columns:
+        frame["cash"] = pd.to_numeric(frame["cash"], errors="coerce")
+    else:
+        frame["cash"] = np.nan
+    if "buying_power" in frame.columns:
+        frame["buying_power"] = pd.to_numeric(frame["buying_power"], errors="coerce")
+    else:
+        frame["buying_power"] = np.nan
+
+    frame = frame.dropna(subset=["timestamp", "equity"]).sort_values("timestamp")
+    if frame.empty:
+        return None, "csv_no_valid_rows"
+
+    latest = frame.iloc[-1]
+    equity = _to_float(latest.get("equity")) or 0.0
+    cash = _to_float(latest.get("cash"))
+    if cash is None:
+        cash = equity
+    buying_power = _to_float(latest.get("buying_power"))
+    if buying_power is None:
+        buying_power = 0.0
+
+    open_positions_value = _open_positions_value_from_csv()
+    if open_positions_value is None:
+        inferred = equity - cash
+        open_positions_value = inferred if inferred > 0 else 0.0
+    ratio = float(cash / open_positions_value) if open_positions_value > 0 else None
+
+    taken_at = latest.get("timestamp")
+    taken_at_utc = ""
+    if isinstance(taken_at, pd.Timestamp):
+        taken_at_utc = taken_at.to_pydatetime().isoformat()
+    elif taken_at is not None and not pd.isna(taken_at):
+        parsed = _coerce_datetime_utc(taken_at)
+        taken_at_utc = parsed.isoformat() if parsed else ""
+    if not taken_at_utc:
+        taken_at_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+    return (
+        {
+            "equity": float(equity),
+            "cash": float(cash),
+            "buying_power": float(buying_power),
+            "open_positions_value": float(open_positions_value),
+            "cash_to_positions_ratio": ratio,
+            "taken_at_utc": taken_at_utc,
+        },
+        "csv:account_equity",
+    )
+
+
+def _account_portfolio_points_from_csv(
+    *, period: str, timeframe: str
+) -> tuple[list[dict[str, Any]], str]:
+    path = Path(BASE_DIR) / "data" / "account_equity.csv"
+    if not path.exists():
+        return [], "csv_missing"
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return [], "csv_unreadable"
+    if df is None or df.empty:
+        return [], "csv_empty"
+    if "timestamp" not in df.columns or "equity" not in df.columns:
+        return [], "csv_missing_columns"
+
+    frame = df.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
+    frame["equity"] = pd.to_numeric(frame["equity"], errors="coerce")
+    frame = frame.dropna(subset=["timestamp", "equity"]).sort_values("timestamp")
+    if frame.empty:
+        return [], "csv_no_valid_rows"
+
+    if str(period).upper() == "1Y":
+        cutoff = datetime.now(timezone.utc) - timedelta(days=366)
+        frame = frame[frame["timestamp"] >= cutoff]
+        if frame.empty:
+            return [], "csv_period_empty"
+
+    points: list[dict[str, Any]] = []
+    for _, row in frame.iterrows():
+        ts_raw = row.get("timestamp")
+        ts = None
+        if isinstance(ts_raw, pd.Timestamp):
+            ts = ts_raw.to_pydatetime()
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            else:
+                ts = ts.astimezone(timezone.utc)
+        else:
+            ts = _coerce_datetime_utc(ts_raw)
+        equity = _to_float(row.get("equity"))
+        if ts is None or equity is None:
+            continue
+        points.append({"t": ts.isoformat(), "equity": float(equity), "_dt": ts})
+
+    if not points:
+        return [], "csv_no_points"
+
+    if str(timeframe).upper() == "1D":
+        by_day: dict[str, dict[str, Any]] = {}
+        for point in points:
+            dt = point.get("_dt")
+            if dt is None:
+                continue
+            by_day[dt.date().isoformat()] = point
+        points = list(by_day.values())
+
+    points.sort(
+        key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc)
+    )
+    return points, "ok"
 
 
 def _serialize_record(value: Any) -> Any:
@@ -4547,6 +5314,18 @@ app = Dash(
 server = app.server
 
 
+@server.after_request
+def _api_cors_headers(response: Response) -> Response:
+    path = str(getattr(request, "path", "") or "")
+    if path.startswith("/api/"):
+        response.headers.setdefault("Access-Control-Allow-Origin", "*")
+        response.headers.setdefault(
+            "Access-Control-Allow-Headers", "Content-Type, Authorization, Accept"
+        )
+        response.headers.setdefault("Access-Control-Allow-Methods", "GET, OPTIONS")
+    return response
+
+
 @server.route("/")
 def react_root():
     """Serve the React build at the root instead of the Dash UI."""
@@ -4716,6 +5495,292 @@ def api_account_overview():
             "source_detail": "unavailable",
             "db_source_of_truth": True,
             "db_ready": False,
+        }
+    )
+
+
+@server.route("/api/account/summary")
+def api_account_summary():
+    paper_mode = _account_api_is_paper_mode()
+    alpaca_detail = "paper_mode_required" if not paper_mode else "skipped"
+
+    if paper_mode:
+        payload, detail = _alpaca_rest_get_json("/v2/account", timeout=12)
+        alpaca_detail = detail
+        if detail == "ok" and isinstance(payload, Mapping):
+            equity = _to_float(payload.get("equity")) or 0.0
+            cash = _to_float(payload.get("cash")) or 0.0
+            buying_power = _to_float(payload.get("buying_power")) or 0.0
+
+            open_positions_value = _open_positions_value_from_alpaca()
+            if open_positions_value is None or open_positions_value <= 0:
+                inferred_value = equity - cash
+                open_positions_value = inferred_value if inferred_value > 0 else 0.0
+
+            ratio = None
+            if open_positions_value > 0:
+                ratio = float(cash / open_positions_value)
+
+            return _json_no_store(
+                {
+                    "ok": True,
+                    "source": "alpaca",
+                    "equity": float(equity),
+                    "cash": float(cash),
+                    "buying_power": float(buying_power),
+                    "open_positions_value": float(open_positions_value),
+                    "cash_to_positions_ratio": ratio,
+                    "taken_at_utc": datetime.now(timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat(),
+                }
+            )
+
+    db_summary, db_detail = _account_summary_from_db()
+    if db_summary:
+        return _json_no_store(
+            {
+                "ok": True,
+                "source": "postgres",
+                **db_summary,
+                "source_detail": f"alpaca:{alpaca_detail};{db_detail}",
+            }
+        )
+
+    csv_summary, csv_detail = _account_summary_from_csv()
+    if csv_summary:
+        return _json_no_store(
+            {
+                "ok": True,
+                "source": "csv",
+                **csv_summary,
+                "source_detail": f"alpaca:{alpaca_detail};{csv_detail}",
+            }
+        )
+
+    return _json_no_store(
+        {
+            "ok": False,
+            "source": "alpaca",
+            "equity": 0.0,
+            "cash": 0.0,
+            "buying_power": 0.0,
+            "open_positions_value": 0.0,
+            "cash_to_positions_ratio": None,
+            "taken_at_utc": datetime.now(timezone.utc).isoformat(),
+            "source_detail": f"alpaca:{alpaca_detail};db:unavailable;csv:unavailable",
+        }
+    )
+
+
+@server.route("/api/account/performance")
+def api_account_performance():
+    requested_range = _parse_account_range(request.args.get("range"), default="all")
+    paper_mode = _account_api_is_paper_mode()
+    points: list[dict[str, Any]] = []
+    source_detail = "alpaca:skipped"
+
+    if paper_mode:
+        points, history_detail = _fetch_account_portfolio_points(period="all", timeframe="1D")
+        source_detail = f"alpaca:{history_detail}"
+    else:
+        history_detail = "paper_mode_required"
+        source_detail = f"alpaca:{history_detail}"
+
+    if not points:
+        db_points, db_detail = _account_portfolio_points_from_db(period="ALL", timeframe="1D")
+        if db_points:
+            points = db_points
+            source_detail = f"{source_detail};postgres:{db_detail}"
+        else:
+            source_detail = f"{source_detail};postgres:{db_detail}"
+    if not points:
+        csv_points, csv_detail = _account_portfolio_points_from_csv(period="ALL", timeframe="1D")
+        if csv_points:
+            points = csv_points
+        source_detail = f"{source_detail};csv:{csv_detail}"
+
+    latest_equity = _to_float(points[-1].get("equity")) if points else 0.0
+    if latest_equity is None:
+        latest_equity = 0.0
+
+    rows: list[dict[str, Any]] = []
+    detail_tokens: list[str] = []
+    calculable_statuses = {"ok", "partial_history"}
+    for key in _ACCOUNT_PERFORMANCE_RANGE_ORDER:
+        pct, usd, status = _account_delta_for_range(points, key)
+        if status not in calculable_statuses:
+            pct = 0.0
+            usd = 0.0
+            detail_tokens.append(f"{key}:{status}")
+        elif status != "ok":
+            detail_tokens.append(f"{key}:{status}")
+        rows.append(
+            {
+                "period": _ACCOUNT_PERFORMANCE_LABELS[key],
+                "netChangePct": float(pct),
+                "netChangeUsd": float(usd),
+            }
+        )
+
+    total_pct, total_usd, total_status = _account_delta_for_range(points, requested_range)
+    if total_status not in calculable_statuses:
+        total_pct = 0.0
+        total_usd = 0.0
+        detail_tokens.append(f"total:{total_status}")
+    elif total_status != "ok":
+        detail_tokens.append(f"total:{total_status}")
+
+    if history_detail != "ok":
+        detail_tokens.append(f"history:{history_detail}")
+
+    detail_parts = [source_detail]
+    if detail_tokens:
+        detail_parts.append(";".join(dict.fromkeys(detail_tokens)))
+    source_detail = ";".join([part for part in detail_parts if part])
+
+    return _json_no_store(
+        {
+            "ok": bool(points),
+            "range": requested_range,
+            "rows": rows,
+            "accountTotal": {
+                "equity": float(latest_equity),
+                "netChangePct": float(total_pct),
+                "netChangeUsd": float(total_usd),
+            },
+            "source_detail": source_detail,
+        }
+    )
+
+
+@server.route("/api/account/portfolio_history")
+def api_account_portfolio_history():
+    period_label, alpaca_period = _normalize_account_history_period(request.args.get("period"))
+    timeframe = _normalize_account_history_timeframe(request.args.get("timeframe"))
+    paper_mode = _account_api_is_paper_mode()
+
+    points: list[dict[str, Any]] = []
+    detail = "paper_mode_required" if not paper_mode else "skipped"
+    if paper_mode:
+        points, detail = _fetch_account_portfolio_points(
+            period=alpaca_period, timeframe=timeframe
+        )
+    source_detail = f"alpaca:{detail}"
+
+    if not points:
+        db_points, db_detail = _account_portfolio_points_from_db(
+            period=period_label, timeframe=timeframe
+        )
+        if db_points:
+            points = db_points
+        source_detail = f"{source_detail};postgres:{db_detail}"
+    if not points:
+        csv_points, csv_detail = _account_portfolio_points_from_csv(
+            period=period_label, timeframe=timeframe
+        )
+        if csv_points:
+            points = csv_points
+        source_detail = f"{source_detail};csv:{csv_detail}"
+
+    serialized_points = [
+        {"t": str(point.get("t") or ""), "equity": float(point.get("equity") or 0.0)}
+        for point in points
+    ]
+    start = serialized_points[0]["t"] if serialized_points else None
+    end = serialized_points[-1]["t"] if serialized_points else None
+    return _json_no_store(
+        {
+            "ok": bool(serialized_points),
+            "points": serialized_points,
+            "start": start,
+            "end": end,
+            "timeframe": timeframe,
+            "period": period_label,
+            "source_detail": source_detail,
+        }
+    )
+
+
+@server.route("/api/account/open_orders")
+def api_account_open_orders():
+    limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
+    paper_mode = _account_api_is_paper_mode()
+    if paper_mode:
+        payload, detail = _alpaca_rest_get_json(
+            "/v2/orders",
+            params={"status": "open", "limit": int(limit), "direction": "desc"},
+            timeout=20,
+        )
+        if detail == "ok":
+            if isinstance(payload, list):
+                raw_orders = payload
+            elif isinstance(payload, Mapping) and isinstance(payload.get("orders"), list):
+                raw_orders = payload.get("orders", [])
+            else:
+                raw_orders = []
+
+            rows: list[dict[str, Any]] = []
+            for raw in raw_orders:
+                if not isinstance(raw, Mapping):
+                    continue
+                status = str(raw.get("status") or "").strip().lower()
+                if status and status not in _ACCOUNT_OPEN_ORDER_STATUSES:
+                    continue
+                submitted_at_dt = _coerce_datetime_utc(
+                    raw.get("submitted_at") or raw.get("created_at") or raw.get("updated_at")
+                )
+                submitted_at = (
+                    submitted_at_dt.isoformat()
+                    if submitted_at_dt is not None
+                    else str(raw.get("submitted_at") or raw.get("created_at") or "")
+                )
+
+                qty = _to_float(raw.get("qty"))
+                rows.append(
+                    {
+                        "symbol": str(raw.get("symbol") or "").strip().upper(),
+                        "type": str(raw.get("type") or "market").strip().lower(),
+                        "side": str(raw.get("side") or "buy").strip().lower(),
+                        "qty": float(qty) if qty is not None else 0.0,
+                        "price_or_stop": _order_price_or_stop(raw),
+                        "submitted_at": submitted_at,
+                    }
+                )
+
+            rows.sort(key=lambda row: str(row.get("submitted_at") or ""), reverse=True)
+            return _json_no_store({"ok": True, "rows": rows[: int(limit)]})
+        alpaca_detail = detail
+    else:
+        alpaca_detail = "paper_mode_required"
+
+    db_rows, db_detail = _account_open_orders_from_db(limit=limit)
+    if db_rows:
+        return _json_no_store(
+            {
+                "ok": True,
+                "rows": db_rows,
+                "source_detail": f"alpaca:{alpaca_detail};{db_detail}",
+            }
+        )
+    return _json_no_store(
+        {
+            "ok": False,
+            "rows": [],
+            "source_detail": f"alpaca:{alpaca_detail};{db_detail}",
+        }
+    )
+
+
+@server.route("/api/account/order_logs")
+def api_account_order_logs():
+    limit = _parse_positive_int(request.args.get("limit"), default=100, minimum=1, maximum=300)
+    rows, source_detail = _account_order_logs(limit=limit)
+    return _json_no_store(
+        {
+            "ok": bool(rows),
+            "rows": rows,
+            "source_detail": source_detail,
         }
     )
 

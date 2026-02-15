@@ -38,7 +38,7 @@ const plToneClass = (value: number): string => {
 
 function MobileMetric({ label, value, toneClass = "text-primary" }: { label: string; value: string; toneClass?: string }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-surface px-2.5 py-2 dark:border-slate-700">
+    <div className="rounded-md px-2.5 py-2 jbravo-panel-inner jbravo-panel-inner-cyan">
       <p className={metricLabelClass}>{label}</p>
       <p className={`font-cousine mt-1 text-sm font-bold tabular-nums ${toneClass}`}>{value}</p>
     </div>
@@ -55,7 +55,7 @@ export default function TradesPerformanceBoard({
   );
 
   return (
-    <section className="rounded-2xl bg-surface p-md shadow-card outline-subtle" aria-label="Performance board">
+    <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-cyan" aria-label="Performance board">
       <h2 className="sr-only">Performance board</h2>
 
       <div className="sm:hidden">
@@ -64,7 +64,7 @@ export default function TradesPerformanceBoard({
             {Array.from({ length: 5 }).map((_, index) => (
               <div
                 key={`perf-mobile-skeleton-${index}`}
-                className="rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700"
+                className="rounded-xl px-3 py-3 jbravo-panel-inner jbravo-panel-inner-cyan"
               >
                 <div className="h-5 w-full animate-pulse rounded bg-slate-200/80 dark:bg-slate-700/70" />
               </div>
@@ -79,9 +79,9 @@ export default function TradesPerformanceBoard({
         ) : null}
 
         {!isLoading && sortedRows.length > 0 ? (
-          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+          <div className="overflow-hidden rounded-xl jbravo-panel-inner jbravo-panel-inner-cyan">
             {sortedRows.map((row) => (
-              <article key={`perf-mobile-${row.key}`} className="border-b border-slate-200 px-3 py-3 last:border-b-0 dark:border-slate-700">
+              <article key={`perf-mobile-${row.key}`} className="border-b border-slate-200/70 px-3 py-3 last:border-b-0 dark:border-slate-700/70">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="font-arimo text-xs font-semibold uppercase tracking-[0.08em] text-secondary">{row.label}</h3>
                   <span className="font-cousine text-xs font-semibold tabular-nums text-primary">
@@ -151,7 +151,7 @@ export default function TradesPerformanceBoard({
                   <tr key={`perf-skeleton-${index}`}>
                     <td
                       colSpan={6}
-                      className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-3 dark:border-slate-700 dark:bg-slate-800/40"
+                      className="rounded-xl jbravo-panel-inner jbravo-panel-inner-cyan px-3 py-3"
                     >
                       <div className="h-5 w-full animate-pulse rounded bg-slate-200/80 dark:bg-slate-700/70" />
                     </td>
@@ -176,7 +176,7 @@ export default function TradesPerformanceBoard({
                   const topTone = plToneClass(row.topTrade.pl);
                   const worstTone = plToneClass(row.worstLoss.pl);
                   return (
-                    <tr key={row.key} className="align-middle border-b border-slate-200 dark:border-slate-700">
+                    <tr key={row.key} className="align-middle border-b border-slate-200/70 dark:border-slate-700/70">
                       <th
                         scope="row"
                         className="font-arimo px-2 py-2.5 text-center text-xs font-semibold uppercase tracking-[0.08em] text-secondary"

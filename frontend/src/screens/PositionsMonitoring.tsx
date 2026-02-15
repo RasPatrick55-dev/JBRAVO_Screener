@@ -221,8 +221,10 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
   return (
     <div className="dark min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
-      <main className="pt-36 pb-12 sm:pt-32">
-        <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+      <main className="relative pb-12 pt-[calc(var(--app-nav-height,208px)+16px)]">
+        <div className="pointer-events-none absolute -top-28 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-cyan-300/18 via-sky-200/10 to-transparent blur-3xl dark:from-cyan-500/16 dark:via-blue-500/12 dark:to-transparent" />
+        <div className="pointer-events-none absolute left-0 top-56 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-300/18 via-amber-200/10 to-transparent blur-3xl dark:from-emerald-500/14 dark:via-amber-500/10 dark:to-transparent" />
+        <div className="relative mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
           <PositionsTab
             positions={positionRows}
             summary={summary}

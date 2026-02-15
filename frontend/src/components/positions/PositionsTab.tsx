@@ -61,18 +61,18 @@ export default function PositionsTab({
       </header>
 
       {hasError ? (
-        <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-300/40 dark:bg-amber-500/10 dark:text-amber-200">
           Position data could not be fully loaded. Displaying available data.
         </div>
       ) : null}
 
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-surface shadow-card">
+      <section className="overflow-hidden rounded-xl shadow-card jbravo-panel jbravo-panel-emerald">
         <div className="overflow-x-auto sm:overflow-x-auto">
           <div className="sm:hidden">
             {isLoading ? (
               <div className="space-y-2 px-4 py-3">
                 {skeletonKey.map((key) => (
-                  <div key={`mobile-${key}`} className="rounded-lg border border-slate-200 px-3 py-3">
+                  <div key={`mobile-${key}`} className="rounded-lg px-3 py-3 jbravo-panel-inner jbravo-panel-inner-emerald">
                     <div className="h-5 w-24 rounded bg-slate-100" />
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       {Array.from({ length: 6 }).map((_, index) => (
@@ -98,7 +98,7 @@ export default function PositionsTab({
                 <col key={columnLabels[index]} style={{ width }} />
               ))}
             </colgroup>
-            <thead className="border-b border-slate-200">
+            <thead className="border-b border-slate-200/70 dark:border-slate-700/70">
               <tr>
                 {columnLabels.map((label, index) => (
                   <th key={label} scope="col" className={desktopHeaderCellClass(index)}>
@@ -110,7 +110,7 @@ export default function PositionsTab({
             <tbody>
               {isLoading ? (
                 skeletonKey.map((key) => (
-                  <tr key={key} className="border-b border-slate-200">
+                  <tr key={key} className="border-b border-slate-200/70 dark:border-slate-700/70">
                     {columnLabels.map((label, index) => (
                       <td key={`${key}-${label}`} className={desktopLoadingCellClass(index)}>
                         <div className="mx-auto h-4 w-4/5 rounded bg-slate-100" aria-hidden="true" />

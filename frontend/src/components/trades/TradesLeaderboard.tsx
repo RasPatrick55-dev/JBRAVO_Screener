@@ -32,14 +32,14 @@ export default function TradesLeaderboard({
 
   return (
     <section
-      className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-surface p-md shadow-card outline-subtle"
+      className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-violet"
       aria-label="Leaderboard"
     >
       <h2 className="sr-only">Leaderboard</h2>
 
       <TradesRangePills value={selectedRange} onChange={onRangeChange} />
 
-      <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg bg-slate-100/70 p-1 dark:bg-slate-800/40">
+      <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg p-1 jbravo-panel-inner jbravo-panel-inner-violet">
         <button
           type="button"
           onClick={() => onModeChange("winners")}
@@ -73,7 +73,7 @@ export default function TradesLeaderboard({
       <div className="mt-3 min-h-0 max-h-[312px] overflow-auto xl:flex-1 xl:max-h-none">
         <table className="w-full table-fixed">
           <thead className="sticky top-0 z-10 bg-surface">
-            <tr className="font-arimo border-b border-slate-200 text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary dark:border-slate-700">
+            <tr className="font-arimo border-b border-slate-200/70 text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary dark:border-slate-700/70">
               <th scope="col" className="w-[18%] px-2 py-2 text-center">
                 Rank
               </th>
@@ -89,7 +89,7 @@ export default function TradesLeaderboard({
             {isLoading
               ? Array.from({ length: 5 }).map((_, index) => (
                   <tr key={`leader-skeleton-${index}`}>
-                    <td colSpan={3} className="border-b border-slate-200 px-2 py-3 dark:border-slate-700">
+                    <td colSpan={3} className="border-b border-slate-200/70 px-2 py-3 dark:border-slate-700/70">
                       <div className="h-4 w-full animate-pulse rounded bg-slate-200/80 dark:bg-slate-700/70" />
                     </td>
                   </tr>
@@ -108,7 +108,7 @@ export default function TradesLeaderboard({
               ? sortedRows.map((row) => {
                   const plTone = row.pl > 0 ? "jbravo-text-success" : row.pl < 0 ? "jbravo-text-error" : "text-primary";
                   return (
-                    <tr key={`${row.rank}-${row.symbol}`} className="border-b border-slate-200 text-sm dark:border-slate-700">
+                    <tr key={`${row.rank}-${row.symbol}`} className="border-b border-slate-200/70 text-sm transition-colors hover:bg-sky-100/35 dark:border-slate-700/70 dark:hover:bg-slate-800/45">
                       <td className="font-cousine px-2 py-2.5 text-center text-secondary tabular-nums">#{row.rank}</td>
                       <td className="px-2 py-2.5">
                         <div className="flex items-center justify-center gap-2">

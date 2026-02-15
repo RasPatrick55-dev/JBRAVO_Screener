@@ -66,7 +66,7 @@ const renderSymbol = (
 
 function MobileField({ label, value, toneClass = "text-primary" }: { label: string; value: string; toneClass?: string }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-surface px-2.5 py-2 dark:border-slate-700">
+    <div className="rounded-md px-2.5 py-2 jbravo-panel-inner jbravo-panel-inner-emerald">
       <p className="font-arimo text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary">{label}</p>
       <p className={`font-cousine mt-1 text-sm font-bold tabular-nums ${toneClass}`}>{value}</p>
     </div>
@@ -80,7 +80,7 @@ export default function LatestTradesTable({
   getSymbolHref,
 }: LatestTradesTableProps) {
   return (
-    <section className="rounded-2xl bg-surface p-md shadow-card outline-subtle" aria-label="Latest trades">
+    <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-emerald" aria-label="Latest trades">
       <h2 className="font-arimo text-sm font-semibold uppercase tracking-[0.08em] text-primary">LATEST TRADES</h2>
 
       <div className="mt-3 sm:hidden">
@@ -89,7 +89,7 @@ export default function LatestTradesTable({
             {Array.from({ length: 5 }).map((_, index) => (
               <div
                 key={`latest-mobile-skeleton-${index}`}
-                className="rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700"
+                className="rounded-xl px-3 py-3 jbravo-panel-inner jbravo-panel-inner-emerald"
               >
                 <div className="h-5 w-full animate-pulse rounded bg-slate-200/80 dark:bg-slate-700/70" />
               </div>
@@ -104,7 +104,7 @@ export default function LatestTradesTable({
         ) : null}
 
         {!isLoading && rows.length > 0 ? (
-          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+          <div className="overflow-hidden rounded-xl jbravo-panel-inner jbravo-panel-inner-emerald">
             {rows.map((row, index) => {
               const symbol = row.symbol.trim().toUpperCase() || "--";
               const symbolHref = getSymbolHref?.(symbol);
@@ -112,7 +112,7 @@ export default function LatestTradesTable({
               return (
                 <article
                   key={`latest-mobile-${row.symbol}-${row.sellDate}-${index}`}
-                  className="border-b border-slate-200 px-3 py-3 last:border-b-0 dark:border-slate-700"
+                  className="border-b border-slate-200/70 px-3 py-3 last:border-b-0 dark:border-slate-700/70"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -152,7 +152,7 @@ export default function LatestTradesTable({
             <col className="w-[13%]" />
           </colgroup>
           <thead className="sticky top-0 z-10 bg-surface">
-            <tr className="font-arimo border-b border-slate-200 text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary dark:border-slate-700">
+            <tr className="font-arimo border-b border-slate-200/70 text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary dark:border-slate-700/70">
               <th scope="col" className="px-1.5 py-1.5 text-center">
                 Symbol
               </th>
@@ -183,7 +183,7 @@ export default function LatestTradesTable({
             {isLoading
               ? Array.from({ length: 5 }).map((_, index) => (
                   <tr key={`latest-skeleton-${index}`}>
-                    <td colSpan={8} className="border-b border-slate-200 px-2 py-3 dark:border-slate-700">
+                    <td colSpan={8} className="border-b border-slate-200/70 px-2 py-3 dark:border-slate-700/70">
                       <div className="h-4 w-full animate-pulse rounded bg-slate-200/80 dark:bg-slate-700/70" />
                     </td>
                   </tr>
@@ -207,7 +207,7 @@ export default function LatestTradesTable({
                   return (
                     <tr
                       key={`${row.symbol}-${row.sellDate}-${index}`}
-                      className="border-b border-slate-200 text-xs dark:border-slate-700"
+                      className="border-b border-slate-200/70 text-xs transition-colors hover:bg-sky-100/35 dark:border-slate-700/70 dark:hover:bg-slate-800/45"
                     >
                       <th scope="row" className="truncate px-1.5 py-2 text-center">
                         {renderSymbol(symbol, symbolHref, onSymbolSelect, symbolDesktopTextClass)}

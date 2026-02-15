@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { NavbarDesktopProps } from "../../types/ui";
 import StatusBadge from "../badges/StatusBadge";
 import MarketClockGroup from "../header/MarketClockGroup";
@@ -7,6 +7,7 @@ import ThemeToggle from "../ui/ThemeToggle";
 export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: NavbarDesktopProps) {
   const [serverUtc, setServerUtc] = useState("");
   const [localUtc, setLocalUtc] = useState(() => new Date().toISOString());
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const tick = () => setLocalUtc(new Date().toISOString());
@@ -48,8 +49,39 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
     };
   }, []);
 
+  useEffect(() => {
+    const updateHeightVar = () => {
+      if (typeof document === "undefined") {
+        return;
+      }
+      const height = Math.ceil(rootRef.current?.getBoundingClientRect().height ?? 0);
+      if (height > 0) {
+        document.documentElement.style.setProperty("--app-nav-height", `${height}px`);
+      }
+    };
+
+    updateHeightVar();
+    window.addEventListener("resize", updateHeightVar);
+
+    const observer =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => updateHeightVar())
+        : null;
+    if (observer && rootRef.current) {
+      observer.observe(rootRef.current);
+    }
+
+    return () => {
+      window.removeEventListener("resize", updateHeightVar);
+      observer?.disconnect();
+    };
+  }, []);
+
   return (
-    <div className="fixed inset-x-0 top-0 z-50 border-b border-slate-200/80 bg-white/80 backdrop-blur dark:border-slate-800/80 dark:bg-slate-950/80">
+    <div
+      ref={rootRef}
+      className="fixed inset-x-0 top-0 z-50 border-b border-slate-200/80 bg-white/80 backdrop-blur dark:border-slate-800/80 dark:bg-slate-950/80"
+    >
       <div className="mx-auto w-full max-w-[1240px] px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-2 py-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

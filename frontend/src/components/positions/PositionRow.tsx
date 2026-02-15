@@ -25,9 +25,9 @@ const plToneClass = (value: number) => {
 
 const moneyCellClass = "px-3 text-center text-base leading-6 font-cousine tabular-nums text-financial";
 const pillClass =
-  "inline-flex min-w-20 items-center justify-center whitespace-nowrap rounded-full bg-surface px-2 py-0.5 text-base leading-6 font-cousine tabular-nums";
+  "inline-flex min-w-20 items-center justify-center whitespace-nowrap rounded-full jbravo-panel-inner jbravo-panel-inner-emerald px-2 py-0.5 text-base leading-6 font-cousine tabular-nums";
 const numericCellClass = "px-3 text-center text-base leading-6 font-cousine tabular-nums text-financial";
-const tableRowDividerClass = "border-l border-slate-200/50";
+const tableRowDividerClass = "border-l border-slate-200/50 dark:border-slate-700/60";
 const tableFirstCellClass = "px-3 py-3.5 pl-7 pr-3 align-middle";
 const tableMiddleCellClass = "px-3 py-3.5 align-middle";
 const tableLastCellClass = "px-3 py-3.5 pl-3 pr-7 align-middle";
@@ -55,7 +55,7 @@ export function PositionRowMobile({
   const symbolText = symbol.trim().toUpperCase() || "--";
 
   return (
-    <div className="border-b border-slate-200 px-4 py-4 sm:hidden">
+    <div className="border-b border-slate-200/70 px-4 py-4 sm:hidden dark:border-slate-700/70">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <StockLogo symbol={symbolText} logoUrl={logoUrl} />
@@ -89,7 +89,7 @@ export default function PositionRow({
   const symbolText = symbol.trim().toUpperCase() || "--";
 
   return (
-    <tr className="border-b border-slate-200">
+    <tr className="border-b border-slate-200/70 transition-colors hover:bg-sky-100/35 dark:border-slate-700/70 dark:hover:bg-slate-800/45">
       <th scope="row" className={tableFirstCellClass}>
         <div className="flex items-center justify-center gap-2">
           <StockLogo symbol={symbolText} logoUrl={logoUrl} />

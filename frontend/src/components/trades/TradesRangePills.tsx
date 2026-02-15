@@ -36,7 +36,7 @@ export default function TradesRangePills({
               "font-arimo inline-flex min-w-11 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] transition " +
               (isSelected
                 ? "bg-amber-50 text-amber-700 outline outline-1 outline-offset-[-1px] outline-amber-300 dark:bg-amber-500/20 dark:text-amber-200 dark:outline-amber-300/45"
-                : "bg-surface text-secondary outline outline-1 outline-offset-[-1px] outline-subtle hover:text-primary")
+                : "jbravo-panel-inner jbravo-panel-inner-cyan text-secondary hover:text-primary")
             }
           >
             {range.label}
