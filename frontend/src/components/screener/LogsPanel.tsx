@@ -228,9 +228,9 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
               {title} entries with UTC timestamp, level, and message.
             </caption>
             <colgroup>
-              <col className="w-[44%] sm:w-[43%]" />
-              <col className="w-[16%] sm:w-[15%]" />
-              <col className="w-[40%] sm:w-[42%]" />
+              <col className="w-[31%] sm:w-[28%]" />
+              <col className="w-[14%] sm:w-[13%]" />
+              <col className="w-[55%] sm:w-[59%]" />
             </colgroup>
             <thead className="sticky top-0 z-10 bg-slate-100/95 dark:bg-slate-900/95">
               <tr className="font-arimo border-b border-slate-300/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary dark:border-slate-600/80">
@@ -268,6 +268,7 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
                 ? displayedRows.map((row, index) => {
                     const level = normalizeLogLevel(row.level);
                     const formattedTs = formatUtcDateTime(row.ts_utc);
+                    const [datePart, timePart] = formattedTs === "--" ? ["--", ""] : formattedTs.split(" ");
                     return (
                       <tr
                         key={`${stage}-${row.ts_utc ?? "na"}-${index}`}
@@ -275,9 +276,16 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
                       >
                         <td
                           title={formattedTs}
-                          className="font-cousine overflow-hidden text-ellipsis whitespace-nowrap px-2 py-2 text-left tabular-nums text-secondary"
+                          className="font-cousine px-2 py-2 text-left tabular-nums text-secondary"
                         >
-                          {formattedTs}
+                          <span className="block overflow-hidden text-ellipsis whitespace-nowrap leading-tight">
+                            {datePart}
+                          </span>
+                          {timePart ? (
+                            <span className="block overflow-hidden text-ellipsis whitespace-nowrap leading-tight text-secondary/90">
+                              {timePart}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-2 py-2 text-center">
                           <span
