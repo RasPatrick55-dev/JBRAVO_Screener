@@ -6882,6 +6882,7 @@ def _screener_latest_run_ts_for_date(run_date: Any) -> Optional[str]:
 def _screener_backtest_rows_from_db(
     *,
     run_date: Any,
+    run_ts_utc: Any,
     window: str,
     limit: int,
     query: str,
@@ -6914,6 +6915,7 @@ def _screener_backtest_rows_from_db(
         "limit": max(limit, 1),
         "window": window,
         "q_like": f"%{query}%",
+        "run_ts_utc": run_ts_utc,
     }
     if run_date is not None and run_date_col:
         where_parts.append(f"b.{run_date_col} = %(run_date)s")
@@ -6922,6 +6924,30 @@ def _screener_backtest_rows_from_db(
         where_parts.append(f"UPPER(COALESCE(b.{window_col}::text, '')) = %(window)s")
     if query:
         where_parts.append(f"COALESCE(b.{symbol_col}::text, '') ILIKE %(q_like)s")
+
+    scope_sql = ""
+    map_columns = _db_table_columns("screener_run_map_app")
+    if run_ts_utc and {"run_ts_utc", "symbol"}.issubset(map_columns):
+        scope_sql = (
+            " AND EXISTS ("
+            "SELECT 1 FROM screener_run_map_app m "
+            "WHERE m.run_ts_utc = %(run_ts_utc)s "
+            f"AND UPPER(COALESCE(m.symbol::text, '')) = UPPER(COALESCE(b.{symbol_col}::text, ''))"
+            ")"
+        )
+    else:
+        candidate_columns = _db_table_columns("screener_candidates")
+        candidate_symbol_col = _first_existing_column(candidate_columns, ["symbol"])
+        candidate_run_date_col = _first_existing_column(candidate_columns, ["run_date"])
+        if candidate_symbol_col:
+            candidate_where = [
+                f"UPPER(COALESCE(c.{candidate_symbol_col}::text, '')) = UPPER(COALESCE(b.{symbol_col}::text, ''))"
+            ]
+            if run_date is not None and candidate_run_date_col:
+                candidate_where.append(f"c.{candidate_run_date_col} = %(run_date)s")
+            scope_sql = (
+                f" AND EXISTS (SELECT 1 FROM screener_candidates c WHERE {' AND '.join(candidate_where)})"
+            )
 
     order_sql = "b.symbol ASC"
     if total_pl_col:
@@ -6941,6 +6967,7 @@ def _screener_backtest_rows_from_db(
             {_expr(total_pl_col)} AS total_pl_usd
         FROM backtest_results b
         WHERE {' AND '.join(where_parts)}
+          {scope_sql}
         ORDER BY {order_sql}
         LIMIT %(limit)s
         """,
@@ -7687,8 +7714,9 @@ def api_screener_backtest():
     requested_run_ts = str(request.args.get("run_ts_utc") or "").strip() or None
     run_date, resolved_run_ts = _screener_resolve_run_date_from_run_ts(requested_run_ts)
     if run_date is None:
-        latest_row = _db_fetch_one("SELECT MAX(run_date) AS run_date FROM backtest_results")
-        run_date = latest_row.get("run_date") if latest_row else None
+        latest_scope = _screener_latest_run_scope()
+        run_date = latest_scope.get("run_date")
+        resolved_run_ts = resolved_run_ts or latest_scope.get("run_ts_utc")
     if resolved_run_ts is None:
         resolved_run_ts = _screener_latest_run_ts_for_date(run_date)
 
@@ -7697,6 +7725,7 @@ def api_screener_backtest():
     if run_date is not None and db.db_enabled():
         rows, _ = _screener_backtest_rows_from_db(
             run_date=run_date,
+            run_ts_utc=resolved_run_ts,
             window=window,
             limit=limit,
             query=query,
