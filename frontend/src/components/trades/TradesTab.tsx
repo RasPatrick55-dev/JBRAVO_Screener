@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import LatestTradesTable from "./LatestTradesTable";
 import TradesLeaderboard from "./TradesLeaderboard";
 import TradesPerformanceBoard from "./TradesPerformanceBoard";
+import { buildLeaderboardRequestPath, normalizeLeaderboardPayload } from "./leaderboardData";
 import type {
   LatestTradeRow,
   LeaderRow,
@@ -66,69 +67,6 @@ const mockStatsRows: RangeRowMetrics[] = [
     tradesCount: 428,
   },
 ];
-
-const mockLeaderboardRows: Record<RangeKey, Record<LeaderboardMode, LeaderRow[]>> = {
-  d: {
-    winners: [
-      { rank: 1, symbol: "VTRS", pl: 475.5 },
-      { rank: 2, symbol: "AAPL", pl: 320.0 },
-      { rank: 3, symbol: "TSLA", pl: 280.75 },
-    ],
-    losers: [
-      { rank: 1, symbol: "AMD", pl: -340.5 },
-      { rank: 2, symbol: "LC", pl: -165.05 },
-      { rank: 3, symbol: "PLTR", pl: -120.1 },
-    ],
-  },
-  w: {
-    winners: [
-      { rank: 1, symbol: "TSLA", pl: 820.0 },
-      { rank: 2, symbol: "NVDA", pl: 510.75 },
-      { rank: 3, symbol: "MSFT", pl: 430.2 },
-    ],
-    losers: [
-      { rank: 1, symbol: "AMD", pl: -340.5 },
-      { rank: 2, symbol: "QQQ", pl: -210.0 },
-      { rank: 3, symbol: "F", pl: -174.85 },
-    ],
-  },
-  m: {
-    winners: [
-      { rank: 1, symbol: "NVDA", pl: 1250.0 },
-      { rank: 2, symbol: "AAPL", pl: 980.4 },
-      { rank: 3, symbol: "META", pl: 760.8 },
-    ],
-    losers: [
-      { rank: 1, symbol: "PLTR", pl: -580.25 },
-      { rank: 2, symbol: "SNAP", pl: -420.1 },
-      { rank: 3, symbol: "BABA", pl: -335.55 },
-    ],
-  },
-  y: {
-    winners: [
-      { rank: 1, symbol: "AAPL", pl: 3200.0 },
-      { rank: 2, symbol: "MSFT", pl: 2860.25 },
-      { rank: 3, symbol: "NVDA", pl: 2105.6 },
-    ],
-    losers: [
-      { rank: 1, symbol: "SNAP", pl: -1150.0 },
-      { rank: 2, symbol: "ROKU", pl: -980.55 },
-      { rank: 3, symbol: "BYND", pl: -905.2 },
-    ],
-  },
-  all: {
-    winners: [
-      { rank: 1, symbol: "MSFT", pl: 4500.0 },
-      { rank: 2, symbol: "AAPL", pl: 3880.35 },
-      { rank: 3, symbol: "NVDA", pl: 3105.25 },
-    ],
-    losers: [
-      { rank: 1, symbol: "BYND", pl: -2100.0 },
-      { rank: 2, symbol: "SNAP", pl: -1425.2 },
-      { rank: 3, symbol: "PLTR", pl: -980.45 },
-    ],
-  },
-};
 
 const mockLatestTrades: LatestTradeRow[] = [
   {
@@ -328,38 +266,6 @@ const normalizeStatsPayload = (payload: unknown): RangeRowMetrics[] => {
   return rangeOrder.map((key) => mapped.get(key)).filter((row): row is RangeRowMetrics => Boolean(row));
 };
 
-const normalizeLeaderboardRow = (value: unknown, index: number): LeaderRow | null => {
-  const record = asRecord(value);
-  if (!record) {
-    return null;
-  }
-
-  const symbol = normalizeSymbol(record.symbol ?? record.ticker);
-  if (symbol === "--") {
-    return null;
-  }
-
-  return {
-    rank: Math.max(1, Math.trunc(parseNumber(record.rank) ?? index + 1)),
-    symbol,
-    pl: parseNumber(record.pl ?? record.totalPL ?? record.total_pl ?? record.pnl ?? record.net_pnl) ?? 0,
-  };
-};
-
-const normalizeLeaderboardPayload = (payload: unknown): LeaderRow[] => {
-  const rows = Array.isArray(payload)
-    ? payload
-    : Array.isArray(asRecord(payload)?.rows)
-      ? (asRecord(payload)?.rows as unknown[])
-      : Array.isArray(asRecord(payload)?.leaderboard)
-        ? (asRecord(payload)?.leaderboard as unknown[])
-        : [];
-
-  return rows
-    .map((row, index) => normalizeLeaderboardRow(row, index))
-    .filter((row): row is LeaderRow => Boolean(row));
-};
-
 const normalizeLatestRow = (value: unknown): LatestTradeRow | null => {
   const record = asRecord(value);
   if (!record) {
@@ -434,6 +340,7 @@ export default function TradesTab() {
   const [statsLoading, setStatsLoading] = useState(true);
   const [leaderboardRows, setLeaderboardRows] = useState<LeaderRow[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+  const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
   const [latestTradesRows, setLatestTradesRows] = useState<LatestTradeRow[]>([]);
   const [latestTradesLoading, setLatestTradesLoading] = useState(true);
 
@@ -476,20 +383,21 @@ export default function TradesTab() {
       if (!hasLoadedLeaderboardRef.current) {
         setLeaderboardLoading(true);
       }
-      const query = new URLSearchParams({
-        range: selectedLeaderboardRange,
-        mode: leaderboardMode,
-        limit: String(LEADERBOARD_LIMIT),
-        ts: String(Date.now()),
-      });
-      const payload = await fetchJson<unknown>(`/api/trades/leaderboard?${query.toString()}`);
+      const payload = await fetchJson<unknown>(
+        buildLeaderboardRequestPath(selectedLeaderboardRange, leaderboardMode, LEADERBOARD_LIMIT)
+      );
       if (!isMounted) {
         return;
       }
+      if (payload === null) {
+        setLeaderboardError("Unable to load leaderboard");
+        hasLoadedLeaderboardRef.current = true;
+        setLeaderboardLoading(false);
+        return;
+      }
       const normalized = normalizeLeaderboardPayload(payload);
-      const fallback = mockLeaderboardRows[selectedLeaderboardRange][leaderboardMode];
-      const nextRows = normalized.length > 0 ? normalized : isDev ? fallback : [];
-      setLeaderboardRows(nextRows.slice(0, LEADERBOARD_LIMIT));
+      setLeaderboardRows(normalized.slice(0, LEADERBOARD_LIMIT));
+      setLeaderboardError(null);
       hasLoadedLeaderboardRef.current = true;
       setLeaderboardLoading(false);
     };
@@ -501,7 +409,7 @@ export default function TradesTab() {
       isMounted = false;
       window.clearInterval(intervalId);
     };
-  }, [isDev, selectedLeaderboardRange, leaderboardMode]);
+  }, [selectedLeaderboardRange, leaderboardMode]);
 
   useEffect(() => {
     let isMounted = true;
@@ -556,6 +464,7 @@ export default function TradesTab() {
             mode={leaderboardMode}
             onModeChange={setLeaderboardMode}
             isLoading={leaderboardLoading}
+            errorMessage={leaderboardError}
           />
         </div>
       </div>

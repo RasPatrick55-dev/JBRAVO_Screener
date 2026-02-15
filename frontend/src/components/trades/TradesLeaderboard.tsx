@@ -11,6 +11,7 @@ interface TradesLeaderboardProps {
   mode: LeaderboardMode;
   onModeChange: (mode: LeaderboardMode) => void;
   isLoading?: boolean;
+  errorMessage?: string | null;
 }
 
 const MAX_LEADERBOARD_ROWS = 12;
@@ -22,6 +23,7 @@ export default function TradesLeaderboard({
   mode,
   onModeChange,
   isLoading = false,
+  errorMessage = null,
 }: TradesLeaderboardProps) {
   const sortedRows = useMemo(
     () => [...rows].sort((left, right) => left.rank - right.rank).slice(0, MAX_LEADERBOARD_ROWS),
@@ -69,6 +71,11 @@ export default function TradesLeaderboard({
       </div>
 
       <h3 className="font-arimo mt-4 text-sm font-semibold uppercase tracking-[0.08em] text-primary">{title}</h3>
+      {errorMessage ? (
+        <p className="mt-2 text-xs text-secondary" role="status">
+          {errorMessage}
+        </p>
+      ) : null}
 
       <div className="mt-3 min-h-0 max-h-[312px] overflow-auto xl:flex-1 xl:max-h-none">
         <table className="w-full table-fixed">
