@@ -24,6 +24,7 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 import os
+import time
 import inspect
 import pytz
 import re
@@ -6281,6 +6282,1530 @@ def api_execute_orders_summary():
                 "source": "alpaca",
             }
         )
+
+
+_DB_TABLE_COLUMNS_CACHE: dict[str, tuple[float, set[str]]] = {}
+_DB_TABLE_COLUMNS_CACHE_TTL_SECONDS = 300.0
+_SCREENER_RUN_SCOPE_CACHE: tuple[float, dict[str, Any]] | None = None
+_SCREENER_RUN_SCOPE_CACHE_TTL_SECONDS = 20.0
+
+
+def _db_table_columns(table_name: str) -> set[str]:
+    cache_key = str(table_name).strip().lower()
+    now = time.time()
+    cached = _DB_TABLE_COLUMNS_CACHE.get(cache_key)
+    if cached and (now - cached[0]) <= _DB_TABLE_COLUMNS_CACHE_TTL_SECONDS:
+        return set(cached[1])
+
+    rows = _db_fetch_all(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %(table_name)s
+        """,
+        {"table_name": cache_key},
+    )
+    columns = {
+        str(row.get("column_name") or "").strip().lower()
+        for row in rows
+        if row.get("column_name")
+    }
+    _DB_TABLE_COLUMNS_CACHE[cache_key] = (now, set(columns))
+    return columns
+
+
+def _first_existing_column(columns: set[str], candidates: list[str]) -> str | None:
+    for candidate in candidates:
+        lowered = str(candidate).strip().lower()
+        if lowered in columns:
+            return lowered
+    return None
+
+
+def _screener_parse_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "pass", "passed"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "fail", "failed"}:
+        return False
+    return None
+
+
+def _screener_normalize_pct(value: Any) -> Optional[float]:
+    numeric = _to_float(value)
+    if numeric is None:
+        return None
+    if abs(numeric) <= 1:
+        return float(numeric * 100.0)
+    return float(numeric)
+
+
+def _screener_iso_utc(value: Any) -> Optional[str]:
+    dt_value = _coerce_datetime_utc(value)
+    if dt_value is None:
+        return None
+    return dt_value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _screener_sort_rows_with_rank(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (
+            -(_to_float(row.get("final_score")) or float("-inf")),
+            str(row.get("symbol") or ""),
+        ),
+    )
+    for index, row in enumerate(sorted_rows, start=1):
+        row["rank"] = index
+    return sorted_rows
+
+
+def _screener_apply_pick_filter(
+    rows: list[dict[str, Any]],
+    *,
+    filter_key: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        passed_gates = _screener_parse_bool(row.get("_passed_gates"))
+        fail_reason = str(row.get("_gate_fail_reason") or "").strip()
+        has_error = bool(fail_reason) or passed_gates is False
+        if filter_key == "top10":
+            if (row.get("rank") or 0) > 10:
+                continue
+        elif filter_key == "passed":
+            if passed_gates is not True or has_error:
+                continue
+        elif filter_key == "errors":
+            if not has_error:
+                continue
+        filtered.append(row)
+
+    trimmed = filtered[:limit]
+    for row in trimmed:
+        row.pop("_passed_gates", None)
+        row.pop("_gate_fail_reason", None)
+    return trimmed
+
+
+def _screener_latest_run_scope() -> dict[str, Any]:
+    global _SCREENER_RUN_SCOPE_CACHE
+
+    now = time.time()
+    if _SCREENER_RUN_SCOPE_CACHE is not None:
+        cached_at, cached_scope = _SCREENER_RUN_SCOPE_CACHE
+        if (now - cached_at) <= _SCREENER_RUN_SCOPE_CACHE_TTL_SECONDS:
+            return dict(cached_scope)
+
+    scope: dict[str, Any] = {
+        "run_date": None,
+        "run_ts_utc": None,
+        "status": "COMPLETE",
+        "source_detail": "unavailable",
+    }
+    if not db.db_enabled():
+        scope["status"] = "ERROR"
+        scope["source_detail"] = "db_disabled"
+        _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
+        return scope
+
+    conn = db.get_db_conn()
+    if conn is None:
+        scope["status"] = "ERROR"
+        scope["source_detail"] = "db_connect_failed"
+        _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
+        return scope
+
+    run_date = None
+    run_ts_utc = None
+    rc = None
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT MAX(run_date) AS run_date FROM screener_candidates")
+            latest_date = cursor.fetchone()
+            run_date = latest_date[0] if latest_date else None
+            if run_date is None:
+                scope["status"] = "EMPTY"
+                scope["source_detail"] = "screener_candidates:empty"
+                _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
+                return scope
+
+            try:
+                cursor.execute(
+                    """
+                    SELECT run_ts_utc
+                    FROM pipeline_health_app
+                    WHERE mode = 'screener' AND run_date = %(run_date)s
+                    ORDER BY run_ts_utc DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    {"run_date": run_date},
+                )
+                run_ts_row = cursor.fetchone()
+                run_ts_utc = run_ts_row[0] if run_ts_row else None
+            except Exception:
+                run_ts_utc = None
+            if run_ts_utc is None:
+                try:
+                    cursor.execute(
+                        """
+                        SELECT MAX(run_ts_utc) AS run_ts_utc
+                        FROM screener_run_map_app
+                        """
+                    )
+                    run_ts_row = cursor.fetchone()
+                    run_ts_utc = run_ts_row[0] if run_ts_row else None
+                except Exception:
+                    run_ts_utc = None
+
+            try:
+                cursor.execute(
+                    """
+                    SELECT rc
+                    FROM pipeline_runs
+                    WHERE run_date = %(run_date)s
+                    ORDER BY created_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    {"run_date": run_date},
+                )
+                pipeline_row = cursor.fetchone()
+                rc = pipeline_row[0] if pipeline_row else None
+            except Exception:
+                rc = None
+    except Exception as exc:
+        logger.warning("[WARN] DB_QUERY_FAIL err=%s", exc)
+        scope["status"] = "ERROR"
+        scope["source_detail"] = f"db_query_fail:{exc}"
+        _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
+        return scope
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if run_date is None:
+        scope["status"] = "EMPTY"
+        scope["source_detail"] = "screener_candidates:empty"
+        _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
+        return scope
+    scope["run_date"] = run_date
+
+    scope["run_ts_utc"] = run_ts_utc
+
+    if rc not in (None, 0):
+        scope["status"] = "ERROR"
+
+    scope["source_detail"] = f"run_date={_serialize_record(run_date)}"
+    _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
+    return scope
+
+
+def _screener_pick_rows_from_db(
+    *,
+    run_date: Any,
+    run_ts_utc: Any,
+    filter_key: str,
+    limit: int,
+    query: str,
+) -> tuple[list[dict[str, Any]], str]:
+    columns = _db_table_columns("screener_candidates")
+    if not columns:
+        return [], "screener_candidates:missing"
+
+    score_col = _first_existing_column(columns, ["final_score", "score"])
+    exchange_col = _first_existing_column(columns, ["exchange"])
+    timestamp_col = _first_existing_column(columns, ["timestamp", "screened_at_utc", "created_at"])
+    volume_col = _first_existing_column(columns, ["volume"])
+    price_col = _first_existing_column(columns, ["close", "price", "last"])
+    entry_col = _first_existing_column(columns, ["entry_price"])
+    adv20_col = _first_existing_column(columns, ["adv20"])
+    atrp_col = _first_existing_column(columns, ["atrp"])
+    passed_col = _first_existing_column(columns, ["passed_gates"])
+    fail_reason_col = _first_existing_column(columns, ["gate_fail_reason"])
+    sma_ema_pct_col = _first_existing_column(columns, ["sma_ema_pct"])
+    sma9_col = _first_existing_column(columns, ["sma9"])
+    ema20_col = _first_existing_column(columns, ["ema20"])
+
+    score_expr = f"c.{score_col}" if score_col else "NULL"
+    exchange_expr = f"c.{exchange_col}" if exchange_col else "NULL"
+    screened_expr = f"c.{timestamp_col}" if timestamp_col else "NULL"
+    volume_expr = f"c.{volume_col}" if volume_col else "NULL"
+    price_expr = f"c.{price_col}" if price_col else "NULL"
+    entry_expr = f"c.{entry_col}" if entry_col else "NULL"
+    adv20_expr = f"c.{adv20_col}" if adv20_col else "NULL"
+    atrp_expr = f"c.{atrp_col}" if atrp_col else "NULL"
+    passed_expr = f"c.{passed_col}" if passed_col else "NULL"
+    fail_expr = f"c.{fail_reason_col}" if fail_reason_col else "NULL"
+
+    if sma_ema_pct_col:
+        sma_ema_expr = f"c.{sma_ema_pct_col}"
+    elif sma9_col and ema20_col:
+        sma_ema_expr = (
+            f"CASE WHEN c.{ema20_col} IS NULL OR c.{ema20_col} = 0 THEN NULL "
+            f"ELSE ((c.{sma9_col} - c.{ema20_col}) / c.{ema20_col}) * 100 END"
+        )
+    else:
+        sma_ema_expr = "NULL"
+
+    q_like = f"%{query}%"
+    q_parts: list[str] = []
+    if query:
+        q_parts.append("COALESCE(c.symbol, '') ILIKE %(q_like)s")
+        if exchange_col:
+            q_parts.append(f"COALESCE(c.{exchange_col}::text, '') ILIKE %(q_like)s")
+    q_sql = f" AND ({' OR '.join(q_parts)})" if q_parts else ""
+
+    scope_sql = ""
+    map_columns = _db_table_columns("screener_run_map_app")
+    if run_ts_utc and {"run_ts_utc", "symbol"}.issubset(map_columns):
+        scope_sql = (
+            " AND EXISTS ("
+            "SELECT 1 FROM screener_run_map_app m "
+            "WHERE m.symbol = c.symbol AND m.run_ts_utc = %(run_ts_utc)s"
+            ")"
+        )
+
+    order_sql = "c.symbol ASC"
+    if score_col:
+        order_sql = f"c.{score_col} DESC NULLS LAST, c.symbol ASC"
+
+    fetch_limit = max(limit * 6, 120)
+    params: dict[str, Any] = {
+        "run_date": run_date,
+        "run_ts_utc": run_ts_utc,
+        "fetch_limit": fetch_limit,
+        "q_like": q_like,
+    }
+    def _fetch_raw_rows(scope_fragment: str) -> list[dict[str, Any]]:
+        return _db_fetch_all(
+            f"""
+            SELECT
+                c.symbol AS symbol,
+                {exchange_expr} AS exchange,
+                {screened_expr} AS screened_at_utc,
+                {score_expr} AS final_score,
+                {volume_expr} AS volume,
+                {price_expr} AS price,
+                {entry_expr} AS entry_price,
+                {adv20_expr} AS adv20,
+                {atrp_expr} AS atrp,
+                {sma_ema_expr} AS sma_ema_pct,
+                {passed_expr} AS passed_gates,
+                {fail_expr} AS gate_fail_reason
+            FROM screener_candidates c
+            WHERE c.run_date = %(run_date)s
+            {scope_fragment}
+            {q_sql}
+            ORDER BY {order_sql}
+            LIMIT %(fetch_limit)s
+            """,
+            params,
+        )
+
+    raw_rows = _fetch_raw_rows(scope_sql)
+    scope_note = "run_ts_scope=exact" if scope_sql else "run_ts_scope=none"
+    if not raw_rows and scope_sql:
+        raw_rows = _fetch_raw_rows("")
+        scope_note = "run_ts_scope=fallback_unscoped"
+
+    staged_rows: list[dict[str, Any]] = []
+    for row in raw_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        price = _to_float(row.get("price"))
+        volume = _to_float(row.get("volume"))
+        dollar_volume = None
+        if price is not None and volume is not None:
+            dollar_volume = float(price * volume)
+        staged_rows.append(
+            {
+                "rank": None,
+                "symbol": symbol,
+                "exchange": str(row.get("exchange") or "").strip().upper(),
+                "screened_at_utc": _screener_iso_utc(row.get("screened_at_utc")),
+                "final_score": _to_float(row.get("final_score")),
+                "volume": volume,
+                "dollar_volume": dollar_volume,
+                "price": price,
+                "sma_ema_pct": _screener_normalize_pct(row.get("sma_ema_pct")),
+                "entry_price": _to_float(row.get("entry_price")),
+                "adv20": _to_float(row.get("adv20")),
+                "atrp": _screener_normalize_pct(row.get("atrp")),
+                "_passed_gates": row.get("passed_gates"),
+                "_gate_fail_reason": row.get("gate_fail_reason"),
+            }
+        )
+
+    ranked_rows = _screener_sort_rows_with_rank(staged_rows)
+    return _screener_apply_pick_filter(ranked_rows, filter_key=filter_key, limit=limit), (
+        f"postgres:screener_candidates run_date={_serialize_record(run_date)} {scope_note}"
+    )
+
+
+def _screener_pick_rows_from_file(
+    *,
+    filter_key: str,
+    limit: int,
+    query: str,
+) -> tuple[list[dict[str, Any]], str, Optional[str]]:
+    def _pick_rows_from_frame(
+        frame: pd.DataFrame,
+    ) -> tuple[list[dict[str, Any]], Optional[str], Optional[str]]:
+        if frame.empty:
+            return [], None, "empty"
+
+        rename_candidates = {
+            "symbol": ["symbol"],
+            "exchange": ["exchange"],
+            "run_date": ["run_date", "date"],
+            "screened_at_utc": ["timestamp", "screened_at_utc", "created_at"],
+            "rank": ["rank"],
+            "final_score": ["final_score", "score"],
+            "volume": ["volume"],
+            "price": ["close", "price", "last", "price_close"],
+            "entry_price": ["entry_price", "entry"],
+            "adv20": ["adv20"],
+            "atrp": ["atrp", "atr_pct", "atr_percent"],
+            "passed_gates": ["passed_gates"],
+            "gate_fail_reason": ["gate_fail_reason"],
+            "sma_ema_pct": ["sma_ema_pct"],
+            "sma9": ["sma9"],
+            "ema20": ["ema20"],
+        }
+
+        def _find_column(possible_names: list[str]) -> Optional[str]:
+            lowered_map = {str(column).strip().lower(): column for column in frame.columns}
+            for name in possible_names:
+                hit = lowered_map.get(name)
+                if hit is not None:
+                    return str(hit)
+            return None
+
+        symbol_col = _find_column(rename_candidates["symbol"])
+        if symbol_col is None:
+            return [], None, "missing_symbol"
+
+        exchange_col = _find_column(rename_candidates["exchange"])
+        run_date_col = _find_column(rename_candidates["run_date"])
+        screened_col = _find_column(rename_candidates["screened_at_utc"])
+        rank_col = _find_column(rename_candidates["rank"])
+        score_col = _find_column(rename_candidates["final_score"])
+        volume_col = _find_column(rename_candidates["volume"])
+        price_col = _find_column(rename_candidates["price"])
+        entry_col = _find_column(rename_candidates["entry_price"])
+        adv20_col = _find_column(rename_candidates["adv20"])
+        atrp_col = _find_column(rename_candidates["atrp"])
+        passed_col = _find_column(rename_candidates["passed_gates"])
+        fail_col = _find_column(rename_candidates["gate_fail_reason"])
+        sma_ema_col = _find_column(rename_candidates["sma_ema_pct"])
+        sma9_col = _find_column(rename_candidates["sma9"])
+        ema20_col = _find_column(rename_candidates["ema20"])
+
+        q_lower = query.lower()
+        staged_rows: list[dict[str, Any]] = []
+        for _, source_row in frame.iterrows():
+            symbol = str(source_row.get(symbol_col) or "").strip().upper()
+            if not symbol:
+                continue
+            exchange = (
+                str(source_row.get(exchange_col) or "").strip().upper() if exchange_col else ""
+            )
+            if q_lower and q_lower not in symbol.lower() and q_lower not in exchange.lower():
+                continue
+
+            price = _to_float(source_row.get(price_col)) if price_col else None
+            volume = _to_float(source_row.get(volume_col)) if volume_col else None
+            sma_ema_pct = _to_float(source_row.get(sma_ema_col)) if sma_ema_col else None
+            if sma_ema_pct is None and sma9_col and ema20_col:
+                sma9 = _to_float(source_row.get(sma9_col))
+                ema20 = _to_float(source_row.get(ema20_col))
+                if sma9 is not None and ema20 not in (None, 0):
+                    sma_ema_pct = ((sma9 - ema20) / ema20) * 100.0
+
+            source_rank = _to_float(source_row.get(rank_col)) if rank_col else None
+            if source_rank is not None:
+                source_rank = max(1.0, source_rank)
+
+            screened_value: Any = None
+            if screened_col:
+                screened_value = source_row.get(screened_col)
+            elif run_date_col:
+                screened_value = source_row.get(run_date_col)
+
+            dollar_volume = None
+            if price is not None and volume is not None:
+                dollar_volume = float(price * volume)
+
+            staged_rows.append(
+                {
+                    "rank": None,
+                    "_source_rank": source_rank,
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "screened_at_utc": _screener_iso_utc(screened_value),
+                    "final_score": _to_float(source_row.get(score_col)) if score_col else None,
+                    "volume": volume,
+                    "dollar_volume": dollar_volume,
+                    "price": price,
+                    "sma_ema_pct": _screener_normalize_pct(sma_ema_pct),
+                    "entry_price": _to_float(source_row.get(entry_col)) if entry_col else None,
+                    "adv20": _to_float(source_row.get(adv20_col)) if adv20_col else None,
+                    "atrp": _screener_normalize_pct(source_row.get(atrp_col)) if atrp_col else None,
+                    "_passed_gates": source_row.get(passed_col) if passed_col else None,
+                    "_gate_fail_reason": source_row.get(fail_col) if fail_col else None,
+                }
+            )
+
+        if any(row.get("_source_rank") is not None for row in staged_rows):
+            ranked_rows = sorted(
+                staged_rows,
+                key=lambda row: (
+                    _to_float(row.get("_source_rank")) or float("inf"),
+                    str(row.get("symbol") or ""),
+                ),
+            )
+            for index, row in enumerate(ranked_rows, start=1):
+                row["rank"] = index
+        else:
+            ranked_rows = _screener_sort_rows_with_rank(staged_rows)
+
+        for row in ranked_rows:
+            row.pop("_source_rank", None)
+
+        picked_rows = _screener_apply_pick_filter(ranked_rows, filter_key=filter_key, limit=limit)
+        run_ts_utc = None
+        for candidate_column in [screened_col, run_date_col]:
+            if not candidate_column:
+                continue
+            try:
+                run_ts_candidate = pd.to_datetime(
+                    frame[candidate_column], errors="coerce", utc=True
+                ).max()
+                if run_ts_candidate is not None and not pd.isna(run_ts_candidate):
+                    run_ts_utc = (
+                        run_ts_candidate.to_pydatetime().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                    )
+                    break
+            except Exception:
+                continue
+        return picked_rows, run_ts_utc, None
+
+    candidate_paths: list[Path] = [Path(BASE_DIR) / "data" / "latest_candidates.csv"]
+    predictions_dir = Path(BASE_DIR) / "data" / "predictions"
+    candidate_paths.append(predictions_dir / "latest.csv")
+    if predictions_dir.exists():
+        dated_prediction_files = list(predictions_dir.glob("????-??-??.csv"))
+        dated_prediction_files.sort(key=lambda value: value.name, reverse=True)
+        candidate_paths.extend(dated_prediction_files)
+
+    seen_paths: set[str] = set()
+    diagnostic_details: list[str] = []
+    for path in candidate_paths:
+        path_key = str(path.resolve()) if path.exists() else str(path)
+        if path_key in seen_paths:
+            continue
+        seen_paths.add(path_key)
+
+        if not path.exists():
+            diagnostic_details.append(f"{path.name}:missing")
+            continue
+
+        try:
+            frame = pd.read_csv(path)
+        except Exception as exc:
+            diagnostic_details.append(f"{path.name}:read_error:{exc}")
+            continue
+
+        parsed_rows, run_ts_utc, parse_error = _pick_rows_from_frame(frame)
+        if parse_error is None:
+            if run_ts_utc is None:
+                stem_match = re.match(r"^(\d{4}-\d{2}-\d{2})$", path.stem)
+                if stem_match:
+                    run_ts_utc = f"{stem_match.group(1)}T00:00:00Z"
+            return parsed_rows, f"file:{path}", run_ts_utc
+
+        diagnostic_details.append(f"{path.name}:{parse_error}")
+
+    if diagnostic_details:
+        return [], ";".join(diagnostic_details[:8]), None
+    return [], "picks_file_fallback:missing", None
+
+
+def _screener_resolve_run_date_from_run_ts(raw_value: str | None) -> tuple[Optional[Any], Optional[Any]]:
+    if not raw_value:
+        return None, None
+    parsed_ts = _coerce_datetime_utc(raw_value)
+    if parsed_ts is None:
+        return None, None
+
+    health_row = _db_fetch_one(
+        """
+        SELECT run_date, run_ts_utc
+        FROM pipeline_health_app
+        WHERE run_ts_utc <= %(run_ts_utc)s
+        ORDER BY run_ts_utc DESC NULLS LAST
+        LIMIT 1
+        """,
+        {"run_ts_utc": parsed_ts},
+    )
+    if health_row and health_row.get("run_date") is not None:
+        return health_row.get("run_date"), health_row.get("run_ts_utc")
+    return parsed_ts.date(), parsed_ts
+
+
+def _screener_latest_run_ts_for_date(run_date: Any) -> Optional[str]:
+    if run_date is None:
+        return None
+    row = _db_fetch_one(
+        """
+        SELECT run_ts_utc
+        FROM pipeline_health_app
+        WHERE run_date = %(run_date)s
+        ORDER BY run_ts_utc DESC NULLS LAST
+        LIMIT 1
+        """,
+        {"run_date": run_date},
+    )
+    value = row.get("run_ts_utc") if row else None
+    return _screener_iso_utc(value)
+
+
+def _screener_backtest_rows_from_db(
+    *,
+    run_date: Any,
+    window: str,
+    limit: int,
+    query: str,
+) -> tuple[list[dict[str, Any]], str]:
+    columns = _db_table_columns("backtest_results")
+    if not columns:
+        return [], "backtest_results:missing"
+
+    symbol_col = _first_existing_column(columns, ["symbol"])
+    if symbol_col is None:
+        return [], "backtest_results:missing_symbol"
+
+    run_date_col = _first_existing_column(columns, ["run_date"])
+    window_col = _first_existing_column(columns, ["window", "range", "period"])
+    trades_col = _first_existing_column(columns, ["trades"])
+    win_rate_col = _first_existing_column(columns, ["win_rate", "win_rate_pct"])
+    avg_return_col = _first_existing_column(
+        columns, ["avg_return_pct", "avg_return", "expectancy", "return_pct"]
+    )
+    pl_ratio_col = _first_existing_column(columns, ["pl_ratio", "profit_factor"])
+    max_dd_col = _first_existing_column(columns, ["max_dd_pct", "max_drawdown", "max_drawdown_pct"])
+    avg_hold_col = _first_existing_column(columns, ["avg_hold_days", "hold_days", "avg_days_held"])
+    total_pl_col = _first_existing_column(columns, ["total_pl_usd", "net_pnl", "total_pl", "pnl"])
+
+    def _expr(column: Optional[str]) -> str:
+        return f"b.{column}" if column else "NULL"
+
+    where_parts = ["1=1"]
+    params: dict[str, Any] = {
+        "limit": max(limit, 1),
+        "window": window,
+        "q_like": f"%{query}%",
+    }
+    if run_date is not None and run_date_col:
+        where_parts.append(f"b.{run_date_col} = %(run_date)s")
+        params["run_date"] = run_date
+    if window != "ALL" and window_col:
+        where_parts.append(f"UPPER(COALESCE(b.{window_col}::text, '')) = %(window)s")
+    if query:
+        where_parts.append(f"COALESCE(b.{symbol_col}::text, '') ILIKE %(q_like)s")
+
+    order_sql = "b.symbol ASC"
+    if total_pl_col:
+        order_sql = f"b.{total_pl_col} DESC NULLS LAST, b.{symbol_col} ASC"
+
+    rows = _db_fetch_all(
+        f"""
+        SELECT
+            b.{symbol_col} AS symbol,
+            {_expr(window_col)} AS window,
+            {_expr(trades_col)} AS trades,
+            {_expr(win_rate_col)} AS win_rate_pct,
+            {_expr(avg_return_col)} AS avg_return_pct,
+            {_expr(pl_ratio_col)} AS pl_ratio,
+            {_expr(max_dd_col)} AS max_dd_pct,
+            {_expr(avg_hold_col)} AS avg_hold_days,
+            {_expr(total_pl_col)} AS total_pl_usd
+        FROM backtest_results b
+        WHERE {' AND '.join(where_parts)}
+        ORDER BY {order_sql}
+        LIMIT %(limit)s
+        """,
+        params,
+    )
+
+    normalized_rows: list[dict[str, Any]] = []
+    for row in rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        resolved_window = str(row.get("window") or window).strip().upper() or window
+        if resolved_window not in {"3M", "6M", "1Y", "ALL"}:
+            resolved_window = window
+        normalized_rows.append(
+            {
+                "symbol": symbol,
+                "window": resolved_window,
+                "trades": _to_float(row.get("trades")),
+                "win_rate_pct": _screener_normalize_pct(row.get("win_rate_pct")),
+                "avg_return_pct": _screener_normalize_pct(row.get("avg_return_pct")),
+                "pl_ratio": _to_float(row.get("pl_ratio")),
+                "max_dd_pct": _screener_normalize_pct(row.get("max_dd_pct")),
+                "avg_hold_days": _to_float(row.get("avg_hold_days")),
+                "total_pl_usd": _to_float(row.get("total_pl_usd")),
+            }
+        )
+    return normalized_rows[:limit], (
+        f"postgres:backtest_results run_date={_serialize_record(run_date)} window={window}"
+    )
+
+
+def _screener_backtest_rows_from_file(
+    *,
+    window: str,
+    limit: int,
+    query: str,
+) -> tuple[list[dict[str, Any]], str]:
+    path = Path(BASE_DIR) / "data" / "backtest_results.csv"
+    if not path.exists():
+        return [], "backtest_results.csv:missing"
+    try:
+        frame = pd.read_csv(path)
+    except Exception as exc:
+        return [], f"backtest_results.csv:read_error:{exc}"
+    if frame.empty:
+        return [], "backtest_results.csv:empty"
+
+    lowered_map = {str(column).strip().lower(): str(column) for column in frame.columns}
+
+    def _col(*names: str) -> Optional[str]:
+        for name in names:
+            if name in lowered_map:
+                return lowered_map[name]
+        return None
+
+    symbol_col = _col("symbol")
+    if symbol_col is None:
+        return [], "backtest_results.csv:missing_symbol"
+
+    window_col = _col("window", "range", "period")
+    trades_col = _col("trades")
+    win_rate_col = _col("win_rate", "win_rate_pct")
+    avg_return_col = _col("avg_return_pct", "avg_return", "expectancy", "return_pct")
+    pl_ratio_col = _col("pl_ratio", "profit_factor")
+    max_dd_col = _col("max_dd_pct", "max_drawdown", "max_drawdown_pct")
+    avg_hold_col = _col("avg_hold_days", "hold_days", "avg_days_held")
+    total_pl_col = _col("total_pl_usd", "net_pnl", "total_pl", "pnl")
+
+    query_lower = query.lower()
+    rows: list[dict[str, Any]] = []
+    for _, source_row in frame.iterrows():
+        symbol = str(source_row.get(symbol_col) or "").strip().upper()
+        if not symbol:
+            continue
+        if query_lower and query_lower not in symbol.lower():
+            continue
+        resolved_window = str(source_row.get(window_col) or window).strip().upper() if window_col else window
+        if resolved_window not in {"3M", "6M", "1Y", "ALL"}:
+            resolved_window = window
+        if window != "ALL" and resolved_window != window:
+            continue
+        rows.append(
+            {
+                "symbol": symbol,
+                "window": resolved_window,
+                "trades": _to_float(source_row.get(trades_col)) if trades_col else None,
+                "win_rate_pct": _screener_normalize_pct(source_row.get(win_rate_col)) if win_rate_col else None,
+                "avg_return_pct": _screener_normalize_pct(source_row.get(avg_return_col)) if avg_return_col else None,
+                "pl_ratio": _to_float(source_row.get(pl_ratio_col)) if pl_ratio_col else None,
+                "max_dd_pct": _screener_normalize_pct(source_row.get(max_dd_col)) if max_dd_col else None,
+                "avg_hold_days": _to_float(source_row.get(avg_hold_col)) if avg_hold_col else None,
+                "total_pl_usd": _to_float(source_row.get(total_pl_col)) if total_pl_col else None,
+            }
+        )
+
+    rows.sort(key=lambda item: _to_float(item.get("total_pl_usd")) or float("-inf"), reverse=True)
+    return rows[:limit], f"file:{path}"
+
+
+def _screener_score_breakdown_short(value: Any) -> str:
+    if value in (None, ""):
+        return "--"
+
+    parsed: Any = None
+    if isinstance(value, dict):
+        parsed = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return "--"
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+        if parsed is None:
+            token_matches = re.findall(
+                r"([A-Za-z][A-Za-z0-9_]+)\s*[:=]\s*([-+]?[0-9]*\.?[0-9]+)",
+                text,
+            )
+            if token_matches:
+                parsed = {key: float(score) for key, score in token_matches}
+            else:
+                return text[:72]
+
+    if not isinstance(parsed, dict):
+        return str(value)[:72]
+
+    pretty_names: dict[str, str] = {
+        "ms": "Momentum",
+        "momentum": "Momentum",
+        "macd": "Momentum",
+        "rsi": "Momentum",
+        "vol": "Vol",
+        "liquidity": "Vol",
+        "liq": "Vol",
+        "trend": "Trend",
+        "ma_stack": "Trend",
+        "adx": "Trend",
+    }
+    parts: list[tuple[str, float]] = []
+    for raw_key, raw_score in parsed.items():
+        score = _to_float(raw_score)
+        if score is None:
+            continue
+        key = str(raw_key).strip().lower()
+        key = key.replace("_z", "")
+        label = pretty_names.get(key)
+        if label is None:
+            label = str(raw_key).replace("_", " ").strip().title()
+        parts.append((label, score))
+    if not parts:
+        return "--"
+
+    parts.sort(key=lambda item: abs(item[1]), reverse=True)
+    snippets: list[str] = []
+    for label, score in parts[:3]:
+        snippets.append(f"{label}:{score:.0f}")
+    return " ".join(snippets)
+
+
+def _screener_infer_metric_gates(
+    *,
+    passed_gates: Any,
+    gate_fail_reason: Any,
+) -> tuple[str, str, str]:
+    passed_value = _screener_parse_bool(passed_gates)
+    reason = str(gate_fail_reason or "").strip().lower()
+    liquidity = "PASS"
+    volatility = "PASS"
+    trend = "PASS"
+
+    if passed_value is False and not reason:
+        liquidity = "FAIL"
+        volatility = "FAIL"
+        trend = "FAIL"
+        return liquidity, volatility, trend
+
+    if any(token in reason for token in ("liq", "liquid", "adv", "volume", "dollar")):
+        liquidity = "FAIL"
+    if any(token in reason for token in ("vol", "atr", "sigma", "range")):
+        volatility = "FAIL"
+    if any(token in reason for token in ("trend", "ema", "sma", "ma stack", "moving average")):
+        trend = "FAIL"
+
+    if passed_value is False and liquidity == "PASS" and volatility == "PASS" and trend == "PASS":
+        trend = "FAIL"
+    return liquidity, volatility, trend
+
+
+def _screener_metrics_rows_from_db(
+    *,
+    run_date: Any,
+    run_ts_utc: Any,
+    filter_key: str,
+    limit: int,
+    query: str,
+) -> tuple[list[dict[str, Any]], str]:
+    columns = _db_table_columns("screener_candidates")
+    if not columns:
+        return [], "screener_candidates:missing"
+
+    score_breakdown_col = _first_existing_column(columns, ["score_breakdown"])
+    final_score_col = _first_existing_column(columns, ["final_score", "score"])
+    passed_col = _first_existing_column(columns, ["passed_gates"])
+    fail_col = _first_existing_column(columns, ["gate_fail_reason"])
+    source_col = _first_existing_column(columns, ["source"])
+    entry_col = _first_existing_column(columns, ["entry_price"])
+    adv20_col = _first_existing_column(columns, ["adv20"])
+    atrp_col = _first_existing_column(columns, ["atrp"])
+    exchange_col = _first_existing_column(columns, ["exchange"])
+
+    def _expr(column: Optional[str]) -> str:
+        return f"c.{column}" if column else "NULL"
+
+    q_parts: list[str] = []
+    if query:
+        q_parts.append("COALESCE(c.symbol, '') ILIKE %(q_like)s")
+        if source_col:
+            q_parts.append(f"COALESCE(c.{source_col}::text, '') ILIKE %(q_like)s")
+        if score_breakdown_col:
+            q_parts.append(f"COALESCE(c.{score_breakdown_col}::text, '') ILIKE %(q_like)s")
+    q_sql = f" AND ({' OR '.join(q_parts)})" if q_parts else ""
+
+    scope_sql = ""
+    map_columns = _db_table_columns("screener_run_map_app")
+    if run_ts_utc and {"run_ts_utc", "symbol"}.issubset(map_columns):
+        scope_sql = (
+            " AND EXISTS ("
+            "SELECT 1 FROM screener_run_map_app m "
+            "WHERE m.symbol = c.symbol AND m.run_ts_utc = %(run_ts_utc)s"
+            ")"
+        )
+
+    fetch_limit = max(limit * 6, 120)
+    raw_rows = _db_fetch_all(
+        f"""
+        SELECT
+            c.symbol AS symbol,
+            {_expr(score_breakdown_col)} AS score_breakdown,
+            {_expr(final_score_col)} AS final_score,
+            {_expr(passed_col)} AS passed_gates,
+            {_expr(fail_col)} AS gate_fail_reason,
+            {_expr(source_col)} AS source_label,
+            {_expr(entry_col)} AS entry_price,
+            {_expr(adv20_col)} AS adv20,
+            {_expr(atrp_col)} AS atrp,
+            {_expr(exchange_col)} AS exchange
+        FROM screener_candidates c
+        WHERE c.run_date = %(run_date)s
+        {scope_sql}
+        {q_sql}
+        ORDER BY c.symbol ASC
+        LIMIT %(fetch_limit)s
+        """,
+        {
+            "run_date": run_date,
+            "run_ts_utc": run_ts_utc,
+            "q_like": f"%{query}%",
+            "fetch_limit": fetch_limit,
+        },
+    )
+
+    staged: list[dict[str, Any]] = []
+    for row in raw_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        final_score = _to_float(row.get("final_score"))
+        liquidity_gate, volatility_gate, trend_gate = _screener_infer_metric_gates(
+            passed_gates=row.get("passed_gates"),
+            gate_fail_reason=row.get("gate_fail_reason"),
+        )
+        bars_complete = "YES"
+        if (
+            _to_float(row.get("entry_price")) in (None, 0)
+            or _to_float(row.get("adv20")) in (None, 0)
+            or _to_float(row.get("atrp")) in (None, 0)
+            or not str(row.get("exchange") or "").strip()
+        ):
+            bars_complete = "NO"
+
+        confidence = "Low"
+        if final_score is not None and final_score >= 80:
+            confidence = "High"
+        elif final_score is not None and final_score >= 60:
+            confidence = "Medium"
+
+        source_label = str(row.get("source_label") or "").strip()
+        if not source_label:
+            source_label = "DB"
+
+        record = {
+            "symbol": symbol,
+            "score_breakdown_short": _screener_score_breakdown_short(row.get("score_breakdown")),
+            "liquidity_gate": liquidity_gate,
+            "volatility_gate": volatility_gate,
+            "trend_gate": trend_gate,
+            "bars_complete": bars_complete,
+            "confidence": confidence,
+            "source_label": source_label,
+            "_gate_fail_reason": str(row.get("gate_fail_reason") or "").strip().lower(),
+        }
+
+        if filter_key == "gate_failures":
+            if all(record[key] == "PASS" for key in ("liquidity_gate", "volatility_gate", "trend_gate")):
+                continue
+        elif filter_key == "data_issues":
+            has_data_issue = (
+                record["bars_complete"] == "NO"
+                or "data" in record["_gate_fail_reason"]
+                or "missing" in record["_gate_fail_reason"]
+            )
+            if not has_data_issue:
+                continue
+        elif filter_key == "high_confidence" and record["confidence"] != "High":
+            continue
+
+        staged.append(record)
+
+    for row in staged:
+        row.pop("_gate_fail_reason", None)
+    return staged[:limit], f"postgres:screener_candidates run_date={_serialize_record(run_date)}"
+
+
+def _screener_metrics_rows_from_file(
+    *,
+    filter_key: str,
+    limit: int,
+    query: str,
+) -> tuple[list[dict[str, Any]], str]:
+    path = Path(BASE_DIR) / "data" / "latest_candidates.csv"
+    if not path.exists():
+        return [], "latest_candidates.csv:missing"
+    try:
+        frame = pd.read_csv(path)
+    except Exception as exc:
+        return [], f"latest_candidates.csv:read_error:{exc}"
+    if frame.empty:
+        return [], "latest_candidates.csv:empty"
+
+    lowered = {str(column).strip().lower(): str(column) for column in frame.columns}
+
+    def _col(*names: str) -> Optional[str]:
+        for name in names:
+            if name in lowered:
+                return lowered[name]
+        return None
+
+    symbol_col = _col("symbol")
+    if symbol_col is None:
+        return [], "latest_candidates.csv:missing_symbol"
+
+    score_breakdown_col = _col("score_breakdown")
+    score_col = _col("final_score", "score")
+    passed_col = _col("passed_gates")
+    fail_col = _col("gate_fail_reason")
+    source_col = _col("source")
+    entry_col = _col("entry_price")
+    adv20_col = _col("adv20")
+    atrp_col = _col("atrp")
+    exchange_col = _col("exchange")
+
+    query_lower = query.lower()
+    rows: list[dict[str, Any]] = []
+    for _, source_row in frame.iterrows():
+        symbol = str(source_row.get(symbol_col) or "").strip().upper()
+        if not symbol:
+            continue
+        score_breakdown = source_row.get(score_breakdown_col) if score_breakdown_col else None
+        source_label = str(source_row.get(source_col) or "").strip() if source_col else "DB"
+        if query_lower:
+            joined = " ".join(
+                [
+                    symbol,
+                    str(score_breakdown or ""),
+                    str(source_label),
+                ]
+            ).lower()
+            if query_lower not in joined:
+                continue
+
+        liquidity_gate, volatility_gate, trend_gate = _screener_infer_metric_gates(
+            passed_gates=source_row.get(passed_col) if passed_col else None,
+            gate_fail_reason=source_row.get(fail_col) if fail_col else None,
+        )
+        bars_complete = "YES"
+        if (
+            _to_float(source_row.get(entry_col)) in (None, 0) if entry_col else True
+        ) or ((_to_float(source_row.get(adv20_col)) in (None, 0)) if adv20_col else True) or (
+            (_to_float(source_row.get(atrp_col)) in (None, 0)) if atrp_col else True
+        ) or (not str(source_row.get(exchange_col) or "").strip() if exchange_col else True):
+            bars_complete = "NO"
+
+        final_score = _to_float(source_row.get(score_col)) if score_col else None
+        confidence = "Low"
+        if final_score is not None and final_score >= 80:
+            confidence = "High"
+        elif final_score is not None and final_score >= 60:
+            confidence = "Medium"
+
+        record = {
+            "symbol": symbol,
+            "score_breakdown_short": _screener_score_breakdown_short(score_breakdown),
+            "liquidity_gate": liquidity_gate,
+            "volatility_gate": volatility_gate,
+            "trend_gate": trend_gate,
+            "bars_complete": bars_complete,
+            "confidence": confidence,
+            "source_label": source_label or "DB",
+            "_gate_fail_reason": str(source_row.get(fail_col) or "").strip().lower() if fail_col else "",
+        }
+
+        if filter_key == "gate_failures":
+            if all(record[key] == "PASS" for key in ("liquidity_gate", "volatility_gate", "trend_gate")):
+                continue
+        elif filter_key == "data_issues":
+            has_data_issue = (
+                record["bars_complete"] == "NO"
+                or "data" in record["_gate_fail_reason"]
+                or "missing" in record["_gate_fail_reason"]
+            )
+            if not has_data_issue:
+                continue
+        elif filter_key == "high_confidence" and record["confidence"] != "High":
+            continue
+
+        rows.append(record)
+
+    rows.sort(key=lambda item: item.get("symbol") or "")
+    for row in rows:
+        row.pop("_gate_fail_reason", None)
+    return rows[:limit], f"file:{path}"
+
+
+_SCREENER_LOG_TS_RE = re.compile(
+    r"(?P<date>\d{4}-\d{2}-\d{2})[ T](?P<time>\d{2}:\d{2}:\d{2})(?:[.,](?P<frac>\d{1,6}))?"
+)
+_SCREENER_LOG_LEVEL_RE = re.compile(
+    r"\b(ERROR|ERR|WARN|WARNING|INFO|SUCCESS|OK|DEBUG)\b", re.IGNORECASE
+)
+
+
+def _screener_normalize_log_level(level: str) -> str:
+    normalized = str(level or "").strip().upper()
+    if normalized.startswith("ERR"):
+        return "ERROR"
+    if normalized.startswith("WARN"):
+        return "WARN"
+    if normalized in {"SUCCESS", "OK"}:
+        return "SUCCESS"
+    return "INFO"
+
+
+def _screener_parse_log_line(line: str) -> Optional[dict[str, Any]]:
+    text = str(line or "").strip()
+    if not text:
+        return None
+
+    timestamp = None
+    match = _SCREENER_LOG_TS_RE.search(text)
+    if match:
+        date_text = match.group("date")
+        time_text = match.group("time")
+        frac_text = (match.group("frac") or "").ljust(6, "0")[:6]
+        dt_text = f"{date_text} {time_text}"
+        try:
+            timestamp = datetime.strptime(dt_text, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+            if frac_text:
+                timestamp = timestamp.replace(microsecond=int(frac_text))
+        except Exception:
+            timestamp = None
+
+    level_match = _SCREENER_LOG_LEVEL_RE.search(text)
+    level = _screener_normalize_log_level(level_match.group(1) if level_match else "")
+
+    message = re.sub(
+        r"^\s*\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\s*",
+        "",
+        text,
+    ).strip()
+    if not message:
+        message = text
+
+    return {
+        "ts_utc": _screener_iso_utc(timestamp),
+        "level": level,
+        "message": message,
+        "_ts": timestamp,
+    }
+
+
+def _screener_filter_log_rows(
+    rows: list[dict[str, Any]],
+    *,
+    level_filter: str,
+    today_only: bool,
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    now_utc = datetime.now(timezone.utc).date()
+    query_lower = query.lower()
+    filtered: list[dict[str, Any]] = []
+
+    for row in rows:
+        level = _screener_normalize_log_level(row.get("level", ""))
+        if level_filter == "errors" and level != "ERROR":
+            continue
+        if level_filter == "warnings" and level != "WARN":
+            continue
+
+        ts_value = row.get("_ts")
+        if today_only:
+            if ts_value is None or ts_value.date() != now_utc:
+                continue
+
+        if query_lower:
+            joined = " ".join(
+                [
+                    str(row.get("ts_utc") or ""),
+                    str(level),
+                    str(row.get("message") or ""),
+                ]
+            ).lower()
+            if query_lower not in joined:
+                continue
+
+        filtered.append(
+            {
+                "ts_utc": row.get("ts_utc"),
+                "level": level,
+                "message": str(row.get("message") or "").strip(),
+                "_ts": ts_value,
+            }
+        )
+
+    filtered.sort(
+        key=lambda item: item.get("_ts")
+        or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+
+    trimmed = filtered[:limit]
+    for row in trimmed:
+        row.pop("_ts", None)
+    return trimmed
+
+
+def _screener_logs_from_db(stage: str, fetch_limit: int) -> tuple[list[dict[str, Any]], str]:
+    stage = str(stage).strip().lower()
+    candidate_tables = [
+        f"{stage}_logs",
+        "pipeline_logs",
+        "log_events",
+        "app_logs",
+    ]
+    seen: set[str] = set()
+    for table in candidate_tables:
+        if table in seen:
+            continue
+        seen.add(table)
+
+        columns = _db_table_columns(table)
+        if not columns:
+            continue
+
+        ts_col = _first_existing_column(
+            columns,
+            ["ts_utc", "timestamp", "created_at", "event_ts", "event_time", "ts", "time_utc"],
+        )
+        message_col = _first_existing_column(
+            columns,
+            ["message", "msg", "log_text", "text", "event", "line", "payload"],
+        )
+        if ts_col is None or message_col is None:
+            continue
+
+        level_col = _first_existing_column(columns, ["level", "severity", "log_level", "lvl"])
+        stage_col = _first_existing_column(columns, ["stage", "component", "source", "module", "task"])
+
+        level_expr = f"{level_col}" if level_col else "'INFO'"
+        params: dict[str, Any] = {"limit": int(fetch_limit), "stage_like": f"%{stage}%"}
+        stage_sql = ""
+        if stage_col:
+            stage_sql = f"AND COALESCE({stage_col}::text, '') ILIKE %(stage_like)s"
+
+        raw_rows = _db_fetch_all(
+            f"""
+            SELECT
+                {ts_col} AS ts_utc,
+                {level_expr} AS level,
+                {message_col} AS message
+            FROM {table}
+            WHERE {message_col} IS NOT NULL
+              {stage_sql}
+            ORDER BY {ts_col} DESC NULLS LAST
+            LIMIT %(limit)s
+            """,
+            params,
+        )
+        if not raw_rows:
+            continue
+
+        parsed_rows: list[dict[str, Any]] = []
+        for row in raw_rows:
+            parsed_ts = _coerce_datetime_utc(row.get("ts_utc"))
+            parsed_rows.append(
+                {
+                    "ts_utc": _screener_iso_utc(parsed_ts),
+                    "level": _screener_normalize_log_level(str(row.get("level") or "")),
+                    "message": str(row.get("message") or "").strip(),
+                    "_ts": parsed_ts,
+                }
+            )
+        if parsed_rows:
+            return parsed_rows, f"postgres:{table}"
+    return [], "postgres:none"
+
+
+def _screener_remote_log_text(filename: str) -> Optional[tuple[str, str]]:
+    username = _pythonanywhere_username()
+    token = _pythonanywhere_token()
+    if not username or not token:
+        return None
+    candidate_paths = [
+        f"/home/{username}/JBRAVO_Screener/logs/{filename}",
+        f"/home/{username}/jbravo_screener/logs/{filename}",
+    ]
+    for remote_path in candidate_paths:
+        payload = _fetch_pythonanywhere_file(None, remote_path)
+        if payload:
+            text, _ = payload
+            return text, f"pythonanywhere:{remote_path}"
+    return None
+
+
+def _screener_local_log_text(filename: str) -> Optional[tuple[str, str]]:
+    path = Path(BASE_DIR) / "logs" / filename
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+    return text, f"local:{path}"
+
+
+def _screener_logs_from_files(stage: str, fetch_limit: int) -> tuple[list[dict[str, Any]], str]:
+    files_by_stage = {
+        "screener": ["screener.log", "pipeline.log"],
+        "backtest": ["step.backtest.out", "backtest.log", "pipeline.log"],
+        "metrics": ["step.metrics.out", "metrics.log", "pipeline.log"],
+    }
+    file_list = files_by_stage.get(stage, [])
+    if not file_list:
+        return [], "files:none"
+
+    parsed_rows: list[dict[str, Any]] = []
+    sources: list[str] = []
+    tail_limit = max(fetch_limit * 12, 400)
+
+    for filename in file_list:
+        payload = _screener_remote_log_text(filename) or _screener_local_log_text(filename)
+        if not payload:
+            continue
+        text, source = payload
+        sources.append(source)
+        lines = [line for line in text.splitlines() if line.strip()]
+        for line in lines[-tail_limit:]:
+            parsed = _screener_parse_log_line(line)
+            if not parsed:
+                continue
+            parsed_rows.append(parsed)
+
+    if not parsed_rows:
+        return [], "files:none"
+    return parsed_rows, ";".join(sources)
+
+
+@server.route("/api/screener/picks")
+def api_screener_picks():
+    limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
+    query = str(request.args.get("q") or "").strip()
+    filter_key = str(request.args.get("filter") or "all").strip().lower()
+    if filter_key not in {"all", "top10", "passed", "errors"}:
+        filter_key = "all"
+
+    scope = _screener_latest_run_scope()
+    run_date = scope.get("run_date")
+    run_ts_utc = scope.get("run_ts_utc")
+    status = str(scope.get("status") or "COMPLETE").upper()
+    source = "postgres"
+    source_detail = str(scope.get("source_detail") or "")
+
+    rows: list[dict[str, Any]] = []
+    if run_date is not None and db.db_enabled():
+        rows, detail = _screener_pick_rows_from_db(
+            run_date=run_date,
+            run_ts_utc=run_ts_utc,
+            filter_key=filter_key,
+            limit=limit,
+            query=query,
+        )
+        source_detail = detail
+
+    if not rows:
+        fallback_rows, fallback_detail, fallback_run_ts = _screener_pick_rows_from_file(
+            filter_key=filter_key,
+            limit=limit,
+            query=query,
+        )
+        if fallback_detail.startswith("file:"):
+            rows = fallback_rows
+            source = "file-fallback"
+            source_detail = fallback_detail
+            run_ts_utc = fallback_run_ts or run_ts_utc
+            status = "COMPLETE"
+        elif status != "ERROR":
+            source_detail = fallback_detail
+            status = "EMPTY"
+
+    return _json_no_store(
+        {
+            "ok": status != "ERROR",
+            "run_ts_utc": _screener_iso_utc(run_ts_utc),
+            "status": status,
+            "source": source,
+            "source_detail": source_detail,
+            "rows": rows,
+        }
+    )
+
+
+@server.route("/api/screener/backtest")
+def api_screener_backtest():
+    limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
+    query = str(request.args.get("q") or "").strip()
+    window = str(request.args.get("window") or "6M").strip().upper()
+    if window not in {"3M", "6M", "1Y", "ALL"}:
+        window = "6M"
+
+    requested_run_ts = str(request.args.get("run_ts_utc") or "").strip() or None
+    run_date, resolved_run_ts = _screener_resolve_run_date_from_run_ts(requested_run_ts)
+    if run_date is None:
+        latest_row = _db_fetch_one("SELECT MAX(run_date) AS run_date FROM backtest_results")
+        run_date = latest_row.get("run_date") if latest_row else None
+    if resolved_run_ts is None:
+        resolved_run_ts = _screener_latest_run_ts_for_date(run_date)
+
+    source = "postgres"
+    rows: list[dict[str, Any]] = []
+    if run_date is not None and db.db_enabled():
+        rows, _ = _screener_backtest_rows_from_db(
+            run_date=run_date,
+            window=window,
+            limit=limit,
+            query=query,
+        )
+
+    if not rows:
+        fallback_rows, _ = _screener_backtest_rows_from_file(window=window, limit=limit, query=query)
+        if fallback_rows:
+            rows = fallback_rows
+            source = "file-fallback"
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "run_ts_utc": _screener_iso_utc(resolved_run_ts),
+            "window": window,
+            "source": source,
+            "rows": rows,
+        }
+    )
+
+
+@server.route("/api/screener/metrics")
+def api_screener_metrics():
+    limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
+    query = str(request.args.get("q") or "").strip()
+    filter_key = str(request.args.get("filter") or "all").strip().lower()
+    if filter_key not in {"all", "gate_failures", "data_issues", "high_confidence"}:
+        filter_key = "all"
+
+    requested_run_ts = str(request.args.get("run_ts_utc") or "").strip() or None
+    run_date, resolved_run_ts = _screener_resolve_run_date_from_run_ts(requested_run_ts)
+    if run_date is None:
+        latest_scope = _screener_latest_run_scope()
+        run_date = latest_scope.get("run_date")
+        resolved_run_ts = resolved_run_ts or latest_scope.get("run_ts_utc")
+
+    rows: list[dict[str, Any]] = []
+    source = "postgres"
+    if run_date is not None and db.db_enabled():
+        rows, _ = _screener_metrics_rows_from_db(
+            run_date=run_date,
+            run_ts_utc=resolved_run_ts,
+            filter_key=filter_key,
+            limit=limit,
+            query=query,
+        )
+
+    if not rows:
+        fallback_rows, _ = _screener_metrics_rows_from_file(
+            filter_key=filter_key,
+            limit=limit,
+            query=query,
+        )
+        if fallback_rows:
+            rows = fallback_rows
+            source = "file-fallback"
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "run_ts_utc": _screener_iso_utc(resolved_run_ts),
+            "source": source,
+            "rows": rows,
+        }
+    )
+
+
+@server.route("/api/screener/logs")
+def api_screener_logs():
+    stage = str(request.args.get("stage") or "screener").strip().lower()
+    if stage not in {"screener", "backtest", "metrics"}:
+        stage = "screener"
+    limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=1, maximum=500)
+    level_filter = str(request.args.get("level") or "all").strip().lower()
+    if level_filter not in {"all", "errors", "warnings"}:
+        level_filter = "all"
+    today_only = str(request.args.get("today") or "0").strip().lower() in {"1", "true", "yes", "on"}
+    query = str(request.args.get("q") or "").strip()
+
+    fetch_limit = max(limit * 6, 300)
+    file_rows, file_source_detail = _screener_logs_from_files(stage, fetch_limit)
+    staged_rows = file_rows
+    source_detail = file_source_detail
+    if staged_rows:
+        source = "pythonanywhere" if "pythonanywhere:" in file_source_detail else "local-log-fallback"
+    else:
+        db_rows, db_source_detail = _screener_logs_from_db(stage, fetch_limit)
+        staged_rows = db_rows
+        source = "postgres" if db_rows else "none"
+        source_detail = db_source_detail if db_rows else f"{file_source_detail};{db_source_detail}"
+
+    rows = _screener_filter_log_rows(
+        staged_rows,
+        level_filter=level_filter,
+        today_only=today_only,
+        query=query,
+        limit=limit,
+    )
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "stage": stage,
+            "source": source,
+            "source_detail": source_detail,
+            "rows": rows,
+        }
+    )
 
 
 @server.route("/api/screener/candidates")
