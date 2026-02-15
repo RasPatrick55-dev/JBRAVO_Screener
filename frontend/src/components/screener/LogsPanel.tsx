@@ -228,13 +228,13 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
               {title} entries with UTC timestamp, level, and message.
             </caption>
             <colgroup>
-              <col className="w-[38%] sm:w-[32%]" />
-              <col className="w-[18%] sm:w-[16%]" />
-              <col className="w-[44%] sm:w-[52%]" />
+              <col className="w-[44%] sm:w-[43%]" />
+              <col className="w-[16%] sm:w-[15%]" />
+              <col className="w-[40%] sm:w-[42%]" />
             </colgroup>
             <thead className="sticky top-0 z-10 bg-slate-100/95 dark:bg-slate-900/95">
               <tr className="font-arimo border-b border-slate-300/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary dark:border-slate-600/80">
-                <th scope="col" className="px-2 py-1.5 text-left">
+                <th scope="col" className="whitespace-nowrap px-2 py-1.5 text-left">
                   Time (UTC)
                 </th>
                 <th scope="col" className="px-2 py-1.5 text-center">
@@ -267,13 +267,17 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
               {!isLoading
                 ? displayedRows.map((row, index) => {
                     const level = normalizeLogLevel(row.level);
+                    const formattedTs = formatUtcDateTime(row.ts_utc);
                     return (
                       <tr
                         key={`${stage}-${row.ts_utc ?? "na"}-${index}`}
-                        className={`border-b border-slate-200/70 text-[11px] transition-colors dark:border-slate-700/70 sm:text-xs ${stageStyle.rowHover}`}
+                        className={`border-b border-slate-200/70 text-[10px] transition-colors dark:border-slate-700/70 sm:text-[11px] ${stageStyle.rowHover}`}
                       >
-                        <td className="font-cousine px-2 py-2 text-left tabular-nums text-secondary sm:whitespace-nowrap">
-                          {formatUtcDateTime(row.ts_utc)}
+                        <td
+                          title={formattedTs}
+                          className="font-cousine overflow-hidden text-ellipsis whitespace-nowrap px-2 py-2 text-left tabular-nums text-secondary"
+                        >
+                          {formattedTs}
                         </td>
                         <td className="px-2 py-2 text-center">
                           <span

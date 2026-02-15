@@ -94,9 +94,21 @@ export const formatUtcDateTime = (value: string | null | undefined): string => {
   if (!value) {
     return "--";
   }
-  const parsed = new Date(value);
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return "--";
+  }
+
+  let candidate = normalized;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,6})?$/.test(candidate)) {
+    candidate = `${candidate.replace(" ", "T")}Z`;
+  } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?$/.test(candidate)) {
+    candidate = `${candidate}Z`;
+  }
+
+  const parsed = new Date(candidate);
   if (Number.isNaN(parsed.getTime())) {
-    return value;
+    return normalized;
   }
   const date = parsed.toLocaleDateString("en-US", {
     year: "numeric",
