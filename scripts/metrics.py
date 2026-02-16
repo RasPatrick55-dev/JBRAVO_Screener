@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 from psycopg2.extensions import connection as PGConnection
 from scripts import db
+from scripts.db_queries import get_latest_screener_candidates
 from utils.screener_metrics import ensure_canonical_metrics, write_screener_metrics_json
 from utils.env import load_env
 
@@ -43,7 +44,8 @@ def derive_prefix_counts_from_scored_candidates(base_dir: Path) -> dict:
         logging.warning("Prefix count skipped: DB disabled")
         return {}
     try:
-        df, _ = db.fetch_latest_screener_candidates()
+        run_date = db.fetch_latest_run_date("screener_candidates")
+        df, _ = get_latest_screener_candidates(run_date) if run_date is not None else (pd.DataFrame(), None)
     except Exception as exc:
         logging.warning("Prefix count skipped: DB query failed: %s", exc)
         return {}
@@ -470,7 +472,7 @@ logger.info(
 
 backtest_df = load_results(run_date=run_date)
 try:
-    screener_df = db.fetch_screener_candidates_for_run_date(run_date)
+    screener_df, _ = get_latest_screener_candidates(run_date)
 except Exception as exc:  # pragma: no cover - defensive guard
     logger.exception("[ERROR] Failed to load screener candidates: %s", exc)
     screener_df = pd.DataFrame()

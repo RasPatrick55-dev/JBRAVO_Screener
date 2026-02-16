@@ -641,6 +641,7 @@ def insert_screener_candidates(
             "passed_gates": _coerce_bool(record.get("passed_gates")),
             "gate_fail_reason": normalize_gate_fail_reason(record.get("gate_fail_reason")),
             "ml_weight_used": record.get("ml_weight_used"),
+            "run_ts_utc": normalize_ts(run_ts_utc, field="run_ts_utc") if run_ts_utc is not None else None,
         }
         rows.append(payload)
 
@@ -654,13 +655,13 @@ def insert_screener_candidates(
                     INSERT INTO screener_candidates (
                         run_date, timestamp, symbol, score, final_score, exchange, close, volume,
                         universe_count, score_breakdown, entry_price, adv20, atrp, source,
-                        sma9, ema20, sma180, rsi14, passed_gates, gate_fail_reason, ml_weight_used
+                        sma9, ema20, sma180, rsi14, passed_gates, gate_fail_reason, ml_weight_used, run_ts_utc
                     )
                     VALUES (
                         %(run_date)s, %(timestamp)s, %(symbol)s, %(score)s, %(final_score)s, %(exchange)s, %(close)s, %(volume)s,
                         %(universe_count)s, CAST(%(score_breakdown)s AS JSONB), %(entry_price)s, %(adv20)s,
                         %(atrp)s, %(source)s, %(sma9)s, %(ema20)s, %(sma180)s, %(rsi14)s, %(passed_gates)s,
-                        %(gate_fail_reason)s, %(ml_weight_used)s
+                        %(gate_fail_reason)s, %(ml_weight_used)s, COALESCE(%(run_ts_utc)s, now())
                     )
                     ON CONFLICT (run_date, symbol) DO UPDATE SET
                         timestamp=EXCLUDED.timestamp,
@@ -681,7 +682,8 @@ def insert_screener_candidates(
                         rsi14=EXCLUDED.rsi14,
                         passed_gates=EXCLUDED.passed_gates,
                         gate_fail_reason=EXCLUDED.gate_fail_reason,
-                        ml_weight_used=EXCLUDED.ml_weight_used
+                        ml_weight_used=EXCLUDED.ml_weight_used,
+                        run_ts_utc=EXCLUDED.run_ts_utc
                     """,
                     rows,
                     page_size=200,
@@ -697,12 +699,13 @@ def insert_screener_candidates(
         if normalized_run_ts is not None:
             normalized_run_ts = normalized_run_ts.replace(microsecond=0)
             map_rows = [
-                {"run_ts_utc": normalized_run_ts, "symbol": row.get("symbol")}
+                {"run_date": _coerce_date(run_date), "run_ts_utc": normalized_run_ts, "symbol": row.get("symbol")}
                 for row in rows
                 if row.get("symbol")
             ]
             create_stmt = """
                 CREATE TABLE IF NOT EXISTS screener_run_map_app (
+                    run_date DATE,
                     run_ts_utc TIMESTAMPTZ,
                     symbol TEXT,
                     created_at TIMESTAMPTZ DEFAULT now(),
@@ -710,9 +713,10 @@ def insert_screener_candidates(
                 )
             """
             insert_stmt = """
-                INSERT INTO screener_run_map_app (run_ts_utc, symbol)
-                VALUES (%(run_ts_utc)s, %(symbol)s)
-                ON CONFLICT (run_ts_utc, symbol) DO NOTHING
+                INSERT INTO screener_run_map_app (run_date, run_ts_utc, symbol)
+                VALUES (%(run_date)s, %(run_ts_utc)s, %(symbol)s)
+                ON CONFLICT (run_ts_utc, symbol) DO UPDATE SET
+                    run_date=EXCLUDED.run_date
             """
             try:
                 with conn:
@@ -1181,10 +1185,19 @@ def fetch_latest_screener_candidate_count() -> tuple[int, Optional[date]]:
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT run_date, COUNT(*)
-                FROM screener_candidates
-                WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
-                GROUP BY run_date
+                WITH latest_date AS (
+                    SELECT MAX(run_date) AS run_date
+                    FROM screener_candidates
+                ), latest_run AS (
+                    SELECT COALESCE(MAX(c.run_ts_utc), MAX(c.created_at)) AS latest_run_ts
+                    FROM screener_candidates c
+                    JOIN latest_date d ON c.run_date = d.run_date
+                )
+                SELECT c.run_date, COUNT(*) AS row_count
+                FROM screener_candidates c
+                JOIN latest_date d ON c.run_date = d.run_date
+                JOIN latest_run r ON c.run_ts_utc = r.latest_run_ts
+                GROUP BY c.run_date
                 """
             )
             row = cursor.fetchone()
@@ -1209,25 +1222,32 @@ def fetch_latest_screener_candidates(
         return pd.DataFrame(), None
     try:
         with conn.cursor() as cursor:
+            params: dict[str, Any] = {}
+            limit_sql = ""
             if limit:
-                cursor.execute(
+                params["limit"] = int(limit)
+                limit_sql = " LIMIT %(limit)s"
+            cursor.execute(
+                (
                     """
-                    SELECT *
-                    FROM screener_candidates
-                    WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
-                    ORDER BY score DESC NULLS LAST
-                    LIMIT %(limit)s
-                    """,
-                    {"limit": int(limit)},
-                )
-            else:
-                cursor.execute(
+                    WITH latest_date AS (
+                        SELECT MAX(run_date) AS run_date
+                        FROM screener_candidates
+                    ), latest_run AS (
+                        SELECT COALESCE(MAX(c.run_ts_utc), MAX(c.created_at)) AS latest_run_ts
+                        FROM screener_candidates c
+                        JOIN latest_date d ON c.run_date = d.run_date
+                    )
+                    SELECT c.*
+                    FROM screener_candidates c
+                    JOIN latest_date d ON c.run_date = d.run_date
+                    JOIN latest_run r ON c.run_ts_utc = r.latest_run_ts
+                    ORDER BY c.score DESC NULLS LAST, c.symbol ASC
                     """
-                    SELECT *
-                    FROM screener_candidates
-                    WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
-                    """
-                )
+                    + limit_sql
+                ),
+                params,
+            )
             rows = cursor.fetchall()
             columns = [desc[0] for desc in cursor.description or []]
         df = pd.DataFrame(rows, columns=columns)
@@ -1260,6 +1280,12 @@ def fetch_screener_candidates_for_run_date(run_date: Any) -> pd.DataFrame:
                 SELECT symbol, entry_price, adv20, atrp, exchange, source
                 FROM screener_candidates
                 WHERE run_date = %(run_date)s
+                  AND run_ts_utc = (
+                    SELECT COALESCE(max(run_ts_utc), max(created_at))
+                    FROM screener_candidates
+                    WHERE run_date = %(run_date)s
+                  )
+                ORDER BY symbol ASC
                 """,
                 {"run_date": run_date_value},
             )
