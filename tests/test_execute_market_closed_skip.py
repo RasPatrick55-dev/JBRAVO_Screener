@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 pytestmark = pytest.mark.alpaca_optional
@@ -23,6 +25,7 @@ class ClosedClockClient:
 
 def test_market_closed_skips_before_candidate_load(monkeypatch, tmp_path):
     execute_mod._EXECUTE_METRICS_PAYLOAD = None
+    monkeypatch.setattr(execute_mod, "METRICS_PATH", tmp_path / "execute_metrics.json")
 
     def fail_load(*args, **kwargs):
         raise AssertionError("load_candidates should not run on market closed")
@@ -32,5 +35,9 @@ def test_market_closed_skips_before_candidate_load(monkeypatch, tmp_path):
     rc = run_executor(config, client=ClosedClockClient())
     assert rc == 0
     payload = execute_mod._EXECUTE_METRICS_PAYLOAD or {}
+    persisted = json.loads(execute_mod.METRICS_PATH.read_text(encoding="utf-8"))
     assert payload.get("status") == "skipped"
     assert payload.get("skips", {}).get("MARKET_CLOSED", 0) == 1
+    assert persisted.get("status") == "skipped"
+    assert persisted.get("skip_counts", {}).get("MARKET_CLOSED", 0) == 1
+    assert persisted.get("market_clock", {}).get("is_open") is False
