@@ -6,6 +6,11 @@ dashboard built with Plotly Dash.  It visualizes trade performance, recent
 pipeline runs and multiple log files.  Example CSVs and logs can be found under
 `data/` and `logs/`.
 
+## Repo Hygiene
+
+`.gitignore` prevents new runtime artifacts from being added, but it does not affect files that are already tracked.
+To stop tracking existing artifacts, run `bin/untrack_artifacts.sh` once and commit the resulting index changes.
+
 ## Production Status and Validation
 
 The screener is production-ready (post Phase V) and approved for daily pipeline
