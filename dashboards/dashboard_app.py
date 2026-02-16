@@ -6284,6 +6284,1919 @@ def api_execute_orders_summary():
         )
 
 
+_EXECUTE_STATUS_SCOPES = {"all", "open", "closed"}
+_EXECUTE_LSX_SCOPES = {"all", "l", "s", "e", "x"}
+_EXECUTE_LOG_STAGES = {"execute", "monitor", "pipeline"}
+_EXECUTE_LOG_LEVELS = {"all", "errors", "warnings"}
+_EXECUTE_STAGE_FILES = {
+    "execute": "execute_trades.log",
+    "monitor": "monitor.log",
+    "pipeline": "pipeline.log",
+}
+_EXECUTE_MONITOR_EVENT_TYPES = {
+    "SELL_SUBMIT",
+    "SELL_FILL",
+    "SELL_CANCELLED",
+    "SELL_REJECTED",
+    "SELL_EXPIRED",
+    "TRAIL_ADJUST",
+    "TRAIL_CANCEL",
+}
+
+
+def _execute_parse_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _execute_parse_scope(value: Any, *, allowed: set[str], default: str) -> str:
+    normalized = str(value or default).strip().lower()
+    if normalized in allowed:
+        return normalized
+    return default
+
+
+def _execute_now_in_window() -> bool:
+    now_utc = datetime.now(timezone.utc)
+    ny_tz = pytz.timezone("America/New_York")
+    ny_now = now_utc.astimezone(ny_tz)
+    window_start = ny_now.replace(hour=7, minute=0, second=0, microsecond=0)
+    window_end = ny_now.replace(hour=9, minute=30, second=0, microsecond=0)
+    return window_start <= ny_now <= window_end
+
+
+def _execute_iso_utc(value: Any) -> str | None:
+    parsed = _coerce_datetime_utc(value)
+    if parsed is None:
+        return None
+    return parsed.isoformat()
+
+
+def _execute_pick_value(payload: Mapping[str, Any], candidates: list[str]) -> Any:
+    for key in candidates:
+        if key in payload and payload.get(key) not in (None, ""):
+            return payload.get(key)
+    return None
+
+
+def _execute_to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _execute_latest_candidates_count() -> int:
+    count_row = _db_fetch_one("SELECT COUNT(*) AS count FROM latest_screener_candidates")
+    if count_row and count_row.get("count") is not None:
+        return _execute_to_int(count_row.get("count"), 0)
+
+    latest_run = _db_fetch_one("SELECT MAX(run_date) AS run_date FROM screener_candidates")
+    run_date = latest_run.get("run_date") if latest_run else None
+    if run_date is not None:
+        row = _db_fetch_one(
+            "SELECT COUNT(*) AS count FROM screener_candidates WHERE run_date = %(run_date)s",
+            {"run_date": run_date},
+        )
+        if row and row.get("count") is not None:
+            return _execute_to_int(row.get("count"), 0)
+
+    latest_candidates_file = Path(BASE_DIR) / "data" / "latest_candidates.csv"
+    if latest_candidates_file.exists():
+        try:
+            frame = pd.read_csv(latest_candidates_file)
+            return int(len(frame.index))
+        except Exception:
+            return 0
+    return 0
+
+
+def _execute_last_run_from_logs() -> str | None:
+    lines = tail_log(execute_trades_log_path, limit=800)
+    if not lines:
+        return None
+
+    for line in reversed(lines):
+        text = str(line or "").strip()
+        if not text:
+            continue
+        if (
+            "starting pre-market trade execution" in text.lower()
+            or "starting trade execution" in text.lower()
+            or "execute_summary" in text.lower()
+            or "metrics_updated" in text.lower()
+        ):
+            parsed = _parse_log_timestamp(text)
+            if parsed is not None:
+                return parsed.replace(tzinfo=timezone.utc).isoformat()
+            parsed = _coerce_datetime_utc(text)
+            if parsed is not None:
+                return parsed.isoformat()
+    return None
+
+
+def _execute_order_status_bucket(status: str, event_type: str = "") -> str:
+    text = f"{status} {event_type}".strip().lower()
+    if any(token in text for token in ("reject", "cancel", "cancelled", "expired", "fail", "error")):
+        return "REJECTED"
+    if "partial" in text:
+        return "PARTIAL"
+    if any(token in text for token in ("fill", "closed", "done_for_day")):
+        return "FILLED"
+    if any(
+        token in text
+        for token in (
+            "new",
+            "accepted",
+            "pending",
+            "submit",
+            "open",
+            "held",
+            "replace",
+            "calculated",
+            "stopped",
+        )
+    ):
+        return "PENDING"
+    normalized = str(status or "").strip().upper()
+    return normalized or "PENDING"
+
+
+def _execute_trailing_status_bucket(status: str, event_type: str = "") -> str:
+    text = f"{status} {event_type}".strip().lower()
+    if any(token in text for token in ("trigger", "fill", "closed", "cancel", "reject", "expired")):
+        return "TRIGGERED"
+    return "ACTIVE"
+
+
+def _execute_status_scope_matches(status_bucket: str, status_scope: str) -> bool:
+    scope = _execute_parse_scope(status_scope, allowed=_EXECUTE_STATUS_SCOPES, default="all")
+    normalized = str(status_bucket or "").strip().upper()
+    if scope == "all":
+        return True
+    if scope == "open":
+        return normalized in {"PENDING", "PARTIAL", "ACTIVE"}
+    return normalized in {"FILLED", "REJECTED", "TRIGGERED"}
+
+
+def _execute_lsx_matches(
+    lsx: str,
+    *,
+    side: str = "",
+    message: str = "",
+    notes: str = "",
+    event_type: str = "",
+    status: str = "",
+) -> bool:
+    scope = _execute_parse_scope(lsx, allowed=_EXECUTE_LSX_SCOPES, default="all")
+    if scope == "all":
+        return True
+
+    side_text = str(side or "").strip().lower()
+    haystack = " ".join(
+        [
+            side_text,
+            str(message or "").lower(),
+            str(notes or "").lower(),
+            str(event_type or "").lower(),
+            str(status or "").lower(),
+        ]
+    )
+    if scope == "l":
+        return side_text == "buy" or " long" in f" {haystack}" or "entry" in haystack
+    if scope == "s":
+        return side_text == "sell" or " short" in f" {haystack}" or "trail" in haystack
+    if scope == "e":
+        return any(token in haystack for token in ("entry", "submit", "open", "buy"))
+    if scope == "x":
+        return any(token in haystack for token in ("exit", "close", "sell", "trigger", "filled"))
+    return True
+
+
+def _execute_query_matches(query: str, values: list[Any]) -> bool:
+    normalized_query = str(query or "").strip().lower()
+    if not normalized_query:
+        return True
+    haystack = " ".join(str(value or "") for value in values).lower()
+    return normalized_query in haystack
+
+
+def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
+    table_candidates = ("executor_runs", "execute_metrics", "execute_runs")
+    for table in table_candidates:
+        columns = _db_table_columns(table)
+        if not columns:
+            continue
+        ts_col = _first_existing_column(
+            columns,
+            [
+                "run_finished_utc",
+                "last_run_utc",
+                "finished_utc",
+                "updated_at",
+                "created_at",
+                "timestamp",
+            ],
+        )
+        if ts_col is None:
+            continue
+        row = _db_fetch_one(f"SELECT * FROM {table} ORDER BY {ts_col} DESC NULLS LAST LIMIT 1")
+        if not row:
+            continue
+
+        in_window_raw = _execute_pick_value(row, ["in_window", "market_in_window", "within_window"])
+        in_window = _execute_parse_bool(in_window_raw)
+        payload = {
+            "last_run_utc": _execute_iso_utc(
+                _execute_pick_value(
+                    row,
+                    [
+                        "last_run_utc",
+                        "run_finished_utc",
+                        "finished_utc",
+                        "timestamp",
+                        ts_col,
+                    ],
+                )
+            ),
+            "in_window": _execute_now_in_window() if in_window is None else bool(in_window),
+            "candidates": _execute_to_int(
+                _execute_pick_value(row, ["candidates", "candidates_in", "symbols_in", "symbols", "rows"]),
+                0,
+            ),
+            "submitted": _execute_to_int(
+                _execute_pick_value(row, ["orders_submitted", "submitted", "orders_total"]),
+                0,
+            ),
+            "filled": _execute_to_int(
+                _execute_pick_value(row, ["orders_filled", "filled", "fills"]),
+                0,
+            ),
+            "rejected": _execute_to_int(
+                _execute_pick_value(row, ["orders_rejected", "rejected", "orders_canceled", "canceled", "cancelled"]),
+                0,
+            ),
+            "result_pl_usd": _to_float(
+                _execute_pick_value(
+                    row,
+                    ["result_pl_usd", "net_pnl", "pnl", "realized_pnl", "profit_loss_usd"],
+                )
+            ),
+        }
+        if not payload["last_run_utc"]:
+            payload["last_run_utc"] = _execute_last_run_from_logs()
+        return payload, f"postgres:{table}"
+    return None, "postgres:none"
+
+
+def _execute_summary_from_metrics_file() -> tuple[dict[str, Any] | None, str]:
+    path = Path(execute_metrics_path)
+    if not path.exists():
+        return None, "file:missing"
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None, "file:read_error"
+    if not isinstance(loaded, Mapping):
+        return None, "file:invalid_format"
+
+    payload = dict(loaded)
+    in_window = _execute_parse_bool(payload.get("in_window"))
+    skip_block = payload.get("skips") or payload.get("skip_reasons") or {}
+    if in_window is None and isinstance(skip_block, Mapping):
+        in_window = _execute_to_int(skip_block.get("TIME_WINDOW"), 0) <= 0
+
+    candidates = _execute_to_int(
+        _execute_pick_value(payload, ["candidates", "candidates_in", "symbols_in", "symbols", "rows"]),
+        0,
+    )
+    if candidates <= 0:
+        candidates = _execute_latest_candidates_count()
+
+    normalized = {
+        "last_run_utc": _execute_iso_utc(
+            _execute_pick_value(
+                payload,
+                [
+                    "last_run_utc",
+                    "run_finished_utc",
+                    "finished_utc",
+                    "timestamp",
+                    "run_utc",
+                ],
+            )
+        ),
+        "in_window": _execute_now_in_window() if in_window is None else bool(in_window),
+        "candidates": candidates,
+        "submitted": _execute_to_int(
+            _execute_pick_value(payload, ["orders_submitted", "submitted", "orders_total"]),
+            0,
+        ),
+        "filled": _execute_to_int(
+            _execute_pick_value(payload, ["orders_filled", "filled", "fills"]),
+            0,
+        ),
+        "rejected": _execute_to_int(
+            _execute_pick_value(payload, ["orders_rejected", "rejected", "orders_canceled", "canceled", "cancelled"]),
+            0,
+        ),
+        "result_pl_usd": _to_float(
+            _execute_pick_value(
+                payload,
+                ["result_pl_usd", "net_pnl", "pnl", "realized_pnl", "profit_loss_usd"],
+            )
+        ),
+    }
+    if not normalized["last_run_utc"]:
+        normalized["last_run_utc"] = _execute_last_run_from_logs()
+    return normalized, f"file:{path}"
+
+
+def _execute_result_pl_from_db(last_run_dt: datetime | None) -> float | None:
+    row = _db_fetch_one(
+        """
+        SELECT SUM(COALESCE(realized_pnl, 0)) AS result_pl_usd
+        FROM trades
+        WHERE status = 'CLOSED'
+          AND (%(since)s IS NULL OR exit_time >= %(since)s)
+        """,
+        {"since": last_run_dt},
+    )
+    if row and row.get("result_pl_usd") is not None:
+        value = _to_float(row.get("result_pl_usd"))
+        if value is not None:
+            return value
+
+    fallback_row = _db_fetch_one(
+        """
+        SELECT SUM(COALESCE(net_pnl, pnl, 0)) AS result_pl_usd
+        FROM executed_trades
+        WHERE (%(since)s IS NULL OR COALESCE(exit_time, entry_time, created_at) >= %(since)s)
+        """,
+        {"since": last_run_dt},
+    )
+    if fallback_row and fallback_row.get("result_pl_usd") is not None:
+        return _to_float(fallback_row.get("result_pl_usd"))
+    return None
+
+
+def _execute_side_label(side_value: Any, event_type: str = "") -> str:
+    side = str(side_value or "").strip().lower()
+    if not side:
+        event_upper = str(event_type or "").strip().upper()
+        if "SELL" in event_upper:
+            side = "sell"
+        elif "BUY" in event_upper:
+            side = "buy"
+    if side in {"buy", "long"}:
+        return "BUY"
+    if side in {"sell", "short"}:
+        return "SELL"
+    return side.upper()
+
+
+def _execute_type_label(type_value: Any, event_type: str = "", raw_payload: Mapping[str, Any] | None = None) -> str:
+    text = str(type_value or "").strip().lower()
+    raw = raw_payload or {}
+    if not text:
+        event_upper = str(event_type or "").strip().upper()
+        if event_upper.startswith("TRAIL"):
+            text = "trailing_stop"
+        elif event_upper.startswith("BUY"):
+            text = "limit"
+        elif event_upper.startswith("SELL"):
+            text = "market"
+    if not text and (
+        raw.get("trail_percent") not in (None, "")
+        or raw.get("trail_price") not in (None, "")
+        or raw.get("trail") not in (None, "")
+    ):
+        text = "trailing_stop"
+    if not text:
+        return "MARKET"
+    text = text.replace("-", "_")
+    mapping = {
+        "trailing_stop": "TRAILING",
+        "trailing": "TRAILING",
+        "stop_limit": "STOP",
+        "stop_loss": "STOP",
+    }
+    return mapping.get(text, text.upper())
+
+
+def _execute_fmt_price(value: Any) -> str:
+    numeric = _to_float(value)
+    if numeric is None:
+        return "--"
+    return f"${numeric:,.2f}"
+
+
+def _execute_limit_stop_trail(raw_payload: Mapping[str, Any]) -> str:
+    trail_percent = _to_float(
+        raw_payload.get("trail_percent")
+        or raw_payload.get("trail_pct")
+        or raw_payload.get("trailPercent")
+    )
+    trail_price = _to_float(raw_payload.get("trail_price") or raw_payload.get("trailPrice"))
+    stop_price = _to_float(raw_payload.get("stop_price") or raw_payload.get("stopPrice"))
+    limit_price = _to_float(raw_payload.get("limit_price") or raw_payload.get("limitPrice"))
+
+    if trail_percent is not None:
+        return f"{trail_percent:.2f}%"
+    if trail_price is not None:
+        return _execute_fmt_price(trail_price)
+    if stop_price is not None:
+        return _execute_fmt_price(stop_price)
+    if limit_price is not None:
+        return _execute_fmt_price(limit_price)
+    return "--"
+
+
+def _execute_notes_from_row(row: Mapping[str, Any], raw_payload: Mapping[str, Any]) -> str:
+    for key in ("reason", "note", "notes", "message", "msg", "detail", "description"):
+        value = raw_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    event_type = str(row.get("event_type") or "").strip()
+    if event_type:
+        return event_type.replace("_", " ").title()
+    return ""
+
+
+def _execute_trail_text(raw_payload: Mapping[str, Any]) -> str:
+    trail_percent = _to_float(
+        raw_payload.get("trail_percent")
+        or raw_payload.get("trail_pct")
+        or raw_payload.get("trailPercent")
+        or raw_payload.get("trail")
+    )
+    if trail_percent is not None:
+        return f"{trail_percent:.2f}%"
+    trail_price = _to_float(raw_payload.get("trail_price") or raw_payload.get("trailPrice"))
+    if trail_price is not None:
+        return _execute_fmt_price(trail_price)
+    return "--"
+
+
+def _execute_stop_price_from_raw(raw_payload: Mapping[str, Any]) -> float | None:
+    stop_price = _to_float(raw_payload.get("stop_price") or raw_payload.get("stopPrice"))
+    if stop_price is not None:
+        return stop_price
+    hwm = _to_float(raw_payload.get("hwm"))
+    trail_percent = _to_float(
+        raw_payload.get("trail_percent")
+        or raw_payload.get("trail_pct")
+        or raw_payload.get("trailPercent")
+        or raw_payload.get("trail")
+    )
+    if hwm is not None and trail_percent is not None:
+        return hwm * (1 - (trail_percent / 100.0))
+    return None
+
+
+def _execute_parent_leg(raw_payload: Mapping[str, Any], order_id: str) -> str:
+    for key in ("parent_leg", "parent", "parent_order_id", "parent_id", "leg", "leg_id"):
+        value = raw_payload.get(key)
+        if value not in (None, ""):
+            return str(value)
+    if order_id:
+        return order_id
+    return "--"
+
+
+def _execute_orders_from_alpaca(
+    *, fetch_limit: int, status_scope: str
+) -> tuple[list[dict[str, Any]], str]:
+    if not _account_api_is_paper_mode():
+        return [], "paper_mode_required"
+
+    query_status = status_scope if status_scope in {"open", "closed"} else "all"
+    payload, detail = _alpaca_rest_get_json(
+        "/v2/orders",
+        params={
+            "status": query_status,
+            "direction": "desc",
+            "limit": int(fetch_limit),
+            "nested": True,
+        },
+        timeout=20,
+    )
+    if detail != "ok":
+        return [], f"alpaca:{detail}"
+
+    if isinstance(payload, list):
+        raw_orders = payload
+    elif isinstance(payload, Mapping) and isinstance(payload.get("orders"), list):
+        raw_orders = payload.get("orders", [])
+    else:
+        raw_orders = []
+
+    rows: list[dict[str, Any]] = []
+    for raw in raw_orders:
+        if not isinstance(raw, Mapping):
+            continue
+        ts_raw = (
+            raw.get("updated_at")
+            or raw.get("filled_at")
+            or raw.get("submitted_at")
+            or raw.get("created_at")
+        )
+        ts_dt = _coerce_datetime_utc(ts_raw)
+        ts_iso = ts_dt.isoformat() if ts_dt else str(ts_raw or "")
+
+        side = _execute_side_label(raw.get("side"), str(raw.get("type") or ""))
+        order_type = _execute_type_label(raw.get("type"), "", raw)
+        status_bucket = _execute_order_status_bucket(str(raw.get("status") or ""), "")
+        notes = str(raw.get("client_order_id") or "").strip()
+
+        row = {
+            "ts_utc": ts_iso,
+            "symbol": str(raw.get("symbol") or "").strip().upper(),
+            "side": side,
+            "type": order_type,
+            "qty": _to_float(raw.get("qty") or raw.get("filled_qty")),
+            "limit_stop_trail": _execute_limit_stop_trail(raw),
+            "status": status_bucket,
+            "filled_avg": _to_float(raw.get("filled_avg_price")),
+            "order_id": str(raw.get("id") or raw.get("order_id") or "").strip(),
+            "notes": notes,
+            "_ts": ts_dt,
+            "_event_type": str(raw.get("type") or ""),
+        }
+        rows.append(row)
+
+    rows.sort(
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+    return rows, "alpaca:/v2/orders"
+
+
+def _execute_orders_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], str]:
+    rows = _db_fetch_all(
+        """
+        SELECT DISTINCT ON (
+            COALESCE(
+                NULLIF(order_id, ''),
+                symbol || ':' || COALESCE(event_time::text, '')
+            )
+        )
+            event_time,
+            symbol,
+            qty,
+            order_id,
+            status,
+            event_type,
+            raw
+        FROM order_events
+        ORDER BY
+            COALESCE(
+                NULLIF(order_id, ''),
+                symbol || ':' || COALESCE(event_time::text, '')
+            ),
+            event_time DESC NULLS LAST,
+            event_id DESC
+        LIMIT %(limit)s
+        """,
+        {"limit": int(fetch_limit)},
+    )
+    if not rows:
+        return [], "postgres:order_events_empty"
+
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        raw_payload = _coerce_json_mapping(row.get("raw"))
+        event_type = str(row.get("event_type") or "").strip().upper()
+        ts_dt = _coerce_datetime_utc(row.get("event_time"))
+        ts_iso = ts_dt.isoformat() if ts_dt else str(row.get("event_time") or "")
+
+        side = _execute_side_label(
+            raw_payload.get("side") or raw_payload.get("order_side"),
+            event_type,
+        )
+        type_value = _execute_type_label(
+            raw_payload.get("type") or raw_payload.get("order_type"),
+            event_type,
+            raw_payload,
+        )
+        status_bucket = _execute_order_status_bucket(str(row.get("status") or ""), event_type)
+        notes = _execute_notes_from_row(row, raw_payload)
+
+        output.append(
+            {
+                "ts_utc": ts_iso,
+                "symbol": str(row.get("symbol") or "").strip().upper(),
+                "side": side,
+                "type": type_value,
+                "qty": _to_float(row.get("qty") or raw_payload.get("qty")),
+                "limit_stop_trail": _execute_limit_stop_trail(raw_payload),
+                "status": status_bucket,
+                "filled_avg": _to_float(
+                    raw_payload.get("filled_avg_price")
+                    or raw_payload.get("avg_fill_price")
+                    or raw_payload.get("filled_avg")
+                ),
+                "order_id": str(row.get("order_id") or "").strip(),
+                "notes": notes,
+                "_ts": ts_dt,
+                "_event_type": event_type,
+            }
+        )
+
+    output.sort(
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+    return output, "postgres:order_events"
+
+
+def _execute_merge_order_rows(
+    db_rows: list[dict[str, Any]], alpaca_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    sequence: list[str] = []
+
+    for row in db_rows:
+        key = str(row.get("order_id") or f"db:{row.get('symbol')}:{row.get('ts_utc')}")
+        merged[key] = dict(row)
+        sequence.append(key)
+
+    for row in alpaca_rows:
+        key = str(row.get("order_id") or f"alpaca:{row.get('symbol')}:{row.get('ts_utc')}")
+        if key not in merged:
+            merged[key] = dict(row)
+            sequence.append(key)
+            continue
+
+        combined = dict(merged[key])
+        for field in (
+            "ts_utc",
+            "symbol",
+            "side",
+            "type",
+            "qty",
+            "limit_stop_trail",
+            "status",
+            "filled_avg",
+            "notes",
+            "_ts",
+            "_event_type",
+        ):
+            value = row.get(field)
+            if value not in (None, "", "--"):
+                combined[field] = value
+        merged[key] = combined
+
+    output = [merged[key] for key in sequence]
+    output.sort(
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+    return output
+
+
+def _execute_enrich_alpaca_orders_with_db(
+    alpaca_rows: list[dict[str, Any]], db_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    db_by_id: dict[str, dict[str, Any]] = {}
+    for row in db_rows:
+        order_id = str(row.get("order_id") or "").strip()
+        if not order_id:
+            continue
+        current = db_by_id.get(order_id)
+        if current is None:
+            db_by_id[order_id] = row
+            continue
+        current_ts = current.get("_ts")
+        candidate_ts = row.get("_ts")
+        if current_ts is None and candidate_ts is not None:
+            db_by_id[order_id] = row
+            continue
+        if (
+            current_ts is not None
+            and candidate_ts is not None
+            and candidate_ts > current_ts
+        ):
+            db_by_id[order_id] = row
+
+    output: list[dict[str, Any]] = []
+    for base in alpaca_rows:
+        combined = dict(base)
+        order_id = str(base.get("order_id") or "").strip()
+        db_row = db_by_id.get(order_id)
+        if db_row:
+            if combined.get("notes") in (None, ""):
+                combined["notes"] = db_row.get("notes") or ""
+            if combined.get("limit_stop_trail") in (None, "", "--"):
+                combined["limit_stop_trail"] = db_row.get("limit_stop_trail") or "--"
+            if combined.get("filled_avg") in (None, "") and db_row.get("filled_avg") not in (None, ""):
+                combined["filled_avg"] = db_row.get("filled_avg")
+            if combined.get("qty") in (None, "") and db_row.get("qty") not in (None, ""):
+                combined["qty"] = db_row.get("qty")
+            if combined.get("symbol") in (None, "") and db_row.get("symbol") not in (None, ""):
+                combined["symbol"] = db_row.get("symbol")
+            if combined.get("side") in (None, "") and db_row.get("side") not in (None, ""):
+                combined["side"] = db_row.get("side")
+            if combined.get("type") in (None, "") and db_row.get("type") not in (None, ""):
+                combined["type"] = db_row.get("type")
+            if combined.get("_event_type") in (None, "") and db_row.get("_event_type") not in (None, ""):
+                combined["_event_type"] = db_row.get("_event_type")
+            if combined.get("ts_utc") in (None, "") and db_row.get("ts_utc") not in (None, ""):
+                combined["ts_utc"] = db_row.get("ts_utc")
+            if combined.get("_ts") is None and db_row.get("_ts") is not None:
+                combined["_ts"] = db_row.get("_ts")
+        output.append(combined)
+
+    output.sort(
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+    return output
+
+
+def _execute_filter_order_rows(
+    rows: list[dict[str, Any]],
+    *,
+    status_scope: str,
+    query: str,
+    lsx: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        status_bucket = str(row.get("status") or "")
+        if not _execute_status_scope_matches(status_bucket, status_scope):
+            continue
+        if not _execute_query_matches(
+            query,
+            [
+                row.get("ts_utc"),
+                row.get("symbol"),
+                row.get("side"),
+                row.get("type"),
+                row.get("qty"),
+                row.get("limit_stop_trail"),
+                row.get("status"),
+                row.get("filled_avg"),
+                row.get("order_id"),
+                row.get("notes"),
+            ],
+        ):
+            continue
+        if not _execute_lsx_matches(
+            lsx,
+            side=str(row.get("side") or "").lower(),
+            message=str(row.get("notes") or ""),
+            notes=str(row.get("notes") or ""),
+            event_type=str(row.get("_event_type") or ""),
+            status=status_bucket,
+        ):
+            continue
+        output.append(
+            {
+                "ts_utc": row.get("ts_utc"),
+                "symbol": row.get("symbol"),
+                "side": row.get("side"),
+                "type": row.get("type"),
+                "qty": row.get("qty"),
+                "limit_stop_trail": row.get("limit_stop_trail") or "--",
+                "status": row.get("status"),
+                "filled_avg": row.get("filled_avg"),
+                "order_id": row.get("order_id"),
+                "notes": row.get("notes") or "",
+            }
+        )
+        if len(output) >= max(1, int(limit)):
+            break
+    return output
+
+
+def _execute_trailing_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], str]:
+    rows = _db_fetch_all(
+        """
+        SELECT DISTINCT ON (
+            COALESCE(
+                NULLIF(order_id, ''),
+                symbol || ':' || COALESCE(event_time::text, '')
+            )
+        )
+            symbol,
+            qty,
+            order_id,
+            status,
+            event_type,
+            event_time,
+            raw
+        FROM order_events
+        WHERE (
+            event_type ILIKE 'TRAIL%%'
+            OR COALESCE(raw, '{}'::jsonb) ? 'trail_percent'
+            OR COALESCE(raw, '{}'::jsonb) ? 'trail_pct'
+            OR COALESCE(raw, '{}'::jsonb) ? 'trailPercent'
+            OR COALESCE(raw, '{}'::jsonb) ? 'trail_price'
+            OR COALESCE(raw, '{}'::jsonb) ? 'trailPrice'
+            OR COALESCE(raw, '{}'::jsonb) ? 'stop_price'
+            OR COALESCE(raw, '{}'::jsonb) ? 'stopPrice'
+        )
+        ORDER BY
+            COALESCE(
+                NULLIF(order_id, ''),
+                symbol || ':' || COALESCE(event_time::text, '')
+            ),
+            event_time DESC NULLS LAST,
+            event_id DESC
+        LIMIT %(limit)s
+        """,
+        {"limit": int(fetch_limit)},
+    )
+    if not rows:
+        return [], "postgres:order_events_empty"
+
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        raw_payload = _coerce_json_mapping(row.get("raw"))
+        event_type = str(row.get("event_type") or "").strip().upper()
+        status_bucket = _execute_trailing_status_bucket(str(row.get("status") or ""), event_type)
+        ts_dt = _coerce_datetime_utc(row.get("event_time"))
+
+        output.append(
+            {
+                "symbol": str(row.get("symbol") or "").strip().upper(),
+                "qty": _to_float(row.get("qty") or raw_payload.get("qty")),
+                "trail": _execute_trail_text(raw_payload),
+                "stop_price": _execute_stop_price_from_raw(raw_payload),
+                "status": status_bucket,
+                "parent_leg": _execute_parent_leg(raw_payload, str(row.get("order_id") or "").strip()),
+                "_ts": ts_dt,
+                "_side": _execute_side_label(raw_payload.get("side"), event_type),
+                "_event_type": event_type,
+            }
+        )
+
+    output.sort(
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+    return output, "postgres:order_events"
+
+
+def _execute_trailing_from_alpaca(
+    *, fetch_limit: int, status_scope: str
+) -> tuple[list[dict[str, Any]], str]:
+    if not _account_api_is_paper_mode():
+        return [], "paper_mode_required"
+
+    query_status = status_scope if status_scope in {"open", "closed"} else "all"
+    payload, detail = _alpaca_rest_get_json(
+        "/v2/orders",
+        params={
+            "status": query_status,
+            "direction": "desc",
+            "limit": int(fetch_limit),
+            "nested": True,
+        },
+        timeout=20,
+    )
+    if detail != "ok":
+        return [], f"alpaca:{detail}"
+
+    if isinstance(payload, list):
+        raw_orders = payload
+    elif isinstance(payload, Mapping) and isinstance(payload.get("orders"), list):
+        raw_orders = payload.get("orders", [])
+    else:
+        raw_orders = []
+
+    rows: list[dict[str, Any]] = []
+    for raw in raw_orders:
+        if not isinstance(raw, Mapping):
+            continue
+        type_text = str(raw.get("type") or "").strip().lower()
+        has_trail_fields = (
+            raw.get("trail_percent") not in (None, "")
+            or raw.get("trail_pct") not in (None, "")
+            or raw.get("trail_price") not in (None, "")
+        )
+        if "trailing" not in type_text and not has_trail_fields:
+            continue
+
+        ts_raw = (
+            raw.get("updated_at")
+            or raw.get("submitted_at")
+            or raw.get("created_at")
+            or raw.get("filled_at")
+        )
+        ts_dt = _coerce_datetime_utc(ts_raw)
+        event_type = _execute_type_label(raw.get("type"), "TRAIL_SUBMIT", raw)
+        status_bucket = _execute_trailing_status_bucket(str(raw.get("status") or ""), event_type)
+
+        rows.append(
+            {
+                "symbol": str(raw.get("symbol") or "").strip().upper(),
+                "qty": _to_float(raw.get("qty") or raw.get("filled_qty")),
+                "trail": _execute_trail_text(raw),
+                "stop_price": _execute_stop_price_from_raw(raw),
+                "status": status_bucket,
+                "parent_leg": _execute_parent_leg(raw, str(raw.get("id") or "").strip()),
+                "_ts": ts_dt,
+                "_side": _execute_side_label(raw.get("side"), event_type),
+                "_event_type": event_type,
+            }
+        )
+
+    rows.sort(
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+    return rows, "alpaca:/v2/orders"
+
+
+def _execute_filter_trailing_rows(
+    rows: list[dict[str, Any]],
+    *,
+    status_scope: str,
+    query: str,
+    lsx: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        status_bucket = str(row.get("status") or "")
+        if not _execute_status_scope_matches(status_bucket, status_scope):
+            continue
+        if not _execute_query_matches(
+            query,
+            [
+                row.get("symbol"),
+                row.get("qty"),
+                row.get("trail"),
+                row.get("stop_price"),
+                row.get("status"),
+                row.get("parent_leg"),
+            ],
+        ):
+            continue
+        if not _execute_lsx_matches(
+            lsx,
+            side=str(row.get("_side") or "").lower(),
+            message=str(row.get("parent_leg") or ""),
+            notes=str(row.get("parent_leg") or ""),
+            event_type=str(row.get("_event_type") or ""),
+            status=status_bucket,
+        ):
+            continue
+        output.append(
+            {
+                "symbol": row.get("symbol"),
+                "qty": row.get("qty"),
+                "trail": row.get("trail") or "--",
+                "stop_price": row.get("stop_price"),
+                "status": row.get("status"),
+                "parent_leg": row.get("parent_leg") or "--",
+            }
+        )
+        if len(output) >= max(1, int(limit)):
+            break
+    return output
+
+
+def _execute_summary_counts_from_alpaca(last_run_dt: datetime | None) -> tuple[dict[str, int], str]:
+    if not _account_api_is_paper_mode():
+        return {"submitted": 0, "filled": 0, "rejected": 0}, "paper_mode_required"
+
+    params: dict[str, Any] = {"status": "all", "direction": "desc", "limit": 500, "nested": True}
+    if last_run_dt is not None:
+        params["after"] = last_run_dt.isoformat()
+    payload, detail = _alpaca_rest_get_json("/v2/orders", params=params, timeout=20)
+    if detail != "ok":
+        return {"submitted": 0, "filled": 0, "rejected": 0}, f"alpaca:{detail}"
+
+    if isinstance(payload, list):
+        raw_orders = payload
+    elif isinstance(payload, Mapping) and isinstance(payload.get("orders"), list):
+        raw_orders = payload.get("orders", [])
+    else:
+        raw_orders = []
+
+    submitted = 0
+    filled = 0
+    rejected = 0
+    for raw in raw_orders:
+        if not isinstance(raw, Mapping):
+            continue
+        submitted += 1
+        status_bucket = _execute_order_status_bucket(str(raw.get("status") or ""), str(raw.get("type") or ""))
+        if status_bucket == "FILLED":
+            filled += 1
+        if status_bucket == "REJECTED":
+            rejected += 1
+    return {"submitted": submitted, "filled": filled, "rejected": rejected}, "alpaca:/v2/orders"
+
+
+def _execute_log_level(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if text in {"WARN", "WARNING"}:
+        return "WARNING"
+    if text in {"ERR", "ERROR"}:
+        return "ERROR"
+    if text == "SUCCESS":
+        return "SUCCESS"
+    if text == "INFO":
+        return "INFO"
+    normalized = _screener_normalize_log_level(text)
+    if normalized == "WARN":
+        return "WARNING"
+    return normalized
+
+
+def _execute_event_stage(event_type: str, raw_payload: Mapping[str, Any]) -> str:
+    source = str(raw_payload.get("source") or "").strip().lower()
+    event_upper = str(event_type or "").strip().upper()
+    if source == "monitor_positions":
+        return "monitor"
+    if event_upper in _EXECUTE_MONITOR_EVENT_TYPES:
+        return "monitor"
+    return "execute"
+
+
+def _execute_logs_from_order_events(stage: str, fetch_limit: int) -> tuple[list[dict[str, Any]], str]:
+    rows = _db_fetch_all(
+        """
+        SELECT event_time, event_type, symbol, qty, order_id, status, raw
+        FROM order_events
+        ORDER BY event_time DESC NULLS LAST
+        LIMIT %(limit)s
+        """,
+        {"limit": int(fetch_limit)},
+    )
+    if not rows:
+        return [], "postgres:order_events_empty"
+
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        raw_payload = _coerce_json_mapping(row.get("raw"))
+        event_type = str(row.get("event_type") or "").strip().upper()
+        event_stage = _execute_event_stage(event_type, raw_payload)
+        if event_stage != stage:
+            continue
+
+        ts_dt = _coerce_datetime_utc(row.get("event_time"))
+        message = _order_event_message(row, raw_payload)
+        level_hint = raw_payload.get("level") or raw_payload.get("severity")
+        level = _execute_log_level(
+            _order_log_level(
+                str(row.get("event_type") or ""),
+                str(row.get("status") or ""),
+                message,
+                str(level_hint or ""),
+            )
+        )
+        side = _execute_side_label(
+            raw_payload.get("side") or raw_payload.get("order_side"),
+            event_type,
+        )
+        output.append(
+            {
+                "ts_utc": _execute_iso_utc(ts_dt),
+                "level": level,
+                "message": message,
+                "_ts": ts_dt,
+                "_side": side.lower(),
+            }
+        )
+
+    output.sort(
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+    return output, "postgres:order_events"
+
+
+def _execute_log_file_payload(stage: str) -> tuple[str | None, str]:
+    filename = _EXECUTE_STAGE_FILES.get(stage)
+    if not filename:
+        return None, "files:none"
+
+    env_map = {
+        "execute": ("PYTHONANYWHERE_EXECUTE_LOG_URL", "PYTHONANYWHERE_EXECUTE_LOG_PATH"),
+        "monitor": ("PYTHONANYWHERE_MONITOR_LOG_URL", "PYTHONANYWHERE_MONITOR_LOG_PATH"),
+        "pipeline": ("PYTHONANYWHERE_PIPELINE_LOG_URL", "PYTHONANYWHERE_PIPELINE_LOG_PATH"),
+    }
+    url_env, path_env = env_map.get(stage, ("", ""))
+    remote_payload = _fetch_pythonanywhere_file(
+        os.environ.get(url_env) if url_env else None,
+        os.environ.get(path_env) if path_env else None,
+    )
+    if remote_payload:
+        text, source = remote_payload
+        return text, f"pythonanywhere:{source}"
+
+    local_path = Path(BASE_DIR) / "logs" / filename
+    if not local_path.exists():
+        return None, f"files:missing:{local_path}"
+    try:
+        text = local_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None, f"files:read_error:{local_path}"
+    return text, f"local:{local_path}"
+
+
+def _execute_logs_from_files(stage: str, fetch_limit: int) -> tuple[list[dict[str, Any]], str]:
+    text, source = _execute_log_file_payload(stage)
+    if not text:
+        return [], source
+
+    lines = [line for line in str(text).splitlines() if line.strip()]
+    tail_limit = max(fetch_limit * 10, 400)
+    parsed_rows: list[dict[str, Any]] = []
+    for line in lines[-tail_limit:]:
+        parsed = _screener_parse_log_line(line)
+        if parsed:
+            ts_dt = _coerce_datetime_utc(parsed.get("_ts") or parsed.get("ts_utc"))
+            level = _execute_log_level(parsed.get("level"))
+            message = str(parsed.get("message") or "").strip() or str(line).strip()
+        else:
+            ts_dt = _coerce_datetime_utc(_parse_log_timestamp(line))
+            upper = str(line).upper()
+            if "ERROR" in upper:
+                level = "ERROR"
+            elif "WARN" in upper:
+                level = "WARNING"
+            elif "SUCCESS" in upper:
+                level = "SUCCESS"
+            else:
+                level = "INFO"
+            message = str(line).strip()
+        parsed_rows.append(
+            {
+                "ts_utc": _execute_iso_utc(ts_dt),
+                "level": level,
+                "message": message,
+                "_ts": ts_dt,
+                "_side": "",
+            }
+        )
+
+    parsed_rows.sort(
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
+    return parsed_rows, source
+
+
+def _execute_filter_log_rows(
+    rows: list[dict[str, Any]],
+    *,
+    level_filter: str,
+    today_only: bool,
+    query: str,
+    lsx: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    today = datetime.now(timezone.utc).date()
+    for row in rows:
+        level = _execute_log_level(row.get("level"))
+        if level_filter == "errors" and level != "ERROR":
+            continue
+        if level_filter == "warnings" and level != "WARNING":
+            continue
+
+        ts_dt = row.get("_ts")
+        if today_only:
+            if ts_dt is None or ts_dt.date() != today:
+                continue
+
+        if not _execute_query_matches(
+            query,
+            [row.get("ts_utc"), level, row.get("message")],
+        ):
+            continue
+
+        if not _execute_lsx_matches(
+            lsx,
+            side=str(row.get("_side") or "").lower(),
+            message=str(row.get("message") or ""),
+            notes=str(row.get("message") or ""),
+            event_type="",
+            status=level,
+        ):
+            continue
+
+        output.append(
+            {
+                "ts_utc": row.get("ts_utc"),
+                "level": level,
+                "message": str(row.get("message") or "").strip(),
+            }
+        )
+        if len(output) >= max(1, int(limit)):
+            break
+    return output
+
+
+def _execute_summary_payload() -> dict[str, Any]:
+    source = "none"
+    source_detail_parts: list[str] = []
+
+    summary_payload, summary_detail = _execute_summary_from_metrics_table()
+    if summary_payload:
+        source = "postgres"
+        source_detail_parts.append(summary_detail)
+    else:
+        file_payload, file_detail = _execute_summary_from_metrics_file()
+        summary_payload = file_payload
+        source = "file-fallback" if file_payload else "none"
+        source_detail_parts.append(f"{summary_detail};{file_detail}")
+
+    if not summary_payload:
+        summary_payload = {
+            "last_run_utc": _execute_last_run_from_logs(),
+            "in_window": _execute_now_in_window(),
+            "candidates": _execute_latest_candidates_count(),
+            "submitted": 0,
+            "filled": 0,
+            "rejected": 0,
+            "result_pl_usd": None,
+        }
+
+    last_run_dt = _coerce_datetime_utc(summary_payload.get("last_run_utc"))
+    alpaca_counts, alpaca_detail = _execute_summary_counts_from_alpaca(last_run_dt)
+    source_detail_parts.append(alpaca_detail)
+
+    submitted = _execute_to_int(summary_payload.get("submitted"), 0)
+    filled = _execute_to_int(summary_payload.get("filled"), 0)
+    rejected = _execute_to_int(summary_payload.get("rejected"), 0)
+    if submitted <= 0:
+        submitted = _execute_to_int(alpaca_counts.get("submitted"), 0)
+    if filled <= 0:
+        filled = _execute_to_int(alpaca_counts.get("filled"), 0)
+    if rejected <= 0:
+        rejected = _execute_to_int(alpaca_counts.get("rejected"), 0)
+
+    candidates = _execute_to_int(summary_payload.get("candidates"), 0)
+    if candidates <= 0:
+        candidates = max(submitted, _execute_latest_candidates_count())
+
+    result_pl = _to_float(summary_payload.get("result_pl_usd"))
+    if result_pl is None:
+        result_pl = _execute_result_pl_from_db(last_run_dt)
+
+    in_window_value = _execute_parse_bool(summary_payload.get("in_window"))
+    in_window = _execute_now_in_window() if in_window_value is None else bool(in_window_value)
+    last_run_utc = _execute_iso_utc(summary_payload.get("last_run_utc")) or _execute_last_run_from_logs()
+
+    if source == "none":
+        source = "alpaca-fallback" if alpaca_counts.get("submitted", 0) > 0 else "local-fallback"
+
+    return {
+        "ok": bool(last_run_utc or submitted or filled or rejected or candidates),
+        "last_run_utc": last_run_utc,
+        "in_window": bool(in_window),
+        "candidates": int(candidates),
+        "submitted": int(submitted),
+        "filled": int(filled),
+        "rejected": int(rejected),
+        "result_pl_usd": result_pl if result_pl is not None else 0.0,
+        "source": source,
+        "source_detail": ";".join(part for part in source_detail_parts if part),
+    }
+
+
+def _execute_orders_payload(
+    *, status_scope: str, limit: int, query: str, lsx: str
+) -> dict[str, Any]:
+    fetch_limit = max(int(limit) * 8, 320)
+
+    db_rows, db_detail = _execute_orders_from_db(fetch_limit)
+    alpaca_rows, alpaca_detail = _execute_orders_from_alpaca(
+        fetch_limit=fetch_limit, status_scope=status_scope
+    )
+
+    if alpaca_rows:
+        merged_rows = _execute_enrich_alpaca_orders_with_db(alpaca_rows, db_rows)
+        source = "alpaca+postgres_enriched"
+        source_detail = f"{alpaca_detail};{db_detail}"
+    elif db_rows:
+        merged_rows = db_rows
+        source = "postgres-fallback"
+        source_detail = f"{alpaca_detail};{db_detail}"
+    else:
+        merged_rows = []
+        source = "none"
+        source_detail = f"{alpaca_detail};{db_detail}"
+
+    rows = _execute_filter_order_rows(
+        merged_rows,
+        status_scope=status_scope,
+        query=query,
+        lsx=lsx,
+        limit=limit,
+    )
+
+    return {
+        "ok": bool(rows),
+        "rows": rows,
+        "source": source,
+        "source_detail": source_detail,
+    }
+
+
+def _execute_trailing_stops_payload(
+    *, status_scope: str, limit: int, query: str, lsx: str
+) -> dict[str, Any]:
+    fetch_limit = max(int(limit) * 8, 320)
+
+    db_rows, db_detail = _execute_trailing_from_db(fetch_limit)
+    if db_rows:
+        source = "postgres"
+        source_detail = db_detail
+        staged_rows = db_rows
+    else:
+        alpaca_rows, alpaca_detail = _execute_trailing_from_alpaca(
+            fetch_limit=fetch_limit,
+            status_scope=status_scope,
+        )
+        staged_rows = alpaca_rows
+        source = "alpaca" if alpaca_rows else "none"
+        source_detail = f"{db_detail};{alpaca_detail}"
+
+    rows = _execute_filter_trailing_rows(
+        staged_rows,
+        status_scope=status_scope,
+        query=query,
+        lsx=lsx,
+        limit=limit,
+    )
+
+    return {
+        "ok": bool(rows),
+        "rows": rows,
+        "source": source,
+        "source_detail": source_detail,
+    }
+
+
+def _execute_logs_payload(
+    *,
+    stage: str,
+    limit: int,
+    level_filter: str,
+    today_only: bool,
+    query: str,
+    lsx: str,
+) -> dict[str, Any]:
+    fetch_limit = max(int(limit) * 6, 240)
+
+    if stage == "pipeline":
+        db_rows_raw, db_detail = _screener_logs_from_db("pipeline", fetch_limit)
+        db_rows = [
+            {
+                "ts_utc": row.get("ts_utc"),
+                "level": _execute_log_level(row.get("level")),
+                "message": str(row.get("message") or "").strip(),
+                "_ts": row.get("_ts"),
+                "_side": "",
+            }
+            for row in db_rows_raw
+        ]
+    else:
+        db_rows, db_detail = _execute_logs_from_order_events(stage, fetch_limit)
+
+    if db_rows:
+        staged_rows = db_rows
+        source = "postgres"
+        source_detail = db_detail
+    else:
+        file_rows, file_detail = _execute_logs_from_files(stage, fetch_limit)
+        staged_rows = file_rows
+        source = "pythonanywhere" if file_detail.startswith("pythonanywhere:") else "local-log-fallback"
+        if not staged_rows:
+            source = "none"
+        source_detail = f"{db_detail};{file_detail}"
+
+    rows = _execute_filter_log_rows(
+        staged_rows,
+        level_filter=level_filter,
+        today_only=today_only,
+        query=query,
+        lsx=lsx,
+        limit=limit,
+    )
+
+    return {
+        "ok": bool(rows),
+        "stage": stage,
+        "rows": rows,
+        "source": source,
+        "source_detail": source_detail,
+    }
+
+
+def _execute_audit_null_rate(rows: list[dict[str, Any]], key: str) -> float:
+    if not rows:
+        return 0.0
+    missing = 0
+    for row in rows:
+        value = row.get(key)
+        if value is None:
+            missing += 1
+            continue
+        if isinstance(value, str) and not value.strip():
+            missing += 1
+    return round(missing / max(1, len(rows)), 4)
+
+
+def _execute_audit_timestamp_metrics(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
+    parsed: list[datetime] = []
+    invalid = 0
+    for row in rows:
+        ts = _coerce_datetime_utc(row.get(key))
+        if ts is None:
+            invalid += 1
+            continue
+        parsed.append(ts)
+    is_newest_first = all(parsed[idx] >= parsed[idx + 1] for idx in range(len(parsed) - 1))
+    return {
+        "invalid_ts_rows": invalid,
+        "is_newest_first": bool(is_newest_first),
+        "newest_ts_utc": parsed[0].isoformat() if parsed else None,
+        "oldest_ts_utc": parsed[-1].isoformat() if parsed else None,
+    }
+
+
+def _execute_audit_payload(*, limit: int) -> dict[str, Any]:
+    bounded_limit = max(50, min(500, int(limit)))
+    now_utc = datetime.now(timezone.utc)
+
+    summary_payload = _execute_summary_payload()
+    orders_all_payload = _execute_orders_payload(
+        status_scope="all", limit=bounded_limit, query="", lsx="all"
+    )
+    orders_open_payload = _execute_orders_payload(
+        status_scope="open", limit=bounded_limit, query="", lsx="all"
+    )
+    orders_closed_payload = _execute_orders_payload(
+        status_scope="closed", limit=bounded_limit, query="", lsx="all"
+    )
+    trailing_all_payload = _execute_trailing_stops_payload(
+        status_scope="all", limit=bounded_limit, query="", lsx="all"
+    )
+    trailing_open_payload = _execute_trailing_stops_payload(
+        status_scope="open", limit=bounded_limit, query="", lsx="all"
+    )
+    trailing_closed_payload = _execute_trailing_stops_payload(
+        status_scope="closed", limit=bounded_limit, query="", lsx="all"
+    )
+    logs_execute_payload = _execute_logs_payload(
+        stage="execute",
+        limit=bounded_limit,
+        level_filter="all",
+        today_only=False,
+        query="",
+        lsx="all",
+    )
+    logs_monitor_payload = _execute_logs_payload(
+        stage="monitor",
+        limit=bounded_limit,
+        level_filter="all",
+        today_only=False,
+        query="",
+        lsx="all",
+    )
+    logs_pipeline_payload = _execute_logs_payload(
+        stage="pipeline",
+        limit=bounded_limit,
+        level_filter="all",
+        today_only=False,
+        query="",
+        lsx="all",
+    )
+
+    orders_all = list(orders_all_payload.get("rows") or [])
+    orders_open = list(orders_open_payload.get("rows") or [])
+    orders_closed = list(orders_closed_payload.get("rows") or [])
+    trailing_all = list(trailing_all_payload.get("rows") or [])
+    trailing_open = list(trailing_open_payload.get("rows") or [])
+    trailing_closed = list(trailing_closed_payload.get("rows") or [])
+    logs_execute = list(logs_execute_payload.get("rows") or [])
+    logs_monitor = list(logs_monitor_payload.get("rows") or [])
+    logs_pipeline = list(logs_pipeline_payload.get("rows") or [])
+
+    def _counter(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for row in rows:
+            label = str(row.get(key) or "").strip().upper() or "UNKNOWN"
+            counts[label] = counts.get(label, 0) + 1
+        return counts
+
+    orders_all_ids = {
+        str(row.get("order_id") or "").strip()
+        for row in orders_all
+        if str(row.get("order_id") or "").strip()
+    }
+    orders_open_ids = {
+        str(row.get("order_id") or "").strip()
+        for row in orders_open
+        if str(row.get("order_id") or "").strip()
+    }
+    orders_closed_ids = {
+        str(row.get("order_id") or "").strip()
+        for row in orders_closed
+        if str(row.get("order_id") or "").strip()
+    }
+    overlap_count = len(orders_open_ids.intersection(orders_closed_ids))
+    open_not_in_all = len(orders_open_ids - orders_all_ids)
+    closed_not_in_all = len(orders_closed_ids - orders_all_ids)
+    all_scope_limited = len(orders_all) >= bounded_limit
+
+    last_run_dt = _coerce_datetime_utc(summary_payload.get("last_run_utc"))
+    orders_since_last_run: list[dict[str, Any]] = []
+    for row in orders_all:
+        ts = _coerce_datetime_utc(row.get("ts_utc"))
+        if ts is None:
+            continue
+        if last_run_dt is None or ts >= last_run_dt:
+            orders_since_last_run.append(row)
+
+    orders_since_status = _counter(orders_since_last_run, "status")
+    submitted_since = len(orders_since_last_run)
+    filled_since = int(orders_since_status.get("FILLED", 0))
+    rejected_since = int(orders_since_status.get("REJECTED", 0))
+
+    orders_ts_metrics = _execute_audit_timestamp_metrics(orders_all, "ts_utc")
+    logs_execute_ts_metrics = _execute_audit_timestamp_metrics(logs_execute, "ts_utc")
+    logs_monitor_ts_metrics = _execute_audit_timestamp_metrics(logs_monitor, "ts_utc")
+    logs_pipeline_ts_metrics = _execute_audit_timestamp_metrics(logs_pipeline, "ts_utc")
+
+    newest_orders_ts = _coerce_datetime_utc(orders_ts_metrics.get("newest_ts_utc"))
+    newest_execute_log_ts = _coerce_datetime_utc(logs_execute_ts_metrics.get("newest_ts_utc"))
+
+    quality = {
+        "orders_filled_avg_null_rate": _execute_audit_null_rate(orders_all, "filled_avg"),
+        "orders_notes_null_rate": _execute_audit_null_rate(orders_all, "notes"),
+        "trailing_stop_price_null_rate": _execute_audit_null_rate(trailing_all, "stop_price"),
+        "logs_execute_message_null_rate": _execute_audit_null_rate(logs_execute, "message"),
+    }
+
+    findings: list[dict[str, Any]] = []
+    if overlap_count > 0:
+        findings.append(
+            {
+                "severity": "high",
+                "code": "orders_scope_overlap",
+                "message": "Order IDs overlap between open and closed result sets.",
+                "details": "Open/closed buckets should be disjoint when Alpaca status is authoritative.",
+                "value": overlap_count,
+            }
+        )
+    if (open_not_in_all > 0 or closed_not_in_all > 0) and not all_scope_limited:
+        findings.append(
+            {
+                "severity": "warning",
+                "code": "orders_scope_not_subset_all",
+                "message": "Open/closed sets are not strict subsets of the all-scope set.",
+                "details": f"open_not_in_all={open_not_in_all};closed_not_in_all={closed_not_in_all}",
+                "value": open_not_in_all + closed_not_in_all,
+            }
+        )
+    if quality["trailing_stop_price_null_rate"] >= 0.95 and len(trailing_all) > 0:
+        findings.append(
+            {
+                "severity": "warning",
+                "code": "trailing_stop_price_missing",
+                "message": "Trailing stop price is frequently missing.",
+                "details": "Active threshold may be unavailable from the current source payload.",
+                "value": quality["trailing_stop_price_null_rate"],
+            }
+        )
+    if quality["orders_filled_avg_null_rate"] >= 0.95 and len(orders_all) > 0:
+        findings.append(
+            {
+                "severity": "info",
+                "code": "orders_filled_avg_sparse",
+                "message": "Filled average price is mostly null.",
+                "details": "Expected when most orders are pending/rejected.",
+                "value": quality["orders_filled_avg_null_rate"],
+            }
+        )
+    if bool(summary_payload.get("submitted") or 0) == 0 and len(orders_all) > 0:
+        findings.append(
+            {
+                "severity": "info",
+                "code": "summary_zero_submitted_with_history",
+                "message": "Summary submitted count is zero while historical orders exist.",
+                "details": "May be valid when orders predate last_run_utc.",
+                "value": len(orders_all),
+            }
+        )
+
+    endpoint_health = {
+        "summary": {"ok": bool(summary_payload.get("ok")), "source": summary_payload.get("source")},
+        "orders_all": {"ok": bool(orders_all_payload.get("ok")), "source": orders_all_payload.get("source")},
+        "orders_open": {"ok": bool(orders_open_payload.get("ok")), "source": orders_open_payload.get("source")},
+        "orders_closed": {"ok": bool(orders_closed_payload.get("ok")), "source": orders_closed_payload.get("source")},
+        "trailing_all": {
+            "ok": bool(trailing_all_payload.get("ok")),
+            "source": trailing_all_payload.get("source"),
+        },
+        "logs_execute": {
+            "ok": bool(logs_execute_payload.get("ok")),
+            "source": logs_execute_payload.get("source"),
+        },
+        "logs_monitor": {
+            "ok": bool(logs_monitor_payload.get("ok")),
+            "source": logs_monitor_payload.get("source"),
+        },
+        "logs_pipeline": {
+            "ok": bool(logs_pipeline_payload.get("ok")),
+            "source": logs_pipeline_payload.get("source"),
+        },
+    }
+    severity_counts = {
+        "high": sum(1 for item in findings if str(item.get("severity") or "") == "high"),
+        "warning": sum(1 for item in findings if str(item.get("severity") or "") == "warning"),
+        "info": sum(1 for item in findings if str(item.get("severity") or "") == "info"),
+    }
+    overall_ok = severity_counts["high"] == 0
+
+    return {
+        "ok": bool(overall_ok),
+        "fetched_at_utc": now_utc.isoformat(),
+        "limit": bounded_limit,
+        "endpoint_health": endpoint_health,
+        "row_counts": {
+            "orders_all": len(orders_all),
+            "orders_open": len(orders_open),
+            "orders_closed": len(orders_closed),
+            "trailing_all": len(trailing_all),
+            "trailing_open": len(trailing_open),
+            "trailing_closed": len(trailing_closed),
+            "logs_execute": len(logs_execute),
+            "logs_monitor": len(logs_monitor),
+            "logs_pipeline": len(logs_pipeline),
+        },
+        "summary": {
+            "last_run_utc": summary_payload.get("last_run_utc"),
+            "candidates": summary_payload.get("candidates"),
+            "submitted": summary_payload.get("submitted"),
+            "filled": summary_payload.get("filled"),
+            "rejected": summary_payload.get("rejected"),
+            "source": summary_payload.get("source"),
+            "source_detail": summary_payload.get("source_detail"),
+        },
+        "status_breakdowns": {
+            "orders_all": _counter(orders_all, "status"),
+            "orders_open": _counter(orders_open, "status"),
+            "orders_closed": _counter(orders_closed, "status"),
+            "trailing_all": _counter(trailing_all, "status"),
+            "logs_execute": _counter(logs_execute, "level"),
+            "logs_monitor": _counter(logs_monitor, "level"),
+            "logs_pipeline": _counter(logs_pipeline, "level"),
+        },
+        "timestamp_checks": {
+            "orders_all": orders_ts_metrics,
+            "logs_execute": logs_execute_ts_metrics,
+            "logs_monitor": logs_monitor_ts_metrics,
+            "logs_pipeline": logs_pipeline_ts_metrics,
+        },
+        "quality": quality,
+        "cross_checks": {
+            "orders_subset": {
+                "all_scope_limited": bool(all_scope_limited),
+                "open_subset_of_all": (
+                    None
+                    if all_scope_limited
+                    else bool(orders_open_ids.issubset(orders_all_ids))
+                ),
+                "closed_subset_of_all": (
+                    None
+                    if all_scope_limited
+                    else bool(orders_closed_ids.issubset(orders_all_ids))
+                ),
+                "open_closed_intersection_count": overlap_count,
+                "open_not_in_all": open_not_in_all,
+                "closed_not_in_all": closed_not_in_all,
+            },
+            "summary_vs_orders_since_last_run": {
+                "summary_last_run_utc": summary_payload.get("last_run_utc"),
+                "orders_since_last_run": submitted_since,
+                "orders_since_last_run_filled": filled_since,
+                "orders_since_last_run_rejected": rejected_since,
+                "summary_submitted": summary_payload.get("submitted"),
+                "summary_filled": summary_payload.get("filled"),
+                "summary_rejected": summary_payload.get("rejected"),
+            },
+            "freshness": {
+                "orders_newest_age_seconds": (
+                    None
+                    if newest_orders_ts is None
+                    else int((now_utc - newest_orders_ts).total_seconds())
+                ),
+                "execute_logs_newest_age_seconds": (
+                    None
+                    if newest_execute_log_ts is None
+                    else int((now_utc - newest_execute_log_ts).total_seconds())
+                ),
+            },
+        },
+        "severity_counts": severity_counts,
+        "findings": findings,
+    }
+
+
+def _execute_sse_response(
+    payload_factory: Callable[[], Mapping[str, Any] | list[Any]], *, interval_seconds: float
+) -> Response:
+    interval = max(0.5, float(interval_seconds))
+
+    def _stream():
+        last_payload_text = ""
+        while True:
+            try:
+                payload = payload_factory()
+                payload_text = json.dumps(payload, separators=(",", ":"), default=str)
+            except GeneratorExit:
+                raise
+            except Exception as exc:
+                logger.exception("Execute SSE payload failure: %s", exc)
+                payload_text = json.dumps(
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "ts_utc": datetime.now(timezone.utc).isoformat(),
+                    },
+                    separators=(",", ":"),
+                    default=str,
+                )
+            if payload_text != last_payload_text:
+                last_payload_text = payload_text
+                yield f"data: {payload_text}\n\n"
+            else:
+                yield f": keepalive {int(time.time())}\n\n"
+            time.sleep(interval)
+
+    response = Response(_stream(), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["Connection"] = "keep-alive"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
+@server.route("/api/execute/summary")
+def api_execute_summary():
+    return _json_no_store(_execute_summary_payload())
+
+
+@server.route("/api/execute/summary/stream")
+def api_execute_summary_stream():
+    return _execute_sse_response(_execute_summary_payload, interval_seconds=6.0)
+
+
+@server.route("/api/execute/orders")
+def api_execute_orders():
+    status_scope = _execute_parse_scope(
+        request.args.get("status"), allowed=_EXECUTE_STATUS_SCOPES, default="all"
+    )
+    limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=1, maximum=200)
+    query = str(request.args.get("q") or "").strip()
+    lsx = _execute_parse_scope(request.args.get("lsx"), allowed=_EXECUTE_LSX_SCOPES, default="all")
+    return _json_no_store(
+        _execute_orders_payload(
+            status_scope=status_scope,
+            limit=int(limit),
+            query=query,
+            lsx=lsx,
+        )
+    )
+
+
+@server.route("/api/execute/orders/stream")
+def api_execute_orders_stream():
+    status_scope = _execute_parse_scope(
+        request.args.get("status"), allowed=_EXECUTE_STATUS_SCOPES, default="all"
+    )
+    limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=1, maximum=200)
+    query = str(request.args.get("q") or "").strip()
+    lsx = _execute_parse_scope(request.args.get("lsx"), allowed=_EXECUTE_LSX_SCOPES, default="all")
+    return _execute_sse_response(
+        lambda: _execute_orders_payload(
+            status_scope=status_scope,
+            limit=int(limit),
+            query=query,
+            lsx=lsx,
+        ),
+        interval_seconds=4.0,
+    )
+
+
+@server.route("/api/execute/trailing_stops")
+def api_execute_trailing_stops():
+    status_scope = _execute_parse_scope(
+        request.args.get("status"), allowed=_EXECUTE_STATUS_SCOPES, default="all"
+    )
+    limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=1, maximum=200)
+    query = str(request.args.get("q") or "").strip()
+    lsx = _execute_parse_scope(request.args.get("lsx"), allowed=_EXECUTE_LSX_SCOPES, default="all")
+    return _json_no_store(
+        _execute_trailing_stops_payload(
+            status_scope=status_scope,
+            limit=int(limit),
+            query=query,
+            lsx=lsx,
+        )
+    )
+
+
+@server.route("/api/execute/trailing_stops/stream")
+def api_execute_trailing_stops_stream():
+    status_scope = _execute_parse_scope(
+        request.args.get("status"), allowed=_EXECUTE_STATUS_SCOPES, default="all"
+    )
+    limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=1, maximum=200)
+    query = str(request.args.get("q") or "").strip()
+    lsx = _execute_parse_scope(request.args.get("lsx"), allowed=_EXECUTE_LSX_SCOPES, default="all")
+    return _execute_sse_response(
+        lambda: _execute_trailing_stops_payload(
+            status_scope=status_scope,
+            limit=int(limit),
+            query=query,
+            lsx=lsx,
+        ),
+        interval_seconds=5.0,
+    )
+
+
+@server.route("/api/execute/logs")
+def api_execute_logs():
+    stage = _execute_parse_scope(request.args.get("stage"), allowed=_EXECUTE_LOG_STAGES, default="execute")
+    limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=1, maximum=300)
+    level_filter = _execute_parse_scope(
+        request.args.get("level"), allowed=_EXECUTE_LOG_LEVELS, default="all"
+    )
+    today_only = str(request.args.get("today") or "0").strip().lower() in {"1", "true", "yes", "on"}
+    query = str(request.args.get("q") or "").strip()
+    lsx = _execute_parse_scope(request.args.get("lsx"), allowed=_EXECUTE_LSX_SCOPES, default="all")
+    return _json_no_store(
+        _execute_logs_payload(
+            stage=stage,
+            limit=int(limit),
+            level_filter=level_filter,
+            today_only=today_only,
+            query=query,
+            lsx=lsx,
+        )
+    )
+
+
+@server.route("/api/execute/logs/stream")
+def api_execute_logs_stream():
+    stage = _execute_parse_scope(request.args.get("stage"), allowed=_EXECUTE_LOG_STAGES, default="execute")
+    limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=1, maximum=300)
+    level_filter = _execute_parse_scope(
+        request.args.get("level"), allowed=_EXECUTE_LOG_LEVELS, default="all"
+    )
+    today_only = str(request.args.get("today") or "0").strip().lower() in {"1", "true", "yes", "on"}
+    query = str(request.args.get("q") or "").strip()
+    lsx = _execute_parse_scope(request.args.get("lsx"), allowed=_EXECUTE_LSX_SCOPES, default="all")
+    return _execute_sse_response(
+        lambda: _execute_logs_payload(
+            stage=stage,
+            limit=int(limit),
+            level_filter=level_filter,
+            today_only=today_only,
+            query=query,
+            lsx=lsx,
+        ),
+        interval_seconds=3.0,
+    )
+
+
+@server.route("/api/execute/audit")
+def api_execute_audit():
+    limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=50, maximum=500)
+    return _json_no_store(_execute_audit_payload(limit=int(limit)))
+
+
+@server.route("/api/execute/audit/stream")
+def api_execute_audit_stream():
+    limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=50, maximum=500)
+    return _execute_sse_response(
+        lambda: _execute_audit_payload(limit=int(limit)),
+        interval_seconds=6.0,
+    )
+
+
 _DB_TABLE_COLUMNS_CACHE: dict[str, tuple[float, set[str]]] = {}
 _DB_TABLE_COLUMNS_CACHE_TTL_SECONDS = 300.0
 _SCREENER_RUN_SCOPE_CACHE: tuple[float, dict[str, Any]] | None = None
