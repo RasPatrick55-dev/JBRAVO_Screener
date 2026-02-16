@@ -1,111 +1,29 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type {
   ExecuteLsxFilter,
   ExecuteStatusScope,
   ExecuteTrailingStopRow,
-  ExecuteTrailingStopsResponse,
 } from "./types";
 import {
   LSX_CHIPS,
   cycleStatusScope,
-  fetchJsonNoStore,
   filterTrailingClient,
   formatCurrency,
   formatNumber,
   normalizeTrailingStatus,
-  parseSseJson,
   statusScopeLabel,
   trailingStatusChipClass,
 } from "./utils";
 
-export default function TrailingStopsCard() {
-  const [rows, setRows] = useState<ExecuteTrailingStopRow[]>([]);
+type Props = {
+  rows: ExecuteTrailingStopRow[];
+  isLoading: boolean;
+  hasError: boolean;
+};
+
+export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) {
   const [statusScope, setStatusScope] = useState<ExecuteStatusScope>("all");
   const [lsx, setLsx] = useState<ExecuteLsxFilter>("all");
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
-  const [hasError, setHasError] = useState(false);
-  const hasLoadedOnceRef = useRef(false);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const normalizeRows = (payload: ExecuteTrailingStopsResponse | null) =>
-      (payload?.rows ?? []).map((row) => ({
-        ...row,
-        status: normalizeTrailingStatus(row.status),
-      }));
-
-    const applyPayload = (payload: ExecuteTrailingStopsResponse | null) => {
-      if (!isMounted) {
-        return;
-      }
-      setRows(normalizeRows(payload));
-      setHasError(!payload);
-      setIsLoading(false);
-      if (payload) {
-        hasLoadedOnceRef.current = true;
-        setHasLoadedOnce(true);
-      }
-    };
-
-    const params = new URLSearchParams({
-      status: statusScope,
-      limit: "200",
-      q: "",
-    });
-    if (lsx !== "all") {
-      params.set("lsx", lsx);
-    }
-
-    const loadFallback = async () => {
-      setIsLoading(!hasLoadedOnceRef.current);
-      const params = new URLSearchParams({
-        status: statusScope,
-        limit: "200",
-        q: "",
-      });
-      if (lsx !== "all") {
-        params.set("lsx", lsx);
-      }
-
-      const payload = await fetchJsonNoStore<ExecuteTrailingStopsResponse>(
-        `/api/execute/trailing_stops?${params.toString()}&ts=${Date.now()}`
-      );
-      applyPayload(payload);
-    };
-
-    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
-      void loadFallback();
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    setIsLoading(!hasLoadedOnceRef.current);
-    const source = new EventSource(`/api/execute/trailing_stops/stream?${params.toString()}`);
-    source.onmessage = (event) => {
-      const payload = parseSseJson<ExecuteTrailingStopsResponse>(event.data);
-      if (!payload) {
-        return;
-      }
-      applyPayload(payload);
-    };
-    source.onerror = () => {
-      if (!isMounted) {
-        return;
-      }
-      if (!hasLoadedOnceRef.current) {
-        setHasError(true);
-        setIsLoading(false);
-      }
-    };
-
-    return () => {
-      isMounted = false;
-      source.close();
-    };
-  }, [lsx, statusScope]);
 
   const visibleRows = useMemo(
     () => filterTrailingClient(rows, "", statusScope, lsx),
@@ -184,7 +102,7 @@ export default function TrailingStopsCard() {
               </tr>
             </thead>
             <tbody>
-              {isLoading && !hasLoadedOnce
+              {isLoading && rows.length === 0
                 ? Array.from({ length: 5 }).map((_, index) => (
                     <tr key={`trailing-skeleton-${index}`} className="border-b border-slate-700/70">
                       <td colSpan={6} className="px-3 py-3">

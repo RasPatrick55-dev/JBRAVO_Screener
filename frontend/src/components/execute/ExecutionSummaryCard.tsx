@@ -1,14 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import type { ExecuteSummaryResponse } from "./types";
 import {
-  fetchJsonNoStore,
   formatDateUtc,
   formatNumber,
   formatSignedCurrency,
   formatTimeUtc,
-  parseSseJson,
   parseNumber,
 } from "./utils";
+
+type Props = {
+  summary: ExecuteSummaryResponse | null;
+  isLoading: boolean;
+  hasError: boolean;
+};
 
 const basePillClass =
   "rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] outline outline-1 outline-offset-[-1px]";
@@ -23,64 +27,8 @@ const summaryTileSurface = [
   "jbravo-panel-inner-cyan outline-sky-400/35",
 ];
 
-export default function ExecutionSummaryCard() {
-  const [summary, setSummary] = useState<ExecuteSummaryResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
-  const hasConnectedRef = useRef(false);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const applyPayload = (payload: ExecuteSummaryResponse | null) => {
-      if (!isMounted) {
-        return;
-      }
-      setSummary(payload);
-      setHasError(!payload);
-      setIsLoading(false);
-      if (payload) {
-        hasConnectedRef.current = true;
-      }
-    };
-
-    const loadFallback = async () => {
-      setIsLoading(true);
-      const payload = await fetchJsonNoStore<ExecuteSummaryResponse>(`/api/execute/summary?ts=${Date.now()}`);
-      applyPayload(payload);
-    };
-
-    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
-      void loadFallback();
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    setIsLoading(true);
-    const source = new EventSource("/api/execute/summary/stream");
-    source.onmessage = (event) => {
-      const payload = parseSseJson<ExecuteSummaryResponse>(event.data);
-      if (!payload) {
-        return;
-      }
-      applyPayload(payload);
-    };
-    source.onerror = () => {
-      if (!isMounted) {
-        return;
-      }
-      if (!hasConnectedRef.current) {
-        setHasError(true);
-        setIsLoading(false);
-      }
-    };
-
-    return () => {
-      isMounted = false;
-      source.close();
-    };
-  }, []);
+export default function ExecutionSummaryCard({ summary, isLoading, hasError }: Props) {
+  const ready = !isLoading && summary !== null;
 
   const resultValue = parseNumber(summary?.result_pl_usd) ?? 0;
   const resultTone =
@@ -102,11 +50,41 @@ export default function ExecutionSummaryCard() {
         subValue: "ET 07:00-09:30",
         tone: summary?.in_window ? "text-emerald-300" : "text-amber-300",
       },
-      { key: "candidates", label: "Candidates", value: formatNumber(summary?.candidates), subValue: "Scanned", tone: "text-slate-100" },
-      { key: "submitted", label: "Submitted", value: formatNumber(summary?.submitted), subValue: "Orders", tone: "text-emerald-300" },
-      { key: "filled", label: "Filled", value: formatNumber(summary?.filled), subValue: "Completed", tone: "text-emerald-300" },
-      { key: "rejected", label: "Rejected", value: formatNumber(summary?.rejected), subValue: "Blocked", tone: "text-rose-300" },
-      { key: "result", label: "Result", value: formatSignedCurrency(summary?.result_pl_usd), subValue: "USD", tone: resultTone },
+      {
+        key: "candidates",
+        label: "Candidates",
+        value: formatNumber(summary?.candidates),
+        subValue: "Scanned",
+        tone: "text-slate-100",
+      },
+      {
+        key: "submitted",
+        label: "Submitted",
+        value: formatNumber(summary?.submitted),
+        subValue: "Orders",
+        tone: "text-emerald-300",
+      },
+      {
+        key: "filled",
+        label: "Filled",
+        value: formatNumber(summary?.filled),
+        subValue: "Completed",
+        tone: "text-emerald-300",
+      },
+      {
+        key: "rejected",
+        label: "Rejected",
+        value: formatNumber(summary?.rejected),
+        subValue: "Blocked",
+        tone: "text-rose-300",
+      },
+      {
+        key: "result",
+        label: "Result",
+        value: formatSignedCurrency(summary?.result_pl_usd),
+        subValue: "USD",
+        tone: resultTone,
+      },
     ],
     [
       resultTone,
@@ -169,10 +147,10 @@ export default function ExecutionSummaryCard() {
               {tile.label}
             </p>
             <p className={`mt-2 font-cousine text-xl font-bold tabular-nums sm:text-2xl ${tile.tone}`}>
-              {summary ? tile.value : "--"}
+              {ready ? tile.value : "--"}
             </p>
             <p className="mt-1 font-cousine text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
-              {summary ? tile.subValue : "--"}
+              {ready ? tile.subValue : "--"}
             </p>
           </article>
         ))}
@@ -184,3 +162,4 @@ export default function ExecutionSummaryCard() {
     </section>
   );
 }
+

@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ExecuteLsxFilter, ExecuteOrderRow, ExecuteOrdersResponse, ExecuteStatusScope } from "./types";
+import { useMemo, useState } from "react";
+import type { ExecuteLsxFilter, ExecuteOrderRow, ExecuteStatusScope } from "./types";
 import {
   LSX_CHIPS,
   cycleStatusScope,
-  fetchJsonNoStore,
   filterOrdersClient,
   formatCurrency,
   formatDateTimeUtc,
@@ -11,112 +10,21 @@ import {
   normalizeOrderStatus,
   normalizeSide,
   orderStatusChipClass,
-  parseSseJson,
   sideChipClass,
   statusScopeLabel,
 } from "./utils";
 
-export default function OrdersTableCard() {
-  const [rows, setRows] = useState<ExecuteOrderRow[]>([]);
+type Props = {
+  rows: ExecuteOrderRow[];
+  isLoading: boolean;
+  hasError: boolean;
+};
+
+export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [statusScope, setStatusScope] = useState<ExecuteStatusScope>("all");
   const [lsx, setLsx] = useState<ExecuteLsxFilter>("all");
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
-  const [hasError, setHasError] = useState(false);
-  const hasLoadedOnceRef = useRef(false);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setDebouncedQuery(searchQuery.trim());
-    }, 200);
-    return () => window.clearTimeout(timeout);
-  }, [searchQuery]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const normalizeRows = (payload: ExecuteOrdersResponse | null) => {
-      const normalizedRows = (payload?.rows ?? []).map((row) => ({
-        ...row,
-        side: normalizeSide(row.side),
-        status: normalizeOrderStatus(row.status),
-        type: String(row.type ?? "").trim().toUpperCase() || "--",
-      }));
-      return normalizedRows;
-    };
-
-    const applyPayload = (payload: ExecuteOrdersResponse | null) => {
-      if (!isMounted) {
-        return;
-      }
-      setRows(normalizeRows(payload));
-      setHasError(!payload);
-      setIsLoading(false);
-      if (payload) {
-        hasLoadedOnceRef.current = true;
-        setHasLoadedOnce(true);
-      }
-    };
-
-    const params = new URLSearchParams({
-      status: statusScope,
-      limit: "200",
-      q: debouncedQuery,
-    });
-    if (lsx !== "all") {
-      params.set("lsx", lsx);
-    }
-
-    const loadFallback = async () => {
-      setIsLoading(!hasLoadedOnceRef.current);
-      const params = new URLSearchParams({
-        status: statusScope,
-        limit: "200",
-        q: debouncedQuery,
-      });
-      if (lsx !== "all") {
-        params.set("lsx", lsx);
-      }
-      const payload = await fetchJsonNoStore<ExecuteOrdersResponse>(
-        `/api/execute/orders?${params.toString()}&ts=${Date.now()}`
-      );
-      applyPayload(payload);
-    };
-
-    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
-      void loadFallback();
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    setIsLoading(!hasLoadedOnceRef.current);
-    const source = new EventSource(`/api/execute/orders/stream?${params.toString()}`);
-    source.onmessage = (event) => {
-      const payload = parseSseJson<ExecuteOrdersResponse>(event.data);
-      if (!payload) {
-        return;
-      }
-      applyPayload(payload);
-    };
-    source.onerror = () => {
-      if (!isMounted) {
-        return;
-      }
-      if (!hasLoadedOnceRef.current) {
-        setHasError(true);
-        setIsLoading(false);
-      }
-    };
-
-    return () => {
-      isMounted = false;
-      source.close();
-    };
-  }, [debouncedQuery, lsx, statusScope]);
 
   const visibleRows = useMemo(
     () => filterOrdersClient(rows, searchQuery, statusScope, lsx),
@@ -232,7 +140,7 @@ export default function OrdersTableCard() {
               </tr>
             </thead>
             <tbody>
-              {isLoading && !hasLoadedOnce
+              {isLoading && rows.length === 0
                 ? Array.from({ length: 6 }).map((_, index) => (
                     <tr key={`orders-skeleton-${index}`} className="border-b border-slate-700/70">
                       <td colSpan={10} className="px-3 py-3">

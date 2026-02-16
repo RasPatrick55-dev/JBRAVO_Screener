@@ -66,6 +66,19 @@ export interface ExecuteLogsResponse {
   source_detail?: string;
 }
 
+export interface ExecuteStateResponse {
+  ok?: boolean;
+  ts_utc?: string | null;
+  summary?: ExecuteSummaryResponse;
+  orders?: ExecuteOrdersResponse;
+  trailing_stops?: ExecuteTrailingStopsResponse;
+  logs?: {
+    execute?: ExecuteLogsResponse;
+    monitor?: ExecuteLogsResponse;
+    pipeline?: ExecuteLogsResponse;
+  };
+}
+
 export interface ExecuteAuditFinding {
   severity?: "high" | "warning" | "info" | string;
   code?: string;

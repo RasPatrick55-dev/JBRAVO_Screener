@@ -8182,6 +8182,65 @@ def api_execute_logs_stream():
     )
 
 
+def _execute_state_payload() -> dict[str, Any]:
+    """Aggregate Execute tab data for a single SSE connection.
+
+    PythonAnywhere WSGI apps have limited worker capacity; multiple long-lived SSE
+    streams can starve the app. Keeping this as a single stream avoids that.
+    """
+
+    summary = _execute_summary_payload()
+    orders = _execute_orders_payload(status_scope="all", limit=200, query="", lsx="all")
+    trailing = _execute_trailing_stops_payload(status_scope="all", limit=200, query="", lsx="all")
+    logs_execute = _execute_logs_payload(
+        stage="execute",
+        limit=200,
+        level_filter="all",
+        today_only=False,
+        query="",
+        lsx="all",
+    )
+    logs_monitor = _execute_logs_payload(
+        stage="monitor",
+        limit=200,
+        level_filter="all",
+        today_only=False,
+        query="",
+        lsx="all",
+    )
+    logs_pipeline = _execute_logs_payload(
+        stage="pipeline",
+        limit=200,
+        level_filter="all",
+        today_only=False,
+        query="",
+        lsx="all",
+    )
+
+    return {
+        "ok": bool(summary.get("ok") or orders.get("ok") or trailing.get("ok")),
+        "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "summary": summary,
+        "orders": orders,
+        "trailing_stops": trailing,
+        "logs": {
+            "execute": logs_execute,
+            "monitor": logs_monitor,
+            "pipeline": logs_pipeline,
+        },
+    }
+
+
+@server.route("/api/execute/state")
+def api_execute_state():
+    return _json_no_store(_execute_state_payload())
+
+
+@server.route("/api/execute/state/stream")
+def api_execute_state_stream():
+    return _execute_sse_response(_execute_state_payload, interval_seconds=5.0)
+
+
 @server.route("/api/execute/audit")
 def api_execute_audit():
     limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=50, maximum=500)

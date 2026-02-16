@@ -1,19 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type {
   ExecuteLogLevelFilter,
   ExecuteLogRow,
   ExecuteLogStage,
-  ExecuteLogsResponse,
   ExecuteLsxFilter,
 } from "./types";
 import {
   LSX_CHIPS,
-  fetchJsonNoStore,
   filterLogsClient,
   formatDateTimeUtc,
   logLevelChipClass,
   normalizeLogLevel,
-  parseSseJson,
 } from "./utils";
 
 const stageOptions: Array<{ key: ExecuteLogStage; label: string }> = [
@@ -42,114 +39,34 @@ const levelFilterLabel = (value: ExecuteLogLevelFilter): string => {
   return "All";
 };
 
-export default function ExecutionLogsCard() {
-  const [rows, setRows] = useState<ExecuteLogRow[]>([]);
+type Props = {
+  logs: Record<ExecuteLogStage, ExecuteLogRow[]>;
+  isLoading: boolean;
+  hasError: boolean;
+};
+
+export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) {
   const [stage, setStage] = useState<ExecuteLogStage>("execute");
   const [levelFilter, setLevelFilter] = useState<ExecuteLogLevelFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [lsx, setLsx] = useState<ExecuteLsxFilter>("all");
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
-  const [hasError, setHasError] = useState(false);
-  const hasLoadedOnceRef = useRef(false);
 
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setDebouncedQuery(searchQuery.trim());
-    }, 200);
-    return () => window.clearTimeout(timeout);
-  }, [searchQuery]);
+  const stageRows = logs[stage] ?? [];
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const normalizeRows = (payload: ExecuteLogsResponse | null) =>
-      (payload?.rows ?? []).map((row) => ({
-        ...row,
-        level: normalizeLogLevel(row.level),
-      }));
-
-    const applyPayload = (payload: ExecuteLogsResponse | null) => {
-      if (!isMounted) {
-        return;
+  const visibleRows = useMemo(() => {
+    const filtered = filterLogsClient(stageRows, searchQuery, lsx);
+    if (levelFilter === "all") {
+      return filtered;
+    }
+    return filtered.filter((row) => {
+      const level = normalizeLogLevel(row.level);
+      if (levelFilter === "errors") {
+        return level === "ERROR";
       }
-      setRows(normalizeRows(payload));
-      setHasError(!payload);
-      setIsLoading(false);
-      if (payload) {
-        hasLoadedOnceRef.current = true;
-        setHasLoadedOnce(true);
-      }
-    };
-
-    const params = new URLSearchParams({
-      stage,
-      limit: "200",
-      level: levelFilter,
-      today: "0",
-      q: debouncedQuery,
+      return level === "WARNING";
     });
-    if (lsx !== "all") {
-      params.set("lsx", lsx);
-    }
-
-    const loadFallback = async () => {
-      setIsLoading(!hasLoadedOnceRef.current);
-      const params = new URLSearchParams({
-        stage,
-        limit: "200",
-        level: levelFilter,
-        today: "0",
-        q: debouncedQuery,
-      });
-      if (lsx !== "all") {
-        params.set("lsx", lsx);
-      }
-
-      const payload = await fetchJsonNoStore<ExecuteLogsResponse>(
-        `/api/execute/logs?${params.toString()}&ts=${Date.now()}`
-      );
-      applyPayload(payload);
-    };
-
-    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
-      void loadFallback();
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    setIsLoading(!hasLoadedOnceRef.current);
-    const source = new EventSource(`/api/execute/logs/stream?${params.toString()}`);
-    source.onmessage = (event) => {
-      const payload = parseSseJson<ExecuteLogsResponse>(event.data);
-      if (!payload) {
-        return;
-      }
-      applyPayload(payload);
-    };
-    source.onerror = () => {
-      if (!isMounted) {
-        return;
-      }
-      if (!hasLoadedOnceRef.current) {
-        setHasError(true);
-        setIsLoading(false);
-      }
-    };
-
-    return () => {
-      isMounted = false;
-      source.close();
-    };
-  }, [debouncedQuery, levelFilter, lsx, stage]);
-
-  const visibleRows = useMemo(
-    () => filterLogsClient(rows, searchQuery, lsx),
-    [lsx, rows, searchQuery]
-  );
+  }, [levelFilter, lsx, searchQuery, stageRows]);
 
   return (
     <section className="overflow-hidden rounded-2xl outline-subtle shadow-card jbravo-panel jbravo-panel-amber p-3 sm:p-5">
@@ -268,7 +185,7 @@ export default function ExecutionLogsCard() {
               </tr>
             </thead>
             <tbody>
-              {isLoading && !hasLoadedOnce
+              {isLoading && stageRows.length === 0
                 ? Array.from({ length: 6 }).map((_, index) => (
                     <tr key={`logs-skeleton-${index}`} className="border-b border-slate-700/70">
                       <td colSpan={3} className="px-3 py-3">
@@ -326,3 +243,4 @@ export default function ExecutionLogsCard() {
     </section>
   );
 }
+
