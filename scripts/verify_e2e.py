@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import os
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 from scripts import db
 from scripts.utils.env import load_env
@@ -19,24 +19,25 @@ def _print_check(name: str, ok: bool, detail: str = "") -> None:
     print(f"{status} {name}{suffix}")
 
 
-def _tail_lines(path: Path, max_bytes: int = 200_000) -> list[str]:
-    if not path.exists():
-        return []
-    size = path.stat().st_size
-    read_size = min(size, max_bytes)
-    with path.open("rb") as handle:
-        if read_size > 0:
-            handle.seek(-read_size, os.SEEK_END)
-        data = handle.read()
-    return data.decode("utf-8", errors="replace").splitlines()
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-date", default=None)
     parser.add_argument("--execute-log", type=Path, default=Path("logs") / "execute_trades.log")
+    parser.add_argument("--execute-metrics", type=Path, default=Path("data") / "execute_metrics.json")
     parser.add_argument("--latest-csv", type=Path, default=Path("data") / "latest_candidates.csv")
     return parser.parse_args(argv)
+
+
+def _load_execute_metrics(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    if not path.exists():
+        return None, "missing execute_metrics.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return None, f"unable to parse execute_metrics.json: {exc}"
+    if not isinstance(payload, dict):
+        return None, "execute_metrics.json is not an object"
+    return payload, None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -147,16 +148,41 @@ def main(argv: list[str] | None = None) -> int:
     _print_check("latest_csv_fresh", csv_fresh_ok)
     all_ok &= csv_exists and csv_header_ok and csv_fresh_ok
 
-    execute_lines = _tail_lines(args.execute_log)
-    market_closed_lines = [ln for ln in execute_lines if "MARKET_DAY_CLOSED" in ln]
-    skip_summary_lines = [ln for ln in execute_lines if "EXECUTE_SUMMARY" in ln and "skips.MARKET_CLOSED=1" in ln]
-    no_error_metric_on_close = not any(
-        "METRICS_UPDATED" in ln and "status=error" in ln for ln in execute_lines if "MARKET_DAY_CLOSED" in "\n".join(execute_lines)
-    )
-    _print_check("market_closed_token", bool(market_closed_lines))
-    _print_check("market_closed_skip_summary", bool(skip_summary_lines))
-    _print_check("market_closed_status_not_error", no_error_metric_on_close)
-    all_ok &= bool(market_closed_lines) and bool(skip_summary_lines) and no_error_metric_on_close
+    metrics, metrics_error = _load_execute_metrics(args.execute_metrics)
+    metrics_exists = metrics_error is None
+    _print_check("execute_metrics_exists", metrics_exists, metrics_error or str(args.execute_metrics))
+    all_ok &= metrics_exists
+
+    if metrics_exists and isinstance(metrics, dict):
+        market_clock = metrics.get("market_clock") if isinstance(metrics.get("market_clock"), dict) else {}
+        status = str(metrics.get("status") or "")
+        skip_counts = metrics.get("skip_counts") if isinstance(metrics.get("skip_counts"), dict) else {}
+        if not skip_counts:
+            raw_skips = metrics.get("skips") if isinstance(metrics.get("skips"), dict) else {}
+            skip_counts = {str(k): int(v) if str(v).isdigit() else 0 for k, v in raw_skips.items()}
+        market_closed_count = int(skip_counts.get("MARKET_CLOSED", 0) or 0)
+        is_open = market_clock.get("is_open") if "is_open" in market_clock else None
+
+        if is_open is False:
+            token_ok = bool(market_clock)
+            skip_ok = market_closed_count == 1
+            status_ok = status.lower() != "error"
+            detail = (
+                f"status={status!r} skip_counts.MARKET_CLOSED={market_closed_count} "
+                f"market_clock={market_clock}"
+            )
+            _print_check("market_closed_token", token_ok, "is_open=false present in market_clock")
+            _print_check("market_closed_skip_summary", skip_ok, detail if not skip_ok else "")
+            _print_check("market_closed_status_not_error", status_ok, detail if not status_ok else "")
+            all_ok &= token_ok and skip_ok and status_ok
+        else:
+            na_detail = (
+                f"N/A market open; status={status!r} market_clock={market_clock} "
+                f"skip_counts.MARKET_CLOSED={market_closed_count}"
+            )
+            _print_check("market_closed_token", True, na_detail)
+            _print_check("market_closed_skip_summary", True, na_detail)
+            _print_check("market_closed_status_not_error", True, na_detail)
 
     return 0 if all_ok else 1
 

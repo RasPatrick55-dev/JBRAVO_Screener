@@ -781,6 +781,7 @@ def _log_call(label, fn, *args, **kwargs):
         logger.warning("[CALL] %s ok=0 dt=%.3fs err=%r", label, _time.perf_counter() - t0, e)
         return None, e
 LOG_PATH = Path("logs") / "execute_trades.log"
+METRICS_PATH = Path("data") / "execute_metrics.json"
 _EXECUTE_START_UTC: datetime | None = None
 _EXECUTE_FINISH_UTC: datetime | None = None
 _EXECUTE_METRICS_PAYLOAD: Dict[str, Any] | None = None
@@ -802,12 +803,19 @@ def write_execute_metrics(
         start_dt=start_dt,
         end_dt=end_dt or datetime.now(timezone.utc),
     )
+    metrics_path = METRICS_PATH
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = metrics_path.parent / f"{metrics_path.name}.tmp"
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        json.dump(enriched, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    tmp_path.replace(metrics_path)
     global _EXECUTE_METRICS_PAYLOAD
     _EXECUTE_METRICS_PAYLOAD = dict(enriched)
     # PHASE 3: persist executor run metrics to executor_runs table.
     log_info(
         "METRICS_UPDATED",
-        target="memory",
+        target=str(metrics_path),
         run_started_utc=enriched.get("run_started_utc"),
         run_finished_utc=enriched.get("run_finished_utc"),
         status=enriched.get("status"),
@@ -1005,14 +1013,22 @@ def _paper_only_guard(trading_client: Any | None, base_url: str | None = "") -> 
 
 
 def _load_execute_metrics() -> Optional[Dict[str, Any]]:
-    if _EXECUTE_METRICS_PAYLOAD is None:
-        return None
     if isinstance(_EXECUTE_METRICS_PAYLOAD, Mapping):
         return dict(_EXECUTE_METRICS_PAYLOAD)
-    LOGGER.warning(
-        "Execute metrics payload contained unexpected type: %s",
-        type(_EXECUTE_METRICS_PAYLOAD).__name__,
-    )
+    if _EXECUTE_METRICS_PAYLOAD is not None:
+        LOGGER.warning(
+            "Execute metrics payload contained unexpected type: %s",
+            type(_EXECUTE_METRICS_PAYLOAD).__name__,
+        )
+    if not METRICS_PATH.exists():
+        return None
+    try:
+        payload = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        LOGGER.warning("Failed to load execute metrics from %s", METRICS_PATH, exc_info=True)
+        return None
+    if isinstance(payload, Mapping):
+        return dict(payload)
     return None
 
 
@@ -1091,6 +1107,12 @@ def _canonicalize_execute_metrics(
     enriched["auth_ok"] = bool(auth_ok)
     enriched["auth_reason"] = auth_reason
 
+    def _as_int(value: Any, *, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default
+
     fills_value = enriched.get("orders_filled", enriched.get("fills", 0))
     trails_value = enriched.get("trailing_attached", enriched.get("trails", 0))
     try:
@@ -1104,8 +1126,14 @@ def _canonicalize_execute_metrics(
 
     enriched["fills"] = fills
     enriched["trails"] = trails
-    enriched["orders_filled"] = enriched.get("orders_filled", fills)
-    enriched["trailing_attached"] = enriched.get("trailing_attached", trails)
+    enriched["orders_filled"] = _as_int(enriched.get("orders_filled", fills))
+    enriched["trailing_attached"] = _as_int(enriched.get("trailing_attached", trails))
+    enriched["orders_submitted"] = _as_int(enriched.get("orders_submitted", 0))
+
+    skips_block = enriched.get("skips") if isinstance(enriched.get("skips"), Mapping) else {}
+    canonical_skips = {str(k): _as_int(v) for k, v in skips_block.items()}
+    enriched["skips"] = canonical_skips
+    enriched["skip_counts"] = dict(canonical_skips)
 
     if start_dt is not None:
         try:
@@ -1121,9 +1149,8 @@ def _canonicalize_execute_metrics(
         enriched.get("trailing_attached", 0),
         enriched.get("orders_canceled", 0),
     ]
-    skips_block = enriched.get("skips") if isinstance(enriched.get("skips"), Mapping) else {}
     try:
-        step_signals.append(sum(int(v) for v in skips_block.values()))
+        step_signals.append(sum(int(v) for v in canonical_skips.values()))
     except Exception:
         step_signals.append(0)
     if any(value not in (None, "", 0, 0.0) for value in step_signals):
@@ -1131,6 +1158,18 @@ def _canonicalize_execute_metrics(
             enriched["duration_sec"] = 1.0
 
     enriched.setdefault("status", "ok")
+    source_value = str(enriched.get("candidate_source") or "db").strip().lower()
+    enriched["candidate_source"] = source_value if source_value in {"db", "csv"} else "db"
+    run_date_value = enriched.get("run_date")
+    enriched["run_date"] = "" if run_date_value is None else str(run_date_value)
+
+    market_clock = enriched.get("market_clock") if isinstance(enriched.get("market_clock"), Mapping) else {}
+    enriched["market_clock"] = {
+        "ny_date": "" if market_clock.get("ny_date") is None else str(market_clock.get("ny_date")),
+        "is_open": bool(market_clock.get("is_open", False)),
+        "next_open": "" if market_clock.get("next_open") is None else str(market_clock.get("next_open")),
+        "next_close": "" if market_clock.get("next_close") is None else str(market_clock.get("next_close")),
+    }
     metrics_defaults: Dict[str, Any] = {
         "open_positions": 0,
         "open_orders": 0,
@@ -6237,9 +6276,27 @@ def run_executor(
         next_open_raw = getattr(clock, "next_open", None) if clock is not None else None
         next_open_dt = _parse_clock_dt(next_open_raw)
         next_open_date = next_open_dt.astimezone(NY).date() if next_open_dt else None
-        next_close_dt = _parse_clock_dt(getattr(clock, "next_close", None) if clock is not None else None)
+        next_close_raw = getattr(clock, "next_close", None) if clock is not None else None
+        next_close_dt = _parse_clock_dt(next_close_raw)
         next_close_date = next_close_dt.astimezone(NY).date() if next_close_dt else None
         session = str(getattr(clock, "session", "") or "").lower() if clock is not None else ""
+        strategy_run_date = ny_date.isoformat()
+        market_clock_payload = {
+            "ny_date": ny_date.isoformat(),
+            "is_open": bool(is_open),
+            "next_open": "" if next_open_raw is None else str(next_open_raw),
+            "next_close": "" if next_close_raw is None else str(next_close_raw),
+        }
+        write_execute_metrics(
+            {
+                **metrics.as_dict(),
+                "candidate_source": str(config.source_type or "db").lower(),
+                "run_date": strategy_run_date,
+                "market_clock": market_clock_payload,
+            },
+            start_dt=_EXECUTE_START_UTC,
+            end_dt=datetime.now(timezone.utc),
+        )
 
         def _exit_market_closed() -> int:
             LOGGER.info(
@@ -6252,9 +6309,15 @@ def run_executor(
             metrics.exit_reason = "MARKET_DAY_CLOSED"
             metrics.orders_submitted = 0
             metrics.orders_filled = 0
+            metrics.trailing_attached = 0
             metrics.status = "skipped"
             write_execute_metrics(
-                metrics.as_dict(),
+                {
+                    **metrics.as_dict(),
+                    "candidate_source": str(config.source_type or "db").lower(),
+                    "run_date": strategy_run_date,
+                    "market_clock": market_clock_payload,
+                },
                 status="skipped",
                 start_dt=_EXECUTE_START_UTC,
                 end_dt=datetime.now(timezone.utc),
@@ -6292,6 +6355,23 @@ def run_executor(
                 if not ts_series.empty:
                     max_ts = ts_series.max()
             LOGGER.info("[INFO] DB_CANDIDATES_LOADED count=%s max_timestamp=%s", len(frame), max_ts)
+
+        if "run_date" in frame.columns and not frame["run_date"].isna().all():
+            try:
+                strategy_run_date = str(frame["run_date"].dropna().iloc[0])
+            except Exception:
+                strategy_run_date = ny_date.isoformat()
+
+        write_execute_metrics(
+            {
+                **(_load_execute_metrics() or {}),
+                "candidate_source": str(config.source_type or "db").lower(),
+                "run_date": strategy_run_date,
+                "market_clock": market_clock_payload,
+            },
+            start_dt=_EXECUTE_START_UTC,
+            end_dt=datetime.now(timezone.utc),
+        )
 
         candidates_df = loader._rank_candidates(frame)
         candidates_df = loader._apply_alloc_weight_key(candidates_df)
