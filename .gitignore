@@ -32,3 +32,17 @@ docs/ui-reference/*.jpg
 
 # Local verification artifacts
 tmp/trades_leaderboard_verify/
+
+# Runtime artifacts (hygiene)
+logs/
+reports/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/execute_metrics.json
+data/execute_metrics.json.tmp
+data/latest_candidates.csv
+data/cache/
+data/predictions/
+data/daily_bars.csv
+frontend/node_modules/
