@@ -30,6 +30,7 @@ import psycopg2
 import requests
 
 from scripts import db
+from scripts.db_queries import get_latest_screener_candidates
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.utils.env import load_env
 from utils.alerts import send_alert
@@ -1898,15 +1899,12 @@ def load_candidates_from_db(
                 LOGGER.info("DB_PING ok=true")
             except Exception as exc:  # pragma: no cover - diagnostic logging
                 LOGGER.info("DB_PING ok=false err=%s", exc)
-        LOGGER.info("[INFO] DB_QUERY latest_screener_candidates order=score_desc")
-        query = """
-            SELECT
-                run_date, timestamp, symbol, score, exchange, close, volume,
-                universe_count, score_breakdown, entry_price, adv20, atrp, source
-            FROM latest_screener_candidates
-            ORDER BY score DESC;
-        """
-        df = pd.read_sql_query(query, connection)
+        run_date_value = datetime.now(timezone.utc).date()
+        df, latest_run_ts = get_latest_screener_candidates(run_date_value)
+        if latest_run_ts is None:
+            run_date_value = db.fetch_latest_run_date("screener_candidates")
+            if run_date_value is not None:
+                df, latest_run_ts = get_latest_screener_candidates(run_date_value)
     except Exception as exc:
         raise CandidateLoadError(f"Failed to load candidates from database: {exc}") from exc
     finally:
@@ -1923,9 +1921,10 @@ def load_candidates_from_db(
         else (str(max_timestamp_value) if max_timestamp_value is not None else "NULL")
     )
     LOGGER.info(
-        "[INFO] DB_CANDIDATES_LOADED count=%s max_timestamp=%s",
+        "[INFO] DB_CANDIDATES_LOADED count=%s max_timestamp=%s latest_run_ts=%s",
         len(df),
         max_ts_display,
+        latest_run_ts if "latest_run_ts" in locals() else None,
     )
     if df.empty:
         _record_no_db_candidates("latest_batch_empty")
@@ -6164,6 +6163,7 @@ def _seed_initial_metrics(metrics: ExecutionMetrics, config: ExecutorConfig) -> 
     metrics.slots_total = 0
     metrics.exit_reason = None
     metrics.symbols_in = 0
+    metrics.auth_ok = True
     try:
         write_execute_metrics(
             metrics.as_dict(),
@@ -6227,6 +6227,50 @@ def run_executor(
                 "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
             )
             LOGGER.info(banner)
+        clock = loader._get_trading_clock()
+        now_ny = _ny_now()
+        clock_ts = _parse_clock_dt(getattr(clock, "timestamp", None) if clock is not None else None)
+        if clock_ts is not None:
+            now_ny = clock_ts.astimezone(NY)
+        ny_date = now_ny.date()
+        is_open = bool(getattr(clock, "is_open", False)) if clock is not None else False
+        next_open_raw = getattr(clock, "next_open", None) if clock is not None else None
+        next_open_dt = _parse_clock_dt(next_open_raw)
+        next_open_date = next_open_dt.astimezone(NY).date() if next_open_dt else None
+        next_close_dt = _parse_clock_dt(getattr(clock, "next_close", None) if clock is not None else None)
+        next_close_date = next_close_dt.astimezone(NY).date() if next_close_dt else None
+        session = str(getattr(clock, "session", "") or "").lower() if clock is not None else ""
+
+        def _exit_market_closed() -> int:
+            LOGGER.info(
+                "MARKET_DAY_CLOSED ny_date=%s is_open=%s next_open=%s",
+                ny_date.isoformat(),
+                str(bool(is_open)).lower(),
+                "" if next_open_raw is None else str(next_open_raw),
+            )
+            metrics.record_skip("MARKET_CLOSED", count=1)
+            metrics.exit_reason = "MARKET_DAY_CLOSED"
+            metrics.orders_submitted = 0
+            metrics.orders_filled = 0
+            metrics.status = "skipped"
+            write_execute_metrics(
+                metrics.as_dict(),
+                status="skipped",
+                start_dt=_EXECUTE_START_UTC,
+                end_dt=datetime.now(timezone.utc),
+            )
+            loader.log_summary()
+            return 0
+
+        if ny_date.weekday() >= 5:
+            return _exit_market_closed()
+
+        if clock is not None and not is_open:
+            session_allows = session and session not in {"closed", "holiday"}
+            next_open_not_today = next_open_date is not None and next_open_date != ny_date
+            next_close_not_today = next_close_date is not None and next_close_date != ny_date
+            if not session_allows and next_open_not_today and (next_close_date is None or next_close_not_today):
+                return _exit_market_closed()
         try:
             LOGGER.info("[INFO] CANDIDATE_SOURCE %s", str(config.source_type or "db"))
             frame = loader.load_candidates(rank=False)
@@ -6273,43 +6317,6 @@ def run_executor(
             source_df=candidates_df,
         )
 
-        clock = loader._get_trading_clock()
-        now_ny = _ny_now()
-        clock_ts = _parse_clock_dt(getattr(clock, "timestamp", None) if clock is not None else None)
-        if clock_ts is not None:
-            now_ny = clock_ts.astimezone(NY)
-        ny_date = now_ny.date()
-        is_open = bool(getattr(clock, "is_open", False)) if clock is not None else False
-        next_open_raw = getattr(clock, "next_open", None) if clock is not None else None
-        next_open_dt = _parse_clock_dt(next_open_raw)
-        next_open_date = next_open_dt.astimezone(NY).date() if next_open_dt else None
-        next_close_dt = _parse_clock_dt(getattr(clock, "next_close", None) if clock is not None else None)
-        next_close_date = next_close_dt.astimezone(NY).date() if next_close_dt else None
-        session = str(getattr(clock, "session", "") or "").lower() if clock is not None else ""
-
-        def _exit_market_closed() -> int:
-            LOGGER.info(
-                "MARKET_DAY_CLOSED ny_date=%s is_open=%s next_open=%s",
-                ny_date.isoformat(),
-                str(bool(is_open)).lower(),
-                "" if next_open_raw is None else str(next_open_raw),
-            )
-            metrics.exit_reason = "MARKET_DAY_CLOSED"
-            metrics.orders_submitted = 0
-            metrics.orders_filled = 0
-            loader.persist_metrics()
-            loader.log_summary()
-            return 0
-
-        if ny_date.weekday() >= 5:
-            return _exit_market_closed()
-
-        if clock is not None and not is_open:
-            session_allows = session and session not in {"closed", "holiday"}
-            next_open_not_today = next_open_date is not None and next_open_date != ny_date
-            next_close_not_today = next_close_date is not None and next_close_date != ny_date
-            if not session_allows and next_open_not_today and (next_close_date is None or next_close_not_today):
-                return _exit_market_closed()
 
         _wait_until_submit_at(config.submit_at_ny)
         configured_window = config.time_window or "auto"

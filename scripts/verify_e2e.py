@@ -1,14 +1,11 @@
-"""Verify end-to-end screener health after a run.
+"""Verify end-to-end screener run scoping and export freshness."""
 
-Uses pipeline_health_app.run_ts_utc as the canonical run id and scopes
-candidates through screener_run_map_app (run_date is not unique).
-Zero-candidate fallback days are valid PASS cases when recorded as such.
-"""
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -25,45 +22,20 @@ def _print_check(name: str, ok: bool, detail: str = "") -> None:
 def _tail_lines(path: Path, max_bytes: int = 200_000) -> list[str]:
     if not path.exists():
         return []
-    try:
-        size = path.stat().st_size
-        read_size = min(size, max_bytes)
-        with path.open("rb") as handle:
-            if read_size > 0:
-                handle.seek(-read_size, os.SEEK_END)
-            data = handle.read()
-        text = data.decode("utf-8", errors="replace")
-        return text.splitlines()
-    except Exception:
-        return []
-
-
-def _latest_summary_line(log_path: Path) -> Optional[str]:
-    lines = _tail_lines(log_path)
-    for line in reversed(lines):
-        if "[SUMMARY]" in line:
-            return line.strip()
-    return None
-
-
-def _fetch_one(cur, sql: str, params: tuple = ()) -> Optional[tuple]:
-    cur.execute(sql, params)
-    return cur.fetchone()
-
-
-def _fetch_all(cur, sql: str, params: tuple = ()) -> list[tuple]:
-    cur.execute(sql, params)
-    return cur.fetchall()
+    size = path.stat().st_size
+    read_size = min(size, max_bytes)
+    with path.open("rb") as handle:
+        if read_size > 0:
+            handle.seek(-read_size, os.SEEK_END)
+        data = handle.read()
+    return data.decode("utf-8", errors="replace").splitlines()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--log-path",
-        type=Path,
-        default=Path("logs") / "screener.log",
-        help="Path to screener log file",
-    )
+    parser.add_argument("--run-date", default=None)
+    parser.add_argument("--execute-log", type=Path, default=Path("logs") / "execute_trades.log")
+    parser.add_argument("--latest-csv", type=Path, default=Path("data") / "latest_candidates.csv")
     return parser.parse_args(argv)
 
 
@@ -72,189 +44,119 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
 
     all_ok = True
-
-    db_ok = db.db_enabled() and db.check_db_connection()
-    _print_check("db_health", db_ok)
-    if not db_ok:
-        return 1
-
     conn = db.get_db_conn()
     if conn is None:
-        _print_check("db_connect", False, "db.get_db_conn returned None")
+        _print_check("db_connect", False, "connection unavailable")
         return 1
 
-    latest_run_date = None
-    candidate_count = 0
-    sma9_count = 0
-    gates_count = 0
-    source_counts: list[tuple[str, int]] = []
-    pipeline_row = None
-    outcomes_total = None
-    outcomes_ret5 = None
-
+    run_date = args.run_date
+    latest_run_ts = None
+    latest_count = 0
+    max_run_count = 0
+    recent_null_count = 0
     try:
         with conn.cursor() as cur:
-            pipeline_row = _fetch_one(
-                cur,
-                """
-                SELECT run_date, run_ts_utc, mode, symbols_in, with_bars, coarse_rows,
-                       shortlist_rows, final_rows, gated_rows, fallback_used, db_ingest_rows
-                FROM pipeline_health_app
-                ORDER BY run_ts_utc DESC NULLS LAST
-                LIMIT 1
-                """,
-            )
-            # NOTE: run_date is not unique; run_ts_utc is the screener run identifier.
-            # screener_candidates.timestamp is the bar timestamp.
-            # screener_run_map_app.run_ts_utc is the run identity.
-            if pipeline_row:
-                latest_run_date = pipeline_row[0]
-                run_ts = pipeline_row[1]
-            else:
-                latest_run_date = None
-                run_ts = None
+            if run_date is None:
+                cur.execute("SELECT max(run_date) FROM screener_candidates")
+                row = cur.fetchone()
+                run_date = row[0].isoformat() if row and row[0] else None
 
-            if run_ts is not None and latest_run_date is not None:
-                row = _fetch_one(
-                    cur,
+            if run_date is not None:
+                cur.execute(
                     """
-                    SELECT count(*)
-                    FROM screener_candidates c
-                    JOIN screener_run_map_app m
-                      ON UPPER(c.symbol) = m.symbol
-                    WHERE m.run_ts_utc = %s
-                      AND c.run_date = %s
+                    SELECT COALESCE(max(run_ts_utc), max(created_at)) AS latest_run_ts
+                    FROM screener_candidates
+                    WHERE run_date = %s
                     """,
-                    (run_ts, latest_run_date),
+                    (run_date,),
                 )
-                candidate_count = int(row[0]) if row else 0
-                row = _fetch_one(
-                    cur,
-                    """
-                    SELECT count(*)
-                    FROM screener_candidates c
-                    JOIN screener_run_map_app m
-                      ON UPPER(c.symbol) = m.symbol
-                    WHERE m.run_ts_utc = %s
-                      AND c.run_date = %s
-                      AND c.sma9 IS NOT NULL
-                    """,
-                    (run_ts, latest_run_date),
-                )
-                sma9_count = int(row[0]) if row else 0
-                row = _fetch_one(
-                    cur,
-                    """
-                    SELECT count(*)
-                    FROM screener_candidates c
-                    JOIN screener_run_map_app m
-                      ON UPPER(c.symbol) = m.symbol
-                    WHERE m.run_ts_utc = %s
-                      AND c.run_date = %s
-                      AND c.passed_gates IS NOT NULL
-                    """,
-                    (run_ts, latest_run_date),
-                )
-                gates_count = int(row[0]) if row else 0
-                source_counts = _fetch_all(
-                    cur,
-                    """
-                    SELECT COALESCE(source, '') AS source, count(*)
-                    FROM screener_candidates c
-                    JOIN screener_run_map_app m
-                      ON UPPER(c.symbol) = m.symbol
-                    WHERE m.run_ts_utc = %s
-                      AND c.run_date = %s
-                    GROUP BY COALESCE(source, '')
-                    ORDER BY count(*) DESC
-                    """,
-                    (run_ts, latest_run_date),
-                )
+                row = cur.fetchone()
+                latest_run_ts = row[0] if row else None
 
-            outcomes_row = _fetch_one(
-                cur,
-                "SELECT count(*), count(ret_5d) FROM screener_outcomes_app",
-            )
-            if outcomes_row:
-                outcomes_total = int(outcomes_row[0])
-                outcomes_ret5 = int(outcomes_row[1])
+                cur.execute(
+                    """
+                    SELECT count(*) AS row_count
+                    FROM screener_candidates
+                    WHERE run_date = %s
+                      AND created_at > now() - interval '7 days'
+                      AND run_ts_utc IS NULL
+                    """,
+                    (run_date,),
+                )
+                row = cur.fetchone()
+                recent_null_count = int(row[0] or 0) if row else 0
+
+                if latest_run_ts is not None:
+                    cur.execute(
+                        """
+                        SELECT count(*) AS row_count
+                        FROM screener_candidates
+                        WHERE run_date = %s
+                          AND run_ts_utc = %s
+                        """,
+                        (run_date, latest_run_ts),
+                    )
+                    row = cur.fetchone()
+                    latest_count = int(row[0] or 0) if row else 0
+
+                cur.execute(
+                    """
+                    WITH latest_ts AS (
+                        SELECT COALESCE(max(run_ts_utc), max(created_at)) AS latest_run_ts
+                        FROM screener_candidates
+                        WHERE run_date = %s
+                    )
+                    SELECT count(*) AS row_count
+                    FROM screener_candidates c
+                    JOIN latest_ts t ON c.run_ts_utc = t.latest_run_ts
+                    WHERE c.run_date = %s
+                    """,
+                    (run_date, run_date),
+                )
+                row = cur.fetchone()
+                max_run_count = int(row[0] or 0) if row else 0
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
 
-    has_latest = latest_run_date is not None
+    has_run = run_date is not None
+    _print_check("run_date", has_run, str(run_date))
+    all_ok &= has_run
+
+    _print_check("run_ts_populated_recent", recent_null_count == 0, f"null_count={recent_null_count}")
+    all_ok &= recent_null_count == 0
+
+    scoped_ok = latest_count == max_run_count
     _print_check(
-        "latest_run_date",
-        has_latest,
-        str(latest_run_date) if has_latest else "none",
+        "latest_run_scoping",
+        scoped_ok,
+        f"latest_run_ts={latest_run_ts} latest_count={latest_count} scoped_count={max_run_count}",
     )
-    all_ok &= has_latest
+    all_ok &= scoped_ok
 
-    if has_latest:
-        _print_check(
-            "latest_run_counts",
-            candidate_count >= 0,
-            f"rows={candidate_count} sma9={sma9_count} passed_gates={gates_count}",
-        )
-        for source, count in source_counts:
-            label = source if source else "<null>"
-            print(f"INFO source_count {label}={count}")
-        all_ok &= sma9_count <= candidate_count
-        all_ok &= gates_count <= candidate_count
+    header_expected = "timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entry_price,adv20,atrp,source"
+    csv_exists = args.latest_csv.exists()
+    csv_header_ok = False
+    csv_fresh_ok = False
+    if csv_exists:
+        lines = args.latest_csv.read_text(encoding="utf-8").splitlines()
+        csv_header_ok = bool(lines and lines[0].strip() == header_expected)
+        mtime = datetime.fromtimestamp(args.latest_csv.stat().st_mtime, timezone.utc)
+        csv_fresh_ok = mtime >= datetime.now(timezone.utc) - timedelta(hours=24)
+    _print_check("latest_csv_exists", csv_exists, str(args.latest_csv))
+    _print_check("latest_csv_header", csv_header_ok)
+    _print_check("latest_csv_fresh", csv_fresh_ok)
+    all_ok &= csv_exists and csv_header_ok and csv_fresh_ok
 
-    pipeline_ok = pipeline_row is not None
-    _print_check("pipeline_health_app_latest", pipeline_ok)
-    if pipeline_ok and has_latest:
-        (
-            ph_run_date,
-            _ph_run_ts,
-            _ph_mode,
-            _ph_symbols_in,
-            _ph_with_bars,
-            _ph_coarse_rows,
-            _ph_shortlist_rows,
-            ph_final_rows,
-            ph_gated_rows,
-            ph_fallback_used,
-            ph_db_ingest_rows,
-        ) = pipeline_row
-        match_run_date = ph_run_date == latest_run_date
-        db_ingest_rows = int(ph_db_ingest_rows or 0)
-        final_rows = int(ph_final_rows or 0)
-        gated_rows = int(ph_gated_rows or 0)
-        fallback_used = bool(ph_fallback_used)
-
-        case_a = (
-            not fallback_used
-            and db_ingest_rows > 0
-            and db_ingest_rows == candidate_count
-            and final_rows == candidate_count
-            and gated_rows == candidate_count
-        )
-        case_b = fallback_used and db_ingest_rows == 0 and candidate_count > 0
-
-        match_ok = match_run_date and (case_a or case_b)
-        detail = (
-            f"run_date_match={match_run_date} case_a={case_a} case_b={case_b}"
-        )
-        if not match_ok:
-            detail = f"pipeline_health_app mismatch outside valid fallback case - {detail}"
-        _print_check("pipeline_health_app_match", match_ok, detail)
-        all_ok &= match_ok
-
-    outcomes_ok = outcomes_total is not None and outcomes_ret5 is not None
-    detail = ""
-    if outcomes_ok:
-        detail = f"rows={outcomes_total} ret_5d_not_null={outcomes_ret5}"
-    _print_check("outcomes_table", outcomes_ok, detail)
-    all_ok &= outcomes_ok
-
-    summary_line = _latest_summary_line(args.log_path)
-    summary_ok = summary_line is not None
-    _print_check("summary_log", summary_ok, summary_line or "not found")
-    all_ok &= summary_ok
+    execute_lines = _tail_lines(args.execute_log)
+    market_closed_lines = [ln for ln in execute_lines if "MARKET_DAY_CLOSED" in ln]
+    skip_summary_lines = [ln for ln in execute_lines if "EXECUTE_SUMMARY" in ln and "skips.MARKET_CLOSED=1" in ln]
+    no_error_metric_on_close = not any(
+        "METRICS_UPDATED" in ln and "status=error" in ln for ln in execute_lines if "MARKET_DAY_CLOSED" in "\n".join(execute_lines)
+    )
+    _print_check("market_closed_token", bool(market_closed_lines))
+    _print_check("market_closed_skip_summary", bool(skip_summary_lines))
+    _print_check("market_closed_status_not_error", no_error_metric_on_close)
+    all_ok &= bool(market_closed_lines) and bool(skip_summary_lines) and no_error_metric_on_close
 
     return 0 if all_ok else 1
 

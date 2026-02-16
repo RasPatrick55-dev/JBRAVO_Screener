@@ -914,10 +914,41 @@ def _resolve_sentiment_settings() -> dict[str, object]:
     }
 
 
+def _probe_sentiment_endpoint(url: str, timeout: float) -> tuple[bool, str]:
+    cleaned = (url or "").strip()
+    if not cleaned:
+        return False, "misconfigured"
+    lowered = cleaned.lower()
+    if "example.com" in lowered:
+        return False, "misconfigured"
+    parsed = urlparse(cleaned)
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return False, "misconfigured"
+    try:
+        socket.getaddrinfo(host, parsed.port or 443)
+    except Exception:
+        return False, "dns_fail"
+    try:
+        requests.head(cleaned, timeout=max(float(timeout or 1.0), 1.0), allow_redirects=True)
+    except Exception:
+        return False, "probe_fail"
+    return True, "ok"
+
+
 def _build_sentiment_client(settings: Mapping[str, object]) -> Optional[JsonHttpSentimentClient]:
     global _SENTIMENT_PROVIDER_WARNED
 
     if not settings.get("enabled"):
+        return None
+
+    url = str(settings.get("api_url") or "")
+    timeout = float(settings.get("timeout", 8.0) or 8.0)
+    ok, reason = _probe_sentiment_endpoint(url, timeout)
+    if not ok:
+        if not _SENTIMENT_PROVIDER_WARNED:
+            LOGGER.warning("SENTIMENT_DISABLED reason=%s url=%s", reason, url)
+            _SENTIMENT_PROVIDER_WARNED = True
         return None
 
     env = {
@@ -1864,11 +1895,6 @@ def _fetch_daily_bars(
         insufficient = set()
     accepted_count = len(keep)
     dropped_missing = max(len(unique_symbols) - accepted_count, 0)
-    LOGGER.info(
-        "[BARS_ACCEPT] accepted=%d dropped_missing=%d",
-        accepted_count,
-        dropped_missing,
-    )
     if accepted_count < MIN_BAR_SYMBOLS:
         keep = set()
         coverage_counts = {"any": 0, "required": 0}
@@ -1888,6 +1914,14 @@ def _fetch_daily_bars(
 
     symbols_with_bars_required = coverage_counts["required"]
     symbols_with_bars_any = coverage_counts["any"]
+    dropped_missing = max(len(unique_symbols) - symbols_with_bars_any, 0)
+    LOGGER.info(
+        "[BARS_ACCEPT] accepted=%d with_bars_any=%d with_bars_required=%d dropped_missing=%d",
+        symbols_with_bars_any,
+        symbols_with_bars_any,
+        symbols_with_bars_required,
+        dropped_missing,
+    )
     symbols_no_bars = max(len(unique_symbols) - symbols_with_bars_any, 0)
     bars_rows_total = int(len(combined))
     metrics.update(
@@ -2586,12 +2620,13 @@ def _load_alpaca_universe(
     agg_metrics["symbols_override"] = symbols_override_count
 
     LOGGER.info(
-        "Bars fetch metrics: batches=%d paged=%d pages=%d rows=%d symbols_with_bars=%d",
+        "Bars fetch metrics: batches=%d paged=%d pages=%d rows=%d symbols_with_bars_any=%d symbols_with_bars_required=%d",
         int(agg_metrics.get("batches_total", 0)),
         int(agg_metrics.get("batches_paged", 0)),
         int(agg_metrics.get("pages_total", 0)),
         int(agg_metrics.get("bars_rows_total", 0)),
-        int(agg_metrics.get("symbols_with_bars", 0)),
+        int(agg_metrics.get("symbols_with_any_bars", agg_metrics.get("symbols_with_bars", 0))),
+        int(agg_metrics.get("symbols_with_required_bars", agg_metrics.get("symbols_with_bars", 0))),
     )
     LOGGER.info(
         "Bars window attempts: %s -> used=%d",
@@ -6048,12 +6083,21 @@ def write_outputs(
     if mode in {"screener", "full-nightly"} and db.db_enabled():
         try:
             insert_frame = _prepare_screener_db_frame(top_df, scored_df)
+            gated_rows = int(stats.get("gated_rows", top_df.shape[0] if isinstance(top_df, pd.DataFrame) else 0) or 0)
+            dropped_incomplete = max(int(gated_rows) - int(insert_frame.shape[0]), 0)
             db.insert_screener_candidates(
                 run_date_value,
                 insert_frame,
                 run_ts_utc=now,
             )
-            db.prune_screener_candidates_incomplete(run_date_value)
+            pruned = db.prune_screener_candidates_incomplete(run_date_value)
+            LOGGER.info(
+                "SCREENER_DB_INGEST_SUMMARY gated_rows=%s db_ingest_rows=%s dropped_incomplete=%s pruned_post=%s",
+                gated_rows,
+                int(insert_frame.shape[0]),
+                dropped_incomplete,
+                int(pruned),
+            )
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning("[WARN] DB_WRITE_FAILED table=screener_candidates err=%s", exc)
 
@@ -6258,6 +6302,18 @@ def _prepare_screener_db_frame(
     )
     dropped = int((~required_mask).sum())
     if dropped:
+        missing_fields = {
+            "entry_price": frame["entry_price"].isna() | (frame["entry_price"] <= 0),
+            "adv20": frame["adv20"].isna() | (frame["adv20"] <= 0),
+            "atrp": frame["atrp"].isna() | (frame["atrp"] <= 0),
+            "exchange": frame["exchange"].astype("string").fillna("").str.strip().eq(""),
+        }
+        for idx, is_bad in (~required_mask).items():
+            if not bool(is_bad):
+                continue
+            reason = ",".join([name for name, mask in missing_fields.items() if bool(mask.loc[idx])])
+            symbol = str(frame.loc[idx].get("symbol", "")).upper()
+            LOGGER.warning("SCREENER_CANDIDATE_DROP reason=%s symbol=%s", reason or "unknown", symbol)
         LOGGER.warning(
             "[WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=%s remaining=%s",
             dropped,

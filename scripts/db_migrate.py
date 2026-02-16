@@ -1,5 +1,6 @@
 import argparse
 import logging
+from typing import Any
 
 from scripts import db
 from scripts.utils.env import load_env
@@ -49,6 +50,7 @@ TABLE_STATEMENTS = [
         passed_gates BOOLEAN,
         gate_fail_reason TEXT,
         ml_weight_used DOUBLE PRECISION,
+        run_ts_utc TIMESTAMPTZ DEFAULT now(),
         created_at TIMESTAMPTZ DEFAULT now(),
         PRIMARY KEY (run_date, symbol)
     );
@@ -201,6 +203,7 @@ INDEX_STATEMENTS = [
 ]
 
 SCREENER_CANDIDATES_ALTER_STATEMENTS = [
+    "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS run_ts_utc TIMESTAMPTZ;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS sma9 DOUBLE PRECISION;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS ema20 DOUBLE PRECISION;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS sma180 DOUBLE PRECISION;",
@@ -209,6 +212,12 @@ SCREENER_CANDIDATES_ALTER_STATEMENTS = [
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS gate_fail_reason TEXT;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS final_score NUMERIC;",
     "ALTER TABLE screener_candidates ADD COLUMN IF NOT EXISTS ml_weight_used DOUBLE PRECISION;",
+]
+
+SCREENER_RUN_TS_DDL = [
+    "ALTER TABLE screener_candidates ALTER COLUMN run_ts_utc SET DEFAULT now();",
+    "UPDATE screener_candidates SET run_ts_utc = created_at WHERE run_ts_utc IS NULL;",
+    "CREATE INDEX IF NOT EXISTS idx_screener_candidates_run_date_runts ON screener_candidates (run_date, run_ts_utc DESC);",
 ]
 
 RECONCILE_STATE_SEED = """
@@ -243,7 +252,47 @@ def run_upgrade(engine) -> bool:
             return False
     if not _execute_statement(engine, RECONCILE_STATE_SEED):
         return False
+    if not ensure_schema(engine):
+        return False
     return True
+
+
+def _fetch_row_count(engine, statement: str) -> int:
+    if engine is None:
+        return 0
+    with engine:
+        with engine.cursor() as cursor:
+            cursor.execute(statement)
+            row: tuple[Any, ...] | None = cursor.fetchone()
+    return int((row[0] if row else 0) or 0)
+
+
+def ensure_schema(engine=None) -> bool:
+    conn = engine or db.get_db_conn()
+    own_conn = engine is None
+    if conn is None:
+        return False
+    backfilled = 0
+    try:
+        for ddl in SCREENER_RUN_TS_DDL:
+            if "UPDATE screener_candidates" in ddl:
+                backfilled = _fetch_row_count(
+                    conn,
+                    "SELECT count(*) AS row_count FROM screener_candidates WHERE run_ts_utc IS NULL",
+                )
+            if not _execute_statement(conn, ddl):
+                return False
+        logger.info(
+            "DB_MIGRATE_OK screener_candidates.run_ts_utc_default=true backfilled=%s index_ok=true",
+            backfilled,
+        )
+        return True
+    finally:
+        if own_conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _ensure_screener_candidates_columns(cursor, columns: set[str]) -> None:

@@ -29,6 +29,9 @@ import pandas as pd
 import requests
 
 from scripts import db
+from scripts import db_migrate
+from scripts.db_queries import get_latest_screener_candidates
+from scripts.export_latest_candidates import export_latest_candidates
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.screener import write_universe_prefix_counts
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
@@ -539,15 +542,8 @@ def compose_metrics_from_artifacts(
             with_bars_required,
         )
         symbols_in_effective = with_bars_any
-    if with_bars_required > symbols_in_effective:
-        LOG.warning(
-            "[WARN] METRICS_WITH_BARS_CLAMP with_bars=%s symbols_in=%s",
-            with_bars_required,
-            symbols_in_effective,
-        )
-        with_bars_required = symbols_in_effective
-    if with_bars_any < with_bars_required:
-        with_bars_any = with_bars_required
+    with_bars_required = min(with_bars_required, max(symbols_in_effective, 0))
+    with_bars_any = min(max(with_bars_any, with_bars_required), max(symbols_in_effective, 0))
 
     bars_effective = max(int(bars_effective or 0), int(rows_final))
     payload = {
@@ -936,11 +932,15 @@ def _sync_top_candidates_to_latest(base_dir: Path | None = None) -> None:
         logger.exception("LATEST_SYNC_ERROR path_top=%s path_latest=%s", top, latest)
 
 
-def refresh_latest_candidates(base_dir: Path | None = None) -> pd.DataFrame:
+def refresh_latest_candidates(base_dir: Path | None = None, run_date: date | None = None) -> pd.DataFrame:
     if not db.db_enabled():
         logger.error("LATEST_CANDIDATES refresh skipped: DB required.")
         return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
-    frame, _ = db.fetch_latest_screener_candidates()
+    target_run_date = run_date or db.fetch_latest_run_date("screener_candidates")
+    if target_run_date is None:
+        logger.warning("LATEST_CANDIDATES DB empty; no candidates to refresh.")
+        return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
+    frame, _ = get_latest_screener_candidates(target_run_date)
     if frame.empty:
         logger.warning("LATEST_CANDIDATES DB empty; no candidates to refresh.")
         return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
@@ -2128,6 +2128,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         LOG.error("[ERROR] DB_REQUIRED: DATABASE_URL/DB_* not configured.")
         write_error_report(step="pipeline", detail="db_required")
         raise SystemExit(2)
+    if not db_migrate.ensure_schema():
+        LOG.error("[ERROR] DB_MIGRATE_FAILED")
+        raise SystemExit(2)
     if "screener" not in steps:
         LOG.error("[ERROR] SCREENER_STEP_REQUIRED steps=%s", ",".join(steps))
         write_error_report(step="screener", detail="step_missing")
@@ -2744,6 +2747,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         _PIPELINE_ENDED_AT = ended_at
         duration = time.time() - started
         ingest_artifacts_to_db(today)
+        if rc == 0 and step_rcs.get("metrics", 0) == 0:
+            try:
+                export_latest_candidates(str(pipeline_run_date), LATEST_CANDIDATES)
+            except Exception as exc:
+                LOG.warning("[WARN] LATEST_CANDIDATES_EXPORT_FAILED err=%s", exc)
         logger.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
         try:
             env = os.environ.copy()
