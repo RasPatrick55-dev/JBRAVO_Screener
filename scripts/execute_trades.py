@@ -32,6 +32,7 @@ import requests
 from scripts import db
 from scripts.db_queries import get_latest_screener_candidates
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
+from scripts.log_rotate import rotate_if_needed
 from scripts.utils.env import load_env
 from utils.alerts import send_alert
 from utils.env import (
@@ -6602,6 +6603,7 @@ def _bootstrap_env() -> list[str]:
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     global _EXECUTE_START_UTC, _EXECUTE_FINISH_UTC
+    rotate_if_needed("logs/execute_trades.log", max_bytes=10_000_000, max_age_days=14, keep=14)
     if _EXECUTE_START_UTC is None:
         _EXECUTE_START_UTC = datetime.now(timezone.utc)
     _EXECUTE_FINISH_UTC = None
