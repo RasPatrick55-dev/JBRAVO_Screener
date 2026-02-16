@@ -33,6 +33,7 @@ from scripts import db_migrate
 from scripts.db_queries import get_latest_screener_candidates
 from scripts.export_latest_candidates import export_latest_candidates
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
+from scripts.log_rotate import rotate_if_needed
 from scripts.screener import write_universe_prefix_counts
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
 from utils import write_csv_atomic, atomic_write_bytes
@@ -2115,6 +2116,7 @@ def ingest_artifacts_to_db(run_date: date) -> None:
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     _refresh_logger()
+    rotate_if_needed("logs/pipeline.log", max_bytes=10_000_000, max_age_days=14, keep=14)
     loaded_files, missing_keys = load_env(REQUIRED_ENV_KEYS)
     configure_logging()
     files_repr = f"[{', '.join(loaded_files)}]" if loaded_files else "[]"
