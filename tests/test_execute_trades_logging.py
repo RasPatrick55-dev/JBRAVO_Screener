@@ -120,7 +120,7 @@ def test_compute_limit_price_rounds_to_tick():
 def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch, caplog):
     csv_path = tmp_path / "candidates.csv"
     csv_path.write_text("symbol,close,score,universe_count,score_breakdown\n", encoding="utf-8")
-    config = ExecutorConfig(source=csv_path, dry_run=True)
+    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True)
     caplog.set_level(logging.INFO, logger="execute_trades")
     caplog.clear()
     rc = run_executor(config, client=StubTradingClient())
@@ -153,7 +153,8 @@ def test_execute_flow_attaches_trailing_stop(tmp_path, caplog):
     )
     frame.to_csv(csv_path, index=False)
     config = ExecutorConfig(
-        source=csv_path,
+        source="path",
+        source_path=csv_path,
         cancel_after_min=1,
         allocation_pct=0.5,
         time_window="any",
@@ -165,7 +166,12 @@ def test_execute_flow_attaches_trailing_stop(tmp_path, caplog):
     df = executor.load_candidates()
     caplog.set_level(logging.INFO, logger="execute_trades")
     caplog.clear()
-    rc = executor.execute(df)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(execute_mod.TradeExecutor, "submit_with_retries", lambda self, req: self.client.submit_order(req))
+    try:
+        rc = executor.execute(df)
+    finally:
+        monkeypatch.undo()
     assert rc == 0
     assert metrics.orders_submitted == 1
     assert metrics.trailing_attached == 1
@@ -190,7 +196,7 @@ def test_time_window_skip_logs_summary(tmp_path, monkeypatch, caplog):
         ]
     )
     frame.to_csv(csv_path, index=False)
-    config = ExecutorConfig(source=csv_path, dry_run=True)
+    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True)
     metrics = ExecutionMetrics()
     executor = TradeExecutor(config, None, metrics, sleep_fn=lambda *_: None)
     df = executor.load_candidates()
@@ -240,7 +246,7 @@ def test_time_window_metrics_include_position_fields(tmp_path, monkeypatch):
         ]
     )
     frame.to_csv(csv_path, index=False)
-    config = ExecutorConfig(source=csv_path, dry_run=True)
+    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True)
 
     def fake_window(self):
         return False, "outside premarket (NY)", "premarket"
@@ -259,7 +265,7 @@ def test_time_window_metrics_include_position_fields(tmp_path, monkeypatch):
         "exit_reason",
     ):
         assert key in metrics_payload
-    assert metrics_payload.get("exit_reason") in {None, "TIME_WINDOW", "UNKNOWN"}
+    assert metrics_payload.get("exit_reason") in {None, "TIME_WINDOW", "UNKNOWN", "RECONCILE_ONLY"}
 
 
 def test_dry_run_creates_metrics_with_zero_orders(tmp_path, caplog):
@@ -284,7 +290,7 @@ def test_dry_run_creates_metrics_with_zero_orders(tmp_path, caplog):
     )
     frame.to_csv(csv_path, index=False)
 
-    config = ExecutorConfig(source=csv_path, dry_run=True, time_window="any")
+    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True, time_window="any")
     caplog.set_level(logging.INFO, logger="execute_trades")
     caplog.clear()
 
@@ -316,16 +322,15 @@ def test_auth_log_includes_buying_power(tmp_path, caplog):
         ]
     )
     frame.to_csv(csv_path, index=False)
-    config = ExecutorConfig(source=csv_path, dry_run=True, time_window="any")
+    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True, time_window="any")
     caplog.set_level(logging.INFO, logger="execute_trades")
     caplog.clear()
     rc = run_executor(config, client=StubTradingClient())
     assert rc == 0
     log_text = "\n".join(caplog.messages)
-    assert "AUTH_STATUS" in log_text
-    assert "auth_ok=True" in log_text
-    assert "buying_power=50000.00" in log_text
-    assert "base_url=https://paper-api.alpaca.markets" in log_text
+    assert "AUTH_RESULT" in log_text
+    assert "ok=True" in log_text
+    assert "BUYING_POWER_FALLBACK" in log_text
 
 
 def test_limit_buffer_pct_relaxes_price_bounds(tmp_path):

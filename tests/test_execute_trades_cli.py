@@ -84,9 +84,11 @@ def test_run_executor_returns_zero_when_all_filtered(tmp_path: Path, monkeypatch
     ).to_csv(csv_path, index=False)
 
     config = execute_trades.ExecutorConfig(
-        source=csv_path,
+        source="path",
+        source_path=csv_path,
         min_adv20=200_000,
         log_json=True,
+        dry_run=True,
     )
 
     monkeypatch.setenv("APCA_API_KEY_ID", "PKTEST")
@@ -95,5 +97,5 @@ def test_run_executor_returns_zero_when_all_filtered(tmp_path: Path, monkeypatch
     monkeypatch.setattr(execute_trades, "_fetch_latest_daily_bars", lambda symbols: {})
     monkeypatch.setattr(execute_trades, "_fetch_latest_close_from_alpaca", lambda symbol: None)
 
-    exit_code = execute_trades.run_executor(config)
+    exit_code = execute_trades.run_executor(config, client=type("Client", (), {"get_all_positions": lambda self: [], "get_orders": lambda self, req: [], "get_account": lambda self: type("A", (), {"buying_power": "50000"})()})())
     assert exit_code == 0

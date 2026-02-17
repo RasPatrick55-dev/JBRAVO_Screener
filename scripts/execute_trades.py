@@ -2098,7 +2098,8 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
 
 @dataclass
 class ExecutorConfig:
-    source_path: Path = Path("data/latest_candidates.csv")
+    source: str = "db"
+    source_path: Optional[Path] = None
     source_type: str = "db"
     allocation_pct: float = 0.05
     alloc_weight_key: str = "score"
@@ -2145,6 +2146,18 @@ class ExecutorConfig:
     reconcile_limit: int = 500
     reconcile_use_watermark: bool = True
     reconcile_overlap_secs: int = 300
+
+    def __post_init__(self) -> None:
+        selected_source = self.source or self.source_type or "db"
+        normalized_source = str(selected_source).strip().lower()
+        if normalized_source == "csv":
+            normalized_source = "path"
+        if normalized_source not in {"db", "path"}:
+            normalized_source = "db"
+        self.source = normalized_source
+        self.source_type = normalized_source
+        if self.source_path is not None and not isinstance(self.source_path, Path):
+            self.source_path = Path(self.source_path)
 
 
 @dataclass
@@ -3602,14 +3615,27 @@ class TradeExecutor:
         return df, run_label
 
     def load_candidates(self, *, rank: bool = True) -> pd.DataFrame:
-        source_type = (self.config.source_type or "db").strip().lower()
-        LOGGER.info("[INFO] CANDIDATE_SOURCE db")
+        source_type = (self.config.source or self.config.source_type or "db").strip().lower()
+        LOGGER.info("[INFO] CANDIDATE_SOURCE %s", source_type)
         df: pd.DataFrame
         base_dir: Path | None = None
-        if source_type != "db":
+        if source_type == "db":
+            df, _ = self._load_latest_candidates_from_db()
+            base_dir = Path.cwd()
+        elif source_type == "path":
+            if self.config.source_path is None:
+                raise CandidateLoadError("Candidate source path is required for source=path")
+            source_path = Path(self.config.source_path)
+            if not source_path.exists():
+                raise CandidateLoadError(f"Candidate source file not found: {source_path}")
+            try:
+                df = pd.read_csv(source_path)
+            except Exception as exc:
+                raise CandidateLoadError(f"Failed to load candidate source file: {source_path}") from exc
+            base_dir = source_path
+            LOGGER.info("[INFO] FILE_CANDIDATES path=%s rows=%s", source_path, len(df))
+        else:
             raise CandidateLoadError(f"Candidate source disabled: {source_type}")
-        df, _ = self._load_latest_candidates_from_db()
-        base_dir = Path.cwd()
         raw_columns = list(df.columns)
         LOGGER.info("[INFO] CANDIDATE_COLUMNS raw=%s", raw_columns)
         normalized_columns = [str(column).strip() for column in raw_columns]
@@ -5897,15 +5923,15 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Execute trades for pipeline candidates")
     parser.add_argument(
         "--source",
-        choices=("db",),
-        default=ExecutorConfig.source_type,
-        help="Candidate source: db (PostgreSQL only)",
+        choices=("db", "path"),
+        default=ExecutorConfig.source,
+        help="Candidate source: db (latest run in PostgreSQL) or path (CSV file)",
     )
     parser.add_argument(
         "--source-path",
         type=Path,
         default=ExecutorConfig.source_path,
-        help="Unused (CSV sources disabled)",
+        help="Path to candidates CSV when --source path",
     )
     parser.add_argument(
         "--allocation-pct",
@@ -6172,12 +6198,21 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default=ExecutorConfig.market_timezone,
         help="IANA timezone name used for market window evaluation",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.source == "path":
+        if args.source_path is None:
+            parser.error("--source-path is required when --source path")
+        if not args.source_path.exists():
+            parser.error(f"--source-path not found: {args.source_path}")
+    elif args.source == "db" and args.source_path is not None:
+        print("[WARN] --source-path ignored when --source db", file=sys.stderr)
+    return args
 
 
 def build_config(args: argparse.Namespace) -> ExecutorConfig:
     market_timezone = args.market_timezone or ExecutorConfig.market_timezone
     return ExecutorConfig(
+        source=(args.source or "db").lower(),
         source_path=args.source_path,
         source_type=(args.source or "db").lower(),
         allocation_pct=args.allocation_pct,
@@ -6606,7 +6641,7 @@ def run_executor(
 
 
 def load_candidates(path: Path) -> pd.DataFrame:
-    config = ExecutorConfig(source_path=path, source_type="db")
+    config = ExecutorConfig(source="path", source_path=path, source_type="path")
     metrics = ExecutionMetrics()
     executor = TradeExecutor(config, None, metrics)
     return executor.load_candidates()
