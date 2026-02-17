@@ -358,3 +358,106 @@ def test_limit_buffer_pct_relaxes_price_bounds(tmp_path):
     strict_executor = TradeExecutor(strict_config, None, ExecutionMetrics(), sleep_fn=lambda *_: None)
     denied = strict_executor.guard_candidates([record])
     assert not denied, "without buffer the same candidate should be skipped"
+
+
+def _mock_orders_response(orders):
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return orders
+
+        def raise_for_status(self):
+            return None
+
+    return _Resp()
+
+
+class StubNoFillTradingClient(StubTradingClient):
+    def get_order_by_id(self, order_id: str):
+        for order in self.submitted_orders:
+            if order.id == order_id:
+                order.status = "accepted"
+                order.filled_qty = 0
+                return order
+        raise KeyError(order_id)
+
+
+def test_exec_plan_runs_and_submits(tmp_path, monkeypatch):
+    rows = [
+        {"symbol": f"S{i:02d}", "close": 25.0 + i, "score": 100 - i, "universe_count": 100, "score_breakdown": "{}"}
+        for i in range(12)
+    ]
+    csv_path = tmp_path / "candidates.csv"
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(execute_mod, "alpaca_http_get", lambda *args, **kwargs: _mock_orders_response([
+        {"symbol": "OLD1", "type": "trailing_stop", "side": "sell", "position_intent": "sell_to_close"}
+    ]))
+    monkeypatch.setattr(execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, states, **kwargs: None)
+    monkeypatch.setattr(execute_mod.TradeExecutor, "submit_with_retries", lambda self, req: self.client.submit_order(req))
+
+    config = ExecutorConfig(time_window="any", max_new_positions=4, max_positions=1)
+    client = StubNoFillTradingClient()
+    metrics = ExecutionMetrics()
+    executor = TradeExecutor(config, client, metrics, sleep_fn=lambda *_: None)
+
+    rc = executor.execute(pd.DataFrame(rows))
+    assert rc == 0
+    assert len(client.submitted_orders) == 4
+
+
+def test_open_trailing_stop_does_not_block(tmp_path, monkeypatch):
+    csv_path = tmp_path / "candidates.csv"
+    pd.DataFrame(
+        [
+            {"symbol": "AAA", "close": 50.0, "score": 5.0, "universe_count": 10, "score_breakdown": "{}"},
+            {"symbol": "BBB", "close": 45.0, "score": 4.0, "universe_count": 10, "score_breakdown": "{}"},
+        ]
+    ).to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(execute_mod, "alpaca_http_get", lambda *args, **kwargs: _mock_orders_response([
+        {"symbol": "ZZZ", "type": "trailing_stop", "side": "buy", "position_intent": "buy_to_close"},
+        {"symbol": "YYY", "type": "trailing_stop", "side": "sell", "position_intent": "sell_to_close"},
+    ]))
+    monkeypatch.setattr(execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, states, **kwargs: None)
+    monkeypatch.setattr(execute_mod.TradeExecutor, "submit_with_retries", lambda self, req: self.client.submit_order(req))
+
+    config = ExecutorConfig(time_window="any", max_new_positions=2)
+    client = StubNoFillTradingClient()
+    metrics = ExecutionMetrics()
+    executor = TradeExecutor(config, client, metrics, sleep_fn=lambda *_: None)
+
+    rc = executor.execute(pd.read_csv(csv_path))
+    assert rc == 0
+    assert len(client.submitted_orders) == 2
+
+
+def test_no_submissions_sets_reason(tmp_path, monkeypatch):
+    csv_path = tmp_path / "candidates.csv"
+    pd.DataFrame(
+        [
+            {"symbol": "AAA", "close": 50.0, "score": 5.0, "universe_count": 10, "score_breakdown": "{}"},
+            {"symbol": "BBB", "close": 45.0, "score": 4.0, "universe_count": 10, "score_breakdown": "{}"},
+        ]
+    ).to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(execute_mod, "alpaca_http_get", lambda *args, **kwargs: _mock_orders_response([
+        {"symbol": "AAA", "type": "limit", "side": "buy", "position_intent": "buy_to_open"},
+        {"symbol": "BBB", "type": "limit", "side": "buy", "position_intent": "buy_to_open"},
+    ]))
+
+    monkeypatch.setattr(execute_mod.TradeExecutor, "submit_with_retries", lambda self, req: self.client.submit_order(req))
+
+    config = ExecutorConfig(time_window="any", max_new_positions=2)
+    client = StubNoFillTradingClient()
+    metrics = ExecutionMetrics()
+    executor = TradeExecutor(config, client, metrics, sleep_fn=lambda *_: None)
+
+    rc = executor.execute(pd.read_csv(csv_path))
+    assert rc == 0
+
+    metrics_payload = json.loads(execute_mod.METRICS_PATH.read_text(encoding="utf-8"))
+    assert metrics_payload.get("status") == "skipped"
+    skips = metrics_payload.get("skips", {})
+    assert skips.get("OPEN_ORDER", 0) > 0 or skips.get("NO_SUBMISSIONS", 0) > 0
