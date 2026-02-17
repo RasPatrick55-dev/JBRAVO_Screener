@@ -466,3 +466,41 @@ def test_no_submissions_sets_reason(tmp_path, monkeypatch):
     assert metrics_payload.get("status") == "skipped"
     skips = metrics_payload.get("skips", {})
     assert skips.get("OPEN_ORDER", 0) > 0 or skips.get("NO_SUBMISSIONS", 0) > 0
+
+
+@pytest.mark.parametrize("source_mode", ["path", "db"])
+def test_submit_loop_start_and_four_submissions(source_mode, tmp_path, monkeypatch, caplog):
+    rows = [
+        {"symbol": f"P{i}", "close": 20.0 + i, "score": 10 - i, "universe_count": 100, "score_breakdown": "{}"}
+        for i in range(4)
+    ]
+
+    config_kwargs = {"source": source_mode, "source_type": source_mode, "time_window": "any", "max_new_positions": 4}
+    if source_mode == "path":
+        csv_path = tmp_path / "planned_candidates.csv"
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        config_kwargs["source_path"] = csv_path
+    else:
+        monkeypatch.setattr(execute_mod, "load_candidates_from_db", lambda **kwargs: pd.DataFrame(rows))
+
+    monkeypatch.setattr(execute_mod, "alpaca_http_get", lambda *args, **kwargs: _mock_orders_response([]))
+    monkeypatch.setattr(execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, states, **kwargs: None)
+    monkeypatch.setattr(
+        execute_mod.TradeExecutor,
+        "submit_with_retries",
+        lambda self, req: self.client.submit_order(req),
+    )
+
+    metrics = ExecutionMetrics()
+    client = StubNoFillTradingClient()
+    executor = TradeExecutor(ExecutorConfig(**config_kwargs), client, metrics, sleep_fn=lambda *_: None)
+
+    df = executor.load_candidates(rank=False)
+    filtered = executor.guard_candidates(executor.hydrate_candidates(df))
+    caplog.set_level(logging.INFO, logger="execute_trades")
+    caplog.clear()
+
+    rc = executor.execute(df, prefiltered=filtered)
+    assert rc == 0
+    assert any(message.startswith("SUBMIT_LOOP_START planned=4") for message in caplog.messages)
+    assert len(client.submitted_orders) == 4
