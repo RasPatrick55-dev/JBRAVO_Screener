@@ -22,6 +22,13 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
     StopOrderRequest,
 )
+try:
+    from alpaca.common.exceptions import APIError
+except Exception:  # pragma: no cover - fallback for older SDKs
+    class APIError(Exception):
+        """Fallback API error type when Alpaca SDK exception is unavailable."""
+
+        pass
 
 # Support both ``python -m scripts.monitor_positions`` (preferred) and direct invocation.
 if __package__ in {None, ""}:
@@ -2368,6 +2375,8 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
         _persist_metrics()
         return 0, 0.0, 0
 
+    open_orders = cleanup_orphan_trailing_stops(positions, open_orders)
+
     orders_by_symbol: dict[str, list] = {}
     trailing_stops_count = 0
     protective_open_orders = []
@@ -2449,6 +2458,143 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
     MONITOR_METRICS["stop_coverage_pct"] = float(coverage_pct)
     _persist_metrics()
     return protective_orders_count, float(coverage_pct), trailing_stops_count
+
+
+def cleanup_orphan_trailing_stops(positions: list, open_orders: list) -> list:
+    """Cancel orphan trailing stops (symbol no longer present in active positions)."""
+    if not env_bool("ORPHAN_TRAIL_CANCEL", default=True):
+        return open_orders
+
+    dry_run = env_bool("ORPHAN_TRAIL_DRY_RUN", default=False)
+    active_symbols = {
+        str(getattr(position, "symbol", "") or "")
+        for position in (positions or [])
+        if str(getattr(position, "symbol", "") or "")
+    }
+    trailing_stops = [
+        order
+        for order in (open_orders or [])
+        if order_attr_str(order, ("order_type", "type")) == "trailing_stop"
+    ]
+    orphan_trailing = [
+        order
+        for order in trailing_stops
+        if str(getattr(order, "symbol", "") or "") not in active_symbols
+    ]
+
+    logger.info(
+        "ORPHAN_TRAIL_CHECK active_positions=%s open_orders=%s trailing_stops=%s orphan_trailing=%s",
+        len(active_symbols),
+        len(open_orders or []),
+        len(trailing_stops),
+        len(orphan_trailing),
+    )
+
+    canceled = 0
+    failed = 0
+    canceled_ids: set[str] = set()
+    for order in orphan_trailing:
+        order_id = str(getattr(order, "id", "") or "")
+        symbol = str(getattr(order, "symbol", "") or "")
+        side = order_attr_str(order, ("side",))
+        qty = getattr(order, "qty", None)
+        trail_percent = getattr(order, "trail_percent", None)
+        if not order_id:
+            failed += 1
+            logger.warning(
+                "ORPHAN_TRAIL_CANCEL symbol=%s order_id=%s side=%s qty=%s trail_percent=%s rc=%s",
+                symbol,
+                order_id,
+                side,
+                qty,
+                trail_percent,
+                "missing_id",
+            )
+            continue
+
+        if dry_run:
+            canceled += 1
+            canceled_ids.add(order_id)
+            logger.info(
+                "ORPHAN_TRAIL_CANCEL symbol=%s order_id=%s side=%s qty=%s trail_percent=%s rc=%s",
+                symbol,
+                order_id,
+                side,
+                qty,
+                trail_percent,
+                "dry_run",
+            )
+            continue
+
+        rc = 204
+        try:
+            trading_client.cancel_order_by_id(order_id)
+            canceled += 1
+            canceled_ids.add(order_id)
+        except APIError as exc:
+            rc = int(getattr(exc, "status_code", 0) or 0)
+            if rc == 422:
+                logger.warning(
+                    "ORPHAN_TRAIL_CANCEL symbol=%s order_id=%s side=%s qty=%s trail_percent=%s rc=%s",
+                    symbol,
+                    order_id,
+                    side,
+                    qty,
+                    trail_percent,
+                    rc,
+                )
+                continue
+            failed += 1
+            logger.error(
+                "ORPHAN_TRAIL_CANCEL symbol=%s order_id=%s side=%s qty=%s trail_percent=%s rc=%s",
+                symbol,
+                order_id,
+                side,
+                qty,
+                trail_percent,
+                rc or "api_error",
+            )
+            continue
+        except Exception as exc:
+            failed += 1
+            rc = getattr(exc, "status_code", None) or getattr(
+                getattr(exc, "response", None), "status_code", None
+            )
+            logger.error(
+                "ORPHAN_TRAIL_CANCEL symbol=%s order_id=%s side=%s qty=%s trail_percent=%s rc=%s",
+                symbol,
+                order_id,
+                side,
+                qty,
+                trail_percent,
+                rc or "error",
+            )
+            continue
+
+        logger.info(
+            "ORPHAN_TRAIL_CANCEL symbol=%s order_id=%s side=%s qty=%s trail_percent=%s rc=%s",
+            symbol,
+            order_id,
+            side,
+            qty,
+            trail_percent,
+            rc,
+        )
+
+    logger.info(
+        "ORPHAN_TRAIL_CANCEL_SUMMARY canceled=%s failed=%s dry_run=%s",
+        canceled,
+        failed,
+        dry_run,
+    )
+
+    if not canceled_ids:
+        return open_orders
+    return [
+        order
+        for order in (open_orders or [])
+        if str(getattr(order, "id", "") or "") not in canceled_ids
+    ]
 
 
 def has_pending_sell_order(symbol):
