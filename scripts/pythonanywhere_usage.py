@@ -141,25 +141,43 @@ def directory_size_bytes(path: Path) -> Optional[int]:
         return total
 
 
-def pythonanywhere_quota_bytes() -> Optional[int]:
+def get_file_storage_used_bytes() -> int:
     try:
         output = subprocess.check_output(
             [
                 "bash",
                 "-lc",
-                "du -s -B 1 /tmp ~/.[!.]* ~/* 2>/dev/null | awk '{s+=$1}END{print s}'",
+                "paths=(/tmp \"$HOME\"/.[!.]* \"$HOME\"/*); "
+                "[[ -d /var/www ]] && paths+=(/var/www); "
+                "du -s -B1 \"${paths[@]}\" 2>/dev/null | awk '{sum+=$1} END{print sum+0}'",
             ],
             text=True,
         )
-        value = output.strip()
-        return int(value) if value.isdigit() else None
+        return int(output.strip() or "0")
     except Exception:
-        return None
+        return 0
+
+
+def pythonanywhere_file_quota_bytes() -> int:
+    try:
+        quota_gb = float(os.getenv("PYTHONANYWHERE_DISK_QUOTA_GB", "10"))
+    except (TypeError, ValueError):
+        quota_gb = 10.0
+    if quota_gb <= 0:
+        quota_gb = 10.0
+    return int(quota_gb * (1024**3))
+
+
+def pythonanywhere_file_storage_percent(used_bytes: int, quota_bytes: int) -> int:
+    if quota_bytes <= 0:
+        return 0
+    percent = round(100 * used_bytes / quota_bytes)
+    return max(0, min(100, percent))
 
 
 def storage_used_bytes(storage_path: Path, mode: str) -> Optional[int]:
     if mode == "pythonanywhere":
-        return pythonanywhere_quota_bytes() or directory_size_bytes(storage_path)
+        return get_file_storage_used_bytes()
     return directory_size_bytes(storage_path)
 
 
@@ -215,11 +233,17 @@ def build_payload(
 ) -> dict:
     cpu_payload = pythonanywhere_cpu_usage()
     used_bytes = storage_used_bytes(storage_path, storage_mode)
-    limit_bytes = parse_size_to_bytes(storage_limit)
-    storage_percent = percent_used(
-        float(used_bytes) if used_bytes is not None else None,
-        float(limit_bytes) if limit_bytes is not None else None,
-    )
+    if storage_mode == "pythonanywhere":
+        quota_bytes = pythonanywhere_file_quota_bytes()
+        used = int(used_bytes or 0)
+        storage_percent = pythonanywhere_file_storage_percent(used, quota_bytes)
+        limit_bytes = quota_bytes
+    else:
+        limit_bytes = parse_size_to_bytes(storage_limit)
+        storage_percent = percent_used(
+            float(used_bytes) if used_bytes is not None else None,
+            float(limit_bytes) if limit_bytes is not None else None,
+        )
 
     pg_used_bytes = postgres_size_bytes(postgres_mode)
     pg_limit_bytes = parse_size_to_bytes(postgres_limit)
@@ -234,7 +258,11 @@ def build_payload(
         "file_storage": {
             "used_bytes": used_bytes,
             "limit_bytes": limit_bytes,
-            "percent": round(storage_percent, 2) if storage_percent is not None else None,
+            "percent": round(storage_percent, 2) if isinstance(storage_percent, float) else storage_percent,
+            "file_used_bytes": int(used_bytes or 0),
+            "file_quota_bytes": int(limit_bytes or 0),
+            "file_storage_percent": int(storage_percent or 0),
+            "file_used_gb": round((int(used_bytes or 0) / (1024**3)), 1),
             "path": str(storage_path),
             "mode": storage_mode,
         },
