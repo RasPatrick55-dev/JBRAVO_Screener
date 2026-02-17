@@ -5922,6 +5922,18 @@ def _ensure_trading_auth(
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+    def _str2bool(value: str) -> bool:
+        normalized = str(value).strip().lower()
+        truthy = {"1", "true", "yes", "y"}
+        falsy = {"0", "false", "no", "n"}
+        if normalized in truthy:
+            return True
+        if normalized in falsy:
+            return False
+        raise argparse.ArgumentTypeError(
+            f"Invalid boolean value '{value}'. Use one of: true,false,1,0,yes,no"
+        )
+
     parser = argparse.ArgumentParser(description="Execute trades for pipeline candidates")
     parser.add_argument(
         "--source",
@@ -6153,9 +6165,17 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--reconcile-only",
-        type=lambda s: s.lower() in {"1", "true", "yes", "y"},
-        default=ExecutorConfig.reconcile_only,
+        nargs="?",
+        const=True,
+        type=_str2bool,
+        default=False,
         help="Run reconciliation of closed trades and exit without placing new orders",
+    )
+    parser.add_argument(
+        "--no-reconcile-only",
+        action="store_false",
+        dest="reconcile_only",
+        help="Disable reconcile-only mode and continue to order submission",
     )
     parser.add_argument(
         "--reconcile-auto",
@@ -6256,7 +6276,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         chase_enabled=args.chase_enabled,
         diagnostic=bool(getattr(args, "diagnostic", False)),
         reconcile_auto=bool(getattr(args, "reconcile_auto", True)),
-        reconcile_only=bool(getattr(args, "reconcile_only", False)),
+        reconcile_only=getattr(args, "reconcile_only", False),
         reconcile_lookback_days=int(
             getattr(args, "reconcile_lookback_days", ExecutorConfig.reconcile_lookback_days)
         ),
@@ -6523,13 +6543,7 @@ def run_executor(
             submit_at_ny=str(config.submit_at_ny or ""),
         )
 
-        reconcile_exit_mode = bool(
-            getattr(config, "reconcile_only", False)
-            or (
-                getattr(config, "reconcile_auto", True)
-                and str(configured_window).lower() != "any"
-            )
-        )
+        reconcile_exit_mode = bool(getattr(config, "reconcile_only", False))
 
         account_payload: Optional[Mapping[str, Any]] = None
         clock_payload: Optional[Mapping[str, Any]] = None
@@ -6597,6 +6611,8 @@ def run_executor(
         executor._ranking_key = loader._ranking_key
 
         if reconcile_exit_mode:
+            metrics.status = "skipped"
+            metrics.record_skip("RECONCILE_ONLY", count=1)
             metrics.exit_reason = "RECONCILE_ONLY"
             executor.reconcile_closed_trades()
             executor.persist_metrics()
