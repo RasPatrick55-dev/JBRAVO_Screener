@@ -4045,11 +4045,11 @@ class TradeExecutor:
         )
         planned = candidates[: max(0, daily_slots_remaining)]
         planned_symbols = [str(record.get("symbol", "")).upper() for record in planned if str(record.get("symbol", "")).strip()]
-        self.log_info(
-            "EXEC_PLAN",
-            picked=len(candidates),
-            planned=len(planned),
-            symbols=planned_symbols,
+        LOGGER.info(
+            "EXEC_PLAN picked=%d planned=%d symbols=%s",
+            len(candidates),
+            len(planned),
+            planned_symbols,
         )
         if not planned:
             self.metrics.exit_reason = "NO_ACTIONABLE"
@@ -4124,10 +4124,12 @@ class TradeExecutor:
 
         prepared_orders: list[PreparedOrder] = []
         submitted_count = 0
+        LOGGER.info("SUBMIT_LOOP_START planned=%d symbols=%s", len(planned), planned_symbols)
         for record in planned:
             if submitted_count >= daily_slots_remaining:
                 break
             symbol = record.get("symbol", "").upper()
+            LOGGER.info("EVAL symbol=%s", symbol)
             if not symbol:
                 continue
             if symbol in open_order_symbols:
