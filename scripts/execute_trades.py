@@ -896,6 +896,8 @@ SKIP_REASON_ORDER: tuple[str, ...] = (
     "EXISTING_POSITION",
     "OPEN_ORDER",
     "NO_CANDIDATES",
+    "NO_ACTIONABLE",
+    "NO_SUBMISSIONS",
 )
 SKIP_REASON_KEYS = set(SKIP_REASON_ORDER)
 IMPORT_SENTINEL_ENV = "JBRAVO_IMPORT_SENTINEL"
@@ -2102,6 +2104,7 @@ class ExecutorConfig:
     alloc_weight_key: str = "score"
     max_positions: int = 7
     max_new_positions: int = 7
+    disable_open_position_cap: bool = True
     entry_buffer_bps: int = 75
     limit_buffer_pct: float = 0.5
     max_gap_pct: float = _env_float("MAX_GAP_PCT", 3.0)
@@ -3257,7 +3260,7 @@ class TradeExecutor:
         aliases: Optional[Sequence[str]] = None,
     ) -> None:
         reason_key = reason.upper()
-        parts = [f"[INFO] {reason_key}"]
+        parts = [f"SKIP_{reason_key}"]
         if symbol:
             parts.append(f"symbol={symbol}")
         if detail:
@@ -3955,7 +3958,7 @@ class TradeExecutor:
         self.metrics.open_orders = open_order_total
         account_buying_power = self.fetch_buying_power()
         try:
-            max_daily_entries = int(self.config.max_positions)
+            max_daily_entries = int(self.config.max_new_positions)
         except (TypeError, ValueError):
             max_daily_entries = 0
         max_daily_entries = max(1, max_daily_entries)
@@ -3981,6 +3984,7 @@ class TradeExecutor:
         )
         if not candidates:
             self.metrics.exit_reason = "NO_CANDIDATES"
+            self.metrics.status = "skipped"
             self.metrics.record_skip("NO_CANDIDATES", count=max(1, len(df)))
             LOGGER.info("No candidates passed guardrails; nothing to do.")
             self.persist_metrics()
@@ -3995,6 +3999,7 @@ class TradeExecutor:
             )
             self.record_skip_reason("DAILY_ENTRY_LIMIT", count=max(1, len(candidates)))
             self.metrics.exit_reason = "DAILY_ENTRY_LIMIT"
+            self.metrics.status = "skipped"
             self.persist_metrics()
             self._log_diagnostic_snapshot()
             self.log_summary()
@@ -4012,6 +4017,22 @@ class TradeExecutor:
             base_alloc_pct=allocation_pct,
             source_df=weighted_df,
         )
+        planned = candidates[: max(0, daily_slots_remaining)]
+        planned_symbols = [str(record.get("symbol", "")).upper() for record in planned if str(record.get("symbol", "")).strip()]
+        self.log_info(
+            "EXEC_PLAN",
+            picked=len(candidates),
+            planned=len(planned),
+            symbols=planned_symbols,
+        )
+        if not planned:
+            self.metrics.exit_reason = "NO_ACTIONABLE"
+            self.metrics.status = "skipped"
+            self.record_skip_reason("NO_ACTIONABLE", count=1)
+            self.persist_metrics()
+            self._log_diagnostic_snapshot()
+            self.log_summary()
+            return 0
 
         weight_map: dict[str, float] = {}
         weight_mode = False
@@ -4035,6 +4056,7 @@ class TradeExecutor:
         if not allowed:
             self.record_skip_reason("TIME_WINDOW", detail=status, count=len(candidates))
             self.metrics.exit_reason = "TIME_WINDOW"
+            self.metrics.status = "skipped"
             self.persist_metrics()
             self._log_diagnostic_snapshot()
             self.log_summary()
@@ -4055,6 +4077,7 @@ class TradeExecutor:
                 count=max(1, len(candidates)),
             )
             self.metrics.exit_reason = "CASH"
+            self.metrics.status = "skipped"
             self.persist_metrics()
             self._log_diagnostic_snapshot()
             self.log_summary()
@@ -4075,7 +4098,7 @@ class TradeExecutor:
 
         prepared_orders: list[PreparedOrder] = []
         submitted_count = 0
-        for record in candidates:
+        for record in planned:
             if submitted_count >= daily_slots_remaining:
                 break
             symbol = record.get("symbol", "").upper()
@@ -4429,6 +4452,12 @@ class TradeExecutor:
             if submitted_states:
                 self.poll_submitted_orders(submitted_states, preferred_feed=preferred_feed)
 
+        if self.metrics.orders_submitted == 0:
+            skip_total = sum(int(v) for v in self.metrics.skipped_reasons.values())
+            if skip_total <= 0:
+                self.record_skip_reason("NO_SUBMISSIONS", count=1)
+            self.metrics.status = "skipped"
+
         if not self.metrics.exit_reason or self.metrics.exit_reason == "UNKNOWN":
             if self.metrics.orders_submitted > 0:
                 self.metrics.exit_reason = "EXECUTED"
@@ -4502,12 +4531,19 @@ class TradeExecutor:
             orders = payload if isinstance(payload, list) else []
             for order in orders:
                 total_orders += 1
-                symbol = order.get("symbol", "")
-                if symbol:
-                    symbols.add(str(symbol).upper())
-                side = order.get("side", "")
-                if str(side).lower() == "buy":
+                side = str(order.get("side", "")).lower()
+                order_type = str(order.get("type", "")).lower()
+                position_intent = str(order.get("position_intent", "")).lower()
+                symbol = str(order.get("symbol", "") or "").upper()
+                is_protective_close = (
+                    order_type == "trailing_stop"
+                    and position_intent in {"buy_to_close", "sell_to_close"}
+                )
+                if side == "buy":
                     open_buy_orders += 1
+                is_entry_order = side == "buy" and not is_protective_close
+                if symbol and is_entry_order:
+                    symbols.add(symbol)
         except requests.HTTPError as exc:
             resp = getattr(exc, "response", None)
             status = getattr(resp, "status_code", "ERR")
@@ -5899,7 +5935,13 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--max-new-positions",
         type=int,
         default=ExecutorConfig.max_new_positions,
-        help="Deprecated (daily entry limit uses --max-positions)",
+        help="Maximum number of new entry attempts per run",
+    )
+    parser.add_argument(
+        "--disable-open-position-cap",
+        action=argparse.BooleanOptionalAction,
+        default=ExecutorConfig.disable_open_position_cap,
+        help="Disable open-position count caps as an execution blocker",
     )
     parser.add_argument(
         "--entry-buffer-bps",
@@ -6142,6 +6184,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         alloc_weight_key=args.alloc_weight_key,
         max_positions=args.max_positions,
         max_new_positions=args.max_new_positions,
+        disable_open_position_cap=bool(args.disable_open_position_cap),
         entry_buffer_bps=args.entry_buffer_bps,
         trailing_percent=args.trailing_percent,
         limit_buffer_pct=args.limit_buffer_pct,
