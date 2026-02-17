@@ -229,7 +229,9 @@ def _pythonanywhere_postgres_usage() -> Optional[dict[str, Any]]:
     if snapshot:
         storage = snapshot.get("postgres_storage") or snapshot.get("postgres")
         if isinstance(storage, dict):
-            percent = _to_float(storage.get("percent"))
+            percent = _to_float(storage.get("pg_storage_percent"))
+            if percent is None:
+                percent = _to_float(storage.get("percent"))
             used_bytes = _to_float(storage.get("used_bytes") or storage.get("used"))
             limit_bytes = _to_float(storage.get("limit_bytes") or storage.get("limit"))
             if percent is None:
