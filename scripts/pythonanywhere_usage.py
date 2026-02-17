@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -166,6 +167,35 @@ def pythonanywhere_file_quota_bytes() -> int:
     return int(quota_gb * (1024**3))
 
 
+def pythonanywhere_postgres_quota_gb() -> float:
+    try:
+        quota_gb = float(os.getenv("PYTHONANYWHERE_POSTGRES_QUOTA_GB", "10"))
+    except (TypeError, ValueError):
+        quota_gb = 10.0
+    if quota_gb <= 0:
+        quota_gb = 10.0
+    return quota_gb
+
+
+def pythonanywhere_postgres_quota_bytes() -> int:
+    override = os.getenv("PYTHONANYWHERE_POSTGRES_QUOTA_BYTES")
+    if override is not None:
+        try:
+            quota_bytes = int(override)
+            if quota_bytes > 0:
+                return quota_bytes
+        except (TypeError, ValueError):
+            pass
+    return int(pythonanywhere_postgres_quota_gb() * (1024**3))
+
+
+def pythonanywhere_postgres_storage_percent(used_bytes: int, quota_bytes: int) -> int:
+    if quota_bytes <= 0:
+        return 0
+    percent = math.floor(100 * used_bytes / quota_bytes)
+    return max(0, min(100, percent))
+
+
 def pythonanywhere_file_storage_percent(used_bytes: int, quota_bytes: int) -> int:
     if quota_bytes <= 0:
         return 0
@@ -222,6 +252,33 @@ def postgres_size_bytes(mode: str = "database") -> Optional[int]:
             pass
 
 
+def get_pg_used_bytes_and_pretty(database_url: Optional[str]) -> tuple[int, str]:
+    if db is None:
+        raise RuntimeError("DB module unavailable")
+    if database_url:
+        os.environ["DATABASE_URL"] = database_url
+    conn = db.get_db_conn()
+    if conn is None:
+        raise RuntimeError("Could not connect to Postgres")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT pg_database_size(current_database()) AS used_bytes,
+                       pg_size_pretty(pg_database_size(current_database())) AS used_pretty
+                """
+            )
+            row = cursor.fetchone()
+            if not row or row[0] is None:
+                raise RuntimeError("Postgres size query returned no data")
+            return int(row[0]), str(row[1] or "")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def build_payload(
     storage_path: Path,
     storage_limit: Optional[str],
@@ -243,11 +300,20 @@ def build_payload(
             float(limit_bytes) if limit_bytes is not None else None,
         )
 
-    pg_used_bytes = postgres_size_bytes(postgres_mode)
-    pg_limit_bytes = parse_size_to_bytes(postgres_limit)
-    pg_percent = percent_used(
-        float(pg_used_bytes) if pg_used_bytes is not None else None,
-        float(pg_limit_bytes) if pg_limit_bytes is not None else None,
+    pg_used_bytes: Optional[int] = None
+    pg_used_pretty: Optional[str] = None
+    pg_error: Optional[str] = None
+    try:
+        pg_used_bytes, pg_used_pretty = get_pg_used_bytes_and_pretty(os.getenv("DATABASE_URL"))
+    except Exception as exc:
+        pg_error = str(exc)
+
+    pg_quota_bytes = pythonanywhere_postgres_quota_bytes()
+    pg_quota_gb = pythonanywhere_postgres_quota_gb()
+    pg_percent = (
+        pythonanywhere_postgres_storage_percent(pg_used_bytes, pg_quota_bytes)
+        if pg_used_bytes is not None
+        else None
     )
 
     return {
@@ -266,8 +332,15 @@ def build_payload(
         },
         "postgres_storage": {
             "used_bytes": pg_used_bytes,
-            "limit_bytes": pg_limit_bytes,
-            "percent": round(pg_percent, 2) if pg_percent is not None else None,
+            "limit_bytes": pg_quota_bytes,
+            "percent": pg_percent,
+            "pg_used_bytes": pg_used_bytes,
+            "pg_quota_bytes": pg_quota_bytes,
+            "pg_storage_percent": pg_percent,
+            "pg_used_pretty": pg_used_pretty,
+            "pg_used_gib": round((pg_used_bytes / (1024**3)), 3) if pg_used_bytes is not None else None,
+            "pg_quota_gb": pg_quota_gb,
+            "pg_error": pg_error,
             "mode": postgres_mode,
         },
         "version": 1,
