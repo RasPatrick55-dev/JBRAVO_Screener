@@ -141,15 +141,13 @@ def directory_size_bytes(path: Path) -> Optional[int]:
         return total
 
 
-def get_file_storage_used_bytes() -> int:
+def get_used_bytes_via_du() -> int:
     try:
         output = subprocess.check_output(
             [
                 "bash",
                 "-lc",
-                "paths=(/tmp \"$HOME\"/.[!.]* \"$HOME\"/*); "
-                "[[ -d /var/www ]] && paths+=(/var/www); "
-                "du -s -B1 \"${paths[@]}\" 2>/dev/null | awk '{sum+=$1} END{print sum+0}'",
+                "du -s -B 1 /tmp ~/.[!.]* ~/* /var/www/ 2>/dev/null | awk '{s+=$1}END{print s+0}'",
             ],
             text=True,
         )
@@ -177,7 +175,7 @@ def pythonanywhere_file_storage_percent(used_bytes: int, quota_bytes: int) -> in
 
 def storage_used_bytes(storage_path: Path, mode: str) -> Optional[int]:
     if mode == "pythonanywhere":
-        return get_file_storage_used_bytes()
+        return get_used_bytes_via_du()
     return directory_size_bytes(storage_path)
 
 
@@ -262,7 +260,7 @@ def build_payload(
             "file_used_bytes": int(used_bytes or 0),
             "file_quota_bytes": int(limit_bytes or 0),
             "file_storage_percent": int(storage_percent or 0),
-            "file_used_gb": round((int(used_bytes or 0) / (1024**3)), 1),
+            "file_used_gib": round((int(used_bytes or 0) / (1024**3)), 3),
             "path": str(storage_path),
             "mode": storage_mode,
         },
