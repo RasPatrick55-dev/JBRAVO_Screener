@@ -15,6 +15,7 @@ jobs:
       ALPACA_DATA_FEED: iex
       APCA_API_KEY_ID: DUMMY_CI_KEY
       APCA_API_SECRET_KEY: DUMMY_CI_SECRET
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
