@@ -1,8 +1,8 @@
-# Positions Tab: Live Data Integration
+# Positions Tab: Runtime Data Integration
 
 ## Scope
 
-This release wires the `/positions` tab to live broker/account data and backend-calculated metrics.
+This release wires the `/positions` tab to runtime broker/account data and backend-calculated metrics.
 
 Implemented components:
 
@@ -87,8 +87,8 @@ Open `http://127.0.0.1:8050/` and verify:
 From local repo:
 
 ```bash
-git add dashboards/dashboard_app.py frontend/src docs/deployment/positions_tab_live_data.md docs/ui-reference/Positions_Tab_3Features.jpg docs/ui-reference/Positions_Tab_3Features_FigmaMake.png
-git commit -m "Positions tab live data: Alpaca trailing stops, activity-based days held, captured P/L formula, and log panel updates"
+git add dashboards/dashboard_app.py frontend/src docs/reference/positions_tab_runtime_data.md docs/ui-reference/Positions_Tab_3Features.jpg docs/ui-reference/Positions_Tab_3Features_FigmaMake.png
+git commit -m "Positions tab runtime data: Alpaca trailing stops, activity-based days held, captured P/L formula, and log panel updates"
 git push origin main
 ```
 
@@ -100,4 +100,3 @@ git pull origin main
 ./build_frontend_pythonanywhere.sh
 touch /var/www/raspatrick_pythonanywhere_com_wsgi.py
 ```
-

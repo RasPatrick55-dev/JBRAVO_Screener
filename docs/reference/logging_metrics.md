@@ -184,5 +184,5 @@ Use the checklist below before submitting a change:
 - [ ] Code emits the new reason code or metric value.
 - [ ] The metric snapshot written to `execute_metrics.json` contains the new key.
 - [ ] Dashboards read and display the new field (or gracefully ignore it if optional).
-- [ ] `docs/logging_metrics.md` reflects the new reason code or metric, including sample payloads if applicable.
+- [ ] `docs/reference/logging_metrics.md` reflects the new reason code or metric, including sample payloads if applicable.
 

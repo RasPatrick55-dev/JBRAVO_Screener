@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping
 import pandas as pd
 
 from scripts.fallback_candidates import CANON, CANONICAL_COLUMNS
+from scripts import docs_consistency_check as docs_checker
 from utils.alerts import send_alert
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -680,6 +681,7 @@ def collect_evidence(
         "dashboard_consistency.json": "dashboard_consistency.json",
         "dashboard_kpis.csv": "dashboard_kpis.csv",
         "dashboard_findings.txt": "dashboard_findings.txt",
+        "docs_findings.txt": "docs_findings.txt",
     }
     for src_name, dest_name in evidence_copies.items():
         src_path = reports_root / src_name
@@ -944,6 +946,32 @@ def main(argv: Iterable[str] | None = None) -> int:
         evidence_path = collect_evidence(report, base_dir=base, evidence_dir=evidence_target)
         LOGGER.info("Dashboard evidence bundle written to %s", evidence_path)
     failures = run_assertions(base)
+    docs_failures: list[str] = []
+    docs_root = base / "docs"
+    if not docs_root.exists():
+        fallback_docs_root = BASE_DIR / "docs"
+        if fallback_docs_root.exists():
+            docs_root = fallback_docs_root
+    try:
+        docs_failures, docs_findings_path = docs_checker.run_docs_consistency(
+            base_dir=base,
+            docs_dir=docs_root,
+            reports_dir=target_reports_dir,
+            cli_reference_path=docs_root / "reference" / "cli_reference.md",
+            fail_on_missing_docs=False,
+        )
+        LOGGER.info("Docs consistency findings written to %s", docs_findings_path)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        docs_failures = [f"[DOCS] docs consistency check failed: {exc}"]
+        docs_findings_path = target_reports_dir / "docs_findings.txt"
+        docs_findings_path.parent.mkdir(parents=True, exist_ok=True)
+        docs_findings_path.write_text(
+            "DOCS_CONSISTENCY status=FAIL\n"
+            f"Findings:\n- [DOCS] docs consistency check failed: {exc}\n",
+            encoding="utf-8",
+        )
+        LOGGER.warning("Docs consistency check failed: %s", exc)
+    failures.extend(docs_failures)
     critical_issues = list(failures)
 
     tokens = (report.get("checks", {}) or {}).get("pipeline_tokens", {})

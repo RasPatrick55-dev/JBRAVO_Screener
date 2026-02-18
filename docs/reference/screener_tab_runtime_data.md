@@ -1,13 +1,13 @@
-# Screener Tab: Live Data Integration
+# Screener Tab: Runtime Data Integration
 
 ## Scope
 
-This release rebuilds the Screener tab into four live sections:
+This release rebuilds the Screener tab into four runtime sections:
 
 - Screener Picks table
 - Backtest Results table
 - Metrics Results table
-- Live Logs Board (Screener, Backtest, Metrics panels)
+- Logs Board (Screener, Backtest, Metrics panels)
 
 Frontend files added:
 

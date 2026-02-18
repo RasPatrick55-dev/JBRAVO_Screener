@@ -1,8 +1,8 @@
-# Account Tab: Live Data Integration
+# Account Tab: Runtime Data Integration
 
 ## Scope
 
-This release updates the Account tab to the new dark Figma layout and wires all cards to live Alpaca paper data and order logs.
+This release updates the Account tab to the new dark Figma layout and wires all cards to Alpaca paper runtime data and order logs.
 
 Implemented frontend files:
 
@@ -113,8 +113,8 @@ irm "http://127.0.0.1:8050/api/account/order_logs?limit=100" | ConvertTo-Json -D
 From local repo:
 
 ```bash
-git add dashboards/dashboard_app.py frontend/src/components/account frontend/src/screens/AccountOverview.tsx docs/deployment/account_tab_live_data.md
-git commit -m "Account tab: Figma dark layout + Alpaca paper live data endpoints"
+git add dashboards/dashboard_app.py frontend/src/components/account frontend/src/screens/AccountOverview.tsx docs/reference/account_tab_runtime_data.md
+git commit -m "Account tab: Figma dark layout + Alpaca paper runtime data endpoints"
 git push origin main
 ```
 
