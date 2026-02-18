@@ -452,6 +452,10 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _bootstrap_env() -> list[str]:
+    # If help flag is passed, skip environment loading to allow --help to exit cleanly.
+    if any(flag in sys.argv[1:] for flag in ("-h", "--help")):
+        return []
+
     loaded_files, missing = load_env(REQUIRED_ENV_KEYS)
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(message)s"))
