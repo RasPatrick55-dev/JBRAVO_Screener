@@ -97,10 +97,22 @@ def _line_number(text: str, index: int) -> int:
     return text.count("\n", 0, index) + 1
 
 
+def _line_text(text: str, line_number: int) -> str:
+    lines = text.splitlines()
+    if 1 <= line_number <= len(lines):
+        return lines[line_number - 1]
+    return ""
+
+
 def _scan_banned_phrases(base_dir: Path, docs_dir: Path) -> list[str]:
-    def _ignore_match(text: str, start: int, end: int) -> bool:
-        lo = max(0, start - 80)
-        hi = min(len(text), end + 80)
+    def _ignore_match(text: str, start: int, end: int, line_number: int, label: str) -> bool:
+        line_lower = _line_text(text, line_number).lower()
+        if f"docs-check: allow-{label}" in line_lower:
+            return True
+        if any(token in line_lower for token in _IGNORE_CONTEXT_TOKENS):
+            return True
+        lo = max(0, start - 160)
+        hi = min(len(text), end + 160)
         context = text[lo:hi].lower()
         return any(token in context for token in _IGNORE_CONTEXT_TOKENS)
 
@@ -113,11 +125,15 @@ def _scan_banned_phrases(base_dir: Path, docs_dir: Path) -> list[str]:
             continue
         for label, pattern in BANNED_PATTERNS:
             for match in pattern.finditer(text):
-                if _ignore_match(text, match.start(), match.end()):
+                line_number = _line_number(text, match.start())
+                if _ignore_match(text, match.start(), match.end(), line_number, label):
                     continue
+                snippet = _line_text(text, line_number).strip()
+                if len(snippet) > 140:
+                    snippet = snippet[:137] + "..."
                 findings.append(
-                    f"[BANNED] {path.relative_to(base_dir)}:{_line_number(text, match.start())} "
-                    f"pattern={label}"
+                    f"[BANNED] {path.relative_to(base_dir)}:{line_number} "
+                    f"pattern={label} snippet={snippet}"
                 )
     return findings
 

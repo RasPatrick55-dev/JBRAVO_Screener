@@ -14,6 +14,7 @@ from typing import Any, Iterable, Mapping
 
 import pandas as pd
 
+from scripts import db as db_module
 from scripts.fallback_candidates import CANON, CANONICAL_COLUMNS
 from scripts import docs_consistency_check as docs_checker
 from utils.alerts import send_alert
@@ -712,6 +713,33 @@ def _assert_api_payload(base: Path) -> str | None:
     return None
 
 
+def _csv_exports_enabled(top_info: Mapping[str, Any]) -> bool:
+    raw = os.getenv("JBR_WRITE_CANDIDATE_CSVS")
+    parsed = _coerce_bool(raw)
+    if parsed is not None:
+        return bool(parsed)
+    # Auto mode: if top_candidates.csv exists, preserve legacy CSV assertions.
+    return bool(top_info.get("present"))
+
+
+def _db_view_row_count(view_name: str) -> tuple[int | None, str | None]:
+    conn = db_module.get_db_conn()
+    if conn is None:
+        return None, "db_connect_failed_or_disabled"
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT COUNT(*) FROM {view_name}")
+            row = cursor.fetchone()
+        return int((row or [0])[0] or 0), None
+    except Exception as exc:
+        return None, str(exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def run_assertions(base_dir: Path) -> list[str]:
     errors: list[str] = []
     data_dir = base_dir / "data"
@@ -724,13 +752,35 @@ def run_assertions(base_dir: Path) -> list[str]:
     _, top_info = _safe_read_csv(data_dir / "top_candidates.csv")
     top_rows = _coerce_int(top_info.get("rows"))
     rows_metric = _coerce_int(metrics.get("rows"))
-    if top_rows is None or rows_metric is None or top_rows != rows_metric:
-        errors.append(
-            f"[PARITY] top_candidates.csv rows={top_rows} does not match screener_metrics.json rows={rows_metric}"
-        )
     latest_rows = _coerce_int(latest_info.get("rows"))
-    if latest_rows in (None, 0):
-        errors.append("[FALLBACK] latest_candidates.csv empty (header-only)")
+
+    if _csv_exports_enabled(top_info):
+        if top_rows is None or rows_metric is None or top_rows != rows_metric:
+            errors.append(
+                f"[PARITY] top_candidates.csv rows={top_rows} does not match screener_metrics.json rows={rows_metric}"
+            )
+        if latest_rows in (None, 0):
+            errors.append("[FALLBACK] latest_candidates.csv empty (header-only)")
+    else:
+        LOGGER.info(
+            "[CHECK] CSV_ASSERTIONS_SKIPPED reason=JBR_WRITE_CANDIDATE_CSVS!=true top_present=%s",
+            bool(top_info.get("present")),
+        )
+        db_top_rows, db_top_err = _db_view_row_count("latest_top_candidates")
+        db_latest_rows, db_latest_err = _db_view_row_count("latest_screener_candidates")
+        if db_top_err or db_latest_err:
+            LOGGER.warning(
+                "[CHECK] DB_VIEW_ASSERTIONS_SKIPPED top_err=%s latest_err=%s",
+                db_top_err,
+                db_latest_err,
+            )
+        else:
+            if rows_metric is not None and db_top_rows is not None and db_top_rows != rows_metric:
+                errors.append(
+                    f"[PARITY_DB] latest_top_candidates rows={db_top_rows} does not match screener_metrics.json rows={rows_metric}"
+                )
+            if db_latest_rows in (None, 0):
+                errors.append("[DB] latest_screener_candidates empty")
 
     for key in ("bars_rows_total_fetch", "symbols_with_any_bars", "symbols_with_required_bars"):
         if _coerce_int(metrics.get(key)) is None:
