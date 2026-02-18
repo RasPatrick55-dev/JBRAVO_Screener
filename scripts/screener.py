@@ -452,6 +452,8 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _bootstrap_env() -> list[str]:
+    if any(flag in sys.argv[1:] for flag in ("-h", "--help")):
+        return []
     loaded_files, missing = load_env(REQUIRED_ENV_KEYS)
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(message)s"))
