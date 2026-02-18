@@ -17,6 +17,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 ## How-To
 
 - `docs/how-to/ops_runbook.md`
+- `docs/how-to/dev_setup.md`
 - `docs/how-to/qa_plan.md`
 - `docs/how-to/react_dashboard_on_pythonanywhere.md`
 

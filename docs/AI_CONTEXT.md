@@ -35,3 +35,5 @@ python -m scripts.docs_consistency_check
 ```
 
 This regenerates CLI reference docs and fails if docs drift from paper-only + DB-first policy.
+
+For local hook setup, see `docs/how-to/dev_setup.md`.
