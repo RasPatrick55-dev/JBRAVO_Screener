@@ -56,3 +56,21 @@ timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entr
 1. DB views/tables
 2. JSON reports generated from DB-backed runs
 3. CSV exports for debug or first-run bootstrapping only
+
+## Docs-Check Allow Labels
+
+Use inline allow directives only for intentional exceptions, on the same line or the line immediately before the text:
+
+```html
+<!-- docs-check: allow-live_trading_supports_claim -->
+```
+
+Available labels:
+
+- `live_alpaca_endpoint`
+- `live_trading_enabled_claim`
+- `live_trading_supports_claim`
+- `production_trading_enabled_claim`
+- `csv_source_of_truth_claim`
+- `latest_candidates_source_of_truth_claim`
+- `latest_candidates_authoritative_claim`
