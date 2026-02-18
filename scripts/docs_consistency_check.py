@@ -23,6 +23,13 @@ BANNED_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
     (
+        "live_trading_supports_claim",
+        re.compile(
+            r"\bsupport(?:s|ed)?\b.{0,40}\blive[- ]trading\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         "production_trading_enabled_claim",
         re.compile(
             r"\bproduction\b.{0,30}\btrading\b.{0,30}\b(enabled|supported|active)\b",
@@ -106,8 +113,10 @@ def _line_text(text: str, line_number: int) -> str:
 
 def _scan_banned_phrases(base_dir: Path, docs_dir: Path) -> list[str]:
     def _ignore_match(text: str, start: int, end: int, line_number: int, label: str) -> bool:
+        allow_tag = f"docs-check: allow-{label}"
         line_lower = _line_text(text, line_number).lower()
-        if f"docs-check: allow-{label}" in line_lower:
+        prev_line_lower = _line_text(text, line_number - 1).lower()
+        if allow_tag in line_lower or allow_tag in prev_line_lower:
             return True
         if any(token in line_lower for token in _IGNORE_CONTEXT_TOKENS):
             return True
@@ -299,7 +308,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     print(f"DOCS_FINDINGS path={findings_path}")
     if findings:
         for finding in findings:
-            print(f"ERROR {finding}")
+            message = f"ERROR {finding}"
+            try:
+                print(message)
+            except UnicodeEncodeError:
+                safe = message.encode("ascii", errors="backslashreplace").decode("ascii")
+                print(safe)
         return 1
     print("DOCS_CONSISTENCY PASS")
     return 0
