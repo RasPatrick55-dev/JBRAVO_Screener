@@ -6697,8 +6697,24 @@ def _bootstrap_env() -> list[str]:
     return loaded_files
 
 
+def _help_requested(argv: Optional[Iterable[str]] = None) -> bool:
+    args = list(argv) if argv is not None else list(sys.argv[1:])
+    return any(flag in args for flag in ("-h", "--help"))
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
     global _EXECUTE_START_UTC, _EXECUTE_FINISH_UTC
+    if _help_requested(argv):
+        try:
+            parse_args(argv)
+        except SystemExit as exc:
+            if exc.code in (None, 0):
+                return 0
+            try:
+                return int(exc.code)
+            except (TypeError, ValueError):
+                return 1
+        return 0
     rotate_if_needed("logs/execute_trades.log", max_bytes=10_000_000, max_age_days=14, keep=14)
     if _EXECUTE_START_UTC is None:
         _EXECUTE_START_UTC = datetime.now(timezone.utc)
