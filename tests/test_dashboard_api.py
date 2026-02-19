@@ -227,3 +227,26 @@ def test_trades_latest_serializes_nan_as_zero(
     assert rows[0].get("avgEntryPrice") == 0.0
     assert rows[0].get("priceSold") == 0.0
     assert rows[0].get("totalPL") == 0.0
+
+
+@pytest.mark.alpaca_optional
+def test_api_logs_tail_default_and_full(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _prepare_dashboard_data(tmp_path)
+    logs_dir = tmp_path / "logs"
+    lines = [f"2024-01-01 00:00:{idx:02d} [INFO] monitor line {idx}" for idx in range(120)]
+    (logs_dir / "monitor.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+    client = module.app.server.test_client()
+
+    tail_response = client.get("/api/logs/monitor.log?tail=55")
+    assert tail_response.status_code == 200
+    tail_lines = [line for line in tail_response.get_data(as_text=True).splitlines() if line.strip()]
+    assert len(tail_lines) == 55
+    assert tail_lines[0].endswith("monitor line 65")
+    assert tail_lines[-1].endswith("monitor line 119")
+
+    full_response = client.get("/api/logs/monitor.log?full=1")
+    assert full_response.status_code == 200
+    full_lines = [line for line in full_response.get_data(as_text=True).splitlines() if line.strip()]
+    assert len(full_lines) == 120

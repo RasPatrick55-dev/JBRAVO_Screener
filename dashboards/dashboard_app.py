@@ -2972,6 +2972,46 @@ def tail_log(log_path: str, limit: int = 10) -> list[str]:
     return trimmed[-limit:]
 
 
+def _read_log_tail_text(path: Path, *, max_lines: int, max_bytes: int) -> str:
+    """Read only the end of a log file and return the latest non-empty lines."""
+
+    if max_lines <= 0 or max_bytes <= 0:
+        return ""
+    try:
+        if not path.exists():
+            return ""
+        file_size = path.stat().st_size
+        if file_size <= 0:
+            return ""
+        read_bytes = min(int(file_size), int(max_bytes))
+        with path.open("rb") as handle:
+            if file_size > read_bytes:
+                handle.seek(-read_bytes, os.SEEK_END)
+            chunk = handle.read(read_bytes)
+    except OSError:
+        return ""
+
+    text = chunk.decode("utf-8", errors="ignore")
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n"
+
+
+def _remote_log_env(filename: str) -> tuple[Optional[str], Optional[str]]:
+    mapping = {
+        "pipeline.log": ("PYTHONANYWHERE_PIPELINE_LOG_URL", "PYTHONANYWHERE_PIPELINE_LOG_PATH"),
+        "execute_trades.log": ("PYTHONANYWHERE_EXECUTE_LOG_URL", "PYTHONANYWHERE_EXECUTE_LOG_PATH"),
+        "monitor.log": ("PYTHONANYWHERE_MONITOR_LOG_URL", "PYTHONANYWHERE_MONITOR_LOG_PATH"),
+    }
+    keys = mapping.get(filename)
+    if not keys:
+        return None, None
+    return os.environ.get(keys[0]), os.environ.get(keys[1])
+
+
 def _line_contains_level(line: str) -> bool:
     return bool(LOG_LEVEL_RE.search(line)) or any(hint in line for hint in LEVEL_HINTS)
 
@@ -10250,30 +10290,34 @@ def log_exports(filename: str):
         response.headers["Expires"] = "0"
         return response
 
-    if filename == "pipeline.log":
-        remote_payload = _fetch_pythonanywhere_file(
-            os.environ.get("PYTHONANYWHERE_PIPELINE_LOG_URL"),
-            os.environ.get("PYTHONANYWHERE_PIPELINE_LOG_PATH"),
+    full_raw = str(request.args.get("full", "")).strip().lower()
+    serve_full = full_raw in {"1", "true", "yes", "on"}
+
+    if not serve_full:
+        tail_lines = _parse_positive_int(
+            request.args.get("tail"),
+            default=400,
+            minimum=50,
+            maximum=5000,
         )
+        tail_bytes = _parse_positive_int(
+            request.args.get("tail_bytes"),
+            default=512_000,
+            minimum=64_000,
+            maximum=5_000_000,
+        )
+        local_path = Path(BASE_DIR) / "logs" / filename
+        local_tail = _read_log_tail_text(local_path, max_lines=tail_lines, max_bytes=tail_bytes)
+        if local_tail:
+            return _no_cache(Response(local_tail, mimetype="text/plain"))
+
+        remote_url, remote_path = _remote_log_env(filename)
+        remote_payload = _fetch_pythonanywhere_file(remote_url, remote_path)
         if remote_payload:
             remote_text, _ = remote_payload
-            return _no_cache(Response(remote_text, mimetype="text/plain"))
-    if filename == "execute_trades.log":
-        remote_payload = _fetch_pythonanywhere_file(
-            os.environ.get("PYTHONANYWHERE_EXECUTE_LOG_URL"),
-            os.environ.get("PYTHONANYWHERE_EXECUTE_LOG_PATH"),
-        )
-        if remote_payload:
-            remote_text, _ = remote_payload
-            return _no_cache(Response(remote_text, mimetype="text/plain"))
-    if filename == "monitor.log":
-        remote_payload = _fetch_pythonanywhere_file(
-            os.environ.get("PYTHONANYWHERE_MONITOR_LOG_URL"),
-            os.environ.get("PYTHONANYWHERE_MONITOR_LOG_PATH"),
-        )
-        if remote_payload:
-            remote_text, _ = remote_payload
-            return _no_cache(Response(remote_text, mimetype="text/plain"))
+            trimmed = _tail_text_lines(remote_text, limit=tail_lines)
+            return _no_cache(Response(trimmed, mimetype="text/plain"))
+
     base = Path(BASE_DIR) / "logs"
     if not (base / filename).exists():
         abort(404)
