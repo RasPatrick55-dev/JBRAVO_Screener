@@ -182,3 +182,48 @@ def test_trades_leaderboard_limit_honors_requested_value(
 
     pls = [float(row.get("pl") or 0.0) for row in rows]
     assert pls == sorted(pls, reverse=True)
+
+
+@pytest.mark.alpaca_optional
+def test_trades_latest_serializes_nan_as_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    now = pd.Timestamp.now(tz="UTC")
+    mocked_trades = pd.DataFrame(
+        [
+            {
+                "symbol": "AAPL",
+                "entry_time": now - pd.Timedelta(days=1),
+                "exit_time": now,
+                "qty": 10,
+                "entry_price": float("nan"),
+                "exit_price": float("nan"),
+                "realized_pnl": float("nan"),
+                "sort_ts": now,
+            }
+        ]
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_load_trades_analytics_frame",
+        lambda: (mocked_trades.copy(), "postgres", "trades"),
+    )
+    monkeypatch.setattr(module, "_record_trades_api_request", lambda **_: True)
+
+    client = module.app.server.test_client()
+    response = client.get("/api/trades/latest?limit=25")
+
+    assert response.status_code == 200
+    raw_payload = response.get_data(as_text=True)
+    assert "NaN" not in raw_payload
+
+    payload = response.get_json()
+    rows = payload.get("rows") or []
+    assert len(rows) == 1
+    assert rows[0].get("avgEntryPrice") == 0.0
+    assert rows[0].get("priceSold") == 0.0
+    assert rows[0].get("totalPL") == 0.0
