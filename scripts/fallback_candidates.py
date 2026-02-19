@@ -729,6 +729,7 @@ def ensure_min_candidates(
     **kwargs: object,
 ) -> Tuple[int, str]:
     """Maintain compatibility with previous callers by writing canonical fallback rows."""
+    _ = prefer
 
     prepared, source = generate_candidates(base_dir, max_rows=max_rows, **kwargs)
     if canonicalize:

@@ -11,9 +11,8 @@ from typing import Iterable, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 try:  # pragma: no cover - optional dependency
-    from dotenv import dotenv_values, load_dotenv
+    from dotenv import load_dotenv
 except Exception:  # pragma: no cover - allow operation without python-dotenv
-    dotenv_values = None  # type: ignore
     load_dotenv = None  # type: ignore
 
 

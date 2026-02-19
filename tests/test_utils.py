@@ -50,7 +50,6 @@ class TestUtils(unittest.TestCase):
         )
         client.get_stock_bars.return_value.df = mock_df
         df = fetch_daily_bars("AAPL", "2024-01-02", client)
-        req = client.get_stock_bars.call_args
         self.assertTrue(client.get_stock_bars.called)
         self.assertFalse(df.empty)
 

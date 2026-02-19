@@ -456,12 +456,6 @@ except Exception:  # pragma: no cover - allow running without Alpaca SDK
     TimeFrame = None  # type: ignore
     DataFeed = None  # type: ignore
 
-try:  # pragma: no cover - compatibility across pydantic versions
-    from pydantic import ValidationError
-except ImportError:  # pragma: no cover - older pydantic exposes it elsewhere
-    pass  # type: ignore
-
-
 LOGGER = logging.getLogger(__name__)
 
 

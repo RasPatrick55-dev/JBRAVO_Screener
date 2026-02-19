@@ -425,7 +425,7 @@ def test_exec_plan_runs_and_submits(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, states, **kwargs: None
+        execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, _states, **kwargs: None
     )
     monkeypatch.setattr(
         execute_mod.TradeExecutor,
@@ -485,7 +485,7 @@ def test_open_trailing_stop_does_not_block(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, states, **kwargs: None
+        execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, _states, **kwargs: None
     )
     monkeypatch.setattr(
         execute_mod.TradeExecutor,
@@ -587,7 +587,7 @@ def test_submit_loop_start_and_four_submissions(source_mode, tmp_path, monkeypat
         execute_mod, "alpaca_http_get", lambda *args, **kwargs: _mock_orders_response([])
     )
     monkeypatch.setattr(
-        execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, states, **kwargs: None
+        execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, _states, **kwargs: None
     )
     monkeypatch.setattr(
         execute_mod.TradeExecutor,

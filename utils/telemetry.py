@@ -72,7 +72,7 @@ class RunSentinel:
             }
         )
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, _exc_type, exc, _tb):
         log_event(
             {
                 "event": "RUN_END",

@@ -10561,7 +10561,7 @@ def _sync_hash_from_store(store_data: Mapping[str, Any] | None):
     return f"#{DEFAULT_ACTIVE_TAB}"
 
 
-def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
+def _render_tab(tab, _n_intervals, _n_log_intervals, _refresh_clicks):
     app.logger.info("Rendering tab %s", tab)
     if tab == "tab-screener":
         metrics_data: dict = {}
@@ -12501,6 +12501,7 @@ def update_sold_too_soon_table(
     [Input("predictions-dropdown", "value"), Input("refresh-ts", "data")],
 )
 def update_ml_predictions_table(prediction_path, refresh_ts=None):
+    _ = refresh_ts
     return build_predictions_table(prediction_path)
 
 
@@ -12509,6 +12510,7 @@ def update_ml_predictions_table(prediction_path, refresh_ts=None):
     [Input("active-tab-store", "data"), Input("refresh-ts", "data")],
 )
 def render_tab(store_data, refresh_ts=None):
+    _ = refresh_ts
     tab = DEFAULT_ACTIVE_TAB
     if isinstance(store_data, Mapping) and store_data.get("active_tab"):
         tab = store_data["active_tab"]

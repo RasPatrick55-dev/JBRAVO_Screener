@@ -453,6 +453,7 @@ def evaluate_exit_signals(position_state, indicators, trail_state, debug_flags=N
     debug_flags:
         Unused placeholder to mirror monitor signature.
     """
+    _ = debug_flags
 
     reasons: list[str] = []
     current = indicators.get("current")

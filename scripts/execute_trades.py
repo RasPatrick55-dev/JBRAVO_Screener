@@ -45,7 +45,7 @@ import utils.telemetry as telemetry
 try:  # pragma: no cover - import guard for optional dependency
     from alpaca.common.exceptions import APIError
     from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import OrderDirection, OrderSide, QueryOrderStatus, TimeInForce
+    from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
     from alpaca.trading.requests import (
         GetOrdersRequest,
         LimitOrderRequest,
@@ -66,10 +66,6 @@ except Exception:  # pragma: no cover - lightweight fallback for tests
     class OrderSide:  # type: ignore
         BUY = _Enum("buy")
         SELL = _Enum("sell")
-
-    class OrderDirection:  # type: ignore
-        ASC = _Enum("asc")
-        DESC = _Enum("desc")
 
     class TimeInForce:  # type: ignore
         DAY = _Enum("day")

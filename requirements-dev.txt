@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Dev-only tooling (not required in runtime deployments)
+ruff==0.9.10
+vulture==2.14

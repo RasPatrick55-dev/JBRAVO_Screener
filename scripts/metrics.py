@@ -230,6 +230,7 @@ def load_results(
     csv_file: str = "backtest_results.csv",
     run_date: Optional[date] = None,
 ) -> pd.DataFrame:
+    _ = csv_file
     if not db.db_enabled():
         logger.warning("Backtest results skipped: DB disabled")
         return pd.DataFrame()
