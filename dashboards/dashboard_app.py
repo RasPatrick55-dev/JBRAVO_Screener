@@ -1971,6 +1971,13 @@ def _build_leaderboard_rows(
     return rows
 
 
+def _json_safe_float(value: Any, default: float = 0.0) -> float:
+    numeric = _to_float(value)
+    if numeric is None or not math.isfinite(numeric):
+        return float(default)
+    return float(numeric)
+
+
 def _build_latest_trades_rows(frame: pd.DataFrame, limit: int) -> list[dict[str, Any]]:
     if frame.empty:
         return []
@@ -1997,9 +2004,9 @@ def _build_latest_trades_rows(frame: pd.DataFrame, limit: int) -> list[dict[str,
                 "sellDate": _serialize_record(exit_time),
                 "totalDays": hold_days,
                 "totalShares": qty_value,
-                "avgEntryPrice": float(row.get("entry_price") or 0.0),
-                "priceSold": float(row.get("exit_price") or 0.0),
-                "totalPL": float(row.get("realized_pnl") or 0.0),
+                "avgEntryPrice": _json_safe_float(row.get("entry_price")),
+                "priceSold": _json_safe_float(row.get("exit_price")),
+                "totalPL": _json_safe_float(row.get("realized_pnl")),
             }
         )
     return rows
