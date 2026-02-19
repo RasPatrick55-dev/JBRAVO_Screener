@@ -718,8 +718,8 @@ def _csv_exports_enabled(top_info: Mapping[str, Any]) -> bool:
     parsed = _coerce_bool(raw)
     if parsed is not None:
         return bool(parsed)
-    # Auto mode: if top_candidates.csv exists, preserve legacy CSV assertions.
-    return bool(top_info.get("present"))
+    # DB-first default: CSV assertions run only when explicitly enabled.
+    return False
 
 
 def _db_view_row_count(view_name: str) -> tuple[int | None, str | None]:

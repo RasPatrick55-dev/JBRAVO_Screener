@@ -17,6 +17,8 @@ from dash import dcc, html
 from dash.development.base_component import Component
 from dash.dash_table import DataTable
 from dash.dependencies import Input, Output
+from scripts import db
+from dashboards.data_io import screener_table
 
 from dashboards.utils import (
     coerce_kpi_types,
@@ -209,11 +211,23 @@ def load_kpis() -> dict[str, Any]:
         missing = [field for field in numeric_fields if not isinstance(kpis.get(field), int)]
 
     if "rows" in missing:
-        counted = _count_rows(TOP_CSV)
-        if counted is not None:
-            kpis["rows"] = counted
+        db_rows: int | None = None
+        if db.db_enabled():
+            try:
+                latest_count, _ = db.fetch_latest_screener_candidate_count()
+                db_rows = int(latest_count)
+            except Exception:
+                db_rows = None
+        if db_rows is not None:
+            kpis["rows"] = db_rows
             if primary_source == "screener_metrics.json":
-                primary_source = "top_candidates.csv (derived)"
+                primary_source = "latest_screener_candidates (db, derived)"
+        else:
+            counted = _count_rows(TOP_CSV)
+            if counted is not None:
+                kpis["rows"] = counted
+                if primary_source == "screener_metrics.json":
+                    primary_source = "top_candidates.csv (derived)"
         missing = [field for field in numeric_fields if not isinstance(kpis.get(field), int)]
 
     if all(not isinstance(kpis.get(field), int) for field in numeric_fields):
@@ -1188,23 +1202,12 @@ def register_callbacks(app):
     )
     def _load_artifacts(_n):
         m = dict(load_kpis())
-        latest = _safe_csv(LATEST_CSV)
-        fallback_active = False
-        if not latest.empty:
-            source_raw = str(latest.iloc[0].get("source") or "").strip().lower()
-            fallback_active = source_raw.startswith("fallback")
-        m["_fallback_active"] = fallback_active
-        m["_latest_zero_rows"] = LATEST_CSV.exists() and latest.empty
+        latest_preview = _safe_csv(LATEST_CSV, nrows=1)
+        m["_latest_zero_rows"] = LATEST_CSV.exists() and latest_preview.empty
         m["_kpi_inferred_from_log"] = m.get("source") == "pipeline.log (inferred)"
-        top_source: str | None = None
-        top_df = latest.copy()
-        if not top_df.empty:
-            top_source = "latest_candidates.csv"
-        else:
-            legacy_top = _safe_csv(TOP_CSV)
-            if not legacy_top.empty:
-                top_df = legacy_top
-                top_source = "top_candidates.csv"
+        top_df, _, top_source = screener_table()
+        if top_df is None:
+            top_df = pd.DataFrame()
 
         if not top_df.empty:
             rename_map = {
@@ -1218,6 +1221,16 @@ def register_callbacks(app):
                     top_df[col] = np.nan if col in {"score", "close", "volume", "atrp"} else ""
             top_df = top_df.sort_values("score", ascending=False, na_position="last").head(10)
 
+        fallback_active = False
+        if not top_df.empty and "source" in top_df.columns:
+            try:
+                source_series = top_df["source"].astype("string")
+                fallback_active = bool(
+                    source_series.str.contains("fallback", case=False, na=False).any()
+                )
+            except Exception:
+                fallback_active = False
+        m["_fallback_active"] = fallback_active
         m["_top_source"] = top_source
 
         hist = load_screener_history(REPO_ROOT)

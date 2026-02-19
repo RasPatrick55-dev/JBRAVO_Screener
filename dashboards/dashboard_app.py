@@ -3254,7 +3254,7 @@ def load_screener_kpis() -> tuple[dict[str, Any], dbc.Alert | None]:
 
 
 def load_latest_candidates():
-    """Load canonical latest_candidates.csv with header validation."""
+    """Load latest screener candidates (DB-first with CSV fallback)."""
 
     canonical_header = [
         "timestamp",
@@ -3276,34 +3276,50 @@ def load_latest_candidates():
         "passed_gates",
         "gate_fail_reason",
     ]
-    path = latest_candidates_path
-    if not os.path.exists(path):
+    df, updated, source_file = screener_table()
+    source_label = source_file or "unknown"
+    if df is None or df.empty:
         return None, dbc.Alert(
-            "No candidates yet. latest_candidates.csv not found.", color="info"
-        )
-    try:
-        df = pd.read_csv(path)
-    except Exception as exc:
-        return None, dbc.Alert(
-            f"Unable to read latest_candidates.csv: {exc}", color="danger"
+            "No candidates yet (DB view empty/unreachable and CSV fallback unavailable).",
+            color="info",
         )
 
-    header = list(df.columns)
-    if header != canonical_header:
+    work = df.copy()
+    if "timestamp" not in work.columns:
+        if "run_date" in work.columns:
+            try:
+                ts = pd.to_datetime(work["run_date"], errors="coerce", utc=True)
+                work["timestamp"] = ts.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                work["timestamp"] = pd.NA
+        else:
+            work["timestamp"] = pd.NA
+
+    if "source" not in work.columns:
+        work["source"] = source_label
+    else:
+        source_series = work["source"].astype("string").fillna("")
+        work["source"] = source_series.where(source_series.str.strip() != "", source_label)
+
+    required_columns = {"symbol", "score"}
+    missing_required = [column for column in sorted(required_columns) if column not in work.columns]
+    if missing_required:
         return None, dbc.Alert(
-            [
-                html.Div("latest_candidates.csv header mismatch."),
-                html.Div(f"Expected: {', '.join(canonical_header)}"),
-                html.Div(f"Found: {', '.join(header)}"),
-            ],
+            f"Candidates missing required columns from {source_label}: {', '.join(missing_required)}",
             color="warning",
         )
 
-    if df.empty:
-        return None, dbc.Alert(
-            "No candidates today (fallback may populate).", color="info"
-        )
-    return df, None
+    for column in canonical_header:
+        if column not in work.columns:
+            work[column] = pd.NA
+    work = work[canonical_header]
+    logger.info(
+        "Loaded latest candidates source=%s updated=%s rows=%s",
+        source_label,
+        updated,
+        len(work.index),
+    )
+    return work, None
 
 
 def _safe_csv_with_message(path: Path, *, required: Optional[list[str]] = None):
@@ -9904,22 +9920,22 @@ def api_health():
 
 @app.server.route("/api/candidates")
 def api_candidates():
-    candidates_path = Path(BASE_DIR) / "data" / "top_candidates.csv"
-    if not candidates_path.exists():
-        return jsonify({"columns": [], "rows": [], "rows_final": 0})
     try:
-        df = pd.read_csv(candidates_path)
+        df, _, source_file = screener_table()
     except Exception as exc:  # pragma: no cover - defensive read
-        return (
-            jsonify({"columns": [], "rows": [], "rows_final": 0, "error": str(exc)}),
-            500,
-        )
+        return jsonify({"columns": [], "rows": [], "rows_final": 0, "error": str(exc)}), 500
+    if df is None or df.empty:
+        return jsonify({"columns": [], "rows": [], "rows_final": 0, "source": source_file or "none"})
     rows_final = int(df.shape[0])
+    source = source_file or "unknown"
+    db_source_of_truth = "db" in str(source).lower()
     return jsonify(
         {
             "columns": [str(col) for col in df.columns],
             "rows": df.to_dict(orient="records"),
             "rows_final": rows_final,
+            "source": source,
+            "db_source_of_truth": db_source_of_truth,
         }
     )
 

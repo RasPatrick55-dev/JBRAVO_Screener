@@ -18,13 +18,14 @@ logger = logging.getLogger(__name__)
 
 _DUMPED_CANDIDATES = False
 
-DEFAULT_DB_HOST = "localhost"
-DEFAULT_DB_PORT = 9999
+DEFAULT_DB_PORT = 5432
 DEFAULT_DB_NAME = "jbravo"
 DEFAULT_DB_USER = "super"
 DEFAULT_CONNECT_TIMEOUT = 10
+DEFAULT_DEV_DB_HOST = "localhost"
+DEFAULT_DEV_DB_PORT = 9999
 
-_EXPLICIT_ENV_KEYS = (
+_SECONDARY_ENV_KEYS = (
     "DB_HOST",
     "DB_PORT",
     "DB_NAME",
@@ -34,6 +35,7 @@ _EXPLICIT_ENV_KEYS = (
     "DB_PASS",
     "DB_SSLMODE",
 )
+_DB_DISABLE_LOGGED: set[str] = set()
 
 
 def _env_truthy(key: str) -> bool:
@@ -63,17 +65,68 @@ def _parse_database_url(database_url: str) -> dict[str, Any]:
     }
 
 
+def _log_db_disabled_once(key: str, message: str, *args: Any) -> None:
+    if key in _DB_DISABLE_LOGGED:
+        return
+    _DB_DISABLE_LOGGED.add(key)
+    logger.warning(message, *args)
+
+
 def _resolve_db_config() -> Optional[dict[str, Any]]:
     if _env_truthy("DB_DISABLED"):
+        _log_db_disabled_once("db_disabled_env", "[WARN] DB_DISABLED via DB_DISABLED")
         return None
 
-    has_explicit = any(os.environ.get(key) for key in _EXPLICIT_ENV_KEYS)
-    if has_explicit:
+    database_url = (os.environ.get("DATABASE_URL") or "").strip()
+    if database_url:
+        parsed = _parse_database_url(database_url)
+        host = (parsed.get("host") or "").strip()
+        dbname = (parsed.get("dbname") or "").strip()
+        user = (parsed.get("user") or "").strip()
+        if not host or not dbname or not user:
+            _log_db_disabled_once(
+                "db_disabled_invalid_database_url",
+                "[WARN] DB_DISABLED invalid DATABASE_URL (expected postgres URL with host/db/user)",
+            )
+            return None
         return {
-            "host": os.environ.get("DB_HOST", DEFAULT_DB_HOST),
+            "source": "DATABASE_URL",
+            "host": host,
+            "port": _coerce_int(parsed.get("port"), DEFAULT_DB_PORT),
+            "dbname": dbname,
+            "user": user,
+            "password": parsed.get("password"),
+            "sslmode": parsed.get("sslmode") or os.environ.get("DB_SSLMODE"),
+            "connect_timeout": _coerce_int(
+                os.environ.get("DB_CONNECT_TIMEOUT"), DEFAULT_CONNECT_TIMEOUT
+            ),
+        }
+
+    has_secondary = any(os.environ.get(key) for key in _SECONDARY_ENV_KEYS)
+    if has_secondary:
+        host = (os.environ.get("DB_HOST") or "").strip()
+        dbname = (os.environ.get("DB_NAME") or "").strip()
+        user = (os.environ.get("DB_USER") or os.environ.get("DB_USERNAME") or "").strip()
+        missing: list[str] = []
+        if not host:
+            missing.append("DB_HOST")
+        if not dbname:
+            missing.append("DB_NAME")
+        if not user:
+            missing.append("DB_USER")
+        if missing:
+            _log_db_disabled_once(
+                "db_disabled_missing_secondary",
+                "[WARN] DB_DISABLED missing DB config keys=%s (set DATABASE_URL or DB_HOST/DB_NAME/DB_USER)",
+                ",".join(missing),
+            )
+            return None
+        return {
+            "source": "DB_*",
+            "host": host,
             "port": _coerce_int(os.environ.get("DB_PORT"), DEFAULT_DB_PORT),
-            "dbname": os.environ.get("DB_NAME", DEFAULT_DB_NAME),
-            "user": os.environ.get("DB_USER") or os.environ.get("DB_USERNAME") or DEFAULT_DB_USER,
+            "dbname": dbname,
+            "user": user,
             "password": os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS"),
             "sslmode": os.environ.get("DB_SSLMODE"),
             "connect_timeout": _coerce_int(
@@ -81,32 +134,25 @@ def _resolve_db_config() -> Optional[dict[str, Any]]:
             ),
         }
 
-    database_url = os.environ.get("DATABASE_URL")
-    if database_url:
-        parsed = _parse_database_url(database_url)
+    if _env_truthy("JBR_DEV_DB_DEFAULTS"):
         return {
-            "host": parsed.get("host") or DEFAULT_DB_HOST,
-            "port": _coerce_int(parsed.get("port"), DEFAULT_DB_PORT),
-            "dbname": parsed.get("dbname") or DEFAULT_DB_NAME,
-            "user": parsed.get("user") or DEFAULT_DB_USER,
-            "password": parsed.get("password"),
-            "sslmode": parsed.get("sslmode"),
+            "source": "JBR_DEV_DB_DEFAULTS",
+            "host": DEFAULT_DEV_DB_HOST,
+            "port": DEFAULT_DEV_DB_PORT,
+            "dbname": DEFAULT_DB_NAME,
+            "user": DEFAULT_DB_USER,
+            "password": os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS"),
+            "sslmode": os.environ.get("DB_SSLMODE"),
             "connect_timeout": _coerce_int(
                 os.environ.get("DB_CONNECT_TIMEOUT"), DEFAULT_CONNECT_TIMEOUT
             ),
         }
 
-    return {
-        "host": DEFAULT_DB_HOST,
-        "port": DEFAULT_DB_PORT,
-        "dbname": DEFAULT_DB_NAME,
-        "user": DEFAULT_DB_USER,
-        "password": os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS"),
-        "sslmode": os.environ.get("DB_SSLMODE"),
-        "connect_timeout": _coerce_int(
-            os.environ.get("DB_CONNECT_TIMEOUT"), DEFAULT_CONNECT_TIMEOUT
-        ),
-    }
+    _log_db_disabled_once(
+        "db_disabled_no_config",
+        "[WARN] DB_DISABLED no DB config (set DATABASE_URL preferred, or DB_HOST/DB_PORT/DB_NAME/DB_USER)",
+    )
+    return None
 
 
 def db_enabled() -> bool:
@@ -115,12 +161,27 @@ def db_enabled() -> bool:
     return _resolve_db_config() is not None
 
 
+def db_config_preview() -> dict[str, Any]:
+    """Return a safe snapshot of resolved DB config for diagnostics/logging."""
+
+    config = _resolve_db_config()
+    if config is None:
+        return {"enabled": False, "source": "disabled"}
+    return {
+        "enabled": True,
+        "source": config.get("source"),
+        "host": config.get("host"),
+        "port": config.get("port"),
+        "dbname": config.get("dbname"),
+        "user": config.get("user"),
+    }
+
+
 def get_db_conn() -> Optional[PGConnection]:
     """Return a psycopg2 connection using resolved environment config."""
 
     config = _resolve_db_config()
     if config is None:
-        logger.warning("[WARN] DB_DISABLED via DB_DISABLED")
         return None
 
     try:
@@ -140,7 +201,8 @@ def get_db_conn() -> Optional[PGConnection]:
         return psycopg2.connect(**connect_kwargs)
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning(
-            "[WARN] DB_CONNECT_FAIL host=%s port=%s dbname=%s user=%s err=%s",
+            "[WARN] DB_CONNECT_FAIL source=%s host=%s port=%s dbname=%s user=%s err=%s",
+            config.get("source"),
             config.get("host"),
             config.get("port"),
             config.get("dbname"),
