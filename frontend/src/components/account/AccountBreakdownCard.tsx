@@ -20,7 +20,7 @@ export default function AccountBreakdownCard({
     <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-emerald" aria-label="Account breakdown">
       <header>
         <h2 className="font-arimo text-sm font-semibold uppercase tracking-[0.08em] text-primary">Account Breakdown</h2>
-        <p className="mt-1 text-xs text-secondary">Cash, open positions value, and allocation ratio</p>
+        <p className="mt-1 text-xs text-secondary">Cash, gross open exposure, and allocation ratio</p>
       </header>
 
       {isLoading ? (
@@ -44,7 +44,7 @@ export default function AccountBreakdownCard({
 
           <div className="rounded-xl px-4 py-3 jbravo-panel-inner jbravo-panel-inner-emerald">
             <div className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
-              Total Value of Open Positions
+              Total Gross Open Exposure
             </div>
             <div className="font-cousine mt-1 text-3xl font-bold tabular-nums text-primary">
               {formatCurrency(openPositionsValue)}

@@ -19,6 +19,9 @@ export interface AccountTotal {
   equity: number;
   netChangePct: number;
   netChangeUsd: number;
+  equityBasis?: "live" | "last_close";
+  asOfUtc?: string;
+  performanceBasis?: "live_vs_close_baselines" | "close_to_close";
 }
 
 export interface EquityCurvePoint {

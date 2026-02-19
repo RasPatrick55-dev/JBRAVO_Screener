@@ -31,6 +31,35 @@ const formatPerformancePercent = (value: number | null | undefined): string => {
   return `${sign}${Math.abs(rounded).toFixed(digits)}%`;
 };
 
+const formatAsOfUtc = (value: string | null | undefined): string => {
+  if (!value) {
+    return "--";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "--";
+  }
+  return `${new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "UTC",
+  }).format(parsed)} UTC`;
+};
+
+const performanceBasisLabel = (basis: AccountTotal["performanceBasis"]): string => {
+  if (basis === "live_vs_close_baselines") {
+    return "Daily to yearly net change (live equity vs close baselines)";
+  }
+  return "Daily to yearly net change (close-to-close)";
+};
+
+const equityBasisLabel = (basis: AccountTotal["equityBasis"]): string =>
+  basis === "live" ? "Live equity" : "Last close equity";
+
 export default function AccountPerformanceCard({
   rows,
   total,
@@ -43,7 +72,7 @@ export default function AccountPerformanceCard({
           <h2 className="font-arimo text-sm font-semibold uppercase tracking-[0.08em] text-primary">
             Account Performance
           </h2>
-          <p className="mt-1 text-xs text-secondary">Daily to yearly net change breakdown</p>
+          <p className="mt-1 text-xs text-secondary">{performanceBasisLabel(total.performanceBasis)}</p>
         </div>
       </header>
 
@@ -175,6 +204,9 @@ export default function AccountPerformanceCard({
               <span className={`font-cousine text-sm font-bold tabular-nums ${toneClass(total.netChangeUsd)}`}>
                 {formatSignedCurrency(total.netChangeUsd)}
               </span>
+            </div>
+            <div className="font-arimo mt-1 text-[11px] tracking-[0.04em] text-secondary">
+              {equityBasisLabel(total.equityBasis)} as of {formatAsOfUtc(total.asOfUtc)}
             </div>
           </div>
         )}

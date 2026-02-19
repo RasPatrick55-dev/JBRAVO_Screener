@@ -127,6 +127,32 @@ const normalizeOrderLogLevel = (value: unknown): OrderLogLevel => {
   return "info";
 };
 
+const normalizeEquityBasis = (
+  value: unknown
+): AccountTotal["equityBasis"] => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "live") {
+    return "live";
+  }
+  if (normalized === "last_close") {
+    return "last_close";
+  }
+  return undefined;
+};
+
+const normalizePerformanceBasis = (
+  value: unknown
+): AccountTotal["performanceBasis"] => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "live_vs_close_baselines") {
+    return "live_vs_close_baselines";
+  }
+  if (normalized === "close_to_close") {
+    return "close_to_close";
+  }
+  return undefined;
+};
+
 const normalizeSummary = (payload: unknown): AccountSummary | null => {
   const record = asRecord(payload);
   if (!record) {
@@ -169,11 +195,14 @@ const normalizePerformanceRows = (payload: unknown): { rows: AccountPerformanceR
 
   const totalRecord = asRecord(record.accountTotal);
   const total = totalRecord
-    ? {
-        equity: parseNumber(totalRecord.equity) ?? 0,
-        netChangePct: parseNumber(totalRecord.netChangePct) ?? 0,
-        netChangeUsd: parseNumber(totalRecord.netChangeUsd) ?? 0,
-      }
+      ? {
+          equity: parseNumber(totalRecord.equity) ?? 0,
+          netChangePct: parseNumber(totalRecord.netChangePct) ?? 0,
+          netChangeUsd: parseNumber(totalRecord.netChangeUsd) ?? 0,
+          equityBasis: normalizeEquityBasis(totalRecord.equityBasis),
+          asOfUtc: String(totalRecord.asOfUtc ?? "").trim() || undefined,
+          performanceBasis: normalizePerformanceBasis(totalRecord.performanceBasis),
+        }
     : null;
 
   return { rows, total };
@@ -277,6 +306,8 @@ export default function AccountTab() {
     equity: 0,
     netChangePct: 0,
     netChangeUsd: 0,
+    equityBasis: "last_close",
+    performanceBasis: "close_to_close",
   });
   const [portfolioPoints, setPortfolioPoints] = useState<EquityCurvePoint[]>([]);
   const [openOrders, setOpenOrders] = useState<OpenOrderRow[]>([]);
@@ -331,12 +362,17 @@ export default function AccountTab() {
             equity: normalizedSummary?.equity ?? 0,
             netChangePct: 0,
             netChangeUsd: 0,
+            equityBasis: "live",
+            asOfUtc: normalizedSummary?.takenAtUtc ?? "",
+            performanceBasis: "close_to_close",
           }
         );
       } else if (summaryPayload && normalizedSummary) {
         setAccountTotal((previous) => ({
           ...previous,
           equity: normalizedSummary.equity,
+          equityBasis: "live",
+          asOfUtc: normalizedSummary.takenAtUtc,
         }));
       }
       if (historyPayload) {

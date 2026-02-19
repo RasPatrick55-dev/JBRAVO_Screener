@@ -32,13 +32,16 @@ Backend support:
 ### Account totals
 
 - Source: Alpaca paper `GET /v2/account`
-- Output: equity, cash, buying power, open positions value, and cash-to-positions ratio
+- Output: live equity, cash, buying power, gross open exposure, and cash-to-positions ratio
 
 ### Equity curve and performance
 
 - Source: Alpaca paper `GET /v2/account/portfolio/history`
+- Account Total equity source:
+  - prefers live equity from `GET /v2/account` (`equityBasis=live`)
+  - falls back to last close from portfolio history (`equityBasis=last_close`)
 - Performance windows:
-  - daily (previous close delta)
+  - daily (latest equity vs previous close)
   - weekly (7 days)
   - monthly (30 days)
   - yearly (365 days)

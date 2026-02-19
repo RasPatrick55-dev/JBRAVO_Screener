@@ -72,18 +72,29 @@ def _serialize_record(value: Any) -> Any:
     return value
 
 
-def _to_number(value: Any) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
 def _to_int(value: Any) -> int:
     try:
         return int(float(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _maybe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _finite_number(value: Any, *, default: float = 0.0) -> float:
+    numeric = _maybe_float(value)
+    if numeric is None or not math.isfinite(numeric):
+        return float(default)
+    return float(numeric)
+
+
+def _to_number(value: Any) -> float:
+    return _finite_number(value, default=0.0)
 
 
 def _coerce_iso(value: Any) -> str:
@@ -247,9 +258,9 @@ def _expected_latest_rows(frame: pd.DataFrame, limit: int) -> list[dict[str, Any
                 "sellDate": _serialize_record(exit_time),
                 "totalDays": hold_days,
                 "totalShares": _to_int(row.get("qty")),
-                "avgEntryPrice": float(row.get("entry_price") or 0.0),
-                "priceSold": float(row.get("exit_price") or 0.0),
-                "totalPL": float(row.get("realized_pnl") or 0.0),
+                "avgEntryPrice": _finite_number(row.get("entry_price"), default=0.0),
+                "priceSold": _finite_number(row.get("exit_price"), default=0.0),
+                "totalPL": _finite_number(row.get("realized_pnl"), default=0.0),
             }
         )
     return rows
@@ -680,9 +691,17 @@ def _audit_overview(
     open_source = str(open_positions.get("source") or "")
     expected_count = int(ctx.live_open_count)
     expected_pnl = float(ctx.live_open_unrealized_pnl)
+    pnl_abs_tol = 1e-6
     if open_source == "db-fallback":
         expected_count = int(ctx.db_open_count)
         expected_pnl = float(ctx.db_open_realized_pnl)
+        pnl_abs_tol = 1e-6
+    elif open_source == "alpaca":
+        live_count_now, live_open_unrealized_now, _ = _load_live_open_positions_expected()
+        expected_count = int(live_count_now)
+        expected_pnl = float(live_open_unrealized_now)
+        # Live unrealized P/L can move between API calls during market hours.
+        pnl_abs_tol = 2.0
     elif open_source != "alpaca":
         ok = False
         details.append(f"open_source={open_source}")
@@ -690,7 +709,7 @@ def _audit_overview(
     if _to_int(open_positions.get("count")) != expected_count:
         ok = False
         details.append(f"open_count actual={open_positions.get('count')} expected={expected_count}")
-    if not _float_close(open_positions.get("realized_pnl"), expected_pnl, abs_tol=1e-6):
+    if not _float_close(open_positions.get("realized_pnl"), expected_pnl, abs_tol=pnl_abs_tol):
         ok = False
         details.append(
             f"open_realized_pnl actual={open_positions.get('realized_pnl')} expected={expected_pnl}"
@@ -825,6 +844,265 @@ def _audit_account_overview(
     if not ok:
         report.add_issue(f"{endpoint}: " + "; ".join(details[:8]))
     report.add_check(endpoint=endpoint, ok=ok, detail="ok" if ok else "; ".join(details[:4]))
+
+
+def _audit_account_runtime(
+    report: AuditReport, *, requester: Any, base_url: str | None
+) -> None:
+    summary_endpoint = "/api/account/summary"
+    perf_all_endpoint = "/api/account/performance?range=all"
+    perf_daily_endpoint = "/api/account/performance?range=d"
+    history_endpoint = "/api/account/portfolio_history?period=1Y&timeframe=1D"
+
+    summary_status, summary_payload = _request_json(
+        summary_endpoint, base_url=base_url, flask_client=requester
+    )
+    perf_all_status, perf_all_payload = _request_json(
+        perf_all_endpoint, base_url=base_url, flask_client=requester
+    )
+    perf_daily_status, perf_daily_payload = _request_json(
+        perf_daily_endpoint, base_url=base_url, flask_client=requester
+    )
+    history_status, history_payload = _request_json(
+        history_endpoint, base_url=base_url, flask_client=requester
+    )
+
+    summary_ok = True
+    summary_details: list[str] = []
+    summary_equity: float | None = None
+    if summary_status != 200:
+        summary_ok = False
+        summary_details.append(f"http_status={summary_status}")
+    else:
+        source = str(summary_payload.get("source") or "")
+        if source not in {"alpaca", "postgres", "csv"}:
+            summary_ok = False
+            summary_details.append(f"source={source}")
+        if summary_payload.get("ok") is not True:
+            summary_ok = False
+            summary_details.append("ok flag false")
+        for field in ("equity", "cash", "buying_power", "open_positions_value"):
+            value = _maybe_float(summary_payload.get(field))
+            if value is None:
+                summary_ok = False
+                summary_details.append(f"{field}=invalid")
+                continue
+            if value < 0:
+                summary_ok = False
+                summary_details.append(f"{field}=negative")
+            if field == "equity":
+                summary_equity = value
+
+    if not summary_ok:
+        report.add_issue(f"{summary_endpoint}: " + "; ".join(summary_details[:8]))
+    report.add_check(
+        endpoint=summary_endpoint,
+        ok=summary_ok,
+        detail="ok" if summary_ok else "; ".join(summary_details[:4]),
+    )
+
+    history_ok = True
+    history_details: list[str] = []
+    last_close_equity: float | None = None
+    if history_status != 200:
+        history_ok = False
+        history_details.append(f"http_status={history_status}")
+    else:
+        points = history_payload.get("points")
+        if not isinstance(points, list) or not points:
+            history_ok = False
+            history_details.append("points missing")
+        else:
+            rows = [row for row in points if isinstance(row, dict)]
+            if not rows:
+                history_ok = False
+                history_details.append("points invalid")
+            else:
+                last_close_equity = _maybe_float(rows[-1].get("equity"))
+                if last_close_equity is None:
+                    history_ok = False
+                    history_details.append("last_close invalid")
+
+    if not history_ok:
+        report.add_issue(f"{history_endpoint}: " + "; ".join(history_details[:8]))
+    report.add_check(
+        endpoint=history_endpoint,
+        ok=history_ok,
+        detail="ok" if history_ok else "; ".join(history_details[:4]),
+    )
+
+    perf_all_ok = True
+    perf_all_details: list[str] = []
+    perf_all_total_equity: float | None = None
+    if perf_all_status != 200:
+        perf_all_ok = False
+        perf_all_details.append(f"http_status={perf_all_status}")
+    else:
+        if perf_all_payload.get("ok") is not True:
+            perf_all_ok = False
+            perf_all_details.append("ok flag false")
+        if str(perf_all_payload.get("range") or "").lower() != "all":
+            perf_all_ok = False
+            perf_all_details.append(f"range={perf_all_payload.get('range')}")
+
+        rows = perf_all_payload.get("rows")
+        if not isinstance(rows, list):
+            perf_all_ok = False
+            perf_all_details.append("rows missing")
+            rows = []
+        period_set = {
+            str((row or {}).get("period") or "").strip().lower()
+            for row in rows
+            if isinstance(row, dict)
+        }
+        required_periods = {"daily", "weekly", "monthly", "yearly"}
+        missing_periods = sorted(required_periods - period_set)
+        if missing_periods:
+            perf_all_ok = False
+            perf_all_details.append(f"missing_periods={missing_periods}")
+
+        total = perf_all_payload.get("accountTotal")
+        if not isinstance(total, dict):
+            perf_all_ok = False
+            perf_all_details.append("accountTotal missing")
+        else:
+            perf_all_total_equity = _maybe_float(total.get("equity"))
+            total_usd = _maybe_float(total.get("netChangeUsd"))
+            total_pct = _maybe_float(total.get("netChangePct"))
+            if perf_all_total_equity is None:
+                perf_all_ok = False
+                perf_all_details.append("accountTotal.equity invalid")
+            if total_usd is None:
+                perf_all_ok = False
+                perf_all_details.append("accountTotal.netChangeUsd invalid")
+            if total_pct is None:
+                perf_all_ok = False
+                perf_all_details.append("accountTotal.netChangePct invalid")
+
+            equity_basis = str(total.get("equityBasis") or "")
+            if equity_basis not in {"live", "last_close"}:
+                perf_all_ok = False
+                perf_all_details.append(f"accountTotal.equityBasis={equity_basis}")
+
+            performance_basis = str(total.get("performanceBasis") or "")
+            if performance_basis not in {"live_vs_close_baselines", "close_to_close"}:
+                perf_all_ok = False
+                perf_all_details.append(
+                    f"accountTotal.performanceBasis={performance_basis}"
+                )
+
+            as_of = _parse_ts_utc(total.get("asOfUtc"))
+            if as_of is None:
+                perf_all_ok = False
+                perf_all_details.append("accountTotal.asOfUtc invalid")
+
+            if (
+                equity_basis == "live"
+                and summary_equity is not None
+                and perf_all_total_equity is not None
+                and not _float_close(perf_all_total_equity, summary_equity, abs_tol=2.0)
+            ):
+                perf_all_ok = False
+                perf_all_details.append(
+                    "live_equity_mismatch "
+                    f"summary={summary_equity:.4f} performance={perf_all_total_equity:.4f}"
+                )
+
+    if not perf_all_ok:
+        report.add_issue(f"{perf_all_endpoint}: " + "; ".join(perf_all_details[:10]))
+    report.add_check(
+        endpoint=perf_all_endpoint,
+        ok=perf_all_ok,
+        detail="ok" if perf_all_ok else "; ".join(perf_all_details[:5]),
+    )
+
+    perf_daily_ok = True
+    perf_daily_details: list[str] = []
+    if perf_daily_status != 200:
+        perf_daily_ok = False
+        perf_daily_details.append(f"http_status={perf_daily_status}")
+    else:
+        if perf_daily_payload.get("ok") is not True:
+            perf_daily_ok = False
+            perf_daily_details.append("ok flag false")
+        if str(perf_daily_payload.get("range") or "").lower() != "d":
+            perf_daily_ok = False
+            perf_daily_details.append(f"range={perf_daily_payload.get('range')}")
+
+        rows = perf_daily_payload.get("rows")
+        if not isinstance(rows, list):
+            rows = []
+            perf_daily_ok = False
+            perf_daily_details.append("rows missing")
+
+        daily_row = next(
+            (
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and str(row.get("period") or "").strip().lower() == "daily"
+            ),
+            None,
+        )
+        if not isinstance(daily_row, dict):
+            perf_daily_ok = False
+            perf_daily_details.append("daily row missing")
+            daily_row = {}
+
+        total = perf_daily_payload.get("accountTotal")
+        if not isinstance(total, dict):
+            perf_daily_ok = False
+            perf_daily_details.append("accountTotal missing")
+            total = {}
+
+        total_equity = _maybe_float(total.get("equity"))
+        total_usd = _maybe_float(total.get("netChangeUsd"))
+        total_pct = _maybe_float(total.get("netChangePct"))
+        daily_usd = _maybe_float(daily_row.get("netChangeUsd"))
+        daily_pct = _maybe_float(daily_row.get("netChangePct"))
+
+        if total_equity is None:
+            perf_daily_ok = False
+            perf_daily_details.append("accountTotal.equity invalid")
+        if total_usd is None or daily_usd is None:
+            perf_daily_ok = False
+            perf_daily_details.append("daily usd invalid")
+        elif not _float_close(total_usd, daily_usd, abs_tol=1e-6):
+            perf_daily_ok = False
+            perf_daily_details.append(
+                f"daily_usd mismatch total={total_usd} row={daily_usd}"
+            )
+
+        if total_pct is None or daily_pct is None:
+            perf_daily_ok = False
+            perf_daily_details.append("daily pct invalid")
+        elif not _float_close(total_pct, daily_pct, abs_tol=1e-6):
+            perf_daily_ok = False
+            perf_daily_details.append(
+                f"daily_pct mismatch total={total_pct} row={daily_pct}"
+            )
+
+        if (
+            str(total.get("equityBasis") or "") == "live"
+            and total_equity is not None
+            and total_usd is not None
+            and last_close_equity is not None
+        ):
+            expected_daily_usd = total_equity - last_close_equity
+            if not _float_close(total_usd, expected_daily_usd, abs_tol=0.05):
+                perf_daily_ok = False
+                perf_daily_details.append(
+                    "daily_formula mismatch "
+                    f"actual={total_usd:.4f} expected={expected_daily_usd:.4f}"
+                )
+
+    if not perf_daily_ok:
+        report.add_issue(f"{perf_daily_endpoint}: " + "; ".join(perf_daily_details[:10]))
+    report.add_check(
+        endpoint=perf_daily_endpoint,
+        ok=perf_daily_ok,
+        detail="ok" if perf_daily_ok else "; ".join(perf_daily_details[:5]),
+    )
 
 
 def _audit_positions_monitoring(
@@ -1007,6 +1285,7 @@ def run_audit(*, base_url: str | None = None) -> AuditReport:
     _audit_latest(report, ctx, requester=requester, base_url=base_url)
     _audit_overview(report, ctx, requester=requester, base_url=base_url)
     _audit_account_overview(report, ctx, requester=requester, base_url=base_url)
+    _audit_account_runtime(report, requester=requester, base_url=base_url)
     _audit_positions_monitoring(report, ctx, requester=requester, base_url=base_url)
     _audit_positions_logs(report, requester=requester, base_url=base_url)
     return report
