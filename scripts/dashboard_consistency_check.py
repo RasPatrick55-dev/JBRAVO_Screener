@@ -852,13 +852,19 @@ def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | N
     prefix_guard = _prefix_sanity({"latest": latest_df, "scored": scored_df, "top": top_df})
 
     universe_rows = int(universe.get("rows", 0) or 0)
-    top_rows = int(candidates["top"].get("row_count") or 0)
-    if universe_rows == 0 and top_rows == 0:
-        parity = "empty"
-    elif universe_rows == top_rows:
-        parity = "match"
+    csv_assertions_enabled = _csv_exports_enabled(top_info)
+    # Guard (DB-first): when CSV assertions are skipped, top_candidates parity is not applicable.
+    if csv_assertions_enabled:
+        top_rows: int | None = int(candidates["top"].get("row_count") or 0)
+        if universe_rows == 0 and top_rows == 0:
+            parity = "empty"
+        elif universe_rows == top_rows:
+            parity = "match"
+        else:
+            parity = "mismatch"
     else:
-        parity = "mismatch"
+        top_rows = None
+        parity = "skipped"
     LOGGER.info(
         "[CHECK] rows_final=%s top_candidates=%s parity=%s",
         universe_rows,
