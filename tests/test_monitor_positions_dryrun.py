@@ -26,15 +26,20 @@ class TestMonitorDryRun(unittest.TestCase):
         sys.modules.pop("scripts.monitor_positions", None)
 
     def test_dryrun_blocks_alpaca_mutations(self):
-        with mock.patch.object(
-            self.monitor.trading_client, "submit_order", return_value=None
-        ) as submit_mock, mock.patch.object(
-            self.monitor.trading_client, "cancel_order_by_id", return_value=None
-        ) as cancel_by_id_mock, mock.patch.object(
-            self.monitor.trading_client, "cancel_order", return_value=None, create=True
-        ) as cancel_mock, mock.patch.object(
-            self.monitor.trading_client, "close_position", return_value=None
-        ) as close_mock:
+        with (
+            mock.patch.object(
+                self.monitor.trading_client, "submit_order", return_value=None
+            ) as submit_mock,
+            mock.patch.object(
+                self.monitor.trading_client, "cancel_order_by_id", return_value=None
+            ) as cancel_by_id_mock,
+            mock.patch.object(
+                self.monitor.trading_client, "cancel_order", return_value=None, create=True
+            ) as cancel_mock,
+            mock.patch.object(
+                self.monitor.trading_client, "close_position", return_value=None
+            ) as close_mock,
+        ):
             self.monitor.submit_new_trailing_stop("AAPL", 1, 3.0)
             self.monitor.cancel_order_safe("OID-1", "AAPL", reason="test_cancel")
             self.monitor.broker_close_position("AAPL", {"reason": "test_close"})

@@ -1,4 +1,5 @@
 """I/O helpers for atomic file writes used across the project."""
+
 from __future__ import annotations
 
 import os

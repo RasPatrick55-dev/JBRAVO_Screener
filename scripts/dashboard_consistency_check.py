@@ -96,6 +96,8 @@ def _coerce_bool(value: Any) -> bool | None:
         if text in {"false", "0", "no", "off"}:
             return False
     return None
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -374,7 +376,9 @@ def _analyze_candidates(df: pd.DataFrame | None, info: dict[str, Any]) -> dict[s
         "row_count": 0,
         "columns": info.get("columns", []),
         "missing_canonical": sorted(
-            c for c in CANDIDATE_CANONICAL_LOWER if c not in {str(col).lower() for col in info.get("columns", [])}
+            c
+            for c in CANDIDATE_CANONICAL_LOWER
+            if c not in {str(col).lower() for col in info.get("columns", [])}
         ),
         "first_rows": [],
         "canonical": None,
@@ -486,7 +490,9 @@ def _executor_summary(metrics: Mapping[str, Any], log_text: str) -> dict[str, An
     return data
 
 
-def _predictions_summary(pred_df: pd.DataFrame | None, pred_info: dict[str, Any], ranker_json: dict[str, Any]) -> dict[str, Any]:
+def _predictions_summary(
+    pred_df: pd.DataFrame | None, pred_info: dict[str, Any], ranker_json: dict[str, Any]
+) -> dict[str, Any]:
     summary = {
         "predictions_present": bool(pred_info.get("present")),
         "ranker_eval_present": bool(ranker_json),
@@ -532,12 +538,22 @@ def _prefix_sanity(frames: dict[str, pd.DataFrame | None]) -> dict[str, Any]:
     return {"source": None, "unique_prefixes": [], "ok": False, "row_count": 0}
 
 
-def _build_kpis(universe: Mapping[str, Any], candidates: Mapping[str, Any], gate: Mapping[str, Any], timings: Mapping[str, Any], executor: Mapping[str, Any], predictions: Mapping[str, Any], trades_present: bool) -> dict[str, Any]:
+def _build_kpis(
+    universe: Mapping[str, Any],
+    candidates: Mapping[str, Any],
+    gate: Mapping[str, Any],
+    timings: Mapping[str, Any],
+    executor: Mapping[str, Any],
+    predictions: Mapping[str, Any],
+    trades_present: bool,
+) -> dict[str, Any]:
     kpis = {
         "symbols_in": universe.get("symbols_in", 0),
         "symbols_with_bars": universe.get("symbols_with_bars", 0),
         "symbols_with_any_bars": universe.get("symbols_with_any_bars", 0),
-        "symbols_with_required_bars": universe.get("symbols_with_required_bars", universe.get("symbols_with_bars", 0)),
+        "symbols_with_required_bars": universe.get(
+            "symbols_with_required_bars", universe.get("symbols_with_bars", 0)
+        ),
         "candidate_rows": candidates.get("latest", {}).get("row_count")
         or candidates.get("top", {}).get("row_count")
         or candidates.get("scored", {}).get("row_count")
@@ -622,7 +638,10 @@ def _write_findings(path: Path, report: Mapping[str, Any]) -> None:
 
 
 def collect_evidence(
-    report: Mapping[str, Any], *, base_dir: Path | str = BASE_DIR, evidence_dir: Path | str | None = None
+    report: Mapping[str, Any],
+    *,
+    base_dir: Path | str = BASE_DIR,
+    evidence_dir: Path | str | None = None,
 ) -> Path:
     base = Path(base_dir)
     destination = Path(evidence_dir) if evidence_dir else base / "reports" / "evidence"
@@ -642,7 +661,9 @@ def collect_evidence(
         json.dumps(pipeline_tokens, indent=2, default=str), encoding="utf-8"
     )
 
-    executor_tokens = checks.get("executor", {}).get("tokens", {}) if isinstance(checks, Mapping) else {}
+    executor_tokens = (
+        checks.get("executor", {}).get("tokens", {}) if isinstance(checks, Mapping) else {}
+    )
     (destination / "executor_tokens.json").write_text(
         json.dumps(executor_tokens, indent=2, default=str), encoding="utf-8"
     )
@@ -670,9 +691,7 @@ def collect_evidence(
     }
     if metrics_summary_df is not None and not metrics_summary_df.empty:
         latest_row = metrics_summary_df.tail(1).to_dict(orient="records")
-        metrics_snapshot["metrics_summary_latest"] = json.loads(
-            json.dumps(latest_row, default=str)
-        )
+        metrics_snapshot["metrics_summary_latest"] = json.loads(json.dumps(latest_row, default=str))
     (destination / "metrics_snapshot.json").write_text(
         json.dumps(metrics_snapshot, indent=2, default=str), encoding="utf-8"
     )
@@ -718,8 +737,8 @@ def _csv_exports_enabled(top_info: Mapping[str, Any]) -> bool:
     parsed = _coerce_bool(raw)
     if parsed is not None:
         return bool(parsed)
-    # Auto mode: if top_candidates.csv exists, preserve legacy CSV assertions.
-    return bool(top_info.get("present"))
+    # DB-first default: CSV assertions run only when explicitly enabled.
+    return False
 
 
 def _db_view_row_count(view_name: str) -> tuple[int | None, str | None]:
@@ -802,8 +821,12 @@ def run_assertions(base_dir: Path) -> list[str]:
             )
 
     conn_payload, _ = _safe_read_json(data_dir / "connection_health.json")
-    trading_ok = _coerce_bool(conn_payload.get("trading_ok")) if isinstance(conn_payload, Mapping) else None
-    data_ok = _coerce_bool(conn_payload.get("data_ok")) if isinstance(conn_payload, Mapping) else None
+    trading_ok = (
+        _coerce_bool(conn_payload.get("trading_ok")) if isinstance(conn_payload, Mapping) else None
+    )
+    data_ok = (
+        _coerce_bool(conn_payload.get("data_ok")) if isinstance(conn_payload, Mapping) else None
+    )
     if trading_ok is not True or data_ok is not True:
         errors.append(
             f"[CONN] connection_health.json requires trading_ok && data_ok for green badge (found trading_ok={trading_ok} data_ok={data_ok})"
@@ -816,7 +839,9 @@ def run_assertions(base_dir: Path) -> list[str]:
     return errors
 
 
-def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | None = None) -> dict[str, Any]:
+def generate_report(
+    base_dir: Path | str = BASE_DIR, reports_dir: Path | str | None = None
+) -> dict[str, Any]:
     base = Path(base_dir)
     reports_path = Path(reports_dir) if reports_dir else base / "reports"
     reports_path.mkdir(parents=True, exist_ok=True)
@@ -896,7 +921,9 @@ def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | N
     trades_info = _path_info(trades_log_path)
 
     timestamps = {
-        "screener_last_run_utc": screener_metrics.get("last_run_utc") if isinstance(screener_metrics, Mapping) else None,
+        "screener_last_run_utc": screener_metrics.get("last_run_utc")
+        if isinstance(screener_metrics, Mapping)
+        else None,
         "metrics_summary_mtime_utc": metrics_summary_info.get("mtime_utc"),
         "pipeline_start_utc": pipeline_tokens.get("PIPELINE_START", {}).get("timestamp_utc"),
         "pipeline_summary_utc": pipeline_tokens.get("PIPELINE_SUMMARY", {}).get("timestamp_utc"),
@@ -953,7 +980,15 @@ def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | N
         },
     }
 
-    kpis = _build_kpis(universe, candidates, gate, timings, executor, predictions, trades_info.get("present", False))
+    kpis = _build_kpis(
+        universe,
+        candidates,
+        gate,
+        timings,
+        executor,
+        predictions,
+        trades_info.get("present", False),
+    )
 
     dashboard_json = reports_path / "dashboard_consistency.json"
     dashboard_csv = reports_path / "dashboard_kpis.csv"
@@ -968,7 +1003,9 @@ def generate_report(base_dir: Path | str = BASE_DIR, reports_dir: Path | str | N
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate dashboard consistency against pipeline artifacts")
+    parser = argparse.ArgumentParser(
+        description="Validate dashboard consistency against pipeline artifacts"
+    )
     parser.add_argument("--base", default=str(BASE_DIR), help="Base directory for the repository")
     parser.add_argument(
         "--reports-dir",
@@ -987,9 +1024,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
     base = Path(args.base).resolve()
-    target_reports_dir = (
-        Path(args.reports_dir).resolve() if args.reports_dir else base / "reports"
-    )
+    target_reports_dir = Path(args.reports_dir).resolve() if args.reports_dir else base / "reports"
     report = generate_report(base_dir=base, reports_dir=target_reports_dir)
     LOGGER.info("Dashboard consistency report written to %s", target_reports_dir)
     LOGGER.debug("Report summary: %s", json.dumps(report, indent=2, default=str))

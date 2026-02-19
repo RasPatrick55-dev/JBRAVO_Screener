@@ -40,12 +40,14 @@ class TestMonitorRedundantCancelGuard(unittest.TestCase):
         )
 
         cancel_mock = mock.Mock(return_value=True)
-        with mock.patch.object(
-            self.monitor.trading_client, "get_orders", return_value=[order]
-        ), mock.patch.object(
-            self.monitor.trading_client, "get_order_by_id", return_value=types.SimpleNamespace(status="submitted")
-        ), mock.patch.object(
-            self.monitor, "broker_cancel_order", cancel_mock
+        with (
+            mock.patch.object(self.monitor.trading_client, "get_orders", return_value=[order]),
+            mock.patch.object(
+                self.monitor.trading_client,
+                "get_order_by_id",
+                return_value=types.SimpleNamespace(status="submitted"),
+            ),
+            mock.patch.object(self.monitor, "broker_cancel_order", cancel_mock),
         ):
             self.monitor.check_pending_orders()
 
@@ -73,12 +75,16 @@ class TestMonitorRedundantCancelGuard(unittest.TestCase):
         )
 
         cancel_mock = mock.Mock(return_value=True)
-        with mock.patch.object(
-            self.monitor.trading_client, "get_orders", return_value=[older, newer]
-        ), mock.patch.object(
-            self.monitor.trading_client, "get_order_by_id", return_value=types.SimpleNamespace(status="submitted")
-        ), mock.patch.object(
-            self.monitor, "broker_cancel_order", cancel_mock
+        with (
+            mock.patch.object(
+                self.monitor.trading_client, "get_orders", return_value=[older, newer]
+            ),
+            mock.patch.object(
+                self.monitor.trading_client,
+                "get_order_by_id",
+                return_value=types.SimpleNamespace(status="submitted"),
+            ),
+            mock.patch.object(self.monitor, "broker_cancel_order", cancel_mock),
         ):
             self.monitor.check_pending_orders()
 

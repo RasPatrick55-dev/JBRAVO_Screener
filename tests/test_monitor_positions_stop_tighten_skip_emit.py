@@ -50,11 +50,15 @@ class TestMonitorStopTightenSkipEmit(unittest.TestCase):
             stop_price=None,
         )
 
-        with mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]), \
-            mock.patch.object(monitor, "calculate_days_held", return_value=3), \
-            mock.patch.object(monitor, "cancel_order_safe", return_value=None) as cancel_mock, \
-            mock.patch.object(monitor, "broker_submit_order", return_value=SimpleNamespace(id="DRYRUN")) as submit_mock, \
-            mock.patch.object(monitor, "_persist_metrics", return_value=None):
+        with (
+            mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]),
+            mock.patch.object(monitor, "calculate_days_held", return_value=3),
+            mock.patch.object(monitor, "cancel_order_safe", return_value=None) as cancel_mock,
+            mock.patch.object(
+                monitor, "broker_submit_order", return_value=SimpleNamespace(id="DRYRUN")
+            ) as submit_mock,
+            mock.patch.object(monitor, "_persist_metrics", return_value=None),
+        ):
             with self.assertLogs(monitor.logger, level="INFO") as log_ctx:
                 monitor.manage_trailing_stop(position)
 
@@ -68,7 +72,7 @@ class TestMonitorStopTightenSkipEmit(unittest.TestCase):
         prefix = "STOP_TIGHTEN_SKIP "
         start = skip_line.find(prefix)
         self.assertNotEqual(start, -1, "STOP_TIGHTEN_SKIP payload missing")
-        payload = json.loads(skip_line[start + len(prefix):])
+        payload = json.loads(skip_line[start + len(prefix) :])
 
         required_keys = {"symbol", "reason", "existing_stop", "proposed_stop"}
         self.assertTrue(required_keys.issubset(payload), "STOP_TIGHTEN_SKIP missing keys")

@@ -57,6 +57,14 @@ timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entr
 2. JSON reports generated from DB-backed runs
 3. CSV exports for debug or first-run bootstrapping only
 
+## DB Config Precedence
+
+1. `DATABASE_URL` (preferred)
+2. `DB_HOST` + `DB_PORT` + `DB_NAME` + `DB_USER` (`DB_PASSWORD` optional)
+3. Otherwise DB is disabled with an actionable warning
+
+Dev-only local fallback to `localhost:9999` is available only when `JBR_DEV_DB_DEFAULTS=true`.
+
 ## Docs-Check Allow Labels
 
 Use inline allow directives only for intentional exceptions, on the same line or the line immediately before the text:

@@ -24,7 +24,7 @@ class _FakeCursor:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, _exc_type, _exc, _tb):
         return False
 
     def execute(self, _query, _params=None):
@@ -84,14 +84,16 @@ def test_verify_e2e_market_closed_metrics_only(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr(Path, "read_text", guard_read_text)
 
-    rc = verify_e2e.main([
-        "--execute-metrics",
-        str(metrics_path),
-        "--latest-csv",
-        str(latest_csv),
-        "--execute-log",
-        str(execute_log),
-    ])
+    rc = verify_e2e.main(
+        [
+            "--execute-metrics",
+            str(metrics_path),
+            "--latest-csv",
+            str(latest_csv),
+            "--execute-log",
+            str(execute_log),
+        ]
+    )
     out = capsys.readouterr().out
 
     assert rc == 0
@@ -121,12 +123,14 @@ def test_verify_e2e_market_closed_fails_on_error(monkeypatch, tmp_path, capsys):
     latest_csv = tmp_path / "latest_candidates.csv"
     _write_latest_csv(latest_csv)
 
-    rc = verify_e2e.main([
-        "--execute-metrics",
-        str(metrics_path),
-        "--latest-csv",
-        str(latest_csv),
-    ])
+    rc = verify_e2e.main(
+        [
+            "--execute-metrics",
+            str(metrics_path),
+            "--latest-csv",
+            str(latest_csv),
+        ]
+    )
     out = capsys.readouterr().out
 
     assert rc == 1

@@ -56,9 +56,7 @@ def _fetch_portfolio_history(
 
 
 def _fetch_account_snapshot(base_url: str) -> dict:
-    resp = requests.get(
-        f"{base_url}/v2/account", headers=_alpaca_headers(), timeout=15
-    )
+    resp = requests.get(f"{base_url}/v2/account", headers=_alpaca_headers(), timeout=15)
     resp.raise_for_status()
     return resp.json()
 

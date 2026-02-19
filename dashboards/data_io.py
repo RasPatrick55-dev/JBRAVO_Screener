@@ -12,9 +12,7 @@ import pandas as pd
 
 from scripts import db
 
-BASE_DIR = Path(
-    os.environ.get("JBRAVO_HOME", Path(__file__).resolve().parents[1])
-).expanduser()
+BASE_DIR = Path(os.environ.get("JBRAVO_HOME", Path(__file__).resolve().parents[1])).expanduser()
 DATA_DIR = BASE_DIR / "data"
 REPORTS_DIR = BASE_DIR / "reports"
 
@@ -220,11 +218,7 @@ def _mtime_iso(path: Path) -> Optional[str]:
         ts = path.stat().st_mtime
     except (FileNotFoundError, OSError):
         return None
-    return (
-        dt.datetime.utcfromtimestamp(ts)
-        .replace(tzinfo=dt.timezone.utc)
-        .isoformat()
-    )
+    return dt.datetime.utcfromtimestamp(ts).replace(tzinfo=dt.timezone.utc).isoformat()
 
 
 def _health_history_path() -> Path:
@@ -374,18 +368,18 @@ def load_screener_metrics(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     if symbols_with_any_bars is not None:
         symbols_with_bars_fetch = symbols_with_any_bars
     elif symbols_with_bars_fetch is None:
-        symbols_with_bars_fetch = _coerce_int(payload.get("symbols_with_required_bars")) or _coerce_int(
-            payload.get("symbols_with_bars")
-        )
+        symbols_with_bars_fetch = _coerce_int(
+            payload.get("symbols_with_required_bars")
+        ) or _coerce_int(payload.get("symbols_with_bars"))
     attempted_fetch = symbols_attempted_fetch or symbols_with_bars_fetch
-    symbols_with_required_bars = _coerce_int(
-        payload.get("symbols_with_required_bars")
-    ) or symbols_with_bars_fetch
+    symbols_with_required_bars = (
+        _coerce_int(payload.get("symbols_with_required_bars")) or symbols_with_bars_fetch
+    )
     if symbols_with_any_bars is None:
         symbols_with_any_bars = symbols_with_required_bars
-    bars_rows_total_fetch = _coerce_int(
-        payload.get("bars_rows_total_fetch")
-    ) or _coerce_int(payload.get("bars_rows_total"))
+    bars_rows_total_fetch = _coerce_int(payload.get("bars_rows_total_fetch")) or _coerce_int(
+        payload.get("bars_rows_total")
+    )
 
     rows_final = _coerce_int(payload.get("rows_final"))
     if rows_final is None:
@@ -476,7 +470,9 @@ def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     }
 
     # Legacy aliases for existing callers
-    snapshot["symbols_with_bars"] = snapshot["symbols_with_required_bars"] or snapshot["symbols_with_bars_fetch"]
+    snapshot["symbols_with_bars"] = (
+        snapshot["symbols_with_required_bars"] or snapshot["symbols_with_bars_fetch"]
+    )
     snapshot["bars_rows_total"] = snapshot["bars_rows_total_fetch"]
     snapshot["rows"] = snapshot["rows_premetrics"]
     snapshot["source"] = snapshot.get("latest_source")
@@ -589,7 +585,9 @@ def metrics_summary_snapshot() -> Dict[str, Any]:
                         )
                         row = cursor.fetchone()
                         if row:
-                            logger.info("DASH_DB_READ_OK table=metrics_daily run_date=%s", latest_run_date)
+                            logger.info(
+                                "DASH_DB_READ_OK table=metrics_daily run_date=%s", latest_run_date
+                            )
                             return {
                                 "profit_factor": row[5],
                                 "expectancy": row[4],

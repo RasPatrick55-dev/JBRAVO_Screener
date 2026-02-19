@@ -65,16 +65,14 @@ class TestMonitorTightenReservedQty(unittest.TestCase):
         original_cooldowns = dict(self.monitor.TIGHTEN_COOLDOWNS)
         self.monitor.TIGHTEN_COOLDOWNS.clear()
         try:
-            with mock.patch.object(
-                self.monitor.trading_client, "get_orders", return_value=[trailing_order]
-            ), mock.patch.object(
-                self.monitor, "broker_cancel_order", cancel_mock
-            ), mock.patch.object(
-                self.monitor, "broker_submit_order", submit_mock
-            ), mock.patch.object(
-                self.monitor, "log_trailing_stop_event"
-            ) as log_attach, mock.patch.object(
-                self.monitor, "_save_tighten_cooldowns"
+            with (
+                mock.patch.object(
+                    self.monitor.trading_client, "get_orders", return_value=[trailing_order]
+                ),
+                mock.patch.object(self.monitor, "broker_cancel_order", cancel_mock),
+                mock.patch.object(self.monitor, "broker_submit_order", submit_mock),
+                mock.patch.object(self.monitor, "log_trailing_stop_event") as log_attach,
+                mock.patch.object(self.monitor, "_save_tighten_cooldowns"),
             ):
                 self.monitor.manage_trailing_stop(position)
         finally:

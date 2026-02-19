@@ -6,7 +6,9 @@ import pytest
 from utils import alerts
 
 
-def test_send_alert_disabled(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_send_alert_disabled(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("ALERTS_ENABLED", "false")
     monkeypatch.delenv("ALERT_WEBHOOK", raising=False)
     monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
@@ -55,4 +57,3 @@ def test_send_alert_with_webhook_success(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "Webhook success" in called["json"].get("text", "")
     assert called["json"].get("context") == {"alpha": 1}
     assert called["timeout"] == 5
-

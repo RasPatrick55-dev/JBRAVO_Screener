@@ -21,8 +21,6 @@ logic to evolve independently of order placement.
 from __future__ import annotations
 
 import logging
-from typing import Optional
-import pandas as pd
 
 from .indicators import rsi, macd
 from .utils import cache_bars

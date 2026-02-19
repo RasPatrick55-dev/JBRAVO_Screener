@@ -62,9 +62,13 @@ def _coerce_float(value: Any) -> float | None:
         return None
 
 
-def _fetch_snapshot(session: requests.Session, base_url: str, logger: logging.Logger) -> Mapping[str, Any] | None:
+def _fetch_snapshot(
+    session: requests.Session, base_url: str, logger: logging.Logger
+) -> Mapping[str, Any] | None:
     url = f"{base_url}/v2/account"
-    logger.info("[INFO] ACCT_SNAP_START base_url=%s paper_mode=%s", base_url, "paper" in base_url.lower())
+    logger.info(
+        "[INFO] ACCT_SNAP_START base_url=%s paper_mode=%s", base_url, "paper" in base_url.lower()
+    )
     try:
         response = session.get(url, headers=_alpaca_headers(), timeout=15)
     except Exception as exc:
@@ -193,7 +197,9 @@ def _persist_snapshot(payload: Mapping[str, Any], logger: logging.Logger) -> boo
 
 def main() -> int:
     logger = _setup_logger()
-    _, missing = load_env(required_keys=("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_API_BASE_URL"))
+    _, missing = load_env(
+        required_keys=("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_API_BASE_URL")
+    )
     if missing:
         logger.error("[ERROR] ACCT_SNAP_FAIL step=env missing=%s", ",".join(missing))
         return 1

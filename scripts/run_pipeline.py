@@ -4,6 +4,7 @@ The pipeline relies on the screener summary line for observability and uses
 pipeline_health_app.run_ts_utc plus screener_run_map_app for run scoping.
 The database is the source of truth; CSV fallback is disabled.
 """
+
 import argparse
 import csv
 import json
@@ -109,6 +110,8 @@ def safe_write_pipeline_summary(rc: int, *, base_dir: Path = PROJECT_ROOT) -> Pa
 def _refresh_logger() -> None:
     global logger
     logger = LOG
+
+
 LOG_PATH = PROJECT_ROOT / "logs" / "pipeline.log"
 SCREENER_METRICS_PATH = DATA_DIR / "screener_metrics.json"
 LATEST_CANDIDATES = DATA_DIR / "latest_candidates.csv"
@@ -210,9 +213,7 @@ def _write_nightly_ml_status(base_dir: Path) -> None:
             "bars": _artifact_payload_db("daily_bars"),
             "labels": _artifact_payload_db("labels"),
             "features": _artifact_payload_db("features"),
-            "model": _artifact_payload(
-                _latest_by_glob(data_dir / "models", "ranker_*.pkl")
-            ),
+            "model": _artifact_payload(_latest_by_glob(data_dir / "models", "ranker_*.pkl")),
             "predictions": _artifact_payload_db("predictions"),
             "eval": _artifact_payload_db("ranker_eval"),
         }
@@ -220,28 +221,18 @@ def _write_nightly_ml_status(base_dir: Path) -> None:
         payload = {
             "written_at": datetime.now(timezone.utc).isoformat(),
             "bars": _artifact_payload(data_dir / "daily_bars.csv"),
-            "labels": _artifact_payload(
-                _latest_by_glob(data_dir / "labels", "labels_*.csv")
-            ),
-            "features": _artifact_payload(
-                _latest_by_glob(data_dir / "features", "features_*.csv")
-            ),
-            "model": _artifact_payload(
-                _latest_by_glob(data_dir / "models", "ranker_*.pkl")
-            ),
+            "labels": _artifact_payload(_latest_by_glob(data_dir / "labels", "labels_*.csv")),
+            "features": _artifact_payload(_latest_by_glob(data_dir / "features", "features_*.csv")),
+            "model": _artifact_payload(_latest_by_glob(data_dir / "models", "ranker_*.pkl")),
             "predictions": _artifact_payload(
                 _latest_by_glob(data_dir / "predictions", "predictions_*.csv")
             ),
-            "eval": _artifact_payload(
-                _latest_by_glob(data_dir / "ranker_eval", "*.json")
-            ),
+            "eval": _artifact_payload(_latest_by_glob(data_dir / "ranker_eval", "*.json")),
         }
 
     try:
         _write_json(data_dir / "nightly_ml_status.json", payload)
-        LOG.info(
-            "[INFO] NIGHTLY_ML_STATUS_WRITTEN path=%s", data_dir / "nightly_ml_status.json"
-        )
+        LOG.info("[INFO] NIGHTLY_ML_STATUS_WRITTEN path=%s", data_dir / "nightly_ml_status.json")
     except Exception:
         LOG.exception("NIGHTLY_ML_STATUS_WRITE_FAILED")
 
@@ -263,7 +254,9 @@ def _alpaca_headers() -> dict[str, str]:
     return headers
 
 
-def _probe_trading_endpoint(session: requests.Session, headers: Mapping[str, str]) -> dict[str, Any]:
+def _probe_trading_endpoint(
+    session: requests.Session, headers: Mapping[str, str]
+) -> dict[str, Any]:
     url = f"{trading_base_url().rstrip('/')}/v2/account"
     if "APCA-API-KEY-ID" not in headers or "APCA-API-SECRET-KEY" not in headers:
         LOG.warning("CONNECTION_PROBE trading skipped reason=missing_credentials")
@@ -413,6 +406,7 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
 
 DEFAULT_REQUIRED_BARS = 250
 
+
 def _coerce_symbol(value: object) -> str:
     """Return a safe uppercase symbol string."""
 
@@ -441,7 +435,6 @@ def _should_write_candidate_csvs() -> bool:
     if override is not None:
         return _as_bool(override, False)
     return not db.db_enabled()
-
 
 
 def compose_metrics_from_artifacts(
@@ -499,8 +492,9 @@ def compose_metrics_from_artifacts(
             break
     required_bars_value = (
         _coerce_optional_int(existing_metrics.get("required_bars"))
-        or _coerce_optional_int(fetch_stats.get("required_bars")) if fetch_stats else None
-        or DEFAULT_REQUIRED_BARS
+        or _coerce_optional_int(fetch_stats.get("required_bars"))
+        if fetch_stats
+        else None or DEFAULT_REQUIRED_BARS
     )
     fetch_symbols_required = (
         _coerce_optional_int(fetch_stats.get("symbols_with_required_bars_fetch"))
@@ -508,7 +502,9 @@ def compose_metrics_from_artifacts(
         else None
     )
     fetch_symbols_any = (
-        _coerce_optional_int(fetch_stats.get("symbols_with_any_bars_fetch")) if fetch_stats else None
+        _coerce_optional_int(fetch_stats.get("symbols_with_any_bars_fetch"))
+        if fetch_stats
+        else None
     )
     fetch_symbols_legacy = (
         _coerce_optional_int(fetch_stats.get("symbols_with_bars_fetch")) if fetch_stats else None
@@ -528,7 +524,9 @@ def compose_metrics_from_artifacts(
         or with_bars_required
         or 0
     )
-    bars_fetch = _coerce_optional_int(fetch_stats.get("bars_rows_total_fetch")) if fetch_stats else None
+    bars_fetch = (
+        _coerce_optional_int(fetch_stats.get("bars_rows_total_fetch")) if fetch_stats else None
+    )
     fallback_bars = _coerce_optional_int(fallback_bars_rows_total)
     bars_effective = (
         _coerce_optional_int(existing_metrics.get("bars_rows_total"))
@@ -559,10 +557,14 @@ def compose_metrics_from_artifacts(
         "symbols_with_any_bars": int(with_bars_any),
         "symbols_with_bars_required": int(with_bars_required),
         "symbols_with_bars_any": int(with_bars_any),
-        "symbols_with_bars_post": _coerce_optional_int(post_stats.get("symbols_with_bars_post")) if post_stats else None,
+        "symbols_with_bars_post": _coerce_optional_int(post_stats.get("symbols_with_bars_post"))
+        if post_stats
+        else None,
         "bars_rows_total": int(bars_effective or 0),
         "bars_rows_total_fetch": bars_fetch,
-        "bars_rows_total_post": _coerce_optional_int(post_stats.get("bars_rows_total_post")) if post_stats else None,
+        "bars_rows_total_post": _coerce_optional_int(post_stats.get("bars_rows_total_post"))
+        if post_stats
+        else None,
         "rows": int(rows_final),
         "rows_premetrics": int(rows_final),
         "latest_source": latest_source or "unknown",
@@ -576,7 +578,9 @@ def compose_metrics_from_artifacts(
     elif fetch_symbols_required is not None:
         payload["symbols_attempted_fetch"] = fetch_symbols_required
     if post_stats and "candidates_final" in post_stats:
-        payload["candidates_final"] = _coerce_optional_int(post_stats.get("candidates_final")) or int(rows_final)
+        payload["candidates_final"] = _coerce_optional_int(
+            post_stats.get("candidates_final")
+        ) or int(rows_final)
     return payload
 
 
@@ -607,14 +611,17 @@ def _backfill_metrics_from_summary(
             metrics_path.parent.mkdir(parents=True, exist_ok=True)
             metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             LOG.info(
-                "SCREENER_METRICS_BACKFILL source=pipeline_summary fields=%s",",".join(sorted(updated_fields))
+                "SCREENER_METRICS_BACKFILL source=pipeline_summary fields=%s",
+                ",".join(sorted(updated_fields)),
             )
         except Exception:
             LOG.exception("SCREENER_METRICS_BACKFILL_FAILED path=%s", metrics_path)
     return payload
 
 
-def _coerce_canonical(df_scored: Optional[pd.DataFrame], df_top: Optional[pd.DataFrame]) -> pd.DataFrame:
+def _coerce_canonical(
+    df_scored: Optional[pd.DataFrame], df_top: Optional[pd.DataFrame]
+) -> pd.DataFrame:
     """Return a canonical candidates DataFrame derived from pipeline outputs."""
 
     if df_top is None or df_top.empty:
@@ -630,9 +637,7 @@ def _coerce_canonical(df_scored: Optional[pd.DataFrame], df_top: Optional[pd.Dat
     if "symbol" not in base.columns or "score" not in base.columns:
         return pd.DataFrame(columns=REQUIRED_CAND_COLS)
 
-    base["symbol"] = (
-        base["symbol"].astype("string").fillna("").str.strip().str.upper()
-    )
+    base["symbol"] = base["symbol"].astype("string").fillna("").str.strip().str.upper()
     base = base.loc[base["symbol"].str.len() > 0]
 
     if base.empty:
@@ -655,9 +660,7 @@ def _coerce_canonical(df_scored: Optional[pd.DataFrame], df_top: Optional[pd.Dat
         scored.columns = [str(col).strip().lower() for col in scored.columns]
         scored = scored.loc[:, ~scored.columns.duplicated()]
         if "symbol" in scored.columns:
-            scored["symbol"] = (
-                scored["symbol"].astype("string").fillna("").str.strip().str.upper()
-            )
+            scored["symbol"] = scored["symbol"].astype("string").fillna("").str.strip().str.upper()
             merge_cols = [
                 col
                 for col in (
@@ -724,7 +727,10 @@ def _coerce_canonical(df_scored: Optional[pd.DataFrame], df_top: Optional[pd.Dat
 
     if "score_breakdown" in base.columns:
         base["score_breakdown"] = (
-            base["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
+            base["score_breakdown"]
+            .astype("string")
+            .fillna("")
+            .replace({"": "{}", "fallback": "{}"})
         )
     else:
         base["score_breakdown"] = "{}"
@@ -870,9 +876,7 @@ def _snapshot_label_files(output_dir: Path) -> dict[Path, int]:
     return snapshot
 
 
-def _detect_new_labels_file(
-    output_dir: Path, before: Mapping[Path, int]
-) -> Path | None:
+def _detect_new_labels_file(output_dir: Path, before: Mapping[Path, int]) -> Path | None:
     if not output_dir.exists():
         return None
     updated: list[tuple[int, Path]] = []
@@ -933,7 +937,9 @@ def _sync_top_candidates_to_latest(base_dir: Path | None = None) -> None:
         logger.exception("LATEST_SYNC_ERROR path_top=%s path_latest=%s", top, latest)
 
 
-def refresh_latest_candidates(base_dir: Path | None = None, run_date: date | None = None) -> pd.DataFrame:
+def refresh_latest_candidates(
+    base_dir: Path | None = None, run_date: date | None = None
+) -> pd.DataFrame:
     if not db.db_enabled():
         logger.error("LATEST_CANDIDATES refresh skipped: DB required.")
         return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
@@ -1164,9 +1170,7 @@ def _apply_allocation_weights(
     working = working.drop(columns=[weight_column], errors="ignore")
 
     if key not in working.columns:
-        LOG.warning(
-            "[WARN] CANDIDATES_WEIGHTED_SKIPPED reason=missing_key key=%s", key
-        )
+        LOG.warning("[WARN] CANDIDATES_WEIGHTED_SKIPPED reason=missing_key key=%s", key)
         return working
 
     scores = pd.to_numeric(working[key], errors="coerce")
@@ -1290,6 +1294,8 @@ def emit_metric(*args: Any, **kwargs: Any) -> None:  # pragma: no cover - legacy
 
 def write_metrics_summary(**kwargs: Any) -> None:  # pragma: no cover - legacy hook
     return None
+
+
 REQUIRED_ENV_KEYS = (
     "APCA_API_KEY_ID",
     "APCA_API_SECRET_KEY",
@@ -1359,9 +1365,7 @@ def _extract_split_tokens(
     argv: list[str], option_strings: set[str]
 ) -> tuple[list[str], dict[str, list[str]]]:
     filtered: list[str] = []
-    collected: dict[str, list[str]] = {
-        dest: [] for dest in _SPLIT_FLAG_MAP.values()
-    }
+    collected: dict[str, list[str]] = {dest: [] for dest in _SPLIT_FLAG_MAP.values()}
     current_flag: Optional[str] = None
     index = 0
     while index < len(argv):
@@ -1552,6 +1556,7 @@ def run_step(
             return 1, 0.0
         stream_thread = None
         if tee_to_stdout or tee_to_logger:
+
             def _stream_output() -> None:
                 if proc.stdout is None:
                     return
@@ -1586,7 +1591,9 @@ def run_step(
         elapsed = time.time() - started
         if stream_thread is not None:
             stream_thread.join(timeout=5)
-        log_file.write(f"[{datetime.now(timezone.utc).isoformat()}] END {name} rc={rc} secs={elapsed:.1f}\n")
+        log_file.write(
+            f"[{datetime.now(timezone.utc).isoformat()}] END {name} rc={rc} secs={elapsed:.1f}\n"
+        )
     LOG.info("END %s rc=%s secs=%.1f log=%s", name, rc, elapsed, log_path)
     return rc, elapsed
 
@@ -2014,10 +2021,14 @@ def ingest_artifacts_to_db(run_date: date) -> None:
             record = row.to_dict() if isinstance(row, Mapping) else dict(row)
             symbol = _coerce_symbol(record.get("symbol"))
             score_breakdown_raw_value = record.get("score_breakdown")
-            normalized_score_breakdown = db.normalize_score_breakdown(score_breakdown_raw_value, symbol=symbol)
+            normalized_score_breakdown = db.normalize_score_breakdown(
+                score_breakdown_raw_value, symbol=symbol
+            )
             if normalized_score_breakdown is None:
                 try:
-                    is_empty_score = score_breakdown_raw_value in (None, "") or pd.isna(score_breakdown_raw_value)
+                    is_empty_score = score_breakdown_raw_value in (None, "") or pd.isna(
+                        score_breakdown_raw_value
+                    )
                 except Exception:
                     is_empty_score = score_breakdown_raw_value in (None, "")
                 if not is_empty_score:
@@ -2187,9 +2198,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     export_bars_path = args.export_daily_bars_path
     if "screener" in steps:
-        extras["screener"] = _inject_export_daily_bars_arg(
-            extras["screener"], export_bars_path
-        )
+        extras["screener"] = _inject_export_daily_bars_arg(extras["screener"], export_bars_path)
     elif export_bars_path:
         LOG.warning(
             "[WARN] DAILY_BARS_EXPORT_FAILED path=%s error=%s",
@@ -2383,9 +2392,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         labels_path = _detect_new_labels_file(labels_output_dir, labels_before)
                         labels_rows = _count_csv_lines(labels_path) if labels_path else 0
                     except Exception:
-                        LOG.exception(
-                            "LABELS_DETECT_FAILED output_dir=%s", labels_output_dir
-                        )
+                        LOG.exception("LABELS_DETECT_FAILED output_dir=%s", labels_output_dir)
                 finally:
                     LOG.info(
                         "[INFO] LABELS_END labels_path=%s rows=%s",
@@ -2421,9 +2428,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 if rc_features:
                     LOG.warning("[WARN] FEATURES_FAILED rc=%s (continuing)", rc_features)
                 else:
-                    model_path = _latest_by_glob(
-                        base_dir / "data" / "models", "ranker_*.pkl"
-                    )
+                    model_path = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
                     if model_path is None:
                         LOG.info("[INFO] RANKER_TRAIN_START reason=model_missing")
                         rc_train, secs = run_step(
@@ -2437,9 +2442,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                                 "[WARN] RANKER_TRAIN_FAILED rc=%s (continuing)",
                                 rc_train,
                             )
-                        model_path = _latest_by_glob(
-                            base_dir / "data" / "models", "ranker_*.pkl"
-                        )
+                        model_path = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
                     if model_path is None:
                         LOG.warning("[WARN] PREDICTIONS_SKIPPED reason=model_missing")
                     else:
@@ -2743,7 +2746,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "with_bars": int(summary.with_bars or 0),
             "with_bars_any": int(summary.with_bars_any or 0),
             "rows": int(summary.rows or 0),
-            "bars_rows_total": int(summary.bars_rows_total or 0) if summary.bars_rows_total is not None else None,
+            "bars_rows_total": int(summary.bars_rows_total or 0)
+            if summary.bars_rows_total is not None
+            else None,
             "source": summary.source,
             "fetch_secs": t.fetch,
             "feature_secs": t.features,
@@ -2799,7 +2804,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         except Exception:
             LOG.warning("ACCOUNT_EQUITY_REFRESH_FAILED", exc_info=True)
         _reload_dashboard(args.reload_web.lower() == "true")
-        should_raise = LOG.name != "pipeline" or os.environ.get("JBR_PIPELINE_RAISE", "").lower() in {
+        should_raise = LOG.name != "pipeline" or os.environ.get(
+            "JBR_PIPELINE_RAISE", ""
+        ).lower() in {
             "1",
             "true",
             "yes",

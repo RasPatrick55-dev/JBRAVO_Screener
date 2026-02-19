@@ -1,4 +1,5 @@
 """Train an ML rank model from screener outcomes."""
+
 from __future__ import annotations
 
 import argparse
@@ -118,11 +119,7 @@ def _select_window(df: pd.DataFrame, window_days: int) -> pd.DataFrame:
     if window_days <= 0 or df.empty:
         return df
     dates = pd.to_datetime(df["run_date"], errors="coerce")
-    unique_dates = (
-        pd.Series(dates.dropna().unique())
-        .sort_values()
-        .tolist()
-    )
+    unique_dates = pd.Series(dates.dropna().unique()).sort_values().tolist()
     if not unique_dates:
         return df.iloc[0:0].copy()
     window_dates = set(unique_dates[-window_days:])
@@ -203,7 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     env_window = os.getenv("TRAIN_WINDOW_DAYS")
     try:
-        window_days = int(args.window_days) if args.window_days is not None else int(env_window or 0)
+        window_days = (
+            int(args.window_days) if args.window_days is not None else int(env_window or 0)
+        )
     except (TypeError, ValueError):
         window_days = 0
     if window_days <= 0:

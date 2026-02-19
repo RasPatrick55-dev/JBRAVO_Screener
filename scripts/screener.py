@@ -9,6 +9,7 @@ By design:
 - Each run emits a [SUMMARY] line; verify_e2e enforces end-to-end correctness.
 - ML assists ranking only; it never creates candidates or overrides gates.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,7 +19,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import sys
 import time
 from datetime import datetime, timezone, date
@@ -47,6 +47,7 @@ from scripts import db
 from scripts import logger_utils
 
 from utils.sentiment import JsonHttpSentimentClient, load_sentiment_cache, persist_sentiment_cache
+
 
 def _to_symbol_list(obj: Iterable[object] | pd.Series | pd.DataFrame | None) -> list[str]:
     """Normalize a container of symbols into a de-duplicated uppercase list."""
@@ -155,7 +156,9 @@ def _is_common_stock_like(row) -> bool:
     return bool(sym) and is_us_listing and is_common and not (bad_name or bad_sym)
 
 
-def _apply_universe_hygiene(df: Optional[pd.DataFrame], asset_meta: Mapping[str, Mapping[str, object]] | None) -> pd.DataFrame:
+def _apply_universe_hygiene(
+    df: Optional[pd.DataFrame], asset_meta: Mapping[str, Mapping[str, object]] | None
+) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["symbol"])
 
@@ -186,13 +189,23 @@ def _select_numeric_series(frame: pd.DataFrame, *names: str) -> pd.Series:
     return pd.Series(np.nan, index=frame.index, dtype="float64")
 
 
-def _apply_quality_filters(scored_df: pd.DataFrame, cfg: Optional[Mapping[str, object]]) -> pd.DataFrame:
+def _apply_quality_filters(
+    scored_df: pd.DataFrame, cfg: Optional[Mapping[str, object]]
+) -> pd.DataFrame:
     if scored_df is None or scored_df.empty:
         return scored_df
 
     working = scored_df.copy()
-    thresholds = cfg.get("thresholds") if isinstance(cfg, Mapping) and isinstance(cfg.get("thresholds"), Mapping) else {}
-    gates_cfg = cfg.get("gates") if isinstance(cfg, Mapping) and isinstance(cfg.get("gates"), Mapping) else {}
+    thresholds = (
+        cfg.get("thresholds")
+        if isinstance(cfg, Mapping) and isinstance(cfg.get("thresholds"), Mapping)
+        else {}
+    )
+    gates_cfg = (
+        cfg.get("gates")
+        if isinstance(cfg, Mapping) and isinstance(cfg.get("gates"), Mapping)
+        else {}
+    )
     min_price = _coerce_float(thresholds.get("min_price"), 0.25)
     adv_min = _coerce_float(thresholds.get("adv20_min"))
     if adv_min is None:
@@ -239,7 +252,11 @@ def _soft_gate_with_min(
 ) -> pd.DataFrame:
     if cfg is None:
         cfg = {}
-    policy = cfg.get("gate_policy") if isinstance(cfg, Mapping) and isinstance(cfg.get("gate_policy"), Mapping) else {}
+    policy = (
+        cfg.get("gate_policy")
+        if isinstance(cfg, Mapping) and isinstance(cfg.get("gate_policy"), Mapping)
+        else {}
+    )
     try:
         min_candidates = int(policy.get("min_candidates", 0) or 0)
     except (TypeError, ValueError):
@@ -312,6 +329,7 @@ def _soft_gate_with_min(
 
     return base
 
+
 try:
     from scripts.features import fetch_symbols
 except ImportError:
@@ -334,19 +352,18 @@ except ImportError:
         # Optionally filter by dollar_vol_min if bars available
         return df
 
+
 if "fetch_symbols" in globals() and callable(fetch_symbols):
     # Allowed elsewhere for backwards-compat, but not used by _fetch_daily_bars.
     pass
 
 try:  # pragma: no cover - preferred module execution path
-    from .indicators import adx, aroon, macd, obv, rsi
     from .utils.normalize import to_bars_df, BARS_COLUMNS
     from .utils.calendar import calc_daily_window
     from .utils.http_alpaca import fetch_bars_http
     from .utils.rate import TokenBucket
     from .utils.models import (
         ALLOWED_EQUITY_EXCHANGES,
-        BarData,
         classify_exchange,
         KNOWN_EQUITY,
     )
@@ -355,7 +372,6 @@ try:  # pragma: no cover - preferred module execution path
     from .features import (
         ALL_FEATURE_COLUMNS,
         compute_all_features,
-        REQUIRED_FEATURE_COLUMNS,
         add_wk52_and_rs,
     )
     from .ranking import (
@@ -371,14 +387,12 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     import sys as _sys
 
     _sys.path.append(_os.path.dirname(_os.path.dirname(__file__)))
-    from scripts.indicators import adx, aroon, macd, obv, rsi  # type: ignore
     from scripts.utils.normalize import to_bars_df, BARS_COLUMNS  # type: ignore
     from scripts.utils.calendar import calc_daily_window  # type: ignore
     from scripts.utils.http_alpaca import fetch_bars_http  # type: ignore
     from scripts.utils.rate import TokenBucket  # type: ignore
     from scripts.utils.models import (  # type: ignore
         ALLOWED_EQUITY_EXCHANGES,
-        BarData,
         classify_exchange,
         KNOWN_EQUITY,
     )
@@ -387,7 +401,6 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.features import (  # type: ignore
         ALL_FEATURE_COLUMNS,
         compute_all_features,
-        REQUIRED_FEATURE_COLUMNS,
         add_wk52_and_rs,
     )
     from scripts.ranking import (  # type: ignore
@@ -428,6 +441,7 @@ try:  # pragma: no cover - optional Alpaca dependency import guard
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
+
     try:  # pragma: no cover - enum availability varies across versions
         from alpaca.data.enums import DataFeed
     except Exception:  # pragma: no cover - ``DataFeed`` introduced later
@@ -441,12 +455,6 @@ except Exception:  # pragma: no cover - allow running without Alpaca SDK
     StockBarsRequest = None  # type: ignore
     TimeFrame = None  # type: ignore
     DataFeed = None  # type: ignore
-
-try:  # pragma: no cover - compatibility across pydantic versions
-    from pydantic import ValidationError
-except ImportError:  # pragma: no cover - older pydantic exposes it elsewhere
-    from pydantic.error_wrappers import ValidationError  # type: ignore
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -488,9 +496,7 @@ def _bootstrap_env() -> list[str]:
         LOGGER.error("[ERROR] ENV_MISSING_KEYS=%s", json.dumps(missing_keys))
         raise SystemExit(2)
     _, _, _, feed_value = get_alpaca_creds()
-    resolved_feed = (
-        (feed_value or os.getenv("ALPACA_DATA_FEED") or "iex").strip().lower() or "iex"
-    )
+    resolved_feed = (feed_value or os.getenv("ALPACA_DATA_FEED") or "iex").strip().lower() or "iex"
     globals()["DEFAULT_FEED"] = resolved_feed
     return loaded_files
 
@@ -651,7 +657,9 @@ def _symbol_count(frame: Optional[pd.DataFrame]) -> int:
         return int(frame["symbol"].nunique())
 
 
-def summarize_bar_history_counts(history: Optional[pd.DataFrame], *, required_bars: int) -> dict[str, int]:
+def summarize_bar_history_counts(
+    history: Optional[pd.DataFrame], *, required_bars: int
+) -> dict[str, int]:
     """Summarize coverage counts for fetched bars.
 
     Returns the number of symbols that have **any** bars (``>0`` rows) and the
@@ -807,6 +815,8 @@ def _persist_auth_error(
         metrics_path=metrics_path,
         summary_path=summary_path,
     )
+
+
 DEFAULT_SHORTLIST_SIZE = 800
 DEFAULT_BACKTEST_TOP_K = 100
 DEFAULT_BACKTEST_LOOKBACK = 90
@@ -841,9 +851,7 @@ def _write_universe_prefix_metrics(
         metrics["universe_prefix_counts"] = {}
         return {}
 
-    prefix_counts = (
-        universe_df["symbol"].astype(str).str.upper().str[0].value_counts().to_dict()
-    )
+    prefix_counts = universe_df["symbol"].astype(str).str.upper().str[0].value_counts().to_dict()
     metrics["universe_prefix_counts"] = prefix_counts
     if prefix_counts:
         LOGGER.info("Universe prefix counts: %s", prefix_counts)
@@ -876,9 +884,7 @@ def _load_symbol_stats_universe(base_dir: Path) -> pd.DataFrame:
     return frame[["symbol"]]
 
 
-def write_universe_prefix_counts(
-    base_dir: Path, metrics: Dict[str, Any]
-) -> Dict[str, Any]:
+def write_universe_prefix_counts(base_dir: Path, metrics: Dict[str, Any]) -> Dict[str, Any]:
     """
     Ensure metrics['universe_prefix_counts'] is populated based on the full universe.
 
@@ -968,7 +974,9 @@ def _build_sentiment_client(settings: Mapping[str, object]) -> Optional[JsonHttp
         env=env,
     )
     if not client.enabled() and not _SENTIMENT_PROVIDER_WARNED:
-        LOGGER.warning("USE_SENTIMENT enabled but SENTIMENT_API_URL is not set; skipping sentiment fetch.")
+        LOGGER.warning(
+            "USE_SENTIMENT enabled but SENTIMENT_API_URL is not set; skipping sentiment fetch."
+        )
         _SENTIMENT_PROVIDER_WARNED = True
         return None
     return client
@@ -1048,8 +1056,12 @@ def _make_stock_bars_request(**kwargs: Any):
     attempts.append(base)
     attempts.append({k: v for k, v in base.items() if k != "adjustment"})
     attempts.append({k: v for k, v in base.items() if k not in {"adjustment", "feed"}})
-    attempts.append({k: v for k, v in base.items() if k not in {"adjustment", "feed", "page_token"}})
-    attempts.append({k: v for k, v in base.items() if k not in {"adjustment", "feed", "page_token", "limit"}})
+    attempts.append(
+        {k: v for k, v in base.items() if k not in {"adjustment", "feed", "page_token"}}
+    )
+    attempts.append(
+        {k: v for k, v in base.items() if k not in {"adjustment", "feed", "page_token", "limit"}}
+    )
     last_exc: Optional[Exception] = None
     for attempt in attempts:
         try:
@@ -1190,11 +1202,7 @@ def _fetch_daily_bars(
     days = max(1, int(days))
     cache_feed = (feed or "iex").strip().lower() or "iex"
     cache_root = Path("data") / "cache" / f"bars_1d_{cache_feed}"
-    run_date_str = (
-        str(run_date)
-        if run_date
-        else datetime.now(timezone.utc).date().isoformat()
-    )
+    run_date_str = str(run_date) if run_date else datetime.now(timezone.utc).date().isoformat()
 
     def _cache_paths(batch_idx: int) -> tuple[Path, Path]:
         batch_dir = cache_root / run_date_str
@@ -1369,6 +1377,7 @@ def _fetch_daily_bars(
             "http_rows": 0,
             "http_retries": 0,
         }
+
         def _merge_metrics(payload: dict[str, int]) -> None:
             for key, value in (payload or {}).items():
                 if not isinstance(value, int):
@@ -1392,9 +1401,7 @@ def _fetch_daily_bars(
 
                 parsed_rows_count = int(bars_df.shape[0])
                 if raw_bars_count > 0 and parsed_rows_count == 0:
-                    LOGGER.error(
-                        "Raw bars > 0 but parsed rows == 0; dumping debug artifacts."
-                    )
+                    LOGGER.error("Raw bars > 0 but parsed rows == 0; dumping debug artifacts.")
                     _dump_parse_failure(raw, bars_df)
                 if not bars_df.empty and "symbol" in bars_df.columns:
                     bars_df["symbol"] = bars_df["symbol"].fillna(symbol)
@@ -1488,7 +1495,7 @@ def _fetch_daily_bars(
                 except Exception as exc:  # pragma: no cover - network errors hit in integration
                     status = getattr(exc, "status_code", None)
                     if status in BAR_RETRY_STATUSES and attempt < BAR_MAX_RETRIES - 1:
-                        sleep_for = 2 ** attempt
+                        sleep_for = 2**attempt
                         LOGGER.warning(
                             "Retrying single-symbol SDK fetch for %s (attempt %d/%d) after %s",
                             symbol,
@@ -1500,17 +1507,21 @@ def _fetch_daily_bars(
                         continue
                     LOGGER.warning("Failed to fetch single-symbol bars for %s: %s", symbol, exc)
                     break
-            return symbol, pd.DataFrame(columns=BARS_COLUMNS), {
-                "symbols_in": 1,
-                "rate_limited": 0,
-                "http_404_batches": 0,
-                "http_empty_batches": 0,
-                "raw_bars_count": 0,
-                "parsed_rows_count": 0,
-                "http_requests": 0,
-                "http_rows": 0,
-                "http_retries": 0,
-            }
+            return (
+                symbol,
+                pd.DataFrame(columns=BARS_COLUMNS),
+                {
+                    "symbols_in": 1,
+                    "rate_limited": 0,
+                    "http_404_batches": 0,
+                    "http_empty_batches": 0,
+                    "raw_bars_count": 0,
+                    "parsed_rows_count": 0,
+                    "http_requests": 0,
+                    "http_rows": 0,
+                    "http_retries": 0,
+                },
+            )
 
         worker = _http_worker if use_http else _sdk_worker
         pages = 0
@@ -1592,16 +1603,14 @@ def _fetch_daily_bars(
                     rows_cached = int(normalized_cached.shape[0])
                     metrics["cache_hits"] += 1
                     metrics.setdefault("cache", {})
-                    metrics["cache"]["batches_hit"] = int(
-                        metrics["cache"].get("batches_hit", 0)
-                    ) + 1
+                    metrics["cache"]["batches_hit"] = (
+                        int(metrics["cache"].get("batches_hit", 0)) + 1
+                    )
                     metrics["raw_bars_count"] += rows_cached
                     metrics["parsed_rows_count"] += rows_cached
                     metrics["bars_rows_total"] = metrics.get("bars_rows_total", 0) + rows_cached
                     keep_cached = {
-                        str(sym).strip().upper()
-                        for sym in (cached_meta.get("keep") or [])
-                        if sym
+                        str(sym).strip().upper() for sym in (cached_meta.get("keep") or []) if sym
                     }
                     if not keep_cached and not normalized_cached.empty:
                         keep_cached = set(
@@ -1646,9 +1655,9 @@ def _fetch_daily_bars(
                 metrics["cache_misses"] += 1
                 if reuse_cache:
                     metrics.setdefault("cache", {})
-                    metrics["cache"]["batches_miss"] = int(
-                        metrics["cache"].get("batches_miss", 0)
-                    ) + 1
+                    metrics["cache"]["batches_miss"] = (
+                        int(metrics["cache"].get("batches_miss", 0)) + 1
+                    )
                 try:
                     hook = _acquire_verify_hook()
                     raw, http_stats = fetch_bars_http(
@@ -1679,22 +1688,18 @@ def _fetch_daily_bars(
                     metrics["pages_total"] += fallback_pages
                     for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
                         metrics[key] += int(fallback_metrics.get(key, 0))
-                    metrics["raw_bars_count"] += int(
-                        fallback_metrics.get("raw_bars_count", 0)
-                    )
+                    metrics["raw_bars_count"] += int(fallback_metrics.get("raw_bars_count", 0))
                     metrics["parsed_rows_count"] += int(
                         fallback_metrics.get("parsed_rows_count", 0)
                     )
-                    metrics["http"]["requests"] += int(
-                        fallback_metrics.get("http_requests", 0)
-                    )
+                    metrics["http"]["requests"] += int(fallback_metrics.get("http_requests", 0))
                     metrics["http"]["rows"] += int(fallback_metrics.get("http_rows", 0))
                     metrics["http"]["rate_limit_hits"] += int(
-                        fallback_metrics.get("rate_limit_hits", fallback_metrics.get("rate_limited", 0))
+                        fallback_metrics.get(
+                            "rate_limit_hits", fallback_metrics.get("rate_limited", 0)
+                        )
                     )
-                    metrics["http"]["retries"] += int(
-                        fallback_metrics.get("http_retries", 0)
-                    )
+                    metrics["http"]["retries"] += int(fallback_metrics.get("http_retries", 0))
                     prescreened.update(fallback_prescreened)
                     keep_fallback = (
                         set(fallback_frame["symbol"].astype(str).str.upper().unique())
@@ -1731,9 +1736,7 @@ def _fetch_daily_bars(
 
                 parsed_rows_count = int(bars_df.shape[0])
                 if raw_bars_count > 0 and parsed_rows_count == 0:
-                    LOGGER.error(
-                        "Raw bars > 0 but parsed rows == 0; dumping debug artifacts."
-                    )
+                    LOGGER.error("Raw bars > 0 but parsed rows == 0; dumping debug artifacts.")
                     _dump_parse_failure(raw, bars_df)
                 missing = [c for c in required_cols if c not in bars_df.columns]
                 if missing:
@@ -1775,9 +1778,7 @@ def _fetch_daily_bars(
                     prescreened.setdefault(sym, "INSUFFICIENT_HISTORY")
                 metrics["insufficient_history"] += len(insufficient)
                 bars_df = bars_df[bars_df["symbol"].isin(keep)] if keep else bars_df.iloc[0:0]
-                metrics["bars_rows_total"] = metrics.get("bars_rows_total", 0) + int(
-                    len(bars_df)
-                )
+                metrics["bars_rows_total"] = metrics.get("bars_rows_total", 0) + int(len(bars_df))
                 normalized = _normalize_bars_frame(bars_df)
                 if normalized.empty:
                     for sym in keep:
@@ -1842,9 +1843,7 @@ def _fetch_daily_bars(
             for key in ["rate_limited", "http_404_batches", "http_empty_batches"]:
                 metrics[key] += int(fallback_metrics.get(key, 0))
             metrics["raw_bars_count"] += int(fallback_metrics.get("raw_bars_count", 0))
-            metrics["parsed_rows_count"] += int(
-                fallback_metrics.get("parsed_rows_count", 0)
-            )
+            metrics["parsed_rows_count"] += int(fallback_metrics.get("parsed_rows_count", 0))
             metrics["http"]["requests"] += int(fallback_metrics.get("http_requests", 0))
             metrics["http"]["rows"] += int(fallback_metrics.get("http_rows", 0))
             metrics["http"]["rate_limit_hits"] += int(
@@ -1853,7 +1852,9 @@ def _fetch_daily_bars(
             metrics["http"]["retries"] += int(fallback_metrics.get("http_retries", 0))
             prescreened.update(fallback_prescreened)
 
-    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
+    combined = (
+        pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BARS_COLUMNS)
+    )
     combined = _normalize_bars_frame(combined)
     combined = ensure_symbol_column(combined)
     if not combined.empty:
@@ -1887,9 +1888,7 @@ def _fetch_daily_bars(
     else:
         hist = pd.DataFrame(columns=["symbol", "n"])
 
-    coverage_counts = summarize_bar_history_counts(
-        hist, required_bars=BARS_REQUIRED_FOR_INDICATORS
-    )
+    coverage_counts = summarize_bar_history_counts(hist, required_bars=BARS_REQUIRED_FOR_INDICATORS)
 
     if min_history > 0 and not hist.empty:
         keep = set(hist.loc[hist["n"] >= min_history, "symbol"].tolist())
@@ -1906,7 +1905,7 @@ def _fetch_daily_bars(
     existing_insufficient = {
         sym for sym, reason in prescreened.items() if reason == "INSUFFICIENT_HISTORY"
     }
-    insufficient = (insufficient | existing_insufficient)
+    insufficient = insufficient | existing_insufficient
     for sym in insufficient:
         prescreened.setdefault(sym, "INSUFFICIENT_HISTORY")
     if keep:
@@ -1951,7 +1950,9 @@ def _fetch_daily_bars(
         if not retry_frame.empty:
             retry_frame = _normalize_bars_frame(retry_frame)
             retry_frame = ensure_symbol_column(retry_frame)
-            retry_frame = retry_frame.dropna(subset=["timestamp"]) if not retry_frame.empty else retry_frame
+            retry_frame = (
+                retry_frame.dropna(subset=["timestamp"]) if not retry_frame.empty else retry_frame
+            )
             if not retry_frame.empty:
                 retry_frame = (
                     retry_frame.sort_values("timestamp")
@@ -1969,7 +1970,9 @@ def _fetch_daily_bars(
                         retry_hist.loc[retry_hist["n"] >= min_history, "symbol"].tolist()
                     )
                 else:
-                    retry_keep = set(retry_hist["symbol"].tolist()) if not retry_hist.empty else set()
+                    retry_keep = (
+                        set(retry_hist["symbol"].tolist()) if not retry_hist.empty else set()
+                    )
                 if retry_keep:
                     recovered = len(retry_keep)
                     combined = pd.concat(
@@ -1985,9 +1988,7 @@ def _fetch_daily_bars(
             len(missing),
             recovered,
         )
-        metrics["fallback_batches"] = metrics.get("fallback_batches", 0) + int(
-            bool(len(missing))
-        )
+        metrics["fallback_batches"] = metrics.get("fallback_batches", 0) + int(bool(len(missing)))
         for key, value in (retry_metrics or {}).items():
             if not isinstance(value, int):
                 continue
@@ -2019,9 +2020,7 @@ def _fetch_daily_bars(
                     .rename(columns={"size": "n"})
                 )
                 if min_history > 0 and not sip_hist.empty:
-                    sip_keep = set(
-                        sip_hist.loc[sip_hist["n"] >= min_history, "symbol"].tolist()
-                    )
+                    sip_keep = set(sip_hist.loc[sip_hist["n"] >= min_history, "symbol"].tolist())
                 else:
                     sip_keep = set(sip_hist["symbol"].tolist()) if not sip_hist.empty else set()
                 if sip_keep:
@@ -2196,7 +2195,9 @@ def _load_alpaca_universe(
         except (TypeError, ValueError):
             min_dollar = 2_000_000
 
-    def _fallback_universe_via_fetch_symbols(reason: str) -> Optional[Tuple[pd.DataFrame, Dict[str, dict], dict[str, Any]]]:
+    def _fallback_universe_via_fetch_symbols(
+        reason: str,
+    ) -> Optional[Tuple[pd.DataFrame, Dict[str, dict], dict[str, Any]]]:
         if "fetch_symbols" not in globals():
             raise RuntimeError("fetch_symbols helper not defined/imported in screener.py")
         try:
@@ -2282,8 +2283,7 @@ def _load_alpaca_universe(
         LOGGER.info("Asset sample: %s", sample_str)
 
     asset_meta = {
-        str(symbol).strip().upper(): dict(meta or {})
-        for symbol, meta in (asset_meta or {}).items()
+        str(symbol).strip().upper(): dict(meta or {}) for symbol, meta in (asset_meta or {}).items()
     }
     override_cleaned: list[str] = []
     if symbols_override:
@@ -2379,7 +2379,8 @@ def _load_alpaca_universe(
             )
         fallback_df, fallback_meta, fallback_metrics = fallback
         LOGGER.warning(
-            "Falling back to fetch_symbols universe (%s)", fallback_reason or "alpaca assets unavailable"
+            "Falling back to fetch_symbols universe (%s)",
+            fallback_reason or "alpaca assets unavailable",
         )
         asset_meta = {
             str(sym).strip().upper(): dict(meta or {})
@@ -2461,9 +2462,7 @@ def _load_alpaca_universe(
         agg_metrics["bars_rows_total"] = int(cached_bars.shape[0])
         present_symbols: set[str] = set()
         if not cached_bars.empty and "symbol" in cached_bars.columns:
-            cached_bars["symbol"] = (
-                cached_bars["symbol"].astype("string").str.strip().str.upper()
-            )
+            cached_bars["symbol"] = cached_bars["symbol"].astype("string").str.strip().str.upper()
             present_symbols = set(cached_bars["symbol"].dropna().unique())
         missing_symbols = sorted(set(symbols) - present_symbols) if symbols else []
         agg_metrics["symbols_with_bars"] = len(present_symbols)
@@ -2613,7 +2612,9 @@ def _load_alpaca_universe(
     agg_metrics["bars_rows_total"] = _coerce_int(fetch_metrics.get("bars_rows_total", 0))
     agg_metrics["symbols_with_bars"] = _coerce_int(fetch_metrics.get("symbols_with_bars", 0))
     agg_metrics["symbols_no_bars"] = _coerce_int(fetch_metrics.get("symbols_no_bars", 0))
-    agg_metrics["symbols_in"] = _coerce_int(fetch_metrics.get("symbols_in", agg_metrics.get("symbols_in", 0)))
+    agg_metrics["symbols_in"] = _coerce_int(
+        fetch_metrics.get("symbols_in", agg_metrics.get("symbols_in", 0))
+    )
     agg_metrics["symbols_no_bars_sample"] = list(
         fetch_metrics.get("symbols_no_bars_sample", []) or []
     )
@@ -2822,7 +2823,9 @@ def _filter_equity_assets(
     return sorted(symbols), asset_meta, metrics
 
 
-def _fetch_assets_via_sdk(trading_client, *, exclude_otc: bool) -> Tuple[List[str], Dict[str, dict], dict[str, int]]:
+def _fetch_assets_via_sdk(
+    trading_client, *, exclude_otc: bool
+) -> Tuple[List[str], Dict[str, dict], dict[str, int]]:
     if trading_client is None:
         raise RuntimeError("Trading client is unavailable")
     try:
@@ -3134,9 +3137,7 @@ def _append_secondary_indicators(enriched: pd.DataFrame, raw_df: pd.DataFrame) -
 
     volume = pd.to_numeric(working["volume"], errors="coerce").fillna(0.0)
 
-    vol_ma30 = _groupby("volume").transform(
-        lambda s: s.rolling(30, min_periods=1).mean()
-    )
+    vol_ma30 = _groupby("volume").transform(lambda s: s.rolling(30, min_periods=1).mean())
     rel_vol = volume / vol_ma30.replace(0, np.nan)
 
     close_diff = _groupby("close").diff().fillna(0.0)
@@ -3283,7 +3284,9 @@ def _best_score_column(frame: pd.DataFrame) -> str:
 def _normalise_timestamp(series: pd.Series) -> pd.Series:
     parsed = pd.to_datetime(series, errors="coerce", utc=True)
     formatted = parsed.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    fallback = series.astype("string") if isinstance(series, pd.Series) else pd.Series(dtype="string")
+    fallback = (
+        series.astype("string") if isinstance(series, pd.Series) else pd.Series(dtype="string")
+    )
     return formatted.where(~parsed.isna(), fallback).fillna("")
 
 
@@ -3328,7 +3331,9 @@ def _extract_sentiment_symbols(frame: pd.DataFrame) -> pd.Series:
     return empty
 
 
-def _inject_sentiment_breakdown(frame: pd.DataFrame, *, weight: float, min_sentiment: float) -> None:
+def _inject_sentiment_breakdown(
+    frame: pd.DataFrame, *, weight: float, min_sentiment: float
+) -> None:
     if frame is None or frame.empty:
         return
     if "sentiment" not in frame.columns or "score_breakdown" not in frame.columns:
@@ -3416,7 +3421,9 @@ def _apply_sentiment_scores(
         seen.add(sym)
         target_unique.append(sym)
 
-    LOGGER.info("[INFO] SENTIMENT_FETCH start target=%d unique=%d", len(target_symbols), len(target_unique))
+    LOGGER.info(
+        "[INFO] SENTIMENT_FETCH start target=%d unique=%d", len(target_symbols), len(target_unique)
+    )
     skip_reason: Optional[str] = None
     if frame.empty:
         skip_reason = "df_empty"
@@ -3440,7 +3447,9 @@ def _apply_sentiment_scores(
         LOGGER.warning("[WARN] SENTIMENT_FETCH skipped reason=missing_api_url")
     if cache_dir_path is None:
         skip_reason = skip_reason or "cache_dir_invalid"
-        LOGGER.error("[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_invalid cache_dir=%s", cache_dir)
+        LOGGER.error(
+            "[ERROR] SENTIMENT_FETCH skipped reason=cache_dir_invalid cache_dir=%s", cache_dir
+        )
 
     fetch_started = time.perf_counter()
     client_builder = client_factory or _build_sentiment_client
@@ -3471,7 +3480,9 @@ def _apply_sentiment_scores(
     local_errors = 0
     log_limit = 3
     errors_before = 0
-    if client is not None and not (hasattr(client, "get_score") or hasattr(client, "get_symbol_sentiment")):
+    if client is not None and not (
+        hasattr(client, "get_score") or hasattr(client, "get_symbol_sentiment")
+    ):
         LOGGER.warning(
             "[WARN] SENTIMENT_FETCH skipped reason=no_get_score client=%s",
             type(client).__name__,
@@ -3639,11 +3650,11 @@ def _normalise_top_candidates(
         scored_meta["symbol"] = (
             scored_meta.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
         )
-        scored_meta["_ts"] = pd.to_datetime(
-            scored_meta.get("timestamp"), errors="coerce", utc=True
-        )
+        scored_meta["_ts"] = pd.to_datetime(scored_meta.get("timestamp"), errors="coerce", utc=True)
 
-    meta_columns = [col for col in ("exchange", "close", "volume", "score_breakdown") if col in frame.columns]
+    meta_columns = [
+        col for col in ("exchange", "close", "volume", "score_breakdown") if col in frame.columns
+    ]
     lookup_columns = {"exchange", "close", "volume", "score_breakdown"}
 
     if scored_meta is not None:
@@ -3686,9 +3697,7 @@ def _normalise_top_candidates(
         "volume_score": frame.get("volume_score", pd.Series(pd.NA, index=frame.index)),
         "volatility_score": frame.get("volatility_score", pd.Series(pd.NA, index=frame.index)),
         "risk_score": frame.get("risk_score", pd.Series(pd.NA, index=frame.index)),
-        "trend_contribution": frame.get(
-            "trend_contribution", pd.Series(pd.NA, index=frame.index)
-        ),
+        "trend_contribution": frame.get("trend_contribution", pd.Series(pd.NA, index=frame.index)),
         "momentum_contribution": frame.get(
             "momentum_contribution", pd.Series(pd.NA, index=frame.index)
         ),
@@ -3698,9 +3707,7 @@ def _normalise_top_candidates(
         "volatility_contribution": frame.get(
             "volatility_contribution", pd.Series(pd.NA, index=frame.index)
         ),
-        "risk_contribution": frame.get(
-            "risk_contribution", pd.Series(pd.NA, index=frame.index)
-        ),
+        "risk_contribution": frame.get("risk_contribution", pd.Series(pd.NA, index=frame.index)),
         "REL_VOLUME": frame.get("REL_VOLUME", pd.Series(pd.NA, index=frame.index)),
         "OBV_DELTA": frame.get("OBV_DELTA", pd.Series(pd.NA, index=frame.index)),
         "BB_BANDWIDTH": frame.get("BB_BANDWIDTH", pd.Series(pd.NA, index=frame.index)),
@@ -3820,7 +3827,9 @@ def _write_shortlist_csv(path: Path, shortlist: Optional[pd.DataFrame]) -> Path:
         if "coarse_score" in frame.columns:
             frame["coarse_score"] = pd.to_numeric(frame["coarse_score"], errors="coerce")
         if "coarse_rank" in frame.columns:
-            frame["coarse_rank"] = pd.to_numeric(frame["coarse_rank"], errors="coerce").astype("Int64")
+            frame["coarse_rank"] = pd.to_numeric(frame["coarse_rank"], errors="coerce").astype(
+                "Int64"
+            )
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     _write_csv_atomic(target, frame)
@@ -3829,7 +3838,9 @@ def _write_shortlist_csv(path: Path, shortlist: Optional[pd.DataFrame]) -> Path:
 
 def _write_json_atomic(path: Path, payload: dict) -> None:
     target = Path(path)
-    enriched = ensure_canonical_metrics(payload) if target.name == "screener_metrics.json" else payload
+    enriched = (
+        ensure_canonical_metrics(payload) if target.name == "screener_metrics.json" else payload
+    )
     data = json.dumps(enriched, indent=2, sort_keys=True).encode("utf-8")
     atomic_write_bytes(target, data)
 
@@ -3869,7 +3880,9 @@ def _write_coverage_table(path: Path, coverage: Mapping[str, Mapping[str, object
                 "miss_count": int(entry.get("miss_count", 0) or 0),
             }
         )
-    frame = pd.DataFrame(rows, columns=["symbol", "last_ok_utc", "last_miss_utc", "ok_count", "miss_count"])
+    frame = pd.DataFrame(
+        rows, columns=["symbol", "last_ok_utc", "last_miss_utc", "ok_count", "miss_count"]
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_csv_atomic(path, frame)
 
@@ -3915,7 +3928,9 @@ def _metrics_defaults() -> dict[str, Any]:
     }
 
 
-def _merge_dict(target: MutableMapping[str, Any], payload: Mapping[str, Any]) -> MutableMapping[str, Any]:
+def _merge_dict(
+    target: MutableMapping[str, Any], payload: Mapping[str, Any]
+) -> MutableMapping[str, Any]:
     for key, value in payload.items():
         if isinstance(value, Mapping):
             node = target.setdefault(key, {})
@@ -4096,10 +4111,8 @@ def _compute_symbol_stats_frame(bars_df: pd.DataFrame) -> pd.DataFrame:
 
     df.sort_values(["symbol", "timestamp"], inplace=True)
     df["close_volume"] = df["close"] * df["volume"]
-    df["ADV20"] = (
-        df.groupby("symbol", group_keys=False)["close_volume"].transform(
-            lambda s: s.rolling(20, min_periods=1).mean()
-        )
+    df["ADV20"] = df.groupby("symbol", group_keys=False)["close_volume"].transform(
+        lambda s: s.rolling(20, min_periods=1).mean()
     )
     prev_close = df.groupby("symbol")[["close"]].shift(1)
     true_range = pd.concat(
@@ -4115,9 +4128,9 @@ def _compute_symbol_stats_frame(bars_df: pd.DataFrame) -> pd.DataFrame:
         lambda s: s.ewm(alpha=1 / 14, adjust=False, min_periods=1).mean()
     )
     latest = df.groupby("symbol", as_index=False).tail(1).copy()
-    latest["ATR_pct"] = (latest.get("ATR14", pd.Series(index=latest.index)) / latest["close"]).replace(
-        [np.inf, -np.inf], np.nan
-    )
+    latest["ATR_pct"] = (
+        latest.get("ATR14", pd.Series(index=latest.index)) / latest["close"]
+    ).replace([np.inf, -np.inf], np.nan)
     latest["last_bar_date"] = latest["timestamp"].dt.date.astype("string")
     result = latest.reindex(columns=columns, fill_value=pd.NA)
     result.sort_values("symbol", inplace=True)
@@ -4378,9 +4391,7 @@ def _fallback_coarse_score_from_z(frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     working = frame.copy()
-    working["symbol"] = (
-        working["symbol"].astype("string").fillna("").str.strip().str.upper()
-    )
+    working["symbol"] = working["symbol"].astype("string").fillna("").str.strip().str.upper()
     working = working.loc[working["symbol"].str.len() > 0].copy()
     if working.empty:
         return pd.DataFrame()
@@ -4431,7 +4442,9 @@ def run_coarse_features(
         LOGGER.error("Failed to read %s: %s", stats_path, exc)
         return empty_frame if return_frame else 1
 
-    stats_df["symbol"] = stats_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    stats_df["symbol"] = (
+        stats_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    )
     stats_df["ADV20"] = pd.to_numeric(stats_df.get("ADV20"), errors="coerce")
     threshold = float(getattr(args, "dollar_vol_min", 0) or 0)
     eligible = stats_df[stats_df["ADV20"] >= threshold] if threshold else stats_df
@@ -4547,12 +4560,9 @@ def run_coarse_features(
         coarse_rank_df["coarse_score"] = pd.to_numeric(
             coarse_rank_df["coarse_score"], errors="coerce"
         )
-        coarse_rank_df = coarse_rank_df.loc[
-            coarse_rank_df["coarse_score"].notna()
-        ].copy()
+        coarse_rank_df = coarse_rank_df.loc[coarse_rank_df["coarse_score"].notna()].copy()
     if not coarse_rank_df.empty and (
-        "coarse_rank" not in coarse_rank_df.columns
-        or coarse_rank_df["coarse_rank"].isna().all()
+        "coarse_rank" not in coarse_rank_df.columns or coarse_rank_df["coarse_rank"].isna().all()
     ):
         coarse_rank_df = coarse_rank_df.sort_values(
             "coarse_score", ascending=False, na_position="last"
@@ -4652,7 +4662,9 @@ def run_full_nightly(
         int(coarse_df.shape[0]),
     )
 
-    coarse_df["symbol"] = coarse_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    coarse_df["symbol"] = (
+        coarse_df.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
+    )
     if "Score_coarse" not in coarse_df.columns:
         if "coarse_score" in coarse_df.columns:
             coarse_df = coarse_df.rename(columns={"coarse_score": "Score_coarse"})
@@ -4664,11 +4676,15 @@ def run_full_nightly(
             coarse_df["Score_coarse"] = pd.NA
     if "coarse_rank" not in coarse_df.columns:
         if coarse_df["Score_coarse"].notna().any():
-            coarse_df = coarse_df.sort_values("Score_coarse", ascending=False).reset_index(drop=True)
+            coarse_df = coarse_df.sort_values("Score_coarse", ascending=False).reset_index(
+                drop=True
+            )
         else:
             coarse_df = coarse_df.reset_index(drop=True)
         coarse_df["coarse_rank"] = np.arange(1, coarse_df.shape[0] + 1, dtype=int)
-    shortlist_size = max(int(getattr(args, "prefilter_top", DEFAULT_SHORTLIST_SIZE) or DEFAULT_SHORTLIST_SIZE), 0)
+    shortlist_size = max(
+        int(getattr(args, "prefilter_top", DEFAULT_SHORTLIST_SIZE) or DEFAULT_SHORTLIST_SIZE), 0
+    )
     sort_cols = ["coarse_rank"]
     ascending = [True]
     if "Score_coarse" in coarse_df.columns and coarse_df["Score_coarse"].notna().any():
@@ -4766,7 +4782,9 @@ def run_full_nightly(
             "last_run_utc": _now_iso(),
             "required_bars": BARS_REQUIRED_FOR_INDICATORS,
             "symbols_with_bars_fetch": _coerce_int(fetch_metrics.get("symbols_with_required_bars")),
-            "symbols_with_required_bars_fetch": _coerce_int(fetch_metrics.get("symbols_with_required_bars")),
+            "symbols_with_required_bars_fetch": _coerce_int(
+                fetch_metrics.get("symbols_with_required_bars")
+            ),
             "symbols_with_any_bars_fetch": _coerce_int(fetch_metrics.get("symbols_with_any_bars")),
             "bars_rows_total_fetch": int(bars_df.shape[0]) if hasattr(bars_df, "shape") else 0,
         },
@@ -4788,9 +4806,7 @@ def run_full_nightly(
         or _symbol_count(bars_df)
     )
     missing_examples = _normalize_symbol_list(
-        fetch_metrics.get("symbols_no_bars_sample")
-        or fetch_metrics.get("symbols_no_bars")
-        or []
+        fetch_metrics.get("symbols_no_bars_sample") or fetch_metrics.get("symbols_no_bars") or []
     )
     _record_bar_coverage(
         run_ts=now,
@@ -4803,7 +4819,16 @@ def run_full_nightly(
     ranker_path = getattr(args, "ranker_config", RANKER_CONFIG_PATH)
     base_ranker_cfg = _load_ranker_config(ranker_path)
 
-    top_df, scored_df, stats, skip_reasons, reject_samples, gate_counters, ranker_cfg, timing_info = run_screener(
+    (
+        top_df,
+        scored_df,
+        stats,
+        skip_reasons,
+        reject_samples,
+        gate_counters,
+        ranker_cfg,
+        timing_info,
+    ) = run_screener(
         bars_df,
         benchmark_bars=None,
         top_n=int(getattr(args, "top_n", DEFAULT_TOP_N) or DEFAULT_TOP_N),
@@ -4982,7 +5007,9 @@ def _prepare_predictions_frame(
     def _coerce_float(series: pd.Series) -> pd.Series:
         return pd.to_numeric(series, errors="coerce")
 
-    score_breakdowns = frame.get("score_breakdown", pd.Series(dtype="string")).fillna("").astype(str)
+    score_breakdowns = (
+        frame.get("score_breakdown", pd.Series(dtype="string")).fillna("").astype(str)
+    )
     component_breakdowns = (
         frame.get("component_breakdown", pd.Series(dtype="string")).fillna("").astype(str)
     )
@@ -5113,18 +5140,14 @@ def run_screener(
 
     try:
         shortlist_limit = (
-            DEFAULT_SHORTLIST_SIZE
-            if shortlist_size is None
-            else max(int(shortlist_size), 0)
+            DEFAULT_SHORTLIST_SIZE if shortlist_size is None else max(int(shortlist_size), 0)
         )
     except (TypeError, ValueError):
         shortlist_limit = DEFAULT_SHORTLIST_SIZE
 
     try:
         backtest_limit = (
-            DEFAULT_BACKTEST_TOP_K
-            if backtest_top_k is None
-            else max(int(backtest_top_k), 0)
+            DEFAULT_BACKTEST_TOP_K if backtest_top_k is None else max(int(backtest_top_k), 0)
         )
     except (TypeError, ValueError):
         backtest_limit = DEFAULT_BACKTEST_TOP_K
@@ -5234,9 +5257,7 @@ def run_screener(
         include_intermediate=False,
         benchmark_df=benchmark_bars,
     )
-    LOGGER.info(
-        "[STAGE] coarse features end (rows=%d)", int(coarse_enriched.shape[0])
-    )
+    LOGGER.info("[STAGE] coarse features end (rows=%d)", int(coarse_enriched.shape[0]))
 
     coarse_rank_timer = T()
     LOGGER.info("[STAGE] coarse rank start")
@@ -5255,20 +5276,16 @@ def run_screener(
             coarse_scored = coarse_scored.rename(columns=rename_map)
         lower_cols = {str(col).lower(): col for col in coarse_scored.columns}
         if "symbol" not in coarse_scored.columns and "symbol" in lower_cols:
-            coarse_scored = coarse_scored.rename(
-                columns={lower_cols["symbol"]: "symbol"}
-            )
+            coarse_scored = coarse_scored.rename(columns={lower_cols["symbol"]: "symbol"})
         if "symbol" in coarse_scored.columns:
             coarse_scored["symbol"] = (
-                coarse_scored["symbol"]
-                .astype("string")
-                .str.strip()
-                .str.upper()
+                coarse_scored["symbol"].astype("string").str.strip().str.upper()
             )
         score_source = None
-        if "coarse_score" not in coarse_scored.columns or coarse_scored[
-            "coarse_score"
-        ].isna().all():
+        if (
+            "coarse_score" not in coarse_scored.columns
+            or coarse_scored["coarse_score"].isna().all()
+        ):
             if "coarse score" in lower_cols:
                 score_source = lower_cols["coarse score"]
             elif "Score" in coarse_scored.columns:
@@ -5286,9 +5303,7 @@ def run_screener(
                 coarse_scored["coarse_score"], errors="coerce"
             )
             if coarse_scored["coarse_score"].notna().any():
-                coarse_scored = coarse_scored.loc[
-                    coarse_scored["coarse_score"].notna()
-                ].copy()
+                coarse_scored = coarse_scored.loc[coarse_scored["coarse_score"].notna()].copy()
     score_non_null = (
         int(coarse_scored["coarse_score"].notna().sum())
         if "coarse_score" in coarse_scored.columns
@@ -5300,35 +5315,28 @@ def run_screener(
         score_non_null,
         ",".join([str(col) for col in coarse_scored.columns]),
     )
-    LOGGER.info(
-        "[STAGE] coarse rank end (rows=%d)", int(coarse_scored.shape[0])
-    )
+    LOGGER.info("[STAGE] coarse rank end (rows=%d)", int(coarse_scored.shape[0]))
     timing_info["coarse_rank_secs"] = timing_info.get(
         "coarse_rank_secs", 0.0
     ) + coarse_rank_timer.lap("coarse_rank_secs")
 
     if not coarse_scored.empty:
         coarse_scored = coarse_scored.copy()
-        if "coarse_rank" not in coarse_scored.columns or coarse_scored[
-            "coarse_rank"
-        ].isna().all():
-            if "coarse_score" in coarse_scored.columns and coarse_scored[
-                "coarse_score"
-            ].notna().any():
+        if "coarse_rank" not in coarse_scored.columns or coarse_scored["coarse_rank"].isna().all():
+            if (
+                "coarse_score" in coarse_scored.columns
+                and coarse_scored["coarse_score"].notna().any()
+            ):
                 coarse_scored = coarse_scored.sort_values(
                     "coarse_score", ascending=False, na_position="last"
                 ).reset_index(drop=True)
-            elif "Score" in coarse_scored.columns and coarse_scored[
-                "Score"
-            ].notna().any():
+            elif "Score" in coarse_scored.columns and coarse_scored["Score"].notna().any():
                 coarse_scored = coarse_scored.sort_values(
                     "Score", ascending=False, na_position="last"
                 ).reset_index(drop=True)
             else:
                 coarse_scored = coarse_scored.reset_index(drop=True)
-            coarse_scored["coarse_rank"] = np.arange(
-                1, coarse_scored.shape[0] + 1, dtype=int
-            )
+            coarse_scored["coarse_rank"] = np.arange(1, coarse_scored.shape[0] + 1, dtype=int)
     else:
         coarse_scored["coarse_rank"] = pd.Series(dtype="int64")
 
@@ -5341,9 +5349,7 @@ def run_screener(
     )
     shortlist_payload = shortlist_view.rename(columns={"Score": "coarse_score"})
     shortlist_payload["symbol"] = (
-        shortlist_payload.get("symbol", pd.Series(dtype="object"))
-        .astype(str)
-        .str.upper()
+        shortlist_payload.get("symbol", pd.Series(dtype="object")).astype(str).str.upper()
     )
     shortlist_payload = shortlist_payload.drop_duplicates(subset=["symbol"])
     stats["shortlist_candidates"] = int(shortlist_payload.shape[0])
@@ -5373,9 +5379,7 @@ def run_screener(
         else prepared.iloc[0:0].copy()
     )
 
-    LOGGER.info(
-        "[STAGE] full features start (shortlist=%d)", len(shortlist_symbols)
-    )
+    LOGGER.info("[STAGE] full features start (shortlist=%d)", len(shortlist_symbols))
     enriched = build_enriched_bars(
         shortlist_prepared,
         ranker_cfg,
@@ -5400,9 +5404,7 @@ def run_screener(
     LOGGER.info("[STAGE] full rank start")
     scored_df = score_universe(enriched, ranker_cfg)
     LOGGER.info("[STAGE] full rank end (rows=%d)", int(scored_df.shape[0]))
-    timing_info["rank_secs"] = timing_info.get("rank_secs", 0.0) + rank_timer.lap(
-        "rank_secs"
-    )
+    timing_info["rank_secs"] = timing_info.get("rank_secs", 0.0) + rank_timer.lap("rank_secs")
     scored_df, sentiment_summary = _apply_sentiment_scores(
         scored_df,
         run_ts=now,
@@ -5433,13 +5435,11 @@ def run_screener(
             scored_df["coarse_rank"] = pd.Series(pd.NA, index=scored_df.index, dtype="Int64")
 
     if "coarse_score" in scored_df.columns:
-        scored_df["coarse_score"] = pd.to_numeric(
-            scored_df["coarse_score"], errors="coerce"
-        )
+        scored_df["coarse_score"] = pd.to_numeric(scored_df["coarse_score"], errors="coerce")
     if "coarse_rank" in scored_df.columns:
-        scored_df["coarse_rank"] = pd.to_numeric(
-            scored_df["coarse_rank"], errors="coerce"
-        ).astype("Int64")
+        scored_df["coarse_rank"] = pd.to_numeric(scored_df["coarse_rank"], errors="coerce").astype(
+            "Int64"
+        )
 
     gates_timer = T()
     LOGGER.info("[STAGE] gates start")
@@ -5466,12 +5466,12 @@ def run_screener(
                 0,
             )
             if int(candidates_df.shape[0]) > prev_count:
-                gate_fail_counts["gate_policy_tier"] = gate_fail_counts.get("gate_policy_tier") or "soft"
+                gate_fail_counts["gate_policy_tier"] = (
+                    gate_fail_counts.get("gate_policy_tier") or "soft"
+                )
             if sentiment_gated:
                 gate_fail_counts["sentiment"] = sentiment_gated
-    timing_info["gates_secs"] = timing_info.get("gates_secs", 0.0) + gates_timer.lap(
-        "gates_secs"
-    )
+    timing_info["gates_secs"] = timing_info.get("gates_secs", 0.0) + gates_timer.lap("gates_secs")
     LOGGER.info("[STAGE] gates end (candidates=%d)", int(candidates_df.shape[0]))
 
     if not candidates_df.empty:
@@ -5488,13 +5488,12 @@ def run_screener(
             ).astype("Int64")
 
     if not candidates_df.empty:
+
         def _gate_key(frame: pd.DataFrame) -> pd.Index:
             symbols = frame.get("symbol", pd.Series(index=frame.index, dtype="object"))
             symbols = symbols.astype(str).str.upper()
             if "timestamp" in frame.columns:
-                timestamps = pd.to_datetime(
-                    frame["timestamp"], utc=True, errors="coerce"
-                )
+                timestamps = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
                 timestamp_str = timestamps.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                 timestamp_str = timestamp_str.fillna("")
             else:
@@ -5576,14 +5575,10 @@ def run_screener(
     stats["backtest_lookback"] = int(lookback_window)
     if not backtest_df.empty:
         stats["backtest_expectancy_mean"] = float(
-            pd.to_numeric(backtest_df["backtest_expectancy"], errors="coerce")
-            .dropna()
-            .mean()
+            pd.to_numeric(backtest_df["backtest_expectancy"], errors="coerce").dropna().mean()
         )
         stats["backtest_win_rate_mean"] = float(
-            pd.to_numeric(backtest_df["backtest_win_rate"], errors="coerce")
-            .dropna()
-            .mean()
+            pd.to_numeric(backtest_df["backtest_win_rate"], errors="coerce").dropna().mean()
         )
     else:
         stats["backtest_expectancy_mean"] = 0.0
@@ -5760,7 +5755,11 @@ def run_screener(
             failures.append("with_bars=0")
         if fallback_used:
             failures.append("fallback_used=true")
-        frame_for_indicators = scored_df if isinstance(scored_df, pd.DataFrame) and not scored_df.empty else candidates_df
+        frame_for_indicators = (
+            scored_df
+            if isinstance(scored_df, pd.DataFrame) and not scored_df.empty
+            else candidates_df
+        )
         sma9_series = None
         if isinstance(frame_for_indicators, pd.DataFrame) and not frame_for_indicators.empty:
             if "sma9" in frame_for_indicators.columns:
@@ -5868,7 +5867,9 @@ def write_outputs(
     sentiment_missing = int(stats.get("sentiment_missing_count", 0) or 0)
     sentiment_avg = stats.get("sentiment_avg")
     sentiment_series = (
-        scored_df.get("sentiment") if sentiment_enabled and isinstance(scored_df, pd.DataFrame) else None
+        scored_df.get("sentiment")
+        if sentiment_enabled and isinstance(scored_df, pd.DataFrame)
+        else None
     )
     run_meta = {
         "ranker_version": str(cfg_for_summary.get("version", "unknown")),
@@ -6001,7 +6002,9 @@ def write_outputs(
     metrics["with_bars"] = metrics["symbols_with_bars"]
     if not metrics.get("bars_rows_total"):
         metrics["bars_rows_total"] = int(rows_total)
-    metrics["symbols_no_bars"] = max(int(metrics.get("symbols_in", 0)) - int(metrics.get("symbols_with_any_bars", 0)), 0)
+    metrics["symbols_no_bars"] = max(
+        int(metrics.get("symbols_in", 0)) - int(metrics.get("symbols_with_any_bars", 0)), 0
+    )
     prefix_counts_payload = fetch_payload.get("universe_prefix_counts")
     if isinstance(prefix_counts_payload, dict):
         metrics["universe_prefix_counts"] = {
@@ -6038,14 +6041,14 @@ def write_outputs(
     if isinstance(http_payload, Mapping):
         http_requests = int(http_payload.get("requests", 0) or 0)
         http_rows = int(http_payload.get("rows", 0) or 0)
-        http_rl = int(
-            http_payload.get("rate_limit_hits", http_payload.get("rate_limited", 0) or 0)
-        )
+        http_rl = int(http_payload.get("rate_limit_hits", http_payload.get("rate_limited", 0) or 0))
         http_retries = int(http_payload.get("retries", http_payload.get("http_retries", 0) or 0))
     else:
         http_requests = int(fetch_payload.get("http_requests", 0) or 0)
         http_rows = int(fetch_payload.get("http_rows", 0) or 0)
-        http_rl = int(fetch_payload.get("rate_limit_hits", fetch_payload.get("rate_limited", 0) or 0))
+        http_rl = int(
+            fetch_payload.get("rate_limit_hits", fetch_payload.get("rate_limited", 0) or 0)
+        )
         http_retries = int(fetch_payload.get("http_retries", fetch_payload.get("retries", 0) or 0))
     if not http_rows:
         try:
@@ -6087,7 +6090,10 @@ def write_outputs(
     if mode in {"screener", "full-nightly"} and db.db_enabled():
         try:
             insert_frame = _prepare_screener_db_frame(top_df, scored_df)
-            gated_rows = int(stats.get("gated_rows", top_df.shape[0] if isinstance(top_df, pd.DataFrame) else 0) or 0)
+            gated_rows = int(
+                stats.get("gated_rows", top_df.shape[0] if isinstance(top_df, pd.DataFrame) else 0)
+                or 0
+            )
             dropped_incomplete = max(int(gated_rows) - int(insert_frame.shape[0]), 0)
             db.insert_screener_candidates(
                 run_date_value,
@@ -6110,8 +6116,12 @@ def write_outputs(
         "run_utc": metrics.get("last_run_utc"),
         "symbols_in": metrics.get("symbols_in", 0),
         "symbols_with_bars": metrics.get("symbols_with_bars", 0),
-        "symbols_with_any_bars": metrics.get("symbols_with_any_bars", metrics.get("symbols_with_bars", 0)),
-        "symbols_with_required_bars": metrics.get("symbols_with_required_bars", metrics.get("symbols_with_bars", 0)),
+        "symbols_with_any_bars": metrics.get(
+            "symbols_with_any_bars", metrics.get("symbols_with_bars", 0)
+        ),
+        "symbols_with_required_bars": metrics.get(
+            "symbols_with_required_bars", metrics.get("symbols_with_bars", 0)
+        ),
         "bars_rows_total": metrics.get("bars_rows_total", 0),
         "rows": metrics.get("rows", 0),
         "fetch_secs": timing_payload.get("fetch_secs", 0),
@@ -6237,7 +6247,9 @@ def _prepare_screener_db_frame(
     scored_meta["symbol"] = (
         scored_meta.get("symbol", pd.Series(dtype="string")).astype("string").str.upper()
     )
-    scored_meta = scored_meta.dropna(subset=["symbol"]).drop_duplicates(subset=["symbol"], keep="last")
+    scored_meta = scored_meta.dropna(subset=["symbol"]).drop_duplicates(
+        subset=["symbol"], keep="last"
+    )
 
     meta = pd.DataFrame({"symbol": scored_meta["symbol"]})
     if "exchange" in scored_meta.columns:
@@ -6291,7 +6303,9 @@ def _prepare_screener_db_frame(
         else pd.Series(pd.NA, index=frame.index)
     )
     if "close_meta" in frame.columns:
-        entry_price = entry_price.where(entry_price.notna() & (entry_price > 0), frame["close_meta"])
+        entry_price = entry_price.where(
+            entry_price.notna() & (entry_price > 0), frame["close_meta"]
+        )
     frame["entry_price"] = pd.to_numeric(entry_price, errors="coerce")
     frame.drop(columns=["close_meta"], inplace=True, errors="ignore")
 
@@ -6315,9 +6329,13 @@ def _prepare_screener_db_frame(
         for idx, is_bad in (~required_mask).items():
             if not bool(is_bad):
                 continue
-            reason = ",".join([name for name, mask in missing_fields.items() if bool(mask.loc[idx])])
+            reason = ",".join(
+                [name for name, mask in missing_fields.items() if bool(mask.loc[idx])]
+            )
             symbol = str(frame.loc[idx].get("symbol", "")).upper()
-            LOGGER.warning("SCREENER_CANDIDATE_DROP reason=%s symbol=%s", reason or "unknown", symbol)
+            LOGGER.warning(
+                "SCREENER_CANDIDATE_DROP reason=%s symbol=%s", reason or "unknown", symbol
+            )
         LOGGER.warning(
             "[WARN] SCREENER_CANDIDATES_INCOMPLETE dropped=%s remaining=%s",
             dropped,
@@ -6614,7 +6632,9 @@ def main(
         status_code = (
             trading_probe.get("status")
             if isinstance(trading_probe, Mapping)
-            else trading_probe.get("status") if isinstance(trading_probe, dict) else None
+            else trading_probe.get("status")
+            if isinstance(trading_probe, dict)
+            else None
         )
         if status_code in (401, 403):
             raise AlpacaUnauthorizedError(endpoint="/v2/account")
@@ -6734,9 +6754,15 @@ def main(
             {
                 "last_run_utc": _now_iso(),
                 "required_bars": BARS_REQUIRED_FOR_INDICATORS,
-                "symbols_with_bars_fetch": _symbol_count(frame if isinstance(frame, pd.DataFrame) else None),
-                "symbols_with_required_bars_fetch": _symbol_count(frame if isinstance(frame, pd.DataFrame) else None),
-                "symbols_with_any_bars_fetch": _symbol_count(frame if isinstance(frame, pd.DataFrame) else None),
+                "symbols_with_bars_fetch": _symbol_count(
+                    frame if isinstance(frame, pd.DataFrame) else None
+                ),
+                "symbols_with_required_bars_fetch": _symbol_count(
+                    frame if isinstance(frame, pd.DataFrame) else None
+                ),
+                "symbols_with_any_bars_fetch": _symbol_count(
+                    frame if isinstance(frame, pd.DataFrame) else None
+                ),
                 "bars_rows_total_fetch": int(frame.shape[0]) if hasattr(frame, "shape") else 0,
             },
             base_dir=base_dir,

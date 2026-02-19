@@ -1,4 +1,5 @@
 """Simple rate-limiting primitives."""
+
 from __future__ import annotations
 
 import collections
@@ -29,4 +30,3 @@ class TokenBucket:
 
 
 __all__ = ["TokenBucket"]
-

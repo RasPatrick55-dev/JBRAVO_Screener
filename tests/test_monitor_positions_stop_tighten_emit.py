@@ -52,12 +52,18 @@ class TestMonitorStopTightenEmit(unittest.TestCase):
         original_cooldowns = dict(monitor.TIGHTEN_COOLDOWNS)
         monitor.TIGHTEN_COOLDOWNS.clear()
         try:
-            with mock.patch.dict(os.environ, {"MONITOR_ENABLE_BREAKEVEN_TIGHTEN": "true"}), \
-                mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]), \
-                mock.patch.object(monitor, "cancel_order_safe", return_value=True), \
-                mock.patch.object(monitor, "broker_submit_order", return_value=SimpleNamespace(id="DRYRUN")), \
-                mock.patch.object(monitor, "_persist_metrics", return_value=None), \
-                mock.patch.object(monitor, "_save_tighten_cooldowns", return_value=None):
+            with (
+                mock.patch.dict(os.environ, {"MONITOR_ENABLE_BREAKEVEN_TIGHTEN": "true"}),
+                mock.patch.object(
+                    monitor.trading_client, "get_orders", return_value=[trailing_order]
+                ),
+                mock.patch.object(monitor, "cancel_order_safe", return_value=True),
+                mock.patch.object(
+                    monitor, "broker_submit_order", return_value=SimpleNamespace(id="DRYRUN")
+                ),
+                mock.patch.object(monitor, "_persist_metrics", return_value=None),
+                mock.patch.object(monitor, "_save_tighten_cooldowns", return_value=None),
+            ):
                 with self.assertLogs(monitor.logger, level="INFO") as log_ctx:
                     monitor.manage_trailing_stop(position)
         finally:
@@ -76,7 +82,7 @@ class TestMonitorStopTightenEmit(unittest.TestCase):
         prefix = "STOP_TIGHTEN "
         start = tighten_line.find(prefix)
         self.assertNotEqual(start, -1, "STOP_TIGHTEN payload missing")
-        payload = json.loads(tighten_line[start + len(prefix):])
+        payload = json.loads(tighten_line[start + len(prefix) :])
 
         required_keys = {"symbol", "from", "to", "gain_pct", "days_held", "reason"}
         self.assertTrue(required_keys.issubset(payload), "STOP_TIGHTEN missing keys")

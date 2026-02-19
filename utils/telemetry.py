@@ -25,9 +25,7 @@ def events_path() -> Path:
 
 def get_version() -> str:
     try:
-        sha = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], text=True
-        ).strip()
+        sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
         return sha
     except Exception:
         return os.environ.get("JBRAVO_VERSION", "unknown")
@@ -74,7 +72,7 @@ class RunSentinel:
             }
         )
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, _exc_type, exc, _tb):
         log_event(
             {
                 "event": "RUN_END",

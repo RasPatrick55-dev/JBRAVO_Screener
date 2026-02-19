@@ -1,4 +1,5 @@
 """Robust trade execution orchestrator for JBRAVO."""
+
 from __future__ import annotations
 
 import argparse
@@ -14,11 +15,10 @@ import time as _time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, time as dtime
-from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
-from urllib.parse import urlparse, unquote
 
 from zoneinfo import ZoneInfo
 from dateutil.parser import isoparse
@@ -26,7 +26,6 @@ from dateutil.parser import isoparse
 NY = ZoneInfo("America/New_York")
 
 import pandas as pd
-import psycopg2
 import requests
 
 from scripts import db
@@ -46,7 +45,7 @@ import utils.telemetry as telemetry
 try:  # pragma: no cover - import guard for optional dependency
     from alpaca.common.exceptions import APIError
     from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import OrderDirection, OrderSide, QueryOrderStatus, TimeInForce
+    from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
     from alpaca.trading.requests import (
         GetOrdersRequest,
         LimitOrderRequest,
@@ -67,10 +66,6 @@ except Exception:  # pragma: no cover - lightweight fallback for tests
     class OrderSide:  # type: ignore
         BUY = _Enum("buy")
         SELL = _Enum("sell")
-
-    class OrderDirection:  # type: ignore
-        ASC = _Enum("asc")
-        DESC = _Enum("desc")
 
     class TimeInForce:  # type: ignore
         DAY = _Enum("day")
@@ -145,9 +140,7 @@ def _canonicalize_candidate_header(
     if "symbol" not in frame.columns:
         return pd.DataFrame(columns=REQUIRED)
 
-    frame["symbol"] = (
-        frame["symbol"].astype("string").fillna("").str.strip().str.upper()
-    )
+    frame["symbol"] = frame["symbol"].astype("string").fillna("").str.strip().str.upper()
     frame = frame.loc[frame["symbol"].str.len() > 0]
 
     if frame.empty:
@@ -182,7 +175,9 @@ def _canonicalize_candidate_header(
             except Exception:
                 scored = pd.DataFrame()
 
-    if ("close" not in frame.columns or frame["close"].isna().all()) and "entry_price" in frame.columns:
+    if (
+        "close" not in frame.columns or frame["close"].isna().all()
+    ) and "entry_price" in frame.columns:
         frame.loc[:, "close"] = frame["entry_price"]
 
     if not scored.empty and "symbol" in scored.columns:
@@ -210,7 +205,10 @@ def _canonicalize_candidate_header(
 
     if "score_breakdown" in frame.columns:
         frame["score_breakdown"] = (
-            frame["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
+            frame["score_breakdown"]
+            .astype("string")
+            .fillna("")
+            .replace({"": "{}", "fallback": "{}"})
         )
     else:
         frame["score_breakdown"] = "{}"
@@ -220,7 +218,9 @@ def _canonicalize_candidate_header(
     else:
         frame["source"] = "screener"
 
-    volume_series = frame["volume"] if "volume" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    volume_series = (
+        frame["volume"] if "volume" in frame.columns else pd.Series(pd.NA, index=frame.index)
+    )
     frame["volume"] = pd.to_numeric(volume_series, errors="coerce").fillna(0)
 
     adv_series = frame["adv20"] if "adv20" in frame.columns else pd.Series(pd.NA, index=frame.index)
@@ -230,7 +230,9 @@ def _canonicalize_candidate_header(
     frame["atrp"] = pd.to_numeric(atrp_series, errors="coerce").fillna(0.0)
 
     universe_series = (
-        frame["universe_count"] if "universe_count" in frame.columns else pd.Series(pd.NA, index=frame.index)
+        frame["universe_count"]
+        if "universe_count" in frame.columns
+        else pd.Series(pd.NA, index=frame.index)
     )
     frame["universe_count"] = pd.to_numeric(universe_series, errors="coerce").fillna(0).astype(int)
 
@@ -572,7 +574,9 @@ def _alpaca_url(path: str) -> str:
     return f"{base_url}{normalized_path}"
 
 
-def alpaca_http_get(path: str, *, params: Mapping[str, Any] | None = None, timeout: int = 15) -> requests.Response:
+def alpaca_http_get(
+    path: str, *, params: Mapping[str, Any] | None = None, timeout: int = 15
+) -> requests.Response:
     url = _alpaca_url(path)
     headers = _alpaca_headers()
     return requests.get(url, headers=headers, params=params, timeout=timeout)
@@ -673,7 +677,9 @@ def alpaca_list_orders_http(
     url = _alpaca_url("/v2/orders")
     computed_after = after_iso
     if computed_after is None:
-        computed_after = (datetime.now(timezone.utc) - timedelta(days=max(0, lookback_days or 0))).isoformat()
+        computed_after = (
+            datetime.now(timezone.utc) - timedelta(days=max(0, lookback_days or 0))
+        ).isoformat()
     params = {
         "status": "all",
         "after": computed_after,
@@ -770,8 +776,8 @@ def log_info(tag: str, **kv: Any) -> None:
     payload = " ".join(f"{key}={kv[key]}" for key in sorted(kv)) if kv else ""
     message = f"{tag} {payload}".strip()
     LOGGER.info(message)
- 
- 
+
+
 def _log_call(label, fn, *args, **kwargs):
     t0 = _time.perf_counter()
     try:
@@ -781,6 +787,8 @@ def _log_call(label, fn, *args, **kwargs):
     except Exception as e:
         logger.warning("[CALL] %s ok=0 dt=%.3fs err=%r", label, _time.perf_counter() - t0, e)
         return None, e
+
+
 LOG_PATH = Path("logs") / "execute_trades.log"
 METRICS_PATH = Path("data") / "execute_metrics.json"
 _EXECUTE_START_UTC: datetime | None = None
@@ -868,6 +876,8 @@ def _write_execute_metrics_error(
         start_dt=_EXECUTE_START_UTC,
         end_dt=datetime.now(timezone.utc),
     )
+
+
 DEFAULT_BAR_DIRECTORIES: Sequence[Path] = (
     Path("data") / "daily",
     Path("data") / "bars" / "daily",
@@ -944,9 +954,7 @@ def _log_account_probe(
     creds_snapshot: Mapping[str, Any] | None = None,
 ) -> tuple[bool, str]:
     env_files = [
-        Path(path).name
-        for path in _ENV_FILES_LOADED
-        if isinstance(path, str) and path.strip()
+        Path(path).name for path in _ENV_FILES_LOADED if isinstance(path, str) and path.strip()
     ]
     has_env_file = any(name.lower().endswith(".env") for name in env_files)
 
@@ -1166,12 +1174,18 @@ def _canonicalize_execute_metrics(
     run_date_value = enriched.get("run_date")
     enriched["run_date"] = "" if run_date_value is None else str(run_date_value)
 
-    market_clock = enriched.get("market_clock") if isinstance(enriched.get("market_clock"), Mapping) else {}
+    market_clock = (
+        enriched.get("market_clock") if isinstance(enriched.get("market_clock"), Mapping) else {}
+    )
     enriched["market_clock"] = {
         "ny_date": "" if market_clock.get("ny_date") is None else str(market_clock.get("ny_date")),
         "is_open": bool(market_clock.get("is_open", False)),
-        "next_open": "" if market_clock.get("next_open") is None else str(market_clock.get("next_open")),
-        "next_close": "" if market_clock.get("next_close") is None else str(market_clock.get("next_close")),
+        "next_open": ""
+        if market_clock.get("next_open") is None
+        else str(market_clock.get("next_open")),
+        "next_close": ""
+        if market_clock.get("next_close") is None
+        else str(market_clock.get("next_close")),
     }
     metrics_defaults: Dict[str, Any] = {
         "open_positions": 0,
@@ -1306,7 +1320,9 @@ def write_premarket_snapshot(
         buying_power = probe_payload.get("buying_power", buying_power)
 
     try:
-        buying_power = float(str(buying_power).replace(",", "")) if buying_power not in (None, "") else None
+        buying_power = (
+            float(str(buying_power).replace(",", "")) if buying_power not in (None, "") else None
+        )
     except Exception:
         buying_power = None
 
@@ -1349,9 +1365,7 @@ def _clock_is_in_window(client: Any, window: str) -> tuple[bool, str]:
         clk = client.get_clock()
         ny = ZoneInfo("America/New_York")
         now_ny = (
-            clk.timestamp.astimezone(ny)
-            if getattr(clk, "timestamp", None) is not None
-            else None
+            clk.timestamp.astimezone(ny) if getattr(clk, "timestamp", None) is not None else None
         )
         if now_ny is None:
             now_ny = datetime.now(ny)
@@ -1556,9 +1570,7 @@ def _fetch_prevclose_snapshot(symbol: str) -> Optional[float]:
         )
         return None
     if response.status_code != 200:
-        _warn_context(
-            "alpaca.snapshot_prevclose", f"{symbol} status={response.status_code}"
-        )
+        _warn_context("alpaca.snapshot_prevclose", f"{symbol} status={response.status_code}")
         return None
     try:
         payload = response.json()
@@ -1861,7 +1873,9 @@ def load_candidates_from_db(
     LOGGER.info("Loading candidates from DB")
 
     def _record_missing_config() -> pd.DataFrame:
-        LOGGER.error("[ERROR] Missing DB config: set JBRAVO_DB_* or DATABASE_URL")
+        LOGGER.error(
+            "[ERROR] Missing DB config: set DATABASE_URL (preferred) or DB_HOST/DB_PORT/DB_NAME/DB_USER"
+        )
         if metrics is not None:
             metrics.auth_ok = False
             metrics.auth_reason = "candidate_load_error"
@@ -1873,43 +1887,21 @@ def load_candidates_from_db(
                 record_skip("DATA_MISSING", count=1)
         return pd.DataFrame()
 
-    host = os.getenv("JBRAVO_DB_HOST")
-    port = os.getenv("JBRAVO_DB_PORT")
-    name = os.getenv("JBRAVO_DB_NAME")
-    user = os.getenv("JBRAVO_DB_USER")
-    password = os.getenv("JBRAVO_DB_PASS")
-    database_url = os.getenv("DATABASE_URL")
-
-    config_source = None
-    if host and name and user and password:
-        config_source = "JBRAVO_DB_*"
-        port = port or "5432"
-    elif database_url:
-        parsed = urlparse(database_url)
-        if parsed.scheme.startswith("postgresql"):
-            host = parsed.hostname
-            port = str(parsed.port or "5432")
-            name = (parsed.path or "").lstrip("/")
-            user = parsed.username
-            password = unquote(parsed.password or "")
-            if host and name and user and password:
-                config_source = "DATABASE_URL"
-                LOGGER.info("[INFO] DB_PASSWORD decoded_from_url=true")
-
-    if not config_source:
+    config = db.db_config_preview()
+    if not config.get("enabled"):
         return _record_missing_config()
 
     connection = None
-    masked_user = (user or "")[:1] + "***" if user else "***"
-    masked_pass = "***" if not password else "***"
-    LOGGER.info("[INFO] DB_CONFIG source=%s", config_source)
+    user = str(config.get("user") or "")
+    masked_user = user[:1] + "***" if user else "***"
+    LOGGER.info("[INFO] DB_CONFIG source=%s", config.get("source"))
     LOGGER.info(
         "[INFO] DB_CONNECT target=host=%s port=%s db=%s user=%s pass=%s",
-        host,
-        port or "5432",
-        name,
+        config.get("host"),
+        config.get("port"),
+        config.get("dbname"),
         masked_user,
-        masked_pass,
+        "***",
     )
 
     def _record_no_db_candidates(detail: str) -> None:
@@ -1926,13 +1918,9 @@ def load_candidates_from_db(
 
     max_timestamp_value: Any = None
     try:
-        connection = psycopg2.connect(
-            host=host,
-            port=port or "5432",
-            dbname=name,
-            user=user,
-            password=password,
-        )
+        connection = db.get_db_conn()
+        if connection is None:
+            raise CandidateLoadError("Database connection unavailable")
         if diagnostic:
             try:
                 with connection.cursor() as cursor:
@@ -1972,7 +1960,10 @@ def load_candidates_from_db(
         _record_no_db_candidates("latest_batch_empty")
         return df
     if diagnostic:
-        sample = [{"symbol": rec.get("symbol"), "score": rec.get("score")} for rec in df.to_dict("records")[:5]]
+        sample = [
+            {"symbol": rec.get("symbol"), "score": rec.get("score")}
+            for rec in df.to_dict("records")[:5]
+        ]
         LOGGER.info("[DIAGNOSTIC] DB_SAMPLE symbols_scores=%s", sample)
     return df
 
@@ -2037,7 +2028,11 @@ def _apply_candidate_defaults(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]
 
     if "entry_price" in frame.columns:
         entry_series = pd.to_numeric(frame["entry_price"], errors="coerce")
-        close_series = pd.to_numeric(frame.get("close"), errors="coerce") if "close" in frame.columns else pd.Series(dtype="float64")
+        close_series = (
+            pd.to_numeric(frame.get("close"), errors="coerce")
+            if "close" in frame.columns
+            else pd.Series(dtype="float64")
+        )
         missing_entry = entry_series.isna()
         if "close" in frame.columns and not close_series.empty:
             filled = close_series.reindex_like(entry_series)
@@ -2232,9 +2227,7 @@ class ExecutionMetrics:
         return round(value, 3)
 
     def as_dict(self) -> Dict[str, Any]:
-        skip_payload = {
-            key: int(self.skipped_reasons.get(key, 0)) for key in SKIP_REASON_ORDER
-        }
+        skip_payload = {key: int(self.skipped_reasons.get(key, 0)) for key in SKIP_REASON_ORDER}
         for key, value in sorted(self.skipped_reasons.items()):
             if key not in skip_payload:
                 skip_payload[key] = int(value)
@@ -2363,11 +2356,7 @@ def _compute_qty(
         else max(0.0, float(target_notional))
     )
     alloc_qty = math.floor(notional_budget / limit_floor)
-    min_qty = (
-        math.floor(max(0.0, min_order_usd) / limit_floor)
-        if min_order_usd
-        else 0
-    )
+    min_qty = math.floor(max(0.0, min_order_usd) / limit_floor) if min_order_usd else 0
     qty = max(alloc_qty, min_qty)
     return max(0, qty)
 
@@ -2604,9 +2593,8 @@ class OptionalFieldHydrator:
                     cached["volume"] = local.get("volume")
                 cached["source"] = "cache"
                 self.latest_bar_cache[symbol] = cached
-                if (
-                    (not needs_close or cached.get("close") is not None)
-                    and (not needs_volume or cached.get("volume") is not None)
+                if (not needs_close or cached.get("close") is not None) and (
+                    not needs_volume or cached.get("volume") is not None
                 ):
                     continue
             symbols_to_fetch.append(symbol)
@@ -2786,7 +2774,9 @@ class TradeExecutor:
         self._prev_close_cache: Dict[str, Optional[float]] = {}
         self._ranking_key: str = "score"
 
-    def reconcile_closed_trades(self, *, lookback_days: int | None = None, limit: int | None = None) -> None:
+    def reconcile_closed_trades(
+        self, *, lookback_days: int | None = None, limit: int | None = None
+    ) -> None:
         watermark_enabled = bool(getattr(self.config, "reconcile_use_watermark", True))
         if not db.db_enabled():
             if watermark_enabled:
@@ -2808,7 +2798,9 @@ class TradeExecutor:
             lookback_days = 7
         lookback_days = max(0, lookback_days)
         try:
-            limit = int(limit if limit is not None else getattr(self.config, "reconcile_limit", 500))
+            limit = int(
+                limit if limit is not None else getattr(self.config, "reconcile_limit", 500)
+            )
         except Exception:
             limit = 500
         limit = max(1, limit)
@@ -2898,7 +2890,9 @@ class TradeExecutor:
                     return ts
             return None
 
-        def _latest_filled_sell_order(symbol: str) -> tuple[Any | None, datetime | None, Dict[str, Any]]:
+        def _latest_filled_sell_order(
+            symbol: str,
+        ) -> tuple[Any | None, datetime | None, Dict[str, Any]]:
             stats: Dict[str, Any] = {
                 "after_iso": fetch_after_iso,
                 "fetched_orders": 0,
@@ -2981,7 +2975,8 @@ class TradeExecutor:
                 open_by_symbol.setdefault(symbol, []).append(trade)
             for trades in open_by_symbol.values():
                 trades.sort(
-                    key=lambda t: db.normalize_ts(t.get("entry_time")) or datetime.min.replace(tzinfo=timezone.utc),
+                    key=lambda t: db.normalize_ts(t.get("entry_time"))
+                    or datetime.min.replace(tzinfo=timezone.utc),
                     reverse=True,
                 )
 
@@ -3055,7 +3050,9 @@ class TradeExecutor:
                         exit_price = float(exit_price_raw) if exit_price_raw is not None else None
                     except (TypeError, ValueError):
                         exit_price = None
-                    exit_reason = "TRAIL_STOP" if order.get("type") == "trailing_stop" else "SELL_FILL"
+                    exit_reason = (
+                        "TRAIL_STOP" if order.get("type") == "trailing_stop" else "SELL_FILL"
+                    )
                     order_id = str(order.get("id") or order.get("order_id") or "")
                     try:
                         db.insert_order_event(
@@ -3076,7 +3073,9 @@ class TradeExecutor:
                             exc,
                         )
                     try:
-                        closed = db.close_trade(engine, trade_id, order_id, exit_time_raw, exit_price, exit_reason)
+                        closed = db.close_trade(
+                            engine, trade_id, order_id, exit_time_raw, exit_price, exit_reason
+                        )
                     except Exception as exc:  # pragma: no cover - defensive guard
                         LOGGER.warning(
                             "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
@@ -3111,7 +3110,9 @@ class TradeExecutor:
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=get_closed_trades err=%s", exc)
             trades_to_decorate = []
 
-        latest_sell_order_by_symbol: Dict[str, tuple[Any | None, datetime | None, Dict[str, Any]]] = {}
+        latest_sell_order_by_symbol: Dict[
+            str, tuple[Any | None, datetime | None, Dict[str, Any]]
+        ] = {}
         for trade in trades_to_decorate:
             trade_id = trade.get("trade_id")
             symbol = str(trade.get("symbol", "")).upper()
@@ -3167,7 +3168,11 @@ class TradeExecutor:
             try:
                 entry_price_value = trade.get("entry_price")
                 qty_value = trade.get("qty")
-                if exit_price is not None and entry_price_value is not None and qty_value is not None:
+                if (
+                    exit_price is not None
+                    and entry_price_value is not None
+                    and qty_value is not None
+                ):
                     realized_pnl = (float(exit_price) - float(entry_price_value)) * float(qty_value)
             except Exception:
                 realized_pnl = None
@@ -3225,10 +3230,14 @@ class TradeExecutor:
             try:
                 updated = db.set_reconcile_state(engine, new_last_after, now_utc)
             except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=write_failed err=%s", exc)
+                LOGGER.warning(
+                    "[WARN] RECONCILE_WATERMARK_DISABLED reason=write_failed err=%s", exc
+                )
                 updated = False
             if updated:
-                LOGGER.info("[INFO] RECONCILE_WATERMARK_UPDATE last_after=%s", new_last_after.isoformat())
+                LOGGER.info(
+                    "[INFO] RECONCILE_WATERMARK_UPDATE last_after=%s", new_last_after.isoformat()
+                )
         LOGGER.info("[INFO] RECONCILE_END closed=%s decorated=%s", closed_count, decorated_count)
 
     def log_info(self, event: str, **payload: Any) -> None:
@@ -3631,7 +3640,9 @@ class TradeExecutor:
             try:
                 df = pd.read_csv(source_path)
             except Exception as exc:
-                raise CandidateLoadError(f"Failed to load candidate source file: {source_path}") from exc
+                raise CandidateLoadError(
+                    f"Failed to load candidate source file: {source_path}"
+                ) from exc
             base_dir = source_path
             LOGGER.info("[INFO] FILE_CANDIDATES path=%s rows=%s", source_path, len(df))
         else:
@@ -3676,7 +3687,9 @@ class TradeExecutor:
                     normalized[column] = preserved_scores[column]
                 except Exception:
                     normalized[column] = pd.NA
-        missing_required = [column for column in REQUIRED_COLUMNS if column not in normalized.columns]
+        missing_required = [
+            column for column in REQUIRED_COLUMNS if column not in normalized.columns
+        ]
         if missing_required:
             joined = ", ".join(sorted(missing_required))
             raise CandidateLoadError(f"Missing required columns: {joined}")
@@ -3863,7 +3876,9 @@ class TradeExecutor:
         if "_rank_val" in frame.columns:
             rank_series = pd.to_numeric(frame["_rank_val"], errors="coerce")
         else:
-            rank_series = pd.to_numeric(frame.get(rank_key, pd.Series(dtype="float")), errors="coerce")
+            rank_series = pd.to_numeric(
+                frame.get(rank_key, pd.Series(dtype="float")), errors="coerce"
+            )
         symbols = frame.get("symbol", pd.Series(dtype="string"))
         picks: list[tuple[str, Any]] = []
         for idx in range(len(frame)):
@@ -4044,7 +4059,11 @@ class TradeExecutor:
             source_df=weighted_df,
         )
         planned = candidates[: max(0, daily_slots_remaining)]
-        planned_symbols = [str(record.get("symbol", "")).upper() for record in planned if str(record.get("symbol", "")).strip()]
+        planned_symbols = [
+            str(record.get("symbol", "")).upper()
+            for record in planned
+            if str(record.get("symbol", "")).strip()
+        ]
         LOGGER.info(
             "EXEC_PLAN picked=%d planned=%d symbols=%s",
             len(candidates),
@@ -4115,9 +4134,7 @@ class TradeExecutor:
         gap_marketable_pct = max(0.0, float(getattr(self.config, "gap_marketable_pct", 3.0)))
         marketable_bps = max(0, int(getattr(self.config, "marketable_bps", 25)))
         premarket_active = resolved_window == "premarket" and self.config.extended_hours
-        preferred_feed = (
-            os.getenv("LIMIT_PRICE_FEED") or os.getenv("ALPACA_DATA_FEED") or None
-        )
+        preferred_feed = os.getenv("LIMIT_PRICE_FEED") or os.getenv("ALPACA_DATA_FEED") or None
 
         price_mode = (self.config.price_source or "entry").lower()
         min_prevclose = max(1.0, float(self.config.min_price or 0.0))
@@ -4145,9 +4162,7 @@ class TradeExecutor:
             reference_price: Optional[float] = None
             limit_source = "prev_close_only"
             mode = (
-                price_mode
-                if price_mode in {"prevclose", "entry", "close", "blended"}
-                else "entry"
+                price_mode if price_mode in {"prevclose", "entry", "close", "blended"} else "entry"
             )
             if mode in {"prevclose", "blended"}:
                 anchor_price = self.resolve_limit_price(symbol, record)
@@ -4180,7 +4195,9 @@ class TradeExecutor:
                     price_value = record.get("entry_price")
                     fallback_value = record.get("close")
                     anchor_label = "entry"
-                if price_value in (None, "") or (isinstance(price_value, float) and math.isnan(price_value)):
+                if price_value in (None, "") or (
+                    isinstance(price_value, float) and math.isnan(price_value)
+                ):
                     price_value = fallback_value
                     anchor_label = "entry" if mode == "close" else "close"
                 price_series = pd.to_numeric(pd.Series([price_value]), errors="coerce").fillna(0.0)
@@ -4250,14 +4267,10 @@ class TradeExecutor:
                     trade_snapshot.get("feed") if isinstance(trade_snapshot, Mapping) else None
                 )
                 quote_ts = (
-                    quote_snapshot.get("timestamp")
-                    if isinstance(quote_snapshot, Mapping)
-                    else None
+                    quote_snapshot.get("timestamp") if isinstance(quote_snapshot, Mapping) else None
                 )
                 trade_ts = (
-                    trade_snapshot.get("timestamp")
-                    if isinstance(trade_snapshot, Mapping)
-                    else None
+                    trade_snapshot.get("timestamp") if isinstance(trade_snapshot, Mapping) else None
                 )
                 LOGGER.info(
                     "PRICE_REF symbol=%s anchor=%.4f ref=%.4f src=%s feed=%s q_ts=%s t_ts=%s",
@@ -4453,7 +4466,9 @@ class TradeExecutor:
                     prev_close=anchor_price,
                     ref_trade=price_ref if price_ref > 0 else None,
                     gap_pct=gap_pct if mode in {"prevclose", "blended"} else None,
-                    ref_buffer_pct=effective_ref_buffer_pct if mode in {"prevclose", "blended"} else None,
+                    ref_buffer_pct=effective_ref_buffer_pct
+                    if mode in {"prevclose", "blended"}
+                    else None,
                     marketable_bps=marketable_bps,
                 )
             )
@@ -4563,10 +4578,10 @@ class TradeExecutor:
                 order_type = str(order.get("type", "")).lower()
                 position_intent = str(order.get("position_intent", "")).lower()
                 symbol = str(order.get("symbol", "") or "").upper()
-                is_protective_close = (
-                    order_type == "trailing_stop"
-                    and position_intent in {"buy_to_close", "sell_to_close"}
-                )
+                is_protective_close = order_type == "trailing_stop" and position_intent in {
+                    "buy_to_close",
+                    "sell_to_close",
+                }
                 if side == "buy":
                     open_buy_orders += 1
                 is_entry_order = side == "buy" and not is_protective_close
@@ -4674,9 +4689,7 @@ class TradeExecutor:
                 if field != "buying_power" and "buying_power" not in snapshot_map:
                     snapshot_map["buying_power"] = raw_value
                 if field != "cash":
-                    LOGGER.info(
-                        "[INFO] BUYING_POWER_FALLBACK source=%s field=%s", source, field
-                    )
+                    LOGGER.info("[INFO] BUYING_POWER_FALLBACK source=%s field=%s", source, field)
                 self.account_snapshot = snapshot_map
                 return parsed
             return None
@@ -4841,13 +4854,23 @@ class TradeExecutor:
             else:
                 quote_feed = None
             if ask_price is not None and not math.isnan(ask_price) and ask_price > 0:
-                ts = quote_snapshot.get("timestamp") if isinstance(quote_snapshot, Mapping) else None
-                return ask_price, self._parse_snapshot_time(ts), f"ask[{str(quote_feed or 'default').strip()}]"
+                ts = (
+                    quote_snapshot.get("timestamp") if isinstance(quote_snapshot, Mapping) else None
+                )
+                return (
+                    ask_price,
+                    self._parse_snapshot_time(ts),
+                    f"ask[{str(quote_feed or 'default').strip()}]",
+                )
 
         if trade_price is None or math.isnan(trade_price) or trade_price <= 0:
             return None, None, ""
         trade_ts = trade_snapshot.get("timestamp") if isinstance(trade_snapshot, Mapping) else None
-        return trade_price, self._parse_snapshot_time(trade_ts), f"trade[{str(trade_feed or 'default').strip()}]"
+        return (
+            trade_price,
+            self._parse_snapshot_time(trade_ts),
+            f"trade[{str(trade_feed or 'default').strip()}]",
+        )
 
     def _has_capacity_for_symbol(self, symbol: str) -> bool:
         return True
@@ -5052,7 +5075,9 @@ class TradeExecutor:
         )
         state.order_id = chase_order_id
         state.submit_ts = time.time()
-        state.submitted_at = self._coerce_datetime(chased_submitted_at) or datetime.now(timezone.utc)
+        state.submitted_at = self._coerce_datetime(chased_submitted_at) or datetime.now(
+            timezone.utc
+        )
         state.current_limit = candidate_limit
         chase_interval = max(1, int(self.config.chase_interval_minutes)) * 60
         state.next_chase_ts = state.submit_ts + chase_interval
@@ -5145,7 +5170,9 @@ class TradeExecutor:
                         state.status or "filled",
                         filled_at,
                     )
-                    self.attach_trailing_stop(state.symbol, state.filled_qty, state.filled_avg_price, order_id)
+                    self.attach_trailing_stop(
+                        state.symbol, state.filled_qty, state.filled_avg_price, order_id
+                    )
                     remaining.pop(order_id, None)
                     continue
                 if state.status in {"canceled", "expired", "rejected"}:
@@ -5171,7 +5198,9 @@ class TradeExecutor:
                             state.status,
                             filled_at,
                         )
-                        self.attach_trailing_stop(state.symbol, state.filled_qty, state.filled_avg_price, order_id)
+                        self.attach_trailing_stop(
+                            state.symbol, state.filled_qty, state.filled_avg_price, order_id
+                        )
                     remaining.pop(order_id, None)
                     continue
                 if cancel_after_min > 0:
@@ -5310,9 +5339,7 @@ class TradeExecutor:
         chase_buffer_ratio = max(0.0, float(self.config.ref_buffer_pct)) / 100.0
         chase_attempts = 0
         chase_halted = False
-        next_chase_ts: Optional[float] = (
-            submit_ts + chase_interval if chase_enabled else None
-        )
+        next_chase_ts: Optional[float] = submit_ts + chase_interval if chase_enabled else None
 
         def _chase_order(current_id: str) -> tuple[str, float, float] | None:
             nonlocal chase_attempts, chase_halted
@@ -5666,7 +5693,9 @@ class TradeExecutor:
                 error_message = body
                 side_value = str(_extract_request_field(request, "side", "")).lower()
                 normalized_limit = bool(_extract_request_field(request, "_normalized_limit", False))
-                retry_tick_applied = bool(_extract_request_field(request, "_retry_tick_applied", False))
+                retry_tick_applied = bool(
+                    _extract_request_field(request, "_retry_tick_applied", False)
+                )
                 limit_price = _extract_request_field(request, "limit_price", 0.0) or 0.0
                 if isinstance(limit_price, str):
                     try:
@@ -6007,9 +6036,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--ref-buffer-pct",
         type=float,
         default=ExecutorConfig.ref_buffer_pct,
-        help=(
-            "Percent buffer added to live reference prices (env: REF_BUFFER_PCT, default 0.75)"
-        ),
+        help=("Percent buffer added to live reference prices (env: REF_BUFFER_PCT, default 0.75)"),
     )
     parser.add_argument(
         "--gap-refboost-pct",
@@ -6281,7 +6308,9 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
             getattr(args, "reconcile_lookback_days", ExecutorConfig.reconcile_lookback_days)
         ),
         reconcile_limit=int(getattr(args, "reconcile_limit", ExecutorConfig.reconcile_limit)),
-        reconcile_use_watermark=bool(getattr(args, "reconcile_use_watermark", ExecutorConfig.reconcile_use_watermark)),
+        reconcile_use_watermark=bool(
+            getattr(args, "reconcile_use_watermark", ExecutorConfig.reconcile_use_watermark)
+        ),
         reconcile_overlap_secs=int(
             getattr(args, "reconcile_overlap_secs", ExecutorConfig.reconcile_overlap_secs)
         ),
@@ -6356,7 +6385,9 @@ def run_executor(
     _seed_initial_metrics(metrics, config)
     diagnostic_mode = bool(getattr(config, "diagnostic", False))
     loader = TradeExecutor(config, client, metrics)
-    auto_reconcile_enabled = bool(getattr(config, "reconcile_auto", True)) and not getattr(config, "reconcile_only", False)
+    auto_reconcile_enabled = bool(getattr(config, "reconcile_auto", True)) and not getattr(
+        config, "reconcile_only", False
+    )
     if auto_reconcile_enabled:
         _run_auto_reconcile(loader, config, stage="start")
     try:
@@ -6433,7 +6464,11 @@ def run_executor(
             session_allows = session and session not in {"closed", "holiday"}
             next_open_not_today = next_open_date is not None and next_open_date != ny_date
             next_close_not_today = next_close_date is not None and next_close_date != ny_date
-            if not session_allows and next_open_not_today and (next_close_date is None or next_close_not_today):
+            if (
+                not session_allows
+                and next_open_not_today
+                and (next_close_date is None or next_close_not_today)
+            ):
                 return _exit_market_closed()
         try:
             LOGGER.info("[INFO] CANDIDATE_SOURCE %s", str(config.source_type or "db"))
@@ -6497,7 +6532,6 @@ def run_executor(
             base_alloc_pct=base_alloc_pct,
             source_df=candidates_df,
         )
-
 
         _wait_until_submit_at(config.submit_at_ny)
         configured_window = config.time_window or "auto"
@@ -6575,7 +6609,9 @@ def run_executor(
         auth_reason = "ok"
         if trading_client is not None and client is None:
             try:
-                account_payload, clock_payload = _ensure_trading_auth(base_url or "", creds_snapshot or {})
+                account_payload, clock_payload = _ensure_trading_auth(
+                    base_url or "", creds_snapshot or {}
+                )
                 auth_ok = True
             except AlpacaAuthFailure as exc:
                 auth_ok = False
@@ -6665,7 +6701,9 @@ def load_candidates(path: Path) -> pd.DataFrame:
     return executor.load_candidates()
 
 
-def apply_guards(df: pd.DataFrame, config: ExecutorConfig, metrics: ExecutionMetrics) -> pd.DataFrame:
+def apply_guards(
+    df: pd.DataFrame, config: ExecutorConfig, metrics: ExecutionMetrics
+) -> pd.DataFrame:
     executor = TradeExecutor(config, None, metrics)
     records = executor.hydrate_candidates(df)
     filtered = executor.guard_candidates(records)
@@ -6775,6 +6813,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         status = metrics_payload.get("status") if isinstance(metrics_payload, Mapping) else None
         if metrics_payload is not None:
+
             def _as_int(value: Any) -> int:
                 try:
                     return int(value)
@@ -6788,7 +6827,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 metrics_payload.get("skips", {}),
             )
             try:
-                skip_block = metrics_payload.get("skips") if isinstance(metrics_payload.get("skips"), Mapping) else {}
+                skip_block = (
+                    metrics_payload.get("skips")
+                    if isinstance(metrics_payload.get("skips"), Mapping)
+                    else {}
+                )
                 if not skip_block and isinstance(metrics_payload.get("skip_reasons"), Mapping):
                     skip_block = metrics_payload.get("skip_reasons")
                 skip_counts = {str(k): _as_int(v) for k, v in (skip_block or {}).items()}
@@ -6796,7 +6839,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 if candidates_in <= 0:
                     candidates_in = _count_db_candidates()
                 orders_submitted = _as_int(metrics_payload.get("orders_submitted"))
-                non_time_skips = sum(count for reason, count in skip_counts.items() if reason != "TIME_WINDOW")
+                non_time_skips = sum(
+                    count for reason, count in skip_counts.items() if reason != "TIME_WINDOW"
+                )
                 time_only = non_time_skips == 0 and skip_counts.get("TIME_WINDOW", 0) > 0
                 if orders_submitted == 0 and candidates_in > 0 and not time_only:
                     send_alert(
@@ -6853,7 +6898,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return rc
     finally:
         _EXECUTE_FINISH_UTC = datetime.now(timezone.utc)
-        final_status = status or (metrics_payload.get("status") if isinstance(metrics_payload, Mapping) else None)
+        final_status = status or (
+            metrics_payload.get("status") if isinstance(metrics_payload, Mapping) else None
+        )
         if final_status is None:
             final_status = "ok" if rc == 0 else "error"
         try:

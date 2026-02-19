@@ -41,8 +41,7 @@ def test_load_env_strips_crlf_and_spaces(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     env_path = _write_env(
         tmp_path,
-        "APCA_API_KEY_ID= key123   \r\n"
-        "APCA_API_SECRET_KEY= secret456\r\n",
+        "APCA_API_KEY_ID= key123   \r\nAPCA_API_SECRET_KEY= secret456\r\n",
     )
 
     loaded, missing = load_env(("APCA_API_KEY_ID", "APCA_API_SECRET_KEY"))

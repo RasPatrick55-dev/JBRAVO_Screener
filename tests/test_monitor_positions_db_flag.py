@@ -25,22 +25,28 @@ class TestMonitorDbFlag(unittest.TestCase):
         sys.modules.pop("scripts.monitor_positions", None)
 
     def test_db_logging_disabled_by_default(self):
-        with mock.patch("scripts.db.db_enabled", return_value=True), \
-            mock.patch("scripts.db.get_db_conn") as get_conn, \
-            mock.patch.dict(os.environ, {"MONITOR_ENABLE_DB_LOGGING": ""}, clear=False):
+        with (
+            mock.patch("scripts.db.db_enabled", return_value=True),
+            mock.patch("scripts.db.get_db_conn") as get_conn,
+            mock.patch.dict(os.environ, {"MONITOR_ENABLE_DB_LOGGING": ""}, clear=False),
+        ):
             self.assertFalse(self.monitor.db_logging_enabled())
             get_conn.assert_not_called()
 
     def test_db_logging_enabled_when_flag_and_db(self):
-        with mock.patch("scripts.db.db_enabled", return_value=True), \
-            mock.patch("scripts.db.get_db_conn") as get_conn, \
-            mock.patch.dict(os.environ, {"MONITOR_ENABLE_DB_LOGGING": "true"}, clear=False):
+        with (
+            mock.patch("scripts.db.db_enabled", return_value=True),
+            mock.patch("scripts.db.get_db_conn") as get_conn,
+            mock.patch.dict(os.environ, {"MONITOR_ENABLE_DB_LOGGING": "true"}, clear=False),
+        ):
             self.assertTrue(self.monitor.db_logging_enabled())
             get_conn.assert_not_called()
 
     def test_db_logging_disabled_when_db_unavailable(self):
-        with mock.patch("scripts.db.db_enabled", return_value=False), \
-            mock.patch("scripts.db.get_db_conn") as get_conn, \
-            mock.patch.dict(os.environ, {"MONITOR_ENABLE_DB_LOGGING": "true"}, clear=False):
+        with (
+            mock.patch("scripts.db.db_enabled", return_value=False),
+            mock.patch("scripts.db.get_db_conn") as get_conn,
+            mock.patch.dict(os.environ, {"MONITOR_ENABLE_DB_LOGGING": "true"}, clear=False),
+        ):
             self.assertFalse(self.monitor.db_logging_enabled())
             get_conn.assert_not_called()

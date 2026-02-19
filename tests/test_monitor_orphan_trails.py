@@ -33,11 +33,41 @@ class TestMonitorOrphanTrailingStops(unittest.TestCase):
 
     def _orders(self):
         return [
-            types.SimpleNamespace(id="trail-a", symbol="A", order_type="trailing_stop", side="sell", qty="1", trail_percent="4"),
-            types.SimpleNamespace(id="trail-b", symbol="B", order_type="trailing_stop", side="sell", qty="2", trail_percent="4"),
-            types.SimpleNamespace(id="trail-x", symbol="X", order_type="trailing_stop", side="sell", qty="1", trail_percent="4"),
-            types.SimpleNamespace(id="trail-y", symbol="Y", order_type="trailing_stop", side="sell", qty="1", trail_percent="4"),
-            types.SimpleNamespace(id="limit-x", symbol="X", order_type="limit", side="sell", qty="1"),
+            types.SimpleNamespace(
+                id="trail-a",
+                symbol="A",
+                order_type="trailing_stop",
+                side="sell",
+                qty="1",
+                trail_percent="4",
+            ),
+            types.SimpleNamespace(
+                id="trail-b",
+                symbol="B",
+                order_type="trailing_stop",
+                side="sell",
+                qty="2",
+                trail_percent="4",
+            ),
+            types.SimpleNamespace(
+                id="trail-x",
+                symbol="X",
+                order_type="trailing_stop",
+                side="sell",
+                qty="1",
+                trail_percent="4",
+            ),
+            types.SimpleNamespace(
+                id="trail-y",
+                symbol="Y",
+                order_type="trailing_stop",
+                side="sell",
+                qty="1",
+                trail_percent="4",
+            ),
+            types.SimpleNamespace(
+                id="limit-x", symbol="X", order_type="limit", side="sell", qty="1"
+            ),
         ]
 
     def test_cancel_called_only_for_orphan_trailing_stops(self):
@@ -72,7 +102,9 @@ class TestMonitorOrphanTrailingStops(unittest.TestCase):
         os.environ["ORPHAN_TRAIL_DRY_RUN"] = "0"
 
         orders = [
-            types.SimpleNamespace(id="limit-x", symbol="X", order_type="limit", side="sell", qty="1"),
+            types.SimpleNamespace(
+                id="limit-x", symbol="X", order_type="limit", side="sell", qty="1"
+            ),
             types.SimpleNamespace(id="stop-y", symbol="Y", order_type="stop", side="sell", qty="1"),
         ]
 

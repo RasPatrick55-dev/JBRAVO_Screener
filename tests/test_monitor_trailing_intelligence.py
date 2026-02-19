@@ -43,10 +43,12 @@ class TestMonitorTrailingIntelligence(unittest.TestCase):
             trail_percent=1.0,
             stop_price=99.0,
         )
-        with mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]), \
-            mock.patch.object(monitor, "broker_submit_order") as submit_mock, \
-            mock.patch.object(monitor, "cancel_order_safe", return_value=None), \
-            mock.patch.object(monitor, "_persist_metrics", return_value=None):
+        with (
+            mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]),
+            mock.patch.object(monitor, "broker_submit_order") as submit_mock,
+            mock.patch.object(monitor, "cancel_order_safe", return_value=None),
+            mock.patch.object(monitor, "_persist_metrics", return_value=None),
+        ):
             monitor.manage_trailing_stop(position)
         self.assertFalse(submit_mock.called)
 

@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 
-from datetime import datetime, timezone
 
 import pytest
 
@@ -57,7 +56,10 @@ def test_auto_time_window_detects_premarket(monkeypatch, caplog):
     assert allowed is True
     assert resolved == "premarket"
     assert "premarket" in message
-    assert any("MARKET_TIME" in msg and "mode=auto" in msg and "resolved=premarket" in msg for msg in caplog.messages)
+    assert any(
+        "MARKET_TIME" in msg and "mode=auto" in msg and "resolved=premarket" in msg
+        for msg in caplog.messages
+    )
 
 
 def test_auto_time_window_detects_regular(monkeypatch, caplog):
@@ -76,4 +78,7 @@ def test_auto_time_window_detects_regular(monkeypatch, caplog):
     assert allowed is True
     assert resolved == "regular"
     assert "regular session" in message
-    assert any("MARKET_TIME" in msg and "mode=auto" in msg and "resolved=regular" in msg for msg in caplog.messages)
+    assert any(
+        "MARKET_TIME" in msg and "mode=auto" in msg and "resolved=regular" in msg
+        for msg in caplog.messages
+    )

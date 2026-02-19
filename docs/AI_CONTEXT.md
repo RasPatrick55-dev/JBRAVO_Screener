@@ -9,6 +9,7 @@ This file is the single source of truth for assistant context in this repo.
 - Canonical candidate reads come from DB views: `latest_screener_candidates` and `latest_top_candidates`.
 - CSV candidate files are non-authoritative and exist only for debug/parachute workflows.
 - Candidate CSV export is optional via `JBR_WRITE_CANDIDATE_CSVS=true`.
+- DB config precedence is `DATABASE_URL` first, then `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`; otherwise DB is treated as disabled (unless `JBR_DEV_DB_DEFAULTS=true` is set for local fallback).
 
 ## Canonical Daily One-Liners
 

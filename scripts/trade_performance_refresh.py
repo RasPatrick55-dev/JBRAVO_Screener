@@ -74,7 +74,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
         enrichment_flags = df.get("needs_enrichment", [])
         trades_enriched = int(pd.Series(enrichment_flags, dtype=bool).sum()) if len(df.index) else 0
-        token = cache_refresh_summary_token(len(df.index), trades_enriched, summary, int(args.lookback_days), rc)
+        token = cache_refresh_summary_token(
+            len(df.index), trades_enriched, summary, int(args.lookback_days), rc
+        )
     except Exception:
         LOG.exception("TRADE_PERFORMANCE_REFRESH_FAILED")
         rc = 1

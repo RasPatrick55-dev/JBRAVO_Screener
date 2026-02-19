@@ -35,28 +35,29 @@ class TestMonitorExitPayloadDb(unittest.TestCase):
             qty_available=10,
             avg_entry_price=100.0,
             current_price=100.0,
-            created_at=datetime.now(timezone.utc)
-            - timedelta(days=monitor.MAX_HOLD_DAYS + 1),
+            created_at=datetime.now(timezone.utc) - timedelta(days=monitor.MAX_HOLD_DAYS + 1),
         )
 
-        with mock.patch.dict(os.environ, {"MONITOR_ENABLE_EXIT_INTELLIGENCE": "true"}), \
-            mock.patch.object(monitor, "db_logging_enabled", return_value=True), \
-            mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event, \
-            mock.patch.object(monitor, "get_open_positions", return_value=[position]), \
-            mock.patch.object(monitor, "save_positions_csv", return_value=None), \
-            mock.patch.object(monitor, "log_closed_positions", return_value=None), \
-            mock.patch.object(monitor, "refresh_ml_risk_state", return_value={}), \
-            mock.patch.object(monitor, "has_pending_sell_order", return_value=False), \
-            mock.patch.object(monitor, "get_trailing_stop_order", return_value=None), \
-            mock.patch.object(monitor, "cancel_order_safe", return_value=None), \
+        with (
+            mock.patch.dict(os.environ, {"MONITOR_ENABLE_EXIT_INTELLIGENCE": "true"}),
+            mock.patch.object(monitor, "db_logging_enabled", return_value=True),
+            mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event,
+            mock.patch.object(monitor, "get_open_positions", return_value=[position]),
+            mock.patch.object(monitor, "save_positions_csv", return_value=None),
+            mock.patch.object(monitor, "log_closed_positions", return_value=None),
+            mock.patch.object(monitor, "refresh_ml_risk_state", return_value={}),
+            mock.patch.object(monitor, "has_pending_sell_order", return_value=False),
+            mock.patch.object(monitor, "get_trailing_stop_order", return_value=None),
+            mock.patch.object(monitor, "cancel_order_safe", return_value=None),
             mock.patch.object(
                 monitor,
                 "broker_submit_order",
                 return_value=SimpleNamespace(id="OID-TS", status="accepted", dryrun=True),
-            ), \
-            mock.patch.object(monitor, "log_trade_exit", return_value=None), \
-            mock.patch.object(monitor, "_persist_metrics", return_value=None), \
-            mock.patch.object(monitor.os.path, "exists", return_value=False):
+            ),
+            mock.patch.object(monitor, "log_trade_exit", return_value=None),
+            mock.patch.object(monitor, "_persist_metrics", return_value=None),
+            mock.patch.object(monitor.os.path, "exists", return_value=False),
+        ):
             monitor.process_positions_cycle()
 
         submit_calls = [
@@ -79,9 +80,11 @@ class TestMonitorExitPayloadDb(unittest.TestCase):
         start_ok = int(monitor.MONITOR_METRICS.get("db_event_ok", 0))
         start_fail = int(monitor.MONITOR_METRICS.get("db_event_fail", 0))
 
-        with mock.patch.object(monitor, "db_logging_enabled", return_value=True), \
-            mock.patch("scripts.db.insert_order_event", return_value=False), \
-            self.assertLogs(monitor.logger, level="INFO") as captured:
+        with (
+            mock.patch.object(monitor, "db_logging_enabled", return_value=True),
+            mock.patch("scripts.db.insert_order_event", return_value=False),
+            self.assertLogs(monitor.logger, level="INFO") as captured,
+        ):
             ok = monitor.db_log_event(
                 event_type=monitor.MONITOR_DB_EVENT_TYPES["sell_submit"],
                 symbol="AAPL",

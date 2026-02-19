@@ -57,7 +57,9 @@ def test_screener_health_prefers_artifacts(tmp_path: Path, monkeypatch: pytest.M
     assert snapshot["run_type"] in {"nightly", "pre-market"}
 
 
-def test_screener_health_fallbacks_when_files_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_screener_health_fallbacks_when_files_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     data_dir = tmp_path / "data"
     logs_dir = tmp_path / "logs"
     data_dir.mkdir()
@@ -93,7 +95,9 @@ def test_screener_health_fallbacks_when_files_missing(tmp_path: Path, monkeypatc
     assert snapshot["symbols_with_bars_fetch"] == 9
 
 
-def test_screener_health_rows_final_from_top(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_screener_health_rows_final_from_top(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     data_dir = tmp_path / "data"
     logs_dir = tmp_path / "logs"
     data_dir.mkdir()
@@ -123,7 +127,9 @@ def test_screener_health_rows_final_from_top(tmp_path: Path, monkeypatch: pytest
     assert snapshot["rows_premetrics"] == 6
 
 
-def test_health_history_tracks_coverage_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_health_history_tracks_coverage_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     data_dir = tmp_path / "data"
     logs_dir = tmp_path / "logs"
     reports_dir = tmp_path / "reports"

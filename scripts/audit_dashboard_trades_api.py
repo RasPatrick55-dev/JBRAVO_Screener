@@ -217,7 +217,13 @@ def _expected_leaderboard_rows(
     grouped = grouped.head(limit).reset_index(drop=True)
     rows: list[dict[str, Any]] = []
     for i, row in grouped.iterrows():
-        rows.append({"rank": i + 1, "symbol": str(row.get("symbol") or "--"), "pl": float(row.get("pl") or 0.0)})
+        rows.append(
+            {
+                "rank": i + 1,
+                "symbol": str(row.get("symbol") or "--"),
+                "pl": float(row.get("pl") or 0.0),
+            }
+        )
     return rows
 
 
@@ -419,10 +425,14 @@ def _build_audit_context() -> AuditContext:
 
     open_df = _db_query_frame("SELECT realized_pnl FROM trades WHERE status='OPEN'")
     db_open_count = int(len(open_df))
-    db_open_realized_pnl = float(pd.to_numeric(open_df.get("realized_pnl"), errors="coerce").fillna(0).sum())
+    db_open_realized_pnl = float(
+        pd.to_numeric(open_df.get("realized_pnl"), errors="coerce").fillna(0).sum()
+    )
     account_snapshot_db = _load_account_snapshot_db()
     db_open_positions_expected = _load_open_positions_expected()
-    live_open_count, live_open_unrealized_pnl, live_open_positions_expected = _load_live_open_positions_expected()
+    live_open_count, live_open_unrealized_pnl, live_open_positions_expected = (
+        _load_live_open_positions_expected()
+    )
 
     return AuditContext(
         trades_frame=normalized,
@@ -437,7 +447,9 @@ def _build_audit_context() -> AuditContext:
     )
 
 
-def _request_json(path: str, *, base_url: str | None = None, flask_client: Any = None) -> tuple[int, dict[str, Any]]:
+def _request_json(
+    path: str, *, base_url: str | None = None, flask_client: Any = None
+) -> tuple[int, dict[str, Any]]:
     if flask_client is not None:
         response = flask_client.get(path)
         payload = response.get_json(silent=True) or {}
@@ -447,7 +459,11 @@ def _request_json(path: str, *, base_url: str | None = None, flask_client: Any =
         raise RuntimeError("No request method configured")
     url = f"{base_url.rstrip('/')}{path}"
     response = requests.get(url, timeout=30, headers={"Accept": "application/json"})
-    payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    payload = (
+        response.json()
+        if response.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
     return int(response.status_code), dict(payload) if isinstance(payload, dict) else {}
 
 
@@ -456,7 +472,9 @@ def _row_label(value: Any) -> str:
     return text
 
 
-def _audit_stats(report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None) -> None:
+def _audit_stats(
+    report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None
+) -> None:
     endpoint = "/api/trades/stats?range=all"
     status, payload = _request_json(endpoint, base_url=base_url, flask_client=requester)
     expected = _expected_stats_rows(ctx.trades_frame, "all")
@@ -496,22 +514,32 @@ def _audit_stats(report: AuditReport, ctx: AuditContext, *, requester: Any, base
             continue
         if not _float_close(got.get("winRatePct"), exp.get("winRatePct"), abs_tol=1e-6):
             ok = False
-            details.append(f"{key}.winRatePct actual={got.get('winRatePct')} expected={exp.get('winRatePct')}")
+            details.append(
+                f"{key}.winRatePct actual={got.get('winRatePct')} expected={exp.get('winRatePct')}"
+            )
         if not _float_close(got.get("totalPL"), exp.get("totalPL"), abs_tol=1e-6):
             ok = False
-            details.append(f"{key}.totalPL actual={got.get('totalPL')} expected={exp.get('totalPL')}")
+            details.append(
+                f"{key}.totalPL actual={got.get('totalPL')} expected={exp.get('totalPL')}"
+            )
         if _to_int(got.get("tradesCount")) != _to_int(exp.get("tradesCount")):
             ok = False
-            details.append(f"{key}.tradesCount actual={got.get('tradesCount')} expected={exp.get('tradesCount')}")
+            details.append(
+                f"{key}.tradesCount actual={got.get('tradesCount')} expected={exp.get('tradesCount')}"
+            )
 
         exp_top = exp.get("topTrade") or {}
         got_top = (got or {}).get("topTrade") or {}
         if str(got_top.get("symbol") or "--") != str(exp_top.get("symbol") or "--"):
             ok = False
-            details.append(f"{key}.topTrade.symbol actual={got_top.get('symbol')} expected={exp_top.get('symbol')}")
+            details.append(
+                f"{key}.topTrade.symbol actual={got_top.get('symbol')} expected={exp_top.get('symbol')}"
+            )
         if not _float_close(got_top.get("pl"), exp_top.get("pl"), abs_tol=1e-6):
             ok = False
-            details.append(f"{key}.topTrade.pl actual={got_top.get('pl')} expected={exp_top.get('pl')}")
+            details.append(
+                f"{key}.topTrade.pl actual={got_top.get('pl')} expected={exp_top.get('pl')}"
+            )
 
         exp_worst = exp.get("worstLoss") or {}
         got_worst = (got or {}).get("worstLoss") or {}
@@ -522,7 +550,9 @@ def _audit_stats(report: AuditReport, ctx: AuditContext, *, requester: Any, base
             )
         if not _float_close(got_worst.get("pl"), exp_worst.get("pl"), abs_tol=1e-6):
             ok = False
-            details.append(f"{key}.worstLoss.pl actual={got_worst.get('pl')} expected={exp_worst.get('pl')}")
+            details.append(
+                f"{key}.worstLoss.pl actual={got_worst.get('pl')} expected={exp_worst.get('pl')}"
+            )
 
     if not ok:
         report.add_issue(f"{endpoint}: " + "; ".join(details[:12]))
@@ -539,12 +569,16 @@ def _leaderboard_signature(rows: Iterable[dict[str, Any]]) -> list[tuple[int, st
     return signature
 
 
-def _audit_leaderboard(report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None) -> None:
+def _audit_leaderboard(
+    report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None
+) -> None:
     for range_key in RANGE_ORDER:
         for mode in ("winners", "losers"):
             endpoint = f"/api/trades/leaderboard?range={range_key}&mode={mode}&limit=10"
             status, payload = _request_json(endpoint, base_url=base_url, flask_client=requester)
-            expected = _expected_leaderboard_rows(ctx.trades_frame, range_key=range_key, mode=mode, limit=10)
+            expected = _expected_leaderboard_rows(
+                ctx.trades_frame, range_key=range_key, mode=mode, limit=10
+            )
 
             if status != 200:
                 report.add_issue(f"{endpoint}: unexpected HTTP {status}")
@@ -569,7 +603,9 @@ def _audit_leaderboard(report: AuditReport, ctx: AuditContext, *, requester: Any
 
             if not ok:
                 report.add_issue(f"{endpoint}: " + "; ".join(details[:6]))
-            report.add_check(endpoint=endpoint, ok=ok, detail="ok" if ok else "; ".join(details[:3]))
+            report.add_check(
+                endpoint=endpoint, ok=ok, detail="ok" if ok else "; ".join(details[:3])
+            )
 
 
 def _latest_signature(rows: Iterable[dict[str, Any]]) -> list[tuple[Any, ...]]:
@@ -591,7 +627,9 @@ def _latest_signature(rows: Iterable[dict[str, Any]]) -> list[tuple[Any, ...]]:
     return signature
 
 
-def _audit_latest(report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None) -> None:
+def _audit_latest(
+    report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None
+) -> None:
     endpoint = "/api/trades/latest?limit=25"
     status, payload = _request_json(endpoint, base_url=base_url, flask_client=requester)
     expected = _expected_latest_rows(ctx.trades_frame, limit=25)
@@ -620,7 +658,9 @@ def _audit_latest(report: AuditReport, ctx: AuditContext, *, requester: Any, bas
     report.add_check(endpoint=endpoint, ok=ok, detail="ok" if ok else "; ".join(details[:3]))
 
 
-def _audit_overview(report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None) -> None:
+def _audit_overview(
+    report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None
+) -> None:
     endpoint = "/api/trades/overview"
     status, payload = _request_json(endpoint, base_url=base_url, flask_client=requester)
 
@@ -715,7 +755,9 @@ def _positions_summary_from_payload(positions: list[dict[str, Any]]) -> dict[str
     }
 
 
-def _audit_account_overview(report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None) -> None:
+def _audit_account_overview(
+    report: AuditReport, ctx: AuditContext, *, requester: Any, base_url: str | None
+) -> None:
     endpoint = "/api/account/overview"
     status, payload = _request_json(endpoint, base_url=base_url, flask_client=requester)
     expected = ctx.account_snapshot_db or {}
@@ -764,7 +806,9 @@ def _audit_account_overview(report: AuditReport, ctx: AuditContext, *, requester
             exp_ts = _parse_ts_utc(expected.get("taken_at"))
             if got_ts is None or exp_ts is None:
                 ok = False
-                details.append(f"taken_at parse failed actual={snapshot.get('taken_at')} expected={expected.get('taken_at')}")
+                details.append(
+                    f"taken_at parse failed actual={snapshot.get('taken_at')} expected={expected.get('taken_at')}"
+                )
             else:
                 diff = abs((got_ts - exp_ts).total_seconds())
                 if diff > 1.0:
@@ -850,7 +894,14 @@ def _audit_positions_monitoring(
             continue
         api_by_symbol[symbol] = row
 
-        for required in ("qty", "entryPrice", "currentPrice", "dollarPL", "percentPL", "capturedPL"):
+        for required in (
+            "qty",
+            "entryPrice",
+            "currentPrice",
+            "dollarPL",
+            "percentPL",
+            "capturedPL",
+        ):
             if required not in row:
                 ok = False
                 details.append(f"{symbol}.{required} missing")
@@ -859,7 +910,9 @@ def _audit_positions_monitoring(
     api_symbols = set(api_by_symbol.keys())
     if api_symbols != expected_symbols:
         ok = False
-        details.append(f"symbol_set actual={sorted(api_symbols)} expected={sorted(expected_symbols)}")
+        details.append(
+            f"symbol_set actual={sorted(api_symbols)} expected={sorted(expected_symbols)}"
+        )
 
     for symbol, expected_row in expected_positions.items():
         got = api_by_symbol.get(symbol)
@@ -867,7 +920,9 @@ def _audit_positions_monitoring(
             continue
         if not _float_close(got.get("qty"), expected_row.get("qty"), abs_tol=1e-6):
             ok = False
-            details.append(f"{symbol}.qty actual={got.get('qty')} expected={expected_row.get('qty')}")
+            details.append(
+                f"{symbol}.qty actual={got.get('qty')} expected={expected_row.get('qty')}"
+            )
         if not _float_close(got.get("entryPrice"), expected_row.get("entryPrice"), abs_tol=1e-4):
             ok = False
             details.append(
@@ -878,7 +933,9 @@ def _audit_positions_monitoring(
     for key in ("totalShares", "totalOpenPL", "avgDaysHeld", "totalCapturedPL"):
         if not _float_close(summary.get(key), expected_summary.get(key), abs_tol=1e-6):
             ok = False
-            details.append(f"summary.{key} actual={summary.get(key)} expected={expected_summary.get(key)}")
+            details.append(
+                f"summary.{key} actual={summary.get(key)} expected={expected_summary.get(key)}"
+            )
 
     if not ok:
         report.add_issue(f"{endpoint}: " + "; ".join(details[:10]))

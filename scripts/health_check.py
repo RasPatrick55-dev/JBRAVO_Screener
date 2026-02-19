@@ -79,9 +79,7 @@ def _probe_trading(session: requests.Session, headers: Mapping[str, str]) -> Dic
     return {"ok": resp.ok, "status": resp.status_code, "message": message}
 
 
-def _probe_data(
-    session: requests.Session, headers: Mapping[str, str], feed: str
-) -> Dict[str, Any]:
+def _probe_data(session: requests.Session, headers: Mapping[str, str], feed: str) -> Dict[str, Any]:
     base = market_data_base_url().rstrip("/")
     url = f"{base}/v2/stocks/bars"
     params = {

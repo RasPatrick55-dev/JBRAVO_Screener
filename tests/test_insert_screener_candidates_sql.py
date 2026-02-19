@@ -23,7 +23,7 @@ class _DummyCursor:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, _exc_type, _exc_val, _exc_tb):
         return False
 
 
@@ -37,7 +37,7 @@ class _DummyConn:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, _exc_type, _exc_val, _exc_tb):
         return False
 
     def close(self):
@@ -57,5 +57,7 @@ def test_insert_screener_candidates_uses_run_date_column(monkeypatch):
     payload = pd.DataFrame([{"symbol": "ABC", "timestamp": "2024-01-01T00:00:00Z"}])
     db.insert_screener_candidates(date(2024, 1, 1), payload)
 
-    assert any("INSERT INTO screener_candidates" in sql and "run_date" in sql for sql in sql_capture)
+    assert any(
+        "INSERT INTO screener_candidates" in sql and "run_date" in sql for sql in sql_capture
+    )
     assert all("run date" not in sql for sql in sql_capture)

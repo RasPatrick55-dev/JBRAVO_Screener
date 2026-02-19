@@ -18,13 +18,14 @@ logger = logging.getLogger(__name__)
 
 _DUMPED_CANDIDATES = False
 
-DEFAULT_DB_HOST = "localhost"
-DEFAULT_DB_PORT = 9999
+DEFAULT_DB_PORT = 5432
 DEFAULT_DB_NAME = "jbravo"
 DEFAULT_DB_USER = "super"
 DEFAULT_CONNECT_TIMEOUT = 10
+DEFAULT_DEV_DB_HOST = "localhost"
+DEFAULT_DEV_DB_PORT = 9999
 
-_EXPLICIT_ENV_KEYS = (
+_SECONDARY_ENV_KEYS = (
     "DB_HOST",
     "DB_PORT",
     "DB_NAME",
@@ -34,6 +35,7 @@ _EXPLICIT_ENV_KEYS = (
     "DB_PASS",
     "DB_SSLMODE",
 )
+_DB_DISABLE_LOGGED: set[str] = set()
 
 
 def _env_truthy(key: str) -> bool:
@@ -63,17 +65,68 @@ def _parse_database_url(database_url: str) -> dict[str, Any]:
     }
 
 
+def _log_db_disabled_once(key: str, message: str, *args: Any) -> None:
+    if key in _DB_DISABLE_LOGGED:
+        return
+    _DB_DISABLE_LOGGED.add(key)
+    logger.warning(message, *args)
+
+
 def _resolve_db_config() -> Optional[dict[str, Any]]:
     if _env_truthy("DB_DISABLED"):
+        _log_db_disabled_once("db_disabled_env", "[WARN] DB_DISABLED via DB_DISABLED")
         return None
 
-    has_explicit = any(os.environ.get(key) for key in _EXPLICIT_ENV_KEYS)
-    if has_explicit:
+    database_url = (os.environ.get("DATABASE_URL") or "").strip()
+    if database_url:
+        parsed = _parse_database_url(database_url)
+        host = (parsed.get("host") or "").strip()
+        dbname = (parsed.get("dbname") or "").strip()
+        user = (parsed.get("user") or "").strip()
+        if not host or not dbname or not user:
+            _log_db_disabled_once(
+                "db_disabled_invalid_database_url",
+                "[WARN] DB_DISABLED invalid DATABASE_URL (expected postgres URL with host/db/user)",
+            )
+            return None
         return {
-            "host": os.environ.get("DB_HOST", DEFAULT_DB_HOST),
+            "source": "DATABASE_URL",
+            "host": host,
+            "port": _coerce_int(parsed.get("port"), DEFAULT_DB_PORT),
+            "dbname": dbname,
+            "user": user,
+            "password": parsed.get("password"),
+            "sslmode": parsed.get("sslmode") or os.environ.get("DB_SSLMODE"),
+            "connect_timeout": _coerce_int(
+                os.environ.get("DB_CONNECT_TIMEOUT"), DEFAULT_CONNECT_TIMEOUT
+            ),
+        }
+
+    has_secondary = any(os.environ.get(key) for key in _SECONDARY_ENV_KEYS)
+    if has_secondary:
+        host = (os.environ.get("DB_HOST") or "").strip()
+        dbname = (os.environ.get("DB_NAME") or "").strip()
+        user = (os.environ.get("DB_USER") or os.environ.get("DB_USERNAME") or "").strip()
+        missing: list[str] = []
+        if not host:
+            missing.append("DB_HOST")
+        if not dbname:
+            missing.append("DB_NAME")
+        if not user:
+            missing.append("DB_USER")
+        if missing:
+            _log_db_disabled_once(
+                "db_disabled_missing_secondary",
+                "[WARN] DB_DISABLED missing DB config keys=%s (set DATABASE_URL or DB_HOST/DB_NAME/DB_USER)",
+                ",".join(missing),
+            )
+            return None
+        return {
+            "source": "DB_*",
+            "host": host,
             "port": _coerce_int(os.environ.get("DB_PORT"), DEFAULT_DB_PORT),
-            "dbname": os.environ.get("DB_NAME", DEFAULT_DB_NAME),
-            "user": os.environ.get("DB_USER") or os.environ.get("DB_USERNAME") or DEFAULT_DB_USER,
+            "dbname": dbname,
+            "user": user,
             "password": os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS"),
             "sslmode": os.environ.get("DB_SSLMODE"),
             "connect_timeout": _coerce_int(
@@ -81,32 +134,25 @@ def _resolve_db_config() -> Optional[dict[str, Any]]:
             ),
         }
 
-    database_url = os.environ.get("DATABASE_URL")
-    if database_url:
-        parsed = _parse_database_url(database_url)
+    if _env_truthy("JBR_DEV_DB_DEFAULTS"):
         return {
-            "host": parsed.get("host") or DEFAULT_DB_HOST,
-            "port": _coerce_int(parsed.get("port"), DEFAULT_DB_PORT),
-            "dbname": parsed.get("dbname") or DEFAULT_DB_NAME,
-            "user": parsed.get("user") or DEFAULT_DB_USER,
-            "password": parsed.get("password"),
-            "sslmode": parsed.get("sslmode"),
+            "source": "JBR_DEV_DB_DEFAULTS",
+            "host": DEFAULT_DEV_DB_HOST,
+            "port": DEFAULT_DEV_DB_PORT,
+            "dbname": DEFAULT_DB_NAME,
+            "user": DEFAULT_DB_USER,
+            "password": os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS"),
+            "sslmode": os.environ.get("DB_SSLMODE"),
             "connect_timeout": _coerce_int(
                 os.environ.get("DB_CONNECT_TIMEOUT"), DEFAULT_CONNECT_TIMEOUT
             ),
         }
 
-    return {
-        "host": DEFAULT_DB_HOST,
-        "port": DEFAULT_DB_PORT,
-        "dbname": DEFAULT_DB_NAME,
-        "user": DEFAULT_DB_USER,
-        "password": os.environ.get("DB_PASSWORD") or os.environ.get("DB_PASS"),
-        "sslmode": os.environ.get("DB_SSLMODE"),
-        "connect_timeout": _coerce_int(
-            os.environ.get("DB_CONNECT_TIMEOUT"), DEFAULT_CONNECT_TIMEOUT
-        ),
-    }
+    _log_db_disabled_once(
+        "db_disabled_no_config",
+        "[WARN] DB_DISABLED no DB config (set DATABASE_URL preferred, or DB_HOST/DB_PORT/DB_NAME/DB_USER)",
+    )
+    return None
 
 
 def db_enabled() -> bool:
@@ -115,12 +161,27 @@ def db_enabled() -> bool:
     return _resolve_db_config() is not None
 
 
+def db_config_preview() -> dict[str, Any]:
+    """Return a safe snapshot of resolved DB config for diagnostics/logging."""
+
+    config = _resolve_db_config()
+    if config is None:
+        return {"enabled": False, "source": "disabled"}
+    return {
+        "enabled": True,
+        "source": config.get("source"),
+        "host": config.get("host"),
+        "port": config.get("port"),
+        "dbname": config.get("dbname"),
+        "user": config.get("user"),
+    }
+
+
 def get_db_conn() -> Optional[PGConnection]:
     """Return a psycopg2 connection using resolved environment config."""
 
     config = _resolve_db_config()
     if config is None:
-        logger.warning("[WARN] DB_DISABLED via DB_DISABLED")
         return None
 
     try:
@@ -140,7 +201,8 @@ def get_db_conn() -> Optional[PGConnection]:
         return psycopg2.connect(**connect_kwargs)
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning(
-            "[WARN] DB_CONNECT_FAIL host=%s port=%s dbname=%s user=%s err=%s",
+            "[WARN] DB_CONNECT_FAIL source=%s host=%s port=%s dbname=%s user=%s err=%s",
+            config.get("source"),
             config.get("host"),
             config.get("port"),
             config.get("dbname"),
@@ -315,9 +377,7 @@ def normalize_gate_fail_reason(value: Any) -> Optional[str]:
         raw = text
         if raw.startswith("[") and raw.endswith("]"):
             raw = raw[1:-1]
-        parts = [
-            part.strip().strip("\"'") for part in raw.split(",") if part.strip().strip("\"'")
-        ]
+        parts = [part.strip().strip("\"'") for part in raw.split(",") if part.strip().strip("\"'")]
         return ",".join(parts) if parts else text
     rendered = str(value).strip()
     return rendered or None
@@ -358,7 +418,9 @@ def normalize_ts(value: Any, field: str | None = None) -> datetime | None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed
 
-    logger.warning("[WARN] EXECUTED_TRADES_TS_PARSE_FAIL field=%s value=%s", field or "unknown", value)
+    logger.warning(
+        "[WARN] EXECUTED_TRADES_TS_PARSE_FAIL field=%s value=%s", field or "unknown", value
+    )
     return None
 
 
@@ -392,7 +454,9 @@ def normalize_score_breakdown(value: Any, symbol: str | None = None) -> Optional
         return json.dumps(normalized)
     except Exception as exc:
         logger.warning(
-            "[WARN] SCORE_BREAKDOWN_JSON_FAIL symbol=%s detail=%s", (symbol or "UNKNOWN").upper(), exc
+            "[WARN] SCORE_BREAKDOWN_JSON_FAIL symbol=%s detail=%s",
+            (symbol or "UNKNOWN").upper(),
+            exc,
         )
         return None
 
@@ -629,7 +693,9 @@ def insert_screener_candidates(
             "close": record.get("close"),
             "volume": record.get("volume"),
             "universe_count": record.get("universe_count"),
-            "score_breakdown": normalize_score_breakdown(record.get("score_breakdown"), symbol=symbol),
+            "score_breakdown": normalize_score_breakdown(
+                record.get("score_breakdown"), symbol=symbol
+            ),
             "entry_price": record.get("entry_price"),
             "adv20": record.get("adv20"),
             "atrp": record.get("atrp"),
@@ -641,7 +707,9 @@ def insert_screener_candidates(
             "passed_gates": _coerce_bool(record.get("passed_gates")),
             "gate_fail_reason": normalize_gate_fail_reason(record.get("gate_fail_reason")),
             "ml_weight_used": record.get("ml_weight_used"),
-            "run_ts_utc": normalize_ts(run_ts_utc, field="run_ts_utc") if run_ts_utc is not None else None,
+            "run_ts_utc": normalize_ts(run_ts_utc, field="run_ts_utc")
+            if run_ts_utc is not None
+            else None,
         }
         rows.append(payload)
 
@@ -699,7 +767,11 @@ def insert_screener_candidates(
         if normalized_run_ts is not None:
             normalized_run_ts = normalized_run_ts.replace(microsecond=0)
             map_rows = [
-                {"run_date": _coerce_date(run_date), "run_ts_utc": normalized_run_ts, "symbol": row.get("symbol")}
+                {
+                    "run_date": _coerce_date(run_date),
+                    "run_ts_utc": normalized_run_ts,
+                    "symbol": row.get("symbol"),
+                }
                 for row in rows
                 if row.get("symbol")
             ]
@@ -918,7 +990,9 @@ def insert_executor_run(payload: Mapping[str, Any] | None) -> bool:
     skipped = (
         payload.get("skipped_reasons")
         if payload.get("skipped_reasons") is not None
-        else payload.get("skips") if payload.get("skips") is not None else payload.get("skipped_by_reason")
+        else payload.get("skips")
+        if payload.get("skips") is not None
+        else payload.get("skipped_by_reason")
     )
     stmt_payload = {
         "run_ts_utc": run_ts,
@@ -1147,10 +1221,7 @@ def insert_backtest_results(run_date: Any, df_results: pd.DataFrame | None) -> b
                 else:
                     insert_sql += "ON CONFLICT (run_date, symbol) DO NOTHING"
 
-                rows = [
-                    {col: payload.get(col) for col in insert_cols}
-                    for payload in rows_payloads
-                ]
+                rows = [{col: payload.get(col) for col in insert_cols} for payload in rows_payloads]
                 if not rows:
                     _log_write_result(False, "backtest_results", 0, "no_rows")
                     return False
@@ -1293,9 +1364,7 @@ def fetch_screener_candidates_for_run_date(run_date: Any) -> pd.DataFrame:
             columns = [desc[0] for desc in cursor.description or []]
         return pd.DataFrame(rows, columns=columns)
     except Exception as exc:  # pragma: no cover - defensive guard
-        logger.warning(
-            "[WARN] DB_READ_FAILED table=screener_candidates err=%s", exc
-        )
+        logger.warning("[WARN] DB_READ_FAILED table=screener_candidates err=%s", exc)
         return pd.DataFrame()
     finally:
         try:
@@ -1787,9 +1856,7 @@ def fetch_latest_ml_artifact(artifact_type: str) -> dict[str, Any] | None:
             pass
 
 
-def fetch_ml_artifact(
-    artifact_type: str, run_date: Any | None = None
-) -> dict[str, Any] | None:
+def fetch_ml_artifact(artifact_type: str, run_date: Any | None = None) -> dict[str, Any] | None:
     conn = _conn_or_none()
     if conn is None:
         return None
@@ -1829,9 +1896,7 @@ def fetch_ml_artifact(
             pass
 
 
-def load_ml_artifact_csv(
-    artifact_type: str, *, run_date: Any | None = None
-) -> pd.DataFrame:
+def load_ml_artifact_csv(artifact_type: str, *, run_date: Any | None = None) -> pd.DataFrame:
     record = fetch_ml_artifact(artifact_type, run_date=run_date)
     if not record:
         return pd.DataFrame()
@@ -1845,9 +1910,7 @@ def load_ml_artifact_csv(
         return pd.DataFrame()
 
 
-def load_ml_artifact_payload(
-    artifact_type: str, *, run_date: Any | None = None
-) -> dict[str, Any]:
+def load_ml_artifact_payload(artifact_type: str, *, run_date: Any | None = None) -> dict[str, Any]:
     record = fetch_ml_artifact(artifact_type, run_date=run_date)
     payload = record.get("payload") if record else None
     if isinstance(payload, Mapping):
@@ -1884,7 +1947,6 @@ def upsert_ml_artifact_frame(
         source=source,
         file_name=file_name,
     )
-
 
 
 def upsert_top_candidates(
@@ -1961,7 +2023,11 @@ def upsert_top_candidates(
                 continue
             if col == "source":
                 value = row.get(col) if col in row else None
-                if value is None or (isinstance(value, str) and not value.strip()) or pd.isna(value):
+                if (
+                    value is None
+                    or (isinstance(value, str) and not value.strip())
+                    or pd.isna(value)
+                ):
                     payload[col] = "metrics"
                 else:
                     payload[col] = value
@@ -2008,7 +2074,9 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
     if not row_dict:
         return False
     conn = _conn_or_none()
-    event_label = (row_dict.get("event_type") or row_dict.get("status") or row_dict.get("order_status") or "").upper()
+    event_label = (
+        row_dict.get("event_type") or row_dict.get("status") or row_dict.get("order_status") or ""
+    ).upper()
     order_id = row_dict.get("order_id")
     if conn is None:
         logger.warning(
@@ -2020,7 +2088,9 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
         _log_write_result(False, "executed_trades", 0, RuntimeError("db_disabled"))
         return False
 
-    entry_time = normalize_ts(row_dict.get("entry_time"), field="entry_time") or datetime.now(timezone.utc)
+    entry_time = normalize_ts(row_dict.get("entry_time"), field="entry_time") or datetime.now(
+        timezone.utc
+    )
     exit_time = normalize_ts(row_dict.get("exit_time"), field="exit_time")
 
     payload = {
@@ -2118,7 +2188,9 @@ def insert_order_event(
             _log_write_result(False, "order_events", 0, RuntimeError("db_disabled"))
             return False
 
-        normalized_event_time = normalize_ts(payload.get("event_time"), field="event_time") or datetime.now(timezone.utc)
+        normalized_event_time = normalize_ts(
+            payload.get("event_time"), field="event_time"
+        ) or datetime.now(timezone.utc)
         raw_payload = raw if raw is not None else payload
         stmt_payload = {
             "symbol": (payload.get("symbol") or "").upper(),
@@ -2157,7 +2229,9 @@ def insert_order_event(
             return False
 
 
-def get_open_trades(engine: Optional[PGConnection] = None, limit: int = 200) -> list[dict[str, Any]]:
+def get_open_trades(
+    engine: Optional[PGConnection] = None, limit: int = 200
+) -> list[dict[str, Any]]:
     limit = max(1, int(limit or 0))
     with _maybe_conn(engine) as conn:
         if conn is None:
@@ -2227,7 +2301,9 @@ def close_trade(
             )
             return False
 
-        normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
+        normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(
+            timezone.utc
+        )
         try:
             with conn:
                 with conn.cursor() as cursor:
@@ -2321,7 +2397,9 @@ def update_trade_exit_fields(
 
         normalized_exit_time = None
         if exit_time is not None:
-            normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
+            normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(
+                timezone.utc
+            )
 
         try:
             with conn:
@@ -2428,7 +2506,9 @@ def decorate_trade_exit(
             )
             return False
 
-        normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
+        normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(
+            timezone.utc
+        )
         try:
             with conn:
                 with conn.cursor() as cursor:
@@ -2511,7 +2591,9 @@ def upsert_trade_on_buy_fill(
         )
         return False
 
-    normalized_entry_time = normalize_ts(entry_time, field="entry_time") or datetime.now(timezone.utc)
+    normalized_entry_time = normalize_ts(entry_time, field="entry_time") or datetime.now(
+        timezone.utc
+    )
     payload = {
         "symbol": (symbol or "").upper(),
         "qty": qty,

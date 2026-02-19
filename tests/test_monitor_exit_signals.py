@@ -40,9 +40,7 @@ class TestMonitorExitSignals(unittest.TestCase):
             "SMA9": 95.0,
             "EMA20": 99.0,
         }
-        signals = monitor.evaluate_exit_signals(
-            position, indicators, datetime.now(timezone.utc)
-        )
+        signals = monitor.evaluate_exit_signals(position, indicators, datetime.now(timezone.utc))
         codes = {signal["code"] for signal in signals}
         self.assertIn("SIGNAL_REVERSAL", codes)
 

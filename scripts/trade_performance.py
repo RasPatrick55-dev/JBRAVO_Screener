@@ -103,7 +103,9 @@ def fetch_with_backoff(
         try:
             return fetcher()
         except Exception as exc:  # pragma: no cover - exercised via integration
-            status = getattr(exc, "status_code", None) or getattr(getattr(exc, "error", None), "code", None)
+            status = getattr(exc, "status_code", None) or getattr(
+                getattr(exc, "error", None), "code", None
+            )
             if status == 429 or "429" in str(exc):
                 if attempt == max_attempts:
                     logger.warning("Alpaca 429 rate limit reached after %s attempts.", attempt)
@@ -111,7 +113,13 @@ def fetch_with_backoff(
                 time.sleep(delay)
                 delay *= 2
                 continue
-            logger.debug("Backoff fetch failed (attempt %s/%s): %s", attempt, max_attempts, exc, exc_info=True)
+            logger.debug(
+                "Backoff fetch failed (attempt %s/%s): %s",
+                attempt,
+                max_attempts,
+                exc,
+                exc_info=True,
+            )
             break
     return pd.DataFrame()
 
@@ -181,15 +189,11 @@ def load_trades_log(base_dir: Path | str | None = None) -> pd.DataFrame:
                 df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
         if "qty" in df.columns:
             df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
-        if "pnl" not in df.columns and {"qty", "entry_price", "exit_price"}.issubset(
-            df.columns
-        ):
+        if "pnl" not in df.columns and {"qty", "entry_price", "exit_price"}.issubset(df.columns):
             df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["qty"]
         if "pnl" in df.columns:
             df["pnl"] = pd.to_numeric(df["pnl"], errors="coerce")
-        if "return_pct" not in df.columns and {"entry_price", "exit_price"}.issubset(
-            df.columns
-        ):
+        if "return_pct" not in df.columns and {"entry_price", "exit_price"}.issubset(df.columns):
             entry_price = pd.to_numeric(df["entry_price"], errors="coerce")
             exit_price = pd.to_numeric(df["exit_price"], errors="coerce")
             df["return_pct"] = np.where(
@@ -206,7 +210,6 @@ def load_trades_log(base_dir: Path | str | None = None) -> pd.DataFrame:
     except Exception:
         logger.warning("Trades log malformed at %s; returning empty frame", path, exc_info=True)
         return pd.DataFrame()
-
 
 
 def _normalize_bars_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -238,8 +241,12 @@ def _prepare_summary_frame(df: pd.DataFrame) -> pd.DataFrame:
             frame[col] = pd.to_datetime(frame[col], utc=True, errors="coerce")
 
     qty = pd.to_numeric(frame.get("qty", pd.Series(np.nan, index=frame.index)), errors="coerce")
-    entry_price = pd.to_numeric(frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
-    exit_price = pd.to_numeric(frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    entry_price = pd.to_numeric(
+        frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+    exit_price = pd.to_numeric(
+        frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
 
     pnl_series = frame.get("pnl")
     computed_pnl = (exit_price - entry_price) * qty
@@ -271,18 +278,16 @@ def _prepare_summary_frame(df: pd.DataFrame) -> pd.DataFrame:
     if "hold_days" in frame.columns:
         frame["hold_days"] = pd.to_numeric(frame["hold_days"], errors="coerce")
     elif {"entry_time", "exit_time"}.issubset(frame.columns):
-        frame["hold_days"] = (
-            frame["exit_time"] - frame["entry_time"]
-        ).dt.total_seconds() / (24 * 3600)
+        frame["hold_days"] = (frame["exit_time"] - frame["entry_time"]).dt.total_seconds() / (
+            24 * 3600
+        )
 
     return frame
 
 
 def _ensure_exit_reasons(frame: pd.DataFrame) -> pd.DataFrame:
     if "exit_reason" not in frame.columns:
-        frame["exit_reason"] = [
-            _infer_exit_reason(row) for row in frame.to_dict(orient="records")
-        ]
+        frame["exit_reason"] = [_infer_exit_reason(row) for row in frame.to_dict(orient="records")]
     frame["exit_reason"] = frame["exit_reason"].fillna("").astype("string")
     return frame
 
@@ -299,11 +304,15 @@ def _annotate_stop_exits(frame: pd.DataFrame) -> pd.DataFrame:
         if "is_trailing_stop_exit" in annotated.columns
         else pd.Series(False, index=annotated.index)
     )
-    order_type = annotated.get("order_type", pd.Series("", index=annotated.index)).fillna("").astype("string")
+    order_type = (
+        annotated.get("order_type", pd.Series("", index=annotated.index))
+        .fillna("")
+        .astype("string")
+    )
     exit_reason = annotated["exit_reason"].str.lower()
-    computed_stop = (
-        order_type.str.lower() == "trailing_stop"
-    ) | exit_reason.str.contains("trail", na=False)
+    computed_stop = (order_type.str.lower() == "trailing_stop") | exit_reason.str.contains(
+        "trail", na=False
+    )
     annotated["is_stop_exit"] = (computed_stop | existing_stop | trailing_flag).astype(bool)
     return annotated
 
@@ -400,9 +409,17 @@ def compute_trade_excursions(
         trailing_pct = _safe_to_float(
             _first_notna(row, "trailing_pct", "trailing_percent", "trailing_stop_pct")
         )
-        estimated_peak = exit_price / 0.97 if exit_reason == "TrailingStop" and trailing_pct == 3.0 and exit_price else None
+        estimated_peak = (
+            exit_price / 0.97
+            if exit_reason == "TrailingStop" and trailing_pct == 3.0 and exit_price
+            else None
+        )
 
-        if not isinstance(entry_ts, pd.Timestamp) or pd.isna(entry_ts) or not isinstance(exit_ts, pd.Timestamp):
+        if (
+            not isinstance(entry_ts, pd.Timestamp)
+            or pd.isna(entry_ts)
+            or not isinstance(exit_ts, pd.Timestamp)
+        ):
             peak_prices.append(estimated_peak if estimated_peak is not None else np.nan)
             trough_prices.append(np.nan)
             post_exit_peaks.append(estimated_peak if estimated_peak is not None else np.nan)
@@ -412,7 +429,9 @@ def compute_trade_excursions(
         end = exit_ts.to_pydatetime()
         post_end = end + timedelta(days=max(post_exit_days, 0))
 
-        bars = _fetch_bars_for_trade(symbol, start, post_end, data_client, feed, bar_fetcher=bar_fetcher)
+        bars = _fetch_bars_for_trade(
+            symbol, start, post_end, data_client, feed, bar_fetcher=bar_fetcher
+        )
         if bars.empty:
             peak_prices.append(estimated_peak if estimated_peak is not None else np.nan)
             trough_prices.append(np.nan)
@@ -445,7 +464,9 @@ def compute_trade_excursions(
             peak = estimated_peak
 
         peak_prices.append(peak if peak is not None else np.nan)
-        trough_prices.append(trough if trough is not None else (entry_price or exit_price or np.nan))
+        trough_prices.append(
+            trough if trough is not None else (entry_price or exit_price or np.nan)
+        )
 
         post_peak = _series_peak(post_bars.get("high", pd.Series(dtype=float))) or _series_peak(
             post_bars.get("close", pd.Series(dtype=float))
@@ -487,7 +508,9 @@ def _normalize_trailing_pct(value: Any) -> float | None:
     return pct
 
 
-def _is_trailing_stop_exit(row: Mapping[str, Any], *, tolerance: float = DEFAULT_TRAILING_STOP_TOLERANCE) -> bool:
+def _is_trailing_stop_exit(
+    row: Mapping[str, Any], *, tolerance: float = DEFAULT_TRAILING_STOP_TOLERANCE
+) -> bool:
     reason = _safe_str(_first_notna(row, "exit_reason", "reason")).strip()
     if reason == "TrailingStop":
         return True
@@ -519,10 +542,18 @@ def compute_exit_quality_columns(
     frame = _prepare_summary_frame(df)
     frame = _annotate_stop_exits(frame)
 
-    entry_price = pd.to_numeric(frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
-    exit_price = pd.to_numeric(frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
-    peak_price = pd.to_numeric(frame.get("peak_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
-    trough_price = pd.to_numeric(frame.get("trough_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    entry_price = pd.to_numeric(
+        frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+    exit_price = pd.to_numeric(
+        frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+    peak_price = pd.to_numeric(
+        frame.get("peak_price", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+    trough_price = pd.to_numeric(
+        frame.get("trough_price", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
     post_exit_peak = pd.to_numeric(
         frame.get("post_exit_peak", pd.Series(np.nan, index=frame.index)),
         errors="coerce",
@@ -539,14 +570,22 @@ def compute_exit_quality_columns(
         np.nan,
     )
 
-    valid_peak_mask = (peak_price.notna()) & (entry_price.notna()) & (exit_price.notna()) & (peak_price > entry_price)
+    valid_peak_mask = (
+        (peak_price.notna())
+        & (entry_price.notna())
+        & (exit_price.notna())
+        & (peak_price > entry_price)
+    )
     exit_eff_raw = np.where(
         valid_peak_mask,
         (exit_price - entry_price) / (peak_price - entry_price) * 100,
         np.nan,
     )
     exit_eff = np.where(
-        (peak_price.notna()) & (entry_price.notna()) & (exit_price.notna()) & (peak_price <= entry_price),
+        (peak_price.notna())
+        & (entry_price.notna())
+        & (exit_price.notna())
+        & (peak_price <= entry_price),
         0.0,
         exit_eff_raw,
     )
@@ -596,15 +635,23 @@ def evaluate_sold_too_soon_flags(
         if col in frame.columns:
             frame[col] = pd.to_datetime(frame[col], utc=True, errors="coerce")
 
-    entry_price = pd.to_numeric(frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
-    exit_price = pd.to_numeric(frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    entry_price = pd.to_numeric(
+        frame.get("entry_price", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+    exit_price = pd.to_numeric(
+        frame.get("exit_price", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
     qty = pd.to_numeric(frame.get("qty", pd.Series(np.nan, index=frame.index)), errors="coerce")
 
-    pnl_series = pd.to_numeric(frame.get("pnl", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    pnl_series = pd.to_numeric(
+        frame.get("pnl", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
     pnl_fallback = (exit_price - entry_price) * qty
     frame["pnl"] = pnl_series.where(~pnl_series.isna(), pnl_fallback)
 
-    return_pct = pd.to_numeric(frame.get("return_pct", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    return_pct = pd.to_numeric(
+        frame.get("return_pct", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
     computed_return = np.where(
         (entry_price > 0) & (exit_price.notna()),
         (exit_price - entry_price) / entry_price * 100,
@@ -612,7 +659,9 @@ def evaluate_sold_too_soon_flags(
     )
     frame["return_pct"] = return_pct.where(~return_pct.isna(), computed_return)
 
-    hold_days_series = pd.to_numeric(frame.get("hold_days", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    hold_days_series = pd.to_numeric(
+        frame.get("hold_days", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
     hold_days_calc = np.where(
         (frame.get("exit_time") is not None)
         & (frame.get("entry_time") is not None)
@@ -627,7 +676,9 @@ def evaluate_sold_too_soon_flags(
         frame.get("missed_profit_pct", pd.Series(np.nan, index=frame.index)),
         errors="coerce",
     )
-    peak_price = pd.to_numeric(frame.get("peak_price", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    peak_price = pd.to_numeric(
+        frame.get("peak_price", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
     fallback_mask = (
         missed_profit.isna()
         & peak_price.notna()
@@ -654,7 +705,9 @@ def evaluate_sold_too_soon_flags(
         sold_flags = eff_condition | missed_condition
     frame["sold_too_soon_flag"] = sold_flags.fillna(False)
 
-    rebound_series = pd.to_numeric(frame.get("rebound_pct", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    rebound_series = pd.to_numeric(
+        frame.get("rebound_pct", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
     if rebound_threshold_pct is not None:
         rebound_flags = (rebound_series >= float(rebound_threshold_pct)).fillna(False)
     else:
@@ -705,9 +758,13 @@ def compute_rebound_metrics(
         ]
     else:
         frame["is_stop_exit"] = frame["is_stop_exit"].fillna(False)
-    frame["is_trailing_stop_exit"] = frame.get("is_trailing_stop_exit", False) | frame["is_stop_exit"]
+    frame["is_trailing_stop_exit"] = (
+        frame.get("is_trailing_stop_exit", False) | frame["is_stop_exit"]
+    )
 
-    rebound_window_days = int(rebound_window_days) if rebound_window_days is not None else DEFAULT_REBOUND_DAYS
+    rebound_window_days = (
+        int(rebound_window_days) if rebound_window_days is not None else DEFAULT_REBOUND_DAYS
+    )
     frame["rebound_window_days"] = rebound_window_days
 
     post_exit_highs: list[float | None] = [np.nan] * len(frame.index)
@@ -832,8 +889,14 @@ def summarize_by_window(df: pd.DataFrame) -> dict[str, dict[str, float]]:
             stop_mask = pd.Series(False, index=subset.index)
         stop_subset = subset[stop_mask.fillna(False)] if trades else pd.DataFrame()
         stop_exits = int(len(stop_subset.index)) if not stop_subset.empty else 0
-        rebounds = int(stop_subset.get("rebounded", pd.Series(dtype=bool)).sum()) if stop_exits else 0
-        avg_rebound_pct = _safe_mean(stop_subset.get("rebound_pct", pd.Series(dtype=float))) if stop_exits else 0.0
+        rebounds = (
+            int(stop_subset.get("rebounded", pd.Series(dtype=bool)).sum()) if stop_exits else 0
+        )
+        avg_rebound_pct = (
+            _safe_mean(stop_subset.get("rebound_pct", pd.Series(dtype=float)))
+            if stop_exits
+            else 0.0
+        )
         rebound_rate = rebounds / stop_exits if stop_exits else 0.0
         summaries[label] = {
             "trades": trades,
@@ -906,7 +969,9 @@ def write_cache(
     trades_log_iso: str | None = None
     if trades_log_time is not None:
         try:
-            trades_log_iso = datetime.fromtimestamp(float(trades_log_time), tz=timezone.utc).isoformat()
+            trades_log_iso = datetime.fromtimestamp(
+                float(trades_log_time), tz=timezone.utc
+            ).isoformat()
         except Exception:
             trades_log_iso = None
     payload = {
@@ -950,7 +1015,10 @@ def is_cache_stale(
     if not cache.exists():
         return True
     try:
-        cache_age_hours = (datetime.now(timezone.utc) - datetime.fromtimestamp(cache.stat().st_mtime, tz=timezone.utc)).total_seconds() / 3600
+        cache_age_hours = (
+            datetime.now(timezone.utc)
+            - datetime.fromtimestamp(cache.stat().st_mtime, tz=timezone.utc)
+        ).total_seconds() / 3600
     except Exception:
         return True
     if cache_age_hours > max_age_hours:
@@ -1041,7 +1109,12 @@ def refresh_trade_performance_cache(
     except Exception:
         logger.warning("Exit quality enrichment failed; proceeding with raw trades.", exc_info=True)
         enriched = _prepare_summary_frame(excursions_frame)
-        for col, default in (("hold_days", 0.0), ("exit_efficiency_pct", 0.0), ("sold_too_soon", 0), ("is_stop_exit", False)):
+        for col, default in (
+            ("hold_days", 0.0),
+            ("exit_efficiency_pct", 0.0),
+            ("sold_too_soon", 0),
+            ("is_stop_exit", False),
+        ):
             if col not in enriched.columns:
                 enriched[col] = default
         for col in ("mfe_pct", "mae_pct", "missed_profit_pct"):
@@ -1069,13 +1142,23 @@ def refresh_trade_performance_cache(
             bar_fetcher=bar_fetcher,
         )
         if not rebound_enriched_subset.empty:
-            for col in ("rebound_window_days", "post_exit_high", "rebound_pct", "rebounded", "is_trailing_stop_exit"):
+            for col in (
+                "rebound_window_days",
+                "post_exit_high",
+                "rebound_pct",
+                "rebounded",
+                "is_trailing_stop_exit",
+            ):
                 if col in rebound_enriched_subset.columns:
                     rebound_frame.loc[enrichment_mask, col] = rebound_enriched_subset[col].values
             if "is_stop_exit" in rebound_enriched_subset.columns:
-                rebound_frame.loc[enrichment_mask, "is_stop_exit"] = rebound_enriched_subset["is_stop_exit"].values
+                rebound_frame.loc[enrichment_mask, "is_stop_exit"] = rebound_enriched_subset[
+                    "is_stop_exit"
+                ].values
     except Exception:
-        logger.warning("Rebound enrichment failed; proceeding without rebound metrics.", exc_info=True)
+        logger.warning(
+            "Rebound enrichment failed; proceeding without rebound metrics.", exc_info=True
+        )
         if "is_trailing_stop_exit" not in rebound_frame.columns:
             rebound_frame["is_trailing_stop_exit"] = False
         if "is_stop_exit" not in rebound_frame.columns:

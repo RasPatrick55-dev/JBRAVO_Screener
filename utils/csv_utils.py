@@ -18,7 +18,7 @@ def write_csv_atomic(
     - rows (list[dict] | pandas.DataFrame): Data to write.
     - fieldnames (list[str], optional): List of CSV headers. If None, inferred from rows[0].
     """
-    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     if isinstance(rows, pd.DataFrame):
         with atomic_write(path, overwrite=True, newline="", encoding="utf-8") as f:

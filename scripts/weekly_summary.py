@@ -27,7 +27,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # Connect to local trades database if present
-DB_CONN = sqlite3.connect(os.path.join(BASE_DIR, 'trades.db'))
+DB_CONN = sqlite3.connect(os.path.join(BASE_DIR, "trades.db"))
 
 logger = logging.getLogger("weekly_summary")
 logger.setLevel(logging.INFO)
@@ -56,13 +56,13 @@ def load_csv(filename: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(path)
         logger.info("Loaded %s (%d rows)", filename, len(df))
-        if 'net_pnl' not in df.columns:
-            if {'close_price', 'open_price'} <= set(df.columns):
-                df['net_pnl'] = df['close_price'] - df['open_price']
-            elif {'exit_price', 'entry_price'} <= set(df.columns):
-                df['net_pnl'] = df['exit_price'].fillna(0) - df['entry_price'].fillna(0)
+        if "net_pnl" not in df.columns:
+            if {"close_price", "open_price"} <= set(df.columns):
+                df["net_pnl"] = df["close_price"] - df["open_price"]
+            elif {"exit_price", "entry_price"} <= set(df.columns):
+                df["net_pnl"] = df["exit_price"].fillna(0) - df["entry_price"].fillna(0)
             else:
-                df['net_pnl'] = 0.0
+                df["net_pnl"] = 0.0
         return df
     except Exception as exc:
         logger.error("Failed reading %s: %s", filename, exc)
@@ -175,9 +175,9 @@ def calculate_weekly_summary() -> dict:
             for c in missing_cols:
                 logger.warning("No '%s' column in backtest_results—skipping", c)
         if "net_pnl" in backtest_results.columns and "symbol" in backtest_results.columns:
-            best_backtest_symbol = (
-                backtest_results.sort_values("net_pnl", ascending=False)["symbol"].iloc[0]
-            )
+            best_backtest_symbol = backtest_results.sort_values("net_pnl", ascending=False)[
+                "symbol"
+            ].iloc[0]
         else:
             logger.warning(
                 "Column 'net_pnl' or 'symbol' missing. Skipping best backtest symbol calculation."
@@ -186,15 +186,21 @@ def calculate_weekly_summary() -> dict:
     best_candidate = ""
     if not historical_candidates.empty:
         historical_candidates["date"] = pd.to_datetime(historical_candidates["date"], utc=True)
-        recent_candidates = historical_candidates[
-            historical_candidates["date"] >= one_week_ago
-        ]
-        if not recent_candidates.empty and "score" in recent_candidates.columns and "symbol" in recent_candidates.columns:
-            best_candidate = recent_candidates.sort_values("score", ascending=False)["symbol"].iloc[0]
+        recent_candidates = historical_candidates[historical_candidates["date"] >= one_week_ago]
+        if (
+            not recent_candidates.empty
+            and "score" in recent_candidates.columns
+            and "symbol" in recent_candidates.columns
+        ):
+            best_candidate = recent_candidates.sort_values("score", ascending=False)["symbol"].iloc[
+                0
+            ]
         elif recent_candidates.empty:
             pass
         else:
-            logger.warning("Historical candidates missing required columns—cannot determine best candidate")
+            logger.warning(
+                "Historical candidates missing required columns—cannot determine best candidate"
+            )
 
     metrics_row = metrics_summary.iloc[0] if not metrics_summary.empty else pd.Series()
 

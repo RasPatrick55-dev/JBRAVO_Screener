@@ -70,7 +70,9 @@ def test_gather_fill_events_falls_back_to_orders(monkeypatch, dummy_events, null
     monkeypatch.setattr("scripts.backfill_trades_log.fetch_order_fill_events", fake_fetch_orders)
 
     events = gather_fill_events(
-        pd.Timestamp("2024-01-01", tz="UTC"), pd.Timestamp("2024-01-02", tz="UTC"), logger=null_logger
+        pd.Timestamp("2024-01-01", tz="UTC"),
+        pd.Timestamp("2024-01-02", tz="UTC"),
+        logger=null_logger,
     )
 
     assert events == dummy_events
@@ -79,8 +81,20 @@ def test_gather_fill_events_falls_back_to_orders(monkeypatch, dummy_events, null
 
 def test_build_trades_supports_multi_fill_entry_and_exit():
     events = [
-        {"symbol": "AAPL", "side": "buy", "qty": 5, "price": 10, "timestamp": "2024-01-01T00:00:00Z"},
-        {"symbol": "AAPL", "side": "buy", "qty": 5, "price": 11, "timestamp": "2024-01-01T00:01:00Z"},
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": 5,
+            "price": 10,
+            "timestamp": "2024-01-01T00:00:00Z",
+        },
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": 5,
+            "price": 11,
+            "timestamp": "2024-01-01T00:01:00Z",
+        },
         {
             "symbol": "AAPL",
             "side": "sell",
@@ -123,9 +137,27 @@ def test_build_trades_supports_multi_fill_entry_and_exit():
 
 def test_partial_exit_accumulates_and_sets_exit_price():
     events = [
-        {"symbol": "TSLA", "side": "buy", "qty": 10, "price": 20, "timestamp": "2024-02-01T00:00:00Z"},
-        {"symbol": "TSLA", "side": "sell", "qty": 4, "price": 21, "timestamp": "2024-02-01T01:00:00Z"},
-        {"symbol": "TSLA", "side": "sell", "qty": 6, "price": 22, "timestamp": "2024-02-01T02:00:00Z"},
+        {
+            "symbol": "TSLA",
+            "side": "buy",
+            "qty": 10,
+            "price": 20,
+            "timestamp": "2024-02-01T00:00:00Z",
+        },
+        {
+            "symbol": "TSLA",
+            "side": "sell",
+            "qty": 4,
+            "price": 21,
+            "timestamp": "2024-02-01T01:00:00Z",
+        },
+        {
+            "symbol": "TSLA",
+            "side": "sell",
+            "qty": 6,
+            "price": 22,
+            "timestamp": "2024-02-01T02:00:00Z",
+        },
     ]
 
     trades = build_trades_from_events(events)
@@ -143,7 +175,14 @@ def test_partial_exit_accumulates_and_sets_exit_price():
 
 def test_trailing_stop_exit_sets_type_and_reason():
     events = [
-        {"symbol": "MSFT", "side": "buy", "qty": 2, "price": 100, "timestamp": "2024-03-01T00:00:00Z", "order_type": "market"},
+        {
+            "symbol": "MSFT",
+            "side": "buy",
+            "qty": 2,
+            "price": 100,
+            "timestamp": "2024-03-01T00:00:00Z",
+            "order_type": "market",
+        },
         {
             "symbol": "MSFT",
             "side": "sell",
@@ -165,7 +204,13 @@ def test_trailing_stop_exit_sets_type_and_reason():
 
 def test_order_type_uses_alpaca_type_not_status():
     events = [
-        {"symbol": "AMD", "side": "buy", "qty": 1, "price": 50, "timestamp": "2024-04-01T00:00:00Z"},
+        {
+            "symbol": "AMD",
+            "side": "buy",
+            "qty": 1,
+            "price": 50,
+            "timestamp": "2024-04-01T00:00:00Z",
+        },
         {
             "symbol": "AMD",
             "side": "sell",
@@ -182,7 +227,13 @@ def test_order_type_uses_alpaca_type_not_status():
     trade = trades[0]
     assert trade["order_type"] == "limit"
     assert trade["order_status"] in {"filled", "closed"}
-    assert trade["order_type"] not in {"fill", "partial_fill", "filled", "partially_filled", "order_type"}
+    assert trade["order_type"] not in {
+        "fill",
+        "partial_fill",
+        "filled",
+        "partially_filled",
+        "order_type",
+    }
     assert trade["order_type"] in {"market", "limit", "stop", "stop_limit", "trailing_stop"}
 
 
@@ -190,7 +241,14 @@ def test_backfill_uses_exit_order_metadata_and_sanitizes(tmp_path, monkeypatch):
     dest = tmp_path / "trades_log.csv"
 
     events = [
-        {"symbol": "AMD", "side": "buy", "qty": 1, "price": 50, "timestamp": "2024-04-01T00:00:00Z", "order_id": "entry-1"},
+        {
+            "symbol": "AMD",
+            "side": "buy",
+            "qty": 1,
+            "price": 50,
+            "timestamp": "2024-04-01T00:00:00Z",
+            "order_id": "entry-1",
+        },
         {
             "symbol": "AMD",
             "side": "sell",
@@ -208,7 +266,9 @@ def test_backfill_uses_exit_order_metadata_and_sanitizes(tmp_path, monkeypatch):
     def fake_fetch_order_metadata(order_ids, **kwargs):
         return {"exit-1": {"type": "stop_limit", "status": "partially_filled"}}
 
-    monkeypatch.setattr("scripts.backfill_trades_log._fetch_order_metadata", fake_fetch_order_metadata)
+    monkeypatch.setattr(
+        "scripts.backfill_trades_log._fetch_order_metadata", fake_fetch_order_metadata
+    )
 
     backfill(1, dest, merge=True)
 
@@ -225,7 +285,9 @@ def test_backfill_uses_exit_order_metadata_and_sanitizes(tmp_path, monkeypatch):
 def test_backfill_writes_atomic(tmp_path, monkeypatch, dummy_events):
     dest = tmp_path / "trades_log.csv"
 
-    monkeypatch.setattr("scripts.backfill_trades_log.gather_fill_events", lambda *a, **k: dummy_events)
+    monkeypatch.setattr(
+        "scripts.backfill_trades_log.gather_fill_events", lambda *a, **k: dummy_events
+    )
 
     backfill(1, dest, merge=True)
 

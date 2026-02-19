@@ -2,10 +2,12 @@ from scripts.utils.normalize import to_bars_df
 
 
 def test_flatten_dict_of_lists():
-    raw = {"bars": {
-        "AAPL": [{"t": "2024-01-02T00:00:00Z", "o": 1, "h": 2, "l": 1, "c": 2, "v": 10}],
-        "MSFT": [{"t": "2024-01-02T00:00:00Z", "o": 2, "h": 3, "l": 2, "c": 3, "v": 20}],
-    }}
+    raw = {
+        "bars": {
+            "AAPL": [{"t": "2024-01-02T00:00:00Z", "o": 1, "h": 2, "l": 1, "c": 2, "v": 10}],
+            "MSFT": [{"t": "2024-01-02T00:00:00Z", "o": 2, "h": 3, "l": 2, "c": 3, "v": 20}],
+        }
+    }
     flattened = []
     for sym, arr in raw["bars"].items():
         for bar in arr:

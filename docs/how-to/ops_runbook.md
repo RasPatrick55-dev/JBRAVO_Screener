@@ -58,7 +58,8 @@ cd /home/RasPatrick/jbravo_screener && touch /var/www/raspatrick_pythonanywhere_
 ## Dashboard Consistency Checker Troubleshooting
 
 1. CSV parity mismatch (`[PARITY] top_candidates.csv rows mismatch`):
-   - In DB-first mode, stale `data/top_candidates.csv` can trigger legacy CSV parity checks.
+   - In DB-first mode, CSV parity checks run only when `JBR_WRITE_CANDIDATE_CSVS=true`.
+   - If parity is not required, unset `JBR_WRITE_CANDIDATE_CSVS` and rerun the checker.
 
    ```bash
    mkdir -p data/parachute
@@ -67,7 +68,8 @@ cd /home/RasPatrick/jbravo_screener && touch /var/www/raspatrick_pythonanywhere_
    ```
 
 2. `DB_CONNECT_FAIL localhost:9999`:
-   - `localhost:9999` implies DB config was not sourced (or a local tunnel default was used). On PythonAnywhere, source `~/.config/jbravo/.env` first.
+   - `localhost:9999` should only appear when `JBR_DEV_DB_DEFAULTS=true` (dev fallback) or when explicitly configured.
+   - On PythonAnywhere/production, source `~/.config/jbravo/.env` so `DATABASE_URL` is present.
 
    ```bash
    set -a; . ~/.config/jbravo/.env; set +a

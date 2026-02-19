@@ -13,6 +13,7 @@ from scripts.ensure_db_indicators import (
     REQUIRED_COLUMNS,
 )
 
+
 class TestEnsureDBIndicators(unittest.TestCase):
     def test_columns_created(self):
         fd, path = tempfile.mkstemp()
@@ -43,5 +44,6 @@ class TestEnsureDBIndicators(unittest.TestCase):
         finally:
             os.remove(path)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

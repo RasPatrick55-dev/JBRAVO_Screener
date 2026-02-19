@@ -26,9 +26,7 @@ def cache_bars(symbol: str, bars_or_df, cache_dir: str = "cache") -> None:
     df.to_csv(filepath, index=False)
 
 
-def fetch_bars_with_cutoff(
-    symbol: str, cutoff_ts: datetime.datetime, data_client
-) -> pd.DataFrame:
+def fetch_bars_with_cutoff(symbol: str, cutoff_ts: datetime.datetime, data_client) -> pd.DataFrame:
     """Fetch daily bars up to ``cutoff_ts`` inclusive.
 
     The request uses the IEX feed which includes extended trading hours data.
@@ -52,9 +50,7 @@ def fetch_bars_with_cutoff(
         logging.error("Failed to fetch bars for %s via IEX: %s", symbol, e)
         return pd.DataFrame()
     if isinstance(bars.index, pd.MultiIndex):
-        bars = (
-            bars.droplevel("symbol") if "symbol" in bars.index.names else bars.droplevel(0)
-        )
+        bars = bars.droplevel("symbol") if "symbol" in bars.index.names else bars.droplevel(0)
     bars.index = pd.to_datetime(bars.index)
     if bars.index.tzinfo is None:
         bars.index = bars.index.tz_localize("UTC")

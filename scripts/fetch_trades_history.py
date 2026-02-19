@@ -1,7 +1,7 @@
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import timezone
 import pandas as pd
 import numpy as np
 import os
@@ -27,10 +27,11 @@ def safe_float(val, default=0.0):
     except (ValueError, TypeError):
         return default
 
+
 load_dotenv()
 client = TradingClient(
-    os.getenv('APCA_API_KEY_ID'),
-    os.getenv('APCA_API_SECRET_KEY'),
+    os.getenv("APCA_API_KEY_ID"),
+    os.getenv("APCA_API_SECRET_KEY"),
     paper=True,
 )
 
@@ -42,7 +43,7 @@ while True:
         status="closed",
         until=end,
         limit=500,
-        direction='desc',
+        direction="desc",
     )
     try:
         chunk = client.get_orders(filter=req)
@@ -72,28 +73,28 @@ for order in orders_sorted:
     avg_price = safe_float(order.filled_avg_price)
     qty = safe_float(order.filled_qty)
 
-    entry_price = ''
-    exit_price = ''
-    entry_time = ''
-    exit_time = ''
+    entry_price = ""
+    exit_price = ""
+    entry_time = ""
+    exit_time = ""
 
-    if side == 'buy':
+    if side == "buy":
         entry_price = avg_price
-        entry_time = order.filled_at.isoformat() if order.filled_at else ''
+        entry_time = order.filled_at.isoformat() if order.filled_at else ""
         open_positions[symbol] = {
-            'price': avg_price,
-            'qty': qty,
-            'time': entry_time,
+            "price": avg_price,
+            "qty": qty,
+            "time": entry_time,
         }
         pnl = 0.0
-    elif side == 'sell':
+    elif side == "sell":
         exit_price = avg_price
-        exit_time = order.filled_at.isoformat() if order.filled_at else ''
+        exit_time = order.filled_at.isoformat() if order.filled_at else ""
         if symbol in open_positions:
             entry_info = open_positions.pop(symbol)
-            entry_price = entry_info['price']
-            entry_time = entry_info['time']
-            pnl = (avg_price - entry_info['price']) * entry_info['qty']
+            entry_price = entry_info["price"]
+            entry_time = entry_info["time"]
+            pnl = (avg_price - entry_info["price"]) * entry_info["qty"]
         else:
             pnl = 0.0
     else:
@@ -101,53 +102,48 @@ for order in orders_sorted:
 
     records.append(
         {
-            'symbol': symbol,
-            'qty': qty,
-            'entry_price': entry_price,
-            'exit_price': exit_price,
-            'entry_time': entry_time,
-            'exit_time': exit_time,
-            'order_status': order.status.value if order.status else 'unknown',
-            'net_pnl': pnl,
-            'pnl': pnl,
-            'order_type': getattr(order, 'order_type', ''),
-            'side': side,
+            "symbol": symbol,
+            "qty": qty,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "entry_time": entry_time,
+            "exit_time": exit_time,
+            "order_status": order.status.value if order.status else "unknown",
+            "net_pnl": pnl,
+            "pnl": pnl,
+            "order_type": getattr(order, "order_type", ""),
+            "side": side,
         }
     )
 
 df = pd.DataFrame(records)
-data_dir = os.path.join(BASE_DIR, 'data')
+data_dir = os.path.join(BASE_DIR, "data")
 
 # Optional percent profit calculation
 with np.errstate(divide="ignore", invalid="ignore"):
     df["pct_profit"] = (
-        df["net_pnl"]
-        / (
-            df["entry_price"].replace(0, np.nan) * df["qty"].replace(0, np.nan)
-        )
+        df["net_pnl"] / (df["entry_price"].replace(0, np.nan) * df["qty"].replace(0, np.nan))
     ).fillna(0.0) * 100
 
 cols = [
-    'symbol',
-    'qty',
-    'entry_price',
-    'exit_price',
-    'entry_time',
-    'exit_time',
-    'order_status',
-    'net_pnl',
-    'pnl',
-    'order_type',
-    'side',
+    "symbol",
+    "qty",
+    "entry_price",
+    "exit_price",
+    "entry_time",
+    "exit_time",
+    "order_status",
+    "net_pnl",
+    "pnl",
+    "order_type",
+    "side",
 ]
 
 try:
-    df[cols + ["pct_profit"]].to_csv(
-        os.path.join(data_dir, 'trades_log.csv'), index=False
-    )
-    executed_trades = df[df['qty'] > 0]
+    df[cols + ["pct_profit"]].to_csv(os.path.join(data_dir, "trades_log.csv"), index=False)
+    executed_trades = df[df["qty"] > 0]
     executed_trades[cols + ["pct_profit"]].to_csv(
-        os.path.join(data_dir, 'executed_trades.csv'),
+        os.path.join(data_dir, "executed_trades.csv"),
         index=False,
     )
 except Exception as e:

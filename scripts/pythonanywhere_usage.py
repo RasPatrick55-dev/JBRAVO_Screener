@@ -230,7 +230,9 @@ def postgres_size_bytes(mode: str = "database") -> Optional[int]:
     try:
         with conn.cursor() as cursor:
             if mode in {"total", "total_wal"}:
-                cursor.execute("SELECT SUM(pg_database_size(datname)) AS size_bytes FROM pg_database")
+                cursor.execute(
+                    "SELECT SUM(pg_database_size(datname)) AS size_bytes FROM pg_database"
+                )
             else:
                 cursor.execute("SELECT pg_database_size(current_database()) AS size_bytes")
             row = cursor.fetchone()
@@ -322,7 +324,9 @@ def build_payload(
         "file_storage": {
             "used_bytes": used_bytes,
             "limit_bytes": limit_bytes,
-            "percent": round(storage_percent, 2) if isinstance(storage_percent, float) else storage_percent,
+            "percent": round(storage_percent, 2)
+            if isinstance(storage_percent, float)
+            else storage_percent,
             "file_used_bytes": int(used_bytes or 0),
             "file_quota_bytes": int(limit_bytes or 0),
             "file_storage_percent": int(storage_percent or 0),
@@ -338,7 +342,9 @@ def build_payload(
             "pg_quota_bytes": pg_quota_bytes,
             "pg_storage_percent": pg_percent,
             "pg_used_pretty": pg_used_pretty,
-            "pg_used_gib": round((pg_used_bytes / (1024**3)), 3) if pg_used_bytes is not None else None,
+            "pg_used_gib": round((pg_used_bytes / (1024**3)), 3)
+            if pg_used_bytes is not None
+            else None,
             "pg_quota_gb": pg_quota_gb,
             "pg_error": pg_error,
             "mode": postgres_mode,
@@ -364,7 +370,11 @@ def main() -> int:
     parser.add_argument(
         "--storage-mode",
         default=os.getenv("PYTHONANYWHERE_STORAGE_MODE")
-        or ("pythonanywhere" if os.getenv("PYTHONANYWHERE_DOMAIN") or os.getenv("PYTHONANYWHERE_API_TOKEN") else "path"),
+        or (
+            "pythonanywhere"
+            if os.getenv("PYTHONANYWHERE_DOMAIN") or os.getenv("PYTHONANYWHERE_API_TOKEN")
+            else "path"
+        ),
         choices=["path", "pythonanywhere"],
         help="Storage usage mode: 'path' (default) or 'pythonanywhere' quota calculation.",
     )

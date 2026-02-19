@@ -141,9 +141,7 @@ def _probe_data(logger: logging.Logger) -> Dict[str, Any]:
         if ok:
             logger.info("Data probe OK status=%s", resp.status_code)
         else:
-            logger.error(
-                "Data probe FAILED status=%s body=%s", resp.status_code, resp.text[:200]
-            )
+            logger.error("Data probe FAILED status=%s body=%s", resp.status_code, resp.text[:200])
         return {"ok": ok, "status": resp.status_code, "message": message}
     except Exception as exc:  # pragma: no cover - network guard
         logger.exception("Data probe exception")

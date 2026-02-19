@@ -239,11 +239,15 @@ def test_evaluate_sold_too_soon_flags_modes():
         rebound_window_days=5,
     )
     assert evaluated["sold_too_soon_flag"].sum() == 3
-    assert evaluated.loc[evaluated["symbol"] == "CCC", "missed_profit_pct"].iat[0] == pytest.approx(20.0)
+    assert evaluated.loc[evaluated["symbol"] == "CCC", "missed_profit_pct"].iat[0] == pytest.approx(
+        20.0
+    )
     assert bool(evaluated.loc[evaluated["symbol"] == "BBB", "rebounded"].iat[0]) is True
     assert bool(evaluated.loc[evaluated["symbol"] == "AAA", "rebounded"].iat[0]) is False
 
-    efficiency_only = evaluate_sold_too_soon_flags(trades, efficiency_cutoff_pct=50, mode="efficiency")
+    efficiency_only = evaluate_sold_too_soon_flags(
+        trades, efficiency_cutoff_pct=50, mode="efficiency"
+    )
     assert efficiency_only["sold_too_soon_flag"].sum() == 1
 
     missed_only = evaluate_sold_too_soon_flags(trades, missed_profit_cutoff_pct=5, mode="missed")
@@ -328,7 +332,10 @@ def test_refresh_populates_exit_efficiency_with_daily_peak(tmp_path):
 
     payload = read_cache(cache_path)
     assert payload is not None
-    assert pytest.approx(payload["summary"]["ALL"]["avg_exit_efficiency_pct"], rel=1e-6) == expected_eff
+    assert (
+        pytest.approx(payload["summary"]["ALL"]["avg_exit_efficiency_pct"], rel=1e-6)
+        == expected_eff
+    )
     cached_trade = payload["trades"][0]
     assert pytest.approx(cached_trade["exit_efficiency_pct"], rel=1e-6) == expected_eff
 
@@ -479,6 +486,7 @@ def test_rebound_columns_exist():
         ]
     )
     enriched = compute_exit_quality_columns(trades)
+
     def fake_fetch(_symbol, start, end, _timeframe):
         return pd.DataFrame(
             {

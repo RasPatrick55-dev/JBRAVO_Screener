@@ -45,7 +45,6 @@ from datetime import datetime
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-import requests
 from utils.alerts import send_alert
 
 from .indicators import adx, aroon, macd, obv, rsi
@@ -54,11 +53,11 @@ from typing import Optional
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
-os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
 
-log_path = os.path.join(BASE_DIR, 'logs', 'enhanced_screener.log')
-error_log_path = os.path.join(BASE_DIR, 'logs', 'error.log')
+log_path = os.path.join(BASE_DIR, "logs", "enhanced_screener.log")
+error_log_path = os.path.join(BASE_DIR, "logs", "error.log")
 
 # Configure logging with rotation to prevent unbounded growth
 error_handler = RotatingFileHandler(error_log_path, maxBytes=2_000_000, backupCount=5)
@@ -70,16 +69,16 @@ logging.basicConfig(
         error_handler,
     ],
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    format="%(asctime)s [%(levelname)s] %(message)s",
 )
 
 # Load environment variables (API credentials, webhook endpoints, etc.)
-dotenv_path = os.path.join(BASE_DIR, '.env')
+dotenv_path = os.path.join(BASE_DIR, ".env")
 logging.info("Loading environment variables from %s", dotenv_path)
 load_dotenv(dotenv_path)
-DATA_CACHE_DIR = os.path.join(BASE_DIR, 'data', 'history_cache')
+DATA_CACHE_DIR = os.path.join(BASE_DIR, "data", "history_cache")
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
-DB_PATH = os.path.join(BASE_DIR, 'data', 'pipeline.db')
+DB_PATH = os.path.join(BASE_DIR, "data", "pipeline.db")
 
 
 from .ensure_db_indicators import ensure_columns, REQUIRED_COLUMNS
@@ -93,11 +92,11 @@ def init_db() -> None:
 init_db()
 
 # Prepare initial CSVs if they do not already exist
-hist_init_path = os.path.join(BASE_DIR, 'data', 'historical_candidates.csv')
+hist_init_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
 if not os.path.exists(hist_init_path):
-    write_csv_atomic(hist_init_path, pd.DataFrame(columns=['date', 'symbol', 'score']))
+    write_csv_atomic(hist_init_path, pd.DataFrame(columns=["date", "symbol", "score"]))
 
-top_init_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
+top_init_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
 if not os.path.exists(top_init_path):
     write_csv_atomic(top_init_path, pd.DataFrame(columns=["symbol", "score"]))
 
@@ -119,7 +118,11 @@ data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # Filter for active, tradable NYSE/NASDAQ symbols only
 assets = trading_client.get_all_assets()
-symbols = [a.symbol for a in assets if a.tradable and a.status == "active" and a.exchange in ("NYSE", "NASDAQ")]
+symbols = [
+    a.symbol
+    for a in assets
+    if a.tradable and a.status == "active" and a.exchange in ("NYSE", "NASDAQ")
+]
 
 # We need at least 250 bars to compute long period indicators
 required_bars = 250
@@ -132,15 +135,18 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     considers gaps from one period to the next.  We use a simple
     moving average here; you could switch to an EMA if preferred.
     """
-    high = df['high']
-    low = df['low']
-    close = df['close']
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
     prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     atr = tr.rolling(period).mean()
     return atr
 
@@ -316,16 +322,16 @@ def main() -> None:
         )
         sys.exit(1)
     ranked_df.sort_values(by="score", ascending=False, inplace=True)
-    csv_path = os.path.join(BASE_DIR, 'data', 'top_candidates.csv')
+    csv_path = os.path.join(BASE_DIR, "data", "top_candidates.csv")
     if ranked_df.empty:
         logging.warning("No candidates met the screening criteria.")
         ranked_df = pd.DataFrame(columns=["symbol", "score"])
     write_csv_atomic(csv_path, ranked_df.head(15))
     logging.info("Top 15 ranked candidates saved to %s", csv_path)
     # Append to historical candidates log
-    hist_path = os.path.join(BASE_DIR, 'data', 'historical_candidates.csv')
+    hist_path = os.path.join(BASE_DIR, "data", "historical_candidates.csv")
     append_df = ranked_df.head(15).copy()
-    append_df.insert(0, 'date', datetime.now().strftime('%Y-%m-%d'))
+    append_df.insert(0, "date", datetime.now().strftime("%Y-%m-%d"))
     write_csv_atomic(hist_path, append_df)
     logging.info("Historical candidates updated at %s", hist_path)
     with sqlite3.connect(DB_PATH) as conn:

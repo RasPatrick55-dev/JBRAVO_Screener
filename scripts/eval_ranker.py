@@ -34,7 +34,9 @@ class EvaluationConfig:
 
     @property
     def resolved_drawdown(self) -> float:
-        return self.drawdown_threshold if self.drawdown_threshold is not None else self.hit_threshold
+        return (
+            self.drawdown_threshold if self.drawdown_threshold is not None else self.hit_threshold
+        )
 
 
 DATE_FORMAT = "%Y-%m-%d"
@@ -132,9 +134,7 @@ def load_prediction_history(cfg: EvaluationConfig) -> pd.DataFrame:
     start_date = end_date - timedelta(days=cfg.days - 1)
 
     selected: List[PredictionFile] = [
-        (file_date, path)
-        for file_date, path in files
-        if start_date <= file_date <= end_date
+        (file_date, path) for file_date, path in files if start_date <= file_date <= end_date
     ]
     if not selected:
         return pd.DataFrame()
@@ -230,7 +230,11 @@ def _evaluate_price_path(
         if low <= stop_target:
             return LabelResult(0, max_ret, min_ret)
 
-    return LabelResult(0, max_ret if max_ret != float("-inf") else None, min_ret if min_ret != float("inf") else None)
+    return LabelResult(
+        0,
+        max_ret if max_ret != float("-inf") else None,
+        min_ret if min_ret != float("inf") else None,
+    )
 
 
 def label_predictions(
@@ -459,7 +463,10 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> EvaluationConfig:
         "days": EVAL_DEFAULTS.get("days", EvaluationConfig.days),
         "label_horizon": EVAL_DEFAULTS.get("label_horizon", EvaluationConfig.label_horizon),
         "hit_threshold": EVAL_DEFAULTS.get("hit_threshold", EvaluationConfig.hit_threshold),
-        "max_drawdown": EVAL_DEFAULTS.get("max_drawdown", EVAL_DEFAULTS.get("drawdown_threshold", EvaluationConfig.drawdown_threshold)),
+        "max_drawdown": EVAL_DEFAULTS.get(
+            "max_drawdown",
+            EVAL_DEFAULTS.get("drawdown_threshold", EvaluationConfig.drawdown_threshold),
+        ),
     }
     try:
         defaults["days"] = int(defaults["days"])
@@ -475,9 +482,7 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> EvaluationConfig:
         defaults["hit_threshold"] = EvaluationConfig.hit_threshold
     try:
         drawdown_default = (
-            float(defaults["max_drawdown"])
-            if defaults["max_drawdown"] is not None
-            else None
+            float(defaults["max_drawdown"]) if defaults["max_drawdown"] is not None else None
         )
     except (TypeError, ValueError):
         drawdown_default = EvaluationConfig.drawdown_threshold

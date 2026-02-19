@@ -5,6 +5,7 @@ implementation.  The modern flow now lives in ``scripts.execute_trades``.
 This shim remains to preserve backwards compatibility for downstream
 orchestration while clearly signalling the deprecation.
 """
+
 from __future__ import annotations
 
 import sys

@@ -3,6 +3,7 @@
 Alerts are best-effort: missing configuration or network failures should never
 crash callers. Set ``ALERTS_ENABLED=false`` to disable alerts locally.
 """
+
 from __future__ import annotations
 
 import json
@@ -47,9 +48,7 @@ def send_alert(message: str, context: Optional[Mapping[str, Any]] = None) -> Non
     """
 
     if not _is_enabled():
-        logger.info(
-            "Alerts disabled via ALERTS_ENABLED; skipping alert: %s", message
-        )
+        logger.info("Alerts disabled via ALERTS_ENABLED; skipping alert: %s", message)
         return
 
     webhook = _webhook_url()
@@ -67,9 +66,6 @@ def send_alert(message: str, context: Optional[Mapping[str, Any]] = None) -> Non
     try:
         response = requests.post(webhook, json=payload, timeout=5)
         if not response.ok:
-            logger.warning(
-                "Failed to send alert (status %s): %s", response.status_code, message
-            )
+            logger.warning("Failed to send alert (status %s): %s", response.status_code, message)
     except Exception as exc:  # pragma: no cover - defensive network guard
         logger.warning("Failed to send alert: %s", exc)
-

@@ -97,7 +97,18 @@ def test_run_executor_returns_zero_when_all_filtered(tmp_path: Path, monkeypatch
     monkeypatch.setattr(execute_trades, "_fetch_latest_daily_bars", lambda symbols: {})
     monkeypatch.setattr(execute_trades, "_fetch_latest_close_from_alpaca", lambda symbol: None)
 
-    exit_code = execute_trades.run_executor(config, client=type("Client", (), {"get_all_positions": lambda self: [], "get_orders": lambda self, req: [], "get_account": lambda self: type("A", (), {"buying_power": "50000"})()})())
+    exit_code = execute_trades.run_executor(
+        config,
+        client=type(
+            "Client",
+            (),
+            {
+                "get_all_positions": lambda self: [],
+                "get_orders": lambda self, req: [],
+                "get_account": lambda self: type("A", (), {"buying_power": "50000"})(),
+            },
+        )(),
+    )
     assert exit_code == 0
 
 
@@ -112,9 +123,7 @@ def test_parse_args_reconcile_only_flag_sets_true():
 
 
 def test_parse_args_no_reconcile_only_sets_false():
-    args = execute_trades.parse_args(
-        ["--source", "db", "--reconcile-only", "--no-reconcile-only"]
-    )
+    args = execute_trades.parse_args(["--source", "db", "--reconcile-only", "--no-reconcile-only"])
     assert args.reconcile_only is False
 
 

@@ -187,13 +187,17 @@ def _pagination_token(response: requests.Response, payload: Any) -> Optional[str
         if token:
             return token
     if isinstance(payload, dict):
-        token = payload.get("next_page_token") or payload.get("page_token") or payload.get("next_token")
+        token = (
+            payload.get("next_page_token") or payload.get("page_token") or payload.get("next_token")
+        )
         if token:
             return str(token)
     return None
 
 
-def _request_activity_page(base_url: str, params: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+def _request_activity_page(
+    base_url: str, params: Dict[str, Any]
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     base = base_url.rstrip("/")
     url = f"{base}/v2/account/activities"
     headers = _build_headers()
@@ -208,7 +212,11 @@ def _request_activity_page(base_url: str, params: Dict[str, Any]) -> Tuple[List[
     activities: List[Dict[str, Any]] = []
     if isinstance(payload, list):
         activities.extend(payload)
-    elif isinstance(payload, dict) and "activities" in payload and isinstance(payload["activities"], list):
+    elif (
+        isinstance(payload, dict)
+        and "activities" in payload
+        and isinstance(payload["activities"], list)
+    ):
         activities.extend(payload["activities"])
 
     token = _pagination_token(resp, payload)
@@ -296,7 +304,9 @@ def insert_activities(
         raise RuntimeError(f"db_insert_failed err={exc}") from exc
 
 
-def compute_since(args_since: Optional[str], watermark: Optional[str], lookback_days: int) -> Tuple[Optional[str], str]:
+def compute_since(
+    args_since: Optional[str], watermark: Optional[str], lookback_days: int
+) -> Tuple[Optional[str], str]:
     since_candidate = args_since or watermark
     origin = "args" if args_since else "watermark" if watermark else "lookback"
 
@@ -390,7 +400,9 @@ def _is_newer_watermark(candidate: Optional[str], current: Optional[str]) -> boo
     return str(candidate) > str(current)
 
 
-def _run_incremental(args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]) -> None:
+def _run_incremental(
+    args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]
+) -> None:
     since_iso, origin = compute_since(args.since_ts, watermark, args.lookback_days)
     max_pages = max(1, int(args.max_pages))
     page_size = _normalize_page_size(args.page_size)
@@ -444,7 +456,9 @@ def _build_backfill_windows(
         current_start = current_end - timedelta(days=chunk)
 
 
-def _run_backfill(args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]) -> None:
+def _run_backfill(
+    args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]
+) -> None:
     start_ts = _parse_timestamp(args.from_ts)
     end_ts = _parse_timestamp(args.to_ts)
     backfill_all = bool(args.backfill_all and not (start_ts and end_ts))
@@ -465,7 +479,9 @@ def _run_backfill(args: argparse.Namespace, base_url: str, engine, watermark: Op
     earliest_seen_dt: Optional[datetime] = None
     watermark_candidate: Optional[str] = None
 
-    for window_start, window_end in _build_backfill_windows(start_ts, end_ts, chunk_days, backfill_all):
+    for window_start, window_end in _build_backfill_windows(
+        start_ts, end_ts, chunk_days, backfill_all
+    ):
         if window_start >= window_end:
             logger.warning(
                 "[WARN] ACT_SKIP_WINDOW reason=ambiguous_range window_start=%s window_end=%s",
@@ -508,7 +524,9 @@ def _run_backfill(args: argparse.Namespace, base_url: str, engine, watermark: Op
 
             if earliest_iso:
                 parsed_earliest = _parse_timestamp(earliest_iso)
-                if parsed_earliest and (earliest_seen_dt is None or parsed_earliest < earliest_seen_dt):
+                if parsed_earliest and (
+                    earliest_seen_dt is None or parsed_earliest < earliest_seen_dt
+                ):
                     earliest_seen_dt = parsed_earliest
 
             if wm_candidate and _is_newer_watermark(wm_candidate, watermark_candidate):
@@ -562,15 +580,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="ISO-8601 timestamp to start fetching from (overrides lookback when provided, incremental mode).",
     )
-    parser.add_argument("--from-ts", type=str, default=None, help="Backfill start timestamp (ISO-8601).")
-    parser.add_argument("--to-ts", type=str, default=None, help="Backfill end timestamp (ISO-8601).")
+    parser.add_argument(
+        "--from-ts", type=str, default=None, help="Backfill start timestamp (ISO-8601)."
+    )
+    parser.add_argument(
+        "--to-ts", type=str, default=None, help="Backfill end timestamp (ISO-8601)."
+    )
     parser.add_argument(
         "--backfill-all",
         action="store_true",
         help="When set, walk backwards in chunked windows until no more data is returned.",
     )
-    parser.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE, help="API page size (default 100).")
-    parser.add_argument("--chunk-days", type=int, default=DEFAULT_CHUNK_DAYS, help="Days per backfill chunk.")
+    parser.add_argument(
+        "--page-size", type=int, default=DEFAULT_PAGE_SIZE, help="API page size (default 100)."
+    )
+    parser.add_argument(
+        "--chunk-days", type=int, default=DEFAULT_CHUNK_DAYS, help="Days per backfill chunk."
+    )
     parser.add_argument(
         "--max-pages",
         type=int,

@@ -57,9 +57,7 @@ def test_write_complete_screener_metrics_counts_rows_when_missing(tmp_path):
     metrics_path.write_text(json.dumps({}), encoding="utf-8")
 
     top_candidates = data_dir / "top_candidates.csv"
-    top_candidates.write_text(
-        "symbol,score\nAAPL,1.0\nMSFT,2.0\nNVDA,3.0\n", encoding="utf-8"
-    )
+    top_candidates.write_text("symbol,score\nAAPL,1.0\nMSFT,2.0\nNVDA,3.0\n", encoding="utf-8")
 
     result = run_pipeline.write_complete_screener_metrics(base_dir)
 

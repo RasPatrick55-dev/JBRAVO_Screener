@@ -23,7 +23,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-date", default=None)
     parser.add_argument("--execute-log", type=Path, default=Path("logs") / "execute_trades.log")
-    parser.add_argument("--execute-metrics", type=Path, default=Path("data") / "execute_metrics.json")
+    parser.add_argument(
+        "--execute-metrics", type=Path, default=Path("data") / "execute_metrics.json"
+    )
     parser.add_argument("--latest-csv", type=Path, default=Path("data") / "latest_candidates.csv")
     return parser.parse_args(argv)
 
@@ -123,7 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     _print_check("run_date", has_run, str(run_date))
     all_ok &= has_run
 
-    _print_check("run_ts_populated_recent", recent_null_count == 0, f"null_count={recent_null_count}")
+    _print_check(
+        "run_ts_populated_recent", recent_null_count == 0, f"null_count={recent_null_count}"
+    )
     all_ok &= recent_null_count == 0
 
     scoped_ok = latest_count == max_run_count
@@ -150,13 +154,19 @@ def main(argv: list[str] | None = None) -> int:
 
     metrics, metrics_error = _load_execute_metrics(args.execute_metrics)
     metrics_exists = metrics_error is None
-    _print_check("execute_metrics_exists", metrics_exists, metrics_error or str(args.execute_metrics))
+    _print_check(
+        "execute_metrics_exists", metrics_exists, metrics_error or str(args.execute_metrics)
+    )
     all_ok &= metrics_exists
 
     if metrics_exists and isinstance(metrics, dict):
-        market_clock = metrics.get("market_clock") if isinstance(metrics.get("market_clock"), dict) else {}
+        market_clock = (
+            metrics.get("market_clock") if isinstance(metrics.get("market_clock"), dict) else {}
+        )
         status = str(metrics.get("status") or "")
-        skip_counts = metrics.get("skip_counts") if isinstance(metrics.get("skip_counts"), dict) else {}
+        skip_counts = (
+            metrics.get("skip_counts") if isinstance(metrics.get("skip_counts"), dict) else {}
+        )
         if not skip_counts:
             raw_skips = metrics.get("skips") if isinstance(metrics.get("skips"), dict) else {}
             skip_counts = {str(k): int(v) if str(v).isdigit() else 0 for k, v in raw_skips.items()}
@@ -173,7 +183,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             _print_check("market_closed_token", token_ok, "is_open=false present in market_clock")
             _print_check("market_closed_skip_summary", skip_ok, detail if not skip_ok else "")
-            _print_check("market_closed_status_not_error", status_ok, detail if not status_ok else "")
+            _print_check(
+                "market_closed_status_not_error", status_ok, detail if not status_ok else ""
+            )
             all_ok &= token_ok and skip_ok and status_ok
         else:
             na_detail = (

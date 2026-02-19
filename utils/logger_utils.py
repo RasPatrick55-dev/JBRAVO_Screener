@@ -14,13 +14,9 @@ def init_logging(module_name: str, log_filename: str) -> logging.Logger:
     logger = logging.getLogger(module_name)
     logger.setLevel(logging.INFO)
 
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-    file_handler = RotatingFileHandler(
-        log_path, maxBytes=5 * 1024 * 1024, backupCount=5
-    )
+    file_handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=5)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
@@ -52,4 +48,3 @@ def get_logger(
 
     logging.basicConfig(level=level, format=fmt, handlers=handlers)
     return logging.getLogger(name)
-

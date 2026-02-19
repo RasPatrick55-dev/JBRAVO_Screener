@@ -7,13 +7,12 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Iterable, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 try:  # pragma: no cover - optional dependency
-    from dotenv import dotenv_values, load_dotenv
+    from dotenv import load_dotenv
 except Exception:  # pragma: no cover - allow operation without python-dotenv
-    dotenv_values = None  # type: ignore
     load_dotenv = None  # type: ignore
 
 
@@ -101,7 +100,7 @@ def _manual_parse_env(path: Path, *, override: bool) -> bool:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip()
-        if (value.startswith("\"") and value.endswith("\"")) or (
+        if (value.startswith('"') and value.endswith('"')) or (
             value.startswith("'") and value.endswith("'")
         ):
             value = value[1:-1]
@@ -169,9 +168,7 @@ def load_env(
             os.environ["APCA_API_BASE_URL"] = _normalize_apca_base_url(base)
 
     if not os.environ.get("APCA_DATA_API_BASE_URL"):
-        data_alias = os.environ.get("APCA_API_DATA_URL") or os.environ.get(
-            "ALPACA_API_DATA_URL"
-        )
+        data_alias = os.environ.get("APCA_API_DATA_URL") or os.environ.get("ALPACA_API_DATA_URL")
         if data_alias:
             os.environ["APCA_DATA_API_BASE_URL"] = data_alias.rstrip("/")
 
@@ -281,9 +278,7 @@ def write_auth_error_artifacts(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    metrics_file.write_text(
-        json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    metrics_file.write_text(json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8")
 
     summary_row = {
         "last_run_utc": existing.get("last_run_utc", ""),

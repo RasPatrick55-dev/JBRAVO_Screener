@@ -133,7 +133,9 @@ class JsonHttpSentimentClient:
         return score
 
 
-def load_sentiment_cache(cache_dir: Path | str = DEFAULT_CACHE_DIR, run_date: date | str = None) -> dict[str, float]:
+def load_sentiment_cache(
+    cache_dir: Path | str = DEFAULT_CACHE_DIR, run_date: date | str = None
+) -> dict[str, float]:
     if run_date is None:
         return {}
     cache_path = Path(cache_dir) / f"{date.fromisoformat(str(run_date)).isoformat()}.json"
@@ -156,7 +158,9 @@ def load_sentiment_cache(cache_dir: Path | str = DEFAULT_CACHE_DIR, run_date: da
 
 
 def persist_sentiment_cache(
-    cache_dir: Path | str = DEFAULT_CACHE_DIR, run_date: date | str = None, cache: Mapping[str, float] | None = None
+    cache_dir: Path | str = DEFAULT_CACHE_DIR,
+    run_date: date | str = None,
+    cache: Mapping[str, float] | None = None,
 ) -> Path:
     if run_date is None:
         raise ValueError("run_date is required to persist the sentiment cache")
