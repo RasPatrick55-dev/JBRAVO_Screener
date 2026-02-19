@@ -22,6 +22,17 @@ data/cache/
 .coverage
 htmlcov/
 frontend/node_modules/
+
+# Runtime artifact hygiene (non-canonical)
+data/diagnostics/
+data/parachute/
+data/tmp/
+data/history_cache/
+tmp/cache/
+tmp/*.log
+tmp/*.out.log
+tmp/*.err.log
+*.bak
 frontend/dist/
 frontend/.env
 frontend/.env.*
