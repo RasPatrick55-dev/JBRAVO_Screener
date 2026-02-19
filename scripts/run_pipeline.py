@@ -2114,7 +2114,24 @@ def ingest_artifacts_to_db(run_date: date) -> None:
         _log_fail("pipeline_runs", exc)
 
 
+def _help_requested(argv: Optional[Iterable[str]] = None) -> bool:
+    args = list(argv) if argv is not None else list(sys.argv[1:])
+    return any(flag in args for flag in ("-h", "--help"))
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
+    if _help_requested(argv):
+        try:
+            parse_args(argv)
+        except SystemExit as exc:
+            if exc.code in (None, 0):
+                return 0
+            try:
+                return int(exc.code)
+            except (TypeError, ValueError):
+                return 1
+        return 0
+
     _refresh_logger()
     rotate_if_needed("logs/pipeline.log", max_bytes=10_000_000, max_age_days=14, keep=14)
     loaded_files, missing_keys = load_env(REQUIRED_ENV_KEYS)
