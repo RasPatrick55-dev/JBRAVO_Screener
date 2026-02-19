@@ -96,9 +96,16 @@ def _request_with_backoff(fn, *, max_attempts: int = 5, logger: logging.Logger) 
         try:
             return fn()
         except Exception as exc:  # pragma: no cover - defensive fallback
-            status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+            status = getattr(exc, "status_code", None) or getattr(
+                getattr(exc, "response", None), "status_code", None
+            )
             if status == 429 and attempt < max_attempts:
-                logger.warning("Rate limited (429). Backing off for %.2fs (attempt %s/%s)", delay, attempt, max_attempts)
+                logger.warning(
+                    "Rate limited (429). Backing off for %.2fs (attempt %s/%s)",
+                    delay,
+                    attempt,
+                    max_attempts,
+                )
                 time.sleep(delay)
                 delay = min(delay * 2, 16)
                 continue
@@ -121,13 +128,22 @@ def _http_get_with_backoff(
         resp = session.get(url, headers=headers, params=params, timeout=30)
         last_response = resp
         if resp.status_code == 429 and attempt < max_attempts:
-            logger.warning("Hit 429 from Alpaca. Sleeping %.2fs before retry %s/%s", delay, attempt, max_attempts)
+            logger.warning(
+                "Hit 429 from Alpaca. Sleeping %.2fs before retry %s/%s",
+                delay,
+                attempt,
+                max_attempts,
+            )
             time.sleep(delay)
             delay = min(delay * 2, 16)
             continue
         if 500 <= resp.status_code < 600 and attempt < max_attempts:
             logger.warning(
-                "Server error %s from Alpaca. Sleeping %.2fs before retry %s/%s", resp.status_code, delay, attempt, max_attempts
+                "Server error %s from Alpaca. Sleeping %.2fs before retry %s/%s",
+                resp.status_code,
+                delay,
+                attempt,
+                max_attempts,
             )
             time.sleep(delay)
             delay = min(delay * 2, 16)
@@ -165,17 +181,23 @@ def fetch_account_fill_events(
         if page_token:
             params["page_token"] = page_token
 
-        resp = _http_get_with_backoff(session, url, headers=headers, params=params, logger=logger, max_attempts=max_attempts)
+        resp = _http_get_with_backoff(
+            session, url, headers=headers, params=params, logger=logger, max_attempts=max_attempts
+        )
         if resp is None:
             raise AccountActivityUnavailable("No response from account activities endpoint")
         if resp.status_code in (403, 404):
-            raise AccountActivityUnavailable(f"Account activities unavailable (status={resp.status_code})")
+            raise AccountActivityUnavailable(
+                f"Account activities unavailable (status={resp.status_code})"
+            )
         resp.raise_for_status()
 
         try:
             payload = resp.json()
         except Exception as exc:  # pragma: no cover - defensive
-            raise AccountActivityUnavailable(f"Unable to parse account activities payload: {exc}") from exc
+            raise AccountActivityUnavailable(
+                f"Unable to parse account activities payload: {exc}"
+            ) from exc
 
         records: Iterable[Mapping[str, Any]]
         if isinstance(payload, list):
@@ -200,7 +222,9 @@ def fetch_account_fill_events(
                     "timestamp": ts,
                     "order_id": _safe_str(item.get("order_id") or item.get("id")),
                     "order_type": _clean_order_type(item.get("order_type") or item.get("type")),
-                    "order_status": _clean_order_status(item.get("order_status") or item.get("status")),
+                    "order_status": _clean_order_status(
+                        item.get("order_status") or item.get("status")
+                    ),
                 }
             )
 
@@ -277,13 +301,19 @@ def fetch_order_fill_events(
                     "price": _safe_float(getattr(order, "filled_avg_price", 0.0)),
                     "timestamp": ts,
                     "order_id": _safe_str(getattr(order, "id", getattr(order, "order_id", ""))),
-                    "order_type": _clean_order_type(getattr(order, "type", getattr(order, "order_type", ""))),
+                    "order_type": _clean_order_type(
+                        getattr(order, "type", getattr(order, "order_type", ""))
+                    ),
                     "order_status": _clean_order_status(getattr(order, "status", "")),
                 }
             )
 
         last_order = orders[-1]
-        cursor_until = getattr(last_order, "submitted_at", None) or getattr(last_order, "created_at", None) or getattr(last_order, "filled_at", None)
+        cursor_until = (
+            getattr(last_order, "submitted_at", None)
+            or getattr(last_order, "created_at", None)
+            or getattr(last_order, "filled_at", None)
+        )
         if cursor_until is None or cursor_until <= start:
             break
         if cursor_until.tzinfo is None:
@@ -375,7 +405,9 @@ def build_trades_from_events(events: Iterable[Mapping[str, Any]]) -> List[Dict[s
             lot["remaining_qty"] -= match_qty
             lot["exit_qty"] += match_qty
             lot["exit_notional"] += match_qty * price
-            lot["exit_time"] = ts if lot["exit_time"] is None or ts > lot["exit_time"] else lot["exit_time"]
+            lot["exit_time"] = (
+                ts if lot["exit_time"] is None or ts > lot["exit_time"] else lot["exit_time"]
+            )
             if order_id:
                 lot["exit_order_id"] = order_id
 
@@ -434,7 +466,9 @@ def _trade_key(record: Mapping[str, Any]) -> str:
     )
 
 
-def merge_trades(existing: pd.DataFrame, new_trades: List[Dict[str, Any]], *, merge_existing: bool = True) -> pd.DataFrame:
+def merge_trades(
+    existing: pd.DataFrame, new_trades: List[Dict[str, Any]], *, merge_existing: bool = True
+) -> pd.DataFrame:
     new_df = pd.DataFrame(new_trades)
     if new_df.empty:
         if merge_existing:
@@ -451,7 +485,9 @@ def merge_trades(existing: pd.DataFrame, new_trades: List[Dict[str, Any]], *, me
     else:
         combined = new_df
 
-    all_columns = list(dict.fromkeys(list(existing.columns) + DEFAULT_COLUMNS + list(new_df.columns)))
+    all_columns = list(
+        dict.fromkeys(list(existing.columns) + DEFAULT_COLUMNS + list(new_df.columns))
+    )
     for col in all_columns:
         if col not in combined.columns:
             combined[col] = ""
@@ -461,7 +497,11 @@ def merge_trades(existing: pd.DataFrame, new_trades: List[Dict[str, Any]], *, me
 
 
 def _fetch_order_metadata(
-    order_ids: Iterable[str], *, session: Optional[requests.Session] = None, logger: logging.Logger, max_attempts: int = 5
+    order_ids: Iterable[str],
+    *,
+    session: Optional[requests.Session] = None,
+    logger: logging.Logger,
+    max_attempts: int = 5,
 ) -> Dict[str, Dict[str, str]]:
     session = session or requests.Session()
     headers = _alpaca_headers()
@@ -474,7 +514,12 @@ def _fetch_order_metadata(
 
         url = f"{base}/v2/orders/{order_id}"
         resp = _http_get_with_backoff(
-            session, url, headers=headers, params={}, logger=logger, max_attempts=max_attempts  # type: ignore[arg-type]
+            session,
+            url,
+            headers=headers,
+            params={},
+            logger=logger,
+            max_attempts=max_attempts,  # type: ignore[arg-type]
         )
         if resp is None:
             continue
@@ -498,7 +543,12 @@ def _fetch_order_metadata(
     return order_meta
 
 
-def _apply_order_metadata(trades: List[Dict[str, Any]], *, logger: logging.Logger, session: Optional[requests.Session] = None) -> None:
+def _apply_order_metadata(
+    trades: List[Dict[str, Any]],
+    *,
+    logger: logging.Logger,
+    session: Optional[requests.Session] = None,
+) -> None:
     order_ids = {trade.get("exit_order_id", "") for trade in trades}
     order_meta = _fetch_order_metadata(order_ids, session=session, logger=logger)
 
@@ -510,15 +560,23 @@ def _apply_order_metadata(trades: List[Dict[str, Any]], *, logger: logging.Logge
         else:
             trade["order_type"] = ""
 
-        trade["exit_reason"] = "TrailingStop" if trade.get("order_type") == "trailing_stop" else trade.get("exit_reason", "")
+        trade["exit_reason"] = (
+            "TrailingStop"
+            if trade.get("order_type") == "trailing_stop"
+            else trade.get("exit_reason", "")
+        )
 
 
 def _sanitize_trades_df(df: pd.DataFrame, logger: logging.Logger) -> pd.DataFrame:
     sanitized = df.copy()
 
     if sanitized.columns.duplicated().any():
-        dupes = [col for col, duped in zip(sanitized.columns, sanitized.columns.duplicated()) if duped]
-        logger.warning("[WARN] BACKFILL_SANITIZE duplicate_columns cols=%s", ",".join(sorted(set(dupes))))
+        dupes = [
+            col for col, duped in zip(sanitized.columns, sanitized.columns.duplicated()) if duped
+        ]
+        logger.warning(
+            "[WARN] BACKFILL_SANITIZE duplicate_columns cols=%s", ",".join(sorted(set(dupes)))
+        )
         sanitized = sanitized.loc[:, ~sanitized.columns.duplicated()]
 
     if "order_type" in sanitized.columns:
@@ -591,10 +649,16 @@ def backfill(days: int, out_path: Path, merge: bool) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
-    parser = argparse.ArgumentParser(description="Backfill trades_log.csv from Alpaca paper history")
+    parser = argparse.ArgumentParser(
+        description="Backfill trades_log.csv from Alpaca paper history"
+    )
     parser.add_argument("--days", type=int, default=365, help="Lookback window in days")
-    parser.add_argument("--out", type=str, default=str(BASE_DIR / "data" / "trades_log.csv"), help="Output CSV path")
-    parser.add_argument("--merge", type=_bool_arg, default=True, help="Merge with existing trades_log.csv")
+    parser.add_argument(
+        "--out", type=str, default=str(BASE_DIR / "data" / "trades_log.csv"), help="Output CSV path"
+    )
+    parser.add_argument(
+        "--merge", type=_bool_arg, default=True, help="Merge with existing trades_log.csv"
+    )
     args = parser.parse_args(argv)
 
     destination = Path(args.out)

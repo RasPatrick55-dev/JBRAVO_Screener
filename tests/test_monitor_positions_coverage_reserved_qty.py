@@ -43,18 +43,13 @@ class TestMonitorCoverageReservedQty(unittest.TestCase):
             status=OrderStatus.NEW,
         )
 
-        with mock.patch.object(
-            self.monitor.trading_client, "get_orders", return_value=[order]
-        ), mock.patch.object(
-            self.monitor, "_attach_long_protective_stop"
-        ) as attach_long, mock.patch.object(
-            self.monitor, "_attach_short_protective_stop"
-        ) as attach_short, mock.patch.object(
-            self.monitor, "_record_stop_missing"
-        ) as stop_missing, mock.patch.object(
-            self.monitor, "_persist_metrics"
-        ), mock.patch.object(
-            self.monitor, "_save_monitor_state"
+        with (
+            mock.patch.object(self.monitor.trading_client, "get_orders", return_value=[order]),
+            mock.patch.object(self.monitor, "_attach_long_protective_stop") as attach_long,
+            mock.patch.object(self.monitor, "_attach_short_protective_stop") as attach_short,
+            mock.patch.object(self.monitor, "_record_stop_missing") as stop_missing,
+            mock.patch.object(self.monitor, "_persist_metrics"),
+            mock.patch.object(self.monitor, "_save_monitor_state"),
         ):
             protected_count, coverage_pct, trailing_count = self.monitor.enforce_stop_coverage(
                 [position]

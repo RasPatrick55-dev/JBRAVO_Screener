@@ -129,9 +129,7 @@ GateCounts = Dict[str, GateCountValue]
 FLOAT_TOL = 1e-6
 
 
-def _ensure_series(
-    df: pd.DataFrame, column: str, default: float | int | None = None
-) -> pd.Series:
+def _ensure_series(df: pd.DataFrame, column: str, default: float | int | None = None) -> pd.Series:
     base = pd.Series(default, index=df.index)
     if column in df.columns:
         base = df[column]
@@ -159,20 +157,15 @@ def apply_final_gates(df: pd.DataFrame, preset: str = "standard") -> pd.DataFram
     sma100 = _ensure_series(df, "SMA100")
     recent_cross = _ensure_series(df, "recent_cross_bars", default=np.inf).fillna(np.inf)
 
-    rsi_mask = (
-        rsi14.between(preset_cfg["rsi_min"], preset_cfg["rsi_max"], inclusive="both")
-        .fillna(False)
+    rsi_mask = rsi14.between(preset_cfg["rsi_min"], preset_cfg["rsi_max"], inclusive="both").fillna(
+        False
     )
     adx_mask = adx.astype("float64").ge(float(preset_cfg["adx_min"])).fillna(False)
     aroon_mask = aroon_up.astype("float64").ge(float(preset_cfg["aroon_up_min"])).fillna(False)
-    macd_mask = (
-        macd_hist.astype("float64").ge(float(preset_cfg["macd_hist_min"])).fillna(False)
-    )
-    cross_mask = (
-        sma9.astype("float64").gt(ema20.astype("float64")).fillna(False)
-        |
-        recent_cross.astype("float64").le(float(preset_cfg["cross_lookback"])).fillna(False)
-    )
+    macd_mask = macd_hist.astype("float64").ge(float(preset_cfg["macd_hist_min"])).fillna(False)
+    cross_mask = sma9.astype("float64").gt(ema20.astype("float64")).fillna(
+        False
+    ) | recent_cross.astype("float64").le(float(preset_cfg["cross_lookback"])).fillna(False)
     stack_mask = (
         cross_mask
         & ema20.astype("float64").gt(sma50.astype("float64")).fillna(False)
@@ -362,10 +355,7 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     sma9_f = sma9.astype("float64")
     ema20_f = ema20.astype("float64")
     sma180_f = sma180.astype("float64")
-    trend_ma_mask = (
-        sma9_f.gt(ema20_f).fillna(False)
-        & ema20_f.gt(sma180_f).fillna(False)
-    )
+    trend_ma_mask = sma9_f.gt(ema20_f).fillna(False) & ema20_f.gt(sma180_f).fillna(False)
     trend_ma_align = trend_ma_mask.astype("float64")
 
     wk52_f = wk52.astype("float64")
@@ -380,9 +370,7 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     macd_mask = macd.astype("float64").gt(0).fillna(False)
     mom_macd_pos = macd_mask.astype("float64") * 0.5
 
-    macd_hist_mask = (
-        macd_hist.astype("float64").gt(macd_hist_prev.astype("float64")).fillna(False)
-    )
+    macd_hist_mask = macd_hist.astype("float64").gt(macd_hist_prev.astype("float64")).fillna(False)
     mom_macd_hist_rising = macd_hist_mask.astype("float64") * 0.25
 
     rs20_slope = _num("RS20_SLOPE")
@@ -422,11 +410,7 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     else:
         squeeze_series = squeeze_series.reindex(latest.index, fill_value=False)
     squeeze_bool = squeeze_series.astype(bool).fillna(False)
-    mom_squeeze = (
-        squeeze_bool
-        & rs_slope_mask
-        & macd_hist_mask
-    ).astype("float64") * 0.25
+    mom_squeeze = (squeeze_bool & rs_slope_mask & macd_hist_mask).astype("float64") * 0.25
 
     risk_atr_penalty = pd.Series(0.0, index=latest.index)
     if atr_pct_max is not None:
@@ -437,10 +421,9 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     aroon_dn_f = aroon_dn.astype("float64")
     aroon_up_prev_f = aroon_up_prev.astype("float64")
     aroon_dn_prev_f = aroon_dn_prev.astype("float64")
-    aroon_cross_mask = (
-        aroon_up_f.gt(aroon_dn_f).fillna(False)
-        & aroon_up_prev_f.le(aroon_dn_prev_f).fillna(False)
-    )
+    aroon_cross_mask = aroon_up_f.gt(aroon_dn_f).fillna(False) & aroon_up_prev_f.le(
+        aroon_dn_prev_f
+    ).fillna(False)
     aroon_cross = aroon_cross_mask.astype("float64") * 0.5
 
     adx_mask = adx.astype("float64").ge(adx_min).fillna(False)
@@ -487,8 +470,7 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
 
     weights = _normalise_category_weights(cfg.get("weights") if isinstance(cfg, Mapping) else None)
     contributions = {
-        name: category_scores[name] * weights.get(name, 0.0)
-        for name in category_scores
+        name: category_scores[name] * weights.get(name, 0.0) for name in category_scores
     }
     contributions["wk52_bonus"] = wk52_bonus
     contributions["rs_bonus"] = rs_bonus
@@ -515,7 +497,9 @@ def _score_universe_v2(bars_df: pd.DataFrame, cfg: Mapping[str, object]) -> pd.D
     return latest
 
 
-def score_universe(bars_df: pd.DataFrame, cfg: Optional[Mapping[str, object]] = None) -> pd.DataFrame:
+def score_universe(
+    bars_df: pd.DataFrame, cfg: Optional[Mapping[str, object]] = None
+) -> pd.DataFrame:
     """Score every symbol in ``bars_df`` and return a ranked DataFrame.
 
     Parameters
@@ -688,9 +672,7 @@ def _apply_gates_v2(
         )
 
     thresholds_cfg = (
-        dict(cfg.get("thresholds"))
-        if isinstance(cfg.get("thresholds"), Mapping)
-        else {}
+        dict(cfg.get("thresholds")) if isinstance(cfg.get("thresholds"), Mapping) else {}
     )
     policy = cfg.get("gate_policy") if isinstance(cfg.get("gate_policy"), Mapping) else {}
     min_candidates = int(policy.get("min_candidates", 0) or 0)
@@ -791,7 +773,9 @@ def apply_gates(
             latest = latest.sort_values(["symbol", "timestamp"])
         if "symbol" in latest.columns:
             latest = latest.groupby("symbol", as_index=False, group_keys=False).tail(1)
-        liquid_mask = pd.to_numeric(latest["ADV20"], errors="coerce") >= (dollar_vol_min - FLOAT_TOL)
+        liquid_mask = pd.to_numeric(latest["ADV20"], errors="coerce") >= (
+            dollar_vol_min - FLOAT_TOL
+        )
         latest_liquid = latest.loc[liquid_mask.fillna(False)]
         liquid_symbols = set(latest_liquid["symbol"].astype(str).str.upper())
         failed_liquidity = max(total_symbols - len(liquid_symbols), 0)
@@ -995,7 +979,11 @@ def apply_gates(
                 if ema20_value is None or sma50_value is None or ema20_value <= sma50_value:
                     record_reason("failed_sma_stack", "FAILED_EMA20_GT_SMA50")
                     continue
-                if sma50_value is None or sma100_value is None or sma50_value + FLOAT_TOL < sma100_value:
+                if (
+                    sma50_value is None
+                    or sma100_value is None
+                    or sma50_value + FLOAT_TOL < sma100_value
+                ):
                     record_reason("failed_sma_stack", "FAILED_SMA50_GTE_SMA100")
                     continue
             candidates_df = filtered_df
@@ -1021,7 +1009,9 @@ def compute_gate_fail_reasons(
     """Return a list of gate failure labels for each row (telemetry only)."""
 
     if df is None or df.empty:
-        return pd.Series([], index=df.index if isinstance(df, pd.DataFrame) else None, dtype="object")
+        return pd.Series(
+            [], index=df.index if isinstance(df, pd.DataFrame) else None, dtype="object"
+        )
 
     cfg = cfg or {}
     if _config_version(cfg) >= 2:
@@ -1186,4 +1176,3 @@ __all__ = [
     "DEFAULT_GATES",
     "compute_all_features",
 ]
-

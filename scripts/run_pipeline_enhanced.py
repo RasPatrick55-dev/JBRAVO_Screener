@@ -51,11 +51,7 @@ def _emit_tokens(base_dir: Path, *, steps: str, started: float, rc: int) -> None
     symbols_in = int(metrics_payload.get("symbols_in", 0) or 0)
     symbols_with_bars = int(metrics_payload.get("symbols_with_bars") or 0)
     bars_rows_total = metrics_payload.get("bars_rows_total")
-    source = (
-        metrics_payload.get("latest_source")
-        or metrics_payload.get("source")
-        or "enhanced"
-    )
+    source = metrics_payload.get("latest_source") or metrics_payload.get("source") or "enhanced"
     LOG.info("[INFO] FALLBACK_CHECK rows_out=%s source=%s", rows, source)
     summary_parts = [
         "[INFO] PIPELINE_SUMMARY",
@@ -71,8 +67,9 @@ def _emit_tokens(base_dir: Path, *, steps: str, started: float, rc: int) -> None
         summary_parts.append(f"bars_rows_total={bars_rows_total}")
     summary_parts.append(f"source={source}")
     LOG.info(" ".join(summary_parts))
-    duration = (datetime.now(timezone.utc).timestamp() - started)
+    duration = datetime.now(timezone.utc).timestamp() - started
     LOG.info("[INFO] PIPELINE_END rc=%s duration=%.1fs", rc, duration)
+
 
 def run_step(step_name, command):
     start_time = datetime.utcnow()

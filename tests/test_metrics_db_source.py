@@ -81,7 +81,9 @@ def test_metrics_uses_db_and_skips_csv(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert summary.iloc[0]["net_pnl"] == pytest.approx(50.0)
 
 
-def test_metrics_falls_back_when_db_disabled(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_metrics_falls_back_when_db_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _patch_base_dirs(tmp_path, monkeypatch)
 
     trades = pd.DataFrame(

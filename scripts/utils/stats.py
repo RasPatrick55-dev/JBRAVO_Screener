@@ -56,8 +56,7 @@ def rolling_mean(
     """Return a rolling mean aligned to the original index for each group."""
 
     return (
-        grouped
-        .rolling(window=window, min_periods=_resolve_min_periods(window, min_periods))
+        grouped.rolling(window=window, min_periods=_resolve_min_periods(window, min_periods))
         .mean()
         .reset_index(level=0, drop=True)
     )
@@ -72,8 +71,7 @@ def rolling_max(
     """Return a rolling maximum aligned to the input index for each group."""
 
     return (
-        grouped
-        .rolling(window=window, min_periods=_resolve_min_periods(window, min_periods))
+        grouped.rolling(window=window, min_periods=_resolve_min_periods(window, min_periods))
         .max()
         .reset_index(level=0, drop=True)
     )
@@ -88,8 +86,7 @@ def rolling_min(
     """Return a rolling minimum aligned to the input index for each group."""
 
     return (
-        grouped
-        .rolling(window=window, min_periods=_resolve_min_periods(window, min_periods))
+        grouped.rolling(window=window, min_periods=_resolve_min_periods(window, min_periods))
         .min()
         .reset_index(level=0, drop=True)
     )
@@ -111,9 +108,7 @@ def rolling_apply(
     """
 
     return (
-        grouped
-        .rolling(window=window, min_periods=_resolve_min_periods(window, min_periods))
+        grouped.rolling(window=window, min_periods=_resolve_min_periods(window, min_periods))
         .apply(func, raw=raw)
         .reset_index(level=0, drop=True)
     )
-

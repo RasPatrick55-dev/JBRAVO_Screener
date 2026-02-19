@@ -102,7 +102,9 @@ def _read_ranker_eval_path() -> Path | None:
 
 def _build_card(title: str, items: List[str]) -> dbc.Card:
     return dbc.Card(
-        dbc.CardBody([html.H5(title, className="card-title"), html.Ul([html.Li(i) for i in items])]),
+        dbc.CardBody(
+            [html.H5(title, className="card-title"), html.Ul([html.Li(i) for i in items])]
+        ),
         className="mb-3",
     )
 
@@ -123,7 +125,9 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
-def _compute_alerts(metrics: Dict[str, Any], exec_metrics: Dict[str, Any], candidates_rows: int | None) -> List[dbc.Badge]:
+def _compute_alerts(
+    metrics: Dict[str, Any], exec_metrics: Dict[str, Any], candidates_rows: int | None
+) -> List[dbc.Badge]:
     alerts: List[dbc.Badge] = []
     now = datetime.now(timezone.utc)
     ts_raw = metrics.get("timestamp") or metrics.get("last_run_utc")
@@ -411,7 +415,9 @@ def _build_skip_chart(skips: Dict[str, int]):
                 "height": 220,
             },
         }
-        return dcc.Graph(id="ops-summary-skip-chart", figure=figure, config={"displayModeBar": False})
+        return dcc.Graph(
+            id="ops-summary-skip-chart", figure=figure, config={"displayModeBar": False}
+        )
     except Exception as exc:  # pragma: no cover - defensive rendering
         return dbc.Alert(f"Skip chart unavailable: {exc}", color="warning", className="mb-0")
 
@@ -449,8 +455,12 @@ def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) ->
     universe = metrics.get("symbols_in") or metrics.get("symbols") or metrics.get("universe_count")
     rows_out = metrics.get("rows_out") or metrics.get("rows")
 
-    run_started = _format_time(exec_metrics.get("run_started_utc") or exec_metrics.get("started_utc"))
-    run_finished = _format_time(exec_metrics.get("run_finished_utc") or exec_metrics.get("timestamp"))
+    run_started = _format_time(
+        exec_metrics.get("run_started_utc") or exec_metrics.get("started_utc")
+    )
+    run_finished = _format_time(
+        exec_metrics.get("run_finished_utc") or exec_metrics.get("timestamp")
+    )
     fills = exec_metrics.get("fills", exec_metrics.get("orders_filled"))
 
     in_window_raw = exec_metrics.get("in_window")
@@ -462,13 +472,22 @@ def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) ->
             "In window" if in_window else "Out of window", "ok" if in_window else "warn"
         )
 
-    skip_items = [f"{reason}: {count}" for reason, count in sorted(skip_counts.items(), key=lambda kv: kv[1], reverse=True)]
-    skip_block = html.Ul([html.Li(text) for text in skip_items]) if skip_items else html.Div("No skips")
+    skip_items = [
+        f"{reason}: {count}"
+        for reason, count in sorted(skip_counts.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+    skip_block = (
+        html.Ul([html.Li(text) for text in skip_items]) if skip_items else html.Div("No skips")
+    )
 
     status_row = html.Div(
         [
-            _status_badge("Pipeline OK" if pipeline_status == "ok" else "Pipeline issue", pipeline_status),
-            _status_badge("Executor OK" if executor_status == "ok" else "Executor attention", executor_status),
+            _status_badge(
+                "Pipeline OK" if pipeline_status == "ok" else "Pipeline issue", pipeline_status
+            ),
+            _status_badge(
+                "Executor OK" if executor_status == "ok" else "Executor attention", executor_status
+            ),
             time_window_badge,
         ],
         id="ops-summary-status",
@@ -502,8 +521,14 @@ def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) ->
                     [
                         dbc.Col(
                             [
-                                _metric_row("Configured Max Positions", exec_metrics.get("configured_max_positions")),
-                                _metric_row("Risk-limited Max Positions", exec_metrics.get("risk_limited_max_positions")),
+                                _metric_row(
+                                    "Configured Max Positions",
+                                    exec_metrics.get("configured_max_positions"),
+                                ),
+                                _metric_row(
+                                    "Risk-limited Max Positions",
+                                    exec_metrics.get("risk_limited_max_positions"),
+                                ),
                                 _metric_row("Open Positions", exec_metrics.get("open_positions")),
                                 _metric_row("Open Orders", exec_metrics.get("open_orders")),
                             ],
@@ -512,10 +537,16 @@ def _build_ops_summary(metrics: Dict[str, Any], exec_metrics: Dict[str, Any]) ->
                         ),
                         dbc.Col(
                             [
-                                _metric_row("Allowed New Positions", allowed_new_positions, allowed_positions_class),
+                                _metric_row(
+                                    "Allowed New Positions",
+                                    allowed_new_positions,
+                                    allowed_positions_class,
+                                ),
                                 _metric_row("Exit Reason", exit_reason, exit_reason_class),
                                 _metric_row("In Window", in_window_text, in_window_class),
-                                _metric_row("Orders submitted", exec_metrics.get("orders_submitted")),
+                                _metric_row(
+                                    "Orders submitted", exec_metrics.get("orders_submitted")
+                                ),
                             ],
                             md=6,
                             xs=12,

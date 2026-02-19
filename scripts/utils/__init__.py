@@ -1,4 +1,5 @@
 """Utility helpers for pipeline scripts."""
+
 import os
 import shutil
 import logging
@@ -116,7 +117,9 @@ def cache_bars(
                     req = StockLatestTradeRequest(symbol_or_symbols=[symbol], feed="iex")
                     trade_resp = data_client.get_stock_latest_trade(req)
                     prev_close = (
-                        trade_resp[symbol].price if isinstance(trade_resp, dict) else trade_resp.price
+                        trade_resp[symbol].price
+                        if isinstance(trade_resp, dict)
+                        else trade_resp.price
                     )
                     df = pd.DataFrame([{"close": prev_close}], index=[datetime.now(timezone.utc)])
                     logging.info("Using previous close price for %s: %s", symbol, prev_close)
@@ -141,7 +144,11 @@ def cache_bars(
         else pd.DataFrame()
     )
     last = df.index.max() if not df.empty else None
-    start = last + timedelta(days=1) if last is not None else datetime.now(timezone.utc) - timedelta(days=days)
+    start = (
+        last + timedelta(days=1)
+        if last is not None
+        else datetime.now(timezone.utc) - timedelta(days=days)
+    )
     end = get_last_trading_day_end()
     if start >= end:
         return df
@@ -167,9 +174,7 @@ def cache_bars(
 
     # Validate that the DataFrame has a date-based index
     if "timestamp" not in new_df.columns and not has_datetime_index(new_df.index):
-        logging.warning(
-            "cache_bars: %s returned invalid index type %s", symbol, new_df.index
-        )
+        logging.warning("cache_bars: %s returned invalid index type %s", symbol, new_df.index)
         return pd.DataFrame()
 
     if new_df.empty:
@@ -198,7 +203,14 @@ def cache_bars(
     return df
 
 
-def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int = 1500, batch_size: int = 100, retries: int = 3) -> dict[str, pd.DataFrame]:
+def cache_bars_batch(
+    symbols: list[str],
+    data_client,
+    cache_dir: str,
+    days: int = 1500,
+    batch_size: int = 100,
+    retries: int = 3,
+) -> dict[str, pd.DataFrame]:
     """Fetch historical bars for many symbols in batches.
 
     Returns a mapping of symbol to DataFrame containing the updated cache.
@@ -218,7 +230,11 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
             )
             df_map[sym] = df_existing
             last = df_existing.index.max() if not df_existing.empty else None
-            start_map[sym] = last + timedelta(days=1) if last is not None else datetime.now(timezone.utc) - timedelta(days=days)
+            start_map[sym] = (
+                last + timedelta(days=1)
+                if last is not None
+                else datetime.now(timezone.utc) - timedelta(days=days)
+            )
 
         end = get_last_trading_day_end()
         min_start = min(start_map.values())
@@ -258,7 +274,11 @@ def cache_bars_batch(symbols: list[str], data_client, cache_dir: str, days: int 
                 df_map[sym] = pd.concat([df_map[sym], sym_df]).sort_index()
         else:
             for sym in batch:
-                sym_df = bars_df[bars_df.get("symbol") == sym].drop(columns=["symbol"], errors="ignore") if not bars_df.empty else pd.DataFrame()
+                sym_df = (
+                    bars_df[bars_df.get("symbol") == sym].drop(columns=["symbol"], errors="ignore")
+                    if not bars_df.empty
+                    else pd.DataFrame()
+                )
                 df_map[sym] = pd.concat([df_map[sym], sym_df]).sort_index()
 
         for sym, df_sym in df_map.items():
@@ -296,7 +316,9 @@ def fetch_daily_bars(symbol: str, trade_date: str, data_client) -> pd.DataFrame:
     return bars
 
 
-def fetch_extended_hours_bars(symbol: str, trade_date: str, data_client) -> tuple[int, pd.DataFrame]:
+def fetch_extended_hours_bars(
+    symbol: str, trade_date: str, data_client
+) -> tuple[int, pd.DataFrame]:
     """Fetch pre- and post-market minute bars and return the total volume.
 
     The returned DataFrame contains all minute bars between 08:00 and 17:00
@@ -351,4 +373,3 @@ def get_combined_daily_bar(symbol: str, trade_date: str, data_client) -> pd.Data
         daily.loc[idx, "close"] = ext_close
 
     return daily
-

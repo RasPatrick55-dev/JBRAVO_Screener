@@ -41,22 +41,25 @@ class TestMonitorDbLogging(unittest.TestCase):
             created_at=datetime.now(timezone.utc),
         )
 
-        with mock.patch.object(monitor, "db_logging_enabled", return_value=True), \
-            mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event, \
-            mock.patch("scripts.db.insert_executed_trade", return_value=True) as insert_exec, \
-            mock.patch("scripts.db.close_trade_on_sell_fill", return_value=True) as close_trade, \
-            mock.patch.object(monitor, "wait_for_order_terminal", return_value="filled"), \
+        with (
+            mock.patch.object(monitor, "db_logging_enabled", return_value=True),
+            mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event,
+            mock.patch("scripts.db.insert_executed_trade", return_value=True) as insert_exec,
+            mock.patch("scripts.db.close_trade_on_sell_fill", return_value=True) as close_trade,
+            mock.patch.object(monitor, "wait_for_order_terminal", return_value="filled"),
             mock.patch.object(
-                monitor, "broker_submit_order",
+                monitor,
+                "broker_submit_order",
                 return_value=SimpleNamespace(id="OID-1", status="accepted", dryrun=False),
-            ), \
+            ),
             mock.patch.object(
                 monitor.trading_client,
                 "get_all_positions",
                 return_value=[SimpleNamespace(symbol="AAPL", qty_available=10, qty=10)],
-            ), \
-            mock.patch.object(monitor, "log_trade_exit", return_value=None), \
-            mock.patch.object(monitor, "_persist_metrics", return_value=None):
+            ),
+            mock.patch.object(monitor, "log_trade_exit", return_value=None),
+            mock.patch.object(monitor, "_persist_metrics", return_value=None),
+        ):
             monitor.submit_sell_market_order(
                 position,
                 reason="Test reason",
@@ -101,17 +104,21 @@ class TestMonitorDbLogging(unittest.TestCase):
         original_cooldowns = dict(monitor.TIGHTEN_COOLDOWNS)
         monitor.TIGHTEN_COOLDOWNS.clear()
         try:
-            with mock.patch.object(monitor, "db_logging_enabled", return_value=True), \
-                mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event, \
-                mock.patch.object(monitor.trading_client, "get_orders", return_value=[trailing_order]), \
-                mock.patch.object(monitor, "cancel_order_safe", return_value=True), \
+            with (
+                mock.patch.object(monitor, "db_logging_enabled", return_value=True),
+                mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event,
+                mock.patch.object(
+                    monitor.trading_client, "get_orders", return_value=[trailing_order]
+                ),
+                mock.patch.object(monitor, "cancel_order_safe", return_value=True),
                 mock.patch.object(
                     monitor,
                     "broker_submit_order",
                     return_value=SimpleNamespace(id="TS-2", status="accepted", dryrun=False),
-                ), \
-                mock.patch.object(monitor, "_persist_metrics", return_value=None), \
-                mock.patch.object(monitor, "_save_tighten_cooldowns", return_value=None):
+                ),
+                mock.patch.object(monitor, "_persist_metrics", return_value=None),
+                mock.patch.object(monitor, "_save_tighten_cooldowns", return_value=None),
+            ):
                 monitor.manage_trailing_stop(position)
         finally:
             monitor.TIGHTEN_COOLDOWNS.clear()
@@ -138,21 +145,24 @@ class TestMonitorDbLogging(unittest.TestCase):
             current_price=101.23,
             created_at=datetime.now(timezone.utc),
         )
-        with mock.patch.object(monitor, "db_logging_enabled", return_value=False), \
-            mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event, \
-            mock.patch("scripts.db.close_trade_on_sell_fill", return_value=True) as close_trade, \
-            mock.patch.object(monitor, "wait_for_order_terminal", return_value="filled"), \
+        with (
+            mock.patch.object(monitor, "db_logging_enabled", return_value=False),
+            mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event,
+            mock.patch("scripts.db.close_trade_on_sell_fill", return_value=True) as close_trade,
+            mock.patch.object(monitor, "wait_for_order_terminal", return_value="filled"),
             mock.patch.object(
-                monitor, "broker_submit_order",
+                monitor,
+                "broker_submit_order",
                 return_value=SimpleNamespace(id="OID-2", status="accepted", dryrun=False),
-            ), \
+            ),
             mock.patch.object(
                 monitor.trading_client,
                 "get_all_positions",
                 return_value=[SimpleNamespace(symbol="AAPL", qty_available=10, qty=10)],
-            ), \
-            mock.patch.object(monitor, "log_trade_exit", return_value=None), \
-            mock.patch.object(monitor, "_persist_metrics", return_value=None):
+            ),
+            mock.patch.object(monitor, "log_trade_exit", return_value=None),
+            mock.patch.object(monitor, "_persist_metrics", return_value=None),
+        ):
             monitor.submit_sell_market_order(
                 position,
                 reason="Test reason",
@@ -171,21 +181,24 @@ class TestMonitorDbLogging(unittest.TestCase):
             current_price=101.23,
             created_at=datetime.now(timezone.utc),
         )
-        with mock.patch.object(monitor, "db_logging_enabled", return_value=True), \
-            mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event, \
-            mock.patch("scripts.db.close_trade_on_sell_fill", return_value=True) as close_trade, \
-            mock.patch.object(monitor, "wait_for_order_terminal", return_value="filled"), \
+        with (
+            mock.patch.object(monitor, "db_logging_enabled", return_value=True),
+            mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event,
+            mock.patch("scripts.db.close_trade_on_sell_fill", return_value=True) as close_trade,
+            mock.patch.object(monitor, "wait_for_order_terminal", return_value="filled"),
             mock.patch.object(
-                monitor, "broker_submit_order",
+                monitor,
+                "broker_submit_order",
                 return_value=SimpleNamespace(id="OID-3", status="accepted", dryrun=False),
-            ), \
+            ),
             mock.patch.object(
                 monitor.trading_client,
                 "get_all_positions",
                 return_value=[SimpleNamespace(symbol="AAPL", qty_available=10, qty=10)],
-            ), \
-            mock.patch.object(monitor, "log_trade_exit", return_value=None), \
-            mock.patch.object(monitor, "_persist_metrics", return_value=None):
+            ),
+            mock.patch.object(monitor, "log_trade_exit", return_value=None),
+            mock.patch.object(monitor, "_persist_metrics", return_value=None),
+        ):
             monitor.submit_sell_market_order(
                 position,
                 reason="Partial exit",
@@ -199,8 +212,10 @@ class TestMonitorDbLogging(unittest.TestCase):
         monitor = self.monitor
         start_ok = int(monitor.MONITOR_METRICS.get("db_event_ok", 0))
         start_fail = int(monitor.MONITOR_METRICS.get("db_event_fail", 0))
-        with mock.patch.object(monitor, "db_logging_enabled", return_value=True), \
-            mock.patch("scripts.db.insert_order_event", side_effect=RuntimeError("boom")):
+        with (
+            mock.patch.object(monitor, "db_logging_enabled", return_value=True),
+            mock.patch("scripts.db.insert_order_event", side_effect=RuntimeError("boom")),
+        ):
             ok = monitor.db_log_event(
                 event_type=monitor.MONITOR_DB_EVENT_TYPES["sell_submit"],
                 symbol="AAPL",

@@ -1,7 +1,7 @@
 import os
 import unittest
 from unittest.mock import MagicMock
-from datetime import datetime, timezone
+from datetime import datetime
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 import pandas as pd
@@ -11,14 +11,14 @@ from scripts.utils import (
     cache_bars,
     get_last_trading_day_end,
     fetch_daily_bars,
-    fetch_extended_hours_bars,
     get_combined_daily_bar,
     fetch_bars_with_cutoff,
 )
 
+
 class TestUtils(unittest.TestCase):
     def setUp(self):
-        self.cache_dir = 'data/test_cache'
+        self.cache_dir = "data/test_cache"
         os.makedirs(self.cache_dir, exist_ok=True)
 
     def tearDown(self):
@@ -26,14 +26,14 @@ class TestUtils(unittest.TestCase):
             os.remove(os.path.join(self.cache_dir, f))
 
     def test_last_trading_day_weekend(self):
-        dt = pytz.timezone('America/New_York').localize(datetime(2024, 8, 10, 12))
+        dt = pytz.timezone("America/New_York").localize(datetime(2024, 8, 10, 12))
         end = get_last_trading_day_end(dt)
         self.assertEqual(end.weekday(), 4)
 
     def test_cache_bars_handles_empty(self):
         client = MagicMock()
         client.get_stock_bars.return_value.df = pd.DataFrame()
-        df = cache_bars('FAKE', client, self.cache_dir, days=10)
+        df = cache_bars("FAKE", client, self.cache_dir, days=10)
         self.assertIsInstance(df, pd.DataFrame)
 
     def test_fetch_daily_bars_iex_feed(self):
@@ -104,5 +104,6 @@ class TestUtils(unittest.TestCase):
         self.assertAlmostEqual(row["high"], 2.1)
         self.assertAlmostEqual(row["close"], 1.8)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

@@ -94,9 +94,7 @@ def _resolve_repo_root() -> pathlib.Path:
         try:
             candidate = pathlib.Path(env_home).expanduser()
             if not candidate.exists():
-                LOGGER.warning(
-                    "JBRAVO_HOME=%s not found; continuing with provided path", candidate
-                )
+                LOGGER.warning("JBRAVO_HOME=%s not found; continuing with provided path", candidate)
             return candidate
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.warning(
@@ -249,9 +247,7 @@ def _format_probe_timestamp(raw: Any) -> str:
     if not isinstance(raw, str) or not raw.strip():
         return "n/a"
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime(
-            "%Y-%m-%d %H:%M:%S UTC"
-        )
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M:%S UTC")
     except Exception:  # pragma: no cover - tolerate malformed timestamps
         return raw
 
@@ -279,17 +275,13 @@ def load_premarket_readiness(base_dir: pathlib.Path = REPO_ROOT) -> dict[str, An
                     return None
         return None
 
-    candidates_in = _parse_int_from_keys(
-        raw, ["candidates_in", "candidates", "candidates_total"]
-    )
+    candidates_in = _parse_int_from_keys(raw, ["candidates_in", "candidates", "candidates_total"])
 
     payload: dict[str, Any] = {
         "in_window": bool(raw.get("in_window")),
         "auth_ok": bool(raw.get("auth_ok")),
         "candidates_in": candidates_in,
-        "window_label": raw.get("window_label")
-        or raw.get("window")
-        or raw.get("mode"),
+        "window_label": raw.get("window_label") or raw.get("window") or raw.get("mode"),
         "started_utc": raw.get("started_utc") or raw.get("start_utc"),
         "finished_utc": raw.get("finished_utc") or raw.get("end_utc"),
     }
@@ -387,8 +379,13 @@ def _health_elements(health: Mapping[str, Any] | None) -> tuple[html.Div, html.D
     if issues:
         banner = html.Div(
             [
-                html.Div("Alpaca Connectivity Issue", style={"fontWeight": 600, "marginBottom": "4px"}),
-                *[html.Div(issue, style={"fontSize": "13px", "marginBottom": "2px"}) for issue in issues],
+                html.Div(
+                    "Alpaca Connectivity Issue", style={"fontWeight": 600, "marginBottom": "4px"}
+                ),
+                *[
+                    html.Div(issue, style={"fontSize": "13px", "marginBottom": "2px"})
+                    for issue in issues
+                ],
             ],
             style={
                 "position": "sticky",
@@ -560,9 +557,7 @@ def _discover_predictions_csv(metrics: Mapping[str, Any] | None = None) -> pathl
     predictions_dir = DATA_DIR / "predictions"
     if predictions_dir.exists():
         try:
-            discovered = sorted(
-                predictions_dir.glob("*.csv"), key=lambda p: p.stat().st_mtime
-            )
+            discovered = sorted(predictions_dir.glob("*.csv"), key=lambda p: p.stat().st_mtime)
             candidates.extend(discovered[::-1])
         except Exception:
             pass
@@ -785,17 +780,27 @@ def _placeholder_figure(title: str, message: str = "Not computed yet") -> go.Fig
     )
     return fig
 
+
 def _why_from_breakdown(json_str: str) -> str:
     try:
         d = json.loads(json_str) if isinstance(json_str, str) else {}
     except Exception:
         d = {}
-    labels = {"TS":"Trend","MS":"MA Stack","BP":"Near 20D High","PT":"Pullback Tight",
-              "RSI":"RSI","MH":"MACD Hist","ADX":"ADX","AROON":"Aroon",
-              "VCP":"VCP","VOLexp":"Vol Exp"}
+    labels = {
+        "TS": "Trend",
+        "MS": "MA Stack",
+        "BP": "Near 20D High",
+        "PT": "Pullback Tight",
+        "RSI": "RSI",
+        "MH": "MACD Hist",
+        "ADX": "ADX",
+        "AROON": "Aroon",
+        "VCP": "VCP",
+        "VOLexp": "Vol Exp",
+    }
     items = []
     for k, v in d.items():
-        key = k.replace("_z","")
+        key = k.replace("_z", "")
         if key in labels and isinstance(v, (int, float)):
             items.append((labels[key], float(v)))
     items.sort(key=lambda kv: abs(kv[1]), reverse=True)
@@ -805,12 +810,14 @@ def _why_from_breakdown(json_str: str) -> str:
         parts.append(f"{name} {arrow} {abs(val):.2f}")
     return " • ".join(parts) if parts else "n/a"
 
+
 def _fmt_millions(x):
     try:
         x = float(x)
-        return f"${x/1_000_000:.2f}M"
+        return f"${x / 1_000_000:.2f}M"
     except Exception:
         return "n/a"
+
 
 def _mk_why_tooltip(row: dict) -> dict:
     """Return tooltip content for the Why column with resilient fallbacks."""
@@ -887,11 +894,7 @@ def _mk_why_tooltip(row: dict) -> dict:
     close = row.get("close")
 
     md: list[str] = []
-    md.append(
-        "**Score:** `"
-        + _format_value(score, lambda v: "{:.3f}".format(float(v)))
-        + "`"
-    )
+    md.append("**Score:** `" + _format_value(score, lambda v: "{:.3f}".format(float(v))) + "`")
     if contrib_str and contrib_str != "n/a":
         md.append("**Contributions (z‑weighted):**")
         for part in contrib_str.split("•"):
@@ -923,8 +926,7 @@ def _mk_why_tooltip(row: dict) -> dict:
     )
 
     has_raw_data = any(
-        not _is_missing(val)
-        for val in (close, rsi14, adx, aup, adn, mh, atrp, adv20)
+        not _is_missing(val) for val in (close, rsi14, adx, aup, adn, mh, atrp, adv20)
     )
     if has_raw_data:
         md.append("**Raw indicators:**")
@@ -963,15 +965,12 @@ def _mk_why_tooltip(row: dict) -> dict:
 
     return tooltips
 
+
 def build_layout():
     return html.Div(
         [
-            dcc.Interval(
-                id="sh-interval", interval=24 * 60 * 60 * 1000, n_intervals=0
-            ),
-            dcc.Interval(
-                id="health-refresh", interval=24 * 60 * 60 * 1000, n_intervals=0
-            ),
+            dcc.Interval(id="sh-interval", interval=24 * 60 * 60 * 1000, n_intervals=0),
+            dcc.Interval(id="health-refresh", interval=24 * 60 * 60 * 1000, n_intervals=0),
             dcc.Store(id="sh-metrics-store"),
             dcc.Store(id="sh-top-store"),
             dcc.Store(id="sh-hist-store"),
@@ -1017,35 +1016,61 @@ def build_layout():
             ),
             html.Div(
                 [
-                    dcc.Graph(id="sh-gate-pressure", style={"height":"300px"}),
-                    dcc.Graph(id="sh-coverage", style={"height":"300px"}),
-                    dcc.Graph(id="sh-timings", style={"height":"300px"}),
+                    dcc.Graph(id="sh-gate-pressure", style={"height": "300px"}),
+                    dcc.Graph(id="sh-coverage", style={"height": "300px"}),
+                    dcc.Graph(id="sh-timings", style={"height": "300px"}),
                 ],
                 className="sh-row",
-                style={"display":"grid","gridTemplateColumns":"1fr 1fr 1fr","gap":"14px"},
+                style={"display": "grid", "gridTemplateColumns": "1fr 1fr 1fr", "gap": "14px"},
             ),
             html.Hr(),
             html.H3("Top Candidates"),
-            html.Div(id="sh-top-empty", className="mb-2", style={"color": "#bfc3d9", "fontSize": "13px"}),
+            html.Div(
+                id="sh-top-empty", className="mb-2", style={"color": "#bfc3d9", "fontSize": "13px"}
+            ),
             DataTable(
                 id="sh-top-table",
                 page_size=10,
                 sort_action="native",
                 filter_action="native",
-                style_table={"overflowX":"auto"},
-                style_cell={"fontSize":"13px","whiteSpace":"nowrap",
-                            "textOverflow":"ellipsis","maxWidth":220},
+                style_table={"overflowX": "auto"},
+                style_cell={
+                    "fontSize": "13px",
+                    "whiteSpace": "nowrap",
+                    "textOverflow": "ellipsis",
+                    "maxWidth": 220,
+                },
                 tooltip_data=[],
                 tooltip_duration=None,
                 columns=[
-                    {"name":"Symbol","id":"symbol"},
-                    {"name":"Score","id":"score","type":"numeric","format":{"specifier":".3f"}},
-                    {"name":"Exchange","id":"exchange"},
-                    {"name":"Close","id":"close","type":"numeric","format":{"specifier":".2f"}},
-                    {"name":"Volume","id":"volume","type":"numeric","format":{"specifier":".0f"}},
-                    {"name":"ATR%","id":"atrp","type":"numeric","format":{"specifier":".2%"}},
-                    {"name":"Source","id":"source"},
-                    {"name":"Score breakdown","id":"score_breakdown"},
+                    {"name": "Symbol", "id": "symbol"},
+                    {
+                        "name": "Score",
+                        "id": "score",
+                        "type": "numeric",
+                        "format": {"specifier": ".3f"},
+                    },
+                    {"name": "Exchange", "id": "exchange"},
+                    {
+                        "name": "Close",
+                        "id": "close",
+                        "type": "numeric",
+                        "format": {"specifier": ".2f"},
+                    },
+                    {
+                        "name": "Volume",
+                        "id": "volume",
+                        "type": "numeric",
+                        "format": {"specifier": ".0f"},
+                    },
+                    {
+                        "name": "ATR%",
+                        "id": "atrp",
+                        "type": "numeric",
+                        "format": {"specifier": ".2%"},
+                    },
+                    {"name": "Source", "id": "source"},
+                    {"name": "Score breakdown", "id": "score_breakdown"},
                 ],
                 style_data_conditional=[
                     {
@@ -1054,7 +1079,10 @@ def build_layout():
                         "fontWeight": "600",
                     },
                     {
-                        "if": {"column_id": "source", "filter_query": "{source} contains 'fallback'"},
+                        "if": {
+                            "column_id": "source",
+                            "filter_query": "{source} contains 'fallback'",
+                        },
                         "backgroundColor": "#2b223a",
                         "color": "#f4d9ff",
                         "fontSize": "11px",
@@ -1076,7 +1104,7 @@ def build_layout():
             html.H3("Trends & Performance"),
             html.Div(
                 [
-                    dcc.Graph(id="sh-trend-rows", style={"height":"280px"}),
+                    dcc.Graph(id="sh-trend-rows", style={"height": "280px"}),
                     html.Div(
                         [
                             html.Div(
@@ -1100,41 +1128,88 @@ def build_layout():
                         style={"padding": "10px"},
                     ),
                 ],
-                style={"display":"grid","gridTemplateColumns":"2fr 1fr","gap":"14px"},
+                style={"display": "grid", "gridTemplateColumns": "2fr 1fr", "gap": "14px"},
             ),
             html.Hr(),
-            html.Details([
-                html.Summary("Diagnostics & Logs"),
-                html.Div([
-                    html.Div([
-                        html.H4("Latest Predictions (head)"),
-                        html.Pre(id="sh-preds-head",
-                                 style={"maxHeight":"220px","overflow":"auto",
-                                        "background":"#0b0b0b","color":"#cfcfcf","padding":"8px"})
-                    ], style={"gridColumn":"1 / span 2"}),
-                    html.Div([
-                        html.H4("Screener Log (tail)"),
-                        html.Pre(id="sh-screener-log",
-                                 style={"maxHeight":"220px","overflow":"auto",
-                                        "background":"#0b0b0b","color":"#cfcfcf","padding":"8px"})
-                    ]),
-                    html.Div([
-                        html.H4("Pipeline Log (tail)"),
-                        html.Pre(id="sh-pipeline-log",
-                                 style={"maxHeight":"220px","overflow":"auto",
-                                        "background":"#0b0b0b","color":"#cfcfcf","padding":"8px"})
-                    ]),
-                    html.Div([
-                        html.H4("Pipeline Summary"),
-                        html.Pre(id="sh-pipeline-panel",
-                                 style={"maxHeight":"220px","overflow":"auto",
-                                        "background":"#0b0b0b","color":"#cfcfcf","padding":"8px"})
-                    ]),
-                ], style={"display":"grid","gridTemplateColumns":"2fr 1fr 1fr 1fr","gap":"12px"})
-            ]),
+            html.Details(
+                [
+                    html.Summary("Diagnostics & Logs"),
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.H4("Latest Predictions (head)"),
+                                    html.Pre(
+                                        id="sh-preds-head",
+                                        style={
+                                            "maxHeight": "220px",
+                                            "overflow": "auto",
+                                            "background": "#0b0b0b",
+                                            "color": "#cfcfcf",
+                                            "padding": "8px",
+                                        },
+                                    ),
+                                ],
+                                style={"gridColumn": "1 / span 2"},
+                            ),
+                            html.Div(
+                                [
+                                    html.H4("Screener Log (tail)"),
+                                    html.Pre(
+                                        id="sh-screener-log",
+                                        style={
+                                            "maxHeight": "220px",
+                                            "overflow": "auto",
+                                            "background": "#0b0b0b",
+                                            "color": "#cfcfcf",
+                                            "padding": "8px",
+                                        },
+                                    ),
+                                ]
+                            ),
+                            html.Div(
+                                [
+                                    html.H4("Pipeline Log (tail)"),
+                                    html.Pre(
+                                        id="sh-pipeline-log",
+                                        style={
+                                            "maxHeight": "220px",
+                                            "overflow": "auto",
+                                            "background": "#0b0b0b",
+                                            "color": "#cfcfcf",
+                                            "padding": "8px",
+                                        },
+                                    ),
+                                ]
+                            ),
+                            html.Div(
+                                [
+                                    html.H4("Pipeline Summary"),
+                                    html.Pre(
+                                        id="sh-pipeline-panel",
+                                        style={
+                                            "maxHeight": "220px",
+                                            "overflow": "auto",
+                                            "background": "#0b0b0b",
+                                            "color": "#cfcfcf",
+                                            "padding": "8px",
+                                        },
+                                    ),
+                                ]
+                            ),
+                        ],
+                        style={
+                            "display": "grid",
+                            "gridTemplateColumns": "2fr 1fr 1fr 1fr",
+                            "gap": "12px",
+                        },
+                    ),
+                ]
+            ),
         ],
-        style={"padding":"12px"}
+        style={"padding": "12px"},
     )
+
 
 def register_callbacks(app):
     def _json_safe(value: Any) -> Any:
@@ -1165,7 +1240,11 @@ def register_callbacks(app):
     def _sanitize_top_data(top_rows: Any) -> list[dict[str, Any]]:
         if isinstance(top_rows, pd.DataFrame):
             df = top_rows.copy()
-        elif isinstance(top_rows, list) and top_rows and all(isinstance(r, Mapping) for r in top_rows):
+        elif (
+            isinstance(top_rows, list)
+            and top_rows
+            and all(isinstance(r, Mapping) for r in top_rows)
+        ):
             df = pd.DataFrame(top_rows)
         else:
             df = None
@@ -1175,10 +1254,7 @@ def register_callbacks(app):
             df = df.fillna("")
             records = df.to_dict("records")
         elif isinstance(top_rows, list):
-            records = [
-                dict(r) if isinstance(r, Mapping) else {"value": r}
-                for r in top_rows
-            ]
+            records = [dict(r) if isinstance(r, Mapping) else {"value": r} for r in top_rows]
         else:
             records = []
         return [_json_safe(rec) for rec in records]
@@ -1186,19 +1262,16 @@ def register_callbacks(app):
     def _sanitize_tooltips(tooltips: Any) -> list[dict[str, Any]]:
         if not isinstance(tooltips, list):
             return []
-        return [
-            _json_safe(tip if isinstance(tip, Mapping) else {})
-            for tip in tooltips
-        ]
+        return [_json_safe(tip if isinstance(tip, Mapping) else {}) for tip in tooltips]
 
     @app.callback(
-        Output("sh-metrics-store","data"),
-        Output("sh-top-store","data"),
-        Output("sh-hist-store","data"),
-        Output("sh-eval-store","data"),
-        Output("sh-summary-store","data"),
-        Output("sh-premarket-store","data"),
-        Input("sh-interval","n_intervals")
+        Output("sh-metrics-store", "data"),
+        Output("sh-top-store", "data"),
+        Output("sh-hist-store", "data"),
+        Output("sh-eval-store", "data"),
+        Output("sh-summary-store", "data"),
+        Output("sh-premarket-store", "data"),
+        Input("sh-interval", "n_intervals"),
     )
     def _load_artifacts(_n):
         m = dict(load_kpis())
@@ -1216,7 +1289,15 @@ def register_callbacks(app):
                 "ATR%": "atrp",
             }
             top_df = top_df.rename(columns=rename_map)
-            for col in ["score", "exchange", "close", "volume", "atrp", "source", "score_breakdown"]:
+            for col in [
+                "score",
+                "exchange",
+                "close",
+                "volume",
+                "atrp",
+                "source",
+                "score_breakdown",
+            ]:
                 if col not in top_df.columns:
                     top_df[col] = np.nan if col in {"score", "close", "volume", "atrp"} else ""
             top_df = top_df.sort_values("score", ascending=False, na_position="last").head(10)
@@ -1275,9 +1356,7 @@ def register_callbacks(app):
 
         trading_url = os.getenv("APCA_API_BASE_URL", "")
         trading_probe = _probe(trading_url.rstrip("/") + "/v2/account")
-        data_base = os.getenv("APCA_DATA_API_BASE_URL", "") or os.getenv(
-            "APCA_API_DATA_URL", ""
-        )
+        data_base = os.getenv("APCA_DATA_API_BASE_URL", "") or os.getenv("APCA_API_DATA_URL", "")
         data_probe = _probe(data_base.rstrip("/") + "/v2/stocks/AAPL/quotes/latest")
 
         return {
@@ -1289,34 +1368,34 @@ def register_callbacks(app):
         }
 
     @app.callback(
-        Output("sh-health-banner","children"),
-        Output("sh-paper-badge","children"),
-        Output("sh-kpis","children"),
-        Output("sh-prefix-counts","children"),
-        Output("sh-http","children"),
-        Output("sh-cache","children"),
-        Output("sh-timings-json","children"),
-        Output("sh-gate-pressure","figure"),
-        Output("sh-coverage","figure"),
-        Output("sh-timings","figure"),
-        Output("sh-top-table","data"),
-        Output("sh-top-empty","children"),
-        Output("sh-top-table","tooltip_data"),
-        Output("sh-trend-rows","figure"),
-        Output("sh-ranker-summary","children"),
-        Output("sh-ranker-deciles","figure"),
-        Output("sh-ranker-warning","children"),
-        Output("sh-preds-head","children"),
-        Output("sh-screener-log","children"),
-        Output("sh-pipeline-log","children"),
-        Output("sh-pipeline-panel","children"),
-        Input("sh-metrics-store","data"),
-        Input("sh-top-store","data"),
-        Input("sh-hist-store","data"),
-        Input("sh-eval-store","data"),
-        Input("sh-health-store","data"),
-        Input("sh-summary-store","data"),
-        Input("sh-premarket-store","data"),
+        Output("sh-health-banner", "children"),
+        Output("sh-paper-badge", "children"),
+        Output("sh-kpis", "children"),
+        Output("sh-prefix-counts", "children"),
+        Output("sh-http", "children"),
+        Output("sh-cache", "children"),
+        Output("sh-timings-json", "children"),
+        Output("sh-gate-pressure", "figure"),
+        Output("sh-coverage", "figure"),
+        Output("sh-timings", "figure"),
+        Output("sh-top-table", "data"),
+        Output("sh-top-empty", "children"),
+        Output("sh-top-table", "tooltip_data"),
+        Output("sh-trend-rows", "figure"),
+        Output("sh-ranker-summary", "children"),
+        Output("sh-ranker-deciles", "figure"),
+        Output("sh-ranker-warning", "children"),
+        Output("sh-preds-head", "children"),
+        Output("sh-screener-log", "children"),
+        Output("sh-pipeline-log", "children"),
+        Output("sh-pipeline-panel", "children"),
+        Input("sh-metrics-store", "data"),
+        Input("sh-top-store", "data"),
+        Input("sh-hist-store", "data"),
+        Input("sh-eval-store", "data"),
+        Input("sh-health-store", "data"),
+        Input("sh-summary-store", "data"),
+        Input("sh-premarket-store", "data"),
     )
     def _render(m, top_rows, hist_rows, ev, health, summary, premarket):
         empty_fig = _placeholder_figure("Unavailable", "No data available")
@@ -1395,11 +1474,14 @@ def register_callbacks(app):
 
             # ---------------- KPIs ----------------
             def _card(title, value, sub=None):
-                return html.Div([
-                    html.Div(title, className="sh-kpi-title"),
-                    html.Div(value, className="sh-kpi-value"),
-                    html.Div(sub or "", className="sh-kpi-sub")
-                ], className="sh-kpi")
+                return html.Div(
+                    [
+                        html.Div(title, className="sh-kpi-title"),
+                        html.Div(value, className="sh-kpi-value"),
+                        html.Div(sub or "", className="sh-kpi-sub"),
+                    ],
+                    className="sh-kpi",
+                )
 
             health_card, health_banner = _health_elements(health)
             premarket_card = _premarket_pill(premarket)
@@ -1407,7 +1489,11 @@ def register_callbacks(app):
             auth_reason = summary.get("auth_reason") if isinstance(summary, Mapping) else ""
             missing_raw = summary.get("auth_missing") if isinstance(summary, Mapping) else ""
             if isinstance(missing_raw, str):
-                missing_list = [part.strip() for part in missing_raw.replace(";", ",").split(",") if part.strip()]
+                missing_list = [
+                    part.strip()
+                    for part in missing_raw.replace(";", ",").split(",")
+                    if part.strip()
+                ]
             elif isinstance(missing_raw, (list, tuple, set)):
                 missing_list = [str(item).strip() for item in missing_raw if str(item).strip()]
             else:
@@ -1423,6 +1509,7 @@ def register_callbacks(app):
             else:
                 hint_data = {}
             creds_alert = None
+
             def _format_run_time(raw: Any) -> str:
                 if raw in (None, ""):
                     return ""
@@ -1443,10 +1530,7 @@ def register_callbacks(app):
                     return raw_text
 
             last_run_raw = (
-                m.get("run_started_utc")
-                or m.get("last_run_utc")
-                or m.get("timestamp")
-                or ""
+                m.get("run_started_utc") or m.get("last_run_utc") or m.get("timestamp") or ""
             )
             if not last_run_raw and isinstance(exec_metrics, Mapping):
                 for key in ("run_finished_utc", "timestamp", "last_run_utc", "run_started_utc"):
@@ -1480,9 +1564,9 @@ def register_callbacks(app):
             if rows_raw in (None, ""):
                 rows_raw = m.get("rows_out")
             rows = int(rows_raw or 0)
-            candidate_reason = str(
-                (m.get("candidate_reason") or m.get("status") or "")
-            ).strip().upper()
+            candidate_reason = (
+                str((m.get("candidate_reason") or m.get("status") or "")).strip().upper()
+            )
             candidate_sub = ""
             if rows == 0 and candidate_reason:
                 candidate_sub = f"reason: {candidate_reason}"
@@ -1576,14 +1660,18 @@ def register_callbacks(app):
             if fail:
                 df_fail = pd.DataFrame({"gate": list(fail.keys()), "count": list(fail.values())})
                 df_fail = df_fail.sort_values("count", ascending=False)
-                fig_gates = px.bar(df_fail, x="gate", y="count", title="Gate Pressure (Failures by Gate)")
+                fig_gates = px.bar(
+                    df_fail, x="gate", y="count", title="Gate Pressure (Failures by Gate)"
+                )
             else:
                 fig_gates = px.bar(title="Gate Pressure (no data)")
 
             # ---------------- Coverage donut ----------------
             cov_values = [sym_bars_any, max(sym_in - sym_bars_any, 0)]
             if sum(cov_values) > 0:
-                cov_df = pd.DataFrame({"label": ["With Bars (any)", "No Bars"], "value": cov_values})
+                cov_df = pd.DataFrame(
+                    {"label": ["With Bars (any)", "No Bars"], "value": cov_values}
+                )
                 fig_cov = px.pie(
                     cov_df, names="label", values="value", title="Universe Coverage", hole=0.45
                 )
@@ -1634,7 +1722,9 @@ def register_callbacks(app):
                 for row in top_data:
                     breakdown = str(row.get("score_breakdown") or "").strip()
                     if breakdown:
-                        tooltips.append({"score_breakdown": {"value": breakdown, "type": "markdown"}})
+                        tooltips.append(
+                            {"score_breakdown": {"value": breakdown, "type": "markdown"}}
+                        )
                     else:
                         tooltips.append({})
             tooltips = _sanitize_tooltips(tooltips)
@@ -1652,7 +1742,9 @@ def register_callbacks(app):
                 tidy = pd.DataFrame(
                     {
                         "run_utc": pd.concat([hist["run_utc"], hist["run_utc"]], ignore_index=True),
-                        "value": pd.concat([hist["rows"], hist["with_bars_pct"]], ignore_index=True),
+                        "value": pd.concat(
+                            [hist["rows"], hist["with_bars_pct"]], ignore_index=True
+                        ),
                         "series": ["Rows"] * len(hist) + ["With Bars %"] * len(hist),
                     }
                 )
@@ -1701,8 +1793,10 @@ def register_callbacks(app):
                 top_avg_label = ev.get("top_avg_label")
                 bottom_avg_label = ev.get("bottom_avg_label")
                 decile_lift = ev.get("decile_lift")
-                if decile_lift is None and isinstance(top_avg_label, (int, float)) and isinstance(
-                    bottom_avg_label, (int, float)
+                if (
+                    decile_lift is None
+                    and isinstance(top_avg_label, (int, float))
+                    and isinstance(bottom_avg_label, (int, float))
                 ):
                     decile_lift = float(top_avg_label) - float(bottom_avg_label)
 
@@ -1808,11 +1902,10 @@ def register_callbacks(app):
                 "PIPELINE_END",
                 "DASH RELOAD",
             ]
-            pipeline_tokens = [
-                _extract_last_line(p_tail, label) for label in token_labels
-            ]
+            pipeline_tokens = [_extract_last_line(p_tail, label) for label in token_labels]
             for label, token_line in zip(token_labels, pipeline_tokens):
                 panel_lines.append(token_line or f"{label} (missing)")
+
             def _try_float(value: Any) -> float:
                 try:
                     return float(value)
@@ -1849,9 +1942,7 @@ def register_callbacks(app):
                 panel_lines.append(skip_line)
             panel_lines.append(f"TIME_WINDOW skips={time_window_skips}")
             if skip_payload:
-                panel_lines.append(
-                    "execute_skips=" + json.dumps(skip_payload, sort_keys=True)
-                )
+                panel_lines.append("execute_skips=" + json.dumps(skip_payload, sort_keys=True))
             try:
                 pipeline_panel = "\n".join(panel_lines) if panel_lines else "(no data)"
             except Exception as exc:  # pragma: no cover - defensive guard
@@ -1910,7 +2001,9 @@ def register_callbacks(app):
                             )
                         )
                 alert_children: list[Any] = [
-                    html.Div("Credentials invalid", style={"fontWeight": 600, "marginBottom": "4px"}),
+                    html.Div(
+                        "Credentials invalid", style={"fontWeight": 600, "marginBottom": "4px"}
+                    ),
                     *detail_blocks,
                     *hint_entries,
                     html.A(
@@ -1961,9 +2054,16 @@ def register_callbacks(app):
             timings_dict = m.get("timings") if isinstance(m, dict) else {}
             if not isinstance(timings_dict, dict):
                 timings_dict = {}
-            base_timings = {"fetch_secs": "n/a", "feature_secs": "n/a", "rank_secs": "n/a", "gates_secs": "n/a"}
+            base_timings = {
+                "fetch_secs": "n/a",
+                "feature_secs": "n/a",
+                "rank_secs": "n/a",
+                "gates_secs": "n/a",
+            }
             timings_view = {**base_timings, **timings_dict}
-            timings_json = json.dumps({k: timings_view.get(k) for k in sorted(timings_view)}, indent=2)
+            timings_json = json.dumps(
+                {k: timings_view.get(k) for k in sorted(timings_view)}, indent=2
+            )
 
             banner_children: list[Any] = []
             if creds_alert:

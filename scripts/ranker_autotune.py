@@ -78,7 +78,7 @@ def _read_config(path: Path) -> dict:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        if line.endswith(":" ) and not line.startswith("-"):
+        if line.endswith(":") and not line.startswith("-"):
             section = line[:-1]
             if section not in data:
                 data[section] = {}
@@ -149,9 +149,7 @@ def _load_labels(cfg: AutotuneConfig, feature_keys: list[str]) -> pd.DataFrame:
 
     missing_features = [key for key in feature_keys if key not in combined.columns]
     if missing_features:
-        raise AutotuneError(
-            "Feature columns missing from labels: " + ", ".join(missing_features)
-        )
+        raise AutotuneError("Feature columns missing from labels: " + ", ".join(missing_features))
 
     for key in feature_keys:
         combined[key] = pd.to_numeric(combined[key], errors="coerce")
@@ -164,7 +162,9 @@ def _load_labels(cfg: AutotuneConfig, feature_keys: list[str]) -> pd.DataFrame:
     return combined
 
 
-def _walk_forward_splits(dates: pd.Series, splits: int, min_train: int = 3) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+def _walk_forward_splits(
+    dates: pd.Series, splits: int, min_train: int = 3
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     unique_dates = np.array(sorted(pd.to_datetime(dates.dropna().unique())))
     if unique_dates.size < (min_train + 1):
         return iter([])
@@ -182,7 +182,9 @@ def _walk_forward_splits(dates: pd.Series, splits: int, min_train: int = 3) -> I
         yield train_mask.to_numpy(), test_mask.to_numpy()
 
 
-def _standardise(train: pd.DataFrame, test: pd.DataFrame, feature_keys: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _standardise(
+    train: pd.DataFrame, test: pd.DataFrame, feature_keys: list[str]
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     mean = train[feature_keys].mean()
     std = train[feature_keys].std(ddof=0).replace(0, 1.0)
     train_scaled = (train[feature_keys] - mean) / std
@@ -190,7 +192,9 @@ def _standardise(train: pd.DataFrame, test: pd.DataFrame, feature_keys: list[str
     return train_scaled, test_scaled
 
 
-def _score_frame(scaled: pd.DataFrame, weights: Dict[str, float], feature_keys: list[str]) -> pd.Series:
+def _score_frame(
+    scaled: pd.DataFrame, weights: Dict[str, float], feature_keys: list[str]
+) -> pd.Series:
     ordered = np.array([weights[key] for key in feature_keys])
     return scaled.to_numpy() @ ordered
 
@@ -232,7 +236,9 @@ def _evaluate_candidate(
         selected = test_scores >= threshold
         selected_returns = test.loc[selected, "nextday_ret"].astype(float)
         selected_dates = pd.to_datetime(test.loc[selected, "as_of"], errors="coerce")
-        selected_frame = pd.DataFrame({"ret": selected_returns.to_numpy(), "as_of": selected_dates.to_numpy()})
+        selected_frame = pd.DataFrame(
+            {"ret": selected_returns.to_numpy(), "as_of": selected_dates.to_numpy()}
+        )
         selected_frame.dropna(subset=["ret", "as_of"], inplace=True)
         if selected_frame.empty:
             continue
@@ -261,7 +267,9 @@ def _evaluate_candidate(
     aggregate_drawdown = float(_max_drawdown(returns_series, dates_series))
     total_sample = int(returns_series.size)
     fold_expectancies = np.array([fold.expectancy for fold in fold_metrics], dtype=float)
-    expectancy_variance = float(np.var(fold_expectancies, ddof=0)) if fold_expectancies.size > 1 else 0.0
+    expectancy_variance = (
+        float(np.var(fold_expectancies, ddof=0)) if fold_expectancies.size > 1 else 0.0
+    )
 
     return CandidateResult(
         weights=weights,
@@ -278,41 +286,55 @@ def _generate_candidates(base_weights: Dict[str, float]) -> Iterator[Dict[str, f
     keys = list(base_weights.keys())
     multipliers = [0.8, 1.0, 1.2]
     for combo in np.array(np.meshgrid(*([multipliers] * len(keys)))).T.reshape(-1, len(keys)):
-        weights = {key: round(base_weights[key] * float(multiplier), 6) for key, multiplier in zip(keys, combo)}
+        weights = {
+            key: round(base_weights[key] * float(multiplier), 6)
+            for key, multiplier in zip(keys, combo)
+        }
         yield weights
 
 
 def _guardrails_pass(result: CandidateResult, cfg: AutotuneConfig) -> bool:
     if result.total_sample < cfg.min_sample:
         return False
-    if not math.isfinite(result.aggregate_profit_factor) or result.aggregate_profit_factor < cfg.pf_threshold:
+    if (
+        not math.isfinite(result.aggregate_profit_factor)
+        or result.aggregate_profit_factor < cfg.pf_threshold
+    ):
         return False
     if result.aggregate_drawdown < -cfg.max_drawdown:
         return False
-    if not math.isfinite(result.expectancy_variance) or result.expectancy_variance > cfg.variance_cap:
+    if (
+        not math.isfinite(result.expectancy_variance)
+        or result.expectancy_variance > cfg.variance_cap
+    ):
         return False
     return True
 
 
-def _append_changelog(path: Path, as_of: datetime, baseline: CandidateResult, candidate: CandidateResult) -> None:
+def _append_changelog(
+    path: Path, as_of: datetime, baseline: CandidateResult, candidate: CandidateResult
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     improvement = candidate.aggregate_expectancy - baseline.aggregate_expectancy
     lines = [
         f"## {as_of.strftime('%Y-%m-%d')}",
-        "", "Baseline:",
+        "",
+        "Baseline:",
         f"- Expectancy: {baseline.aggregate_expectancy:.6f}",
         f"- Profit Factor: {baseline.aggregate_profit_factor:.3f}",
         f"- Max Drawdown: {baseline.aggregate_drawdown:.3f}",
         f"- Variance: {baseline.expectancy_variance:.6f}",
         f"- Samples: {baseline.total_sample}",
-        "", "Candidate:",
+        "",
+        "Candidate:",
         f"- Expectancy: {candidate.aggregate_expectancy:.6f}",
         f"- Profit Factor: {candidate.aggregate_profit_factor:.3f}",
         f"- Max Drawdown: {candidate.aggregate_drawdown:.3f}",
         f"- Variance: {candidate.expectancy_variance:.6f}",
         f"- Samples: {candidate.total_sample}",
         f"- Expectancy Improvement: {improvement:.6f}",
-        "", "Weights:",
+        "",
+        "Weights:",
     ]
     for key, value in candidate.weights.items():
         lines.append(f"- {key}: {value:.6f}")
@@ -362,7 +384,10 @@ def autotune(cfg: AutotuneConfig) -> Optional[Path]:
         print("Guardrails not met; keeping existing configuration.")
         return None
 
-    if best_result.aggregate_expectancy < baseline_result.aggregate_expectancy + cfg.min_improvement:
+    if (
+        best_result.aggregate_expectancy
+        < baseline_result.aggregate_expectancy + cfg.min_improvement
+    ):
         print("Improvement threshold not met; keeping existing configuration.")
         return None
 

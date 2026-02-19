@@ -287,7 +287,9 @@ def run_docs_consistency(
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Check docs consistency and regenerate CLI reference docs")
+    parser = argparse.ArgumentParser(
+        description="Check docs consistency and regenerate CLI reference docs"
+    )
     parser.add_argument("--base", default=str(BASE_DIR), help="Repository base directory")
     parser.add_argument("--docs-dir", default=None, help="Optional docs directory override")
     parser.add_argument("--reports-dir", default=None, help="Optional reports directory override")

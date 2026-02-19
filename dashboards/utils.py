@@ -76,9 +76,7 @@ def safe_tail_lines(path: Path, max_lines: int = 2000) -> list[str]:
         return []
 
 
-_LOG_TS_RE = re.compile(
-    r"(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(?:,(?P<ms>\d{3}))?"
-)
+_LOG_TS_RE = re.compile(r"(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(?:,(?P<ms>\d{3}))?")
 
 
 def _parse_timestamp_to_tz(line: str, tz: timezone) -> datetime | None:
@@ -158,7 +156,12 @@ def parse_timed_events_from_logs(
             seen.add(norm_key)
             fields.append((norm_key, value.strip()))
 
-        _add("symbol", _search_first(text, [r"\bsymbol[:=]\s*([A-Z0-9\.-]+)", r"\bticker[:=]\s*([A-Z0-9\.-]+)"]))
+        _add(
+            "symbol",
+            _search_first(
+                text, [r"\bsymbol[:=]\s*([A-Z0-9\.-]+)", r"\bticker[:=]\s*([A-Z0-9\.-]+)"]
+            ),
+        )
         _add(
             "symbol",
             _search_first(
@@ -229,7 +232,10 @@ def parse_timed_events_from_logs(
                     [r"SUBMITTING\s+LIMIT\s+BUY\s+ORDER", r"PLAC(ING|ED)\s+BUY\s+ORDER"],
                 ),
                 ("BUY_FILL", [r"ORDER\s+FILLED", r"FILL\s+CONFIRMED"]),
-                ("BUY_CANCELLED", [r"CANCELLED\s+ORDER", r"ORDER\s+CANCELLED", r"ORDER\s+REJECTED"]),
+                (
+                    "BUY_CANCELLED",
+                    [r"CANCELLED\s+ORDER", r"ORDER\s+CANCELLED", r"ORDER\s+REJECTED"],
+                ),
                 ("TRAIL_SUBMIT", [r"TRAILING\s+STOP", r"TRAIL\s+SUBMIT"]),
                 ("TRAIL_CONFIRMED", [r"TRAIL\s+CONFIRMED", r"TRAILING\s+STOP\s+CREATED"]),
                 ("SKIP", [r"SKIP\s+REASON", r"SKIPPING\s"]),
@@ -352,7 +358,9 @@ def parse_pipeline_tokens(path: Path, limit_runs: int = 10) -> list[Dict[str, An
 
     parsed: list[Dict[str, Any]] = []
     for run in runs[::-1][:limit_runs]:
-        start_match = re.search(r"(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", run.get("start", ""))
+        start_match = re.search(
+            r"(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", run.get("start", "")
+        )
         end_match = re.search(r"(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", run.get("end", ""))
         summary = run.get("summary", "")
         summary_match = re.search(
@@ -382,12 +390,17 @@ def parse_pipeline_tokens(path: Path, limit_runs: int = 10) -> list[Dict[str, An
                 "symbols_in": int(summary_match.group("symbols_in")) if summary_match else None,
                 "with_bars": int(summary_match.group("with_bars")) if summary_match else None,
                 "rows": int(summary_match.group("rows")) if summary_match else None,
-                "bars_rows_total": int(summary_match.group("bars_rows_total")) if summary_match and summary_match.group("bars_rows_total") else None,
-                "source": "fallback" if any("FALLBACK_CHECK" in t for t in run.get("tokens", [])) else "screener",
+                "bars_rows_total": int(summary_match.group("bars_rows_total"))
+                if summary_match and summary_match.group("bars_rows_total")
+                else None,
+                "source": "fallback"
+                if any("FALLBACK_CHECK" in t for t in run.get("tokens", []))
+                else "screener",
             }
         )
 
     return parsed
+
 
 logger = logging.getLogger(__name__)
 
@@ -466,7 +479,11 @@ def coerce_kpi_types(metrics: Dict[str, Any]) -> Dict[str, Any]:
     int_fields = {
         "symbols_in": ("symbols_in",),
         "symbols_with_bars": ("symbols_with_bars", "with_bars"),
-        "symbols_with_any_bars": ("symbols_with_any_bars", "with_bars_any", "symbols_with_bars_any"),
+        "symbols_with_any_bars": (
+            "symbols_with_any_bars",
+            "with_bars_any",
+            "symbols_with_bars_any",
+        ),
         "symbols_with_required_bars": ("symbols_with_required_bars", "with_bars_required"),
         "bars_rows_total": ("bars_rows_total",),
         "rows": ("rows", "rows_out"),
@@ -482,7 +499,5 @@ def coerce_kpi_types(metrics: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             result[canonical] = None
 
-    result["last_run_utc"] = (
-        _raw_value("last_run_utc", "timestamp", "last_run") or None
-    )
+    result["last_run_utc"] = _raw_value("last_run_utc", "timestamp", "last_run") or None
     return result

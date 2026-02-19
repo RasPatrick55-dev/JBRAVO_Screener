@@ -9,12 +9,10 @@ import types
 from datetime import datetime, timedelta, timezone, time as dt_time
 from pathlib import Path
 import pandas as pd
-from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest
-from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.trading.requests import (
     GetOrdersRequest,
@@ -22,13 +20,16 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
     StopOrderRequest,
 )
+
 try:
     from alpaca.common.exceptions import APIError
 except Exception:  # pragma: no cover - fallback for older SDKs
+
     class APIError(Exception):
         """Fallback API error type when Alpaca SDK exception is unavailable."""
 
         pass
+
 
 # Support both ``python -m scripts.monitor_positions`` (preferred) and direct invocation.
 if __package__ in {None, ""}:
@@ -41,8 +42,6 @@ else:
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import logging
-import shutil
-from tempfile import NamedTemporaryFile
 
 
 import pytz
@@ -78,7 +77,10 @@ def configure_logging() -> None:
         if getattr(handler, "name", "") == "jbravo_monitor_stream":
             has_stream = True
             handler.setLevel(desired_level)
-        if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) is sys.stdout:
+        if (
+            isinstance(handler, logging.StreamHandler)
+            and getattr(handler, "stream", None) is sys.stdout
+        ):
             has_stream = True
             handler.setLevel(desired_level)
 
@@ -135,6 +137,7 @@ METRIC_KEYS = [
     "db_event_ok",
     "db_event_fail",
 ]
+
 
 def env_bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -635,8 +638,12 @@ def _build_monitor_config() -> dict:
         "MONITOR_DISABLE_SELLS": env_bool("MONITOR_DISABLE_SELLS", default=False),
         "MONITOR_ENABLE_LIVE_PRICES": env_bool("MONITOR_ENABLE_LIVE_PRICES", default=False),
         "MONITOR_ENABLE_EXIT_SIGNALS_V2": env_bool("MONITOR_ENABLE_EXIT_SIGNALS_V2", default=False),
-        "MONITOR_ENABLE_BREAKEVEN_TIGHTEN": env_bool("MONITOR_ENABLE_BREAKEVEN_TIGHTEN", default=False),
-        "MONITOR_ENABLE_TIMEDECAY_TIGHTEN": env_bool("MONITOR_ENABLE_TIMEDECAY_TIGHTEN", default=False),
+        "MONITOR_ENABLE_BREAKEVEN_TIGHTEN": env_bool(
+            "MONITOR_ENABLE_BREAKEVEN_TIGHTEN", default=False
+        ),
+        "MONITOR_ENABLE_TIMEDECAY_TIGHTEN": env_bool(
+            "MONITOR_ENABLE_TIMEDECAY_TIGHTEN", default=False
+        ),
         "MONITOR_ENABLE_DB_LOGGING": env_bool(MONITOR_DB_LOGGING_ENV, default=False),
         "MONITOR_ENABLE_EXIT_INTELLIGENCE": env_bool(
             "MONITOR_ENABLE_EXIT_INTELLIGENCE", default=False
@@ -736,12 +743,14 @@ def run_debug_smoke_test():
         }
 
         if macd_cross:
-            indicators.update({
-                "MACD": -0.5,
-                "MACD_signal": 0.5,
-                "MACD_prev": 0.5,
-                "MACD_signal_prev": -0.2,
-            })
+            indicators.update(
+                {
+                    "MACD": -0.5,
+                    "MACD_signal": 0.5,
+                    "MACD_prev": 0.5,
+                    "MACD_signal_prev": -0.2,
+                }
+            )
 
         if pattern == "shooting_star":
             open_price = max(current_price, entry_price * 1.05)
@@ -802,6 +811,7 @@ def run_debug_smoke_test():
         logger.info("[DEBUG_SMOKE] Completed monitor_positions smoke test")
     except Exception:
         logger.exception("[DEBUG_SMOKE] Smoke test raised unexpectedly")
+
 
 REQUIRED_ALPACA_ENV = [
     "APCA_API_KEY_ID",
@@ -871,7 +881,9 @@ def _load_env_if_needed() -> None:
     )
 
 
-def log_trailing_stop_event(symbol: str, trail_percent: float, order_id: Optional[str], status: str) -> None:
+def log_trailing_stop_event(
+    symbol: str, trail_percent: float, order_id: Optional[str], status: str
+) -> None:
     """Emit the structured trailing-stop attachment log."""
 
     payload = {
@@ -883,7 +895,9 @@ def log_trailing_stop_event(symbol: str, trail_percent: float, order_id: Optiona
     logger.info("TRAILING_STOP_ATTACH %s", payload)
 
 
-def log_exit_submit(symbol: str, qty: int, order_type: str, reason_code: str, side: str = "sell") -> None:
+def log_exit_submit(
+    symbol: str, qty: int, order_type: str, reason_code: str, side: str = "sell"
+) -> None:
     """Emit the EXIT_SUBMIT structured log."""
 
     payload = {
@@ -928,7 +942,9 @@ def round_price(value: float) -> float:
     return round(value + 1e-6, 2)
 
 
-def wait_for_order_terminal(order_id: str, poll_interval: int = 10, timeout_seconds: int = 600) -> str:
+def wait_for_order_terminal(
+    order_id: str, poll_interval: int = 10, timeout_seconds: int = 600
+) -> str:
     """Poll until ``order_id`` reaches a terminal state or times out."""
 
     deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
@@ -978,6 +994,7 @@ def ensure_column_exists(df: pd.DataFrame, column: str, default=None) -> pd.Data
         logger.warning("Added missing '%s' column with default %s", column, default)
     return df
 
+
 # Required columns for open_positions.csv
 REQUIRED_COLUMNS = [
     "symbol",
@@ -1003,6 +1020,7 @@ if not os.path.exists(open_pos_path):
 # No global entry time cache - load the CSV each cycle to preserve original
 # entry times even if other processes modify the file.
 
+
 def get_original_entry_time(existing_df: pd.DataFrame, symbol: str, default_time: str) -> str:
     """Return the previously recorded entry time for ``symbol`` if available."""
     match = existing_df[existing_df["symbol"] == symbol]
@@ -1012,6 +1030,7 @@ def get_original_entry_time(existing_df: pd.DataFrame, symbol: str, default_time
         except Exception:
             pass
     return default_time
+
 
 executed_trades_path = os.path.join(BASE_DIR, "data", "executed_trades.csv")
 trades_log_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
@@ -1171,12 +1190,15 @@ def _can_attempt_stop_attach(symbol: str, now: datetime) -> bool:
 def _mark_stop_attach_attempt(symbol: str, now: datetime) -> None:
     state = MONITOR_STATE.setdefault("stop_attach", {})
     current = state.get(symbol) or {}
-    current.update({
-        "last_state": current.get("last_state", "missing"),
-        "last_attempt_utc": now.isoformat(),
-    })
+    current.update(
+        {
+            "last_state": current.get("last_state", "missing"),
+            "last_attempt_utc": now.isoformat(),
+        }
+    )
     state[symbol] = current
     _save_monitor_state(MONITOR_STATE)
+
 
 _load_env_if_needed()
 
@@ -1221,9 +1243,7 @@ LOW_SIGNAL_TIGHTEN_DELTA = float(os.getenv("LOW_SIGNAL_TIGHTEN_DELTA", "0.75"))
 LOW_SIGNAL_TIGHTEN_MIN = float(os.getenv("LOW_SIGNAL_TIGHTEN_MIN", "0.5"))
 LOW_SIGNAL_TIGHTEN_MAX = float(os.getenv("LOW_SIGNAL_TIGHTEN_MAX", "1.0"))
 LOW_SIGNAL_TRAIL_FLOOR = float(os.getenv("LOW_SIGNAL_TRAIL_FLOOR", "1.5"))
-LOW_SIGNAL_TIGHTEN_COOLDOWN_HOURS = int(
-    os.getenv("LOW_SIGNAL_TIGHTEN_COOLDOWN_HOURS", "24")
-)
+LOW_SIGNAL_TIGHTEN_COOLDOWN_HOURS = int(os.getenv("LOW_SIGNAL_TIGHTEN_COOLDOWN_HOURS", "24"))
 
 # Minimum number of historical bars required for indicator calculation
 required_bars = 200
@@ -1368,7 +1388,9 @@ def _compute_target_trail_meta(
     return float(target), reasons
 
 
-def compute_target_trail_pct(position, indicators: dict | None, exit_signals: list[dict] | None) -> float:
+def compute_target_trail_pct(
+    position, indicators: dict | None, exit_signals: list[dict] | None
+) -> float:
     """Return the tightened trailing stop percent (exit intelligence)."""
 
     target, _reasons = _compute_target_trail_meta(position, indicators, exit_signals)
@@ -1515,9 +1537,7 @@ def fetch_indicators(symbol):
         logger.exception(f"Failed to fetch bars for {symbol}: {e}")
         return None
 
-    logger.debug(
-        f"{symbol}: Screener-bar-count={len(bars)}, Monitor-threshold={required_bars}"
-    )
+    logger.debug(f"{symbol}: Screener-bar-count={len(bars)}, Monitor-threshold={required_bars}")
 
     if bars.empty or len(bars) < required_bars:
         logger.warning("Not enough bars for %s indicator calculation", symbol)
@@ -1680,8 +1700,7 @@ def check_sell_signal(symbol: str, indicators: dict) -> list:
     rsi_prev = _num(indicators.get("RSI_prev", rsi_now))
     if rsi_now is not None and rsi_prev is not None:
         if rsi_prev >= 70 and (
-            rsi_now <= RSI_REVERSAL_FLOOR
-            or (rsi_prev - rsi_now) >= RSI_REVERSAL_DROP
+            rsi_now <= RSI_REVERSAL_FLOOR or (rsi_prev - rsi_now) >= RSI_REVERSAL_DROP
         ):
             v2_reasons.append("RSI reversal")
 
@@ -1984,8 +2003,7 @@ def get_open_orders(symbol):
     request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
     try:
         open_orders = trading_client.get_orders(request)
-        logger.info(
-            f"Fetched open orders for {symbol}: {len(open_orders)} found.")
+        logger.info(f"Fetched open orders for {symbol}: {len(open_orders)} found.")
         return list(open_orders)
     except Exception as e:
         logger.error("Failed to fetch open orders for %s: %s", symbol, e)
@@ -2011,7 +2029,9 @@ def _is_protective_order(order, expected_side: str) -> bool:
     status = order_attr_str(order, ("status",))
 
     stop_like = "trailing" in order_type or "stop" in order_type
-    is_open = any(state in status for state in ["open", "new", "accepted", "held", "partially_filled"])
+    is_open = any(
+        state in status for state in ["open", "new", "accepted", "held", "partially_filled"]
+    )
 
     normalized_side = "sell" if "sell" in side else "buy" if "buy" in side else ""
 
@@ -2126,7 +2146,9 @@ def log_closed_positions(trading_client, closed_symbols, existing_positions_df):
         closed_orders = trading_client.get_orders(request)
 
         exit_price = closed_orders[0].filled_avg_price if closed_orders else None
-        exit_time = closed_orders[0].filled_at.isoformat() if closed_orders else datetime.now().isoformat()
+        exit_time = (
+            closed_orders[0].filled_at.isoformat() if closed_orders else datetime.now().isoformat()
+        )
 
         log_trade_exit(
             symbol,
@@ -2365,9 +2387,7 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
     positions_count = len(positions)
 
     try:
-        open_orders = trading_client.get_orders(
-            GetOrdersRequest(status=QueryOrderStatus.OPEN)
-        )
+        open_orders = trading_client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
     except Exception as exc:
         logger.error("Failed to fetch open orders for stop coverage: %s", exc)
         increment_metric("api_errors")
@@ -2408,16 +2428,12 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
         symbol_orders = orders_by_symbol.get(symbol, [])
         trailing_stop = get_protective_trailing_stop_for_symbol(symbol, symbol_orders)
         if trailing_stop and is_fully_covered(position, trailing_stop):
-            _mark_symbol_protected(
-                symbol, [str(getattr(trailing_stop, "id", ""))]
-            )
+            _mark_symbol_protected(symbol, [str(getattr(trailing_stop, "id", ""))])
             protected_symbols.add(symbol)
             continue
 
         protective_orders = [
-            order
-            for order in symbol_orders
-            if _is_protective_order(order, expected_side)
+            order for order in symbol_orders if _is_protective_order(order, expected_side)
         ]
 
         if protective_orders:
@@ -2452,9 +2468,7 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
     )
 
     protective_orders_count = len(protected_symbols)
-    coverage_pct = (
-        protective_orders_count / positions_count if positions_count else 1.0
-    )
+    coverage_pct = protective_orders_count / positions_count if positions_count else 1.0
     MONITOR_METRICS["stop_coverage_pct"] = float(coverage_pct)
     _persist_metrics()
     return protective_orders_count, float(coverage_pct), trailing_stops_count
@@ -2642,9 +2656,7 @@ def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> Non
                 "dryrun": bool(getattr(order, "dryrun", False)),
             },
         )
-        logger.info(
-            f"Placed trailing stop for {symbol}: qty={qty}, trail_pct={trail_percent}"
-        )
+        logger.info(f"Placed trailing stop for {symbol}: qty={qty}, trail_pct={trail_percent}")
         log_trailing_stop_event(
             symbol,
             float(trail_percent),
@@ -2658,7 +2670,9 @@ def submit_new_trailing_stop(symbol: str, qty: int, trail_percent: float) -> Non
         increment_metric("api_errors")
 
 
-def manage_trailing_stop(position, indicators: dict | None = None, exit_signals: list[dict] | None = None):
+def manage_trailing_stop(
+    position, indicators: dict | None = None, exit_signals: list[dict] | None = None
+):
     symbol = position.symbol
     logger.info(f"Evaluating trailing stop for {symbol}")
     if symbol.upper() == "ARQQ":
@@ -2671,9 +2685,7 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
     gain_pct = (current - entry) / entry * 100 if entry else 0
     ml_signal_quality = ML_RISK_STATE.get("signal_quality", "MEDIUM")
     if not qty or float(qty) <= 0:
-        logger.info(
-            f"Skipping trailing stop for {symbol} due to non-positive quantity: {qty}."
-        )
+        logger.info(f"Skipping trailing stop for {symbol} due to non-positive quantity: {qty}.")
         log_trailing_stop_event(symbol, TRAIL_START_PERCENT, None, "skipped")
         return
     try:
@@ -2701,9 +2713,7 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
                         "reason": "redundant_trailing_stop",
                     },
                 )
-                logger.info(
-                    f"Cancelled redundant trailing-stop order {order.id} for {symbol}"
-                )
+                logger.info(f"Cancelled redundant trailing-stop order {order.id} for {symbol}")
             except Exception as exc:
                 logger.error(
                     "Failed to cancel trailing stop %s for %s: %s",
@@ -2739,9 +2749,7 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
         )
     use_qty = pos_qty_abs if pos_qty_abs > 0 else available_qty
     if use_qty <= 0:
-        logger.warning(
-            f"Insufficient available qty for {symbol}: {available_qty}"
-        )
+        logger.warning(f"Insufficient available qty for {symbol}: {available_qty}")
         log_trailing_stop_event(
             symbol,
             float(getattr(trailing_order, "trail_percent", TRAIL_START_PERCENT)),
@@ -2750,9 +2758,7 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
         )
         return
 
-    logger.debug(
-        f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}."
-    )
+    logger.debug(f"Entry={entry}, Current={current}, Gain={gain_pct:.2f}% for {symbol}.")
     logger.info(
         "Existing trailing stop for %s (order id %s, status %s, trail %% %s)",
         symbol,
@@ -2792,9 +2798,7 @@ def manage_trailing_stop(position, indicators: dict | None = None, exit_signals:
             LOW_SIGNAL_TIGHTEN_MAX,
             max(LOW_SIGNAL_TIGHTEN_MIN, LOW_SIGNAL_TIGHTEN_DELTA),
         )
-        proposed_low_signal_target = max(
-            LOW_SIGNAL_TRAIL_FLOOR, current_trail_pct - tighten_delta
-        )
+        proposed_low_signal_target = max(LOW_SIGNAL_TRAIL_FLOOR, current_trail_pct - tighten_delta)
         if proposed_low_signal_target + 1e-6 < effective_target:
             effective_target = proposed_low_signal_target
             low_signal_tighten = True
@@ -2986,8 +2990,7 @@ def check_pending_orders():
     try:
         request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
         open_orders = trading_client.get_orders(request)
-        logger.info(
-            f"Fetched open orders for all symbols: {len(open_orders)} found.")
+        logger.info(f"Fetched open orders for all symbols: {len(open_orders)} found.")
 
         trailing_by_key: dict[tuple[str, str], list] = {}
         for order in open_orders:
@@ -3053,9 +3056,7 @@ def check_pending_orders():
                 status = trading_client.get_order_by_id(order.id).status
                 status = status.value if hasattr(status, "value") else status
                 if status in ["submitted", "pending"]:
-                    logger.info(
-                        f"Pending order {order.id} for {order.symbol} status: {status}."
-                    )
+                    logger.info(f"Pending order {order.id} for {order.symbol} status: {status}.")
             except Exception as exc:
                 logger.error("Failed to fetch status for %s: %s", order.id, exc)
     except Exception as exc:
@@ -3112,12 +3113,16 @@ def submit_sell_market_order(
             available_qty_attr = int(use_qty)
         if available_qty_attr <= 0:
             logger.warning(
-                "Insufficient available qty for %s: %s", symbol, getattr(position, "qty_available", 0)
+                "Insufficient available qty for %s: %s",
+                symbol,
+                getattr(position, "qty_available", 0),
             )
             return
         try:
             positions = trading_client.get_all_positions()
-            existing_symbols = {p.symbol: int(getattr(p, "qty_available", p.qty)) for p in positions}
+            existing_symbols = {
+                p.symbol: int(getattr(p, "qty_available", p.qty)) for p in positions
+            }
             available_qty = existing_symbols.get(symbol, available_qty_attr)
         except Exception:
             available_qty = available_qty_attr
@@ -3157,9 +3162,7 @@ def submit_sell_market_order(
             },
         )
         order_id_value = str(getattr(order, "id", "") or "") or None
-        is_dryrun = bool(
-            getattr(order, "dryrun", env_bool("MONITOR_DISABLE_SELLS", default=False))
-        )
+        is_dryrun = bool(getattr(order, "dryrun", env_bool("MONITOR_DISABLE_SELLS", default=False)))
         if db_enabled:
             db_log_event(
                 event_type=MONITOR_DB_EVENT_TYPES["sell_submit"],
@@ -3385,9 +3388,7 @@ def process_positions_cycle():
                         symbol,
                     )
                 except Exception as e:
-                    logger.error(
-                        "Failed to cancel trailing stop for %s: %s", symbol, e
-                    )
+                    logger.error("Failed to cancel trailing stop for %s: %s", symbol, e)
             increment_metric("exits_max_hold")
             exit_signals = None
             exit_snapshot = None
@@ -3477,7 +3478,9 @@ def process_positions_cycle():
             exit_signals = None
             exit_snapshot = None
             if exit_intel_enabled:
-                exit_signals = evaluate_exit_signals(position, indicators, datetime.now(timezone.utc))
+                exit_signals = evaluate_exit_signals(
+                    position, indicators, datetime.now(timezone.utc)
+                )
                 if not any(signal.get("code") == "PROFIT_TARGET_HIT" for signal in exit_signals):
                     exit_signals.append(
                         {
@@ -3534,10 +3537,10 @@ def process_positions_cycle():
                         try:
                             cancel_order_safe(trailing_order.id, symbol, reason="signal_exit")
                         except Exception as e:
-                            logger.error(
-                                "Failed to cancel trailing stop for %s: %s", symbol, e
-                            )
-                    primary_signal = _select_primary_exit_signal(actionable_signals) or actionable_signals[0]
+                            logger.error("Failed to cancel trailing stop for %s: %s", symbol, e)
+                    primary_signal = (
+                        _select_primary_exit_signal(actionable_signals) or actionable_signals[0]
+                    )
                     exit_snapshot = _build_exit_snapshot(
                         position,
                         indicators,
@@ -3571,9 +3574,7 @@ def process_positions_cycle():
                     try:
                         cancel_order_safe(trailing_order.id, symbol, reason="signal_exit")
                     except Exception as e:
-                        logger.error(
-                            "Failed to cancel trailing stop for %s: %s", symbol, e
-                        )
+                        logger.error("Failed to cancel trailing stop for %s: %s", symbol, e)
                 reason_text = "; ".join(reasons)
                 increment_metric("exits_signal")
                 submit_sell_market_order(
@@ -3642,13 +3643,15 @@ def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None =
                     logger.info("LIVE_PRICE_SKIP reason=off_hours")
                 positions = update_open_positions() or []
 
-            protective_orders_count, stop_coverage_pct, trailing_stops_count = enforce_stop_coverage(positions)
+            protective_orders_count, stop_coverage_pct, trailing_stops_count = (
+                enforce_stop_coverage(positions)
+            )
 
             check_pending_orders()
 
             logger.info("Updated open_positions.csv successfully.")
             loop_status = "ok"
-        except Exception as e:
+        except Exception:
             logger.exception("Monitoring loop error")
             increment_metric("api_errors")
             loop_status = "error"

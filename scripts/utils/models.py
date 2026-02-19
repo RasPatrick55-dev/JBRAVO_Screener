@@ -1,4 +1,5 @@
 """Pydantic models used by the screener and related helpers."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,6 +9,7 @@ import pandas as pd
 
 try:  # pragma: no cover - import path depends on Pydantic major version
     from pydantic import BaseModel, field_validator
+
     _PYDANTIC_V2 = True
 except ImportError:  # pragma: no cover - fallback for Pydantic v1
     from pydantic import BaseModel, validator  # type: ignore

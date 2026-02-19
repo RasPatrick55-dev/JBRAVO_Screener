@@ -6,11 +6,9 @@ import argparse
 import os
 import sys
 
-import logging
-import logging.handlers
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -25,8 +23,8 @@ from utils import logger_utils
 from utils.env import load_env, get_alpaca_creds
 
 # Import indicator helpers from screener to keep the scoring consistent
-from .indicators import adx, aroon, macd, obv, rsi, compute_indicators
-from .utils import write_csv_atomic, cache_bars
+from .indicators import compute_indicators
+from .utils import write_csv_atomic
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_env()
@@ -36,7 +34,7 @@ logger = logger_utils.init_logging(__name__, "backtest.log")
 start_time = datetime.utcnow()
 logger.info("Script started")
 
-CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 CONFIG = {}
 if os.path.exists(CONFIG_PATH):
     with open(CONFIG_PATH) as f:
@@ -48,6 +46,7 @@ try:
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
+
     if API_KEY and API_SECRET:
         data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
     else:
@@ -164,9 +163,9 @@ def _normalize_api_bars(symbol: str, bars: pd.DataFrame) -> pd.DataFrame:
     else:
         working = working.reset_index()
         if "timestamp" in working.columns:
-            working["date"] = (
-                pd.to_datetime(working["timestamp"], utc=True, errors="coerce").dt.date
-            )
+            working["date"] = pd.to_datetime(
+                working["timestamp"], utc=True, errors="coerce"
+            ).dt.date
         elif "index" in working.columns:
             working["date"] = pd.to_datetime(working["index"], utc=True, errors="coerce").dt.date
     working["symbol"] = symbol
@@ -203,7 +202,12 @@ def _fetch_bars_from_api(symbol: str, end_date: date, lookback_days: int) -> pd.
             normalized = _normalize_api_bars(symbol, bars)
             if not normalized.empty:
                 if feed != "iex":
-                    logger.info("BACKTEST_BARS_FALLBACK feed=%s symbol=%s rows=%s", feed, symbol, len(normalized))
+                    logger.info(
+                        "BACKTEST_BARS_FALLBACK feed=%s symbol=%s rows=%s",
+                        feed,
+                        symbol,
+                        len(normalized),
+                    )
                 return normalized
         except Exception as exc:  # pragma: no cover - network errors
             logger.warning("API_BARS_FETCH_FAILED symbol=%s feed=%s err=%s", symbol, feed, exc)
@@ -272,9 +276,7 @@ def load_bars_from_db(symbol: str, *, end_date: Optional[date] = None) -> Option
             rows = cursor.fetchall()
         if not rows:
             return pd.DataFrame()
-        frame = pd.DataFrame(
-            rows, columns=["date", "open", "high", "low", "close", "volume"]
-        )
+        frame = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
         frame = frame.dropna(subset=["date"]).set_index("date").sort_index()
         for col in ["open", "high", "low", "close", "volume"]:
@@ -363,9 +365,7 @@ def composite_score(df: pd.DataFrame) -> pd.Series:
 
     score += np.where(df["close"] > df["ma50"], 1, -1)
     score += np.where(df["close"] > df["ma200"], 1, -1)
-    score += np.where(
-        (df["ma50"] > df["ma200"]) & (prev["ma50"] <= prev["ma200"]), 1.5, 0
-    )
+    score += np.where((df["ma50"] > df["ma200"]) & (prev["ma50"] <= prev["ma200"]), 1.5, 0)
 
     score += np.where((df["rsi"] > 50) & (prev["rsi"] <= 50), 1, 0)
     score += np.where((df["rsi"] > 30) & (prev["rsi"] <= 30), 1, 0)
@@ -475,7 +475,11 @@ def evaluate_exit_signals(position_state, indicators, trail_state, debug_flags=N
         reasons.append("ATR_STOP")
 
     trailing_stop = trail_state.get("trailing_stop")
-    if trail_state.get("enable_trailing_exit", True) and trailing_stop is not None and low_price <= trailing_stop:
+    if (
+        trail_state.get("enable_trailing_exit", True)
+        and trailing_stop is not None
+        and low_price <= trailing_stop
+    ):
         reasons.append("TRAIL_STOP")
 
     max_hold_days = trail_state.get("max_hold_days")
@@ -495,7 +499,9 @@ def evaluate_exit_signals(position_state, indicators, trail_state, debug_flags=N
     if trail_state.get("enable_rsi_divergence", False) and indicators.get("rsi_divergence", False):
         reasons.append("RSI_DIVERGENCE")
 
-    if trail_state.get("enable_candlestick_exit", True) and indicators.get("is_shooting_star", False):
+    if trail_state.get("enable_candlestick_exit", True) and indicators.get(
+        "is_shooting_star", False
+    ):
         reasons.append("PATTERN_SHOOTING_STAR")
 
     if (
@@ -560,9 +566,7 @@ class PortfolioBacktester:
         self.dates = sorted(set().union(*indices))
         self.rsi_high_memory: Dict[str, dict] = {}
 
-    def _open_position(
-        self, symbol: str, row: pd.Series, date: pd.Timestamp
-    ) -> None:
+    def _open_position(self, symbol: str, row: pd.Series, date: pd.Timestamp) -> None:
         price = float(row["close"])
         alloc = self.cash * self.alloc_pct
         qty = math.floor(alloc / price)
@@ -616,23 +620,35 @@ class PortfolioBacktester:
             return False
         upper_shadow = high_price - max(open_price, close_price)
         lower_shadow = min(open_price, close_price) - low_price
-        return close_price < open_price and upper_shadow > 2 * real_body and lower_shadow <= 0.2 * real_body
+        return (
+            close_price < open_price
+            and upper_shadow > 2 * real_body
+            and lower_shadow <= 0.2 * real_body
+        )
 
     def _record_rsi_high(self, symbol: str, price: float, rsi_value: float) -> None:
         existing = self.rsi_high_memory.get(symbol)
-        if existing is None or (price > existing.get("price", 0) and rsi_value >= existing.get("rsi", 0)):
+        if existing is None or (
+            price > existing.get("price", 0) and rsi_value >= existing.get("rsi", 0)
+        ):
             self.rsi_high_memory[symbol] = {"price": price, "rsi": rsi_value}
 
     def _check_rsi_divergence(self, symbol: str, price: float, rsi_value: float) -> bool:
         state = self.rsi_high_memory.get(symbol, {"price": price, "rsi": rsi_value})
-        triggered = rsi_value > 70 and price > state.get("price", price) and rsi_value < state.get("rsi", rsi_value)
+        triggered = (
+            rsi_value > 70
+            and price > state.get("price", price)
+            and rsi_value < state.get("rsi", rsi_value)
+        )
         if price > state.get("price", price) and rsi_value >= state.get("rsi", rsi_value):
             self._record_rsi_high(symbol, price, rsi_value)
         elif symbol not in self.rsi_high_memory:
             self._record_rsi_high(symbol, price, rsi_value)
         return triggered
 
-    def _scale_out_position(self, symbol: str, price: float, date: pd.Timestamp, reason: str) -> None:
+    def _scale_out_position(
+        self, symbol: str, price: float, date: pd.Timestamp, reason: str
+    ) -> None:
         pos = self.positions.get(symbol)
         if pos is None or pos.qty <= 1:
             return
@@ -665,9 +681,7 @@ class PortfolioBacktester:
         pos.trailing_stop = pos.highest_close * (1 - desired_pct)
         logger.info("Scaled out %s: sold %d @ %.2f reason=%s", symbol, sell_qty, price, reason)
 
-    def _close_position(
-        self, symbol: str, price: float, date: pd.Timestamp, reason: str
-    ) -> None:
+    def _close_position(self, symbol: str, price: float, date: pd.Timestamp, reason: str) -> None:
         pos = self.positions.pop(symbol)
         proceeds = pos.qty * price * (1 - self.slippage) - self.trade_cost
         self.cash += proceeds
@@ -719,7 +733,11 @@ class PortfolioBacktester:
                 pos.max_price = max(pos.max_price, high, close)
                 pos.highest_close = max(pos.highest_close, close)
 
-                gain_pct = (pos.max_price - pos.entry_price) / pos.entry_price * 100 if pos.entry_price else 0
+                gain_pct = (
+                    (pos.max_price - pos.entry_price) / pos.entry_price * 100
+                    if pos.entry_price
+                    else 0
+                )
                 desired_pct = self._desired_trail_pct(gain_pct)
 
                 if self.use_trailing and self.enable_trailing_exit:
@@ -782,7 +800,11 @@ class PortfolioBacktester:
                 exit_price: Optional[float] = None
                 if "ATR_STOP" in reasons and pos.atr_stop is not None and low <= pos.atr_stop:
                     exit_price = pos.atr_stop
-                elif "TRAIL_STOP" in reasons and pos.trailing_stop is not None and low <= pos.trailing_stop:
+                elif (
+                    "TRAIL_STOP" in reasons
+                    and pos.trailing_stop is not None
+                    and low <= pos.trailing_stop
+                ):
                     exit_price = pos.trailing_stop
                 else:
                     exit_price = close
@@ -826,9 +848,7 @@ class PortfolioBacktester:
         return pd.DataFrame(self.trades)
 
     def equity(self) -> pd.DataFrame:
-        return pd.DataFrame(self.equity_curve, columns=["date", "equity"]).set_index(
-            "date"
-        )
+        return pd.DataFrame(self.equity_curve, columns=["date", "equity"]).set_index("date")
 
     def metrics(self) -> Dict[str, float]:
         if not self.equity_curve:
@@ -854,11 +874,7 @@ class PortfolioBacktester:
             else 0
         )
         downside = daily_returns[daily_returns < 0].std()
-        sortino = (
-            np.sqrt(252) * daily_returns.mean() / downside
-            if downside != 0
-            else 0
-        )
+        sortino = np.sqrt(252) * daily_returns.mean() / downside if downside != 0 else 0
 
         return {
             "Total Return": round(total_return * 100, 2),
@@ -898,7 +914,7 @@ def run_backtest(
 
     valid_symbols: List[str] = []
     for symbol in symbols:
-        if re.match(r'^[A-Z]{1,5}$', symbol):
+        if re.match(r"^[A-Z]{1,5}$", symbol):
             valid_symbols.append(symbol)
         else:
             logger.warning("Invalid symbol skipped: %s", symbol)
@@ -909,9 +925,7 @@ def run_backtest(
 
     data = {}
     resolved_lookback = (
-        int(lookback_days)
-        if lookback_days is not None
-        else _resolve_lookback_days(max_days)
+        int(lookback_days) if lookback_days is not None else _resolve_lookback_days(max_days)
     )
     resolved_min_history = (
         int(min_history_bars)
@@ -965,21 +979,21 @@ def run_backtest(
         logger.error("No valid data to run backtest.")
         return {"tested": 0, "skipped": len(valid_symbols)}
 
-    trail_pct = CONFIG.get('trail_pct', 0.03)
-    if not CONFIG.get('use_trailing_stop', True):
+    trail_pct = CONFIG.get("trail_pct", 0.03)
+    if not CONFIG.get("use_trailing_stop", True):
         trail_pct = None
 
     bt = PortfolioBacktester(
         data,
         trail_pct=trail_pct,
-        max_hold_days=CONFIG.get('max_hold_days', 7),
-        atr_multiple=CONFIG.get('atr_multiple', 1.0),
-        enable_macd_exit=CONFIG.get('enable_macd_exit', True),
-        enable_partial_exit=CONFIG.get('enable_partial_exit', True),
-        enable_rsi_divergence=CONFIG.get('enable_rsi_divergence', False),
-        enable_candlestick_exit=CONFIG.get('enable_candlestick_exit', True),
-        enable_ema_exit=CONFIG.get('enable_ema_exit', True),
-        enable_trailing_exit=CONFIG.get('enable_trailing_exit', True),
+        max_hold_days=CONFIG.get("max_hold_days", 7),
+        atr_multiple=CONFIG.get("atr_multiple", 1.0),
+        enable_macd_exit=CONFIG.get("enable_macd_exit", True),
+        enable_partial_exit=CONFIG.get("enable_partial_exit", True),
+        enable_rsi_divergence=CONFIG.get("enable_rsi_divergence", False),
+        enable_candlestick_exit=CONFIG.get("enable_candlestick_exit", True),
+        enable_ema_exit=CONFIG.get("enable_ema_exit", True),
+        enable_trailing_exit=CONFIG.get("enable_trailing_exit", True),
     )
 
     trades_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
@@ -1016,8 +1030,7 @@ def run_backtest(
             grouped = trades_df.copy()
             grouped["win"] = grouped["pnl"] > 0
             reason_stats = (
-                grouped
-                .groupby("exit_reason")
+                grouped.groupby("exit_reason")
                 .agg(
                     trades=("pnl", "size"),
                     win_rate=("win", "mean"),
@@ -1037,17 +1050,13 @@ def run_backtest(
         if not trades_df.empty:
             symbol_groups = trades_df.groupby("symbol")
 
-            summary_df = (
-                symbol_groups
-                .agg(
-                    trades=("pnl", "size"),
-                    wins=("pnl", lambda x: (x > 0).sum()),
-                    losses=("pnl", lambda x: (x <= 0).sum()),
-                    net_pnl=("pnl", "sum"),
-                    expectancy=("pnl", "mean"),
-                )
-                .reset_index()
-            )
+            summary_df = symbol_groups.agg(
+                trades=("pnl", "size"),
+                wins=("pnl", lambda x: (x > 0).sum()),
+                losses=("pnl", lambda x: (x <= 0).sum()),
+                net_pnl=("pnl", "sum"),
+                expectancy=("pnl", "mean"),
+            ).reset_index()
 
             summary_df["win_rate"] = summary_df["wins"] / summary_df["trades"] * 100
 
@@ -1195,7 +1204,6 @@ def run_backtest(
     except Exception as e:
         logger.error(f"Error during backtest trades log generation: {e}", exc_info=True)
         raise
-
 
     processed = len(valid_symbols)
     tested = len(data)

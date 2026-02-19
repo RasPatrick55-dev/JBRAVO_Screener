@@ -5,6 +5,7 @@ import datetime
 
 from utils import fetch_bars_with_cutoff
 
+
 class TestFetchBarsWithCutoff(unittest.TestCase):
     def test_returns_bars_before_cutoff(self):
         client = MagicMock()
@@ -16,10 +17,13 @@ class TestFetchBarsWithCutoff(unittest.TestCase):
                 "close": [1, 2],
                 "volume": [10, 20],
             },
-            index=pd.to_datetime([
-                "2024-01-01",
-                "2024-01-03",
-            ], utc=True),
+            index=pd.to_datetime(
+                [
+                    "2024-01-01",
+                    "2024-01-03",
+                ],
+                utc=True,
+            ),
         )
         client.get_stock_bars.return_value.df = df
         cutoff = datetime.datetime(2024, 1, 2, tzinfo=datetime.timezone.utc)

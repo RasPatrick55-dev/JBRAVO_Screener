@@ -45,6 +45,5 @@ def test_fallback_static_writes_three_rows_when_scored_missing(tmp_path, caplog,
 
     messages = [record.getMessage() for record in caplog.records]
     assert any(
-        "[INFO] FALLBACK_CHECK rows_out=3 source=fallback:static" in message
-        for message in messages
+        "[INFO] FALLBACK_CHECK rows_out=3 source=fallback:static" in message for message in messages
     )

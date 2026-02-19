@@ -64,4 +64,3 @@ def rotate_if_needed(
         "age_days": age_days,
         "keep": keep,
     }
-

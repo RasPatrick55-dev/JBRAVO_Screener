@@ -274,9 +274,7 @@ def parse_args(argv: list[str] | None = None) -> EvalArgs:
                 raise FileNotFoundError("No features files found in data/features")
 
         if predictions_path is None:
-            predictions_path = _find_latest(
-                BASE_DIR / "data" / "predictions", "predictions_*.csv"
-            )
+            predictions_path = _find_latest(BASE_DIR / "data" / "predictions", "predictions_*.csv")
             if predictions_path is None:
                 raise FileNotFoundError("No predictions files found in data/predictions")
 
@@ -333,9 +331,7 @@ def main(argv: list[str] | None = None) -> int:
             dec["avg_score"],
         )
     if db.db_enabled():
-        meta = db.fetch_latest_ml_artifact("predictions") or db.fetch_latest_ml_artifact(
-            "features"
-        )
+        meta = db.fetch_latest_ml_artifact("predictions") or db.fetch_latest_ml_artifact("features")
         run_date = meta.get("run_date") if meta else None
         if run_date is None:
             run_date = datetime.now(timezone.utc).date()

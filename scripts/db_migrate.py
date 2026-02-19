@@ -339,7 +339,9 @@ def _repair_screener_candidates_schema(engine) -> bool:
                     return True
 
                 if "run date" in columns:
-                    cursor.execute('ALTER TABLE screener_candidates RENAME COLUMN "run date" TO run_date')
+                    cursor.execute(
+                        'ALTER TABLE screener_candidates RENAME COLUMN "run date" TO run_date'
+                    )
                     columns.discard("run date")
                     columns.add("run_date")
                     _ensure_screener_candidates_columns(cursor, columns)

@@ -58,7 +58,7 @@ class TestMonitorExitSignalsV2(unittest.TestCase):
             idx = message.find(prefix)
             if idx != -1:
                 self.assertNotIn("EXIT_SIGNALS_V2", message)
-                return json.loads(message[idx + len(prefix):])
+                return json.loads(message[idx + len(prefix) :])
         self.fail("EXIT_SIGNAL_V2 log entry not found")
 
     def _assert_payload(self, payload: dict) -> None:
@@ -157,7 +157,9 @@ class TestMonitorExitSignalsV2(unittest.TestCase):
 
     def test_sma9_ema20_cross_down(self):
         indicators = self._base_indicators()
-        indicators.update({"SMA9_prev": 95.0, "EMA20_prev": 90.0, "SMA9": 85.0, "EMA20": 90.0, "close": 95.0})
+        indicators.update(
+            {"SMA9_prev": 95.0, "EMA20_prev": 90.0, "SMA9": 85.0, "EMA20": 90.0, "close": 95.0}
+        )
         reasons, payload = self._run_check(indicators)
         self.assertIn("SMA9/EMA20 cross-down", reasons)
         self.assertIn("SMA9/EMA20 cross-down", payload["v2_reasons"])

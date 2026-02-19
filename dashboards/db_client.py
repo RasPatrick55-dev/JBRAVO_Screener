@@ -26,7 +26,9 @@ def _fetch_dataframe(sql: str, params: Optional[Mapping[str, Any]] = None) -> pd
             pass
 
 
-def db_query_df(sql: str, params: Optional[Mapping[str, Any]] = None) -> Tuple[Optional[pd.DataFrame], Optional[dbc.Alert]]:
+def db_query_df(
+    sql: str, params: Optional[Mapping[str, Any]] = None
+) -> Tuple[Optional[pd.DataFrame], Optional[dbc.Alert]]:
     """Execute ``sql`` and return a DataFrame or a Dash ``Alert`` on failure.
 
     The helper reads Postgres connection settings from the environment and

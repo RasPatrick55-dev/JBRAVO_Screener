@@ -1,4 +1,5 @@
 """Compute forward outcomes for screener candidates and persist to Postgres."""
+
 from __future__ import annotations
 
 import argparse
@@ -69,9 +70,7 @@ def _load_missing_candidates(
     if "passed_gates" in frame.columns:
         frame["passed_gates"] = frame["passed_gates"].astype("boolean")
     frame["rank"] = (
-        frame.groupby("run_date")["score"]
-        .rank(method="first", ascending=False)
-        .astype("Int64")
+        frame.groupby("run_date")["score"].rank(method="first", ascending=False).astype("Int64")
     )
     return frame
 
@@ -115,7 +114,9 @@ def _calc_ret(prices: pd.Series, offset: int, entry_close: float) -> Optional[fl
     return float(value / entry_close - 1.0)
 
 
-def _drawdown_runup(window: pd.DataFrame, entry_close: float) -> tuple[Optional[float], Optional[float]]:
+def _drawdown_runup(
+    window: pd.DataFrame, entry_close: float
+) -> tuple[Optional[float], Optional[float]]:
     if entry_close is None or pd.isna(entry_close) or entry_close <= 0:
         return None, None
     if window.empty:
@@ -146,10 +147,11 @@ def _compute_outcomes(
     results: list[tuple] = []
     if candidates.empty:
         return results
-    bars_by_symbol = {
-        sym: df.sort_values("date")
-        for sym, df in bars.groupby("symbol")
-    } if not bars.empty else {}
+    bars_by_symbol = (
+        {sym: df.sort_values("date") for sym, df in bars.groupby("symbol")}
+        if not bars.empty
+        else {}
+    )
 
     for row in candidates.itertuples(index=False):
         symbol = str(getattr(row, "symbol", "")).strip().upper()
@@ -180,7 +182,9 @@ def _compute_outcomes(
         ret_1d = ret_5d = ret_10d = None
         max_drawdown = max_runup = None
         if not future.empty:
-            close_series = pd.to_numeric(future.get("close"), errors="coerce").reset_index(drop=True)
+            close_series = pd.to_numeric(future.get("close"), errors="coerce").reset_index(
+                drop=True
+            )
             if (entry_close is None or pd.isna(entry_close)) and not close_series.empty:
                 entry_close = close_series.iloc[0]
             ret_1d = _calc_ret(close_series, 1, entry_close)
@@ -195,7 +199,9 @@ def _compute_outcomes(
                 symbol,
                 int(rank) if rank is not None and not pd.isna(rank) else None,
                 float(score) if score is not None and not pd.isna(score) else None,
-                float(entry_close) if entry_close is not None and not pd.isna(entry_close) else None,
+                float(entry_close)
+                if entry_close is not None and not pd.isna(entry_close)
+                else None,
                 ret_1d,
                 ret_5d,
                 ret_10d,
@@ -339,7 +345,13 @@ def _backfill_rank_metadata(conn) -> int:
         return 0
     candidate_cols = _table_columns(conn, "screener_candidates")
     ml_score_col = "ml_adjusted_score" if "ml_adjusted_score" in candidate_cols else "score"
-    prob_col = "prob_up" if "prob_up" in candidate_cols else "ml_prob_up" if "ml_prob_up" in candidate_cols else None
+    prob_col = (
+        "prob_up"
+        if "prob_up" in candidate_cols
+        else "ml_prob_up"
+        if "ml_prob_up" in candidate_cols
+        else None
+    )
 
     with conn.cursor() as cur:
         cur.execute(
@@ -382,13 +394,11 @@ def _backfill_rank_metadata(conn) -> int:
     ml_score_series = (
         candidates[ml_score_col] if ml_score_col in candidates.columns else candidates["score"]
     )
-    candidates["base_rank"] = (
-        candidates.groupby("run_date")["score"]
-        .rank(method="first", ascending=False)
+    candidates["base_rank"] = candidates.groupby("run_date")["score"].rank(
+        method="first", ascending=False
     )
-    candidates["ml_rank"] = (
-        candidates.groupby("run_date")[ml_score_series.name]
-        .rank(method="first", ascending=False)
+    candidates["ml_rank"] = candidates.groupby("run_date")[ml_score_series.name].rank(
+        method="first", ascending=False
     )
     if prob_col and prob_col in candidates.columns:
         candidates["ml_prob_up"] = pd.to_numeric(candidates[prob_col], errors="coerce")
@@ -454,10 +464,18 @@ def _backfill_rank_metadata(conn) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Compute forward outcomes for screener candidates.")
-    parser.add_argument("--run-date", type=str, default=None, help="Run date (YYYY-MM-DD) to process.")
-    parser.add_argument("--limit", type=int, default=None, help="Limit number of candidates processed.")
-    parser.add_argument("--window-days", type=int, default=30, help="Calendar days to fetch for outcomes.")
+    parser = argparse.ArgumentParser(
+        description="Compute forward outcomes for screener candidates."
+    )
+    parser.add_argument(
+        "--run-date", type=str, default=None, help="Run date (YYYY-MM-DD) to process."
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Limit number of candidates processed."
+    )
+    parser.add_argument(
+        "--window-days", type=int, default=30, help="Calendar days to fetch for outcomes."
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

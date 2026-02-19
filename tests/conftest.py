@@ -12,6 +12,7 @@ def _tf_eq(self, other):
         and self.unit_value == other.unit_value
     )
 
+
 TimeFrame.__eq__ = _tf_eq
 
 
@@ -23,6 +24,7 @@ def null_logger():
         logger.addHandler(handler)
     logger.propagate = False
     return logger
+
 
 @pytest.fixture(autouse=True)
 def check_alpaca_env(request):

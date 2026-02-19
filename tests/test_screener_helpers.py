@@ -15,10 +15,13 @@ def test_merge_meta():
     bars = pd.DataFrame(
         {
             "symbol": ["AAPL", "MSFT"],
-            "timestamp": pd.to_datetime([
-                "2024-01-02T00:00:00Z",
-                "2024-01-02T00:00:00Z",
-            ], utc=True),
+            "timestamp": pd.to_datetime(
+                [
+                    "2024-01-02T00:00:00Z",
+                    "2024-01-02T00:00:00Z",
+                ],
+                utc=True,
+            ),
             "open": [100.0, 200.0],
             "high": [105.0, 205.0],
             "low": [99.0, 198.0],
@@ -150,8 +153,7 @@ def test_gate_presets_parsing():
 
 
 @pytest.mark.skipif(
-    not os.getenv("APCA_API_KEY_ID")
-    or importlib.util.find_spec("alpaca_trade_api") is None,
+    not os.getenv("APCA_API_KEY_ID") or importlib.util.find_spec("alpaca_trade_api") is None,
     reason="Alpaca credentials or alpaca_trade_api not available",
 )
 def test_fetch_symbols_not_empty():

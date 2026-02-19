@@ -57,7 +57,9 @@ def test_dual_write_noop_without_database(monkeypatch):
         "sortino": 1.5,
     }
 
-    db.upsert_pipeline_run(today, datetime.now(timezone.utc), datetime.now(timezone.utc), 0, {"rows": 1})
+    db.upsert_pipeline_run(
+        today, datetime.now(timezone.utc), datetime.now(timezone.utc), 0, {"rows": 1}
+    )
     db.insert_screener_candidates(today, candidates)
     db.insert_backtest_results(today, backtest_results)
     db.upsert_metrics_daily(today, metrics_summary)

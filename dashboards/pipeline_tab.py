@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
-import dash_bootstrap_components as dbc
-import pandas as pd
 from dash import dash_table, html
 
 from dashboards.utils import file_stat, parse_pipeline_tokens, safe_tail_text
@@ -45,17 +43,20 @@ def _artifact_rows() -> list[Dict[str, Any]]:
 def pipeline_layout():
     tokens = parse_pipeline_tokens(LOG_DIR / "pipeline.log")
     token_table = dash_table.DataTable(
-        columns=[{"name": col, "id": col} for col in [
-            "start_time",
-            "end_time",
-            "rc",
-            "duration",
-            "symbols_in",
-            "with_bars",
-            "rows",
-            "bars_rows_total",
-            "source",
-        ]],
+        columns=[
+            {"name": col, "id": col}
+            for col in [
+                "start_time",
+                "end_time",
+                "rc",
+                "duration",
+                "symbols_in",
+                "with_bars",
+                "rows",
+                "bars_rows_total",
+                "source",
+            ]
+        ],
         data=tokens,
         style_table={"overflowX": "auto"},
         page_size=10,
@@ -82,4 +83,3 @@ def pipeline_layout():
             html.Pre(log_tail or "(no log)", style={"maxHeight": "400px", "overflow": "auto"}),
         ]
     )
-

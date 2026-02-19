@@ -88,11 +88,15 @@ def ensure_canonical_metrics(payload: Mapping[str, Any] | None) -> dict[str, Any
     metrics["with_bars"] = metrics["with_bars_required"]
     metrics["symbols_with_required_bars"] = metrics["with_bars_required"]
     metrics["symbols_with_any_bars"] = metrics["with_bars_any"]
-    metrics["symbols_with_bars"] = _coerce_int(metrics.get("symbols_with_bars", metrics["with_bars_required"]))
+    metrics["symbols_with_bars"] = _coerce_int(
+        metrics.get("symbols_with_bars", metrics["with_bars_required"])
+    )
     metrics["symbols_with_bars_required"] = metrics.get(
         "symbols_with_bars_required", metrics["with_bars_required"]
     )
-    metrics["symbols_with_bars_any"] = metrics.get("symbols_with_bars_any", metrics["with_bars_any"])
+    metrics["symbols_with_bars_any"] = metrics.get(
+        "symbols_with_bars_any", metrics["with_bars_any"]
+    )
 
     fetch_count = _coerce_optional_int(metrics.get("symbols_with_bars_fetch"))
     attempted_fetch = _coerce_optional_int(metrics.get("symbols_attempted_fetch"))

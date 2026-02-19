@@ -1,4 +1,5 @@
 """HTTP helpers for Alpaca market data."""
+
 from __future__ import annotations
 
 import os

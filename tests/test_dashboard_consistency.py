@@ -212,7 +212,9 @@ def test_dashboard_consistency_report_generation(tmp_path: Path) -> None:
 
 
 @pytest.mark.alpaca_optional
-def test_dashboard_kpis_recover_from_pipeline_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dashboard_kpis_recover_from_pipeline_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base_dir = tmp_path
     data_dir = base_dir / "data"
     logs_dir = base_dir / "logs"

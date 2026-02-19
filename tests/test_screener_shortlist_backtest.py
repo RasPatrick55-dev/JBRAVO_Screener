@@ -10,7 +10,9 @@ from scripts import screener
 pytestmark = [pytest.mark.alpaca_optional, pytest.mark.slow]
 
 
-def _build_symbol_frame(symbol: str, base_price: float, slope: float, *, periods: int) -> pd.DataFrame:
+def _build_symbol_frame(
+    symbol: str, base_price: float, slope: float, *, periods: int
+) -> pd.DataFrame:
     dates = pd.date_range("2024-01-01", periods=periods, tz="UTC", freq="B")
     close = base_price + slope * np.arange(len(dates))
     open_price = close * 0.995

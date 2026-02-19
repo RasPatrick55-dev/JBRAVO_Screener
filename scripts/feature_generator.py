@@ -4,6 +4,7 @@ Usage examples (from repo root with environment activated):
     python scripts/feature_generator.py
     python scripts/feature_generator.py --labels-path data/labels/labels_20240131.csv
 """
+
 from __future__ import annotations
 
 import argparse
@@ -16,6 +17,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from scripts import db
+
 BAR_COLUMNS = {"symbol", "timestamp", "open", "high", "low", "close", "volume"}
 LABEL_COLUMNS = [
     "symbol",

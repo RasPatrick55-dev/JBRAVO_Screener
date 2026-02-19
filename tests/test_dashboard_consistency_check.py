@@ -86,7 +86,9 @@ def test_dashboard_consistency_detects_missing_metrics(
     assert report_json["inputs"]["screener_metrics"]["present"] is False
 
 
-def test_dashboard_consistency_allows_fetch_superset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dashboard_consistency_allows_fetch_superset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _stub_alert(monkeypatch)
     _build_test_layout(tmp_path)
     data_dir = tmp_path / "data"
@@ -138,7 +140,9 @@ def test_bar_total_mismatch_warns_without_fallback(
     assert "[WARN] bars_rows_total_fetch" in caplog.text
 
 
-def test_fallback_triggers_only_when_candidates_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fallback_triggers_only_when_candidates_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _stub_alert(monkeypatch)
     _build_test_layout(tmp_path)
     _write_minimal_latest_candidates(tmp_path / "data" / "latest_candidates.csv")

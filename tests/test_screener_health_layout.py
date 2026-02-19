@@ -1,4 +1,3 @@
-import json
 import logging
 import shutil
 from pathlib import Path
@@ -162,6 +161,10 @@ def test_screener_health_callback_logs_and_recovers_on_error(
     assert len(outputs) == 21
     error_banner = outputs[0]
     assert isinstance(error_banner, screener_health.html.Div)
-    banner_text = " ".join(error_banner.children) if isinstance(error_banner.children, list) else str(error_banner.children)
+    banner_text = (
+        " ".join(error_banner.children)
+        if isinstance(error_banner.children, list)
+        else str(error_banner.children)
+    )
     assert "failed to render" in banner_text.lower()
     assert "Failed to render screener health dashboard" in caplog.text

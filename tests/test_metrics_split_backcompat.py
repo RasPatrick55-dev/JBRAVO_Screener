@@ -8,9 +8,7 @@ from tests._data_io_helpers import reload_data_io
 
 
 def _write_top_candidates(data_dir: Path, rows: int = 2) -> None:
-    df = pd.DataFrame(
-        [{"symbol": f"SYM{i}"} for i in range(rows)]
-    )
+    df = pd.DataFrame([{"symbol": f"SYM{i}"} for i in range(rows)])
     df.to_csv(data_dir / "top_candidates.csv", index=False)
 
 
@@ -19,7 +17,9 @@ def test_screener_health_backcompat(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     logs_dir = tmp_path / "logs"
     data_dir.mkdir()
     logs_dir.mkdir()
-    (logs_dir / "pipeline.log").write_text("2024-01-01 [INFO] PIPELINE_END rc=0\n", encoding="utf-8")
+    (logs_dir / "pipeline.log").write_text(
+        "2024-01-01 [INFO] PIPELINE_END rc=0\n", encoding="utf-8"
+    )
     _write_top_candidates(data_dir, rows=3)
 
     legacy_metrics = {

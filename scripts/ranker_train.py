@@ -81,6 +81,7 @@ try:  # pragma: no cover - environment-dependent
     from sklearn.metrics import accuracy_score, roc_auc_score
     from sklearn.preprocessing import StandardScaler
     import joblib
+
     SKLEARN_AVAILABLE = True
 except Exception:  # pragma: no cover - environment-dependent
     RandomForestClassifier = None
@@ -97,6 +98,7 @@ MISSING_SKLEARN_ERR = "RANKER_TRAIN: scikit-learn not available; install require
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
 
 def _find_latest_features(features_dir: Path) -> Path | None:
     candidates = sorted(features_dir.glob("features_*.csv"), key=lambda p: p.stat().st_mtime)
@@ -164,9 +166,7 @@ def _train_model(df: pd.DataFrame, label_column: str):
             len(df),
             MAX_TRAIN_ROWS,
         )
-        df = df.sample(n=MAX_TRAIN_ROWS, random_state=SAMPLE_RANDOM_STATE).sort_values(
-            "timestamp"
-        )
+        df = df.sample(n=MAX_TRAIN_ROWS, random_state=SAMPLE_RANDOM_STATE).sort_values("timestamp")
 
     split_idx = max(1, int(len(df) * 0.8))
     if split_idx >= len(df):
@@ -287,9 +287,7 @@ def _save_outputs(
 
     summary_path = output_dir / f"ranker_summary_{snapshot_date}.json"
     features_path_display = (
-        str(args.features_path)
-        if args.features_path is not None
-        else "db://ml_artifacts/features"
+        str(args.features_path) if args.features_path is not None else "db://ml_artifacts/features"
     )
     summary = {
         "features_path": features_path_display,
@@ -301,7 +299,9 @@ def _save_outputs(
     with summary_path.open("w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=2)
 
-    return TrainOutputs(model_path=model_path, summary_path=summary_path, metrics=summary["metrics"])
+    return TrainOutputs(
+        model_path=model_path, summary_path=summary_path, metrics=summary["metrics"]
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> TrainArgs:
@@ -334,7 +334,9 @@ def parse_args(argv: list[str] | None = None) -> TrainArgs:
             if features_path is None:
                 raise FileNotFoundError(f"No features files found in {default_dir}")
 
-    return TrainArgs(features_path=features_path, label_column=parsed.label_column, output_dir=parsed.output_dir)
+    return TrainArgs(
+        features_path=features_path, label_column=parsed.label_column, output_dir=parsed.output_dir
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -352,9 +354,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         LOG.info("Loading features from DB (ml_artifacts: features)")
         try:
-            df = _normalize_features_frame(
-                db.load_ml_artifact_csv("features"), args.label_column
-            )
+            df = _normalize_features_frame(db.load_ml_artifact_csv("features"), args.label_column)
         except Exception as exc:  # pragma: no cover - defensive
             LOG.error("Failed to load features from DB: %s", exc)
             return 1

@@ -1,4 +1,5 @@
 """Environment helpers for Alpaca configuration."""
+
 from __future__ import annotations
 
 import os
@@ -37,7 +38,7 @@ def _manual_parse_env(path: Path, *, override: bool) -> bool:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip()
-        if (value.startswith("\"") and value.endswith("\"")) or (
+        if (value.startswith('"') and value.endswith('"')) or (
             value.startswith("'") and value.endswith("'")
         ):
             value = value[1:-1]

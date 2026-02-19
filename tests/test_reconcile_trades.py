@@ -98,7 +98,10 @@ def test_reconcile_closes_open_trades(monkeypatch):
     assert closed_calls[0]["exit_order_id"] is None
     assert closed_calls[0]["exit_reason"] == "POSITION_CLOSED"
     assert closed_calls[0]["exit_price"] is None
-    assert any(call.get("exit_order_id") == "sell-1" and call.get("exit_reason") == "TRAIL_STOP" for call in decorate_calls)
+    assert any(
+        call.get("exit_order_id") == "sell-1" and call.get("exit_reason") == "TRAIL_STOP"
+        for call in decorate_calls
+    )
     assert any(call.get("event_type") == "SELL_FILL" for call in event_calls)
 
 
@@ -111,7 +114,9 @@ def test_reconcile_decorates_without_open_trades(monkeypatch):
     monkeypatch.setattr(db, "db_enabled", lambda: True)
     monkeypatch.setattr(db, "get_engine", lambda: fake_engine)
     monkeypatch.setattr(db, "get_open_trades", lambda engine, limit=200: [])
-    monkeypatch.setattr(db, "close_trade", lambda *_, **__: pytest.fail("close_trade should not be called"))
+    monkeypatch.setattr(
+        db, "close_trade", lambda *_, **__: pytest.fail("close_trade should not be called")
+    )
 
     missing_trade = {
         "trade_id": 2,

@@ -60,24 +60,26 @@ class TestMonitorTightenCooldown(unittest.TestCase):
         metric_mock = mock.Mock()
 
         try:
-            with mock.patch.object(
-                self.monitor.trading_client, "get_orders", return_value=[trailing_order]
-            ), mock.patch.object(
-                self.monitor, "cancel_order_safe", cancel_mock
-            ), mock.patch.object(
-                self.monitor, "increment_metric", metric_mock
-            ), self.assertLogs(self.monitor.logger, level="INFO") as log_ctx:
+            with (
+                mock.patch.object(
+                    self.monitor.trading_client, "get_orders", return_value=[trailing_order]
+                ),
+                mock.patch.object(self.monitor, "cancel_order_safe", cancel_mock),
+                mock.patch.object(self.monitor, "increment_metric", metric_mock),
+                self.assertLogs(self.monitor.logger, level="INFO") as log_ctx,
+            ):
                 self.monitor.manage_trailing_stop(position)
         finally:
             self.monitor.TIGHTEN_COOLDOWNS.clear()
             self.monitor.TIGHTEN_COOLDOWNS.update(original_cooldowns)
 
         self.assertFalse(cancel_mock.called)
+        self.assertTrue(any("STOP_TIGHTEN_COOLDOWN" in message for message in log_ctx.output))
         self.assertTrue(
-            any("STOP_TIGHTEN_COOLDOWN" in message for message in log_ctx.output)
-        )
-        self.assertTrue(
-            any(call_args[0][0] == "stop_tighten_cooldown" for call_args in metric_mock.call_args_list)
+            any(
+                call_args[0][0] == "stop_tighten_cooldown"
+                for call_args in metric_mock.call_args_list
+            )
         )
 
 

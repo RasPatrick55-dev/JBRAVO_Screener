@@ -214,14 +214,73 @@ def _write_static_three(path):
     # three liquid tickers as a safety net
     now = datetime.utcnow().isoformat()
     rows = [
-      [now,"AAPL",0.0,"NASDAQ",190.00,0,0,"{}",190.00,0.0,0.0,"fallback:static",0.0,0.0,0.0,0.0,True,"[]"],
-      [now,"SPY", 0.0,"NYSEARCA",520.00,0,0,"{}",520.00,0.0,0.0,"fallback:static",0.0,0.0,0.0,0.0,True,"[]"],
-      [now,"QQQ", 0.0,"NASDAQ",460.00,0,0,"{}",460.00,0.0,0.0,"fallback:static",0.0,0.0,0.0,0.0,True,"[]"],
+        [
+            now,
+            "AAPL",
+            0.0,
+            "NASDAQ",
+            190.00,
+            0,
+            0,
+            "{}",
+            190.00,
+            0.0,
+            0.0,
+            "fallback:static",
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            True,
+            "[]",
+        ],
+        [
+            now,
+            "SPY",
+            0.0,
+            "NYSEARCA",
+            520.00,
+            0,
+            0,
+            "{}",
+            520.00,
+            0.0,
+            0.0,
+            "fallback:static",
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            True,
+            "[]",
+        ],
+        [
+            now,
+            "QQQ",
+            0.0,
+            "NASDAQ",
+            460.00,
+            0,
+            0,
+            "{}",
+            460.00,
+            0.0,
+            0.0,
+            "fallback:static",
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            True,
+            "[]",
+        ],
     ]
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path,"w",newline="") as f:
-        w=csv.writer(f); w.writerow(CANONICAL); w.writerows(rows)
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(CANONICAL)
+        w.writerows(rows)
     print("[INFO] FALLBACK_CHECK rows_out=3 source=fallback:static")
 
 
@@ -311,28 +370,32 @@ def _canonical_frame(df: Optional[pd.DataFrame], now_ts: Optional[str] = None) -
     )
 
     exchange_series = source_frame.get("exchange", pd.Series(index=out.index, dtype="string"))
-    out["exchange"] = (
-        exchange_series.astype("string").fillna("").str.strip().str.upper()
-    )
+    out["exchange"] = exchange_series.astype("string").fillna("").str.strip().str.upper()
 
     for column in ("score", "close", "volume", "universe_count", "entry_price", "adv20", "atrp"):
         values = source_frame.get(column)
-        out[column] = pd.to_numeric(values, errors="coerce") if values is not None else pd.Series(
-            _DEFAULT_ROW[column], index=out.index
+        out[column] = (
+            pd.to_numeric(values, errors="coerce")
+            if values is not None
+            else pd.Series(_DEFAULT_ROW[column], index=out.index)
         )
         out[column] = out[column].fillna(_DEFAULT_ROW[column])
 
     for column in ("sma9", "ema20", "sma180", "rsi14"):
         values = source_frame.get(column)
-        out[column] = pd.to_numeric(values, errors="coerce") if values is not None else pd.Series(
-            _DEFAULT_ROW[column], index=out.index
+        out[column] = (
+            pd.to_numeric(values, errors="coerce")
+            if values is not None
+            else pd.Series(_DEFAULT_ROW[column], index=out.index)
         )
         out[column] = out[column].fillna(_DEFAULT_ROW[column])
 
     out["volume"] = out["volume"].clip(lower=0)
     out["universe_count"] = out["universe_count"].clip(lower=0)
 
-    score_breakdown = source_frame.get("score_breakdown", pd.Series(index=out.index, dtype="string"))
+    score_breakdown = source_frame.get(
+        "score_breakdown", pd.Series(index=out.index, dtype="string")
+    )
     out["score_breakdown"] = (
         score_breakdown.astype("string")
         .fillna("")
@@ -341,7 +404,9 @@ def _canonical_frame(df: Optional[pd.DataFrame], now_ts: Optional[str] = None) -
     )
 
     out["entry_price"] = out["entry_price"].where(out["entry_price"] > 0, out["close"])
-    out["entry_price"] = out["entry_price"].where(out["entry_price"] > 0, _DEFAULT_ROW["entry_price"])
+    out["entry_price"] = out["entry_price"].where(
+        out["entry_price"] > 0, _DEFAULT_ROW["entry_price"]
+    )
 
     out["adv20"] = out["adv20"].clip(lower=0)
     out["atrp"] = out["atrp"].clip(lower=0)
@@ -389,7 +454,9 @@ def _canonical_frame(df: Optional[pd.DataFrame], now_ts: Optional[str] = None) -
     return out
 
 
-def normalize_candidate_df(df: Optional[pd.DataFrame], now_ts: Optional[str] = None) -> pd.DataFrame:
+def normalize_candidate_df(
+    df: Optional[pd.DataFrame], now_ts: Optional[str] = None
+) -> pd.DataFrame:
     """Public helper retained for callers that expect the legacy normalizer."""
 
     return _canonical_frame(df, now_ts)
@@ -436,12 +503,15 @@ def _guard_fallback_candidates(
     guarded["entry_price"] = price_numeric.loc[guarded.index].fillna(guarded["close"])
     guarded["score"] = score_numeric.loc[guarded.index]
     guarded["volume"] = volume_numeric.loc[guarded.index].clip(lower=0)
-    guarded["universe_count"] = pd.to_numeric(
-        guarded.get("universe_count", 0), errors="coerce"
-    ).fillna(0).astype(int)
+    guarded["universe_count"] = (
+        pd.to_numeric(guarded.get("universe_count", 0), errors="coerce").fillna(0).astype(int)
+    )
     if "score_breakdown" in guarded.columns:
         sb_series = (
-            guarded["score_breakdown"].astype("string").fillna("").replace({"": "{}", "fallback": "{}"})
+            guarded["score_breakdown"]
+            .astype("string")
+            .fillna("")
+            .replace({"": "{}", "fallback": "{}"})
         )
         guarded["score_breakdown"] = sb_series
     else:
@@ -569,17 +639,16 @@ def build_latest_candidates(
         )
     else:
         combined["score_breakdown"] = "fallback"
-    combined["universe_count"] = pd.to_numeric(
-        combined.get("universe_count", 0), errors="coerce"
-    ).fillna(0).astype(int)
+    combined["universe_count"] = (
+        pd.to_numeric(combined.get("universe_count", 0), errors="coerce").fillna(0).astype(int)
+    )
     combined["source"] = "fallback"
 
     tag_series = combined.get("_source_tag")
     fallback_only = True
     if tag_series is not None and not tag_series.empty:
         unique_tags = {
-            str(tag).strip().lower()
-            for tag in pd.Series(tag_series).dropna().unique().tolist()
+            str(tag).strip().lower() for tag in pd.Series(tag_series).dropna().unique().tolist()
         }
         fallback_only = not any(tag in {"scored", "predictions"} for tag in unique_tags)
 
@@ -590,9 +659,13 @@ def build_latest_candidates(
         symbol_order = {
             str(row.get("symbol")): idx for idx, row in enumerate(_STATIC_FALLBACK_ROWS)
         }
-        static_rows["_fallback_order"] = static_rows.get("symbol").astype("string").map(
-            symbol_order
-        ).fillna(len(symbol_order)).astype(int)
+        static_rows["_fallback_order"] = (
+            static_rows.get("symbol")
+            .astype("string")
+            .map(symbol_order)
+            .fillna(len(symbol_order))
+            .astype(int)
+        )
         static_rows = static_rows.sort_values("_fallback_order", kind="stable")
         selected = static_rows.head(max(3, max_rows)).copy()
         selected = selected.drop(columns=["_fallback_order"], errors="ignore")
@@ -639,7 +712,9 @@ def build_latest_candidates(
     return prepared, primary_source
 
 
-def generate_candidates(base_dir: Path, *, max_rows: int = 3, **kwargs: object) -> Tuple[pd.DataFrame, str]:
+def generate_candidates(
+    base_dir: Path, *, max_rows: int = 3, **kwargs: object
+) -> Tuple[pd.DataFrame, str]:
     frame, source = build_latest_candidates(base_dir, max_rows=max_rows, **kwargs)
     return frame.head(max_rows), source
 

@@ -57,5 +57,7 @@ def test_insert_screener_candidates_uses_run_date_column(monkeypatch):
     payload = pd.DataFrame([{"symbol": "ABC", "timestamp": "2024-01-01T00:00:00Z"}])
     db.insert_screener_candidates(date(2024, 1, 1), payload)
 
-    assert any("INSERT INTO screener_candidates" in sql and "run_date" in sql for sql in sql_capture)
+    assert any(
+        "INSERT INTO screener_candidates" in sql and "run_date" in sql for sql in sql_capture
+    )
     assert all("run date" not in sql for sql in sql_capture)

@@ -1,7 +1,6 @@
 import logging
 from datetime import date, datetime, timezone
 
-import pytest
 
 from scripts import db
 

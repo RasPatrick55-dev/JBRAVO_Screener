@@ -164,7 +164,9 @@ def percentile(values: list[float], pct: float) -> float:
     return lower_value + (upper_value - lower_value) * (rank - lower_index)
 
 
-def build_context(events: list[dict[str, Any]], metrics_docs: list[MetricsDocument]) -> dict[str, Any]:
+def build_context(
+    events: list[dict[str, Any]], metrics_docs: list[MetricsDocument]
+) -> dict[str, Any]:
     """Aggregate metrics and prepare the template context."""
 
     now = datetime.now(timezone.utc)

@@ -32,9 +32,7 @@ RUN_TZ = ZoneInfo("America/New_York")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Generate forward return labels for multiple symbols from a daily bars CSV."
-        )
+        description=("Generate forward return labels for multiple symbols from a daily bars CSV.")
     )
     parser.add_argument(
         "--bars-path",
@@ -86,9 +84,7 @@ def _format_threshold_label(threshold_percent: float) -> str:
     return f"pos_{basis_points}bp"
 
 
-def compute_forward_returns(
-    df: pd.DataFrame, horizons: Iterable[int]
-) -> pd.DataFrame:
+def compute_forward_returns(df: pd.DataFrame, horizons: Iterable[int]) -> pd.DataFrame:
     result = df.copy()
     sorted_horizons = sorted(set(horizons))
 
@@ -100,9 +96,7 @@ def compute_forward_returns(
     return result
 
 
-def add_labels(
-    df: pd.DataFrame, horizons: Iterable[int], threshold_percent: float
-) -> pd.DataFrame:
+def add_labels(df: pd.DataFrame, horizons: Iterable[int], threshold_percent: float) -> pd.DataFrame:
     labeled = df.copy()
     threshold_decimal = threshold_percent / 100.0
     threshold_label = _format_threshold_label(threshold_percent)
@@ -194,7 +188,9 @@ def main() -> None:
             file_name=output_path.name,
         )
         if ok:
-            logging.info("[INFO] LABELS_DB_WRITTEN run_date=%s rows=%d", run_date, int(labeled.shape[0]))
+            logging.info(
+                "[INFO] LABELS_DB_WRITTEN run_date=%s rows=%d", run_date, int(labeled.shape[0])
+            )
         else:
             logging.warning("[WARN] LABELS_DB_WRITE_FAILED run_date=%s", run_date)
 

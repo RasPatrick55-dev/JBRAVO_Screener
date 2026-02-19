@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import dash_table, dcc, html
 
@@ -37,10 +36,7 @@ def _ranker_eval_rows() -> List[Dict[str, Any]]:
 
 def _prediction_options() -> List[Dict[str, Any]]:
     files = list_recent_files(DATA_DIR / "predictions", "*.csv", limit=30)
-    return [
-        {"label": f.name, "value": str(f)}
-        for f in files
-    ]
+    return [{"label": f.name, "value": str(f)} for f in files]
 
 
 def _prediction_preview(path_str: str | None) -> List[Dict[str, Any]]:
@@ -60,11 +56,7 @@ def _prediction_preview(path_str: str | None) -> List[Dict[str, Any]]:
 
 def build_predictions_table(path_str: str | None) -> dash_table.DataTable:
     rows = _prediction_preview(path_str)
-    columns = (
-        [{"name": str(col), "id": str(col)} for col in rows[0].keys()]
-        if rows
-        else []
-    )
+    columns = [{"name": str(col), "id": str(col)} for col in rows[0].keys()] if rows else []
 
     return dash_table.DataTable(
         columns=columns,
@@ -101,10 +93,7 @@ def ml_layout(prediction_path: str | None = None):
             eval_table,
             html.Hr(),
             html.H5("Predictions Browser"),
-            dcc.Dropdown(
-                id="predictions-dropdown", options=options, value=selected_prediction
-            ),
+            dcc.Dropdown(id="predictions-dropdown", options=options, value=selected_prediction),
             html.Div(build_predictions_table(selected_prediction), id="ml-predictions-table"),
         ]
     )
-

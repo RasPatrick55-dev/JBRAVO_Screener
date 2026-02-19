@@ -1,10 +1,9 @@
 import os
 import sqlite3
-from typing import Iterable
 import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, 'data', 'pipeline.db')
+DB_PATH = os.path.join(BASE_DIR, "data", "pipeline.db")
 
 REQUIRED_COLUMNS = [
     "date",
@@ -30,6 +29,7 @@ REQUIRED_COLUMNS = [
     "avg_return",
 ]
 
+
 def ensure_columns(db_path: str = DB_PATH, indicators: list[str] = REQUIRED_COLUMNS) -> None:
     """Ensure required columns exist in the ``historical_candidates`` table."""
 
@@ -49,7 +49,7 @@ def ensure_columns(db_path: str = DB_PATH, indicators: list[str] = REQUIRED_COLU
             cur.execute(f"ALTER TABLE historical_candidates ADD COLUMN {col} REAL;")
             print(f"\u2714 Added column: {col}")
         else:
-            print(f"\u23E9 Column already exists: {col}")
+            print(f"\u23e9 Column already exists: {col}")
 
     conn.commit()
 
@@ -78,4 +78,3 @@ def sync_columns_from_dataframe(df: pd.DataFrame, db_path: str = DB_PATH) -> Non
 
 if __name__ == "__main__":
     ensure_columns()
-

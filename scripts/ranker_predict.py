@@ -115,9 +115,7 @@ def _predict(df: pd.DataFrame, model, scaler=None) -> pd.Series:
     return _predict_proba(model, features)
 
 
-def _build_output(
-    df: pd.DataFrame, label_column: str, probs: Iterable[float]
-) -> pd.DataFrame:
+def _build_output(df: pd.DataFrame, label_column: str, probs: Iterable[float]) -> pd.DataFrame:
     scores = pd.Series(probs, index=df.index, name="score_5d")
     preds = (scores >= 0.5).astype(int)
 

@@ -1,6 +1,5 @@
 import logging
 
-import logging
 
 import pytest
 
@@ -27,9 +26,7 @@ def test_trading_auth_failure_exits(monkeypatch, caplog):
 
     caplog.set_level(logging.ERROR, logger="execute_trades")
     with pytest.raises(SystemExit) as exc:
-        execute_trades._ensure_trading_auth(
-            "https://paper-api.alpaca.markets", {"status": "ok"}
-        )
+        execute_trades._ensure_trading_auth("https://paper-api.alpaca.markets", {"status": "ok"})
 
     assert exc.value.code == 2
     assert "TRADING_AUTH_FAILED" in caplog.text

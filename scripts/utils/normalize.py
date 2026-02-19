@@ -1,4 +1,5 @@
 """Normalization helpers for bar payloads."""
+
 from __future__ import annotations
 
 from typing import Any, Iterable
@@ -48,11 +49,7 @@ def _object_to_dict(obj: Any) -> dict[str, Any]:
         except Exception:  # pragma: no cover - defensive
             pass
     if hasattr(obj, "__dict__"):
-        data = {
-            key: value
-            for key, value in vars(obj).items()
-            if not key.startswith("_")
-        }
+        data = {key: value for key, value in vars(obj).items() if not key.startswith("_")}
         if data:
             return data
     return {"value": obj}
@@ -84,7 +81,11 @@ def to_bars_df(obj: Any) -> pd.DataFrame:
     if isinstance(obj, dict):
         records = []
         for key, value in obj.items():
-            values_iter = value if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)) else [value]
+            values_iter = (
+                value
+                if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict))
+                else [value]
+            )
             for bar in values_iter:
                 record = _object_to_dict(bar)
                 if "S" not in record and "symbol" not in record:
@@ -97,7 +98,11 @@ def to_bars_df(obj: Any) -> pd.DataFrame:
         if isinstance(data_attr, dict):
             records = []
             for key, value in data_attr.items():
-                values_iter = value if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)) else [value]
+                values_iter = (
+                    value
+                    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict))
+                    else [value]
+                )
                 for bar in values_iter:
                     record = _object_to_dict(bar)
                     if "S" not in record and "symbol" not in record:
@@ -134,7 +139,11 @@ def to_bars_df(obj: Any) -> pd.DataFrame:
                 rename_map[name_str] = "timestamp"
         if "symbol" not in rename_map and "level_0" in df.columns and "symbol" not in df.columns:
             rename_map["level_0"] = "symbol"
-        if "timestamp" not in rename_map and "level_1" in df.columns and "timestamp" not in df.columns:
+        if (
+            "timestamp" not in rename_map
+            and "level_1" in df.columns
+            and "timestamp" not in df.columns
+        ):
             rename_map["level_1"] = "timestamp"
         if rename_map:
             df = df.rename(columns=rename_map)

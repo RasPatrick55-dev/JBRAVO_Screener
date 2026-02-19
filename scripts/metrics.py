@@ -5,7 +5,6 @@ import os
 import json
 import argparse
 import logging
-import traceback
 from typing import Any, Mapping, Optional, Iterable
 
 # Ensure project root is on ``sys.path`` before third-party imports
@@ -45,7 +44,11 @@ def derive_prefix_counts_from_scored_candidates(base_dir: Path) -> dict:
         return {}
     try:
         run_date = db.fetch_latest_run_date("screener_candidates")
-        df, _ = get_latest_screener_candidates(run_date) if run_date is not None else (pd.DataFrame(), None)
+        df, _ = (
+            get_latest_screener_candidates(run_date)
+            if run_date is not None
+            else (pd.DataFrame(), None)
+        )
     except Exception as exc:
         logging.warning("Prefix count skipped: DB query failed: %s", exc)
         return {}
@@ -217,9 +220,7 @@ def validate_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:
     df[column] = pd.to_numeric(df[column], errors="coerce")
     invalid_count = df[column].isna().sum()
     if invalid_count:
-        logger.warning(
-            "%d rows dropped due to non-numeric %s values", invalid_count, column
-        )
+        logger.warning("%d rows dropped due to non-numeric %s values", invalid_count, column)
         df = df.dropna(subset=[column])
     return df
 
@@ -234,6 +235,7 @@ def load_results(
         return pd.DataFrame()
     df, _ = db.fetch_latest_backtest_results(run_date=run_date)
     return df
+
 
 # Calculate additional performance metrics
 def calculate_metrics(trades_df: pd.DataFrame) -> dict:
@@ -260,9 +262,7 @@ def calculate_metrics(trades_df: pd.DataFrame) -> dict:
     if "qty" in trades_df.columns:
         trades_df["qty"] = pd.to_numeric(trades_df["qty"], errors="coerce").abs()
     if "entry_price" in trades_df.columns:
-        trades_df["entry_price"] = pd.to_numeric(
-            trades_df["entry_price"], errors="coerce"
-        )
+        trades_df["entry_price"] = pd.to_numeric(trades_df["entry_price"], errors="coerce")
     for col in ("entry_time", "exit_time"):
         if col in trades_df.columns:
             trades_df[col] = pd.to_datetime(trades_df[col], errors="coerce")
@@ -278,7 +278,7 @@ def calculate_metrics(trades_df: pd.DataFrame) -> dict:
     max_drawdown = (cumulative - cumulative.cummax()).min() if not cumulative.empty else 0.0
 
     if {"entry_price", "qty"}.issubset(trades_df.columns):
-        exposure = (trades_df["entry_price"].abs() * trades_df["qty"].replace(0, np.nan))
+        exposure = trades_df["entry_price"].abs() * trades_df["qty"].replace(0, np.nan)
         returns = trades_df["pnl"] / exposure
     else:
         returns = trades_df["pnl"]
@@ -307,16 +307,12 @@ def calculate_metrics(trades_df: pd.DataFrame) -> dict:
         "sortino": float(sortino),
     }
 
+
 # Scoring and ranking candidates based on performance metrics
 def rank_candidates(df):
-    weights = {
-        'win_rate': 0.40,
-        'net_pnl': 0.30,
-        'trades': 0.20,
-        'avg_return': 0.10
-    }
+    weights = {"win_rate": 0.40, "net_pnl": 0.30, "trades": 0.20, "avg_return": 0.10}
 
-    missing = [c for c in ['win_rate', 'net_pnl', 'trades'] if c not in df.columns]
+    missing = [c for c in ["win_rate", "net_pnl", "trades"] if c not in df.columns]
     if missing:
         logger.warning("Missing columns for ranking: %s", missing)
         for col in missing:
@@ -338,23 +334,29 @@ def rank_candidates(df):
                 col,
             )
 
-    df['avg_return'] = df['net_pnl'] / df['trades'].replace(0, 1) if 'net_pnl' in df.columns and 'trades' in df.columns else 0
+    df["avg_return"] = (
+        df["net_pnl"] / df["trades"].replace(0, 1)
+        if "net_pnl" in df.columns and "trades" in df.columns
+        else 0
+    )
 
-    df['win_rate_norm'] = df['win_rate'] / df['win_rate'].max() if 'win_rate' in df.columns else 0
-    df['net_pnl_norm'] = df['net_pnl'] / df['net_pnl'].max() if 'net_pnl' in df.columns else 0
-    df['trades_norm'] = df['trades'] / df['trades'].max() if 'trades' in df.columns else 0
-    df['avg_return_norm'] = df['avg_return'] / df['avg_return'].max() if 'avg_return' in df.columns else 0
+    df["win_rate_norm"] = df["win_rate"] / df["win_rate"].max() if "win_rate" in df.columns else 0
+    df["net_pnl_norm"] = df["net_pnl"] / df["net_pnl"].max() if "net_pnl" in df.columns else 0
+    df["trades_norm"] = df["trades"] / df["trades"].max() if "trades" in df.columns else 0
+    df["avg_return_norm"] = (
+        df["avg_return"] / df["avg_return"].max() if "avg_return" in df.columns else 0
+    )
 
     # Compute weighted score
-    df['score'] = (
-        df['win_rate_norm'] * weights['win_rate'] +
-        df['net_pnl_norm'] * weights['net_pnl'] +
-        df['trades_norm'] * weights['trades'] +
-        df['avg_return_norm'] * weights['avg_return']
+    df["score"] = (
+        df["win_rate_norm"] * weights["win_rate"]
+        + df["net_pnl_norm"] * weights["net_pnl"]
+        + df["trades_norm"] * weights["trades"]
+        + df["avg_return_norm"] * weights["avg_return"]
     )
 
     if new_nan_rows.any():
-        nan_scores = df['score'].isna()
+        nan_scores = df["score"].isna()
         drop_mask = nan_scores & new_nan_rows
         if drop_mask.any():
             logger.warning(
@@ -363,7 +365,7 @@ def rank_candidates(df):
             )
             df = df.loc[~drop_mask].copy()
 
-    ranked_df = df.sort_values(by='score', ascending=False).reset_index(drop=True)
+    ranked_df = df.sort_values(by="score", ascending=False).reset_index(drop=True)
     return ranked_df
 
 
@@ -413,6 +415,7 @@ def rank_and_filter_candidates(
             merged[col] = merged[sc_col]
             merged.drop(columns=[sc_col], inplace=True)
     return merged
+
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run metrics ranking + summary")
@@ -584,9 +587,7 @@ print(f">>> db.db_enabled(): {db_enabled}")
 logger.warning(f">>> db.db_enabled(): {db_enabled}")
 try:
     print(f">>> Attempting to insert {top_candidates_rows} rows into top_candidates")
-    logger.warning(
-        f">>> Inserting into top_candidates: rows={top_candidates_rows}"
-    )
+    logger.warning(f">>> Inserting into top_candidates: rows={top_candidates_rows}")
     db.insert_top_candidates(top_candidates_df, run_date)
     print(">>> insert_top_candidates completed successfully")
 except Exception as exc:
@@ -633,12 +634,8 @@ db_enabled = db.db_enabled()
 print(f">>> db.db_enabled(): {db_enabled}")
 logger.warning(f">>> db.db_enabled(): {db_enabled}")
 try:
-    print(
-        f">>> Attempting to upsert metrics_daily: keys={list(summary_metrics.keys())}"
-    )
-    logger.warning(
-        f">>> Upserting metrics_daily: keys={list(summary_metrics.keys())}"
-    )
+    print(f">>> Attempting to upsert metrics_daily: keys={list(summary_metrics.keys())}")
+    logger.warning(f">>> Upserting metrics_daily: keys={list(summary_metrics.keys())}")
     db.upsert_metrics_daily(summary_metrics, run_date)
     print(">>> upsert_metrics_daily completed successfully")
 except Exception as exc:
@@ -660,9 +657,7 @@ if metrics_path.exists():
         logger.warning("Failed to read %s: %s", metrics_path, exc)
 
 if not metrics.get("universe_prefix_counts"):
-    metrics["universe_prefix_counts"] = derive_prefix_counts_from_scored_candidates(
-        Path(BASE_DIR)
-    )
+    metrics["universe_prefix_counts"] = derive_prefix_counts_from_scored_candidates(Path(BASE_DIR))
 
 if "universe_prefix_counts" not in metrics:
     metrics["universe_prefix_counts"] = {}

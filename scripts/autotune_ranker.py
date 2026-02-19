@@ -4,7 +4,7 @@ import argparse
 import json
 import math
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
@@ -144,7 +144,9 @@ def _prepare_feature_matrix(
     components: Sequence[str],
 ) -> pd.DataFrame:
     if "score_breakdown" not in labelled.columns:
-        raise ValueError("score_breakdown column missing; nightly pipeline must export breakdown JSON")
+        raise ValueError(
+            "score_breakdown column missing; nightly pipeline must export breakdown JSON"
+        )
     features = _series_from_breakdown(labelled["score_breakdown"], components)
     features.index = labelled.index
     return features
@@ -174,9 +176,15 @@ def _write_state(path: Path, payload: Dict[str, object]) -> None:
 
 def _parse_args(argv: Optional[Sequence[str]] = None):
     parser = argparse.ArgumentParser(description="Autotune ranker weights via logistic regression")
-    parser.add_argument("--train-days", type=int, default=120, help="Number of prediction days to use for training")
-    parser.add_argument("--label-horizon", type=int, default=3, help="Forward days for label computation")
-    parser.add_argument("--hit-threshold", type=float, default=0.04, help="Hit threshold for label computation")
+    parser.add_argument(
+        "--train-days", type=int, default=120, help="Number of prediction days to use for training"
+    )
+    parser.add_argument(
+        "--label-horizon", type=int, default=3, help="Forward days for label computation"
+    )
+    parser.add_argument(
+        "--hit-threshold", type=float, default=0.04, help="Hit threshold for label computation"
+    )
     parser.add_argument(
         "--drawdown-threshold",
         type=float,
@@ -187,10 +195,21 @@ def _parse_args(argv: Optional[Sequence[str]] = None):
     parser.add_argument("--prices", type=Path, default=EvaluationConfig.prices_path)
     parser.add_argument("--config", type=Path, default=Path("config") / "ranker.yml")
     parser.add_argument("--state-path", type=Path, default=Path("data") / "model_state.json")
-    parser.add_argument("--delta", type=float, default=0.01, help="Minimum AUC improvement required to accept weights")
-    parser.add_argument("--min-sample", type=int, default=200, help="Minimum validation rows required")
-    parser.add_argument("--l2", type=float, default=1.0, help="L2 regularisation strength for logistic fit")
-    parser.add_argument("--max-change", type=float, default=0.2, help="Maximum proportional weight adjustment")
+    parser.add_argument(
+        "--delta",
+        type=float,
+        default=0.01,
+        help="Minimum AUC improvement required to accept weights",
+    )
+    parser.add_argument(
+        "--min-sample", type=int, default=200, help="Minimum validation rows required"
+    )
+    parser.add_argument(
+        "--l2", type=float, default=1.0, help="L2 regularisation strength for logistic fit"
+    )
+    parser.add_argument(
+        "--max-change", type=float, default=0.2, help="Maximum proportional weight adjustment"
+    )
     parser.add_argument("--as-of", type=str, default=None, help="Optional cutoff date (YYYY-MM-DD)")
     parser.add_argument(
         "--validation-fraction",
@@ -223,7 +242,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ranker_cfg = _load_ranker_config(args.config)
     weights_map = _extract_weights(ranker_cfg)
     components = _resolve_components(weights_map)
-    weight_vector = np.array([float(weights_map.get(component, 0.0)) for component in components], dtype=float)
+    weight_vector = np.array(
+        [float(weights_map.get(component, 0.0)) for component in components], dtype=float
+    )
 
     predictions = load_prediction_history(cfg)
     prices = load_price_history(cfg.prices_path)
@@ -356,13 +377,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "accepted": accepted,
         "reason": reason,
         "weights": {
-            "old": {component: float(weight_vector[idx]) for idx, component in enumerate(components)},
-            "proposed": {component: float(constrained[idx]) for idx, component in enumerate(components)},
+            "old": {
+                component: float(weight_vector[idx]) for idx, component in enumerate(components)
+            },
+            "proposed": {
+                component: float(constrained[idx]) for idx, component in enumerate(components)
+            },
             "raw_fit": {component: float(scaled[idx]) for idx, component in enumerate(components)},
         },
         "logistic": {
             "bias": float(logistic_weights[0]),
-            "raw_coefficients": {component: float(raw_coeffs[idx]) for idx, component in enumerate(components)},
+            "raw_coefficients": {
+                component: float(raw_coeffs[idx]) for idx, component in enumerate(components)
+            },
         },
         "splits": {
             "train_dates": sorted(d.isoformat() for d in train_dates),

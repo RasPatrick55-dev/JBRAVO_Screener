@@ -87,6 +87,7 @@ EXECUTE_TASK_LOG_PATH = os.environ.get("EXECUTE_TASK_LOG_PATH") or os.path.join(
     BASE_DIR, "logs", "execute_task.log"
 )
 
+
 def _pythonanywhere_token() -> Optional[str]:
     return os.environ.get("PYTHONANYWHERE_API_TOKEN") or os.environ.get("API_TOKEN")
 
@@ -96,7 +97,10 @@ def _pythonanywhere_username() -> Optional[str]:
 
 
 def _pythonanywhere_api_base() -> str:
-    return (os.environ.get("PYTHONANYWHERE_API_BASE_URL") or "https://www.pythonanywhere.com/api/v0/user").rstrip("/")
+    return (
+        os.environ.get("PYTHONANYWHERE_API_BASE_URL")
+        or "https://www.pythonanywhere.com/api/v0/user"
+    ).rstrip("/")
 
 
 def _pythonanywhere_api_get_json(path: str) -> Optional[Any]:
@@ -418,12 +422,12 @@ def _fetch_pythonanywhere_file(
             remote_path = remote_path.replace(f"/user/{username}/files", "", 1)
         if remote_path and not remote_path.startswith("/"):
             remote_path = f"/{remote_path}"
-        remote_url = f"https://www.pythonanywhere.com/api/v0/user/{username}/files/path{remote_path}"
+        remote_url = (
+            f"https://www.pythonanywhere.com/api/v0/user/{username}/files/path{remote_path}"
+        )
 
     try:
-        req = urllib.request.Request(
-            remote_url, headers={"Authorization": f"Token {token}"}
-        )
+        req = urllib.request.Request(remote_url, headers={"Authorization": f"Token {token}"})
         with urllib.request.urlopen(req, timeout=8) as resp:
             if resp.status != 200:
                 return None
@@ -450,7 +454,9 @@ def _fetch_pythonanywhere_task_log_for(
     if not remote_url:
         if task_id:
             try:
-                schedule_url = f"https://www.pythonanywhere.com/api/v0/user/{username}/schedule/{task_id}/"
+                schedule_url = (
+                    f"https://www.pythonanywhere.com/api/v0/user/{username}/schedule/{task_id}/"
+                )
                 req = urllib.request.Request(
                     schedule_url, headers={"Authorization": f"Token {token}"}
                 )
@@ -704,7 +710,7 @@ def _position_db_metrics(symbols: list[str] | None = None) -> dict[str, dict[str
             OR event_type ILIKE 'TRAIL%%'
             OR event_type ILIKE '%%STOP%%'
         )
-        {f"AND symbol = ANY(%(symbols)s)" if normalized_symbols else ""}
+        {"AND symbol = ANY(%(symbols)s)" if normalized_symbols else ""}
         ORDER BY symbol, event_time DESC NULLS LAST, event_id DESC
         """,
         params,
@@ -919,7 +925,7 @@ def _monitor_log_entries_from_text(text: str | None, limit: int = 80) -> list[di
         )
     if not entries:
         return []
-    return list(reversed(entries[-max(1, int(limit)):]))
+    return list(reversed(entries[-max(1, int(limit)) :]))
 
 
 def _fetch_pythonanywhere_monitor_log_text() -> Optional[str]:
@@ -984,8 +990,10 @@ def _alpaca_trailing_logs(limit: int = 80, lookback_hours: int = 96) -> list[dic
     for order in orders:
         order_type = getattr(order, "type", None)
         order_type_text = (
-            order_type.value if hasattr(order_type, "value") else str(order_type or "")
-        ).strip().lower()
+            (order_type.value if hasattr(order_type, "value") else str(order_type or ""))
+            .strip()
+            .lower()
+        )
 
         raw_trail_pct = _to_float(getattr(order, "trail_percent", None))
         raw_trail_price = _to_float(getattr(order, "trail_price", None))
@@ -1081,7 +1089,11 @@ def _positions_logs_live(limit: int = 80) -> tuple[list[dict[str, str]], str]:
             )
             if len(deduped) >= max(1, int(limit)):
                 break
-        source = "pythonanywhere+alpaca" if logs and alpaca_logs else ("pythonanywhere" if logs else "alpaca")
+        source = (
+            "pythonanywhere+alpaca"
+            if logs and alpaca_logs
+            else ("pythonanywhere" if logs else "alpaca")
+        )
         return deduped, source
 
     local_path = Path(BASE_DIR) / "logs" / "monitor.log"
@@ -1095,7 +1107,9 @@ def _positions_logs_live(limit: int = 80) -> tuple[list[dict[str, str]], str]:
         if merged_local:
             deduped: list[dict[str, str]] = []
             seen: set[tuple[str, str]] = set()
-            for row in sorted(merged_local, key=lambda item: str(item.get("_ts") or ""), reverse=True):
+            for row in sorted(
+                merged_local, key=lambda item: str(item.get("_ts") or ""), reverse=True
+            ):
                 key = (str(row.get("_ts") or ""), str(row.get("message") or ""))
                 if key in seen:
                     continue
@@ -1109,7 +1123,11 @@ def _positions_logs_live(limit: int = 80) -> tuple[list[dict[str, str]], str]:
                 )
                 if len(deduped) >= max(1, int(limit)):
                     break
-            source = "local-fallback+alpaca" if local_logs and alpaca_logs else ("local-fallback" if local_logs else "alpaca")
+            source = (
+                "local-fallback+alpaca"
+                if local_logs and alpaca_logs
+                else ("local-fallback" if local_logs else "alpaca")
+            )
             return deduped, source
 
     if alpaca_logs:
@@ -1134,9 +1152,7 @@ def _alpaca_feed() -> Optional[DataFeed]:
     return None
 
 
-def _fetch_alpaca_sparklines(
-    symbols: list[str], points: int = 12
-) -> dict[str, list[float]]:
+def _fetch_alpaca_sparklines(symbols: list[str], points: int = 12) -> dict[str, list[float]]:
     if data_client is None or not symbols:
         return {}
 
@@ -1215,7 +1231,9 @@ def _active_trailing_stops_from_alpaca(symbols: list[str]) -> dict[str, dict[str
     if trading_client is None:
         return {}
 
-    normalized_symbols = {_normalize_symbol(symbol) for symbol in symbols if _normalize_symbol(symbol)}
+    normalized_symbols = {
+        _normalize_symbol(symbol) for symbol in symbols if _normalize_symbol(symbol)
+    }
     now_utc = datetime.now(timezone.utc)
     since_utc = now_utc - timedelta(days=7)
 
@@ -1249,14 +1267,22 @@ def _active_trailing_stops_from_alpaca(symbols: list[str]) -> dict[str, dict[str
             continue
 
         side_obj = getattr(order, "side", None)
-        side_text = (side_obj.value if hasattr(side_obj, "value") else str(side_obj or "")).strip().lower()
+        side_text = (
+            (side_obj.value if hasattr(side_obj, "value") else str(side_obj or "")).strip().lower()
+        )
         if side_text and side_text != "sell":
             continue
 
         order_type_obj = getattr(order, "type", None)
         order_type = (
-            order_type_obj.value if hasattr(order_type_obj, "value") else str(order_type_obj or "")
-        ).strip().lower()
+            (
+                order_type_obj.value
+                if hasattr(order_type_obj, "value")
+                else str(order_type_obj or "")
+            )
+            .strip()
+            .lower()
+        )
         trail_percent = _to_float(getattr(order, "trail_percent", None))
         trail_price = _to_float(getattr(order, "trail_price", None))
         if "trailing" not in order_type and trail_percent is None and trail_price is None:
@@ -1264,8 +1290,10 @@ def _active_trailing_stops_from_alpaca(symbols: list[str]) -> dict[str, dict[str
 
         status_obj = getattr(order, "status", None)
         status_text = (
-            status_obj.value if hasattr(status_obj, "value") else str(status_obj or "")
-        ).strip().lower()
+            (status_obj.value if hasattr(status_obj, "value") else str(status_obj or ""))
+            .strip()
+            .lower()
+        )
         if status_text in inactive_statuses:
             continue
 
@@ -1416,7 +1444,10 @@ def _days_held_map_from_alpaca_activities(alpaca_positions: list[dict[str, Any]]
         rows = grouped.get(symbol, [])
         if not rows:
             continue
-        rows.sort(key=lambda item: item.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        rows.sort(
+            key=lambda item: item.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
         remaining = float(open_qty)
         earliest_entry: Optional[datetime] = None
 
@@ -1748,7 +1779,15 @@ def _load_trades_for_api_from_files() -> tuple[pd.DataFrame, str]:
     combined = pd.concat(frames, ignore_index=True, sort=False)
     dedupe_columns = [
         column
-        for column in ("trade_id", "entry_order_id", "order_id", "symbol", "entry_time", "exit_time", "qty")
+        for column in (
+            "trade_id",
+            "entry_order_id",
+            "order_id",
+            "symbol",
+            "entry_time",
+            "exit_time",
+            "qty",
+        )
         if column in combined.columns
     ]
     if dedupe_columns:
@@ -1783,13 +1822,19 @@ def _normalize_trades_api_frame(frame: pd.DataFrame) -> pd.DataFrame:
         )
 
     work = frame.copy()
-    work["symbol"] = _series_from_alias(work, ["symbol", "ticker"]).astype(str).str.upper().str.strip()
+    work["symbol"] = (
+        _series_from_alias(work, ["symbol", "ticker"]).astype(str).str.upper().str.strip()
+    )
     work["qty"] = pd.to_numeric(
         _series_from_alias(work, ["qty", "filled_qty", "quantity", "shares"]), errors="coerce"
     )
-    work["status"] = _series_from_alias(work, ["status", "order_status"]).astype(str).str.upper().str.strip()
+    work["status"] = (
+        _series_from_alias(work, ["status", "order_status"]).astype(str).str.upper().str.strip()
+    )
     work["entry_time"] = pd.to_datetime(
-        _series_from_alias(work, ["entry_time", "buy_date", "entry_date"]), utc=True, errors="coerce"
+        _series_from_alias(work, ["entry_time", "buy_date", "entry_date"]),
+        utc=True,
+        errors="coerce",
     )
     work["entry_price"] = pd.to_numeric(
         _series_from_alias(work, ["entry_price", "avg_entry_price", "avg_entry"]), errors="coerce"
@@ -2047,9 +2092,7 @@ _ACCOUNT_OPEN_ORDER_STATUSES = {
     "pending_replace",
     "stopped",
 }
-_EXECUTE_LOG_LINE_RE = re.compile(
-    r"^\[(?P<ts>[^\]]+)\]\s+\[(?P<level>[A-Z]+)\]\s*(?P<message>.*)$"
-)
+_EXECUTE_LOG_LINE_RE = re.compile(r"^\[(?P<ts>[^\]]+)\]\s+\[(?P<level>[A-Z]+)\]\s*(?P<message>.*)$")
 
 
 def _alpaca_base_url() -> str:
@@ -2191,9 +2234,7 @@ def _portfolio_history_points(payload: Any) -> list[dict[str, Any]]:
         if ts is None or equity is None:
             continue
         points.append({"t": ts.isoformat(), "equity": float(equity), "_dt": ts})
-    points.sort(
-        key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc)
-    )
+    points.sort(key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc))
     return points
 
 
@@ -2302,9 +2343,7 @@ def _coerce_json_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _order_log_level(
-    event_type: str, status: str, message: str, raw_level: str = ""
-) -> str:
+def _order_log_level(event_type: str, status: str, message: str, raw_level: str = "") -> str:
     normalized_raw = str(raw_level or "").strip().lower()
     if normalized_raw in {"success", "info", "warning"}:
         return normalized_raw
@@ -2341,9 +2380,7 @@ def _order_event_message(row: Mapping[str, Any], raw: Mapping[str, Any]) -> str:
 
 
 def _account_order_logs_from_db(limit: int) -> list[dict[str, Any]]:
-    day_start_utc = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    day_start_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     rows = _db_fetch_all(
         """
         SELECT event_time, event_type, symbol, qty, order_id, status, raw
@@ -2397,9 +2434,7 @@ def _account_order_logs_from_file(limit: int) -> list[dict[str, Any]]:
     if not lines:
         return []
 
-    day_start_utc = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    day_start_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     parsed: list[dict[str, Any]] = []
 
     for raw_line in reversed(lines):
@@ -2524,15 +2559,19 @@ def _account_open_orders_from_db(limit: int) -> tuple[list[dict[str, Any]], str]
             else str(row.get("event_time") or "")
         )
 
-        side_value = str(
-            raw_payload.get("side") or raw_payload.get("order_side") or "buy"
-        ).strip().lower()
-        type_value = str(
-            raw_payload.get("type")
-            or raw_payload.get("order_type")
-            or row.get("event_type")
-            or "market"
-        ).strip().lower()
+        side_value = (
+            str(raw_payload.get("side") or raw_payload.get("order_side") or "buy").strip().lower()
+        )
+        type_value = (
+            str(
+                raw_payload.get("type")
+                or raw_payload.get("order_type")
+                or row.get("event_type")
+                or "market"
+            )
+            .strip()
+            .lower()
+        )
         if type_value.endswith("_submit"):
             type_value = type_value.replace("_submit", "")
 
@@ -2630,9 +2669,7 @@ def _account_portfolio_points_from_db(
             by_day[day_key] = point
         points = list(by_day.values())
 
-    points.sort(
-        key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc)
-    )
+    points.sort(key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc))
     return points, "ok"
 
 
@@ -2787,9 +2824,7 @@ def _account_portfolio_points_from_csv(
             by_day[dt.date().isoformat()] = point
         points = list(by_day.values())
 
-    points.sort(
-        key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc)
-    )
+    points.sort(key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc))
     return points, "ok"
 
 
@@ -2803,6 +2838,7 @@ def _serialize_record(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
     return value
+
 
 # React build output for the new Dashboard UI
 REACT_BUILD_DIR = Path(BASE_DIR) / "frontend" / "dist"
@@ -3015,9 +3051,7 @@ def _score_breakdown_badges(raw: Any) -> str:
             color = "danger"
         else:
             color = "secondary"
-        fragments.append(
-            f'<span class="badge bg-{color} me-1">{key}: {numeric:+.2f}</span>'
-        )
+        fragments.append(f'<span class="badge bg-{color} me-1">{key}: {numeric:+.2f}</span>')
     return "".join(fragments)
 
 
@@ -3062,6 +3096,7 @@ def is_log_stale(path, max_age_hours: int = 24) -> bool:
         return (_utcnow() - last_ts).total_seconds() > max_age_hours * 3600
     except Exception:
         return True
+
 
 # Load env the same way our scripts do (user config + repo .env), then ensure
 # repo-local .env is also considered for dashboard runtime.
@@ -3163,9 +3198,7 @@ def fetch_positions_api():
                     "avg_entry_price": p.avg_entry_price,
                     "current_price": p.current_price,
                     "unrealized_pl": p.unrealized_pl,
-                    "entry_time": getattr(
-                        p, "created_at", datetime.utcnow()
-                    ).isoformat(),
+                    "entry_time": getattr(p, "created_at", datetime.utcnow()).isoformat(),
                 }
                 for p in positions
             ]
@@ -3194,9 +3227,7 @@ def load_csv(csv_path, required_columns=None, alert_prefix=""):
         )
     df = _normalize_pnl(df)
     if df is None or df.empty:
-        return None, dbc.Alert(
-            f"{prefix}No data yet in {csv_path}.", color="info"
-        )
+        return None, dbc.Alert(f"{prefix}No data yet in {csv_path}.", color="info")
     missing_cols = [col for col in required_columns if col not in df.columns]
     if missing_cols:
         return None, dbc.Alert(
@@ -3231,7 +3262,8 @@ def load_screener_kpis() -> tuple[dict[str, Any], dbc.Alert | None]:
     payload = defaults | kpis
 
     missing = [
-        key for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows")
+        key
+        for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows")
         if not isinstance(payload.get(key), int)
     ]
     if missing:
@@ -3240,7 +3272,8 @@ def load_screener_kpis() -> tuple[dict[str, Any], dbc.Alert | None]:
             if key in defaults and payload.get(key) is None and value is not None:
                 payload[key] = value
         still_missing = [
-            key for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows")
+            key
+            for key in ("symbols_in", "symbols_with_bars", "bars_rows_total", "rows")
             if not isinstance(payload.get(key), int)
         ]
         if still_missing:
@@ -3362,19 +3395,27 @@ def load_execute_metrics() -> tuple[dict[str, Any], dbc.Alert | None, list[dict[
     skip_rows: list[dict[str, Any]] = []
 
     if not os.path.exists(execute_metrics_path):
-        return defaults, dbc.Alert(
-            "Execution has not produced metrics yet (execute_metrics.json missing).",
-            color="info",
-            className="mb-2",
-        ), skip_rows
+        return (
+            defaults,
+            dbc.Alert(
+                "Execution has not produced metrics yet (execute_metrics.json missing).",
+                color="info",
+                className="mb-2",
+            ),
+            skip_rows,
+        )
 
     try:
         with open(execute_metrics_path, encoding="utf-8") as handle:
             payload = json.load(handle)
     except Exception as exc:
-        return defaults, dbc.Alert(
-            f"Unable to read execute_metrics.json: {exc}", color="danger", className="mb-2"
-        ), skip_rows
+        return (
+            defaults,
+            dbc.Alert(
+                f"Unable to read execute_metrics.json: {exc}", color="danger", className="mb-2"
+            ),
+            skip_rows,
+        )
 
     if isinstance(payload, dict):
         metrics = defaults | payload
@@ -3404,9 +3445,7 @@ def load_execute_metrics() -> tuple[dict[str, Any], dbc.Alert | None, list[dict[
         skip_dict = {str(k): _coerce_int_value(v) for k, v in raw_skip.items()}
     else:
         skip_dict = {}
-    skip_rows = [
-        {"reason": reason, "count": count} for reason, count in sorted(skip_dict.items())
-    ]
+    skip_rows = [{"reason": reason, "count": count} for reason, count in sorted(skip_dict.items())]
     metrics["skip_reasons"] = skip_dict
 
     return metrics, alert, skip_rows
@@ -3472,7 +3511,9 @@ def load_recent_fills() -> tuple[pd.DataFrame, list[dbc.Alert]]:
 
     frame = df.copy()
     if "transaction_time" in frame.columns:
-        frame["transaction_time"] = pd.to_datetime(frame["transaction_time"], utc=True, errors="coerce")
+        frame["transaction_time"] = pd.to_datetime(
+            frame["transaction_time"], utc=True, errors="coerce"
+        )
         frame = frame.dropna(subset=["transaction_time"])
         frame = frame.sort_values("transaction_time", ascending=False)
     for col in ("qty", "price"):
@@ -3679,7 +3720,9 @@ def _load_account_latest() -> tuple[pd.DataFrame, list[dbc.Alert]]:
     alerts.extend(normalize_alerts)
 
     if normalized.empty and latest_df is None:
-        fallback_df, fallback_alerts = _account_query_with_fallback(_ACCOUNT_LATEST_SQL_NO_PORTFOLIO)
+        fallback_df, fallback_alerts = _account_query_with_fallback(
+            _ACCOUNT_LATEST_SQL_NO_PORTFOLIO
+        )
         alerts.extend(fallback_alerts)
         normalized, normalize_alerts = _normalize_account_frame(
             fallback_df,
@@ -3729,7 +3772,9 @@ def _timestamp_badges(taken_at: pd.Timestamp | None) -> list[dbc.Badge]:
     ny_tz = pytz.timezone("America/New_York")
     ny_time = taken_at.tz_convert(ny_tz)
     return [
-        dbc.Badge(f"UTC: {taken_at.strftime('%Y-%m-%d %H:%M:%S')}", color="secondary", className="me-2"),
+        dbc.Badge(
+            f"UTC: {taken_at.strftime('%Y-%m-%d %H:%M:%S')}", color="secondary", className="me-2"
+        ),
         dbc.Badge(f"NY: {ny_time.strftime('%Y-%m-%d %H:%M:%S')}", color="info"),
     ]
 
@@ -3797,9 +3842,24 @@ def _account_table(df: pd.DataFrame) -> dash_table.DataTable:
     display_df["taken_at"] = display_df["taken_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
     columns = [
         {"name": "Taken At (UTC)", "id": "taken_at"},
-        {"name": "Equity", "id": "equity", "type": "numeric", "format": Format(precision=2, scheme=Scheme.fixed)},
-        {"name": "Cash", "id": "cash", "type": "numeric", "format": Format(precision=2, scheme=Scheme.fixed)},
-        {"name": "Buying Power", "id": "buying_power", "type": "numeric", "format": Format(precision=2, scheme=Scheme.fixed)},
+        {
+            "name": "Equity",
+            "id": "equity",
+            "type": "numeric",
+            "format": Format(precision=2, scheme=Scheme.fixed),
+        },
+        {
+            "name": "Cash",
+            "id": "cash",
+            "type": "numeric",
+            "format": Format(precision=2, scheme=Scheme.fixed),
+        },
+        {
+            "name": "Buying Power",
+            "id": "buying_power",
+            "type": "numeric",
+            "format": Format(precision=2, scheme=Scheme.fixed),
+        },
     ]
     if "status" in display_df.columns:
         columns.append({"name": "Status", "id": "status"})
@@ -3855,14 +3915,24 @@ def render_account_tab() -> dbc.Container:
                 [
                     _account_kpi_card("Equity", latest_row.get("equity"), color="primary"),
                     _account_kpi_card("Cash", latest_row.get("cash"), color="info"),
-                    _account_kpi_card("Buying Power", latest_row.get("buying_power"), color="secondary"),
+                    _account_kpi_card(
+                        "Buying Power", latest_row.get("buying_power"), color="secondary"
+                    ),
                 ]
             )
             if "portfolio_value" in latest_row and pd.notna(latest_row["portfolio_value"]):
-                kpi_cards.append(_account_kpi_card("Portfolio Value", latest_row.get("portfolio_value"), color="success"))
+                kpi_cards.append(
+                    _account_kpi_card(
+                        "Portfolio Value", latest_row.get("portfolio_value"), color="success"
+                    )
+                )
 
-        status_badge = _account_status_badge(latest_row.get("status") if latest_row is not None else None)
-        timestamp_badges = _timestamp_badges(taken_at if isinstance(taken_at, pd.Timestamp) else None)
+        status_badge = _account_status_badge(
+            latest_row.get("status") if latest_row is not None else None
+        )
+        timestamp_badges = _timestamp_badges(
+            taken_at if isinstance(taken_at, pd.Timestamp) else None
+        )
 
         series_section: list[Any] = []
         if not series_df.empty:
@@ -3870,9 +3940,19 @@ def render_account_tab() -> dbc.Container:
             series_section = [
                 dbc.Row(
                     [
-                        dbc.Col(_account_timeseries_fig(series_df, "equity", "Equity (last 7 days)"), md=4),
-                        dbc.Col(_account_timeseries_fig(series_df, "cash", "Cash (last 7 days)"), md=4),
-                        dbc.Col(_account_timeseries_fig(series_df, "buying_power", "Buying Power (last 7 days)"), md=4),
+                        dbc.Col(
+                            _account_timeseries_fig(series_df, "equity", "Equity (last 7 days)"),
+                            md=4,
+                        ),
+                        dbc.Col(
+                            _account_timeseries_fig(series_df, "cash", "Cash (last 7 days)"), md=4
+                        ),
+                        dbc.Col(
+                            _account_timeseries_fig(
+                                series_df, "buying_power", "Buying Power (last 7 days)"
+                            ),
+                            md=4,
+                        ),
                     ],
                     className="mb-3",
                 ),
@@ -3931,12 +4011,8 @@ def load_last_premarket_run() -> tuple[dict[str, Any], dbc.Alert | None]:
             if isinstance(payload, dict):
                 return payload, None
     except Exception as exc:
-        return {}, dbc.Alert(
-            f"Unable to read last_premarket_run.json: {exc}", color="danger"
-        )
+        return {}, dbc.Alert(f"Unable to read last_premarket_run.json: {exc}", color="danger")
     return {}, dbc.Alert("Malformed last_premarket_run.json payload.", color="warning")
-
-
 
 
 def load_top_or_latest_candidates(required_columns: Optional[set[str] | list[str]] = None):
@@ -3994,7 +4070,11 @@ def _compute_trade_columns(df: pd.DataFrame) -> pd.DataFrame:
     exit_times = pd.to_datetime(work.get("exit_time"), utc=True, errors="coerce")
     now = pd.Timestamp.utcnow()
     if "entry_time" in work.columns:
-        effective_exit = exit_times.fillna(now) if "exit_time" in work.columns else pd.Series(now, index=work.index)
+        effective_exit = (
+            exit_times.fillna(now)
+            if "exit_time" in work.columns
+            else pd.Series(now, index=work.index)
+        )
         work["hold_days"] = (effective_exit - entry_times).dt.days
         work["entry_time"] = entry_times
         if "exit_time" in work.columns:
@@ -4043,9 +4123,19 @@ def load_trades_for_exits() -> tuple[pd.DataFrame, pd.DataFrame, dbc.Alert | Non
     )
     if alert:
         if db_enabled and db_ready is False:
-            return pd.DataFrame(), pd.DataFrame(), dbc.Alert("Trades unavailable.", color="warning"), "unavailable"
+            return (
+                pd.DataFrame(),
+                pd.DataFrame(),
+                dbc.Alert("Trades unavailable.", color="warning"),
+                "unavailable",
+            )
         if not db_enabled:
-            return pd.DataFrame(), pd.DataFrame(), dbc.Alert("No trades yet (paper).", color="info"), "csv"
+            return (
+                pd.DataFrame(),
+                pd.DataFrame(),
+                dbc.Alert("No trades yet (paper).", color="info"),
+                "csv",
+            )
         return pd.DataFrame(), pd.DataFrame(), alert, "unavailable"
 
     if not isinstance(csv_df, pd.DataFrame) or csv_df.empty:
@@ -4126,9 +4216,9 @@ def make_trades_exits_layout():
         "exit_reason",
         "hold_days",
     ]
-    recent_columns = [
-        col for col in preferred_recent_columns if col in trades_df.columns
-    ] or list(trades_df.columns)
+    recent_columns = [col for col in preferred_recent_columns if col in trades_df.columns] or list(
+        trades_df.columns
+    )
     recent_table = _styled_table(
         trades_df[recent_columns],
         table_id="recent-trades-table",
@@ -4179,12 +4269,8 @@ def make_trades_exits_layout():
         {"name": "Symbol", "id": "symbol"},
         {"name": "Entry Time", "id": "entry_time"},
         {"name": "Exit Time", "id": "exit_time"},
-        {"name": "Exit %", "id": "exit_pct"}
-        if "exit_pct" in trades_df.columns
-        else None,
-        {"name": "Net PnL", "id": "net_pnl"}
-        if "net_pnl" in trades_df.columns
-        else None,
+        {"name": "Exit %", "id": "exit_pct"} if "exit_pct" in trades_df.columns else None,
+        {"name": "Net PnL", "id": "net_pnl"} if "net_pnl" in trades_df.columns else None,
     ]
     if has_exit_reason:
         table_columns.append({"name": "Exit Reason", "id": "exit_reason"})
@@ -4350,11 +4436,17 @@ def make_trades_exits_layout():
                 style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
                 style_data_conditional=[
                     {
-                        "if": {"filter_query": "{profit_loss_usd} > 0", "column_id": "profit_loss_usd"},
+                        "if": {
+                            "filter_query": "{profit_loss_usd} > 0",
+                            "column_id": "profit_loss_usd",
+                        },
                         "color": "#28a745",
                     },
                     {
-                        "if": {"filter_query": "{profit_loss_usd} < 0", "column_id": "profit_loss_usd"},
+                        "if": {
+                            "filter_query": "{profit_loss_usd} < 0",
+                            "column_id": "profit_loss_usd",
+                        },
                         "color": "#dc3545",
                     },
                 ],
@@ -4597,22 +4689,87 @@ def render_trade_performance_panel() -> html.Div:
         {"name": "Entry Time", "id": "entry_time"},
         {"name": "Exit Time", "id": "exit_time"},
         {"name": "Qty", "id": "qty", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Price", "id": "exit_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "Entry Price",
+            "id": "entry_price",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Exit Price",
+            "id": "exit_price",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "Return %",
+            "id": "return_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Hold Days",
+            "id": "hold_days",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "Exit Reason", "id": "exit_reason"},
-        {"name": "MFE %", "id": "mfe_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "MAE %", "id": "mae_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Peak Price", "id": "peak_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Trough Price", "id": "trough_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "MFE %",
+            "id": "mfe_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "MAE %",
+            "id": "mae_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Peak Price",
+            "id": "peak_price",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Trough Price",
+            "id": "trough_price",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Missed Profit %",
+            "id": "missed_profit_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Exit Efficiency %",
+            "id": "exit_efficiency_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "Trailing Stop Exit", "id": "is_trailing_stop_exit"},
-        {"name": "Rebound Window (days)", "id": "rebound_window_days", "type": "numeric", "format": Format(precision=0, scheme="f")},
-        {"name": "Post-exit High", "id": "post_exit_high", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "Rebound Window (days)",
+            "id": "rebound_window_days",
+            "type": "numeric",
+            "format": Format(precision=0, scheme="f"),
+        },
+        {
+            "name": "Post-exit High",
+            "id": "post_exit_high",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Rebound %",
+            "id": "rebound_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "Rebounded", "id": "rebounded"},
     ]
 
@@ -4621,40 +4778,119 @@ def render_trade_performance_panel() -> html.Div:
         {"name": "Symbol", "id": "symbol"},
         {"name": "Side", "id": "side"},
         {"name": "Qty", "id": "qty", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Price", "id": "exit_price", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Entry Value", "id": "entry_value", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Value", "id": "exit_value", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "Entry Price",
+            "id": "entry_price",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Exit Price",
+            "id": "exit_price",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Entry Value",
+            "id": "entry_value",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Exit Value",
+            "id": "exit_value",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "Return %",
+            "id": "return_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Hold Days",
+            "id": "hold_days",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "Order Type", "id": "order_type"},
         {"name": "Exit Reason", "id": "exit_reason"},
     ]
 
-
     sold_too_columns = [
         {"name": "Exit Time", "id": "exit_time"},
         {"name": "Symbol", "id": "symbol"},
         {"name": "Order Type", "id": "order_type"},
-        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "Return %",
+            "id": "return_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Exit Efficiency %",
+            "id": "exit_efficiency_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Missed Profit %",
+            "id": "missed_profit_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Rebound %",
+            "id": "rebound_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "Rebounded", "id": "rebounded"},
-        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "Hold Days",
+            "id": "hold_days",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
     ]
     sold_too_columns = [
         {"name": "Exit Time", "id": "exit_time"},
         {"name": "Symbol", "id": "symbol"},
         {"name": "Order Type", "id": "order_type"},
-        {"name": "Return %", "id": "return_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Exit Efficiency %", "id": "exit_efficiency_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Missed Profit %", "id": "missed_profit_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
-        {"name": "Rebound %", "id": "rebound_pct", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "Return %",
+            "id": "return_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Exit Efficiency %",
+            "id": "exit_efficiency_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Missed Profit %",
+            "id": "missed_profit_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
+        {
+            "name": "Rebound %",
+            "id": "rebound_pct",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "Rebounded", "id": "rebounded"},
-        {"name": "Hold Days", "id": "hold_days", "type": "numeric", "format": Format(precision=2, scheme="f")},
+        {
+            "name": "Hold Days",
+            "id": "hold_days",
+            "type": "numeric",
+            "format": Format(precision=2, scheme="f"),
+        },
         {"name": "PnL", "id": "pnl", "type": "numeric", "format": Format(precision=2, scheme="f")},
     ]
 
@@ -4701,22 +4937,20 @@ def render_trade_performance_panel() -> html.Div:
             dbc.Card(
                 [
                     dbc.CardHeader("Sold Too Soon Controls", className="fw-bold"),
-
-            # Sold Too Soon flagged-trades section
-            html.H4("Sold Too Soon (Flagged Trades)", className="mt-5 text-light"),
-            html.Div(id="sold-too-summary-chips", className="mb-2 d-flex flex-wrap gap-2"),
-            dash_table.DataTable(
-                id="sold-too-table",
-                columns=sold_too_columns,
-                data=[],
-                sort_action="native",
-                filter_action="native",
-                sort_by=[{"column_id": "exit_time", "direction": "desc"}],
-                page_size=20,
-                style_table={"overflowX": "auto"},
-                style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
-            ),
-
+                    # Sold Too Soon flagged-trades section
+                    html.H4("Sold Too Soon (Flagged Trades)", className="mt-5 text-light"),
+                    html.Div(id="sold-too-summary-chips", className="mb-2 d-flex flex-wrap gap-2"),
+                    dash_table.DataTable(
+                        id="sold-too-table",
+                        columns=sold_too_columns,
+                        data=[],
+                        sort_action="native",
+                        filter_action="native",
+                        sort_by=[{"column_id": "exit_time", "direction": "desc"}],
+                        page_size=20,
+                        style_table={"overflowX": "auto"},
+                        style_cell={"backgroundColor": "#1e1e1e", "color": "#fff"},
+                    ),
                     dbc.CardBody(
                         [
                             dbc.Row(
@@ -4728,8 +4962,14 @@ def render_trade_performance_panel() -> html.Div:
                                                 id="sold-too-mode",
                                                 options=[
                                                     {"label": "Either", "value": "either"},
-                                                    {"label": "Efficiency only", "value": "efficiency"},
-                                                    {"label": "Missed-profit only", "value": "missed"},
+                                                    {
+                                                        "label": "Efficiency only",
+                                                        "value": "efficiency",
+                                                    },
+                                                    {
+                                                        "label": "Missed-profit only",
+                                                        "value": "missed",
+                                                    },
                                                 ],
                                                 value="either",
                                                 inline=True,
@@ -4748,7 +4988,10 @@ def render_trade_performance_panel() -> html.Div:
                                                 step=1,
                                                 value=40,
                                                 marks=None,
-                                                tooltip={"placement": "bottom", "always_visible": False},
+                                                tooltip={
+                                                    "placement": "bottom",
+                                                    "always_visible": False,
+                                                },
                                             ),
                                         ],
                                         md=4,
@@ -4763,7 +5006,10 @@ def render_trade_performance_panel() -> html.Div:
                                                 step=0.5,
                                                 value=3,
                                                 marks=None,
-                                                tooltip={"placement": "bottom", "always_visible": False},
+                                                tooltip={
+                                                    "placement": "bottom",
+                                                    "always_visible": False,
+                                                },
                                             ),
                                         ],
                                         md=4,
@@ -4783,7 +5029,10 @@ def render_trade_performance_panel() -> html.Div:
                                                 step=0.5,
                                                 value=3,
                                                 marks=None,
-                                                tooltip={"placement": "bottom", "always_visible": False},
+                                                tooltip={
+                                                    "placement": "bottom",
+                                                    "always_visible": False,
+                                                },
                                             ),
                                         ],
                                         md=6,
@@ -4798,7 +5047,10 @@ def render_trade_performance_panel() -> html.Div:
                                                 step=1,
                                                 value=5,
                                                 marks=None,
-                                                tooltip={"placement": "bottom", "always_visible": False},
+                                                tooltip={
+                                                    "placement": "bottom",
+                                                    "always_visible": False,
+                                                },
                                             ),
                                         ],
                                         md=6,
@@ -4822,24 +5074,68 @@ def render_trade_performance_panel() -> html.Div:
                     ),
                     dbc.CardBody(
                         [
-                            dbc.Row(dbc.Col(dcc.Graph(id="trade-perf-window-bar", figure=_empty_trade_perf_fig("Net P&L by window")), width=12), className="mb-3"),
+                            dbc.Row(
+                                dbc.Col(
+                                    dcc.Graph(
+                                        id="trade-perf-window-bar",
+                                        figure=_empty_trade_perf_fig("Net P&L by window"),
+                                    ),
+                                    width=12,
+                                ),
+                                className="mb-3",
+                            ),
                             dbc.Row(
                                 [
-                                    dbc.Col(dcc.Graph(id="trade-perf-scatter", figure=_empty_trade_perf_fig("MFE % vs Return %")), md=6),
-                                    dbc.Col(dcc.Graph(id="trade-perf-eff-hist", figure=_empty_trade_perf_fig("Exit efficiency %")), md=3),
-                                    dbc.Col(dcc.Graph(id="trade-perf-reason-bar", figure=_empty_trade_perf_fig("Exit reasons")), md=3),
+                                    dbc.Col(
+                                        dcc.Graph(
+                                            id="trade-perf-scatter",
+                                            figure=_empty_trade_perf_fig("MFE % vs Return %"),
+                                        ),
+                                        md=6,
+                                    ),
+                                    dbc.Col(
+                                        dcc.Graph(
+                                            id="trade-perf-eff-hist",
+                                            figure=_empty_trade_perf_fig("Exit efficiency %"),
+                                        ),
+                                        md=3,
+                                    ),
+                                    dbc.Col(
+                                        dcc.Graph(
+                                            id="trade-perf-reason-bar",
+                                            figure=_empty_trade_perf_fig("Exit reasons"),
+                                        ),
+                                        md=3,
+                                    ),
                                 ],
                                 className="g-3",
                             ),
                             dbc.Row(
                                 [
-                                    dbc.Col(dcc.Graph(id="trade-perf-rebound-scatter", figure=_empty_trade_perf_fig("Exit Efficiency % vs Rebound %")), md=6),
-                                    dbc.Col(dcc.Graph(id="trade-perf-rebound-hist", figure=_empty_trade_perf_fig("Rebound %")), md=6),
+                                    dbc.Col(
+                                        dcc.Graph(
+                                            id="trade-perf-rebound-scatter",
+                                            figure=_empty_trade_perf_fig(
+                                                "Exit Efficiency % vs Rebound %"
+                                            ),
+                                        ),
+                                        md=6,
+                                    ),
+                                    dbc.Col(
+                                        dcc.Graph(
+                                            id="trade-perf-rebound-hist",
+                                            figure=_empty_trade_perf_fig("Rebound %"),
+                                        ),
+                                        md=6,
+                                    ),
                                 ],
                                 className="g-3",
                             ),
                             html.H4("Closed Trades — Cash P&L", className="mt-4"),
-                            html.Div(id="trade-pnl-summary-chips", className="mb-2 d-flex flex-wrap gap-2"),
+                            html.Div(
+                                id="trade-pnl-summary-chips",
+                                className="mb-2 d-flex flex-wrap gap-2",
+                            ),
                             dash_table.DataTable(
                                 id="trade-pnl-table",
                                 columns=trade_pnl_columns,
@@ -4873,7 +5169,9 @@ def render_trade_performance_panel() -> html.Div:
                     dbc.CardHeader("Sold Too Soon (Flagged Trades)", className="fw-bold"),
                     dbc.CardBody(
                         [
-                            html.Div(id="sold-too-soon-summary", className="mb-2 d-flex flex-wrap gap-2"),
+                            html.Div(
+                                id="sold-too-soon-summary", className="mb-2 d-flex flex-wrap gap-2"
+                            ),
                             dash_table.DataTable(
                                 id="sold-too-soon-table",
                                 columns=sold_too_columns,
@@ -4985,7 +5283,11 @@ def _tail_with_timestamp(path: str, limit: int = 100) -> tuple[list[str], str]:
             last_ts = datetime.utcfromtimestamp(os.path.getmtime(path))
         except OSError:
             last_ts = None
-    label = last_ts.strftime("Last log line at: %Y-%m-%d %H:%M UTC") if last_ts else "Last log line: n/a"
+    label = (
+        last_ts.strftime("Last log line at: %Y-%m-%d %H:%M UTC")
+        if last_ts
+        else "Last log line: n/a"
+    )
     return lines, label
 
 
@@ -5007,7 +5309,9 @@ def read_error_log(path: str = error_log_path) -> pd.DataFrame:
                 records.append({"timestamp": ts, "level": level, "message": msg})
         errors_df = pd.DataFrame(records)
         if not errors_df.empty:
-            errors_df = errors_df[pd.to_datetime(errors_df["timestamp"]) >= datetime.now() - timedelta(days=1)]
+            errors_df = errors_df[
+                pd.to_datetime(errors_df["timestamp"]) >= datetime.now() - timedelta(days=1)
+            ]
         return errors_df
     except Exception:
         return pd.DataFrame(columns=["timestamp", "level", "message"])
@@ -5115,7 +5419,9 @@ def create_open_positions_table(df: pd.DataFrame) -> dash_table.DataTable:
     )
 
 
-def _styled_table(df: pd.DataFrame, table_id: str | None = None, page_size: int = 25) -> dash_table.DataTable:
+def _styled_table(
+    df: pd.DataFrame, table_id: str | None = None, page_size: int = 25
+) -> dash_table.DataTable:
     columns = [{"name": c.replace("_", " ").title(), "id": c} for c in df.columns]
     return dash_table.DataTable(
         id=table_id,
@@ -5219,14 +5525,10 @@ def get_version_string():
             .decode("utf-8")
             .strip()
         )
-        ts = datetime.utcfromtimestamp(os.path.getmtime(__file__)).strftime(
-            "%Y-%m-%d %H:%M UTC"
-        )
+        ts = datetime.utcfromtimestamp(os.path.getmtime(__file__)).strftime("%Y-%m-%d %H:%M UTC")
         return f"Dashboard version: {commit} (updated {ts})"
     except Exception:
-        ts = datetime.utcfromtimestamp(os.path.getmtime(__file__)).strftime(
-            "%Y-%m-%d %H:%M UTC"
-        )
+        ts = datetime.utcfromtimestamp(os.path.getmtime(__file__)).strftime("%Y-%m-%d %H:%M UTC")
         return f"Dashboard version: {ts}"
 
 
@@ -5549,9 +5851,7 @@ def api_account_summary():
                     "buying_power": float(buying_power),
                     "open_positions_value": float(open_positions_value),
                     "cash_to_positions_ratio": ratio,
-                    "taken_at_utc": datetime.now(timezone.utc)
-                    .replace(microsecond=0)
-                    .isoformat(),
+                    "taken_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
                 }
             )
 
@@ -5682,9 +5982,7 @@ def api_account_portfolio_history():
     points: list[dict[str, Any]] = []
     detail = "paper_mode_required" if not paper_mode else "skipped"
     if paper_mode:
-        points, detail = _fetch_account_portfolio_points(
-            period=alpaca_period, timeframe=timeframe
-        )
+        points, detail = _fetch_account_portfolio_points(period=alpaca_period, timeframe=timeframe)
     source_detail = f"alpaca:{detail}"
 
     if not points:
@@ -5818,14 +6116,16 @@ def api_trades_overview():
     open_count = int(len(live_positions))
     open_pnl = None
     if live_positions:
-        open_pnl = float(
-            sum(_to_float(row.get("dollar_pl")) or 0.0 for row in live_positions)
-        )
+        open_pnl = float(sum(_to_float(row.get("dollar_pl")) or 0.0 for row in live_positions))
     else:
         open_df = load_open_trades_db()
         open_source = "db-fallback"
         open_count = int(len(open_df)) if open_df is not None else 0
-        if isinstance(open_df, pd.DataFrame) and not open_df.empty and "realized_pnl" in open_df.columns:
+        if (
+            isinstance(open_df, pd.DataFrame)
+            and not open_df.empty
+            and "realized_pnl" in open_df.columns
+        ):
             open_pnl = float(open_df["realized_pnl"].fillna(0).sum())
 
     payload = {
@@ -5962,9 +6262,7 @@ def api_positions_monitoring():
     include_debug = str(request.args.get("debug", "")).lower() in {"1", "true", "yes", "on"}
     db_ready = _db_connection_available()
 
-    def _sparkline_from_daily_bars(
-        symbols: list[str], points: int = 12
-    ) -> dict[str, list[float]]:
+    def _sparkline_from_daily_bars(symbols: list[str], points: int = 12) -> dict[str, list[float]]:
         bars_df = _load_daily_bars_cache()
         if bars_df is None or bars_df.empty:
             return {}
@@ -6084,9 +6382,13 @@ def api_positions_monitoring():
 
     latest_prices = _fetch_latest_prices(symbols)
     trailing_stop_map = _active_trailing_stops_from_alpaca(symbols)
-    activity_seed = [{"symbol": symbol, "qty": bucket.get("qty")} for symbol, bucket in aggregated.items()]
+    activity_seed = [
+        {"symbol": symbol, "qty": bucket.get("qty")} for symbol, bucket in aggregated.items()
+    ]
     days_held_map = _days_held_map_from_alpaca_activities(activity_seed)
-    using_alpaca_overlay = bool(alpaca_sparkline or latest_prices or trailing_stop_map or days_held_map)
+    using_alpaca_overlay = bool(
+        alpaca_sparkline or latest_prices or trailing_stop_map or days_held_map
+    )
 
     positions = []
 
@@ -6099,7 +6401,11 @@ def api_positions_monitoring():
         cost_basis = bucket["entry_value"] if bucket["entry_value"] else None
         sparkline = sparkline_map.get(symbol, [])
         latest_price = latest_prices.get(symbol)
-        current_price = latest_price if latest_price is not None else (sparkline[-1] if sparkline else entry_price)
+        current_price = (
+            latest_price
+            if latest_price is not None
+            else (sparkline[-1] if sparkline else entry_price)
+        )
 
         dollar_pl = None
         if current_price is not None and entry_price is not None and qty is not None:
@@ -6158,7 +6464,9 @@ def api_positions_monitoring():
         "ok": bool(db_ready),
         "positions": positions,
         "summary": summary,
-        "source": "alpaca" if calculation_source == "alpaca" else ("db+alpaca" if using_alpaca_overlay else "db-fallback"),
+        "source": "alpaca"
+        if calculation_source == "alpaca"
+        else ("db+alpaca" if using_alpaca_overlay else "db-fallback"),
         "calculationSource": calculation_source,
         "db_source_of_truth": bool(db_source_of_truth),
         "db_ready": bool(db_ready),
@@ -6423,7 +6731,9 @@ def _execute_last_run_from_logs() -> str | None:
 
 def _execute_order_status_bucket(status: str, event_type: str = "") -> str:
     text = f"{status} {event_type}".strip().lower()
-    if any(token in text for token in ("reject", "cancel", "cancelled", "expired", "fail", "error")):
+    if any(
+        token in text for token in ("reject", "cancel", "cancelled", "expired", "fail", "error")
+    ):
         return "REJECTED"
     if "partial" in text:
         return "PARTIAL"
@@ -6547,7 +6857,9 @@ def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
             ),
             "in_window": _execute_now_in_window() if in_window is None else bool(in_window),
             "candidates": _execute_to_int(
-                _execute_pick_value(row, ["candidates", "candidates_in", "symbols_in", "symbols", "rows"]),
+                _execute_pick_value(
+                    row, ["candidates", "candidates_in", "symbols_in", "symbols", "rows"]
+                ),
                 0,
             ),
             "submitted": _execute_to_int(
@@ -6559,7 +6871,9 @@ def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
                 0,
             ),
             "rejected": _execute_to_int(
-                _execute_pick_value(row, ["orders_rejected", "rejected", "orders_canceled", "canceled", "cancelled"]),
+                _execute_pick_value(
+                    row, ["orders_rejected", "rejected", "orders_canceled", "canceled", "cancelled"]
+                ),
                 0,
             ),
             "result_pl_usd": _to_float(
@@ -6593,7 +6907,9 @@ def _execute_summary_from_metrics_file() -> tuple[dict[str, Any] | None, str]:
         in_window = _execute_to_int(skip_block.get("TIME_WINDOW"), 0) <= 0
 
     candidates = _execute_to_int(
-        _execute_pick_value(payload, ["candidates", "candidates_in", "symbols_in", "symbols", "rows"]),
+        _execute_pick_value(
+            payload, ["candidates", "candidates_in", "symbols_in", "symbols", "rows"]
+        ),
         0,
     )
     if candidates <= 0:
@@ -6623,7 +6939,9 @@ def _execute_summary_from_metrics_file() -> tuple[dict[str, Any] | None, str]:
             0,
         ),
         "rejected": _execute_to_int(
-            _execute_pick_value(payload, ["orders_rejected", "rejected", "orders_canceled", "canceled", "cancelled"]),
+            _execute_pick_value(
+                payload, ["orders_rejected", "rejected", "orders_canceled", "canceled", "cancelled"]
+            ),
             0,
         ),
         "result_pl_usd": _to_float(
@@ -6681,7 +6999,9 @@ def _execute_side_label(side_value: Any, event_type: str = "") -> str:
     return side.upper()
 
 
-def _execute_type_label(type_value: Any, event_type: str = "", raw_payload: Mapping[str, Any] | None = None) -> str:
+def _execute_type_label(
+    type_value: Any, event_type: str = "", raw_payload: Mapping[str, Any] | None = None
+) -> str:
     text = str(type_value or "").strip().lower()
     raw = raw_payload or {}
     if not text:
@@ -6998,11 +7318,7 @@ def _execute_enrich_alpaca_orders_with_db(
         if current_ts is None and candidate_ts is not None:
             db_by_id[order_id] = row
             continue
-        if (
-            current_ts is not None
-            and candidate_ts is not None
-            and candidate_ts > current_ts
-        ):
+        if current_ts is not None and candidate_ts is not None and candidate_ts > current_ts:
             db_by_id[order_id] = row
 
     output: list[dict[str, Any]] = []
@@ -7015,7 +7331,10 @@ def _execute_enrich_alpaca_orders_with_db(
                 combined["notes"] = db_row.get("notes") or ""
             if combined.get("limit_stop_trail") in (None, "", "--"):
                 combined["limit_stop_trail"] = db_row.get("limit_stop_trail") or "--"
-            if combined.get("filled_avg") in (None, "") and db_row.get("filled_avg") not in (None, ""):
+            if combined.get("filled_avg") in (None, "") and db_row.get("filled_avg") not in (
+                None,
+                "",
+            ):
                 combined["filled_avg"] = db_row.get("filled_avg")
             if combined.get("qty") in (None, "") and db_row.get("qty") not in (None, ""):
                 combined["qty"] = db_row.get("qty")
@@ -7025,7 +7344,10 @@ def _execute_enrich_alpaca_orders_with_db(
                 combined["side"] = db_row.get("side")
             if combined.get("type") in (None, "") and db_row.get("type") not in (None, ""):
                 combined["type"] = db_row.get("type")
-            if combined.get("_event_type") in (None, "") and db_row.get("_event_type") not in (None, ""):
+            if combined.get("_event_type") in (None, "") and db_row.get("_event_type") not in (
+                None,
+                "",
+            ):
                 combined["_event_type"] = db_row.get("_event_type")
             if combined.get("ts_utc") in (None, "") and db_row.get("ts_utc") not in (None, ""):
                 combined["ts_utc"] = db_row.get("ts_utc")
@@ -7152,7 +7474,9 @@ def _execute_trailing_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], s
                 "trail": _execute_trail_text(raw_payload),
                 "stop_price": _execute_stop_price_from_raw(raw_payload),
                 "status": status_bucket,
-                "parent_leg": _execute_parent_leg(raw_payload, str(row.get("order_id") or "").strip()),
+                "parent_leg": _execute_parent_leg(
+                    raw_payload, str(row.get("order_id") or "").strip()
+                ),
                 "_ts": ts_dt,
                 "_side": _execute_side_label(raw_payload.get("side"), event_type),
                 "_event_type": event_type,
@@ -7311,7 +7635,9 @@ def _execute_summary_counts_from_alpaca(last_run_dt: datetime | None) -> tuple[d
         if not isinstance(raw, Mapping):
             continue
         submitted += 1
-        status_bucket = _execute_order_status_bucket(str(raw.get("status") or ""), str(raw.get("type") or ""))
+        status_bucket = _execute_order_status_bucket(
+            str(raw.get("status") or ""), str(raw.get("type") or "")
+        )
         if status_bucket == "FILLED":
             filled += 1
         if status_bucket == "REJECTED":
@@ -7345,7 +7671,9 @@ def _execute_event_stage(event_type: str, raw_payload: Mapping[str, Any]) -> str
     return "execute"
 
 
-def _execute_logs_from_order_events(stage: str, fetch_limit: int) -> tuple[list[dict[str, Any]], str]:
+def _execute_logs_from_order_events(
+    stage: str, fetch_limit: int
+) -> tuple[list[dict[str, Any]], str]:
     rows = _db_fetch_all(
         """
         SELECT event_time, event_type, symbol, qty, order_id, status, raw
@@ -7570,7 +7898,9 @@ def _execute_summary_payload() -> dict[str, Any]:
 
     in_window_value = _execute_parse_bool(summary_payload.get("in_window"))
     in_window = _execute_now_in_window() if in_window_value is None else bool(in_window_value)
-    last_run_utc = _execute_iso_utc(summary_payload.get("last_run_utc")) or _execute_last_run_from_logs()
+    last_run_utc = (
+        _execute_iso_utc(summary_payload.get("last_run_utc")) or _execute_last_run_from_logs()
+    )
 
     if source == "none":
         source = "alpaca-fallback" if alpaca_counts.get("submitted", 0) > 0 else "local-fallback"
@@ -7696,7 +8026,9 @@ def _execute_logs_payload(
     else:
         file_rows, file_detail = _execute_logs_from_files(stage, fetch_limit)
         staged_rows = file_rows
-        source = "pythonanywhere" if file_detail.startswith("pythonanywhere:") else "local-log-fallback"
+        source = (
+            "pythonanywhere" if file_detail.startswith("pythonanywhere:") else "local-log-fallback"
+        )
         if not staged_rows:
             source = "none"
         source_detail = f"{db_detail};{file_detail}"
@@ -7919,9 +8251,18 @@ def _execute_audit_payload(*, limit: int) -> dict[str, Any]:
 
     endpoint_health = {
         "summary": {"ok": bool(summary_payload.get("ok")), "source": summary_payload.get("source")},
-        "orders_all": {"ok": bool(orders_all_payload.get("ok")), "source": orders_all_payload.get("source")},
-        "orders_open": {"ok": bool(orders_open_payload.get("ok")), "source": orders_open_payload.get("source")},
-        "orders_closed": {"ok": bool(orders_closed_payload.get("ok")), "source": orders_closed_payload.get("source")},
+        "orders_all": {
+            "ok": bool(orders_all_payload.get("ok")),
+            "source": orders_all_payload.get("source"),
+        },
+        "orders_open": {
+            "ok": bool(orders_open_payload.get("ok")),
+            "source": orders_open_payload.get("source"),
+        },
+        "orders_closed": {
+            "ok": bool(orders_closed_payload.get("ok")),
+            "source": orders_closed_payload.get("source"),
+        },
         "trailing_all": {
             "ok": bool(trailing_all_payload.get("ok")),
             "source": trailing_all_payload.get("source"),
@@ -7991,14 +8332,10 @@ def _execute_audit_payload(*, limit: int) -> dict[str, Any]:
             "orders_subset": {
                 "all_scope_limited": bool(all_scope_limited),
                 "open_subset_of_all": (
-                    None
-                    if all_scope_limited
-                    else bool(orders_open_ids.issubset(orders_all_ids))
+                    None if all_scope_limited else bool(orders_open_ids.issubset(orders_all_ids))
                 ),
                 "closed_subset_of_all": (
-                    None
-                    if all_scope_limited
-                    else bool(orders_closed_ids.issubset(orders_all_ids))
+                    None if all_scope_limited else bool(orders_closed_ids.issubset(orders_all_ids))
                 ),
                 "open_closed_intersection_count": overlap_count,
                 "open_not_in_all": open_not_in_all,
@@ -8157,7 +8494,9 @@ def api_execute_trailing_stops_stream():
 
 @server.route("/api/execute/logs")
 def api_execute_logs():
-    stage = _execute_parse_scope(request.args.get("stage"), allowed=_EXECUTE_LOG_STAGES, default="execute")
+    stage = _execute_parse_scope(
+        request.args.get("stage"), allowed=_EXECUTE_LOG_STAGES, default="execute"
+    )
     limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=1, maximum=300)
     level_filter = _execute_parse_scope(
         request.args.get("level"), allowed=_EXECUTE_LOG_LEVELS, default="all"
@@ -8179,7 +8518,9 @@ def api_execute_logs():
 
 @server.route("/api/execute/logs/stream")
 def api_execute_logs_stream():
-    stage = _execute_parse_scope(request.args.get("stage"), allowed=_EXECUTE_LOG_STAGES, default="execute")
+    stage = _execute_parse_scope(
+        request.args.get("stage"), allowed=_EXECUTE_LOG_STAGES, default="execute"
+    )
     limit = _parse_positive_int(request.args.get("limit"), default=200, minimum=1, maximum=300)
     level_filter = _execute_parse_scope(
         request.args.get("level"), allowed=_EXECUTE_LOG_LEVELS, default="all"
@@ -8297,9 +8638,7 @@ def _db_table_columns(table_name: str) -> set[str]:
         {"table_name": cache_key},
     )
     columns = {
-        str(row.get("column_name") or "").strip().lower()
-        for row in rows
-        if row.get("column_name")
+        str(row.get("column_name") or "").strip().lower() for row in rows if row.get("column_name")
     }
     _DB_TABLE_COLUMNS_CACHE[cache_key] = (now, set(columns))
     return columns
@@ -8574,6 +8913,7 @@ def _screener_pick_rows_from_db(
         "fetch_limit": fetch_limit,
         "q_like": q_like,
     }
+
     def _fetch_raw_rows(scope_fragment: str) -> list[dict[str, Any]]:
         return _db_fetch_all(
             f"""
@@ -8782,7 +9122,10 @@ def _screener_pick_rows_from_file(
                 ).max()
                 if run_ts_candidate is not None and not pd.isna(run_ts_candidate):
                     run_ts_utc = (
-                        run_ts_candidate.to_pydatetime().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                        run_ts_candidate.to_pydatetime()
+                        .replace(microsecond=0)
+                        .isoformat()
+                        .replace("+00:00", "Z")
                     )
                     break
             except Exception:
@@ -8830,7 +9173,9 @@ def _screener_pick_rows_from_file(
     return [], "picks_file_fallback:missing", None
 
 
-def _screener_resolve_run_date_from_run_ts(raw_value: str | None) -> tuple[Optional[Any], Optional[Any]]:
+def _screener_resolve_run_date_from_run_ts(
+    raw_value: str | None,
+) -> tuple[Optional[Any], Optional[Any]]:
     if not raw_value:
         return None, None
     parsed_ts = _coerce_datetime_utc(raw_value)
@@ -8935,9 +9280,7 @@ def _screener_backtest_rows_from_db(
             ]
             if run_date is not None and candidate_run_date_col:
                 candidate_where.append(f"c.{candidate_run_date_col} = %(run_date)s")
-            scope_sql = (
-                f" AND EXISTS (SELECT 1 FROM screener_candidates c WHERE {' AND '.join(candidate_where)})"
-            )
+            scope_sql = f" AND EXISTS (SELECT 1 FROM screener_candidates c WHERE {' AND '.join(candidate_where)})"
 
     order_sql = "b.symbol ASC"
     if total_pl_col:
@@ -8956,7 +9299,7 @@ def _screener_backtest_rows_from_db(
             {_expr(avg_hold_col)} AS avg_hold_days,
             {_expr(total_pl_col)} AS total_pl_usd
         FROM backtest_results b
-        WHERE {' AND '.join(where_parts)}
+        WHERE {" AND ".join(where_parts)}
           {scope_sql}
         ORDER BY {order_sql}
         LIMIT %(limit)s
@@ -9035,7 +9378,9 @@ def _screener_backtest_rows_from_file(
             continue
         if query_lower and query_lower not in symbol.lower():
             continue
-        resolved_window = str(source_row.get(window_col) or window).strip().upper() if window_col else window
+        resolved_window = (
+            str(source_row.get(window_col) or window).strip().upper() if window_col else window
+        )
         if resolved_window not in {"3M", "6M", "1Y", "ALL"}:
             resolved_window = window
         if window != "ALL" and resolved_window != window:
@@ -9045,10 +9390,16 @@ def _screener_backtest_rows_from_file(
                 "symbol": symbol,
                 "window": resolved_window,
                 "trades": _to_float(source_row.get(trades_col)) if trades_col else None,
-                "win_rate_pct": _screener_normalize_pct(source_row.get(win_rate_col)) if win_rate_col else None,
-                "avg_return_pct": _screener_normalize_pct(source_row.get(avg_return_col)) if avg_return_col else None,
+                "win_rate_pct": _screener_normalize_pct(source_row.get(win_rate_col))
+                if win_rate_col
+                else None,
+                "avg_return_pct": _screener_normalize_pct(source_row.get(avg_return_col))
+                if avg_return_col
+                else None,
                 "pl_ratio": _to_float(source_row.get(pl_ratio_col)) if pl_ratio_col else None,
-                "max_dd_pct": _screener_normalize_pct(source_row.get(max_dd_col)) if max_dd_col else None,
+                "max_dd_pct": _screener_normalize_pct(source_row.get(max_dd_col))
+                if max_dd_col
+                else None,
                 "avg_hold_days": _to_float(source_row.get(avg_hold_col)) if avg_hold_col else None,
                 "total_pl_usd": _to_float(source_row.get(total_pl_col)) if total_pl_col else None,
             }
@@ -9263,7 +9614,9 @@ def _screener_metrics_rows_from_db(
         }
 
         if filter_key == "gate_failures":
-            if all(record[key] == "PASS" for key in ("liquidity_gate", "volatility_gate", "trend_gate")):
+            if all(
+                record[key] == "PASS" for key in ("liquidity_gate", "volatility_gate", "trend_gate")
+            ):
                 continue
         elif filter_key == "data_issues":
             has_data_issue = (
@@ -9346,10 +9699,11 @@ def _screener_metrics_rows_from_file(
         )
         bars_complete = "YES"
         if (
-            _to_float(source_row.get(entry_col)) in (None, 0) if entry_col else True
-        ) or ((_to_float(source_row.get(adv20_col)) in (None, 0)) if adv20_col else True) or (
-            (_to_float(source_row.get(atrp_col)) in (None, 0)) if atrp_col else True
-        ) or (not str(source_row.get(exchange_col) or "").strip() if exchange_col else True):
+            (_to_float(source_row.get(entry_col)) in (None, 0) if entry_col else True)
+            or ((_to_float(source_row.get(adv20_col)) in (None, 0)) if adv20_col else True)
+            or ((_to_float(source_row.get(atrp_col)) in (None, 0)) if atrp_col else True)
+            or (not str(source_row.get(exchange_col) or "").strip() if exchange_col else True)
+        ):
             bars_complete = "NO"
 
         final_score = _to_float(source_row.get(score_col)) if score_col else None
@@ -9368,11 +9722,15 @@ def _screener_metrics_rows_from_file(
             "bars_complete": bars_complete,
             "confidence": confidence,
             "source_label": source_label or "DB",
-            "_gate_fail_reason": str(source_row.get(fail_col) or "").strip().lower() if fail_col else "",
+            "_gate_fail_reason": str(source_row.get(fail_col) or "").strip().lower()
+            if fail_col
+            else "",
         }
 
         if filter_key == "gate_failures":
-            if all(record[key] == "PASS" for key in ("liquidity_gate", "volatility_gate", "trend_gate")):
+            if all(
+                record[key] == "PASS" for key in ("liquidity_gate", "volatility_gate", "trend_gate")
+            ):
                 continue
         elif filter_key == "data_issues":
             has_data_issue = (
@@ -9425,9 +9783,7 @@ def _screener_parse_log_line(line: str) -> Optional[dict[str, Any]]:
         frac_text = (match.group("frac") or "").ljust(6, "0")[:6]
         dt_text = f"{date_text} {time_text}"
         try:
-            timestamp = datetime.strptime(dt_text, "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=timezone.utc
-            )
+            timestamp = datetime.strptime(dt_text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             if frac_text:
                 timestamp = timestamp.replace(microsecond=int(frac_text))
         except Exception:
@@ -9497,8 +9853,7 @@ def _screener_filter_log_rows(
         )
 
     filtered.sort(
-        key=lambda item: item.get("_ts")
-        or datetime.fromtimestamp(0, tz=timezone.utc),
+        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
         reverse=True,
     )
 
@@ -9538,7 +9893,9 @@ def _screener_logs_from_db(stage: str, fetch_limit: int) -> tuple[list[dict[str,
             continue
 
         level_col = _first_existing_column(columns, ["level", "severity", "log_level", "lvl"])
-        stage_col = _first_existing_column(columns, ["stage", "component", "source", "module", "task"])
+        stage_col = _first_existing_column(
+            columns, ["stage", "component", "source", "module", "task"]
+        )
 
         level_expr = f"{level_col}" if level_col else "'INFO'"
         params: dict[str, Any] = {"limit": int(fetch_limit), "stage_like": f"%{stage}%"}
@@ -9722,7 +10079,9 @@ def api_screener_backtest():
         )
 
     if not rows:
-        fallback_rows, _ = _screener_backtest_rows_from_file(window=window, limit=limit, query=query)
+        fallback_rows, _ = _screener_backtest_rows_from_file(
+            window=window, limit=limit, query=query
+        )
         if fallback_rows:
             rows = fallback_rows
             source = "file-fallback"
@@ -9801,7 +10160,9 @@ def api_screener_logs():
     staged_rows = file_rows
     source_detail = file_source_detail
     if staged_rows:
-        source = "pythonanywhere" if "pythonanywhere:" in file_source_detail else "local-log-fallback"
+        source = (
+            "pythonanywhere" if "pythonanywhere:" in file_source_detail else "local-log-fallback"
+        )
     else:
         db_rows, db_source_detail = _screener_logs_from_db(stage, fetch_limit)
         staged_rows = db_rows
@@ -9849,9 +10210,7 @@ def api_screener_candidates():
         """,
         {"run_date": run_date},
     )
-    serialized = [
-        {key: _serialize_record(value) for key, value in row.items()} for row in rows
-    ]
+    serialized = [{key: _serialize_record(value) for key, value in row.items()} for row in rows]
     return jsonify(
         {
             "ok": True,
@@ -9877,11 +10236,13 @@ def data_exports(filename: str):
 def log_exports(filename: str):
     if filename not in LOG_EXPORT_ALLOWLIST:
         abort(404)
+
     def _no_cache(response: Response) -> Response:
         response.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         return response
+
     if filename == "pipeline.log":
         remote_payload = _fetch_pythonanywhere_file(
             os.environ.get("PYTHONANYWHERE_PIPELINE_LOG_URL"),
@@ -9925,7 +10286,9 @@ def api_candidates():
     except Exception as exc:  # pragma: no cover - defensive read
         return jsonify({"columns": [], "rows": [], "rows_final": 0, "error": str(exc)}), 500
     if df is None or df.empty:
-        return jsonify({"columns": [], "rows": [], "rows_final": 0, "source": source_file or "none"})
+        return jsonify(
+            {"columns": [], "rows": [], "rows_final": 0, "source": source_file or "none"}
+        )
     rows_final = int(df.shape[0])
     source = source_file or "unknown"
     db_source_of_truth = "db" in str(source).lower()
@@ -10048,11 +10411,14 @@ def build_tabs(active_tab: str = DEFAULT_ACTIVE_TAB) -> dbc.Tabs:
         ],
     )
 
+
 # Layout with Tabs and Modals
 app.layout = dbc.Container(
     [
         dcc.Location(id="url", refresh=False),
-        dcc.Store(id="active-tab-store", storage_type="memory", data={"active_tab": DEFAULT_ACTIVE_TAB}),
+        dcc.Store(
+            id="active-tab-store", storage_type="memory", data={"active_tab": DEFAULT_ACTIVE_TAB}
+        ),
         dbc.Row(
             dbc.Col(
                 html.H1(
@@ -10078,15 +10444,9 @@ app.layout = dbc.Container(
             ],
         ),
         # Refresh dashboards once per day; the app is reloaded by the wrapper after runs
-        dcc.Interval(
-            id="interval-update", interval=24 * 60 * 60 * 1000, n_intervals=0
-        ),
-        dcc.Interval(
-            id="log-interval", interval=24 * 60 * 60 * 1000, n_intervals=0
-        ),
-        dcc.Interval(
-            id="interval-trades", interval=24 * 60 * 60 * 1000, n_intervals=0
-        ),
+        dcc.Interval(id="interval-update", interval=24 * 60 * 60 * 1000, n_intervals=0),
+        dcc.Interval(id="log-interval", interval=24 * 60 * 60 * 1000, n_intervals=0),
+        dcc.Interval(id="interval-trades", interval=24 * 60 * 60 * 1000, n_intervals=0),
         dcc.Store(id="predictions-store"),
         dbc.Modal(
             id="detail-modal",
@@ -10095,9 +10455,7 @@ app.layout = dbc.Container(
             children=[
                 dbc.ModalHeader(dbc.ModalTitle("Details")),
                 dbc.ModalBody(id="modal-content"),
-                dbc.ModalFooter(
-                    dbc.Button("Close", id="close-modal", className="ms-auto")
-                ),
+                dbc.ModalFooter(dbc.Button("Close", id="close-modal", className="ms-auto")),
             ],
         ),
         html.Div(get_version_string(), id="version-banner", className="text-muted mt-2"),
@@ -10242,10 +10600,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             if _needs_backfill(metrics_data):
                 try:
                     recovered = write_complete_screener_metrics(Path(BASE_DIR))
-                except Exception as exc:
-                    logger.error(
-                        "Unable to backfill screener metrics", exc_info=True
-                    )
+                except Exception:
+                    logger.error("Unable to backfill screener metrics", exc_info=True)
                     if metrics_alert is None:
                         metrics_alert = dbc.Alert(
                             "Unable to backfill screener metrics. Using last known metrics.",
@@ -10297,7 +10653,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     label = f"Freshness: {hours:.1f}h ago"
             else:
                 label = "Freshness: unknown"
-            return dbc.Badge(label, color=color_map.get(level, "secondary"), className="badge-small")
+            return dbc.Badge(
+                label, color=color_map.get(level, "secondary"), className="badge-small"
+            )
 
         metrics_freshness_chip = _build_freshness_chip()
 
@@ -10327,14 +10685,10 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         table_df = None
         if candidates_df is not None and not candidates_df.empty:
             table_source_file = (
-                candidates_df["__source"].iloc[0]
-                if "__source" in candidates_df.columns
-                else None
+                candidates_df["__source"].iloc[0] if "__source" in candidates_df.columns else None
             )
             table_updated = (
-                candidates_df["__updated"].iloc[0]
-                if "__updated" in candidates_df.columns
-                else None
+                candidates_df["__updated"].iloc[0] if "__updated" in candidates_df.columns else None
             )
             work_df = candidates_df.drop(columns=["__source", "__updated"], errors="ignore")
             for column in ("source", "origin"):
@@ -10407,7 +10761,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     return value
             return value
 
-        def _format_kpi_tile_value(value: Any, *, fmt: str = "{:.2f}", prefix: str = "", suffix: str = "") -> str:
+        def _format_kpi_tile_value(
+            value: Any, *, fmt: str = "{:.2f}", prefix: str = "", suffix: str = ""
+        ) -> str:
             if value in (None, "", [], {}):
                 return "—"
             try:
@@ -10417,7 +10773,6 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             if math.isnan(numeric):
                 return "—"
             return f"{prefix}{fmt.format(numeric)}{suffix}"
-
 
         def _build_metrics_summary_tiles(summary_values: dict[str, Any]) -> dbc.Row:
             specs = [
@@ -10432,7 +10787,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             columns: list[Any] = []
             for label, key, fmt_pattern, prefix, suffix in specs:
                 value = summary_values.get(key)
-                rendered = _format_kpi_tile_value(value, fmt=fmt_pattern, prefix=prefix, suffix=suffix)
+                rendered = _format_kpi_tile_value(
+                    value, fmt=fmt_pattern, prefix=prefix, suffix=suffix
+                )
                 card = dbc.Card(
                     [
                         dbc.CardHeader(label),
@@ -10481,17 +10838,23 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             (
                 "With Bars (fetch)",
                 with_bars_value,
-                f"post-filter: {_format_value(with_bars_post)}" if with_bars_post not in (None, "") else None,
+                f"post-filter: {_format_value(with_bars_post)}"
+                if with_bars_post not in (None, "")
+                else None,
             ),
             (
                 "Bars Rows (total)",
                 bars_rows_value,
-                f"post-filter: {_format_value(bars_rows_post)}" if bars_rows_post not in (None, "") else None,
+                f"post-filter: {_format_value(bars_rows_post)}"
+                if bars_rows_post not in (None, "")
+                else None,
             ),
             (
                 "Candidates (final)",
                 final_candidates_value,
-                f"pre-metrics: {_format_value(pre_candidates)}" if pre_candidates not in (None, "") else None,
+                f"pre-metrics: {_format_value(pre_candidates)}"
+                if pre_candidates not in (None, "")
+                else None,
             ),
         ]
         for label, value, sub_text in counter_items:
@@ -10570,9 +10933,17 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         http_badges = [
-            dbc.Badge(f"429: {_safe_int(metrics_data.get('rate_limited'))}", className="badge-small me-1"),
-            dbc.Badge(f"404: {_safe_int(metrics_data.get('http_404_batches'))}", className="badge-small me-1"),
-            dbc.Badge(f"Empty: {_safe_int(metrics_data.get('http_empty_batches'))}", className="badge-small"),
+            dbc.Badge(
+                f"429: {_safe_int(metrics_data.get('rate_limited'))}", className="badge-small me-1"
+            ),
+            dbc.Badge(
+                f"404: {_safe_int(metrics_data.get('http_404_batches'))}",
+                className="badge-small me-1",
+            ),
+            dbc.Badge(
+                f"Empty: {_safe_int(metrics_data.get('http_empty_batches'))}",
+                className="badge-small",
+            ),
         ]
         http_card = dbc.Card(
             dbc.CardBody(
@@ -10585,8 +10956,14 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         cache_badges = [
-            dbc.Badge(f"Cache hits: {_safe_int(metrics_data.get('cache_hits'))}", className="badge-small me-1"),
-            dbc.Badge(f"Parsed rows: {_safe_int(metrics_data.get('parsed_rows_count'))}", className="badge-small"),
+            dbc.Badge(
+                f"Cache hits: {_safe_int(metrics_data.get('cache_hits'))}",
+                className="badge-small me-1",
+            ),
+            dbc.Badge(
+                f"Parsed rows: {_safe_int(metrics_data.get('parsed_rows_count'))}",
+                className="badge-small",
+            ),
         ]
         cache_card = dbc.Card(
             dbc.CardBody(
@@ -10640,7 +11017,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 x=0.5,
                 y=0.5,
             )
-            gate_fig.update_layout(template="plotly_dark", margin=dict(l=20, r=20, t=40, b=20), height=320)
+            gate_fig.update_layout(
+                template="plotly_dark", margin=dict(l=20, r=20, t=40, b=20), height=320
+            )
 
         with_bars = _safe_int(metrics_data.get("symbols_with_bars"))
         without_bars = _safe_int(metrics_data.get("symbols_no_bars"))
@@ -10664,7 +11043,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 x=0.5,
                 y=0.5,
             )
-            coverage_fig.update_layout(template="plotly_dark", margin=dict(l=20, r=20, t=40, b=20), height=320)
+            coverage_fig.update_layout(
+                template="plotly_dark", margin=dict(l=20, r=20, t=40, b=20), height=320
+            )
 
         charts_row = dbc.Row(
             [
@@ -10681,8 +11062,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             display_df = table_df.copy()
             display_df.columns = [str(col) for col in display_df.columns]
             columns = [
-                {"name": col.replace("_", " ").title(), "id": col}
-                for col in display_df.columns
+                {"name": col.replace("_", " ").title(), "id": col} for col in display_df.columns
             ]
             style_data_conditional: list[dict[str, Any]] = []
             for column in ("source", "origin"):
@@ -10734,9 +11114,19 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 {"name": "Score", "id": "score", "type": "numeric", "format": {"specifier": ".3f"}},
                 {"name": "Exchange", "id": "exchange"},
                 {"name": "Close", "id": "close", "type": "numeric", "format": {"specifier": ".2f"}},
-                {"name": "Volume", "id": "volume", "type": "numeric", "format": {"specifier": ".0f"}},
+                {
+                    "name": "Volume",
+                    "id": "volume",
+                    "type": "numeric",
+                    "format": {"specifier": ".0f"},
+                },
                 {"name": "Universe Count", "id": "universe_count"},
-                {"name": "Entry Price", "id": "entry_price", "type": "numeric", "format": {"specifier": ".2f"}},
+                {
+                    "name": "Entry Price",
+                    "id": "entry_price",
+                    "type": "numeric",
+                    "format": {"specifier": ".2f"},
+                },
                 {"name": "ADV20", "id": "adv20", "type": "numeric", "format": {"specifier": ".0f"}},
                 {"name": "ATR%", "id": "atrp", "type": "numeric", "format": {"specifier": ".2%"}},
                 {"name": "Source", "id": "source"},
@@ -10826,7 +11216,11 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                             [
                                 html.Div(feature, className="sparkline-title"),
                                 html.Div(subtitle, className="sparkline-subtitle"),
-                                dcc.Graph(figure=fig, config={"displayModeBar": False}, style={"height": "90px"}),
+                                dcc.Graph(
+                                    figure=fig,
+                                    config={"displayModeBar": False},
+                                    style={"height": "90px"},
+                                ),
                             ],
                             className="sparkline-card",
                         ),
@@ -10845,9 +11239,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
 
         pipeline_lines, pipeline_label = _tail_with_timestamp(pipeline_log_path, limit=120)
-        screener_lines, screener_label = _tail_with_timestamp(
-            screener_log_path, limit=120
-        )
+        screener_lines, screener_label = _tail_with_timestamp(screener_log_path, limit=120)
         backtest_lines = read_recent_lines(backtest_log_path)[::-1]
         pipeline_summary_panel = _render_pipeline_summary_panel(
             parse_pipeline_summary(Path(pipeline_log_path))
@@ -10940,9 +11332,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             badge_children = [html.Span("Alpaca", className="me-2")]
             if feed_label:
                 badge_children.append(html.Span(feed_label, className="me-2 text-uppercase"))
-            badge_children.extend(
-                [html.Span(trade_label, className="me-2"), html.Span(data_label)]
-            )
+            badge_children.extend([html.Span(trade_label, className="me-2"), html.Span(data_label)])
             alpaca_badge = dbc.Badge(badge_children, color=alpaca_color, className="me-2")
         status_badges = [source_badge, rc_badge, run_type_badge]
         if alpaca_badge:
@@ -10957,9 +11347,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                     className="mb-3 d-flex flex-wrap align-items-center gap-2",
                 )
             )
-        table_updated_display = (
-            _format_iso_display(table_updated) if table_updated else "unknown"
-        )
+        table_updated_display = _format_iso_display(table_updated) if table_updated else "unknown"
         table_source_note = html.Span(
             f"Candidates file: {table_source_file or 'unknown'}",
             className="text-muted me-3",
@@ -11022,7 +11410,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         )
         components.append(raw_candidates_component)
         if metrics_data:
-            components.extend([html.Hr(), html.H4("Diagnostics", className="text-light"), feature_section])
+            components.extend(
+                [html.Hr(), html.H4("Diagnostics", className="text-light"), feature_section]
+            )
         components.extend([html.Hr(), logs_stack])
         return dbc.Container(components, fluid=True)
 
@@ -11073,9 +11463,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 )
                 efficiency_df.dropna(subset=["exit_reason", "exit_efficiency"], inplace=True)
                 if not efficiency_df.empty:
-                    avg_efficiency = (
-                        efficiency_df.groupby("exit_reason")["exit_efficiency"].mean()
-                    )
+                    avg_efficiency = efficiency_df.groupby("exit_reason")["exit_efficiency"].mean()
                     avg_efficiency_df = avg_efficiency.reset_index()
                     avg_efficiency_df.columns = ["exit_reason", "avg_exit_efficiency"]
                     efficiency_table = dash_table.DataTable(
@@ -11164,9 +11552,7 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
 
             summary_children: list[Any] = []
             if exit_reason_cards:
-                summary_children.append(
-                    dbc.Row(exit_reason_cards, className="g-3 mb-3")
-                )
+                summary_children.append(dbc.Row(exit_reason_cards, className="g-3 mb-3"))
             if efficiency_fig is not None:
                 summary_children.append(
                     dbc.Card(
@@ -11257,7 +11643,10 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                         dbc.CardBody(
                             [
                                 html.H6("Trailing Stops Attached", className="card-title"),
-                                html.H3(f"{metrics_data.get('trailing_attached', 0)}", className="card-text"),
+                                html.H3(
+                                    f"{metrics_data.get('trailing_attached', 0)}",
+                                    className="card-text",
+                                ),
                             ]
                         ),
                         className="mb-3",
@@ -11269,7 +11658,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                         dbc.CardBody(
                             [
                                 html.H6("API Retries", className="card-title"),
-                                html.H3(f"{metrics_data.get('api_retries', 0)}", className="card-text"),
+                                html.H3(
+                                    f"{metrics_data.get('api_retries', 0)}", className="card-text"
+                                ),
                             ]
                         ),
                         className="mb-3",
@@ -11332,8 +11723,10 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
                 className="mb-2",
             )
 
-        last_updated_path = trade_source_path if trade_source_path else (
-            executed_trades_path if executed_exists else trades_log_path
+        last_updated_path = (
+            trade_source_path
+            if trade_source_path
+            else (executed_trades_path if executed_exists else trades_log_path)
         )
         last_updated = format_time(get_file_mtime(last_updated_path))
         header_children: list[Any] = [_paper_badge_component()]
@@ -11390,7 +11783,6 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         components.append(metrics_view)
         return dbc.Container(components, fluid=True)
 
-
     elif tab == "tab-activities":
         fills_df, fills_alerts = load_recent_fills()
         components: list[Any] = [
@@ -11443,7 +11835,9 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         ]
         if order_column in display_df.columns:
             table_columns.append({"name": "Order ID", "id": order_column})
-        display_df = display_df[[col["id"] for col in table_columns if col["id"] in display_df.columns]]
+        display_df = display_df[
+            [col["id"] for col in table_columns if col["id"] in display_df.columns]
+        ]
 
         table = dash_table.DataTable(
             data=display_df.to_dict("records"),
@@ -11456,10 +11850,8 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
         components.append(table)
         return dbc.Container(components, fluid=True)
 
-
     elif tab == "tab-trades":
         return make_trades_exits_layout()
-
 
     elif tab == "tab-symbol-performance":
         paper_mode = _is_paper_mode()
@@ -11616,7 +12008,6 @@ def _render_tab(tab, n_intervals, n_log_intervals, refresh_clicks):
             className="text-muted mb-2",
         )
 
-
         return html.Div(
             [
                 freshness_alert if freshness_alert else html.Div(),
@@ -11737,7 +12128,9 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
     status_children: list[Any] = []
     if store_mapping.get("written_at"):
         status_children.append(
-            dbc.Badge(f"Cache updated {store_mapping['written_at']}", color="secondary", className="me-2")
+            dbc.Badge(
+                f"Cache updated {store_mapping['written_at']}", color="secondary", className="me-2"
+            )
         )
     if metrics:
         status_children.append(
@@ -11752,7 +12145,7 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
                 color="secondary",
                 className="ms-2",
             )
-            )
+        )
 
     if frame.empty:
         empty_data = store_mapping.get("trades", []) if isinstance(store_mapping, Mapping) else []
@@ -11909,7 +12302,10 @@ def _build_trade_pnl_summary(frame: pd.DataFrame) -> list[Any]:
 def update_trade_pnl_table(
     active_tab: Mapping[str, Any] | None, _refresh_ts: str | None, window: str | None
 ):
-    if isinstance(active_tab, Mapping) and active_tab.get("active_tab") not in (None, "tab-trade-performance"):
+    if isinstance(active_tab, Mapping) and active_tab.get("active_tab") not in (
+        None,
+        "tab-trade-performance",
+    ):
         return dash.no_update, dash.no_update
 
     window = window or "30D"
@@ -11947,7 +12343,11 @@ def update_trade_pnl_table(
 
     if "hold_days" not in frame.columns:
         frame["hold_days"] = np.nan
-    if frame["hold_days"].isna().any() and "entry_time" in frame.columns and "exit_time" in frame.columns:
+    if (
+        frame["hold_days"].isna().any()
+        and "entry_time" in frame.columns
+        and "exit_time" in frame.columns
+    ):
         frame.loc[frame["hold_days"].isna(), "hold_days"] = (
             frame["exit_time"] - frame["entry_time"]
         ).dt.total_seconds() / 86400.0
@@ -12018,7 +12418,10 @@ def update_sold_too_soon_table(
     rebound_threshold: float,
     rebound_window_days: int,
 ):
-    if isinstance(active_tab, Mapping) and active_tab.get("active_tab") not in (None, "tab-trade-performance"):
+    if isinstance(active_tab, Mapping) and active_tab.get("active_tab") not in (
+        None,
+        "tab-trade-performance",
+    ):
         return dash.no_update, dash.no_update
 
     payload = _load_trade_perf_cache()
@@ -12056,7 +12459,11 @@ def update_sold_too_soon_table(
 
     avg_return = _safe_mean(flagged.get("return_pct", pd.Series(dtype=float)))
     avg_eff = _safe_mean(flagged.get("exit_efficiency_pct", pd.Series(dtype=float)))
-    total_pnl = float(pd.to_numeric(flagged.get("pnl", pd.Series(dtype=float)), errors="coerce").sum()) if flagged_count else 0.0
+    total_pnl = (
+        float(pd.to_numeric(flagged.get("pnl", pd.Series(dtype=float)), errors="coerce").sum())
+        if flagged_count
+        else 0.0
+    )
 
     summary = [
         _format_chip("Flagged", f"{flagged_count} of {total_trades}"),
@@ -12251,17 +12658,23 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
                 col=1,
             )
             fig.add_trace(
-                go.Scatter(x=df["timestamp"], y=df["SMA9"], name="SMA9", line=dict(color="#feca57")),
+                go.Scatter(
+                    x=df["timestamp"], y=df["SMA9"], name="SMA9", line=dict(color="#feca57")
+                ),
                 row=1,
                 col=1,
             )
             fig.add_trace(
-                go.Scatter(x=df["timestamp"], y=df["EMA20"], name="EMA20", line=dict(color="#54a0ff")),
+                go.Scatter(
+                    x=df["timestamp"], y=df["EMA20"], name="EMA20", line=dict(color="#54a0ff")
+                ),
                 row=1,
                 col=1,
             )
             fig.add_trace(
-                go.Scatter(x=df["timestamp"], y=df["SMA180"], name="SMA180", line=dict(color="#ff6b6b")),
+                go.Scatter(
+                    x=df["timestamp"], y=df["SMA180"], name="SMA180", line=dict(color="#ff6b6b")
+                ),
                 row=1,
                 col=1,
             )
@@ -12300,17 +12713,26 @@ def toggle_modal(active_cell, table_data, close_click, is_open):
                 secondary_y=True,
             )
             fig.add_trace(
-                go.Bar(x=df["timestamp"], y=df["MACD_HIST"], name="MACD Hist", marker_color="#10ac84"),
+                go.Bar(
+                    x=df["timestamp"], y=df["MACD_HIST"], name="MACD Hist", marker_color="#10ac84"
+                ),
                 row=3,
                 col=1,
             )
             fig.add_trace(
-                go.Scatter(x=df["timestamp"], y=df["MACD_LINE"], name="MACD", line=dict(color="#ff9f43")),
+                go.Scatter(
+                    x=df["timestamp"], y=df["MACD_LINE"], name="MACD", line=dict(color="#ff9f43")
+                ),
                 row=3,
                 col=1,
             )
             fig.add_trace(
-                go.Scatter(x=df["timestamp"], y=df["MACD_SIGNAL"], name="Signal", line=dict(color="#54a0ff")),
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=df["MACD_SIGNAL"],
+                    name="Signal",
+                    line=dict(color="#54a0ff"),
+                ),
                 row=3,
                 col=1,
             )
@@ -12420,11 +12842,12 @@ def download_trades(n_clicks):
     if not n_clicks:
         return dash.no_update
     _, path, _, _ = _resolve_trades_dataframe()
-    candidate = path or (executed_trades_path if os.path.exists(executed_trades_path) else trades_log_path)
+    candidate = path or (
+        executed_trades_path if os.path.exists(executed_trades_path) else trades_log_path
+    )
     if candidate and os.path.exists(candidate):
         return dcc.send_file(candidate)
     return dash.no_update
-
 
 
 if __name__ == "__main__":

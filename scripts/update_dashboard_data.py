@@ -80,9 +80,7 @@ def fetch_account_equity() -> None:
         equity = history.equity
         df_equity = pd.DataFrame(
             {
-                "date": pd.date_range(
-                    end=pd.Timestamp.now(), periods=len(equity)
-                ),
+                "date": pd.date_range(end=pd.Timestamp.now(), periods=len(equity)),
                 "equity": equity,
             }
         )
@@ -172,7 +170,9 @@ def update_open_positions():
 
         positions = trading_client.get_all_positions()
         existing_df = (
-            pd.read_csv(OPEN_POSITIONS_CSV) if os.path.exists(OPEN_POSITIONS_CSV) else pd.DataFrame()
+            pd.read_csv(OPEN_POSITIONS_CSV)
+            if os.path.exists(OPEN_POSITIONS_CSV)
+            else pd.DataFrame()
         )
 
         def get_entry_time(sym: str, default: str) -> str:
@@ -212,11 +212,11 @@ def update_open_positions():
         df = pd.DataFrame(rows)
         if df.empty:
             df = pd.DataFrame(columns=columns)
-        df['side'] = df.get('side', 'long')
-        df['order_status'] = df.get('order_status', 'open')
-        df['net_pnl'] = df.get('unrealized_pl', 0.0)
-        df['pnl'] = df['net_pnl']
-        df['order_type'] = df.get('order_type', 'limit')
+        df["side"] = df.get("side", "long")
+        df["order_status"] = df.get("order_status", "open")
+        df["net_pnl"] = df.get("unrealized_pl", 0.0)
+        df["pnl"] = df["net_pnl"]
+        df["order_type"] = df.get("order_type", "limit")
         df = df[columns]
         write_csv_atomic(OPEN_POSITIONS_CSV, df)
         with sqlite3.connect(DB_PATH) as conn:
@@ -231,9 +231,7 @@ def fetch_all_orders(limit=500):
     orders = []
     end = None
     while True:
-        req = GetOrdersRequest(
-            status="all", limit=limit, until=end, direction="desc"
-        )
+        req = GetOrdersRequest(status="all", limit=limit, until=end, direction="desc")
         chunk = trading_client.get_orders(filter=req)
         if not chunk:
             break
@@ -331,9 +329,7 @@ def update_order_history():
 
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql("trades_log", conn, if_exists="replace", index=False)
-            executed_df.to_sql(
-                "executed_trades", conn, if_exists="replace", index=False
-            )
+            executed_df.to_sql("executed_trades", conn, if_exists="replace", index=False)
 
         logger.info(
             "Updated trades_log.csv with %s records and executed_trades.csv with %s records.",
@@ -386,7 +382,9 @@ def update_metrics_summary():
                         "net_pnl": round(net_pnl, 2),
                         "win_rate": round(win_rate, 2),
                         "expectancy": round(expectancy, 2),
-                        "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else profit_factor,
+                        "profit_factor": round(profit_factor, 2)
+                        if profit_factor != float("inf")
+                        else profit_factor,
                         "max_drawdown": round(max_drawdown, 2),
                     }
                 ]
@@ -446,14 +444,10 @@ def update_order_status_in_csv(order_id: str, status: str) -> None:
 def update_pending_orders():
     """Poll open orders and refresh their status in CSV."""
     try:
-        open_orders = trading_client.get_orders(
-            filter=GetOrdersRequest(status="open")
-        )
+        open_orders = trading_client.get_orders(filter=GetOrdersRequest(status="open"))
         for order in open_orders:
             current = trading_client.get_order_by_id(order.id).status
-            logger.info(
-                "Order %s for %s currently %s", order.id, order.symbol, current
-            )
+            logger.info("Order %s for %s currently %s", order.id, order.symbol, current)
             if current in ["filled", "canceled", "expired", "rejected"]:
                 update_order_status_in_csv(order.id, current)
     except Exception as exc:

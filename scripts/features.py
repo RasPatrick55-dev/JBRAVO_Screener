@@ -147,9 +147,13 @@ def _dedupe(seq: Sequence[str]) -> Sequence[str]:
     return tuple(ordered)
 
 
-Z_SCORE_COLUMNS: Sequence[str] = tuple(f"{col}_z" for col in (*CORE_FEATURE_COLUMNS, *PENALTY_COLUMNS))
+Z_SCORE_COLUMNS: Sequence[str] = tuple(
+    f"{col}_z" for col in (*CORE_FEATURE_COLUMNS, *PENALTY_COLUMNS)
+)
 
-REQUIRED_FEATURE_COLUMNS: Sequence[str] = _dedupe((*CORE_FEATURE_COLUMNS, *PENALTY_COLUMNS, *INTERMEDIATE_COLUMNS))
+REQUIRED_FEATURE_COLUMNS: Sequence[str] = _dedupe(
+    (*CORE_FEATURE_COLUMNS, *PENALTY_COLUMNS, *INTERMEDIATE_COLUMNS)
+)
 
 ALL_FEATURE_COLUMNS: Sequence[str] = _dedupe((*REQUIRED_FEATURE_COLUMNS, *Z_SCORE_COLUMNS))
 
@@ -224,8 +228,12 @@ def macd(
     out_signal: str,
     out_hist: str,
 ) -> pd.DataFrame:
-    ema_fast = _gb(df)["close"].transform(lambda s: s.ewm(span=fast, adjust=False, min_periods=1).mean())
-    ema_slow = _gb(df)["close"].transform(lambda s: s.ewm(span=slow, adjust=False, min_periods=1).mean())
+    ema_fast = _gb(df)["close"].transform(
+        lambda s: s.ewm(span=fast, adjust=False, min_periods=1).mean()
+    )
+    ema_slow = _gb(df)["close"].transform(
+        lambda s: s.ewm(span=slow, adjust=False, min_periods=1).mean()
+    )
     macd_line = ema_fast - ema_slow
     signal_line = _gb(pd.DataFrame({"symbol": df["symbol"], "macd": macd_line}))["macd"].transform(
         lambda s: s.ewm(span=signal, adjust=False, min_periods=1).mean()
@@ -255,14 +263,12 @@ def atr(df: pd.DataFrame, n: int, out: str) -> pd.DataFrame:
 def aroon(df: pd.DataFrame, n: int, out_up: str, out_dn: str) -> pd.DataFrame:
     def _aroon_up(s: pd.Series) -> pd.Series:
         return s.rolling(n, min_periods=1).apply(
-            lambda w: 100
-            * (1 - (len(w) - 1 - np.argmax(w)) / (len(w) - 1 if len(w) > 1 else 1))
+            lambda w: 100 * (1 - (len(w) - 1 - np.argmax(w)) / (len(w) - 1 if len(w) > 1 else 1))
         )
 
     def _aroon_dn(s: pd.Series) -> pd.Series:
         return s.rolling(n, min_periods=1).apply(
-            lambda w: 100
-            * (1 - (len(w) - 1 - np.argmin(w)) / (len(w) - 1 if len(w) > 1 else 1))
+            lambda w: 100 * (1 - (len(w) - 1 - np.argmin(w)) / (len(w) - 1 if len(w) > 1 else 1))
         )
 
     df[out_up] = _gb(df)["high"].transform(_aroon_up)
@@ -280,12 +286,20 @@ def dmi_adx(df: pd.DataFrame, n: int, out_adx: str, out_pdi: str, out_ndi: str) 
     tr_ema = _gb(pd.DataFrame({"symbol": df["symbol"], "tr": tr}))["tr"].transform(
         lambda s: s.ewm(alpha=1 / n, adjust=False, min_periods=1).mean()
     )
-    pdi = 100 * _gb(pd.DataFrame({"symbol": df["symbol"], "pdm": plus_dm}))["pdm"].transform(
-        lambda s: s.ewm(alpha=1 / n, adjust=False, min_periods=1).mean()
-    ) / tr_ema.replace(0, np.nan)
-    ndi = 100 * _gb(pd.DataFrame({"symbol": df["symbol"], "mdm": minus_dm}))["mdm"].transform(
-        lambda s: s.ewm(alpha=1 / n, adjust=False, min_periods=1).mean()
-    ) / tr_ema.replace(0, np.nan)
+    pdi = (
+        100
+        * _gb(pd.DataFrame({"symbol": df["symbol"], "pdm": plus_dm}))["pdm"].transform(
+            lambda s: s.ewm(alpha=1 / n, adjust=False, min_periods=1).mean()
+        )
+        / tr_ema.replace(0, np.nan)
+    )
+    ndi = (
+        100
+        * _gb(pd.DataFrame({"symbol": df["symbol"], "mdm": minus_dm}))["mdm"].transform(
+            lambda s: s.ewm(alpha=1 / n, adjust=False, min_periods=1).mean()
+        )
+        / tr_ema.replace(0, np.nan)
+    )
     dx = ((pdi - ndi).abs() / (pdi + ndi).replace(0, np.nan)) * 100
     adx = _gb(pd.DataFrame({"symbol": df["symbol"], "dx": dx}))["dx"].transform(
         lambda s: s.ewm(alpha=1 / n, adjust=False, min_periods=1).mean()
@@ -341,7 +355,10 @@ def compute_all_features(
     """
 
     if isinstance(cfg, dict):
-        base_values = {name: getattr(DEFAULT_FEATURE_CONFIG, name) for name in FeatureConfig.__dataclass_fields__}
+        base_values = {
+            name: getattr(DEFAULT_FEATURE_CONFIG, name)
+            for name in FeatureConfig.__dataclass_fields__
+        }
         for name in list(base_values):
             if name in cfg:
                 base_values[name] = cfg[name]
@@ -370,7 +387,8 @@ def compute_all_features(
 
     counts = (
         df.dropna(subset=["timestamp"])
-        .groupby("symbol", as_index=False)["timestamp"].size()
+        .groupby("symbol", as_index=False)["timestamp"]
+        .size()
         .rename(columns={"size": "n"})
     )
     valid = set(counts.loc[counts["n"] >= fc.min_history, "symbol"])
@@ -451,7 +469,10 @@ def compute_all_features(
     ADX_raw = df["ADX14"]
     AROON_raw = df["AROON_UP"] - df["AROON_DN"]
     VCP = -(
-        (df["ATR14"] / _gb(df)["ATR14"].transform(lambda s: s.rolling(fc.vcp_long, min_periods=1).mean()))
+        (
+            df["ATR14"]
+            / _gb(df)["ATR14"].transform(lambda s: s.rolling(fc.vcp_long, min_periods=1).mean())
+        )
         - 1.0
     )
     VOLexp = (
@@ -459,10 +480,9 @@ def compute_all_features(
         / _gb(df)["volume"].transform(lambda s: s.rolling(fc.vol_long, min_periods=1).mean())
     ) - 1.0
     GAPpen = (df["open"] - _gb(df)["close"].shift(1)).abs() / df["ATR14"].replace(0, np.nan)
-    adv20 = (
-        _gb(df)["close"].transform(lambda s: s.rolling(20, min_periods=1).mean())
-        * _gb(df)["volume"].transform(lambda s: s.rolling(20, min_periods=1).mean())
-    )
+    adv20 = _gb(df)["close"].transform(lambda s: s.rolling(20, min_periods=1).mean()) * _gb(df)[
+        "volume"
+    ].transform(lambda s: s.rolling(20, min_periods=1).mean())
     df["ADV20"] = adv20.astype("float64")
     df["VOL_MA30"] = _gb(df)["volume"].transform(
         lambda s: s.rolling(fc.vol_ma, min_periods=1).mean()
@@ -490,7 +510,11 @@ def compute_all_features(
 
     df["AROON_DIFF"] = df["AROON"]
 
-    z_clip = fc.robust_clip if isinstance(fc.robust_clip, (int, float)) else DEFAULT_FEATURE_CONFIG.robust_clip
+    z_clip = (
+        fc.robust_clip
+        if isinstance(fc.robust_clip, (int, float))
+        else DEFAULT_FEATURE_CONFIG.robust_clip
+    )
     for name in (*CORE_FEATURE_COLUMNS, *PENALTY_COLUMNS):
         series = df[name]
         z = robust_z(series.dropna(), clip=z_clip)
@@ -584,7 +608,11 @@ def add_wk52_and_rs(features_df: pd.DataFrame, spy_df: Optional[pd.DataFrame]) -
                 spy = spy.loc[spy_symbol == "SPY"]
             spy = spy.dropna(subset=[spy_ts_col, "close"])
             if not spy.empty:
-                lookup = spy.drop_duplicates(subset=[spy_ts_col], keep="last").set_index(spy_ts_col)["close"].astype("float64")
+                lookup = (
+                    spy.drop_duplicates(subset=[spy_ts_col], keep="last")
+                    .set_index(spy_ts_col)["close"]
+                    .astype("float64")
+                )
                 spy_aligned = df[ts_col].map(lookup)
                 ratio = (close_series / spy_aligned.replace(0, np.nan)).astype("float64")
                 df["__rs_ratio"] = ratio
@@ -614,4 +642,3 @@ __all__ = [
     "compute_all_features",
     "add_wk52_and_rs",
 ]
-

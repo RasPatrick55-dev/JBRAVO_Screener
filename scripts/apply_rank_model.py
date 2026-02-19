@@ -1,4 +1,5 @@
 """Apply a trained ML rank model to screener candidates."""
+
 from __future__ import annotations
 
 import argparse

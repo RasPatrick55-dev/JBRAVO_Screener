@@ -22,7 +22,7 @@ def _sample_predictions() -> pd.DataFrame:
             "symbol": ["AAA", "BBB"],
             "as_of": [date(2024, 1, 1), date(2024, 1, 1)],
             "Score": [0.9, 0.2],
-            "score_breakdown": ["{\"trend\": 1.0}", "{\"trend\": -1.0}"],
+            "score_breakdown": ['{"trend": 1.0}', '{"trend": -1.0}'],
             "gates_passed": [True, False],
         }
     )
