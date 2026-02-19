@@ -54,3 +54,24 @@ cd /home/RasPatrick/jbravo_screener && touch /var/www/raspatrick_pythonanywhere_
    `python -m scripts.docs_consistency_check && python -m scripts.dashboard_consistency_check`
 2. If DB connectivity fails, stop trade execution and fix DB health first.
 3. Use CSVs only for diagnosis; do not promote CSV data above DB outputs.
+
+## Dashboard Consistency Checker Troubleshooting
+
+1. CSV parity mismatch (`[PARITY] top_candidates.csv rows mismatch`):
+   - In DB-first mode, stale `data/top_candidates.csv` can trigger legacy CSV parity checks.
+
+   ```bash
+   mkdir -p data/parachute
+   mv data/top_candidates.csv data/parachute/top_candidates_$(date -u +%Y%m%dT%H%M%SZ).csv
+   python -m scripts.dashboard_consistency_check
+   ```
+
+2. `DB_CONNECT_FAIL localhost:9999`:
+   - `localhost:9999` implies DB config was not sourced (or a local tunnel default was used). On PythonAnywhere, source `~/.config/jbravo/.env` first.
+
+   ```bash
+   set -a; . ~/.config/jbravo/.env; set +a
+   python -m scripts.dashboard_consistency_check
+   ```
+
+   Background: https://help.pythonanywhere.com/pages/AccessingPostgresFromOutsidePythonAnywhere/

@@ -128,7 +128,7 @@ options:
                         Maximum number of new entry attempts per run
   --disable-open-position-cap, --no-disable-open-position-cap
                         Disable open-position count caps as an execution
-                        blocker (default: True)
+                        blocker
   --entry-buffer-bps ENTRY_BUFFER_BPS
                         Entry buffer in basis points added to the reference
                         price
@@ -228,15 +228,15 @@ options:
   --time-window {premarket,regular,any,auto}
                         Trading time window gate controlling when orders may
                         be submitted
-  --market-tz MARKET_TIMEZONE, --market-timezone MARKET_TIMEZONE
+  --market-tz, --market-timezone MARKET_TIMEZONE
                         IANA timezone name used for market window evaluation
 ```
 
 ## `python -m scripts.screener --help`
 
 ```text
-usage: screener.py [-h] --mode
-                   {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}
+usage: screener.py [-h]
+                   --mode {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}
                    [--universe {alpaca-active,csv}] [--source-csv SOURCE_CSV]
                    [--output-dir OUTPUT_DIR] [--run-date RUN_DATE]
                    [--ranker-config RANKER_CONFIG] [--local-validate]
@@ -315,7 +315,6 @@ options:
                         disables)
   --exclude-otc, --no-exclude-otc
                         Exclude OTC symbols from the universe (default: true)
-                        (default: True)
   --verify-request      Log and capture the first bars request for debugging
   --reuse-cache {true,false}
                         Reuse cached bars batches when available (default:
