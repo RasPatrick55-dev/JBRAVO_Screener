@@ -2265,27 +2265,61 @@ def _fetch_account_portfolio_points(
     return points, "ok"
 
 
+def _account_live_equity() -> tuple[Optional[float], Optional[datetime], str]:
+    if not _account_api_is_paper_mode():
+        return None, None, "paper_mode_required"
+
+    payload, detail = _alpaca_rest_get_json("/v2/account", timeout=12)
+    if detail != "ok" or not isinstance(payload, Mapping):
+        return None, None, detail
+
+    equity = _to_float(payload.get("equity"))
+    if equity is None:
+        return None, None, "invalid_equity"
+
+    taken_at = datetime.now(timezone.utc).replace(microsecond=0)
+    return float(equity), taken_at, "ok"
+
+
 def _account_delta_for_range(
-    points: list[dict[str, Any]], range_key: str
+    points: list[dict[str, Any]],
+    range_key: str,
+    *,
+    latest_equity_override: Optional[float] = None,
+    latest_dt_override: Optional[datetime] = None,
 ) -> tuple[float, float, str]:
     if not points:
         return 0.0, 0.0, "insufficient_history"
+
     latest_point = points[-1]
-    latest_dt = latest_point.get("_dt")
-    latest_equity = _to_float(latest_point.get("equity"))
-    if latest_dt is None or latest_equity is None:
+    history_latest_dt = latest_point.get("_dt")
+    history_latest_equity = _to_float(latest_point.get("equity"))
+    if history_latest_dt is None or history_latest_equity is None:
         return 0.0, 0.0, "insufficient_history"
+    latest_dt = latest_dt_override or history_latest_dt
+    latest_equity = (
+        float(latest_equity_override)
+        if latest_equity_override is not None
+        else float(history_latest_equity)
+    )
 
     baseline: Optional[dict[str, Any]] = None
     status = "ok"
     if range_key == "all":
-        if len(points) < 2:
+        if len(points) < 1:
             return 0.0, 0.0, "insufficient_history"
+        if len(points) < 2:
+            status = "partial_history"
         baseline = points[0]
     elif range_key == "d":
-        if len(points) < 2:
-            return 0.0, 0.0, "insufficient_history"
-        baseline = points[-2]
+        if latest_equity_override is not None:
+            baseline = points[-1]
+            if len(points) < 2:
+                status = "partial_history"
+        else:
+            if len(points) < 2:
+                return 0.0, 0.0, "insufficient_history"
+            baseline = points[-2]
     else:
         window_days = _ACCOUNT_PERFORMANCE_WINDOW_DAYS.get(range_key)
         if window_days is None:
@@ -5966,15 +6000,36 @@ def api_account_performance():
             points = csv_points
         source_detail = f"{source_detail};csv:{csv_detail}"
 
-    latest_equity = _to_float(points[-1].get("equity")) if points else 0.0
-    if latest_equity is None:
-        latest_equity = 0.0
+    live_equity, live_taken_at, live_detail = _account_live_equity()
+    latest_equity_override = live_equity if live_equity is not None else None
+    latest_dt_override = live_taken_at if live_taken_at is not None else None
+
+    latest_equity = _to_float(points[-1].get("equity")) if points else None
+    latest_as_of_utc = str(points[-1].get("t") or "") if points else ""
+    equity_basis = "last_close"
+    performance_basis = "close_to_close"
+
+    if latest_equity_override is not None and latest_dt_override is not None:
+        latest_equity = float(latest_equity_override)
+        latest_as_of_utc = latest_dt_override.isoformat()
+        equity_basis = "live"
+        performance_basis = "live_vs_close_baselines"
+    else:
+        if latest_equity is None:
+            latest_equity = 0.0
+        if not latest_as_of_utc:
+            latest_as_of_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
     rows: list[dict[str, Any]] = []
     detail_tokens: list[str] = []
     calculable_statuses = {"ok", "partial_history"}
     for key in _ACCOUNT_PERFORMANCE_RANGE_ORDER:
-        pct, usd, status = _account_delta_for_range(points, key)
+        pct, usd, status = _account_delta_for_range(
+            points,
+            key,
+            latest_equity_override=latest_equity_override,
+            latest_dt_override=latest_dt_override,
+        )
         if status not in calculable_statuses:
             pct = 0.0
             usd = 0.0
@@ -5989,7 +6044,12 @@ def api_account_performance():
             }
         )
 
-    total_pct, total_usd, total_status = _account_delta_for_range(points, requested_range)
+    total_pct, total_usd, total_status = _account_delta_for_range(
+        points,
+        requested_range,
+        latest_equity_override=latest_equity_override,
+        latest_dt_override=latest_dt_override,
+    )
     if total_status not in calculable_statuses:
         total_pct = 0.0
         total_usd = 0.0
@@ -5999,21 +6059,26 @@ def api_account_performance():
 
     if history_detail != "ok":
         detail_tokens.append(f"history:{history_detail}")
+    if live_detail != "ok":
+        detail_tokens.append(f"equity:{live_detail}")
 
-    detail_parts = [source_detail]
+    detail_parts = [source_detail, f"account:{live_detail}"]
     if detail_tokens:
         detail_parts.append(";".join(dict.fromkeys(detail_tokens)))
     source_detail = ";".join([part for part in detail_parts if part])
 
     return _json_no_store(
         {
-            "ok": bool(points),
+            "ok": bool(points) or latest_equity_override is not None,
             "range": requested_range,
             "rows": rows,
             "accountTotal": {
                 "equity": float(latest_equity),
                 "netChangePct": float(total_pct),
                 "netChangeUsd": float(total_usd),
+                "equityBasis": equity_basis,
+                "asOfUtc": latest_as_of_utc,
+                "performanceBasis": performance_basis,
             },
             "source_detail": source_detail,
         }

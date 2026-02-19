@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -60,6 +61,11 @@ def _reload_dashboard_app(monkeypatch: pytest.MonkeyPatch, base: Path):
     sys.modules.pop("dashboards.dashboard_app", None)
     module = importlib.import_module("dashboards.dashboard_app")
     return module
+
+
+def _account_point(ts: str, equity: float) -> dict[str, object]:
+    dt = datetime.fromisoformat(ts)
+    return {"t": dt.isoformat(), "equity": float(equity), "_dt": dt}
 
 
 def test_connection_badge_color(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -250,3 +256,111 @@ def test_api_logs_tail_default_and_full(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert full_response.status_code == 200
     full_lines = [line for line in full_response.get_data(as_text=True).splitlines() if line.strip()]
     assert len(full_lines) == 120
+
+
+@pytest.mark.alpaca_optional
+def test_account_performance_uses_live_equity_for_daily_delta(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    points = [
+        _account_point("2026-02-18T01:00:00+00:00", 1000.0),
+        _account_point("2026-02-19T01:00:00+00:00", 1100.0),
+    ]
+
+    monkeypatch.setattr(module, "_fetch_account_portfolio_points", lambda **_: (points, "ok"))
+    monkeypatch.setattr(module, "_account_portfolio_points_from_db", lambda **_: ([], "db_empty"))
+    monkeypatch.setattr(module, "_account_portfolio_points_from_csv", lambda **_: ([], "csv_missing"))
+
+    def _mock_rest(path: str, **_: object):
+        if path == "/v2/account":
+            return {"equity": "1110.0", "cash": "900.0", "buying_power": "0.0"}, "ok"
+        return {}, "request_failed"
+
+    monkeypatch.setattr(module, "_alpaca_rest_get_json", _mock_rest)
+
+    client = module.app.server.test_client()
+    response = client.get("/api/account/performance?range=d")
+    assert response.status_code == 200
+
+    payload = response.get_json()
+    assert payload is not None
+    total = payload.get("accountTotal") or {}
+    assert float(total.get("equity") or 0.0) == pytest.approx(1110.0)
+    assert float(total.get("netChangeUsd") or 0.0) == pytest.approx(10.0)
+    assert total.get("equityBasis") == "live"
+    assert total.get("performanceBasis") == "live_vs_close_baselines"
+
+    rows = payload.get("rows") or []
+    by_period = {str((row or {}).get("period") or "").lower(): row for row in rows}
+    daily = by_period.get("daily") or {}
+    assert float(daily.get("netChangeUsd") or 0.0) == pytest.approx(10.0)
+
+
+@pytest.mark.alpaca_optional
+def test_account_summary_and_performance_total_share_live_equity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    points = [
+        _account_point("2026-02-18T01:00:00+00:00", 1000.0),
+        _account_point("2026-02-19T01:00:00+00:00", 1100.0),
+    ]
+
+    monkeypatch.setattr(module, "_fetch_account_portfolio_points", lambda **_: (points, "ok"))
+    monkeypatch.setattr(module, "_account_portfolio_points_from_db", lambda **_: ([], "db_empty"))
+    monkeypatch.setattr(module, "_account_portfolio_points_from_csv", lambda **_: ([], "csv_missing"))
+    monkeypatch.setattr(module, "_open_positions_value_from_alpaca", lambda: 250.0)
+
+    def _mock_rest(path: str, **_: object):
+        if path == "/v2/account":
+            return {"equity": "1110.0", "cash": "900.0", "buying_power": "0.0"}, "ok"
+        return {}, "request_failed"
+
+    monkeypatch.setattr(module, "_alpaca_rest_get_json", _mock_rest)
+
+    client = module.app.server.test_client()
+    summary_resp = client.get("/api/account/summary")
+    perf_resp = client.get("/api/account/performance?range=all")
+    assert summary_resp.status_code == 200
+    assert perf_resp.status_code == 200
+
+    summary = summary_resp.get_json() or {}
+    performance = perf_resp.get_json() or {}
+    total = performance.get("accountTotal") or {}
+
+    assert float(summary.get("equity") or 0.0) == pytest.approx(1110.0)
+    assert float(total.get("equity") or 0.0) == pytest.approx(float(summary.get("equity") or 0.0))
+    assert total.get("equityBasis") == "live"
+
+
+@pytest.mark.alpaca_optional
+def test_account_performance_falls_back_to_last_close_when_live_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    points = [
+        _account_point("2026-02-18T01:00:00+00:00", 1000.0),
+        _account_point("2026-02-19T01:00:00+00:00", 1100.0),
+    ]
+
+    monkeypatch.setattr(module, "_fetch_account_portfolio_points", lambda **_: (points, "ok"))
+    monkeypatch.setattr(module, "_account_portfolio_points_from_db", lambda **_: ([], "db_empty"))
+    monkeypatch.setattr(module, "_account_portfolio_points_from_csv", lambda **_: ([], "csv_missing"))
+    monkeypatch.setattr(module, "_alpaca_rest_get_json", lambda *_, **__: ({}, "request_failed"))
+
+    client = module.app.server.test_client()
+    response = client.get("/api/account/performance?range=d")
+    assert response.status_code == 200
+
+    payload = response.get_json() or {}
+    total = payload.get("accountTotal") or {}
+    assert float(total.get("equity") or 0.0) == pytest.approx(1100.0)
+    assert float(total.get("netChangeUsd") or 0.0) == pytest.approx(100.0)
+    assert total.get("equityBasis") == "last_close"
