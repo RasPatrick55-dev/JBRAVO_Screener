@@ -5,6 +5,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 ## Canonical
 
 - Context for assistants and automation: `docs/AI_CONTEXT.md`
+- Canonical ChatGPT/Agent context pack: `docs/CONTEXT_PACK.md`
 - Daily operator workflow: `docs/how-to/ops_runbook.md`
 - CLI flags and command help snapshots: `docs/reference/cli_reference.md`
 - Artifacts, schemas, and log tokens: `docs/reference/artifacts_and_schemas.md`
