@@ -537,6 +537,85 @@ def test_execute_summary_from_metrics_table_uses_latest_non_actionable_excluded(
 
 
 @pytest.mark.alpaca_optional
+def test_execute_notes_from_alpaca_order_hides_identifier_client_order_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    note = module._execute_notes_from_alpaca_order(
+        {"client_order_id": "77de3817-1faa-4b03-a444-b85aa0f034e6"},
+        side="BUY",
+        order_type="TRAILING",
+        status_bucket="PENDING",
+    )
+
+    assert note == "Trailing stop order active"
+
+
+@pytest.mark.alpaca_optional
+def test_execute_notes_from_alpaca_order_humanizes_reason_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    note = module._execute_notes_from_alpaca_order(
+        {"rejected_reason": "insufficient_buying_power"},
+        side="BUY",
+        order_type="LIMIT",
+        status_bucket="REJECTED",
+    )
+
+    assert note == "Insufficient buying power"
+
+
+@pytest.mark.alpaca_optional
+def test_execute_notes_from_row_ignores_identifier_message_and_uses_event_label(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    note = module._execute_notes_from_row(
+        {"event_type": "BUY_SUBMIT"},
+        {"message": "58203274-ede2-4ad8-849b-8c1d8dc7f4b1"},
+        side="BUY",
+        order_type="LIMIT",
+        status_bucket="PENDING",
+    )
+
+    assert note == "Buy order submitted"
+
+
+@pytest.mark.alpaca_optional
+def test_execute_merge_order_rows_preserves_more_specific_db_notes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    db_rows = [
+        {
+            "order_id": "ord-1",
+            "notes": "Sell order rejected: insufficient buying power",
+            "_ts": datetime(2026, 2, 20, 15, 23, 18, tzinfo=timezone.utc),
+        }
+    ]
+    alpaca_rows = [
+        {
+            "order_id": "ord-1",
+            "notes": "Order submitted to broker",
+            "_ts": datetime(2026, 2, 20, 15, 23, 18, tzinfo=timezone.utc),
+        }
+    ]
+
+    merged = module._execute_merge_order_rows(db_rows, alpaca_rows)
+    assert merged
+    assert merged[0]["notes"] == "Sell order rejected: insufficient buying power"
+
+
+@pytest.mark.alpaca_optional
 def test_api_logs_tail_default_and_full(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _prepare_dashboard_data(tmp_path)
     logs_dir = tmp_path / "logs"

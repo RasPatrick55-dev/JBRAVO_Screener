@@ -7283,14 +7283,157 @@ def _execute_limit_stop_trail(raw_payload: Mapping[str, Any]) -> str:
     return "--"
 
 
-def _execute_notes_from_row(row: Mapping[str, Any], raw_payload: Mapping[str, Any]) -> str:
+_EXECUTE_EVENT_NOTE_LABELS = {
+    "BUY_SUBMIT": "Buy order submitted",
+    "BUY_FILL": "Buy order filled",
+    "BUY_REJECTED": "Buy order rejected or canceled",
+    "SELL_SUBMIT": "Sell order submitted",
+    "SELL_FILL": "Sell order filled",
+    "SELL_REJECTED": "Sell order rejected or canceled",
+    "TRAIL_SUBMIT": "Trailing stop submitted",
+    "TRAIL_CANCEL": "Trailing stop canceled",
+    "TRAIL_ADJUST": "Trailing stop updated",
+    "TRAIL_TRIGGER": "Trailing stop triggered",
+}
+
+_EXECUTE_GENERIC_ORDER_NOTES = {
+    "order submitted to broker",
+    "buy order submitted",
+    "sell order submitted",
+    "order partially filled",
+    "order filled",
+    "buy order filled",
+    "sell order filled",
+    "order rejected or canceled",
+    "buy order rejected or canceled",
+    "sell order rejected or canceled",
+    "trailing stop order active",
+}
+
+
+def _execute_is_identifier_note(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return False
+    if re.fullmatch(r"[0-9a-z]{8}(?:-[0-9a-z]{4}){3}-[0-9a-z]{12}", normalized):
+        return True
+    compact = normalized.replace("-", "").replace("_", "")
+    if len(compact) >= 24 and re.fullmatch(r"[0-9a-f]+", compact):
+        return True
+    return False
+
+
+def _execute_humanize_note(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or _execute_is_identifier_note(text):
+        return ""
+    normalized = re.sub(r"\s+", " ", text.replace("_", " ")).strip()
+    if not normalized:
+        return ""
+    if re.fullmatch(r"[A-Z0-9 ]+", normalized):
+        return normalized.title()
+    if re.fullmatch(r"[a-z0-9 ]+", normalized):
+        return normalized.capitalize()
+    return normalized
+
+
+def _execute_default_order_note(*, side: str = "", order_type: str = "", status_bucket: str = "") -> str:
+    side_upper = str(side or "").strip().upper()
+    type_upper = str(order_type or "").strip().upper()
+    status_upper = str(status_bucket or "").strip().upper()
+
+    if status_upper == "PENDING":
+        if type_upper == "TRAILING":
+            return "Trailing stop order active"
+        if side_upper == "BUY":
+            return "Buy order submitted"
+        if side_upper == "SELL":
+            return "Sell order submitted"
+        return "Order submitted to broker"
+    if status_upper == "PARTIAL":
+        return "Order partially filled"
+    if status_upper == "FILLED":
+        if side_upper == "BUY":
+            return "Buy order filled"
+        if side_upper == "SELL":
+            return "Sell order filled"
+        return "Order filled"
+    if status_upper == "REJECTED":
+        if side_upper == "BUY":
+            return "Buy order rejected or canceled"
+        if side_upper == "SELL":
+            return "Sell order rejected or canceled"
+        return "Order rejected or canceled"
+    return ""
+
+
+def _execute_note_from_event_type(event_type: Any) -> str:
+    normalized = str(event_type or "").strip().upper()
+    if not normalized:
+        return ""
+    mapped = _EXECUTE_EVENT_NOTE_LABELS.get(normalized)
+    if mapped:
+        return mapped
+    return normalized.replace("_", " ").title()
+
+
+def _execute_is_generic_order_note(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in _EXECUTE_GENERIC_ORDER_NOTES
+
+
+def _execute_notes_from_alpaca_order(
+    raw_payload: Mapping[str, Any],
+    *,
+    side: str = "",
+    order_type: str = "",
+    status_bucket: str = "",
+) -> str:
+    for key in (
+        "reason",
+        "note",
+        "notes",
+        "message",
+        "msg",
+        "detail",
+        "description",
+        "reject_reason",
+        "rejected_reason",
+        "cancel_reason",
+        "client_order_id",
+    ):
+        note = _execute_humanize_note(raw_payload.get(key))
+        if note:
+            return note
+    return _execute_default_order_note(
+        side=side,
+        order_type=order_type,
+        status_bucket=status_bucket,
+    )
+
+
+def _execute_notes_from_row(
+    row: Mapping[str, Any],
+    raw_payload: Mapping[str, Any],
+    *,
+    side: str = "",
+    order_type: str = "",
+    status_bucket: str = "",
+) -> str:
     for key in ("reason", "note", "notes", "message", "msg", "detail", "description"):
-        value = raw_payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    event_type = str(row.get("event_type") or "").strip()
-    if event_type:
-        return event_type.replace("_", " ").title()
+        note = _execute_humanize_note(raw_payload.get(key))
+        if note:
+            return note
+    event_note = _execute_note_from_event_type(row.get("event_type"))
+    if event_note:
+        return event_note
+    fallback = _execute_default_order_note(
+        side=side,
+        order_type=order_type,
+        status_bucket=status_bucket,
+    )
+    if fallback:
+        return fallback
     return ""
 
 
@@ -7378,7 +7521,12 @@ def _execute_orders_from_alpaca(
         side = _execute_side_label(raw.get("side"), str(raw.get("type") or ""))
         order_type = _execute_type_label(raw.get("type"), "", raw)
         status_bucket = _execute_order_status_bucket(str(raw.get("status") or ""), "")
-        notes = str(raw.get("client_order_id") or "").strip()
+        notes = _execute_notes_from_alpaca_order(
+            raw,
+            side=side,
+            order_type=order_type,
+            status_bucket=status_bucket,
+        )
 
         row = {
             "ts_utc": ts_iso,
@@ -7451,7 +7599,13 @@ def _execute_orders_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], str
             raw_payload,
         )
         status_bucket = _execute_order_status_bucket(str(row.get("status") or ""), event_type)
-        notes = _execute_notes_from_row(row, raw_payload)
+        notes = _execute_notes_from_row(
+            row,
+            raw_payload,
+            side=side,
+            order_type=type_value,
+            status_bucket=status_bucket,
+        )
 
         output.append(
             {
@@ -7509,13 +7663,19 @@ def _execute_merge_order_rows(
             "limit_stop_trail",
             "status",
             "filled_avg",
-            "notes",
             "_ts",
             "_event_type",
         ):
             value = row.get(field)
             if value not in (None, "", "--"):
                 combined[field] = value
+        candidate_note = str(row.get("notes") or "").strip()
+        current_note = str(combined.get("notes") or "").strip()
+        if candidate_note and (
+            not current_note
+            or (_execute_is_generic_order_note(current_note) and not _execute_is_generic_order_note(candidate_note))
+        ):
+            combined["notes"] = candidate_note
         merged[key] = combined
 
     output = [merged[key] for key in sequence]
@@ -7552,8 +7712,13 @@ def _execute_enrich_alpaca_orders_with_db(
         order_id = str(base.get("order_id") or "").strip()
         db_row = db_by_id.get(order_id)
         if db_row:
-            if combined.get("notes") in (None, ""):
-                combined["notes"] = db_row.get("notes") or ""
+            db_notes = str(db_row.get("notes") or "").strip()
+            current_notes = str(combined.get("notes") or "").strip()
+            if db_notes and (
+                not current_notes
+                or (_execute_is_generic_order_note(current_notes) and not _execute_is_generic_order_note(db_notes))
+            ):
+                combined["notes"] = db_notes
             if combined.get("limit_stop_trail") in (None, "", "--"):
                 combined["limit_stop_trail"] = db_row.get("limit_stop_trail") or "--"
             if combined.get("filled_avg") in (None, "") and db_row.get("filled_avg") not in (
