@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import type { MonitoringLogItem } from "../components/positions/MonitoringLogsPanel";
@@ -57,6 +57,8 @@ const navLabels = [
   "Screener",
   "ML Pipeline",
 ];
+const REFRESH_INTERVAL_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 const parseNumber = (value: string | number | null | undefined): number | null => {
   if (value === null || value === undefined) {
@@ -83,10 +85,13 @@ const normalizeLogType = (type: string | null | undefined): MonitoringLogItem["t
 };
 
 const fetchJson = async <T,>(path: string): Promise<T | null> => {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch(path, {
       headers: { Accept: "application/json" },
       cache: "no-store",
+      signal: controller.signal,
     });
     if (!response.ok) {
       return null;
@@ -94,6 +99,8 @@ const fetchJson = async <T,>(path: string): Promise<T | null> => {
     return (await response.json()) as T;
   } catch {
     return null;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
   }
 };
 
@@ -155,30 +162,54 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const liveTradingStatus = useLiveTradingStatus();
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
+    let inFlight = false;
 
     const load = async () => {
-      setIsLoading(true);
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      setIsLoading(!hasLoadedRef.current);
       const [monitoringPayload, logsPayload] = await Promise.all([
         fetchJson<MonitoringPositionsResponse>(`/api/positions/monitoring?ts=${Date.now()}`),
         fetchJson<PositionsLogsResponse>(`/api/positions/logs?limit=200&ts=${Date.now()}`),
       ]);
 
       if (!isMounted) {
+        inFlight = false;
         return;
       }
 
-      setMonitoringSnapshot(monitoringPayload ?? { ok: false, positions: [], summary: {} });
-      setLogsSnapshot(logsPayload ?? { ok: false, logs: [] });
-      setHasError(!monitoringPayload);
+      if (monitoringPayload) {
+        setMonitoringSnapshot(monitoringPayload);
+      } else if (!hasLoadedRef.current) {
+        setMonitoringSnapshot({ ok: false, positions: [], summary: {} });
+      }
+
+      if (logsPayload) {
+        setLogsSnapshot(logsPayload);
+      } else if (!hasLoadedRef.current) {
+        setLogsSnapshot({ ok: false, logs: [] });
+      }
+
+      setHasError(!monitoringPayload || !logsPayload);
       setIsLoading(false);
+      hasLoadedRef.current = true;
+      inFlight = false;
     };
 
-    load();
+    void load();
+    const intervalId = window.setInterval(() => {
+      void load();
+    }, REFRESH_INTERVAL_MS);
+
     return () => {
       isMounted = false;
+      window.clearInterval(intervalId);
     };
   }, []);
 

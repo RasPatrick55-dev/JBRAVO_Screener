@@ -6,11 +6,23 @@ import TrailingStopsCard from "./TrailingStopsCard";
 import type { ExecuteStateResponse } from "./types";
 import { fetchJsonNoStore, parseSseJson } from "./utils";
 
+const REFRESH_INTERVAL_MS = 20_000;
+const FIRST_LOAD_GRACE_MS = 2_500;
+const REQUEST_TIMEOUT_MS = 15_000;
+
+const hasUsableState = (value: ExecuteStateResponse | null): value is ExecuteStateResponse => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  return Boolean(value.summary || value.orders || value.trailing_stops || value.logs);
+};
+
 export default function ExecuteTab() {
   const [payload, setPayload] = useState<ExecuteStateResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const hasLoadedOnceRef = useRef(false);
+  const fallbackInFlightRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -19,24 +31,42 @@ export default function ExecuteTab() {
       if (!isMounted) {
         return;
       }
-      setPayload(nextPayload);
-      setHasError(!nextPayload);
-      setIsLoading(false);
-      if (nextPayload) {
+
+      if (hasUsableState(nextPayload)) {
+        setPayload(nextPayload);
+        setHasError(false);
         hasLoadedOnceRef.current = true;
+      } else {
+        if (!hasLoadedOnceRef.current) {
+          setPayload(null);
+        }
+        setHasError(true);
       }
+      setIsLoading(false);
     };
 
     const loadFallback = async () => {
+      if (fallbackInFlightRef.current) {
+        return;
+      }
+      fallbackInFlightRef.current = true;
       setIsLoading(!hasLoadedOnceRef.current);
-      const fallback = await fetchJsonNoStore<ExecuteStateResponse>(`/api/execute/state?ts=${Date.now()}`);
+      const fallback = await fetchJsonNoStore<ExecuteStateResponse>(
+        `/api/execute/state?ts=${Date.now()}`,
+        REQUEST_TIMEOUT_MS
+      );
       applyPayload(fallback);
+      fallbackInFlightRef.current = false;
     };
 
     if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
       void loadFallback();
+      const intervalId = window.setInterval(() => {
+        void loadFallback();
+      }, REFRESH_INTERVAL_MS);
       return () => {
         isMounted = false;
+        window.clearInterval(intervalId);
       };
     }
 
@@ -47,7 +77,10 @@ export default function ExecuteTab() {
       if (!hasLoadedOnceRef.current) {
         void loadFallback();
       }
-    }, 2500);
+    }, FIRST_LOAD_GRACE_MS);
+    const pollTimer = window.setInterval(() => {
+      void loadFallback();
+    }, REFRESH_INTERVAL_MS);
 
     source.onmessage = (event) => {
       const parsed = parseSseJson<ExecuteStateResponse>(event.data);
@@ -61,15 +94,14 @@ export default function ExecuteTab() {
       if (!isMounted) {
         return;
       }
-      if (!hasLoadedOnceRef.current) {
-        window.clearTimeout(fallbackTimer);
-        void loadFallback();
-      }
+      window.clearTimeout(fallbackTimer);
+      void loadFallback();
     };
 
     return () => {
       isMounted = false;
       window.clearTimeout(fallbackTimer);
+      window.clearInterval(pollTimer);
       source.close();
     };
   }, []);

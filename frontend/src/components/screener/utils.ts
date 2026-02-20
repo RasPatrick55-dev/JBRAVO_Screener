@@ -22,6 +22,29 @@ const percentFormatter = new Intl.NumberFormat("en-US", {
 export const withTs = (path: string) =>
   `${path}${path.includes("?") ? "&" : "?"}ts=${Date.now()}`;
 
+export const fetchNoStoreJson = async <T,>(path: string, timeoutMs = 15_000): Promise<T> => {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs));
+  try {
+    const response = await fetch(path, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Request failed (${response.status})`);
+    }
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Request timeout");
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
+};
+
 export const parseNumber = (value: unknown): number | null => {
   if (value === null || value === undefined || value === "") {
     return null;

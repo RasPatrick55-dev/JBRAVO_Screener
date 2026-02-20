@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LogsChipFilter, LogsStage, ScreenerLogRow, ScreenerLogsResponse } from "./types";
-import { formatUtcDateTime, normalizeLogLevel, withTs } from "./utils";
+import { fetchNoStoreJson, formatUtcDateTime, normalizeLogLevel, withTs } from "./utils";
 
 interface LogsPanelProps {
   title: string;
@@ -13,6 +13,8 @@ const chipOptions: Array<{ key: LogsChipFilter; label: string }> = [
   { key: "warnings", label: "Warnings" },
   { key: "today", label: "Today" },
 ];
+const REFRESH_INTERVAL_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 const normalizeLogRow = (row: Partial<ScreenerLogRow>): ScreenerLogRow => {
   return {
@@ -85,15 +87,20 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const hasLoadedRef = useRef(false);
 
   const stageStyle = stageStyleMap[stage] ?? stageStyleMap.screener;
 
   useEffect(() => {
     let isMounted = true;
-    const controller = new AbortController();
+    let inFlight = false;
 
     const load = async () => {
-      setIsLoading(true);
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      setIsLoading(!hasLoadedRef.current);
 
       const level =
         selectedChip === "errors" ? "errors" : selectedChip === "warnings" ? "warnings" : "all";
@@ -107,15 +114,10 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
       });
 
       try {
-        const response = await fetch(withTs(`/api/screener/logs?${params.toString()}`), {
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`Request failed (${response.status})`);
-        }
-        const payload = (await response.json()) as ScreenerLogsResponse;
+        const payload = await fetchNoStoreJson<ScreenerLogsResponse>(
+          withTs(`/api/screener/logs?${params.toString()}`),
+          REQUEST_TIMEOUT_MS
+        );
         if (!isMounted) {
           return;
         }
@@ -124,7 +126,7 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
         setSourceDetail(String(payload.source_detail ?? payload.source ?? ""));
         setErrorMessage(null);
       } catch (error) {
-        if (!isMounted || controller.signal.aborted) {
+        if (!isMounted) {
           return;
         }
         const message = error instanceof Error ? error.message : "Unable to load logs.";
@@ -132,14 +134,20 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
       } finally {
         if (isMounted) {
           setIsLoading(false);
+          hasLoadedRef.current = true;
         }
+        inFlight = false;
       }
     };
 
-    load();
+    void load();
+    const intervalId = window.setInterval(() => {
+      void load();
+    }, REFRESH_INTERVAL_MS);
+
     return () => {
       isMounted = false;
-      controller.abort();
+      window.clearInterval(intervalId);
     };
   }, [reloadToken, selectedChip, stage]);
 

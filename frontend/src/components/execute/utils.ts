@@ -23,11 +23,14 @@ const numberFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
-export const fetchJsonNoStore = async <T,>(path: string): Promise<T | null> => {
+export const fetchJsonNoStore = async <T,>(path: string, timeoutMs = 15_000): Promise<T | null> => {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs));
   try {
     const response = await fetch(path, {
       cache: "no-store",
       headers: { Accept: "application/json" },
+      signal: controller.signal,
     });
     if (!response.ok) {
       return null;
@@ -35,14 +38,38 @@ export const fetchJsonNoStore = async <T,>(path: string): Promise<T | null> => {
     return (await response.json()) as T;
   } catch {
     return null;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
   }
 };
 
 export const parseSseJson = <T,>(raw: string): T | null => {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
+  const normalized = String(raw ?? "").trim();
+  if (!normalized) {
     return null;
+  }
+
+  const candidates = [normalized];
+  if (normalized.includes("\n")) {
+    const dataLines = normalized
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.toLowerCase().startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .filter(Boolean);
+    if (dataLines.length > 0) {
+      candidates.unshift(dataLines.join("\n"));
+    }
+  }
+
+  try {
+    return JSON.parse(candidates[0]) as T;
+  } catch {
+    try {
+      return JSON.parse(candidates[candidates.length - 1]) as T;
+    } catch {
+      return null;
+    }
   }
 };
 

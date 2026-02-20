@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ScreenerPickRow, ScreenerPicksResponse } from "./types";
 import {
   compareNullableNumbers,
+  fetchNoStoreJson,
   formatCompactNumber,
   formatCurrency,
   formatPercent,
@@ -55,6 +56,8 @@ const formatScore = (value: number | null | undefined): string => {
   }
   return value.toFixed(3);
 };
+const REFRESH_INTERVAL_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export default function ScreenerPicksCard() {
   const [rows, setRows] = useState<ScreenerPickRow[]>([]);
@@ -64,31 +67,28 @@ export default function ScreenerPicksCard() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
-    const controller = new AbortController();
+    let inFlight = false;
 
     const load = async () => {
-      setIsLoading(true);
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      setIsLoading(!hasLoadedRef.current);
       const params = new URLSearchParams({
         limit: "50",
         filter: "all",
       });
 
       try {
-        const response = await fetch(
+        const payload = await fetchNoStoreJson<ScreenerPicksResponse>(
           withTs(`/api/screener/picks?${params.toString()}`),
-          {
-            cache: "no-store",
-            headers: { Accept: "application/json" },
-            signal: controller.signal,
-          }
+          REQUEST_TIMEOUT_MS
         );
-        if (!response.ok) {
-          throw new Error(`Request failed (${response.status})`);
-        }
-        const payload = (await response.json()) as ScreenerPicksResponse;
         if (!isMounted) {
           return;
         }
@@ -100,7 +100,7 @@ export default function ScreenerPicksCard() {
         setStatusLabel(String(payload.status ?? "COMPLETE").toUpperCase());
         setErrorMessage(null);
       } catch (error) {
-        if (!isMounted || controller.signal.aborted) {
+        if (!isMounted) {
           return;
         }
         const message = error instanceof Error ? error.message : "Unable to load screener picks.";
@@ -108,14 +108,20 @@ export default function ScreenerPicksCard() {
       } finally {
         if (isMounted) {
           setIsLoading(false);
+          hasLoadedRef.current = true;
         }
+        inFlight = false;
       }
     };
 
-    load();
+    void load();
+    const intervalId = window.setInterval(() => {
+      void load();
+    }, REFRESH_INTERVAL_MS);
+
     return () => {
       isMounted = false;
-      controller.abort();
+      window.clearInterval(intervalId);
     };
   }, [reloadToken]);
 
