@@ -5,6 +5,7 @@ import OrdersTableCard from "./OrdersTableCard";
 import TrailingStopsCard from "./TrailingStopsCard";
 import type { ExecuteStateResponse } from "./types";
 import { fetchJsonNoStore, parseSseJson } from "./utils";
+import type { LiveDataSyncState } from "../navbar/liveStatus";
 
 const REFRESH_INTERVAL_MS = 20_000;
 const FIRST_LOAD_GRACE_MS = 2_500;
@@ -17,7 +18,11 @@ const hasUsableState = (value: ExecuteStateResponse | null): value is ExecuteSta
   return Boolean(value.summary || value.orders || value.trailing_stops || value.logs);
 };
 
-export default function ExecuteTab() {
+type ExecuteTabProps = {
+  onSyncStateChange?: (state: LiveDataSyncState) => void;
+};
+
+export default function ExecuteTab({ onSyncStateChange }: ExecuteTabProps) {
   const [payload, setPayload] = useState<ExecuteStateResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -105,6 +110,21 @@ export default function ExecuteTab() {
       source.close();
     };
   }, []);
+
+  useEffect(() => {
+    if (!onSyncStateChange) {
+      return;
+    }
+    if (isLoading) {
+      onSyncStateChange("loading");
+      return;
+    }
+    if (hasError || !payload) {
+      onSyncStateChange("error");
+      return;
+    }
+    onSyncStateChange("ready");
+  }, [hasError, isLoading, onSyncStateChange, payload]);
 
   const summary = payload?.summary ?? null;
   const ordersRows = payload?.orders?.rows ?? [];

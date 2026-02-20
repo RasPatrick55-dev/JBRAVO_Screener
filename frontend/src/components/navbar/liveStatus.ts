@@ -6,15 +6,22 @@ type ApiHealthResponse = {
 };
 
 type TradingStatus = boolean | null;
+export type LiveDataSyncState = "loading" | "ready" | "error";
 
 const POLL_INTERVAL_MS = 15_000;
 
-const liveToneFromStatus = (status: TradingStatus): StatusTone => {
-  if (status === true) {
-    return "success";
-  }
+const liveToneFromStatus = (status: TradingStatus, syncState: LiveDataSyncState | null): StatusTone => {
   if (status === false) {
     return "error";
+  }
+  if (status === true) {
+    if (syncState === "error") {
+      return "warning";
+    }
+    if (syncState === "loading") {
+      return "neutral";
+    }
+    return "success";
   }
   return "neutral";
 };
@@ -43,13 +50,14 @@ const fetchTradingStatus = async (): Promise<TradingStatus> => {
 };
 
 export const buildNavbarBadges = (
-  tradingStatus: TradingStatus
+  tradingStatus: TradingStatus,
+  syncState: LiveDataSyncState | null = null
 ): NavbarDesktopProps["rightBadges"] => [
   { label: "Paper Trading", tone: "warning" as const, showDot: true },
   {
     label: "Live",
-    tone: liveToneFromStatus(tradingStatus),
-    showDot: tradingStatus === true,
+    tone: liveToneFromStatus(tradingStatus, syncState),
+    showDot: tradingStatus === true && syncState !== "loading" && syncState !== "error",
   },
 ];
 

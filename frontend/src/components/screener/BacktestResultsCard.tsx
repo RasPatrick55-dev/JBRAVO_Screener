@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { LiveDataSyncState } from "../navbar/liveStatus";
 import type { BacktestResponse, BacktestRow, BacktestWindow } from "./types";
 import {
   fetchNoStoreJson,
@@ -46,7 +47,11 @@ const valueTone = (value: number | null): string => {
 const REFRESH_INTERVAL_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
-export default function BacktestResultsCard() {
+type BacktestResultsCardProps = {
+  onSyncStateChange?: (state: LiveDataSyncState) => void;
+};
+
+export default function BacktestResultsCard({ onSyncStateChange }: BacktestResultsCardProps) {
   const [rows, setRows] = useState<BacktestRow[]>([]);
   const [runTsUtc, setRunTsUtc] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -108,6 +113,21 @@ export default function BacktestResultsCard() {
       window.clearInterval(intervalId);
     };
   }, [reloadToken]);
+
+  useEffect(() => {
+    if (!onSyncStateChange) {
+      return;
+    }
+    if (isLoading) {
+      onSyncStateChange("loading");
+      return;
+    }
+    if (errorMessage) {
+      onSyncStateChange("error");
+      return;
+    }
+    onSyncStateChange("ready");
+  }, [errorMessage, isLoading, onSyncStateChange]);
 
   const displayedRows = useMemo(() => rows, [rows]);
 

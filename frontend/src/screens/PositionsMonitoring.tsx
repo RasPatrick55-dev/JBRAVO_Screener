@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
+import { buildNavbarBadges, type LiveDataSyncState, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import type { MonitoringLogItem } from "../components/positions/MonitoringLogsPanel";
 import type { PositionRowProps } from "../components/positions/PositionRow";
@@ -219,9 +219,10 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
     [currentTab]
   );
 
+  const pageSyncState: LiveDataSyncState = isLoading ? "loading" : hasError ? "error" : "ready";
   const rightBadges = useMemo(
-    () => buildNavbarBadges(liveTradingStatus),
-    [liveTradingStatus]
+    () => buildNavbarBadges(liveTradingStatus, pageSyncState),
+    [liveTradingStatus, pageSyncState]
   );
 
   const positionRows = useMemo<PositionRowProps[]>(() => {
