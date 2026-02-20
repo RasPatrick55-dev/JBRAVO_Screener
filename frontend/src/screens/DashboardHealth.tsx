@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
+import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import ProcessStatusCards, {
   type ProcessStatusCardsProps,
 } from "../components/dashboard/ProcessStatusCards";
@@ -1007,7 +1008,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         executeLog,
         monitorLog,
       ] = await Promise.all([
-        fetchJson<HealthOverviewResponse>("/health/overview"),
+        fetchJson<HealthOverviewResponse>("/api/health/overview"),
         fetchJson<ApiHealthResponse>("/api/health"),
         fetchJson<AccountOverviewResponse>("/api/account/overview"),
         fetchJson<TradesOverviewResponse>("/api/trades/overview"),
@@ -1060,22 +1061,13 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     };
   }, []);
 
-  const rightBadges = useMemo(() => {
-    const liveTone: StatusTone =
-      healthSnapshot?.trading_ok === true
-        ? "success"
-        : healthSnapshot?.trading_ok === false
-          ? "error"
-          : "neutral";
-    return [
-      { label: "Paper Trading", tone: "warning" as const },
-      {
-        label: "Live",
-        tone: liveTone as StatusTone,
-        showDot: healthSnapshot?.trading_ok === true,
-      },
-    ];
-  }, [healthSnapshot?.trading_ok]);
+  const liveTradingStatus = useLiveTradingStatus(
+    typeof healthSnapshot?.trading_ok === "boolean" ? healthSnapshot.trading_ok : null
+  );
+  const rightBadges = useMemo(
+    () => buildNavbarBadges(liveTradingStatus),
+    [liveTradingStatus]
+  );
 
   const pipelineScore = useMemo(
     () => computePipelineScore(healthSnapshot),

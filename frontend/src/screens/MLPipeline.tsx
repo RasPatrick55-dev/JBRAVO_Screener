@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import KPICard from "../components/cards/KPICard";
 import StatusBadge from "../components/badges/StatusBadge";
@@ -11,6 +12,7 @@ type MLPipelineProps = {
 };
 
 type ApiHealthResponse = {
+  trading_ok?: boolean | null;
   data_ok?: boolean | null;
   feed?: string | null;
   last_run_utc?: string | null;
@@ -233,10 +235,13 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
     [currentTab]
   );
 
-  const rightBadges = [
-    { label: "Paper Trading", tone: "warning" as const, showDot: true },
-    { label: "Live", tone: "neutral" as const },
-  ];
+  const liveTradingStatus = useLiveTradingStatus(
+    typeof healthSnapshot?.trading_ok === "boolean" ? healthSnapshot.trading_ok : null
+  );
+  const rightBadges = useMemo(
+    () => buildNavbarBadges(liveTradingStatus),
+    [liveTradingStatus]
+  );
 
   const pipelineState = pipelineStatus(healthSnapshot?.pipeline_rc ?? null);
   const lastRun = formatDateTime(healthSnapshot?.last_run_utc);

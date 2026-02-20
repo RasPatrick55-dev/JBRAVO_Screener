@@ -5760,6 +5760,7 @@ def react_asset_bundle(filename: str):
     abort(404)
 
 
+@server.route("/api/health/overview")
 @server.route("/health/overview")
 def health_overview():
     """Return a lightweight JSON payload describing dashboard health."""
