@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
+import { buildNavbarBadges, type LiveDataSyncState, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import KPICard from "../components/cards/KPICard";
 import StatusBadge from "../components/badges/StatusBadge";
@@ -238,9 +238,10 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
   const liveTradingStatus = useLiveTradingStatus(
     typeof healthSnapshot?.trading_ok === "boolean" ? healthSnapshot.trading_ok : null
   );
+  const pageSyncState: LiveDataSyncState = isLoading ? "loading" : hasError ? "error" : "ready";
   const rightBadges = useMemo(
-    () => buildNavbarBadges(liveTradingStatus),
-    [liveTradingStatus]
+    () => buildNavbarBadges(liveTradingStatus, pageSyncState),
+    [liveTradingStatus, pageSyncState]
   );
 
   const pipelineState = pipelineStatus(healthSnapshot?.pipeline_rc ?? null);

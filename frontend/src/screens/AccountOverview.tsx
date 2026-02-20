@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
+import { useMemo, useState } from "react";
+import { buildNavbarBadges, type LiveDataSyncState, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import AccountTab from "../components/account/AccountTab";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 
@@ -21,14 +21,15 @@ const navLabels = [
 export default function AccountOverview({ activeTab, onTabSelect }: AccountOverviewProps) {
   const currentTab = activeTab ?? "Account";
   const liveTradingStatus = useLiveTradingStatus();
+  const [pageSyncState, setPageSyncState] = useState<LiveDataSyncState>("loading");
   const navTabs = useMemo(
     () => navLabels.map((label) => ({ label, isActive: label === currentTab })),
     [currentTab]
   );
 
   const rightBadges = useMemo(
-    () => buildNavbarBadges(liveTradingStatus),
-    [liveTradingStatus]
+    () => buildNavbarBadges(liveTradingStatus, pageSyncState),
+    [liveTradingStatus, pageSyncState]
   );
 
   return (
@@ -38,7 +39,7 @@ export default function AccountOverview({ activeTab, onTabSelect }: AccountOverv
         <div className="pointer-events-none absolute -top-28 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-cyan-300/20 via-sky-200/10 to-transparent blur-3xl dark:from-cyan-500/18 dark:via-blue-500/12 dark:to-transparent" />
         <div className="pointer-events-none absolute left-0 top-56 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-300/20 via-amber-200/12 to-transparent blur-3xl dark:from-emerald-500/15 dark:via-amber-500/10 dark:to-transparent" />
         <div className="relative mx-auto w-full max-w-[1240px] px-4 sm:px-6 lg:px-8">
-          <AccountTab />
+          <AccountTab onSyncStateChange={setPageSyncState} />
         </div>
       </main>
     </div>
