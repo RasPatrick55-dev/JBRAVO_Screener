@@ -20,39 +20,11 @@ type Props = {
   hasError: boolean;
 };
 
-const formatOrderIdDisplay = (value: string | null | undefined): string => {
-  const normalized = String(value ?? "").trim();
-  if (!normalized) {
-    return "--";
-  }
-  if (normalized.length <= 20) {
-    return normalized;
-  }
-  return `${normalized.slice(0, 8)}...${normalized.slice(-8)}`;
-};
-
 export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [statusScope, setStatusScope] = useState<ExecuteStatusScope>("all");
   const [lsx, setLsx] = useState<ExecuteLsxFilter>("all");
-  const [copiedOrderId, setCopiedOrderId] = useState<string | null>(null);
-
-  const copyOrderId = async (orderId: string) => {
-    const normalized = String(orderId).trim();
-    if (!normalized || typeof window === "undefined" || !navigator?.clipboard?.writeText) {
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(normalized);
-      setCopiedOrderId(normalized);
-      window.setTimeout(() => {
-        setCopiedOrderId((current) => (current === normalized ? null : current));
-      }, 1200);
-    } catch {
-      // noop: clipboard can fail due to browser permissions.
-    }
-  };
 
   const visibleRows = useMemo(
     () => filterOrdersClient(rows, searchQuery, statusScope, lsx),
@@ -131,7 +103,7 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
       </header>
 
       <div className="mt-3 overflow-x-auto">
-        <div className="min-w-[1160px] max-h-[320px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-violet">
+        <div className="min-w-[980px] max-h-[320px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-violet">
           <table className="min-w-full table-auto">
             <thead className="sticky top-0 z-10 bg-slate-900/95">
               <tr className="font-arimo border-b border-slate-700/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300">
@@ -160,9 +132,6 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                   Filled Avg
                 </th>
                 <th scope="col" className="w-[220px] px-3 py-2 text-left whitespace-nowrap">
-                  Order ID
-                </th>
-                <th scope="col" className="w-[220px] px-3 py-2 text-left whitespace-nowrap">
                   Notes
                 </th>
               </tr>
@@ -171,7 +140,7 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
               {isLoading && rows.length === 0
                 ? Array.from({ length: 6 }).map((_, index) => (
                     <tr key={`orders-skeleton-${index}`} className="border-b border-slate-700/70">
-                      <td colSpan={10} className="px-3 py-3">
+                      <td colSpan={9} className="px-3 py-3">
                         <div className="h-4 w-full animate-pulse rounded bg-slate-700/70" />
                       </td>
                     </tr>
@@ -180,7 +149,7 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
 
               {!isLoading && visibleRows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-3 py-8 text-center text-sm text-secondary">
+                  <td colSpan={9} className="px-3 py-8 text-center text-sm text-secondary">
                     No orders available.
                   </td>
                 </tr>
@@ -191,7 +160,6 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                     const side = normalizeSide(row.side);
                     const status = normalizeOrderStatus(row.status);
                     const ts = formatDateTimeUtc(row.ts_utc ?? null);
-                    const orderIdText = String(row.order_id ?? "").trim();
                     return (
                       <tr
                         key={`${row.order_id ?? "order"}-${row.ts_utc ?? "ts"}-${index}`}
@@ -235,25 +203,6 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                         </td>
                         <td className="font-cousine px-3 py-2 text-right tabular-nums text-slate-100 whitespace-nowrap">
                           {formatCurrency(row.filled_avg)}
-                        </td>
-                        <td className="font-cousine w-[220px] px-3 py-2 text-left text-slate-300">
-                          {orderIdText ? (
-                            <button
-                              type="button"
-                              onClick={() => void copyOrderId(orderIdText)}
-                              title={`${orderIdText}\nClick to copy`}
-                              className="group inline-flex max-w-[200px] items-center gap-1 rounded px-1 py-0.5 text-left text-[12px] tabular-nums text-sky-200 outline outline-1 outline-transparent transition hover:bg-sky-500/10 hover:text-sky-100 hover:outline-sky-400/45"
-                            >
-                              <span className="overflow-hidden text-ellipsis whitespace-nowrap">
-                                {formatOrderIdDisplay(orderIdText)}
-                              </span>
-                              <span className="text-[10px] uppercase tracking-[0.06em] text-slate-400 group-hover:text-sky-200">
-                                {copiedOrderId === orderIdText ? "Copied" : "Copy"}
-                              </span>
-                            </button>
-                          ) : (
-                            "--"
-                          )}
                         </td>
                         <td className="w-[220px] px-3 py-2 text-left text-slate-300 break-all">
                           {row.notes || ""}
