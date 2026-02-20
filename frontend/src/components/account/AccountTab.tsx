@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { LiveDataSyncState } from "../navbar/liveStatus";
 import AccountBreakdownCard from "./AccountBreakdownCard";
 import AccountPerformanceCard from "./AccountPerformanceCard";
 import DailyOrderLogsCard from "./DailyOrderLogsCard";
@@ -299,7 +300,11 @@ const defaultLoadingState: LoadingState = {
   logs: true,
 };
 
-export default function AccountTab() {
+type AccountTabProps = {
+  onSyncStateChange?: (state: LiveDataSyncState) => void;
+};
+
+export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
   const [summary, setSummary] = useState<AccountSummary | null>(null);
   const [performanceRows, setPerformanceRows] = useState<AccountPerformanceRow[]>([]);
   const [accountTotal, setAccountTotal] = useState<AccountTotal>({
@@ -403,6 +408,22 @@ export default function AccountTab() {
       window.clearInterval(intervalId);
     };
   }, []);
+
+  useEffect(() => {
+    if (!onSyncStateChange) {
+      return;
+    }
+    const anyLoading = Object.values(loading).some(Boolean);
+    if (anyLoading) {
+      onSyncStateChange("loading");
+      return;
+    }
+    if (hasError) {
+      onSyncStateChange("error");
+      return;
+    }
+    onSyncStateChange("ready");
+  }, [hasError, loading, onSyncStateChange]);
 
   const tableRows = useMemo(() => {
     const byPeriod = new Map<string, AccountPerformanceRow>();

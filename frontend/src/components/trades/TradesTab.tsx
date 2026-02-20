@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { LiveDataSyncState } from "../navbar/liveStatus";
 import LatestTradesTable from "./LatestTradesTable";
 import TradesLeaderboard from "./TradesLeaderboard";
 import TradesPerformanceBoard from "./TradesPerformanceBoard";
@@ -332,17 +333,23 @@ const fetchJson = async <T,>(path: string): Promise<T | null> => {
   }
 };
 
-export default function TradesTab() {
+type TradesTabProps = {
+  onSyncStateChange?: (state: LiveDataSyncState) => void;
+};
+
+export default function TradesTab({ onSyncStateChange }: TradesTabProps) {
   const [selectedLeaderboardRange, setSelectedLeaderboardRange] = useState<RangeKey>("all");
   const [leaderboardMode, setLeaderboardMode] = useState<LeaderboardMode>("winners");
 
   const [statsRows, setStatsRows] = useState<RangeRowMetrics[]>([]);
   const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState(false);
   const [leaderboardRows, setLeaderboardRows] = useState<LeaderRow[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
   const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
   const [latestTradesRows, setLatestTradesRows] = useState<LatestTradeRow[]>([]);
   const [latestTradesLoading, setLatestTradesLoading] = useState(true);
+  const [latestTradesError, setLatestTradesError] = useState(false);
 
   const hasLoadedStatsRef = useRef(false);
   const hasLoadedLeaderboardRef = useRef(false);
@@ -362,6 +369,7 @@ export default function TradesTab() {
         return;
       }
       const normalized = normalizeStatsPayload(payload);
+      setStatsError(payload === null);
       setStatsRows(normalized.length > 0 ? normalized : isDev ? mockStatsRows : []);
       hasLoadedStatsRef.current = true;
       setStatsLoading(false);
@@ -423,6 +431,7 @@ export default function TradesTab() {
         return;
       }
       const normalized = normalizeLatestPayload(payload);
+      setLatestTradesError(payload === null);
       setLatestTradesRows(normalized.length > 0 ? normalized : isDev ? mockLatestTrades : []);
       hasLoadedLatestRef.current = true;
       setLatestTradesLoading(false);
@@ -443,6 +452,29 @@ export default function TradesTab() {
     }
     return [];
   }, [statsRows]);
+
+  useEffect(() => {
+    if (!onSyncStateChange) {
+      return;
+    }
+    if (statsLoading || leaderboardLoading || latestTradesLoading) {
+      onSyncStateChange("loading");
+      return;
+    }
+    if (statsError || latestTradesError || Boolean(leaderboardError)) {
+      onSyncStateChange("error");
+      return;
+    }
+    onSyncStateChange("ready");
+  }, [
+    latestTradesError,
+    latestTradesLoading,
+    leaderboardError,
+    leaderboardLoading,
+    onSyncStateChange,
+    statsError,
+    statsLoading,
+  ]);
 
   return (
     <section className="space-y-4" aria-label="Trades tab">
