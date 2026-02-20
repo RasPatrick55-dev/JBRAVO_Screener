@@ -20,11 +20,39 @@ type Props = {
   hasError: boolean;
 };
 
+const formatOrderIdDisplay = (value: string | null | undefined): string => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return "--";
+  }
+  if (normalized.length <= 20) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 8)}...${normalized.slice(-8)}`;
+};
+
 export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [statusScope, setStatusScope] = useState<ExecuteStatusScope>("all");
   const [lsx, setLsx] = useState<ExecuteLsxFilter>("all");
+  const [copiedOrderId, setCopiedOrderId] = useState<string | null>(null);
+
+  const copyOrderId = async (orderId: string) => {
+    const normalized = String(orderId).trim();
+    if (!normalized || typeof window === "undefined" || !navigator?.clipboard?.writeText) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(normalized);
+      setCopiedOrderId(normalized);
+      window.setTimeout(() => {
+        setCopiedOrderId((current) => (current === normalized ? null : current));
+      }, 1200);
+    } catch {
+      // noop: clipboard can fail due to browser permissions.
+    }
+  };
 
   const visibleRows = useMemo(
     () => filterOrdersClient(rows, searchQuery, statusScope, lsx),
@@ -131,10 +159,10 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                 <th scope="col" className="px-3 py-2 text-right whitespace-nowrap">
                   Filled Avg
                 </th>
-                <th scope="col" className="px-3 py-2 text-left whitespace-nowrap">
+                <th scope="col" className="w-[220px] px-3 py-2 text-left whitespace-nowrap">
                   Order ID
                 </th>
-                <th scope="col" className="px-3 py-2 text-left whitespace-nowrap">
+                <th scope="col" className="w-[220px] px-3 py-2 text-left whitespace-nowrap">
                   Notes
                 </th>
               </tr>
@@ -163,6 +191,7 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                     const side = normalizeSide(row.side);
                     const status = normalizeOrderStatus(row.status);
                     const ts = formatDateTimeUtc(row.ts_utc ?? null);
+                    const orderIdText = String(row.order_id ?? "").trim();
                     return (
                       <tr
                         key={`${row.order_id ?? "order"}-${row.ts_utc ?? "ts"}-${index}`}
@@ -207,10 +236,28 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                         <td className="font-cousine px-3 py-2 text-right tabular-nums text-slate-100 whitespace-nowrap">
                           {formatCurrency(row.filled_avg)}
                         </td>
-                        <td className="font-cousine px-3 py-2 text-left text-slate-300 whitespace-nowrap">
-                          {row.order_id || "--"}
+                        <td className="font-cousine w-[220px] px-3 py-2 text-left text-slate-300">
+                          {orderIdText ? (
+                            <button
+                              type="button"
+                              onClick={() => void copyOrderId(orderIdText)}
+                              title={`${orderIdText}\nClick to copy`}
+                              className="group inline-flex max-w-[200px] items-center gap-1 rounded px-1 py-0.5 text-left text-[12px] tabular-nums text-sky-200 outline outline-1 outline-transparent transition hover:bg-sky-500/10 hover:text-sky-100 hover:outline-sky-400/45"
+                            >
+                              <span className="overflow-hidden text-ellipsis whitespace-nowrap">
+                                {formatOrderIdDisplay(orderIdText)}
+                              </span>
+                              <span className="text-[10px] uppercase tracking-[0.06em] text-slate-400 group-hover:text-sky-200">
+                                {copiedOrderId === orderIdText ? "Copied" : "Copy"}
+                              </span>
+                            </button>
+                          ) : (
+                            "--"
+                          )}
                         </td>
-                        <td className="px-3 py-2 text-left text-slate-300">{row.notes || ""}</td>
+                        <td className="w-[220px] px-3 py-2 text-left text-slate-300 break-all">
+                          {row.notes || ""}
+                        </td>
                       </tr>
                     );
                   })
