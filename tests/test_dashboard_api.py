@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -66,6 +66,47 @@ def _reload_dashboard_app(monkeypatch: pytest.MonkeyPatch, base: Path):
 def _account_point(ts: str, equity: float) -> dict[str, object]:
     dt = datetime.fromisoformat(ts)
     return {"t": dt.isoformat(), "equity": float(equity), "_dt": dt}
+
+
+@pytest.mark.alpaca_optional
+def test_days_held_map_reconstructs_long_and_short_entries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    long_entry = datetime(2026, 2, 10, 15, 30, tzinfo=timezone.utc)
+    short_entry = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+
+    fills = [
+        {
+            "symbol": "AAA",
+            "side": "sell",
+            "qty": 4,
+            "timestamp": datetime(2026, 2, 12, 15, 30, tzinfo=timezone.utc),
+        },
+        {"symbol": "AAA", "side": "buy", "qty": 10, "timestamp": long_entry},
+        {
+            "symbol": "BBB",
+            "side": "buy_to_cover",
+            "qty": 3,
+            "timestamp": datetime(2026, 2, 13, 15, 30, tzinfo=timezone.utc),
+        },
+        {"symbol": "BBB", "side": "sell_short", "qty": 8, "timestamp": short_entry},
+    ]
+
+    monkeypatch.setattr(module, "_fetch_alpaca_fill_activities", lambda **_: fills)
+    monkeypatch.setattr(module, "_days_held_from_timestamp", lambda ts: int(ts.timestamp()))
+
+    days_map = module._days_held_map_from_alpaca_activities(
+        [
+            {"symbol": "AAA", "qty": 6},
+            {"symbol": "BBB", "qty": -5},
+        ]
+    )
+
+    assert days_map["AAA"] == int(long_entry.timestamp())
+    assert days_map["BBB"] == int(short_entry.timestamp())
 
 
 def test_connection_badge_color(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

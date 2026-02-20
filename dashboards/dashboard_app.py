@@ -1418,13 +1418,44 @@ def _fetch_alpaca_fill_activities(
 
 
 def _days_held_map_from_alpaca_activities(alpaca_positions: list[dict[str, Any]]) -> dict[str, int]:
+    def _normalize_fill_side(side_value: Any) -> str:
+        side = str(side_value or "").strip().lower()
+        if not side:
+            return ""
+        if side in {
+            "buy",
+            "buy_to_cover",
+            "buytocover",
+            "buy_to_close",
+            "buytoclose",
+            "buy_long",
+            "buytoopen",
+            "buy_to_open",
+        }:
+            return "buy"
+        if side in {
+            "sell",
+            "sell_short",
+            "sellshort",
+            "sell_to_open",
+            "selltoopen",
+            "sell_to_close",
+            "selltoclose",
+        }:
+            return "sell"
+        if side.startswith("buy"):
+            return "buy"
+        if side.startswith("sell"):
+            return "sell"
+        return ""
+
     symbol_qty: dict[str, float] = {}
     for position in alpaca_positions:
         symbol = _normalize_symbol(position.get("symbol"))
         qty = _to_float(position.get("qty"))
         if not symbol or qty is None or qty == 0:
             continue
-        symbol_qty[symbol] = abs(qty)
+        symbol_qty[symbol] = qty
     if not symbol_qty:
         return {}
 
@@ -1440,7 +1471,7 @@ def _days_held_map_from_alpaca_activities(alpaca_positions: list[dict[str, Any]]
         grouped.setdefault(symbol, []).append(fill)
 
     days_map: dict[str, int] = {}
-    for symbol, open_qty in symbol_qty.items():
+    for symbol, open_qty_signed in symbol_qty.items():
         rows = grouped.get(symbol, [])
         if not rows:
             continue
@@ -1448,20 +1479,23 @@ def _days_held_map_from_alpaca_activities(alpaca_positions: list[dict[str, Any]]
             key=lambda item: item.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc),
             reverse=True,
         )
-        remaining = float(open_qty)
+        is_long = open_qty_signed > 0
+        entry_side = "buy" if is_long else "sell"
+        offset_side = "sell" if is_long else "buy"
+        remaining = float(abs(open_qty_signed))
         earliest_entry: Optional[datetime] = None
 
         for row in rows:
-            side = str(row.get("side") or "").lower()
+            side = _normalize_fill_side(row.get("side"))
             qty = _to_float(row.get("qty")) or 0.0
             ts = row.get("timestamp")
             if qty <= 0 or not isinstance(ts, datetime):
                 continue
 
-            if side == "sell":
+            if side == offset_side:
                 remaining += qty
                 continue
-            if side != "buy":
+            if side != entry_side:
                 continue
             if remaining <= 0:
                 break
