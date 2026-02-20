@@ -341,7 +341,10 @@ def test_execute_summary_preserves_explicit_zero_metrics(
     monkeypatch.setattr(
         module,
         "_execute_summary_counts_from_alpaca",
-        lambda _dt: ({"submitted": 9, "filled": 4, "rejected": 1}, "alpaca:/v2/orders"),
+        lambda _after, _until=None: (
+            {"submitted": 9, "filled": 4, "rejected": 1},
+            "alpaca:/v2/orders",
+        ),
     )
     monkeypatch.setattr(module, "_execute_latest_candidates_count", lambda: 6)
     monkeypatch.setattr(module, "_execute_result_pl_from_db", lambda _dt: 123.45)
@@ -357,7 +360,7 @@ def test_execute_summary_preserves_explicit_zero_metrics(
 
 
 @pytest.mark.alpaca_optional
-def test_execute_summary_uses_fallback_only_when_metrics_missing(
+def test_execute_summary_missing_postgres_fields_do_not_use_alpaca_counts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _prepare_dashboard_data(tmp_path)
@@ -381,7 +384,10 @@ def test_execute_summary_uses_fallback_only_when_metrics_missing(
     monkeypatch.setattr(
         module,
         "_execute_summary_counts_from_alpaca",
-        lambda _dt: ({"submitted": 3, "filled": 2, "rejected": 1}, "alpaca:/v2/orders"),
+        lambda _after, _until=None: (
+            {"submitted": 3, "filled": 2, "rejected": 1},
+            "alpaca:/v2/orders",
+        ),
     )
     monkeypatch.setattr(module, "_execute_latest_candidates_count", lambda: 6)
     monkeypatch.setattr(module, "_execute_result_pl_from_db", lambda _dt: 42.0)
@@ -390,6 +396,40 @@ def test_execute_summary_uses_fallback_only_when_metrics_missing(
     payload = module._execute_summary_payload()
 
     assert payload["source"] == "postgres"
+    assert payload["submitted"] == 0
+    assert payload["filled"] == 0
+    assert payload["rejected"] == 0
+    assert payload["candidates"] == 6
+    assert payload["result_pl_usd"] == 42.0
+
+
+@pytest.mark.alpaca_optional
+def test_execute_summary_uses_alpaca_fallback_only_when_no_metrics_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        module, "_execute_summary_from_metrics_table", lambda: (None, "postgres:none")
+    )
+    monkeypatch.setattr(module, "_execute_summary_from_metrics_file", lambda: (None, "file:missing"))
+    monkeypatch.setattr(
+        module,
+        "_execute_summary_counts_from_alpaca",
+        lambda _after, _until=None: (
+            {"submitted": 3, "filled": 2, "rejected": 1},
+            "alpaca:/v2/orders",
+        ),
+    )
+    monkeypatch.setattr(module, "_execute_latest_candidates_count", lambda: 6)
+    monkeypatch.setattr(module, "_execute_result_pl_from_db", lambda _dt: 42.0)
+    monkeypatch.setattr(module, "_execute_last_run_from_logs", lambda: "2026-02-20T16:05:36+00:00")
+    monkeypatch.setattr(module, "_execute_now_in_window", lambda: False)
+
+    payload = module._execute_summary_payload()
+
+    assert payload["source"] == "alpaca-fallback"
     assert payload["submitted"] == 3
     assert payload["filled"] == 2
     assert payload["rejected"] == 1
@@ -418,15 +458,17 @@ def test_execute_summary_from_metrics_table_derives_window_from_run_timestamp(
     )
     monkeypatch.setattr(
         module,
-        "_db_fetch_one",
-        lambda _sql, _params=None: {
-            "run_started_utc": "2026-02-20T13:30:00+00:00",
-            "run_finished_utc": "2026-02-20T13:31:00+00:00",
-            "symbols_in": 5,
-            "orders_submitted": 1,
-            "orders_filled": 1,
-            "orders_rejected": 0,
-        },
+        "_db_fetch_all",
+        lambda _sql, _params=None: [
+            {
+                "run_started_utc": "2026-02-20T13:30:00+00:00",
+                "run_finished_utc": "2026-02-20T13:31:00+00:00",
+                "symbols_in": 5,
+                "orders_submitted": 1,
+                "orders_filled": 1,
+                "orders_rejected": 0,
+            }
+        ],
     )
 
     payload, detail = module._execute_summary_from_metrics_table()
@@ -435,6 +477,63 @@ def test_execute_summary_from_metrics_table_derives_window_from_run_timestamp(
     assert payload["in_window"] is True
     assert payload["candidates"] == 5
     assert payload["submitted"] == 1
+
+
+@pytest.mark.alpaca_optional
+def test_execute_summary_from_metrics_table_uses_latest_non_actionable_excluded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        module,
+        "_db_table_columns",
+        lambda _name: {
+            "run_started_utc",
+            "run_finished_utc",
+            "status",
+            "symbols_in",
+            "orders_submitted",
+            "orders_filled",
+            "exit_reason",
+            "skipped_reasons",
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_db_fetch_all",
+        lambda _sql, _params=None: [
+            {
+                "run_started_utc": "2026-02-20T16:05:36+00:00",
+                "run_finished_utc": "2026-02-20T16:05:36+00:00",
+                "status": "skipped",
+                "symbols_in": 0,
+                "orders_submitted": 0,
+                "orders_filled": 0,
+                "exit_reason": "RECONCILE_ONLY",
+                "skipped_reasons": {"RECONCILE_ONLY": 1},
+            },
+            {
+                "run_started_utc": "2026-02-20T09:01:54+00:00",
+                "run_finished_utc": "2026-02-20T12:01:04+00:00",
+                "status": "ok",
+                "symbols_in": 6,
+                "orders_submitted": 4,
+                "orders_filled": 2,
+                "exit_reason": "EXECUTED",
+                "skipped_reasons": {},
+            },
+        ],
+    )
+
+    payload, detail = module._execute_summary_from_metrics_table()
+    assert payload is not None
+    assert payload["last_run_utc"] == "2026-02-20T12:01:04+00:00"
+    assert payload["candidates"] == 6
+    assert payload["submitted"] == 4
+    assert payload["filled"] == 2
+    assert "selection=latest_non_actionable_excluded" in detail
 
 
 @pytest.mark.alpaca_optional
