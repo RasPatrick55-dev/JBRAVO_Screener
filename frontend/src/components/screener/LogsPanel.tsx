@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { LiveDataSyncState } from "../navbar/liveStatus";
 import type { LogsChipFilter, LogsStage, ScreenerLogRow, ScreenerLogsResponse } from "./types";
 import { fetchNoStoreJson, formatUtcDateTime, normalizeLogLevel, withTs } from "./utils";
 
 interface LogsPanelProps {
   title: string;
   stage: LogsStage;
+  onSyncStateChange?: (state: LiveDataSyncState) => void;
 }
 
 const chipOptions: Array<{ key: LogsChipFilter; label: string }> = [
@@ -80,7 +82,7 @@ const isTodayUtc = (value: string | null | undefined): boolean => {
   );
 };
 
-export default function LogsPanel({ title, stage }: LogsPanelProps) {
+export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanelProps) {
   const [rows, setRows] = useState<ScreenerLogRow[]>([]);
   const [selectedChip, setSelectedChip] = useState<LogsChipFilter>("all");
   const [sourceDetail, setSourceDetail] = useState<string>("");
@@ -150,6 +152,21 @@ export default function LogsPanel({ title, stage }: LogsPanelProps) {
       window.clearInterval(intervalId);
     };
   }, [reloadToken, selectedChip, stage]);
+
+  useEffect(() => {
+    if (!onSyncStateChange) {
+      return;
+    }
+    if (isLoading) {
+      onSyncStateChange("loading");
+      return;
+    }
+    if (errorMessage) {
+      onSyncStateChange("error");
+      return;
+    }
+    onSyncStateChange("ready");
+  }, [errorMessage, isLoading, onSyncStateChange]);
 
   const displayedRows = useMemo(() => {
     let filtered = rows;

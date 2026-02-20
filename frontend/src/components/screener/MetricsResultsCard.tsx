@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { LiveDataSyncState } from "../navbar/liveStatus";
 import type { MetricsFilter, MetricsResponse, MetricsRow } from "./types";
 import { fetchNoStoreJson, metricsMatchQuery, normalizeSymbol, withTs } from "./utils";
 
@@ -66,7 +67,11 @@ const confidenceChipClass = (value: "Low" | "Medium" | "High"): string => {
 const REFRESH_INTERVAL_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
-export default function MetricsResultsCard() {
+type MetricsResultsCardProps = {
+  onSyncStateChange?: (state: LiveDataSyncState) => void;
+};
+
+export default function MetricsResultsCard({ onSyncStateChange }: MetricsResultsCardProps) {
   const [rows, setRows] = useState<MetricsRow[]>([]);
   const [search, setSearch] = useState("");
   const [serverQuery, setServerQuery] = useState("");
@@ -137,6 +142,21 @@ export default function MetricsResultsCard() {
       window.clearInterval(intervalId);
     };
   }, [selectedFilter, serverQuery, reloadToken]);
+
+  useEffect(() => {
+    if (!onSyncStateChange) {
+      return;
+    }
+    if (isLoading) {
+      onSyncStateChange("loading");
+      return;
+    }
+    if (errorMessage) {
+      onSyncStateChange("error");
+      return;
+    }
+    onSyncStateChange("ready");
+  }, [errorMessage, isLoading, onSyncStateChange]);
 
   const displayedRows = useMemo(() => rows.filter((row) => metricsMatchQuery(row, search)), [rows, search]);
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { LiveDataSyncState } from "../navbar/liveStatus";
 import type { ScreenerPickRow, ScreenerPicksResponse } from "./types";
 import {
   compareNullableNumbers,
@@ -59,7 +60,11 @@ const formatScore = (value: number | null | undefined): string => {
 const REFRESH_INTERVAL_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
-export default function ScreenerPicksCard() {
+type ScreenerPicksCardProps = {
+  onSyncStateChange?: (state: LiveDataSyncState) => void;
+};
+
+export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCardProps) {
   const [rows, setRows] = useState<ScreenerPickRow[]>([]);
   const [runTsUtc, setRunTsUtc] = useState<string | null>(null);
   const [statusLabel, setStatusLabel] = useState("COMPLETE");
@@ -124,6 +129,21 @@ export default function ScreenerPicksCard() {
       window.clearInterval(intervalId);
     };
   }, [reloadToken]);
+
+  useEffect(() => {
+    if (!onSyncStateChange) {
+      return;
+    }
+    if (isLoading) {
+      onSyncStateChange("loading");
+      return;
+    }
+    if (errorMessage) {
+      onSyncStateChange("error");
+      return;
+    }
+    onSyncStateChange("ready");
+  }, [errorMessage, isLoading, onSyncStateChange]);
 
   const displayedRows = useMemo(() => {
     const sorted = [...rows].sort((left, right) => {
