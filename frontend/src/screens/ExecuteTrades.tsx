@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import ExecuteTab from "../components/execute/ExecuteTab";
+import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 
 type ExecuteTradesProps = {
@@ -19,15 +20,16 @@ const navLabels = [
 
 export default function ExecuteTrades({ activeTab, onTabSelect }: ExecuteTradesProps) {
   const currentTab = activeTab ?? "Execute";
+  const liveTradingStatus = useLiveTradingStatus();
   const navTabs = useMemo(
     () => navLabels.map((label) => ({ label, isActive: label === currentTab })),
     [currentTab]
   );
 
-  const rightBadges = [
-    { label: "Paper Trading", tone: "warning" as const, showDot: true },
-    { label: "Live", tone: "neutral" as const },
-  ];
+  const rightBadges = useMemo(
+    () => buildNavbarBadges(liveTradingStatus),
+    [liveTradingStatus]
+  );
 
   return (
     <div className="dark min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">

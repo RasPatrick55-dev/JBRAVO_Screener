@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import type { MonitoringLogItem } from "../components/positions/MonitoringLogsPanel";
 import type { PositionRowProps } from "../components/positions/PositionRow";
@@ -153,6 +154,7 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
   const [logsSnapshot, setLogsSnapshot] = useState<PositionsLogsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const liveTradingStatus = useLiveTradingStatus();
 
   useEffect(() => {
     let isMounted = true;
@@ -186,10 +188,10 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: Position
     [currentTab]
   );
 
-  const rightBadges = [
-    { label: "Paper Trading", tone: "warning" as const, showDot: true },
-    { label: "Live", tone: "neutral" as const },
-  ];
+  const rightBadges = useMemo(
+    () => buildNavbarBadges(liveTradingStatus),
+    [liveTradingStatus]
+  );
 
   const positionRows = useMemo<PositionRowProps[]>(() => {
     const rows = (monitoringSnapshot?.positions ?? []).map(toPositionRow);

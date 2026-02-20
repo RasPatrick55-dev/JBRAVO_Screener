@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import ScreenerTab from "../components/screener/ScreenerTab";
 
@@ -19,15 +20,16 @@ const navLabels = [
 
 export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOverviewProps) {
   const currentTab = activeTab ?? "Screener";
+  const liveTradingStatus = useLiveTradingStatus();
   const navTabs = useMemo(
     () => navLabels.map((label) => ({ label, isActive: label === currentTab })),
     [currentTab]
   );
 
-  const rightBadges = [
-    { label: "Paper Trading", tone: "warning" as const, showDot: true },
-    { label: "Live", tone: "neutral" as const },
-  ];
+  const rightBadges = useMemo(
+    () => buildNavbarBadges(liveTradingStatus),
+    [liveTradingStatus]
+  );
 
   return (
     <div className="dark min-h-screen bg-slate-50 font-['Manrope'] text-slate-900 dark:bg-slate-950 dark:text-slate-100">
