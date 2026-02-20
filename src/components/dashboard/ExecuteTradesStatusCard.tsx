@@ -1,6 +1,6 @@
 import CardShell from "./CardShell";
 import StatusChip from "./StatusChip";
-import { formatCurrency, formatNumber, formatPercent } from "./formatters";
+import { formatCurrency, formatNumber } from "./formatters";
 
 export interface ExecuteTradesStatusCardProps {
   lastRun: { date: string; start: string; end: string; duration: string };
@@ -22,7 +22,6 @@ export default function ExecuteTradesStatusCard({
   lastRun,
   ordersPlaced,
   totalValue,
-  successRate,
   isCycleComplete,
   marketNote,
 }: ExecuteTradesStatusCardProps) {
@@ -68,8 +67,6 @@ export default function ExecuteTradesStatusCard({
 
   const valueStyles =
     "rounded-md border border-emerald-400/40 bg-slate-950/60 px-2 py-0.5 text-[13px] font-semibold tracking-[0.01em] text-emerald-200 tabular-nums";
-  const successValueStyles =
-    "rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2 py-0.5 text-[13px] font-semibold tracking-[0.01em] text-emerald-100 tabular-nums";
   const lastRunStats = [
     { label: "Date", value: formatValue(lastRun?.date), valueClassName: valueStyles },
     { label: "Start Time", value: formatValue(lastRun?.start), valueClassName: valueStyles },
@@ -180,15 +177,6 @@ export default function ExecuteTradesStatusCard({
             />
           </div>
         ) : null}
-      </div>
-
-      <div className="mt-3 rounded-xl border border-emerald-400/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(34,197,94,0.4)] sm:p-3">
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-emerald-100/70">
-            Success Rate
-          </span>
-          <span className={successValueStyles}>{formatPercent(successRate)}</span>
-        </div>
       </div>
     </CardShell>
   );
