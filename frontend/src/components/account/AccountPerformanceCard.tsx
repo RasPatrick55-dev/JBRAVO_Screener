@@ -168,7 +168,7 @@ export default function AccountPerformanceCard({
                   scope="row"
                   className="font-arimo px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-primary"
                 >
-                  Account Total
+                  All-time Change
                 </th>
                 <td className={`font-cousine px-3 py-2 text-right tabular-nums ${toneClass(total.netChangePct)}`}>
                   {formatPerformancePercent(total.netChangePct)}
@@ -198,6 +198,9 @@ export default function AccountPerformanceCard({
               {formatCurrency(total.equity)}
             </div>
             <div className="mt-1 flex items-center justify-center gap-3">
+              <span className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
+                All-time change
+              </span>
               <span className={`font-cousine text-sm font-bold tabular-nums ${toneClass(total.netChangePct)}`}>
                 {formatPerformancePercent(total.netChangePct)}
               </span>

@@ -10,8 +10,10 @@ export default function AccountBreakdownCard({
   summary,
   isLoading = false,
 }: AccountBreakdownCardProps) {
+  const equity = summary?.equity ?? 0;
   const cash = summary?.cash ?? 0;
   const openPositionsValue = summary?.openPositionsValue ?? 0;
+  const netPositionsValue = equity - cash;
   const total = Math.max(0, cash + openPositionsValue);
   const cashPct = total > 0 ? (cash / total) * 100 : 0;
   const positionsPct = total > 0 ? (openPositionsValue / total) * 100 : 0;
@@ -20,12 +22,12 @@ export default function AccountBreakdownCard({
     <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-emerald" aria-label="Account breakdown">
       <header>
         <h2 className="font-arimo text-sm font-semibold uppercase tracking-[0.08em] text-primary">Account Breakdown</h2>
-        <p className="mt-1 text-xs text-secondary">Cash, gross open exposure, and allocation ratio</p>
+        <p className="mt-1 text-xs text-secondary">Cash, net position value, gross exposure, and allocation ratio</p>
       </header>
 
       {isLoading ? (
         <div className="mt-4 space-y-3">
-          {Array.from({ length: 2 }).map((_, index) => (
+          {Array.from({ length: 3 }).map((_, index) => (
             <div key={`account-breakdown-skeleton-${index}`} className="rounded-xl px-4 py-3 jbravo-panel-inner jbravo-panel-inner-emerald">
               <div className="h-3 w-28 animate-pulse rounded bg-slate-200/80 dark:bg-slate-700/70" />
               <div className="mt-2 h-6 w-36 animate-pulse rounded bg-slate-200/80 dark:bg-slate-700/70" />
@@ -44,17 +46,29 @@ export default function AccountBreakdownCard({
 
           <div className="rounded-xl px-4 py-3 jbravo-panel-inner jbravo-panel-inner-emerald">
             <div className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
+              Net Open Position Value
+            </div>
+            <div className="font-cousine mt-1 text-3xl font-bold tabular-nums text-primary">
+              {formatCurrency(netPositionsValue)}
+            </div>
+          </div>
+
+          <div className="rounded-xl px-4 py-3 jbravo-panel-inner jbravo-panel-inner-emerald">
+            <div className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
               Total Gross Open Exposure
             </div>
             <div className="font-cousine mt-1 text-3xl font-bold tabular-nums text-primary">
               {formatCurrency(openPositionsValue)}
+            </div>
+            <div className="font-arimo mt-1 text-[11px] tracking-[0.04em] text-secondary">
+              Equity = Cash + Net Open Position Value
             </div>
           </div>
 
           <div className="rounded-xl px-4 py-3 jbravo-panel-inner jbravo-panel-inner-emerald">
             <div className="flex items-center justify-between gap-3">
               <span className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
-                Cash-to-positions ratio
+                Cash-to-gross-exposure mix
               </span>
               <span className="font-cousine text-sm font-bold tabular-nums text-primary">
                 {Math.round(cashPct)}/{Math.round(positionsPct)}
