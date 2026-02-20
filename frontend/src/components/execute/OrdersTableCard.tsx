@@ -1,9 +1,6 @@
-import { useMemo, useState } from "react";
-import type { ExecuteLsxFilter, ExecuteOrderRow, ExecuteStatusScope } from "./types";
+import { useMemo } from "react";
+import type { ExecuteOrderRow } from "./types";
 import {
-  LSX_CHIPS,
-  cycleStatusScope,
-  filterOrdersClient,
   formatCurrency,
   formatDateTimeUtc,
   formatNumber,
@@ -11,7 +8,6 @@ import {
   normalizeSide,
   orderStatusChipClass,
   sideChipClass,
-  statusScopeLabel,
 } from "./utils";
 
 type Props = {
@@ -21,85 +17,35 @@ type Props = {
 };
 
 export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [showSearch, setShowSearch] = useState(false);
-  const [statusScope, setStatusScope] = useState<ExecuteStatusScope>("all");
-  const [lsx, setLsx] = useState<ExecuteLsxFilter>("all");
+  const visibleRows = useMemo(() => {
+    const toEpochMs = (value: string | null | undefined): number | null => {
+      if (!value) {
+        return null;
+      }
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
 
-  const visibleRows = useMemo(
-    () => filterOrdersClient(rows, searchQuery, statusScope, lsx),
-    [lsx, rows, searchQuery, statusScope]
-  );
+    return [...rows].sort((left, right) => {
+      const leftTs = toEpochMs(left.ts_utc);
+      const rightTs = toEpochMs(right.ts_utc);
+      if (leftTs !== null && rightTs !== null) {
+        return rightTs - leftTs;
+      }
+      if (rightTs !== null) {
+        return 1;
+      }
+      if (leftTs !== null) {
+        return -1;
+      }
+      return 0;
+    });
+  }, [rows]);
 
   return (
     <section className="overflow-hidden rounded-2xl outline-subtle shadow-card jbravo-panel jbravo-panel-violet p-3 sm:p-5">
-      <header className="flex flex-wrap items-start justify-between gap-3">
+      <header className="flex items-start justify-between gap-3">
         <h2 className="font-arimo text-[30px] font-semibold leading-none text-primary sm:text-[34px]">Orders</h2>
-        <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
-          <button
-            type="button"
-            aria-label="Search orders"
-            onClick={() => setShowSearch((current) => !current)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md outline outline-1 outline-slate-500/55 transition hover:bg-slate-700/35"
-          >
-            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" fill="none">
-              <path
-                d="M11 19a8 8 0 1 1 5.29-2l4.35 4.36"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-          {showSearch ? (
-            <label className="relative">
-              <span className="sr-only">Search orders table</span>
-              <input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search"
-                className="h-8 w-32 rounded-md border border-slate-600/70 bg-slate-900/70 px-2 py-1 text-xs text-slate-100 outline-none transition focus:border-sky-400 sm:w-44"
-              />
-            </label>
-          ) : null}
-          <button
-            type="button"
-            aria-label={`Order status scope ${statusScopeLabel(statusScope)}`}
-            title={`Status: ${statusScopeLabel(statusScope)}`}
-            onClick={() => setStatusScope((current) => cycleStatusScope(current))}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md outline outline-1 outline-slate-500/55 transition hover:bg-slate-700/35"
-          >
-            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" fill="none">
-              <path
-                d="M4 5h16l-6 7v6l-4 1v-7z"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-          {LSX_CHIPS.map((chip) => {
-            const active = lsx === chip.key;
-            return (
-              <button
-                key={`orders-chip-${chip.key}`}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setLsx((current) => (current === chip.key ? "all" : chip.key))}
-                className={
-                  "h-8 min-w-8 rounded-md px-2 text-xs font-semibold uppercase tracking-[0.08em] outline outline-1 outline-offset-[-1px] transition " +
-                  (active
-                    ? "bg-sky-500/20 text-sky-200 outline-sky-400/60"
-                    : "text-slate-300 outline-slate-600/80 hover:text-slate-100")
-                }
-              >
-                {chip.label}
-              </button>
-            );
-          })}
-        </div>
       </header>
 
       <div className="mt-3 overflow-x-auto">
