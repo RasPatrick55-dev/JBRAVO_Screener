@@ -2012,6 +2012,19 @@ def _json_safe_float(value: Any, default: float = 0.0) -> float:
     return float(numeric)
 
 
+def _calendar_hold_days(entry_time: Any, exit_time: Any) -> int:
+    """Return calendar hold days using NY market dates."""
+    if not isinstance(entry_time, pd.Timestamp) or not isinstance(exit_time, pd.Timestamp):
+        return 0
+    try:
+        entry_ny = entry_time.tz_convert("America/New_York")
+        exit_ny = exit_time.tz_convert("America/New_York")
+    except Exception:
+        return 0
+    delta_days = (exit_ny.date() - entry_ny.date()).days
+    return max(0, int(delta_days))
+
+
 def _build_latest_trades_rows(frame: pd.DataFrame, limit: int) -> list[dict[str, Any]]:
     if frame.empty:
         return []
@@ -2021,9 +2034,7 @@ def _build_latest_trades_rows(frame: pd.DataFrame, limit: int) -> list[dict[str,
     for _, row in scoped.iterrows():
         entry_time = row.get("entry_time")
         exit_time = row.get("exit_time")
-        hold_days = 0
-        if isinstance(entry_time, pd.Timestamp) and isinstance(exit_time, pd.Timestamp):
-            hold_days = max(0, int((exit_time - entry_time).total_seconds() // 86400))
+        hold_days = _calendar_hold_days(entry_time, exit_time)
 
         qty = row.get("qty")
         try:
