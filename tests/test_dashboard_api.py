@@ -317,6 +317,127 @@ def test_trades_latest_total_days_uses_calendar_day_difference(
 
 
 @pytest.mark.alpaca_optional
+def test_execute_summary_preserves_explicit_zero_metrics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    summary_from_metrics = {
+        "last_run_utc": "2026-02-20T16:05:36.747252+00:00",
+        "in_window": False,
+        "candidates": 0,
+        "submitted": 0,
+        "filled": 0,
+        "rejected": 0,
+        "result_pl_usd": 0.0,
+    }
+
+    monkeypatch.setattr(
+        module,
+        "_execute_summary_from_metrics_table",
+        lambda: (summary_from_metrics, "postgres:executor_runs"),
+    )
+    monkeypatch.setattr(
+        module,
+        "_execute_summary_counts_from_alpaca",
+        lambda _dt: ({"submitted": 9, "filled": 4, "rejected": 1}, "alpaca:/v2/orders"),
+    )
+    monkeypatch.setattr(module, "_execute_latest_candidates_count", lambda: 6)
+    monkeypatch.setattr(module, "_execute_result_pl_from_db", lambda _dt: 123.45)
+
+    payload = module._execute_summary_payload()
+
+    assert payload["source"] == "postgres"
+    assert payload["candidates"] == 0
+    assert payload["submitted"] == 0
+    assert payload["filled"] == 0
+    assert payload["rejected"] == 0
+    assert payload["result_pl_usd"] == 0.0
+
+
+@pytest.mark.alpaca_optional
+def test_execute_summary_uses_fallback_only_when_metrics_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    summary_from_metrics = {
+        "last_run_utc": "2026-02-20T16:05:36.747252+00:00",
+        "in_window": None,
+        "candidates": None,
+        "submitted": None,
+        "filled": None,
+        "rejected": None,
+        "result_pl_usd": None,
+    }
+
+    monkeypatch.setattr(
+        module,
+        "_execute_summary_from_metrics_table",
+        lambda: (summary_from_metrics, "postgres:executor_runs"),
+    )
+    monkeypatch.setattr(
+        module,
+        "_execute_summary_counts_from_alpaca",
+        lambda _dt: ({"submitted": 3, "filled": 2, "rejected": 1}, "alpaca:/v2/orders"),
+    )
+    monkeypatch.setattr(module, "_execute_latest_candidates_count", lambda: 6)
+    monkeypatch.setattr(module, "_execute_result_pl_from_db", lambda _dt: 42.0)
+    monkeypatch.setattr(module, "_execute_now_in_window", lambda: False)
+
+    payload = module._execute_summary_payload()
+
+    assert payload["source"] == "postgres"
+    assert payload["submitted"] == 3
+    assert payload["filled"] == 2
+    assert payload["rejected"] == 1
+    assert payload["candidates"] == 6
+    assert payload["result_pl_usd"] == 42.0
+
+
+@pytest.mark.alpaca_optional
+def test_execute_summary_from_metrics_table_derives_window_from_run_timestamp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        module,
+        "_db_table_columns",
+        lambda _name: {
+            "run_started_utc",
+            "run_finished_utc",
+            "symbols_in",
+            "orders_submitted",
+            "orders_filled",
+            "orders_rejected",
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_db_fetch_one",
+        lambda _sql, _params=None: {
+            "run_started_utc": "2026-02-20T13:30:00+00:00",
+            "run_finished_utc": "2026-02-20T13:31:00+00:00",
+            "symbols_in": 5,
+            "orders_submitted": 1,
+            "orders_filled": 1,
+            "orders_rejected": 0,
+        },
+    )
+
+    payload, detail = module._execute_summary_from_metrics_table()
+    assert detail == "postgres:executor_runs"
+    assert payload is not None
+    assert payload["in_window"] is True
+    assert payload["candidates"] == 5
+    assert payload["submitted"] == 1
+
+
+@pytest.mark.alpaca_optional
 def test_api_logs_tail_default_and_full(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _prepare_dashboard_data(tmp_path)
     logs_dir = tmp_path / "logs"

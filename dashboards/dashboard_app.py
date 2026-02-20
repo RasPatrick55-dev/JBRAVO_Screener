@@ -6817,6 +6817,17 @@ def _execute_now_in_window() -> bool:
     return window_start <= ny_now <= window_end
 
 
+def _execute_in_window_at(value: Any) -> Optional[bool]:
+    parsed = _coerce_datetime_utc(value)
+    if parsed is None:
+        return None
+    ny_tz = pytz.timezone("America/New_York")
+    ny_dt = parsed.astimezone(ny_tz)
+    window_start = ny_dt.replace(hour=7, minute=0, second=0, microsecond=0)
+    window_end = ny_dt.replace(hour=9, minute=30, second=0, microsecond=0)
+    return window_start <= ny_dt <= window_end
+
+
 def _execute_iso_utc(value: Any) -> str | None:
     parsed = _coerce_datetime_utc(value)
     if parsed is None:
@@ -6836,6 +6847,17 @@ def _execute_to_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return default
+
+
+def _execute_to_int_optional(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        return int(float(value))
+    except Exception:
+        return None
 
 
 def _execute_latest_candidates_count() -> int:
@@ -7000,6 +7022,20 @@ def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
 
         in_window_raw = _execute_pick_value(row, ["in_window", "market_in_window", "within_window"])
         in_window = _execute_parse_bool(in_window_raw)
+        run_window_hint = _execute_in_window_at(
+            _execute_pick_value(
+                row,
+                [
+                    "run_started_utc",
+                    "run_ts_utc",
+                    "last_run_utc",
+                    "run_finished_utc",
+                    "finished_utc",
+                    "timestamp",
+                    ts_col,
+                ],
+            )
+        )
         payload = {
             "last_run_utc": _execute_iso_utc(
                 _execute_pick_value(
@@ -7013,26 +7049,26 @@ def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
                     ],
                 )
             ),
-            "in_window": _execute_now_in_window() if in_window is None else bool(in_window),
-            "candidates": _execute_to_int(
+            "in_window": (
+                _execute_now_in_window()
+                if in_window is None and run_window_hint is None
+                else (run_window_hint if in_window is None else bool(in_window))
+            ),
+            "candidates": _execute_to_int_optional(
                 _execute_pick_value(
                     row, ["candidates", "candidates_in", "symbols_in", "symbols", "rows"]
-                ),
-                0,
+                )
             ),
-            "submitted": _execute_to_int(
-                _execute_pick_value(row, ["orders_submitted", "submitted", "orders_total"]),
-                0,
+            "submitted": _execute_to_int_optional(
+                _execute_pick_value(row, ["orders_submitted", "submitted", "orders_total"])
             ),
-            "filled": _execute_to_int(
-                _execute_pick_value(row, ["orders_filled", "filled", "fills"]),
-                0,
+            "filled": _execute_to_int_optional(
+                _execute_pick_value(row, ["orders_filled", "filled", "fills"])
             ),
-            "rejected": _execute_to_int(
+            "rejected": _execute_to_int_optional(
                 _execute_pick_value(
                     row, ["orders_rejected", "rejected", "orders_canceled", "canceled", "cancelled"]
-                ),
-                0,
+                )
             ),
             "result_pl_usd": _to_float(
                 _execute_pick_value(
@@ -7064,13 +7100,12 @@ def _execute_summary_from_metrics_file() -> tuple[dict[str, Any] | None, str]:
     if in_window is None and isinstance(skip_block, Mapping):
         in_window = _execute_to_int(skip_block.get("TIME_WINDOW"), 0) <= 0
 
-    candidates = _execute_to_int(
+    candidates = _execute_to_int_optional(
         _execute_pick_value(
             payload, ["candidates", "candidates_in", "symbols_in", "symbols", "rows"]
-        ),
-        0,
+        )
     )
-    if candidates <= 0:
+    if candidates is None:
         candidates = _execute_latest_candidates_count()
 
     normalized = {
@@ -7088,19 +7123,16 @@ def _execute_summary_from_metrics_file() -> tuple[dict[str, Any] | None, str]:
         ),
         "in_window": _execute_now_in_window() if in_window is None else bool(in_window),
         "candidates": candidates,
-        "submitted": _execute_to_int(
-            _execute_pick_value(payload, ["orders_submitted", "submitted", "orders_total"]),
-            0,
+        "submitted": _execute_to_int_optional(
+            _execute_pick_value(payload, ["orders_submitted", "submitted", "orders_total"])
         ),
-        "filled": _execute_to_int(
-            _execute_pick_value(payload, ["orders_filled", "filled", "fills"]),
-            0,
+        "filled": _execute_to_int_optional(
+            _execute_pick_value(payload, ["orders_filled", "filled", "fills"])
         ),
-        "rejected": _execute_to_int(
+        "rejected": _execute_to_int_optional(
             _execute_pick_value(
                 payload, ["orders_rejected", "rejected", "orders_canceled", "canceled", "cancelled"]
-            ),
-            0,
+            )
         ),
         "result_pl_usd": _to_float(
             _execute_pick_value(
@@ -8036,18 +8068,24 @@ def _execute_summary_payload() -> dict[str, Any]:
     alpaca_counts, alpaca_detail = _execute_summary_counts_from_alpaca(last_run_dt)
     source_detail_parts.append(alpaca_detail)
 
-    submitted = _execute_to_int(summary_payload.get("submitted"), 0)
-    filled = _execute_to_int(summary_payload.get("filled"), 0)
-    rejected = _execute_to_int(summary_payload.get("rejected"), 0)
-    if submitted <= 0:
+    submitted_value = _execute_to_int_optional(summary_payload.get("submitted"))
+    filled_value = _execute_to_int_optional(summary_payload.get("filled"))
+    rejected_value = _execute_to_int_optional(summary_payload.get("rejected"))
+
+    submitted = submitted_value if submitted_value is not None else 0
+    filled = filled_value if filled_value is not None else 0
+    rejected = rejected_value if rejected_value is not None else 0
+
+    if submitted_value is None:
         submitted = _execute_to_int(alpaca_counts.get("submitted"), 0)
-    if filled <= 0:
+    if filled_value is None:
         filled = _execute_to_int(alpaca_counts.get("filled"), 0)
-    if rejected <= 0:
+    if rejected_value is None:
         rejected = _execute_to_int(alpaca_counts.get("rejected"), 0)
 
-    candidates = _execute_to_int(summary_payload.get("candidates"), 0)
-    if candidates <= 0:
+    candidates_value = _execute_to_int_optional(summary_payload.get("candidates"))
+    candidates = candidates_value if candidates_value is not None else 0
+    if candidates_value is None:
         candidates = max(submitted, _execute_latest_candidates_count())
 
     result_pl = _to_float(summary_payload.get("result_pl_usd"))
@@ -8396,14 +8434,17 @@ def _execute_audit_payload(*, limit: int) -> dict[str, Any]:
                 "value": quality["orders_filled_avg_null_rate"],
             }
         )
-    if bool(summary_payload.get("submitted") or 0) == 0 and len(orders_all) > 0:
+    if bool(summary_payload.get("submitted") or 0) == 0 and (
+        (last_run_dt is not None and submitted_since > 0)
+        or (last_run_dt is None and len(orders_all) > 0)
+    ):
         findings.append(
             {
                 "severity": "info",
                 "code": "summary_zero_submitted_with_history",
                 "message": "Summary submitted count is zero while historical orders exist.",
-                "details": "May be valid when orders predate last_run_utc.",
-                "value": len(orders_all),
+                "details": "May be valid when all orders predate last_run_utc.",
+                "value": submitted_since if last_run_dt is not None else len(orders_all),
             }
         )
 
