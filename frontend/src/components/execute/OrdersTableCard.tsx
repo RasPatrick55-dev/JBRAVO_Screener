@@ -103,35 +103,46 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
       </header>
 
       <div className="mt-3 overflow-x-auto">
-        <div className="min-w-[920px] max-h-[320px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-violet">
-          <table className="min-w-full table-auto">
+        <div className="min-w-[980px] max-h-[320px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-violet">
+          <table className="min-w-full table-fixed">
+            <colgroup>
+              <col className="w-[112px]" />
+              <col className="w-[84px]" />
+              <col className="w-[74px]" />
+              <col className="w-[86px]" />
+              <col className="w-[58px]" />
+              <col className="w-[112px]" />
+              <col className="w-[92px]" />
+              <col className="w-[86px]" />
+              <col className="w-[276px]" />
+            </colgroup>
             <thead className="sticky top-0 z-10 bg-slate-900/95">
               <tr className="font-arimo border-b border-slate-700/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300">
-                <th scope="col" className="px-2 py-1.5 text-left whitespace-nowrap">
+                <th scope="col" className="px-1.5 py-1 text-left whitespace-nowrap">
                   Time (UTC)
                 </th>
-                <th scope="col" className="px-2 py-1.5 text-left whitespace-nowrap">
+                <th scope="col" className="px-1.5 py-1 text-left whitespace-nowrap">
                   Symbol
                 </th>
-                <th scope="col" className="px-2 py-1.5 text-left whitespace-nowrap">
+                <th scope="col" className="px-1.5 py-1 text-left whitespace-nowrap">
                   Side
                 </th>
-                <th scope="col" className="px-2 py-1.5 text-left whitespace-nowrap">
+                <th scope="col" className="px-1.5 py-1 text-left whitespace-nowrap">
                   Type
                 </th>
-                <th scope="col" className="px-2 py-1.5 text-right whitespace-nowrap">
+                <th scope="col" className="px-1.5 py-1 text-right whitespace-nowrap">
                   Qty
                 </th>
-                <th scope="col" className="px-2 py-1.5 text-left whitespace-nowrap">
+                <th scope="col" className="px-1.5 py-1 text-left whitespace-nowrap">
                   Limit/Stop/Trail
                 </th>
-                <th scope="col" className="px-2 py-1.5 text-left whitespace-nowrap">
+                <th scope="col" className="px-1.5 py-1 text-left whitespace-nowrap">
                   Status
                 </th>
-                <th scope="col" className="px-2 py-1.5 text-right whitespace-nowrap">
+                <th scope="col" className="px-1.5 py-1 text-right whitespace-nowrap">
                   Filled Avg
                 </th>
-                <th scope="col" className="w-[200px] px-2 py-1.5 text-left whitespace-nowrap">
+                <th scope="col" className="px-2 py-1 text-left whitespace-nowrap">
                   Notes
                 </th>
               </tr>
@@ -165,16 +176,16 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                         key={`${row.order_id ?? "order"}-${row.ts_utc ?? "ts"}-${index}`}
                         className="border-b border-slate-700/70 text-sm transition-colors hover:bg-slate-800/45"
                       >
-                        <td className="font-cousine px-2 py-1.5 text-left tabular-nums text-slate-300 whitespace-nowrap">
+                        <td className="font-cousine px-1.5 py-1 text-left tabular-nums text-slate-300 whitespace-nowrap">
                           <div className="flex flex-col whitespace-nowrap leading-tight">
                             <span>{ts.time}</span>
                             <span className="text-[10px] text-slate-400">{ts.date}</span>
                           </div>
                         </td>
-                        <th scope="row" className="font-arimo px-2 py-1.5 text-left font-semibold text-sky-300 whitespace-nowrap">
+                        <th scope="row" className="font-arimo px-1.5 py-1 text-left font-semibold text-sky-300 whitespace-nowrap">
                           {row.symbol || "--"}
                         </th>
-                        <td className="px-2 py-1.5 text-left whitespace-nowrap">
+                        <td className="px-1.5 py-1 text-left whitespace-nowrap">
                           <span
                             className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase outline outline-1 ${sideChipClass(
                               side
@@ -183,16 +194,16 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                             {side || "--"}
                           </span>
                         </td>
-                        <td className="font-cousine px-2 py-1.5 text-left text-slate-100 whitespace-nowrap">
+                        <td className="font-cousine px-1.5 py-1 text-left text-slate-100 whitespace-nowrap">
                           {row.type || "--"}
                         </td>
-                        <td className="font-cousine px-2 py-1.5 text-right tabular-nums text-slate-100 whitespace-nowrap">
+                        <td className="font-cousine px-1.5 py-1 text-right tabular-nums text-slate-100 whitespace-nowrap">
                           {formatNumber(row.qty)}
                         </td>
-                        <td className="font-cousine px-2 py-1.5 text-left tabular-nums text-slate-200 whitespace-nowrap">
+                        <td className="font-cousine px-1.5 py-1 text-left tabular-nums text-slate-200 whitespace-nowrap">
                           {row.limit_stop_trail || "--"}
                         </td>
-                        <td className="px-2 py-1.5 text-left whitespace-nowrap">
+                        <td className="px-1.5 py-1 text-left whitespace-nowrap">
                           <span
                             className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase outline outline-1 ${orderStatusChipClass(
                               status
@@ -201,10 +212,10 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                             {status}
                           </span>
                         </td>
-                        <td className="font-cousine px-2 py-1.5 text-right tabular-nums text-slate-100 whitespace-nowrap">
+                        <td className="font-cousine px-1.5 py-1 text-right tabular-nums text-slate-100 whitespace-nowrap">
                           {formatCurrency(row.filled_avg)}
                         </td>
-                        <td className="w-[200px] px-2 py-1.5 text-left text-slate-300 break-all">
+                        <td className="px-2 py-1 text-left text-slate-300 break-words leading-tight">
                           {row.notes || ""}
                         </td>
                       </tr>
