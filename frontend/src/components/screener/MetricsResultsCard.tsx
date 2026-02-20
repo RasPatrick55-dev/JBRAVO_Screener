@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MetricsFilter, MetricsResponse, MetricsRow } from "./types";
-import { metricsMatchQuery, normalizeSymbol, withTs } from "./utils";
+import { fetchNoStoreJson, metricsMatchQuery, normalizeSymbol, withTs } from "./utils";
 
 const filterOptions: Array<{ key: MetricsFilter; label: string }> = [
   { key: "all", label: "All" },
@@ -63,6 +63,8 @@ const confidenceChipClass = (value: "Low" | "Medium" | "High"): string => {
   }
   return "bg-slate-100 text-slate-600 outline outline-1 outline-slate-300 dark:bg-slate-700/35 dark:text-slate-200 dark:outline-slate-500/45";
 };
+const REFRESH_INTERVAL_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export default function MetricsResultsCard() {
   const [rows, setRows] = useState<MetricsRow[]>([]);
@@ -72,6 +74,7 @@ export default function MetricsResultsCard() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => setServerQuery(search.trim()), 250);
@@ -80,10 +83,14 @@ export default function MetricsResultsCard() {
 
   useEffect(() => {
     let isMounted = true;
-    const controller = new AbortController();
+    let inFlight = false;
 
     const load = async () => {
-      setIsLoading(true);
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      setIsLoading(!hasLoadedRef.current);
       const params = new URLSearchParams({
         filter: selectedFilter,
         limit: "50",
@@ -93,15 +100,10 @@ export default function MetricsResultsCard() {
       }
 
       try {
-        const response = await fetch(withTs(`/api/screener/metrics?${params.toString()}`), {
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`Request failed (${response.status})`);
-        }
-        const payload = (await response.json()) as MetricsResponse;
+        const payload = await fetchNoStoreJson<MetricsResponse>(
+          withTs(`/api/screener/metrics?${params.toString()}`),
+          REQUEST_TIMEOUT_MS
+        );
         if (!isMounted) {
           return;
         }
@@ -111,7 +113,7 @@ export default function MetricsResultsCard() {
         setRows(normalizedRows);
         setErrorMessage(null);
       } catch (error) {
-        if (!isMounted || controller.signal.aborted) {
+        if (!isMounted) {
           return;
         }
         const message = error instanceof Error ? error.message : "Unable to load metrics results.";
@@ -119,14 +121,20 @@ export default function MetricsResultsCard() {
       } finally {
         if (isMounted) {
           setIsLoading(false);
+          hasLoadedRef.current = true;
         }
+        inFlight = false;
       }
     };
 
-    load();
+    void load();
+    const intervalId = window.setInterval(() => {
+      void load();
+    }, REFRESH_INTERVAL_MS);
+
     return () => {
       isMounted = false;
-      controller.abort();
+      window.clearInterval(intervalId);
     };
   }, [selectedFilter, serverQuery, reloadToken]);
 

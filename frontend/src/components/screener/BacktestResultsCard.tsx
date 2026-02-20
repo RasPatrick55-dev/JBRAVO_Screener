@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BacktestResponse, BacktestRow, BacktestWindow } from "./types";
 import {
+  fetchNoStoreJson,
   formatNumber,
   formatPercent,
   formatRunBadge,
@@ -42,6 +43,8 @@ const valueTone = (value: number | null): string => {
   }
   return "text-primary";
 };
+const REFRESH_INTERVAL_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export default function BacktestResultsCard() {
   const [rows, setRows] = useState<BacktestRow[]>([]);
@@ -49,28 +52,28 @@ export default function BacktestResultsCard() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
-    const controller = new AbortController();
+    let inFlight = false;
 
     const load = async () => {
-      setIsLoading(true);
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      setIsLoading(!hasLoadedRef.current);
       const params = new URLSearchParams({
         window: defaultWindow,
         limit: "50",
       });
 
       try {
-        const response = await fetch(withTs(`/api/screener/backtest?${params.toString()}`), {
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`Request failed (${response.status})`);
-        }
-        const payload = (await response.json()) as BacktestResponse;
+        const payload = await fetchNoStoreJson<BacktestResponse>(
+          withTs(`/api/screener/backtest?${params.toString()}`),
+          REQUEST_TIMEOUT_MS
+        );
         if (!isMounted) {
           return;
         }
@@ -81,7 +84,7 @@ export default function BacktestResultsCard() {
         setRunTsUtc(payload.run_ts_utc ?? null);
         setErrorMessage(null);
       } catch (error) {
-        if (!isMounted || controller.signal.aborted) {
+        if (!isMounted) {
           return;
         }
         const message = error instanceof Error ? error.message : "Unable to load backtest results.";
@@ -89,14 +92,20 @@ export default function BacktestResultsCard() {
       } finally {
         if (isMounted) {
           setIsLoading(false);
+          hasLoadedRef.current = true;
         }
+        inFlight = false;
       }
     };
 
-    load();
+    void load();
+    const intervalId = window.setInterval(() => {
+      void load();
+    }, REFRESH_INTERVAL_MS);
+
     return () => {
       isMounted = false;
-      controller.abort();
+      window.clearInterval(intervalId);
     };
   }, [reloadToken]);
 

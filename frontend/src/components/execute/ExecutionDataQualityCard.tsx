@@ -11,12 +11,23 @@ import {
 
 const chipClass =
   "inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase outline outline-1";
+const REFRESH_INTERVAL_MS = 20_000;
+const FIRST_LOAD_GRACE_MS = 2_500;
+const REQUEST_TIMEOUT_MS = 15_000;
+
+const hasUsableAudit = (payload: ExecuteAuditResponse | null): payload is ExecuteAuditResponse => {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  return Boolean(payload.findings || payload.severity_counts || payload.cross_checks);
+};
 
 export default function ExecutionDataQualityCard() {
   const [audit, setAudit] = useState<ExecuteAuditResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
-  const hasConnectedRef = useRef(false);
+  const hasLoadedOnceRef = useRef(false);
+  const fallbackInFlightRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -25,48 +36,76 @@ export default function ExecutionDataQualityCard() {
       if (!isMounted) {
         return;
       }
-      setAudit(payload);
-      setHasError(!payload);
-      setIsLoading(false);
-      if (payload) {
-        hasConnectedRef.current = true;
+
+      if (hasUsableAudit(payload)) {
+        setAudit(payload);
+        setHasError(false);
+        hasLoadedOnceRef.current = true;
+      } else {
+        if (!hasLoadedOnceRef.current) {
+          setAudit(null);
+        }
+        setHasError(true);
       }
+      setIsLoading(false);
     };
 
     const loadFallback = async () => {
-      setIsLoading(true);
-      const payload = await fetchJsonNoStore<ExecuteAuditResponse>(`/api/execute/audit?limit=200&ts=${Date.now()}`);
+      if (fallbackInFlightRef.current) {
+        return;
+      }
+      fallbackInFlightRef.current = true;
+      setIsLoading(!hasLoadedOnceRef.current);
+      const payload = await fetchJsonNoStore<ExecuteAuditResponse>(
+        `/api/execute/audit?limit=200&ts=${Date.now()}`,
+        REQUEST_TIMEOUT_MS
+      );
       applyPayload(payload);
+      fallbackInFlightRef.current = false;
     };
 
     if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
       void loadFallback();
+      const intervalId = window.setInterval(() => {
+        void loadFallback();
+      }, REFRESH_INTERVAL_MS);
       return () => {
         isMounted = false;
+        window.clearInterval(intervalId);
       };
     }
 
-    setIsLoading(true);
+    setIsLoading(!hasLoadedOnceRef.current);
     const source = new EventSource("/api/execute/audit/stream?limit=200");
+    const fallbackTimer = window.setTimeout(() => {
+      if (!hasLoadedOnceRef.current) {
+        void loadFallback();
+      }
+    }, FIRST_LOAD_GRACE_MS);
+    const intervalId = window.setInterval(() => {
+      void loadFallback();
+    }, REFRESH_INTERVAL_MS);
+
     source.onmessage = (event) => {
       const payload = parseSseJson<ExecuteAuditResponse>(event.data);
       if (!payload) {
         return;
       }
+      window.clearTimeout(fallbackTimer);
       applyPayload(payload);
     };
     source.onerror = () => {
       if (!isMounted) {
         return;
       }
-      if (!hasConnectedRef.current) {
-        setHasError(true);
-        setIsLoading(false);
-      }
+      window.clearTimeout(fallbackTimer);
+      void loadFallback();
     };
 
     return () => {
       isMounted = false;
+      window.clearTimeout(fallbackTimer);
+      window.clearInterval(intervalId);
       source.close();
     };
   }, []);
