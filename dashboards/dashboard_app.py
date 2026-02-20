@@ -7987,6 +7987,7 @@ def _execute_filter_trailing_rows(
             continue
         output.append(
             {
+                "ts_utc": _execute_iso_utc(row.get("_ts")),
                 "symbol": row.get("symbol"),
                 "qty": row.get("qty"),
                 "trail": row.get("trail") or "--",

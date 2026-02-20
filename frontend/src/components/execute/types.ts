@@ -37,6 +37,7 @@ export interface ExecuteOrdersResponse {
 }
 
 export interface ExecuteTrailingStopRow {
+  ts_utc?: string | null;
   symbol?: string | null;
   qty?: number | string | null;
   trail?: string | null;
