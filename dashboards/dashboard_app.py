@@ -6786,6 +6786,7 @@ _EXECUTE_MONITOR_EVENT_TYPES = {
     "TRAIL_ADJUST",
     "TRAIL_CANCEL",
 }
+_EXECUTE_NON_ACTIONABLE_EXIT_REASONS = {"RECONCILE_ONLY", "MARKET_DAY_CLOSED"}
 
 
 def _execute_parse_bool(value: Any) -> Optional[bool]:
@@ -6997,6 +6998,28 @@ def _execute_query_matches(query: str, values: list[Any]) -> bool:
     return normalized_query in haystack
 
 
+def _execute_is_non_actionable_summary_row(row: Mapping[str, Any]) -> bool:
+    exit_reason = str(row.get("exit_reason") or "").strip().upper()
+    if exit_reason in _EXECUTE_NON_ACTIONABLE_EXIT_REASONS:
+        return True
+    skipped = _coerce_json_mapping(row.get("skipped_reasons"))
+    if _execute_to_int(skipped.get("RECONCILE_ONLY"), 0) > 0:
+        return True
+    if _execute_to_int(skipped.get("MARKET_DAY_CLOSED"), 0) > 0:
+        return True
+    return False
+
+
+def _execute_select_summary_row(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
+    latest = rows[0]
+    if not _execute_is_non_actionable_summary_row(latest):
+        return latest, "latest"
+    for candidate in rows[1:]:
+        if not _execute_is_non_actionable_summary_row(candidate):
+            return candidate, "latest_non_actionable_excluded"
+    return latest, "latest"
+
+
 def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
     table_candidates = ("executor_runs", "execute_metrics", "execute_runs")
     for table in table_candidates:
@@ -7016,9 +7039,12 @@ def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
         )
         if ts_col is None:
             continue
-        row = _db_fetch_one(f"SELECT * FROM {table} ORDER BY {ts_col} DESC NULLS LAST LIMIT 1")
-        if not row:
+        rows = _db_fetch_all(
+            f"SELECT * FROM {table} ORDER BY {ts_col} DESC NULLS LAST LIMIT 120"
+        )
+        if not rows:
             continue
+        row, selected_reason = _execute_select_summary_row(rows)
 
         in_window_raw = _execute_pick_value(row, ["in_window", "market_in_window", "within_window"])
         in_window = _execute_parse_bool(in_window_raw)
@@ -7048,6 +7074,9 @@ def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
                         ts_col,
                     ],
                 )
+            ),
+            "run_started_utc": _execute_iso_utc(
+                _execute_pick_value(row, ["run_started_utc", "started_utc", "run_ts_utc"])
             ),
             "in_window": (
                 _execute_now_in_window()
@@ -7079,7 +7108,10 @@ def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
         }
         if not payload["last_run_utc"]:
             payload["last_run_utc"] = _execute_last_run_from_logs()
-        return payload, f"postgres:{table}"
+        detail = f"postgres:{table}"
+        if selected_reason != "latest":
+            detail = f"{detail};selection={selected_reason}"
+        return payload, detail
     return None, "postgres:none"
 
 
@@ -7120,6 +7152,9 @@ def _execute_summary_from_metrics_file() -> tuple[dict[str, Any] | None, str]:
                     "run_utc",
                 ],
             )
+        ),
+        "run_started_utc": _execute_iso_utc(
+            _execute_pick_value(payload, ["run_started_utc", "started_utc"])
         ),
         "in_window": _execute_now_in_window() if in_window is None else bool(in_window),
         "candidates": candidates,
@@ -7800,13 +7835,17 @@ def _execute_filter_trailing_rows(
     return output
 
 
-def _execute_summary_counts_from_alpaca(last_run_dt: datetime | None) -> tuple[dict[str, int], str]:
+def _execute_summary_counts_from_alpaca(
+    after_dt: datetime | None, until_dt: datetime | None = None
+) -> tuple[dict[str, int], str]:
     if not _account_api_is_paper_mode():
         return {"submitted": 0, "filled": 0, "rejected": 0}, "paper_mode_required"
 
     params: dict[str, Any] = {"status": "all", "direction": "desc", "limit": 500, "nested": True}
-    if last_run_dt is not None:
-        params["after"] = last_run_dt.isoformat()
+    if after_dt is not None:
+        params["after"] = after_dt.isoformat()
+    if until_dt is not None and (after_dt is None or until_dt >= after_dt):
+        params["until"] = until_dt.isoformat()
     payload, detail = _alpaca_rest_get_json("/v2/orders", params=params, timeout=20)
     if detail != "ok":
         return {"submitted": 0, "filled": 0, "rejected": 0}, f"alpaca:{detail}"
@@ -8065,22 +8104,28 @@ def _execute_summary_payload() -> dict[str, Any]:
         }
 
     last_run_dt = _coerce_datetime_utc(summary_payload.get("last_run_utc"))
-    alpaca_counts, alpaca_detail = _execute_summary_counts_from_alpaca(last_run_dt)
+    run_started_dt = _coerce_datetime_utc(summary_payload.get("run_started_utc"))
+    alpaca_after_dt = run_started_dt or last_run_dt
+    alpaca_until_dt = last_run_dt if run_started_dt is not None else None
+    alpaca_counts, alpaca_detail = _execute_summary_counts_from_alpaca(
+        alpaca_after_dt, alpaca_until_dt
+    )
     source_detail_parts.append(alpaca_detail)
 
     submitted_value = _execute_to_int_optional(summary_payload.get("submitted"))
     filled_value = _execute_to_int_optional(summary_payload.get("filled"))
     rejected_value = _execute_to_int_optional(summary_payload.get("rejected"))
+    allow_alpaca_backfill = source == "none"
 
     submitted = submitted_value if submitted_value is not None else 0
     filled = filled_value if filled_value is not None else 0
     rejected = rejected_value if rejected_value is not None else 0
 
-    if submitted_value is None:
+    if submitted_value is None and allow_alpaca_backfill:
         submitted = _execute_to_int(alpaca_counts.get("submitted"), 0)
-    if filled_value is None:
+    if filled_value is None and allow_alpaca_backfill:
         filled = _execute_to_int(alpaca_counts.get("filled"), 0)
-    if rejected_value is None:
+    if rejected_value is None and allow_alpaca_backfill:
         rejected = _execute_to_int(alpaca_counts.get("rejected"), 0)
 
     candidates_value = _execute_to_int_optional(summary_payload.get("candidates"))
