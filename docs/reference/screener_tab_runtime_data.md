@@ -95,6 +95,7 @@ Response shape:
 Source behavior:
 
 - Primary: Postgres (`backtest_results`)
+- DB scope fallback: if run timestamp map scope returns no rows, query falls back to unscoped latest `run_date`
 - Fallback: `data/backtest_results.csv`
 
 ### `GET /api/screener/metrics?run_ts_utc=<optional>&filter=all|gate_failures|data_issues|high_confidence&limit=50&q=`

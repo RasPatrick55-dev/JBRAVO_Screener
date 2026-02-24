@@ -9696,26 +9696,31 @@ def _screener_backtest_rows_from_db(
     if total_pl_col:
         order_sql = f"b.{total_pl_col} DESC NULLS LAST, b.{symbol_col} ASC"
 
-    rows = _db_fetch_all(
-        f"""
-        SELECT
-            b.{symbol_col} AS symbol,
-            {_expr(window_col)} AS window,
-            {_expr(trades_col)} AS trades,
-            {_expr(win_rate_col)} AS win_rate_pct,
-            {_expr(avg_return_col)} AS avg_return_pct,
-            {_expr(pl_ratio_col)} AS pl_ratio,
-            {_expr(max_dd_col)} AS max_dd_pct,
-            {_expr(avg_hold_col)} AS avg_hold_days,
-            {_expr(total_pl_col)} AS total_pl_usd
-        FROM backtest_results b
-        WHERE {" AND ".join(where_parts)}
-          {scope_sql}
-        ORDER BY {order_sql}
-        LIMIT %(limit)s
-        """,
-        params,
-    )
+    def _fetch_rows(scope_fragment: str) -> list[dict[str, Any]]:
+        return _db_fetch_all(
+            f"""
+            SELECT
+                b.{symbol_col} AS symbol,
+                {_expr(window_col)} AS window,
+                {_expr(trades_col)} AS trades,
+                {_expr(win_rate_col)} AS win_rate_pct,
+                {_expr(avg_return_col)} AS avg_return_pct,
+                {_expr(pl_ratio_col)} AS pl_ratio,
+                {_expr(max_dd_col)} AS max_dd_pct,
+                {_expr(avg_hold_col)} AS avg_hold_days,
+                {_expr(total_pl_col)} AS total_pl_usd
+            FROM backtest_results b
+            WHERE {" AND ".join(where_parts)}
+              {scope_fragment}
+            ORDER BY {order_sql}
+            LIMIT %(limit)s
+            """,
+            params,
+        )
+
+    rows = _fetch_rows(scope_sql)
+    if not rows and scope_sql:
+        rows = _fetch_rows("")
 
     normalized_rows: list[dict[str, Any]] = []
     for row in rows:
