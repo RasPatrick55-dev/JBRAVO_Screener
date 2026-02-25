@@ -127,5 +127,9 @@ On PythonAnywhere:
 cd /home/RasPatrick/jbravo_screener
 git pull origin main
 ./build_frontend_pythonanywhere.sh
-touch /var/www/raspatrick_pythonanywhere_com_wsgi.py
+set -a; . ~/.config/jbravo/.env; set +a
+PYTHONANYWHERE_DOMAIN="${PYTHONANYWHERE_DOMAIN:-${PYTHONANYWHERE_USERNAME}.pythonanywhere.com}"
+curl -fsS -X POST \
+  -H "Authorization: Token ${PYTHONANYWHERE_API_TOKEN}" \
+  "https://www.pythonanywhere.com/api/v0/user/${PYTHONANYWHERE_USERNAME}/webapps/${PYTHONANYWHERE_DOMAIN}/reload/"
 ```
