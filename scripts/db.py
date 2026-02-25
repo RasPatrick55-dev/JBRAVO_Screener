@@ -468,6 +468,124 @@ def _log_write_result(ok: bool, table: str, rows: int, err: Exception | None = N
         logger.warning("[WARN] DB_WRITE_FAILED table=%s err=%s", table, err)
 
 
+def _has_table_column(cursor: Any, table_name: str, column_name: str) -> bool:
+    cursor.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %(table_name)s
+          AND column_name = %(column_name)s
+        LIMIT 1
+        """,
+        {"table_name": table_name, "column_name": column_name},
+    )
+    return cursor.fetchone() is not None
+
+
+def _table_primary_key_columns(cursor: Any, table_name: str) -> tuple[str, ...]:
+    cursor.execute(
+        """
+        SELECT COALESCE(
+            (
+                SELECT array_agg(kcu.column_name ORDER BY kcu.ordinal_position)
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                WHERE tc.table_schema = 'public'
+                  AND tc.table_name = %(table_name)s
+                  AND tc.constraint_type = 'PRIMARY KEY'
+            ),
+            ARRAY[]::text[]
+        ) AS cols
+        """,
+        {"table_name": table_name},
+    )
+    row = cursor.fetchone()
+    raw_cols = row[0] if row else []
+    if not raw_cols:
+        return tuple()
+    if isinstance(raw_cols, str):
+        normalized = raw_cols.strip().strip("{}")
+        iterable_cols = [part.strip().strip('"') for part in normalized.split(",") if part.strip()]
+    else:
+        iterable_cols = list(raw_cols)
+    return tuple(str(col).strip().lower() for col in iterable_cols if col is not None)
+
+
+def _repair_screener_run_map_app_schema(cursor: Any) -> None:
+    table_name = "screener_run_map_app"
+    expected_pk = ("run_ts_utc", "symbol")
+
+    try:
+        has_run_date = _has_table_column(cursor, table_name, "run_date")
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=inspect_failed:%s", exc)
+        return
+
+    if not has_run_date:
+        try:
+            cursor.execute(
+                "ALTER TABLE screener_run_map_app ADD COLUMN IF NOT EXISTS run_date DATE"
+            )
+            logger.info("[INFO] SCREENER_RUN_MAP_REPAIRED action=add_run_date ok=true")
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_run_date_failed:%s", exc)
+
+    try:
+        has_created_at = _has_table_column(cursor, table_name, "created_at")
+        if not has_created_at:
+            cursor.execute(
+                "ALTER TABLE screener_run_map_app ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()"
+            )
+            logger.info("[INFO] SCREENER_RUN_MAP_REPAIRED action=add_created_at ok=true")
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_created_at_failed:%s", exc)
+
+    try:
+        has_run_ts = _has_table_column(cursor, table_name, "run_ts_utc")
+        has_run_date = _has_table_column(cursor, table_name, "run_date")
+        if has_run_ts and has_run_date:
+            cursor.execute(
+                """
+                UPDATE screener_run_map_app
+                SET run_date = (run_ts_utc AT TIME ZONE 'UTC')::date
+                WHERE run_date IS NULL
+                  AND run_ts_utc IS NOT NULL
+                """
+            )
+            backfilled = max(int(cursor.rowcount or 0), 0)
+            logger.info(
+                "[INFO] SCREENER_RUN_MAP_REPAIRED action=backfill_run_date ok=true rows=%s",
+                backfilled,
+            )
+        else:
+            logger.warning(
+                "[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=missing_required_columns run_ts_utc=%s run_date=%s",
+                has_run_ts,
+                has_run_date,
+            )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=backfill_failed:%s", exc)
+
+    try:
+        pk_cols = _table_primary_key_columns(cursor, table_name)
+        if pk_cols and pk_cols != expected_pk:
+            logger.warning(
+                "[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=pk_expected_%s_got_%s",
+                ",".join(expected_pk),
+                ",".join(pk_cols),
+            )
+        elif not pk_cols:
+            logger.warning(
+                "[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=missing_primary_key expected=%s",
+                ",".join(expected_pk),
+            )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=pk_inspect_failed:%s", exc)
+
+
 def get_reconcile_state(engine: Optional[PGConnection] = None) -> dict[str, Any]:
     with _maybe_conn(engine) as conn:
         if conn is None:
@@ -794,6 +912,7 @@ def insert_screener_candidates(
                 with conn:
                     with conn.cursor() as cursor:
                         cursor.execute(create_stmt)
+                        _repair_screener_run_map_app_schema(cursor)
                         extras.execute_batch(cursor, insert_stmt, map_rows, page_size=200)
                 _log_write_result(True, "screener_run_map_app", len(map_rows))
             except Exception as exc:  # pragma: no cover - defensive logging
