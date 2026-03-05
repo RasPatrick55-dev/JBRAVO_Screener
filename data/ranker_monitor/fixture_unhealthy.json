@@ -1,0 +1,7 @@
+{
+  "run_date": "2000-01-01",
+  "recommended_action": "retrain",
+  "psi_score": 0.35,
+  "recent_sharpe": 0.1,
+  "note": "Test fixture for ML health guard warn/block path verification only."
+}

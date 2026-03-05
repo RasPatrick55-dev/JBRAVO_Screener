@@ -425,6 +425,8 @@ from utils.io_utils import atomic_write_bytes
 from utils.screener_metrics import ensure_canonical_metrics
 
 DEFAULT_FEED = (os.getenv("ALPACA_DATA_FEED") or "iex").strip().lower() or "iex"
+DEFAULT_BARS_ADJUSTMENT = "raw"
+ALPACA_BARS_ADJUSTMENTS = ("raw", "split", "dividend", "all")
 
 REQUIRED_ENV_KEYS = (
     "APCA_API_KEY_ID",
@@ -644,6 +646,31 @@ _SENTIMENT_PROVIDER_WARNED = False
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _resolve_bars_adjustment(cli_value: object) -> tuple[str, str]:
+    allowed = set(ALPACA_BARS_ADJUSTMENTS)
+    if cli_value not in (None, ""):
+        value = str(cli_value).strip().lower()
+        if value in allowed:
+            return value, "cli"
+        LOGGER.warning(
+            "[WARN] BARS_ADJUSTMENT_INVALID source=cli value=%s fallback=%s",
+            cli_value,
+            DEFAULT_BARS_ADJUSTMENT,
+        )
+        return DEFAULT_BARS_ADJUSTMENT, "default"
+
+    env_value = (os.getenv("JBR_BARS_ADJUSTMENT") or "").strip().lower()
+    if env_value:
+        if env_value in allowed:
+            return env_value, "env"
+        LOGGER.warning(
+            "[WARN] BARS_ADJUSTMENT_INVALID source=env value=%s fallback=%s",
+            env_value,
+            DEFAULT_BARS_ADJUSTMENT,
+        )
+    return DEFAULT_BARS_ADJUSTMENT, "default"
 
 
 def _symbol_count(frame: Optional[pd.DataFrame]) -> int:
@@ -1185,6 +1212,7 @@ def _fetch_daily_bars(
     max_workers: int,
     min_history: int,
     bars_source: str,
+    bars_adjustment: str = DEFAULT_BARS_ADJUSTMENT,
     run_date: Optional[str] = None,
     reuse_cache: bool = True,
     verify_hook: Optional[Callable[[str, dict[str, object]], None]] = None,
@@ -1192,6 +1220,9 @@ def _fetch_daily_bars(
     source = (bars_source or "http").strip().lower()
     if source not in {"http", "sdk"}:
         source = "http"
+    adjustment = (bars_adjustment or DEFAULT_BARS_ADJUSTMENT).strip().lower()
+    if adjustment not in set(ALPACA_BARS_ADJUSTMENTS):
+        adjustment = DEFAULT_BARS_ADJUSTMENT
     required_cols = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
     if source == "sdk":
         if StockBarsRequest is None or TimeFrame is None:
@@ -1393,6 +1424,7 @@ def _fetch_daily_bars(
                     end_iso,
                     timeframe="1Day",
                     feed=local_feed,
+                    adjustment=adjustment,
                     verify_hook=hook,
                 )
                 raw_bars_count = len(raw)
@@ -1456,7 +1488,7 @@ def _fetch_daily_bars(
                 "start": start_dt,
                 "end": end_dt,
                 "feed": _resolve_feed(local_feed),
-                "adjustment": "raw",
+                "adjustment": adjustment,
                 "limit": days,
             }
             for attempt in range(BAR_MAX_RETRIES):
@@ -1666,6 +1698,7 @@ def _fetch_daily_bars(
                         end_iso,
                         timeframe="1Day",
                         feed=feed,
+                        adjustment=adjustment,
                         verify_hook=hook,
                     )
                 except Exception as exc:
@@ -1811,7 +1844,7 @@ def _fetch_daily_bars(
                 "start": start_dt,
                 "end": end_dt,
                 "feed": _resolve_feed(feed),
-                "adjustment": "raw",
+                "adjustment": adjustment,
             }
             batch_frames, page_count, paged, columns_desc, batch_success = _collect_batch_pages(
                 data_client, request_kwargs
@@ -2125,6 +2158,7 @@ def _load_alpaca_universe(
     max_workers: int,
     min_history: int,
     bars_source: str,
+    bars_adjustment: str,
     exclude_otc: bool,
     iex_only: bool,
     liquidity_top: int,
@@ -2573,6 +2607,7 @@ def _load_alpaca_universe(
             max_workers=max(1, max_workers),
             min_history=min_history,
             bars_source=bars_source,
+            bars_adjustment=bars_adjustment,
             run_date=last_day,
             reuse_cache=reuse_cache,
             verify_hook=verify_hook_fn if use_verify else None,
@@ -4153,6 +4188,11 @@ def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
     run_utc = _format_timestamp(run_ts)
 
     feed = str(getattr(args, "feed", DEFAULT_FEED) or DEFAULT_FEED).strip().lower()
+    bars_adjustment = str(
+        getattr(args, "bars_adjustment", DEFAULT_BARS_ADJUSTMENT) or DEFAULT_BARS_ADJUSTMENT
+    ).strip().lower()
+    if bars_adjustment not in set(ALPACA_BARS_ADJUSTMENTS):
+        bars_adjustment = DEFAULT_BARS_ADJUSTMENT
     batch_size = max(1, int(getattr(args, "batch_size", 50)))
 
     try:
@@ -4232,6 +4272,7 @@ def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
             start_iso,
             end_iso,
             feed=feed,
+            adjustment=bars_adjustment,
             batch=len(batch_syms),
         )
 
@@ -4753,6 +4794,7 @@ def run_full_nightly(
             max_workers=max_workers,
             min_history=min_history,
             bars_source=bars_source,
+            bars_adjustment=str(getattr(args, "bars_adjustment", DEFAULT_BARS_ADJUSTMENT)),
             run_date=last_day,
             reuse_cache=reuse_cache,
             verify_hook=verify_hook,
@@ -5966,6 +6008,12 @@ def write_outputs(
         {
             "required_bars": required_bars,
             "bars_rows_total": _coerce_int(fetch_payload.get("bars_rows_total", 0)),
+            "bars_rows_total_fetch": _coerce_int(
+                fetch_payload.get(
+                    "bars_rows_total_fetch",
+                    fetch_payload.get("bars_rows_total", 0),
+                )
+            ),
             "symbols_with_bars": required_bars_count,
             "symbols_with_required_bars": required_bars_count,
             "symbols_with_any_bars": any_bars_count,
@@ -6434,6 +6482,15 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Market data feed to request from Alpaca",
     )
     parser.add_argument(
+        "--bars-adjustment",
+        choices=list(ALPACA_BARS_ADJUSTMENTS),
+        default=None,
+        help=(
+            "Corporate action adjustment for Alpaca bars "
+            "(raw|split|dividend|all). Precedence: CLI > JBR_BARS_ADJUSTMENT > raw."
+        ),
+    )
+    parser.add_argument(
         "--bars-source",
         choices=["http", "sdk"],
         default="http",
@@ -6619,6 +6676,15 @@ def main(
         local_validate = _as_bool(os.getenv("LOCAL_VALIDATE"), False) or bool(
             getattr(args, "local_validate", False)
         )
+        bars_adjustment, bars_adjustment_source = _resolve_bars_adjustment(
+            getattr(args, "bars_adjustment", None)
+        )
+        args.bars_adjustment = bars_adjustment
+        LOGGER.info(
+            "[INFO] BARS_ADJUSTMENT value=%s source=%s",
+            bars_adjustment,
+            bars_adjustment_source,
+        )
 
         if "fetch_symbols" not in globals():
             raise RuntimeError("fetch_symbols helper missing or not imported correctly")
@@ -6711,6 +6777,7 @@ def main(
                     max_workers=args.max_workers,
                     min_history=args.min_history,
                     bars_source=args.bars_source,
+                    bars_adjustment=args.bars_adjustment,
                     exclude_otc=args.exclude_otc,
                     iex_only=args.iex_only,
                     liquidity_top=args.liquidity_top,

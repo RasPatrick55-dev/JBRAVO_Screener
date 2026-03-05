@@ -36,6 +36,14 @@ from scripts.export_latest_candidates import export_latest_candidates
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.log_rotate import rotate_if_needed
 from scripts.screener import write_universe_prefix_counts
+from scripts.utils.champion_config import champion_env_overrides, load_latest_champion
+from scripts.utils.ml_health_guard import (
+    decide_ml_enrichment,
+    load_latest_ml_health,
+    resolve_ml_health_max_age_days,
+)
+from scripts.utils.prediction_freshness import evaluate_predictions_freshness
+from scripts.utils.feature_schema import compute_feature_signature, load_features_meta_for_path
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
 from utils import write_csv_atomic, atomic_write_bytes
 from utils.screener_metrics import ensure_canonical_metrics, write_screener_metrics_json
@@ -55,7 +63,15 @@ _SPLIT_FLAG_MAP = {
     "--screener-args-split": "screener_args_split",
     "--backtest-args-split": "backtest_args_split",
     "--metrics-args-split": "metrics_args_split",
+    "--ranker-predict-args-split": "ranker_predict_args_split",
     "--ranker-eval-args-split": "ranker_eval_args_split",
+    "--ranker-walkforward-args-split": "ranker_walkforward_args_split",
+    "--ranker-strategy-eval-args-split": "ranker_strategy_eval_args_split",
+    "--ranker-autotune-args-split": "ranker_autotune_args_split",
+    "--ranker-monitor-args-split": "ranker_monitor_args_split",
+    "--ranker-recalibrate-args-split": "ranker_recalibrate_args_split",
+    "--ranker-autoremediate-args-split": "ranker_autoremediate_args_split",
+    "--ranker-trade-attribution-args-split": "ranker_trade_attribution_args_split",
 }
 
 _SUMMARY_RE = re.compile(
@@ -65,6 +81,9 @@ _SUMMARY_RE = re.compile(
     r"(?:with_bars_required=(?P<with_bars_required>\d+).*?)?"
     r"rows=(?P<rows>\d+)"
     r"(?:.*?(?:bars?_rows(?:_total)?)=(?P<bars_rows_total>\d+))?"
+)
+_RANKER_PREDICT_SCORE_SOURCE_RE = re.compile(
+    r"RANKER_PREDICT_SCORE_SOURCE calibrated=(?P<calibrated>true|false) method=(?P<method>[a-zA-Z0-9_\\-]+)"
 )
 
 
@@ -128,6 +147,9 @@ DEFAULT_LABELS_BARS_PATH = Path("data") / "daily_bars.csv"
 DEFAULT_RANKER_SCORE_COLUMN = "score_5d"
 DEFAULT_RANKER_TARGET_COLUMN = "model_score_5d"
 DEFAULT_ALLOC_WEIGHT_TOP_K = 4
+DEFAULT_FEATURES_TIMEOUT_SECS = 900
+DEFAULT_RANKER_PREDICT_TIMEOUT_SECS = 900
+DEFAULT_RANKER_EVAL_TIMEOUT_SECS = 180
 _PIPELINE_SUMMARY_FOR_DB: dict[str, Any] | None = None
 _PIPELINE_RC: int | None = None
 _PIPELINE_STARTED_AT: datetime | None = None
@@ -140,6 +162,195 @@ def _record_health(stage: str) -> dict[str, Any]:  # pragma: no cover - legacy h
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _features_timeout_secs() -> int:
+    raw = (os.getenv("JBR_FEATURES_TIMEOUT_SECS") or "").strip()
+    if not raw:
+        return DEFAULT_FEATURES_TIMEOUT_SECS
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        LOG.warning(
+            "[WARN] FEATURES_TIMEOUT_INVALID env=JBR_FEATURES_TIMEOUT_SECS value=%s default=%s",
+            raw,
+            DEFAULT_FEATURES_TIMEOUT_SECS,
+        )
+        return DEFAULT_FEATURES_TIMEOUT_SECS
+    if value <= 0:
+        LOG.warning(
+            "[WARN] FEATURES_TIMEOUT_INVALID env=JBR_FEATURES_TIMEOUT_SECS value=%s default=%s",
+            value,
+            DEFAULT_FEATURES_TIMEOUT_SECS,
+        )
+        return DEFAULT_FEATURES_TIMEOUT_SECS
+    return value
+
+
+def _ranker_predict_timeout_config() -> tuple[int, str]:
+    raw = (os.getenv("JBR_RANKER_PREDICT_TIMEOUT_SECS") or "").strip()
+    if not raw:
+        return DEFAULT_RANKER_PREDICT_TIMEOUT_SECS, "default"
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        LOG.warning(
+            "[WARN] RANKER_PREDICT_TIMEOUT_INVALID env=JBR_RANKER_PREDICT_TIMEOUT_SECS value=%s default=%s",
+            raw,
+            DEFAULT_RANKER_PREDICT_TIMEOUT_SECS,
+        )
+        return DEFAULT_RANKER_PREDICT_TIMEOUT_SECS, "default"
+    if value <= 0:
+        LOG.warning(
+            "[WARN] RANKER_PREDICT_TIMEOUT_INVALID env=JBR_RANKER_PREDICT_TIMEOUT_SECS value=%s default=%s",
+            value,
+            DEFAULT_RANKER_PREDICT_TIMEOUT_SECS,
+        )
+        return DEFAULT_RANKER_PREDICT_TIMEOUT_SECS, "default"
+    return value, "env"
+
+
+def _ranker_eval_timeout_config() -> tuple[int, str]:
+    raw = (os.getenv("JBR_RANKER_EVAL_TIMEOUT_SECS") or "").strip()
+    if not raw:
+        return DEFAULT_RANKER_EVAL_TIMEOUT_SECS, "default"
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        LOG.warning(
+            "[WARN] RANKER_EVAL_TIMEOUT_INVALID env=JBR_RANKER_EVAL_TIMEOUT_SECS value=%s default=%s",
+            raw,
+            DEFAULT_RANKER_EVAL_TIMEOUT_SECS,
+        )
+        return DEFAULT_RANKER_EVAL_TIMEOUT_SECS, "default"
+    if value <= 0:
+        LOG.warning(
+            "[WARN] RANKER_EVAL_TIMEOUT_INVALID env=JBR_RANKER_EVAL_TIMEOUT_SECS value=%s default=%s",
+            value,
+            DEFAULT_RANKER_EVAL_TIMEOUT_SECS,
+        )
+        return DEFAULT_RANKER_EVAL_TIMEOUT_SECS, "default"
+    return value, "env"
+
+
+def _predictions_source_state(base_dir: Path) -> str:
+    if db.db_enabled():
+        try:
+            present = bool(db.fetch_latest_ml_artifact("predictions"))
+        except Exception:
+            present = False
+        return f"db:{'present' if present else 'missing'}"
+    try:
+        present = _find_latest_predictions_path(base_dir) is not None
+    except Exception:
+        present = False
+    return f"fs:{'present' if present else 'missing'}"
+
+
+def _ranker_eval_source_state(base_dir: Path) -> str:
+    if db.db_enabled():
+        try:
+            present = bool(db.fetch_latest_ml_artifact("ranker_eval"))
+        except Exception:
+            present = False
+        return f"db:{'present' if present else 'missing'}"
+    try:
+        present = (base_dir / "data" / "ranker_eval" / "latest.json").exists()
+    except Exception:
+        present = False
+    return f"fs:{'present' if present else 'missing'}"
+
+
+def _ranker_predict_score_source_from_log(base_dir: Path) -> tuple[str, str]:
+    log_path = Path(base_dir) / "logs" / "step.ranker_predict.out"
+    if not log_path.exists():
+        return "unknown", "unknown"
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="ignore")[-120000:]
+    except Exception:
+        return "unknown", "unknown"
+    for line in reversed(tail.splitlines()):
+        match = _RANKER_PREDICT_SCORE_SOURCE_RE.search(line)
+        if match:
+            return match.group("calibrated"), match.group("method")
+    return "unknown", "unknown"
+
+
+def _env_truthy(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "on"}
+
+
+def _resolve_use_champion(args: argparse.Namespace) -> bool:
+    if getattr(args, "use_champion", None) is not None:
+        return bool(args.use_champion)
+    return _env_truthy(os.getenv("JBR_USE_CHAMPION"))
+
+
+def _resolve_ml_health_guard(args: argparse.Namespace) -> bool:
+    if getattr(args, "ml_health_guard", None) is not None:
+        return bool(args.ml_health_guard)
+    return _env_truthy(os.getenv("JBR_ML_HEALTH_GUARD"))
+
+
+def _resolve_ml_health_guard_mode(args: argparse.Namespace) -> str:
+    cli_value = getattr(args, "ml_health_guard_mode", None)
+    if cli_value in {"warn", "block"}:
+        return str(cli_value)
+    env_value = str(os.getenv("JBR_ML_HEALTH_GUARD_MODE") or "").strip().lower()
+    if env_value in {"warn", "block"}:
+        return env_value
+    return "warn"
+
+
+def _resolve_auto_refresh_predictions(args: argparse.Namespace) -> bool:
+    cli_value = getattr(args, "auto_refresh_predictions", None)
+    if cli_value is not None:
+        return _as_bool(cli_value, False)
+    return _as_bool(os.getenv("JBR_AUTO_REFRESH_PREDICTIONS"), False)
+
+
+def _resolve_auto_refresh_features(args: argparse.Namespace) -> bool:
+    cli_value = getattr(args, "auto_refresh_features", None)
+    if cli_value is not None:
+        return _as_bool(cli_value, False)
+    return _as_bool(os.getenv("JBR_AUTO_REFRESH_FEATURES"), False)
+
+
+def _resolve_strict_auto_refresh_predictions() -> bool:
+    return _as_bool(os.getenv("JBR_STRICT_AUTO_REFRESH_PREDICTIONS"), False)
+
+
+def _resolve_strict_predictions_meta() -> tuple[bool, str]:
+    raw = os.getenv("JBR_STRICT_PREDICTIONS_META")
+    if raw is None or str(raw).strip() == "":
+        return False, "default"
+    return _as_bool(raw, False), "env"
+
+
+def _resolve_allow_no_screener(args: argparse.Namespace) -> bool:
+    cli_value = getattr(args, "allow_no_screener", None)
+    if cli_value is not None:
+        return bool(cli_value)
+    return _env_truthy(os.getenv("JBR_ALLOW_NO_SCREENER"))
+
+
+def _apply_champion_overrides(
+    overrides: Mapping[str, str], *, mode: str
+) -> tuple[dict[str, str], list[str]]:
+    if mode not in {"fill", "force"}:
+        mode = "fill"
+    resolved: dict[str, str] = {}
+    applied: list[str] = []
+    for key, value in overrides.items():
+        if not key:
+            continue
+        text = str(value)
+        existing = os.environ.get(key)
+        if mode == "force" or existing in (None, ""):
+            resolved[key] = text
+            applied.append(key)
+    return resolved, applied
 
 
 def _write_json(path: Path | str, payload: Mapping[str, Any]) -> None:
@@ -545,6 +756,13 @@ def compose_metrics_from_artifacts(
     with_bars_any = min(max(with_bars_any, with_bars_required), max(symbols_in_effective, 0))
 
     bars_effective = max(int(bars_effective or 0), int(rows_final))
+    bars_reported = int(bars_effective)
+    bars_effective_preserved: int | None = None
+    if isinstance(bars_fetch, int) and bars_fetch > 0:
+        bars_reported = int(bars_fetch)
+        if bars_effective != bars_reported:
+            bars_effective_preserved = int(bars_effective)
+
     payload = {
         "last_run_utc": _now_iso(),
         "symbols_in": int(symbols_in_effective or 0),
@@ -560,7 +778,7 @@ def compose_metrics_from_artifacts(
         "symbols_with_bars_post": _coerce_optional_int(post_stats.get("symbols_with_bars_post"))
         if post_stats
         else None,
-        "bars_rows_total": int(bars_effective or 0),
+        "bars_rows_total": int(bars_reported or 0),
         "bars_rows_total_fetch": bars_fetch,
         "bars_rows_total_post": _coerce_optional_int(post_stats.get("bars_rows_total_post"))
         if post_stats
@@ -570,6 +788,8 @@ def compose_metrics_from_artifacts(
         "latest_source": latest_source or "unknown",
         "metrics_version": 2,
     }
+    if bars_effective_preserved is not None:
+        payload["bars_rows_total_effective"] = bars_effective_preserved
     if fetch_any_attempted is not None:
         if with_bars_any and fetch_any_attempted == with_bars_any:
             payload["symbols_with_bars_fetch"] = fetch_any_attempted
@@ -1016,14 +1236,16 @@ def _normalize_predictions_frame(
     df: pd.DataFrame, score_column: str = DEFAULT_RANKER_SCORE_COLUMN
 ) -> pd.DataFrame:
     if df.empty or "symbol" not in df.columns or score_column not in df.columns:
-        return pd.DataFrame(columns=["symbol", score_column])
+        return pd.DataFrame(columns=["symbol", score_column, "score_ts"])
     working = df.copy()
+    working["symbol"] = working["symbol"].map(_coerce_symbol)
+    working = working.loc[working["symbol"].astype(str).str.len() > 0]
+    working["score_ts"] = pd.NaT
     if "timestamp" in working.columns:
-        working["__pred_ts__"] = pd.to_datetime(working["timestamp"], errors="coerce")
-        working.sort_values(by="__pred_ts__", inplace=True)
-    working.drop(columns=["__pred_ts__"], errors="ignore", inplace=True)
+        working["score_ts"] = pd.to_datetime(working["timestamp"], errors="coerce", utc=True)
+        working.sort_values(by="score_ts", inplace=True)
     working = working.drop_duplicates(subset=["symbol"], keep="last")
-    return working[["symbol", score_column]]
+    return working[["symbol", score_column, "score_ts"]]
 
 
 def _prepare_predictions_frame(
@@ -1043,11 +1265,11 @@ def _load_latest_predictions_frame(
     if db.db_enabled():
         predictions = db.load_ml_artifact_csv("predictions")
         if predictions.empty:
-            return pd.DataFrame(columns=["symbol", score_column]), "db:missing"
+            return pd.DataFrame(columns=["symbol", score_column, "score_ts"]), "db:missing"
         return _normalize_predictions_frame(predictions, score_column), "db"
     predictions_path = _find_latest_predictions_path(base_dir)
     if predictions_path is None:
-        return pd.DataFrame(columns=["symbol", score_column]), "file:missing"
+        return pd.DataFrame(columns=["symbol", score_column, "score_ts"]), "file:missing"
     return _prepare_predictions_frame(predictions_path, score_column), str(predictions_path)
 
 
@@ -1072,11 +1294,15 @@ def enrich_candidates_with_predictions(
         return None
     renamed = predictions.rename(columns={score_column: target_column})
     merged = candidates.merge(renamed[["symbol", target_column]], on="symbol", how="left")
+    if "model_score" not in merged.columns and target_column in merged.columns:
+        merged["model_score"] = pd.to_numeric(merged[target_column], errors="coerce")
     matched = int(merged[target_column].notna().sum()) if target_column in merged.columns else 0
     ordered: list[str] = list(CANONICAL_COLUMNS)
     ordered.extend(col for col in candidates.columns if col not in ordered)
     ordered = [col for col in ordered if col in merged.columns and col != target_column]
     ordered.append(target_column)
+    if "model_score" in merged.columns and "model_score" not in ordered:
+        ordered.append("model_score")
     merged = merged[ordered]
     write_csv_atomic(str(latest_path), merged)
     LOG.info(
@@ -1094,10 +1320,107 @@ def _enrich_candidates_with_ranker(
     score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
     target_column: str = DEFAULT_RANKER_TARGET_COLUMN,
 ) -> pd.DataFrame | None:
+    def _extract_candidate_run_ts(frame: pd.DataFrame) -> pd.Timestamp | None:
+        if frame.empty:
+            return None
+        if "run_ts_utc" not in frame.columns:
+            return None
+        parsed = pd.to_datetime(frame["run_ts_utc"], errors="coerce", utc=True)
+        if parsed.notna().any():
+            return parsed.dropna().max()
+        return None
+
+    def _extract_run_date(frame: pd.DataFrame, run_ts: pd.Timestamp | None) -> date | None:
+        if "run_date" in frame.columns:
+            parsed = pd.to_datetime(frame["run_date"], errors="coerce", utc=True)
+            if parsed.notna().any():
+                try:
+                    return parsed.dropna().max().date()
+                except Exception:
+                    pass
+        if run_ts is not None:
+            try:
+                return run_ts.date()
+            except Exception:
+                return None
+        return None
+
+    def _count_rows_for_run_ts(frame: pd.DataFrame, run_ts: pd.Timestamp | None) -> int:
+        if frame.empty or run_ts is None or "run_ts_utc" not in frame.columns:
+            return 0
+        parsed = pd.to_datetime(frame["run_ts_utc"], errors="coerce", utc=True)
+        if not parsed.notna().any():
+            return 0
+        return int((parsed == run_ts).sum())
+
+    def _log_model_score_join_diag(
+        frame: pd.DataFrame,
+        *,
+        scores_rows_for_run: int,
+        run_ts_utc: pd.Timestamp | None,
+        score_col: str,
+    ) -> None:
+        candidates_count = int(len(frame.index))
+        if score_col in frame.columns:
+            joined_series = pd.to_numeric(frame[score_col], errors="coerce")
+        else:
+            joined_series = pd.Series([None] * candidates_count, index=frame.index)
+        joined_non_null = int(joined_series.notna().sum())
+        joined_null = max(candidates_count - joined_non_null, 0)
+        LOG.info(
+            "[INFO] MODEL_SCORE_JOIN_DIAG candidates=%s scores_rows_for_run=%s joined_non_null=%s joined_null=%s run_ts_utc=%s score_col=%s",
+            candidates_count,
+            int(max(scores_rows_for_run, 0)),
+            joined_non_null,
+            joined_null,
+            run_ts_utc.isoformat() if run_ts_utc is not None else None,
+            score_col,
+        )
+        if joined_null <= 0:
+            return
+        if int(scores_rows_for_run or 0) <= 0:
+            reason = "missing_scores_for_run"
+        elif joined_non_null <= 0:
+            reason = "symbol_mismatch_or_join_key_mismatch"
+        else:
+            reason = "partial_missing_scores"
+        sample_symbols: list[str] = []
+        if "symbol" in frame.columns:
+            sample = frame.loc[joined_series.isna(), "symbol"].head(10)
+            sample_symbols = [
+                _coerce_symbol(value)
+                for value in sample
+                if isinstance(value, str) and value.strip()
+            ]
+        LOG.info(
+            "[INFO] MODEL_SCORE_JOIN_SAMPLE_UNMATCHED symbols=%s reason=%s",
+            sample_symbols,
+            reason,
+        )
+
     base = _resolve_base_dir(base_dir)
     candidates_path = base / "data" / "latest_candidates.csv"
+    candidates = _load_latest_candidates_frame(base)
+    if candidates.empty:
+        LOG.warning(
+            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=candidates_empty candidates_path=%s predictions_source=%s",
+            candidates_path,
+            "db:unknown" if db.db_enabled() else "file:unknown",
+        )
+        return
     predictions, predictions_source = _load_latest_predictions_frame(base, score_column)
     if predictions.empty:
+        if db.db_enabled():
+            run_ts_utc = _extract_candidate_run_ts(candidates)
+            diag_frame = candidates.copy()
+            if target_column not in diag_frame.columns:
+                diag_frame[target_column] = pd.NA
+            _log_model_score_join_diag(
+                diag_frame,
+                scores_rows_for_run=0,
+                run_ts_utc=run_ts_utc,
+                score_col=target_column,
+            )
         LOG.warning(
             "[WARN] CANDIDATES_ENRICH_SKIPPED reason=predictions_missing candidates_path=%s predictions_source=%s",
             candidates_path,
@@ -1105,24 +1428,46 @@ def _enrich_candidates_with_ranker(
         )
         return
 
-    candidates = _load_latest_candidates_frame(base)
-    if candidates.empty:
-        LOG.warning(
-            "[WARN] CANDIDATES_ENRICH_SKIPPED reason=candidates_empty candidates_path=%s predictions_source=%s",
-            candidates_path,
-            predictions_source,
-        )
-        return
-
     try:
+        candidates = candidates.copy()
+        predictions = predictions.copy()
+        if "symbol" in candidates.columns:
+            candidates["symbol"] = candidates["symbol"].map(_coerce_symbol)
+        if target_column in candidates.columns:
+            candidates = candidates.drop(columns=[target_column], errors="ignore")
+        if "symbol" in predictions.columns:
+            predictions["symbol"] = predictions["symbol"].map(_coerce_symbol)
         renamed = predictions.rename(columns={score_column: target_column})
-        merged = candidates.merge(renamed[["symbol", target_column]], on="symbol", how="left")
+        candidate_symbol_set = set(candidates["symbol"].dropna().astype(str))
+        scores_rows_for_run = int(
+            renamed.loc[
+                renamed["symbol"].isin(candidate_symbol_set), target_column
+            ].notna().sum()
+        )
+        merged = candidates.merge(
+            renamed[["symbol", target_column, "score_ts"]], on="symbol", how="left"
+        )
+        if "model_score" not in merged.columns and target_column in merged.columns:
+            merged["model_score"] = pd.to_numeric(merged[target_column], errors="coerce")
         matched = int(merged[target_column].notna().sum()) if target_column in merged.columns else 0
         ordered: list[str] = list(CANONICAL_COLUMNS)
         ordered.extend(col for col in candidates.columns if col not in ordered)
         ordered = [col for col in ordered if col in merged.columns and col != target_column]
         ordered.append(target_column)
-        merged = merged[ordered]
+        if "model_score" in merged.columns and "model_score" not in ordered:
+            ordered.append("model_score")
+        optional_columns = ["run_date", "run_ts_utc", "created_at"]
+        if db.db_enabled():
+            optional_columns.append("score_ts")
+        ordered_with_optional: list[str] = []
+        for column in ordered + [
+            col
+            for col in optional_columns
+            if col in merged.columns
+        ]:
+            if column not in ordered_with_optional:
+                ordered_with_optional.append(column)
+        merged = merged[ordered_with_optional]
     except Exception:
         LOG.warning(
             "[WARN] CANDIDATES_ENRICH_FAILED reason=merge_error candidates_path=%s predictions_source=%s",
@@ -1131,6 +1476,49 @@ def _enrich_candidates_with_ranker(
             exc_info=True,
         )
         return
+
+    if db.db_enabled():
+        run_ts_utc = _extract_candidate_run_ts(candidates)
+        if run_ts_utc is None:
+            LOG.warning(
+                "[WARN] CANDIDATES_ENRICH_SKIPPED reason=run_ts_missing predictions_source=%s",
+                predictions_source,
+            )
+            return
+        candidate_rows_for_run = _count_rows_for_run_ts(candidates, run_ts_utc)
+        if candidate_rows_for_run <= 0:
+            LOG.warning(
+                "[WARN] MODEL_SCORE_ENRICH_RUN_TS_MISSING run_ts_utc=%s",
+                run_ts_utc.isoformat(),
+            )
+            return
+        _log_model_score_join_diag(
+            merged,
+            scores_rows_for_run=scores_rows_for_run,
+            run_ts_utc=run_ts_utc,
+            score_col=target_column,
+        )
+        run_date = _extract_run_date(merged, run_ts_utc)
+        written = db.upsert_screener_ranker_scores_frame(
+            run_ts_utc,
+            merged,
+            run_date=run_date,
+            symbol_column="symbol",
+            score_column=target_column,
+            score_ts_column="score_ts" if "score_ts" in merged.columns else None,
+        )
+        if written <= 0:
+            LOG.warning(
+                "[WARN] CANDIDATES_ENRICH_SKIPPED reason=db_write_failed predictions_source=%s",
+                predictions_source,
+            )
+            return
+        LOG.info(
+            "[INFO] CANDIDATES_ENRICHED destination=db table=screener_ranker_scores_app rows=%s run_ts_utc=%s",
+            written,
+            run_ts_utc.isoformat(),
+        )
+        return merged
 
     try:
         write_csv_atomic(str(candidates_path), merged)
@@ -1150,6 +1538,64 @@ def _enrich_candidates_with_ranker(
         matched,
     )
     return merged
+
+
+def _model_score_coverage_summary(
+    frame: pd.DataFrame | None,
+    *,
+    source: str,
+) -> dict[str, Any]:
+    if frame is None or frame.empty:
+        payload = {
+            "total": 0,
+            "non_null": 0,
+            "pct": 0.0,
+            "source": source,
+            "run_ts_utc": None,
+        }
+        LOG.info(
+            "[INFO] MODEL_SCORE_COVERAGE total=%d non_null=%d pct=%.2f source=%s run_ts_utc=%s",
+            0,
+            0,
+            0.0,
+            source,
+            None,
+        )
+        return payload
+
+    total = int(len(frame.index))
+    model_score = pd.to_numeric(frame.get("model_score"), errors="coerce")
+    model_score_5d = pd.to_numeric(frame.get("model_score_5d"), errors="coerce")
+    combined = model_score
+    if combined is None or combined.empty:
+        combined = model_score_5d
+    else:
+        combined = combined.combine_first(model_score_5d)
+    non_null = int(combined.notna().sum()) if combined is not None else 0
+    pct = (float(non_null) / float(total) * 100.0) if total > 0 else 0.0
+
+    run_ts_utc = None
+    if "run_ts_utc" in frame.columns:
+        parsed = pd.to_datetime(frame["run_ts_utc"], errors="coerce", utc=True)
+        if parsed.notna().any():
+            run_ts_utc = parsed.dropna().max().isoformat()
+
+    payload = {
+        "total": total,
+        "non_null": non_null,
+        "pct": pct,
+        "source": source,
+        "run_ts_utc": run_ts_utc,
+    }
+    LOG.info(
+        "[INFO] MODEL_SCORE_COVERAGE total=%d non_null=%d pct=%.2f source=%s run_ts_utc=%s",
+        total,
+        non_null,
+        pct,
+        source,
+        run_ts_utc,
+    )
+    return payload
 
 
 def _apply_allocation_weights(
@@ -1401,7 +1847,14 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default=None,
         help=(
             "Comma-separated list of steps to run (default: screener,backtest,metrics,ranker_eval). "
-            "Include 'labels' to generate label CSVs."
+            "Include 'labels' to generate label CSVs, 'ranker_predict' to refresh predictions from "
+            "the latest model, 'ranker_walkforward' for optional walk-forward "
+            "ML evaluation, 'ranker_strategy_eval' for optional OOS strategy evaluation, "
+            "'ranker_monitor' for optional drift/health monitoring, and "
+            "'ranker_recalibrate' for optional post-hoc model probability calibration, "
+            "'ranker_autotune' for optional OOS autotuning sweeps, "
+            "'ranker_autoremediate' for optional health-triggered bounded autotune, and "
+            "'ranker_trade_attribution' for optional closed-trade score attribution."
         ),
     )
     parser.add_argument(
@@ -1463,10 +1916,134 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Extra CLI arguments forwarded to scripts.ranker_eval",
     )
     parser.add_argument(
+        "--ranker-predict-args",
+        default=os.getenv("JBR_RANKER_PREDICT_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.ranker_predict",
+    )
+    parser.add_argument(
+        "--ranker-predict-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.ranker_predict provided as separate tokens",
+    )
+    parser.add_argument(
         "--ranker-eval-args-split",
         nargs="*",
         default=None,
         help="Extra CLI arguments for scripts.ranker_eval provided as separate tokens",
+    )
+    parser.add_argument(
+        "--ranker-walkforward-args",
+        default=os.getenv("JBR_RANKER_WALKFORWARD_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.ranker_walkforward",
+    )
+    parser.add_argument(
+        "--ranker-walkforward-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.ranker_walkforward provided as separate tokens",
+    )
+    parser.add_argument(
+        "--ranker-strategy-eval-args",
+        default=os.getenv("JBR_RANKER_STRATEGY_EVAL_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.ranker_strategy_eval",
+    )
+    parser.add_argument(
+        "--ranker-strategy-eval-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.ranker_strategy_eval provided as separate tokens",
+    )
+    parser.add_argument(
+        "--ranker-autotune-args",
+        default=os.getenv("JBR_RANKER_AUTOTUNE_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.ranker_autotune",
+    )
+    parser.add_argument(
+        "--ranker-autotune-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.ranker_autotune provided as separate tokens",
+    )
+    parser.add_argument(
+        "--ranker-monitor-args",
+        default=os.getenv("JBR_RANKER_MONITOR_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.ranker_monitor",
+    )
+    parser.add_argument(
+        "--ranker-monitor-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.ranker_monitor provided as separate tokens",
+    )
+    parser.add_argument(
+        "--ranker-recalibrate-args",
+        default=os.getenv("JBR_RANKER_RECALIBRATE_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.ranker_recalibrate",
+    )
+    parser.add_argument(
+        "--ranker-recalibrate-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.ranker_recalibrate provided as separate tokens",
+    )
+    parser.add_argument(
+        "--ranker-autoremediate-args",
+        default=os.getenv("JBR_RANKER_AUTOREMEDIATE_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.ranker_autoremediate",
+    )
+    parser.add_argument(
+        "--ranker-autoremediate-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.ranker_autoremediate provided as separate tokens",
+    )
+    parser.add_argument(
+        "--ranker-trade-attribution-args",
+        default=os.getenv("JBR_RANKER_TRADE_ATTRIBUTION_ARGS", ""),
+        help="Extra CLI arguments forwarded to scripts.ranker_trade_attribution",
+    )
+    parser.add_argument(
+        "--ranker-trade-attribution-args-split",
+        nargs="*",
+        default=None,
+        help="Extra CLI arguments for scripts.ranker_trade_attribution provided as separate tokens",
+    )
+    parser.add_argument(
+        "--use-champion",
+        action="store_true",
+        default=None,
+        help=(
+            "Opt-in: load latest ranker_champion and apply champion-derived ML env overrides "
+            "to ML analysis steps."
+        ),
+    )
+    parser.add_argument(
+        "--champion-mode",
+        choices=("fill", "force"),
+        default="fill",
+        help=(
+            "Champion env application mode: fill applies only missing keys; "
+            "force overwrites existing env keys."
+        ),
+    )
+    parser.add_argument(
+        "--ml-health-guard",
+        action="store_true",
+        default=None,
+        help=(
+            "Opt-in: gate candidate ranker enrichment using latest ranker_monitor "
+            "recommended_action."
+        ),
+    )
+    parser.add_argument(
+        "--ml-health-guard-mode",
+        choices=("warn", "block"),
+        default=None,
+        help=(
+            "ML health guard mode. warn logs and proceeds; block skips enrichment "
+            "when ranker_monitor recommends action!=none."
+        ),
     )
     parser.add_argument(
         "--enrich-candidates-with-ranker",
@@ -1474,6 +2051,35 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help=(
             "Append model scores from the latest predictions file onto latest_candidates.csv. "
             "Runs automatically when ranker_eval is in --steps."
+        ),
+    )
+    parser.add_argument(
+        "--allow-no-screener",
+        action="store_true",
+        default=None,
+        help=(
+            "Opt-in: allow pipeline runs without the screener step. "
+            "Useful for ML-only maintenance/evaluation runs."
+        ),
+    )
+    parser.add_argument(
+        "--auto-refresh-predictions",
+        nargs="?",
+        const="true",
+        default=None,
+        help=(
+            "Opt-in: when predictions are stale vs latest model, rerun ranker_predict "
+            "before eval/enrichment/monitor paths that consume predictions."
+        ),
+    )
+    parser.add_argument(
+        "--auto-refresh-features",
+        nargs="?",
+        const="true",
+        default=None,
+        help=(
+            "Opt-in: when predictions are stale and feature/model metadata mismatch is detected, "
+            "refresh features (and labels if required) before rerunning ranker_predict."
         ),
     )
     parser.add_argument(
@@ -1495,7 +2101,21 @@ def determine_steps(raw: Optional[str]) -> list[str]:
     default = "screener,backtest,metrics,ranker_eval"
     target = raw or os.environ.get("PIPE_STEPS", default)
     steps = [part.strip().lower() for part in target.split(",") if part.strip()]
-    allowed = {"screener", "backtest", "metrics", "labels", "ranker_eval"}
+    allowed = {
+        "screener",
+        "backtest",
+        "metrics",
+        "labels",
+        "ranker_predict",
+        "ranker_eval",
+        "ranker_walkforward",
+        "ranker_strategy_eval",
+        "ranker_monitor",
+        "ranker_recalibrate",
+        "ranker_autotune",
+        "ranker_autoremediate",
+        "ranker_trade_attribution",
+    }
     normalized: list[str] = []
     for step in steps or default.split(","):
         if step in allowed:
@@ -1510,13 +2130,18 @@ def run_step(
     timeout: Optional[float] = None,
     tee_to_stdout: bool = False,
     tee_to_logger: bool = False,
+    env: Mapping[str, str] | None = None,
 ) -> tuple[int, float]:
     started = time.time()
     LOG.info("[INFO] START %s cmd=%s", name, shlex.join(cmd))
-    env = os.environ.copy()
-    env.setdefault("PYTHONUNBUFFERED", "1")
-    env.setdefault("APCA_DATA_API_BASE_URL", "https://data.alpaca.markets")
-    env.setdefault("ALPACA_DATA_FEED", "iex")
+    child_env = os.environ.copy()
+    if env:
+        for key, value in env.items():
+            if key:
+                child_env[str(key)] = str(value)
+    child_env.setdefault("PYTHONUNBUFFERED", "1")
+    child_env.setdefault("APCA_DATA_API_BASE_URL", "https://data.alpaca.markets")
+    child_env.setdefault("ALPACA_DATA_FEED", "iex")
     log_dir = PROJECT_ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"step.{name}.out"
@@ -1529,8 +2154,8 @@ def run_step(
         try:
             LOG.info(
                 "[INFO] CHILD_ENV_KEYS has_database_url=%s keys_count=%d",
-                bool(env.get("DATABASE_URL")),
-                len(env),
+                bool(child_env.get("DATABASE_URL")),
+                len(child_env),
             )
             if tee_to_stdout or tee_to_logger:
                 proc = subprocess.Popen(
@@ -1538,7 +2163,7 @@ def run_step(
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     cwd=PROJECT_ROOT,
-                    env=env,
+                    env=child_env,
                     text=True,
                     bufsize=1,
                 )
@@ -1548,7 +2173,7 @@ def run_step(
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     cwd=PROJECT_ROOT,
-                    env=env,
+                    env=child_env,
                     text=True,
                 )
         except Exception as exc:
@@ -2161,7 +2786,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if not db_migrate.ensure_schema():
         LOG.error("[ERROR] DB_MIGRATE_FAILED")
         raise SystemExit(2)
-    if "screener" not in steps:
+    allow_no_screener = _resolve_allow_no_screener(args)
+    if "screener" not in steps and not allow_no_screener:
         LOG.error("[ERROR] SCREENER_STEP_REQUIRED steps=%s", ",".join(steps))
         write_error_report(step="screener", detail="step_missing")
         try:
@@ -2172,6 +2798,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         except Exception:
             LOG.debug("ALERT_SCREEENER_MISSING_FAILED", exc_info=True)
         raise SystemExit(2)
+    if "screener" not in steps and allow_no_screener:
+        LOG.info("[INFO] ALLOW_NO_SCREENER enabled=true steps=%s", ",".join(steps))
     LOG.info("[INFO] PIPELINE_START steps=%s", ",".join(steps))
     pipeline_run_date = _resolve_pipeline_run_date()
     LOG.info(
@@ -2181,6 +2809,42 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     _ensure_latest_headers()
     base_dir = _resolve_base_dir()
+    use_champion = _resolve_use_champion(args)
+    champion_mode = getattr(args, "champion_mode", "fill") or "fill"
+    ml_health_guard_enabled = _resolve_ml_health_guard(args)
+    ml_health_guard_mode = _resolve_ml_health_guard_mode(args)
+    auto_refresh_predictions = _resolve_auto_refresh_predictions(args)
+    auto_refresh_features = _resolve_auto_refresh_features(args)
+    strict_auto_refresh_predictions = _resolve_strict_auto_refresh_predictions()
+    strict_predictions_meta, strict_predictions_meta_source = _resolve_strict_predictions_meta()
+    LOG.info(
+        "[INFO] STRICT_PREDICTIONS_META enabled=%s source=%s",
+        str(bool(strict_predictions_meta)).lower(),
+        strict_predictions_meta_source,
+    )
+    champion_env: dict[str, str] = {}
+    if use_champion:
+        champion_payload = load_latest_champion(base_dir=base_dir)
+        if champion_payload:
+            champion_source = str(champion_payload.get("_champion_source") or "unknown")
+            champion_run_date = str(champion_payload.get("_champion_run_date") or "unknown")
+            LOG.info(
+                "[INFO] CHAMPION_LOAD source=%s present=true run_date=%s",
+                champion_source,
+                champion_run_date,
+            )
+            overrides = champion_env_overrides(champion_payload)
+            champion_env, champion_applied_keys = _apply_champion_overrides(
+                overrides, mode=champion_mode
+            )
+            LOG.info(
+                "[INFO] CHAMPION_APPLIED mode=%s keys=%s",
+                champion_mode,
+                ",".join(champion_applied_keys) if champion_applied_keys else "none",
+            )
+        else:
+            LOG.info("[INFO] CHAMPION_LOAD source=none present=false run_date=unknown")
+            LOG.warning("[WARN] CHAMPION_MISSING")
 
     extras = {
         "screener": _strip_labels_args(
@@ -2188,8 +2852,40 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         ),
         "backtest": _merge_split_args(args.backtest_args, args.backtest_args_split),
         "metrics": _merge_split_args(args.metrics_args, args.metrics_args_split),
+        "ranker_predict": _merge_split_args(
+            getattr(args, "ranker_predict_args", ""),
+            getattr(args, "ranker_predict_args_split", None),
+        ),
         "ranker_eval": _merge_split_args(
             getattr(args, "ranker_eval_args", ""), getattr(args, "ranker_eval_args_split", None)
+        ),
+        "ranker_walkforward": _merge_split_args(
+            getattr(args, "ranker_walkforward_args", ""),
+            getattr(args, "ranker_walkforward_args_split", None),
+        ),
+        "ranker_strategy_eval": _merge_split_args(
+            getattr(args, "ranker_strategy_eval_args", ""),
+            getattr(args, "ranker_strategy_eval_args_split", None),
+        ),
+        "ranker_monitor": _merge_split_args(
+            getattr(args, "ranker_monitor_args", ""),
+            getattr(args, "ranker_monitor_args_split", None),
+        ),
+        "ranker_recalibrate": _merge_split_args(
+            getattr(args, "ranker_recalibrate_args", ""),
+            getattr(args, "ranker_recalibrate_args_split", None),
+        ),
+        "ranker_autotune": _merge_split_args(
+            getattr(args, "ranker_autotune_args", ""),
+            getattr(args, "ranker_autotune_args_split", None),
+        ),
+        "ranker_autoremediate": _merge_split_args(
+            getattr(args, "ranker_autoremediate_args", ""),
+            getattr(args, "ranker_autoremediate_args_split", None),
+        ),
+        "ranker_trade_attribution": _merge_split_args(
+            getattr(args, "ranker_trade_attribution_args", ""),
+            getattr(args, "ranker_trade_attribution_args_split", None),
         ),
     }
 
@@ -2211,13 +2907,458 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     extras["metrics"] = _inject_run_date_arg(extras["metrics"], pipeline_run_date)
 
     step_rcs: dict[str, int] = {step: 0 for step in steps}
+    champion_ml_steps = {
+        "labels",
+        "features",
+        "ranker_train",
+        "ranker_predict",
+        "ranker_eval",
+        "ranker_walkforward",
+        "ranker_strategy_eval",
+        "ranker_monitor",
+        "ranker_recalibrate",
+        "ranker_autoremediate",
+        "ranker_trade_attribution",
+    }
+
+    def _step_env(step_name: str) -> Mapping[str, str] | None:
+        if not use_champion:
+            return None
+        if not champion_env:
+            return None
+        if step_name not in champion_ml_steps:
+            return None
+        return champion_env
+
+    freshness_state: dict[str, Any] = {"refresh_attempted": False}
+
+    def _summary_path_for_model(model_path: Path | None) -> Path | None:
+        if model_path is None:
+            return None
+        match = re.search(r"ranker_(\d{4}-\d{2}-\d{2})", model_path.name)
+        if not match:
+            return None
+        return model_path.parent / f"ranker_summary_{match.group(1)}.json"
+
+    def _latest_model_meta() -> dict[str, Any]:
+        latest_model = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
+        if latest_model is None:
+            return {
+                "model_path": None,
+                "model_mtime_utc": None,
+                "feature_set": None,
+                "feature_signature": None,
+                "feature_count": 0,
+            }
+        try:
+            model_mtime_utc = datetime.fromtimestamp(
+                latest_model.stat().st_mtime, timezone.utc
+            ).isoformat()
+        except Exception:
+            model_mtime_utc = None
+        feature_set = None
+        feature_signature_stored = None
+        feature_columns: list[str] = []
+        summary_path = _summary_path_for_model(latest_model)
+        if summary_path is not None and summary_path.exists():
+            try:
+                summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+            except Exception:
+                summary_payload = {}
+            if isinstance(summary_payload, Mapping):
+                feature_set = str(summary_payload.get("feature_set") or "").strip().lower() or None
+                feature_signature_stored = (
+                    str(summary_payload.get("feature_signature") or "").strip() or None
+                )
+                summary_cols = summary_payload.get("feature_columns")
+                if isinstance(summary_cols, list):
+                    feature_columns = [str(c).strip() for c in summary_cols if str(c).strip()]
+        try:
+            import joblib  # type: ignore
+
+            payload = joblib.load(latest_model)
+            if isinstance(payload, Mapping):
+                payload_set = str(payload.get("feature_set") or "").strip().lower() or None
+                if payload_set:
+                    feature_set = payload_set
+                payload_signature = str(payload.get("feature_signature") or "").strip() or None
+                if payload_signature:
+                    feature_signature_stored = payload_signature
+                payload_cols = payload.get("feature_columns")
+                if isinstance(payload_cols, list):
+                    cleaned = [str(c).strip() for c in payload_cols if str(c).strip()]
+                    if cleaned:
+                        feature_columns = cleaned
+        except Exception:
+            pass
+        computed_signature = (
+            compute_feature_signature(feature_columns) if feature_columns else None
+        )
+        if (
+            feature_signature_stored
+            and computed_signature
+            and feature_signature_stored != computed_signature
+        ):
+            LOG.warning(
+                "[WARN] MODEL_FEATURE_SIGNATURE_MISMATCH stored=%s computed=%s model_path=%s",
+                feature_signature_stored,
+                computed_signature,
+                latest_model,
+            )
+        resolved_signature = computed_signature or feature_signature_stored
+        return {
+            "model_path": str(latest_model),
+            "model_mtime_utc": model_mtime_utc,
+            "feature_set": feature_set,
+            "feature_signature": resolved_signature,
+            "feature_count": int(len(feature_columns)),
+        }
+
+    def _load_features_meta() -> tuple[dict[str, Any], str]:
+        return load_features_meta_for_path(
+            None,
+            base_dir=base_dir,
+            prefer_db=bool(db.db_enabled()),
+        )
+
+    def _ensure_features_freshness(context: str) -> dict[str, Any]:
+        model_meta = _latest_model_meta()
+        features_meta, features_meta_source = _load_features_meta()
+        model_feature_set = str(model_meta.get("feature_set") or "").strip().lower() or None
+        model_feature_signature = str(model_meta.get("feature_signature") or "").strip() or None
+        features_feature_set = str(features_meta.get("feature_set") or "").strip().lower() or None
+        meta_feature_signature = str(features_meta.get("feature_signature") or "").strip() or None
+        features_columns = features_meta.get("feature_columns")
+        computed_features_signature = None
+        if isinstance(features_columns, list):
+            cleaned_cols = [str(c).strip() for c in features_columns if str(c).strip()]
+            if cleaned_cols:
+                computed_features_signature = compute_feature_signature(cleaned_cols)
+        if (
+            meta_feature_signature
+            and computed_features_signature
+            and meta_feature_signature != computed_features_signature
+        ):
+            LOG.warning(
+                "[WARN] FEATURES_META_SIGNATURE_MISMATCH stored=%s computed=%s source=%s",
+                meta_feature_signature,
+                computed_features_signature,
+                features_meta_source,
+            )
+        features_feature_signature = computed_features_signature or meta_feature_signature
+        stale = False
+        reason = "fresh"
+        if not features_meta:
+            stale = True
+            reason = "features_meta_missing"
+        elif not model_feature_signature:
+            stale = True
+            reason = "model_signature_missing"
+        elif not features_feature_signature:
+            stale = True
+            reason = "features_signature_missing"
+        elif (
+            model_feature_signature
+            and features_feature_signature
+            and model_feature_signature != features_feature_signature
+        ):
+            stale = True
+            reason = "feature_signature_mismatch"
+        elif (
+            model_feature_set
+            and features_feature_set
+            and model_feature_set != features_feature_set
+        ):
+            stale = True
+            reason = "feature_set_mismatch"
+        LOG.info(
+            "[INFO] FEATURES_FRESHNESS stale=%s reason=%s model_feature_set=%s features_feature_set=%s model_feature_signature=%s features_feature_signature=%s",
+            str(bool(stale)).lower(),
+            reason,
+            model_feature_set or None,
+            features_feature_set or None,
+            model_feature_signature or None,
+            features_feature_signature or None,
+        )
+        return {
+            "stale": bool(stale),
+            "reason": reason,
+            "model_feature_set": model_feature_set,
+            "features_feature_set": features_feature_set,
+            "model_feature_signature": model_feature_signature,
+            "features_feature_signature": features_feature_signature,
+            "features_meta_source": features_meta_source,
+            "context": context,
+        }
+
+    def _load_predictions_meta() -> tuple[dict[str, Any], str]:
+        if db.db_enabled():
+            payload = db.load_ml_artifact_payload("predictions")
+            if isinstance(payload, Mapping) and payload:
+                return dict(payload), "db"
+        meta_path = base_dir / "data" / "predictions" / "latest_meta.json"
+        if meta_path.exists():
+            try:
+                payload = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(payload, Mapping):
+                    return dict(payload), "fs"
+            except Exception:
+                LOG.warning("[WARN] PREDICTIONS_META_READ_FAILED path=%s", meta_path)
+        return {}, "missing"
+
+    def _has_cli_flag(tokens: Sequence[str], flag: str) -> bool:
+        normalized = str(flag).strip()
+        if not normalized:
+            return False
+        prefix = f"{normalized}="
+        for raw in tokens:
+            token = str(raw).strip()
+            if not token:
+                continue
+            if token == normalized or token.startswith(prefix):
+                return True
+        return False
+
+    def _ensure_predictions_freshness(context: str) -> dict[str, Any]:
+        model_meta = _latest_model_meta()
+        features_meta, _ = _load_features_meta()
+        predictions_meta, predictions_meta_source = _load_predictions_meta()
+        stale, reason, freshness_details = evaluate_predictions_freshness(
+            model_meta,
+            features_meta,
+            predictions_meta,
+            strict_meta=bool(strict_predictions_meta),
+        )
+        model_path = str(model_meta.get("model_path") or "")
+        pred_model_path = str(predictions_meta.get("model_path") or "")
+        latest_features_set = str(
+            freshness_details.get("latest_features_feature_set") or ""
+        )
+        latest_features_signature = str(
+            freshness_details.get("latest_features_feature_signature") or ""
+        )
+        pred_features_set = str(freshness_details.get("predictions_feature_set") or "")
+        pred_features_signature = str(
+            freshness_details.get("predictions_feature_signature") or ""
+        )
+        pred_compatible = freshness_details.get("pred_compatible")
+        pred_missing_frac = freshness_details.get("pred_missing_frac")
+        pred_compat_reason = str(freshness_details.get("pred_compat_reason") or "")
+        LOG.info(
+            "[INFO] PREDICTIONS_FRESHNESS stale=%s reason=%s model_path=%s pred_model_path=%s latest_features_set=%s latest_features_signature=%s pred_features_set=%s pred_features_signature=%s pred_compatible=%s pred_missing_frac=%s pred_compat_reason=%s",
+            str(bool(stale)).lower(),
+            reason,
+            model_path or None,
+            pred_model_path or None,
+            latest_features_set or None,
+            latest_features_signature or None,
+            pred_features_set or None,
+            pred_features_signature or None,
+            pred_compatible,
+            pred_missing_frac,
+            pred_compat_reason or None,
+        )
+        if stale:
+            LOG.warning("[WARN] PREDICTIONS_STALE reason=%s suggestion=run ranker_predict", reason)
+            if auto_refresh_predictions and not freshness_state.get("refresh_attempted"):
+                freshness_state["refresh_attempted"] = True
+                features_freshness = _ensure_features_freshness(context)
+                refresh_due_to_prediction_feature_mismatch = any(
+                    tag in str(reason or "")
+                    for tag in (
+                        "pred_feature_set_mismatch",
+                        "pred_feature_signature_mismatch",
+                        "features_meta_missing",
+                    )
+                )
+                if auto_refresh_features and (
+                    bool(features_freshness.get("stale")) or refresh_due_to_prediction_feature_mismatch
+                ):
+                    labels_cmd: list[str] | None = None
+                    if db.db_enabled():
+                        labels_present = bool(db.fetch_latest_ml_artifact("labels"))
+                    else:
+                        labels_present = _latest_by_glob(
+                            base_dir / "data" / "labels", "labels_*.csv"
+                        ) is not None
+                    if not labels_present:
+                        bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
+                        labels_cmd = [
+                            sys.executable,
+                            "-m",
+                            "scripts.label_generator",
+                            "--bars-path",
+                            str(bars_path),
+                            "--output-dir",
+                            str(base_dir / "data" / "labels"),
+                        ]
+                        LOG.info(
+                            "[INFO] AUTO_REFRESH_FEATURES enabled=true labels_missing=true -> running labels"
+                        )
+                        rc_labels = 0
+                        secs_labels = 0.0
+                        try:
+                            rc_labels, secs_labels = run_step(
+                                "labels",
+                                labels_cmd,
+                                timeout=60 * 5,
+                                env=_step_env("labels"),
+                            )
+                        except Exception as exc:  # pragma: no cover - defensive continue
+                            LOG.warning("AUTO_REFRESH_FEATURES labels error: %s", exc)
+                            rc_labels, secs_labels = 1, 0.0
+                        stage_times["labels"] = secs_labels
+                        step_rcs["labels"] = rc_labels
+                        if rc_labels:
+                            LOG.warning("[WARN] AUTO_REFRESH_FEATURES_LABELS_FAILED rc=%s", rc_labels)
+                    LOG.info(
+                        "[INFO] AUTO_REFRESH_FEATURES enabled=true stale=true -> running feature_generator feature_set=%s",
+                        str(features_freshness.get("model_feature_set") or "env/default"),
+                    )
+                    rc_features = 0
+                    secs_features = 0.0
+                    features_env = dict(_step_env("features") or {})
+                    target_feature_set = str(
+                        features_freshness.get("model_feature_set") or ""
+                    ).strip().lower()
+                    if target_feature_set in {"v1", "v2"}:
+                        features_env["JBR_ML_FEATURE_SET"] = target_feature_set
+                    try:
+                        rc_features, secs_features = run_step(
+                            "features",
+                            [sys.executable, "-m", "scripts.feature_generator"],
+                            timeout=_features_timeout_secs(),
+                            env=features_env or None,
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive continue
+                        LOG.warning("AUTO_REFRESH_FEATURES feature_generator error: %s", exc)
+                        rc_features, secs_features = 1, 0.0
+                    stage_times["features"] = secs_features
+                    step_rcs["features"] = rc_features
+                    LOG.info("[INFO] AUTO_REFRESH_FEATURES_DONE rc=%s", rc_features)
+                    _ensure_features_freshness(context)
+                LOG.info(
+                    "[INFO] AUTO_REFRESH_PREDICTIONS enabled=true stale=true -> running ranker_predict"
+                )
+                predict_timeout, _ = _ranker_predict_timeout_config()
+                cmd = [sys.executable, "-m", "scripts.ranker_predict"]
+                if extras["ranker_predict"]:
+                    cmd.extend(extras["ranker_predict"])
+                if strict_auto_refresh_predictions:
+                    LOG.info(
+                        "[INFO] STRICT_AUTO_REFRESH_PREDICTIONS enabled=true max_missing_feature_fraction=0.2"
+                    )
+                    if not _has_cli_flag(cmd, "--strict-feature-match"):
+                        cmd.extend(["--strict-feature-match", "true"])
+                    if not _has_cli_flag(cmd, "--max-missing-feature-fraction"):
+                        cmd.extend(["--max-missing-feature-fraction", "0.2"])
+                rc_predict = 0
+                secs = 0.0
+                try:
+                    rc_predict, secs = run_step(
+                        "ranker_predict",
+                        cmd,
+                        timeout=predict_timeout,
+                        env=_step_env("ranker_predict"),
+                    )
+                except Exception as exc:  # pragma: no cover - defensive continue
+                    LOG.warning("AUTO_REFRESH_PREDICTIONS ranker_predict error: %s", exc)
+                    rc_predict, secs = 1, 0.0
+                stage_times["ranker_predict"] = secs
+                step_rcs["ranker_predict"] = rc_predict
+                calibrated, method = _ranker_predict_score_source_from_log(base_dir)
+                LOG.info(
+                    "[INFO] RANKER_PREDICT rc=%s calibrated=%s method=%s predictions_source=%s",
+                    rc_predict,
+                    calibrated,
+                    method,
+                    _predictions_source_state(base_dir),
+                )
+                LOG.info("[INFO] AUTO_REFRESH_PREDICTIONS_DONE rc=%s", rc_predict)
+                model_meta = _latest_model_meta()
+                features_meta, _ = _load_features_meta()
+                predictions_meta, predictions_meta_source = _load_predictions_meta()
+                stale, reason, freshness_details = evaluate_predictions_freshness(
+                    model_meta,
+                    features_meta,
+                    predictions_meta,
+                    strict_meta=bool(strict_predictions_meta),
+                )
+                model_path = str(model_meta.get("model_path") or "")
+                pred_model_path = str(predictions_meta.get("model_path") or "")
+                latest_features_set = str(
+                    freshness_details.get("latest_features_feature_set") or ""
+                )
+                latest_features_signature = str(
+                    freshness_details.get("latest_features_feature_signature") or ""
+                )
+                pred_features_set = str(
+                    freshness_details.get("predictions_feature_set") or ""
+                )
+                pred_features_signature = str(
+                    freshness_details.get("predictions_feature_signature") or ""
+                )
+                pred_compatible = freshness_details.get("pred_compatible")
+                pred_missing_frac = freshness_details.get("pred_missing_frac")
+                pred_compat_reason = str(freshness_details.get("pred_compat_reason") or "")
+                LOG.info(
+                    "[INFO] PREDICTIONS_FRESHNESS stale=%s reason=%s model_path=%s pred_model_path=%s latest_features_set=%s latest_features_signature=%s pred_features_set=%s pred_features_signature=%s pred_compatible=%s pred_missing_frac=%s pred_compat_reason=%s",
+                    str(bool(stale)).lower(),
+                    reason,
+                    model_path or None,
+                    pred_model_path or None,
+                    latest_features_set or None,
+                    latest_features_signature or None,
+                    pred_features_set or None,
+                    pred_features_signature or None,
+                    pred_compatible,
+                    pred_missing_frac,
+                    pred_compat_reason or None,
+                )
+                if stale and any(
+                    token in str(reason or "")
+                    for token in (
+                        "pred_feature_incompatible",
+                        "pred_feature_compat_missing",
+                        "pred_feature_set_missing",
+                        "pred_feature_signature_missing",
+                        "pred_model_meta_missing",
+                    )
+                ):
+                    LOG.warning(
+                        "[WARN] AUTO_REFRESH_PREDICTIONS_INEFFECTIVE reason=%s suggestion=enable_strict_auto_refresh_or_refresh_features",
+                        reason,
+                    )
+        return {
+            "stale": bool(stale),
+            "reason": reason,
+            "model_path": model_path or None,
+            "pred_model_path": pred_model_path or None,
+            "predictions_meta_source": predictions_meta_source,
+            "latest_features_set": latest_features_set or None,
+            "latest_features_signature": latest_features_signature or None,
+            "pred_features_set": pred_features_set or None,
+            "pred_features_signature": pred_features_signature or None,
+            "pred_compatible": pred_compatible,
+            "pred_missing_frac": pred_missing_frac,
+            "pred_compat_reason": pred_compat_reason or None,
+            "context": context,
+        }
 
     LOG.info(
-        "[INFO] PIPELINE_ARGS screener=%s backtest=%s metrics=%s ranker_eval=%s",
+        "[INFO] PIPELINE_ARGS screener=%s backtest=%s metrics=%s ranker_predict=%s ranker_eval=%s ranker_walkforward=%s ranker_strategy_eval=%s ranker_monitor=%s ranker_recalibrate=%s ranker_autotune=%s ranker_autoremediate=%s ranker_trade_attribution=%s",
         extras["screener"],
         extras["backtest"],
         extras["metrics"],
+        extras["ranker_predict"],
         extras["ranker_eval"],
+        extras["ranker_walkforward"],
+        extras["ranker_strategy_eval"],
+        extras["ranker_monitor"],
+        extras["ranker_recalibrate"],
+        extras["ranker_autotune"],
+        extras["ranker_autoremediate"],
+        extras["ranker_trade_attribution"],
     )
 
     started = time.time()
@@ -2231,6 +3372,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     stage_times: dict[str, float] = {}
     rc = 0
     current_step: str | None = None
+    ml_health_summary: dict[str, Any] | None = None
+    model_score_coverage_summary: dict[str, Any] | None = None
 
     metrics_rows: int | None = None
     latest_source: str | None = "unknown"
@@ -2359,6 +3502,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if "labels" in steps:
             current_step = "labels"
             bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
+            LOG.info("[INFO] START labels bars_path=%s", bars_path)
             if db.db_enabled():
                 bars_meta = db.fetch_latest_ml_artifact("daily_bars")
                 bars_rows = int(bars_meta.get("rows_count") or 0) if bars_meta else 0
@@ -2384,10 +3528,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 labels_rows = 0
                 rc_labels = 0
                 secs = 0.0
-                LOG.info("[INFO] START labels bars_path=%s", bars_path)
                 LOG.info("[INFO] LABELS_START bars_path=%s", bars_path)
                 try:
-                    rc_labels, secs = run_step("labels", cmd, timeout=60 * 5)
+                    rc_labels, secs = run_step(
+                        "labels",
+                        cmd,
+                        timeout=60 * 5,
+                        env=_step_env("labels"),
+                    )
                     try:
                         labels_path = _detect_new_labels_file(labels_output_dir, labels_before)
                         labels_rows = _count_csv_lines(labels_path) if labels_path else 0
@@ -2404,62 +3552,199 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 if rc_labels:
                     LOG.warning("[WARN] LABELS_STEP rc=%s (continuing)", rc_labels)
 
+        if "ranker_recalibrate" in steps:
+            current_step = "ranker_recalibrate"
+            cmd = [sys.executable, "-m", "scripts.ranker_recalibrate"]
+            if extras["ranker_recalibrate"]:
+                cmd.extend(extras["ranker_recalibrate"])
+            rc_recalibrate = 0
+            secs = 0.0
+            try:
+                rc_recalibrate, secs = run_step(
+                    "ranker_recalibrate",
+                    cmd,
+                    timeout=60 * 10,
+                    env=_step_env("ranker_recalibrate"),
+                )
+            except Exception as exc:  # pragma: no cover - defensive continue
+                LOG.warning("RANKER_RECALIBRATE error (continuing): %s", exc)
+                rc_recalibrate, secs = 1, 0.0
+            stage_times["ranker_recalibrate"] = secs
+            step_rcs["ranker_recalibrate"] = rc_recalibrate
+            if rc_recalibrate:
+                LOG.warning("[WARN] RANKER_RECALIBRATE_FAILED rc=%s (continuing)", rc_recalibrate)
+            else:
+                method = "unknown"
+                model_path = ""
+                if db.db_enabled():
+                    recal_payload = db.load_ml_artifact_payload("ranker_recalibrate")
+                    method = str(recal_payload.get("method") or "unknown")
+                    model_path = str(recal_payload.get("model_path") or "")
+                else:
+                    summary_path = _latest_by_glob(DATA_DIR / "models", "ranker_summary_*.json")
+                    summary_payload = _read_json(summary_path) if summary_path else {}
+                    calibration_block = summary_payload.get("calibration")
+                    if isinstance(calibration_block, Mapping):
+                        method = str(
+                            calibration_block.get("method")
+                            or calibration_block.get("requested_method")
+                            or "unknown"
+                        )
+                    else:
+                        method = str(summary_payload.get("method") or "unknown")
+                    model_path = str(summary_payload.get("model_path") or "")
+                if not model_path:
+                    latest_model = _latest_by_glob(DATA_DIR / "models", "ranker_*.pkl")
+                    model_path = str(latest_model) if latest_model else "unknown"
+                LOG.info(
+                    "[INFO] RANKER_RECALIBRATE rc=%s method=%s model_path=%s",
+                    rc_recalibrate,
+                    method,
+                    model_path,
+                )
+
+        if "ranker_predict" in steps:
+            current_step = "ranker_predict"
+            cmd = [sys.executable, "-m", "scripts.ranker_predict"]
+            if extras["ranker_predict"]:
+                cmd.extend(extras["ranker_predict"])
+            predict_timeout, _ = _ranker_predict_timeout_config()
+            rc_predict = 0
+            secs = 0.0
+            try:
+                rc_predict, secs = run_step(
+                    "ranker_predict",
+                    cmd,
+                    timeout=predict_timeout,
+                    env=_step_env("ranker_predict"),
+                )
+            except Exception as exc:  # pragma: no cover - defensive continue
+                LOG.warning("RANKER_PREDICT error (continuing): %s", exc)
+                rc_predict, secs = 1, 0.0
+            stage_times["ranker_predict"] = secs
+            step_rcs["ranker_predict"] = rc_predict
+            calibrated, method = _ranker_predict_score_source_from_log(base_dir)
+            LOG.info(
+                "[INFO] RANKER_PREDICT rc=%s calibrated=%s method=%s predictions_source=%s",
+                rc_predict,
+                calibrated,
+                method,
+                _predictions_source_state(base_dir),
+            )
+            if rc_predict:
+                LOG.warning(
+                    "[WARN] RANKER_PREDICT_FAILED rc=%s timeout_secs=%s predictions_source=%s",
+                    rc_predict,
+                    predict_timeout,
+                    _predictions_source_state(base_dir),
+                )
+
         if db.db_enabled() and (
             "ranker_eval" in steps or getattr(args, "enrich_candidates_with_ranker", False)
         ):
-            missing_artifacts: list[str] = []
-            if not db.fetch_latest_ml_artifact("daily_bars"):
-                missing_artifacts.append("daily_bars")
-            if not db.fetch_latest_ml_artifact("labels"):
-                missing_artifacts.append("labels")
-            if missing_artifacts:
-                LOG.warning(
-                    "[WARN] RANKER_PIPELINE_SKIPPED reason=missing_artifacts artifacts=%s",
-                    ",".join(missing_artifacts),
-                )
-            else:
-                LOG.info("[INFO] FEATURES_START")
-                rc_features, secs = run_step(
-                    "features",
-                    [sys.executable, "-m", "scripts.feature_generator"],
-                    timeout=60 * 5,
-                )
-                stage_times["features"] = secs
-                if rc_features:
-                    LOG.warning("[WARN] FEATURES_FAILED rc=%s (continuing)", rc_features)
+            # Let explicit predict step or freshness manager own prediction refresh.
+            skip_internal_predict = (
+                "ranker_predict" in steps
+                or auto_refresh_predictions
+                or ml_health_guard_enabled
+            )
+            if skip_internal_predict:
+                if "ranker_predict" in steps:
+                    LOG.info("[INFO] RANKER_PIPELINE_SKIPPED reason=explicit_ranker_predict_step")
+                elif auto_refresh_predictions:
+                    LOG.info(
+                        "[INFO] RANKER_PIPELINE_SKIPPED reason=freshness_manager_auto_refresh"
+                    )
                 else:
-                    model_path = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
-                    if model_path is None:
-                        LOG.info("[INFO] RANKER_TRAIN_START reason=model_missing")
-                        rc_train, secs = run_step(
-                            "ranker_train",
-                            [sys.executable, "-m", "scripts.ranker_train"],
-                            timeout=60 * 5,
-                        )
-                        stage_times["ranker_train"] = secs
-                        if rc_train:
-                            LOG.warning(
-                                "[WARN] RANKER_TRAIN_FAILED rc=%s (continuing)",
-                                rc_train,
-                            )
-                        model_path = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
-                    if model_path is None:
-                        LOG.warning("[WARN] PREDICTIONS_SKIPPED reason=model_missing")
+                    LOG.info(
+                        "[INFO] RANKER_PIPELINE_SKIPPED reason=guard_managed_prediction_freshness"
+                    )
+            else:
+                missing_artifacts: list[str] = []
+                if not db.fetch_latest_ml_artifact("daily_bars"):
+                    missing_artifacts.append("daily_bars")
+                if not db.fetch_latest_ml_artifact("labels"):
+                    missing_artifacts.append("labels")
+                if missing_artifacts:
+                    LOG.warning(
+                        "[WARN] RANKER_PIPELINE_SKIPPED reason=missing_artifacts artifacts=%s",
+                        ",".join(missing_artifacts),
+                    )
+                else:
+                    LOG.info("[INFO] FEATURES_START")
+                    features_timeout = _features_timeout_secs()
+                    LOG.info("[INFO] FEATURES_TIMEOUT secs=%s", features_timeout)
+                    rc_features, secs = run_step(
+                        "features",
+                        [sys.executable, "-m", "scripts.feature_generator"],
+                        timeout=features_timeout,
+                        env=_step_env("features"),
+                    )
+                    stage_times["features"] = secs
+                    if rc_features:
+                        LOG.warning("[WARN] FEATURES_FAILED rc=%s (continuing)", rc_features)
                     else:
-                        LOG.info("[INFO] PREDICTIONS_START model=%s", model_path.name)
-                        rc_predict, secs = run_step(
-                            "ranker_predict",
-                            [sys.executable, "-m", "scripts.ranker_predict"],
-                            timeout=60 * 3,
-                        )
-                        stage_times["ranker_predict"] = secs
-                        if rc_predict:
-                            LOG.warning(
-                                "[WARN] PREDICTIONS_FAILED rc=%s (continuing)",
+                        model_path = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
+                        if model_path is None:
+                            LOG.info("[INFO] RANKER_TRAIN_START reason=model_missing")
+                            rc_train, secs = run_step(
+                                "ranker_train",
+                                [sys.executable, "-m", "scripts.ranker_train"],
+                                timeout=60 * 5,
+                                env=_step_env("ranker_train"),
+                            )
+                            stage_times["ranker_train"] = secs
+                            if rc_train:
+                                LOG.warning(
+                                    "[WARN] RANKER_TRAIN_FAILED rc=%s (continuing)",
+                                    rc_train,
+                                )
+                            model_path = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
+                        if model_path is None:
+                            LOG.warning("[WARN] PREDICTIONS_SKIPPED reason=model_missing")
+                        else:
+                            predict_timeout, predict_timeout_source = _ranker_predict_timeout_config()
+                            LOG.info(
+                                "[INFO] RANKER_PREDICT_TIMEOUT secs=%s source=%s",
+                                predict_timeout,
+                                predict_timeout_source,
+                            )
+                            LOG.info("[INFO] PREDICTIONS_START model=%s", model_path.name)
+                            rc_predict, secs = run_step(
+                                "ranker_predict",
+                                [sys.executable, "-m", "scripts.ranker_predict"],
+                                timeout=predict_timeout,
+                                env=_step_env("ranker_predict"),
+                            )
+                            stage_times["ranker_predict"] = secs
+                            if rc_predict:
+                                LOG.warning(
+                                    "[WARN] RANKER_PREDICT_FAILED rc=%s timeout_secs=%s predictions_source=%s",
+                                    rc_predict,
+                                    predict_timeout,
+                                    _predictions_source_state(base_dir),
+                                )
+                                LOG.warning(
+                                    "[WARN] PREDICTIONS_FAILED rc=%s (continuing)",
+                                    rc_predict,
+                                )
+                            calibrated, method = _ranker_predict_score_source_from_log(base_dir)
+                            LOG.info(
+                                "[INFO] RANKER_PREDICT rc=%s calibrated=%s method=%s predictions_source=%s",
                                 rc_predict,
+                                calibrated,
+                                method,
+                                _predictions_source_state(base_dir),
                             )
         if "ranker_eval" in steps:
             current_step = "ranker_eval"
+            eval_timeout, eval_timeout_source = _ranker_eval_timeout_config()
+            LOG.info(
+                "[INFO] RANKER_EVAL_TIMEOUT secs=%s source=%s",
+                eval_timeout,
+                eval_timeout_source,
+            )
+            _ensure_predictions_freshness("ranker_eval")
             if db.db_enabled():
                 missing: list[str] = []
                 if not db.fetch_latest_ml_artifact("features"):
@@ -2480,13 +3765,24 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     rc_eval = 0
                     secs = 0.0
                     try:
-                        rc_eval, secs = run_step("ranker_eval", cmd, timeout=60 * 3)
+                        rc_eval, secs = run_step(
+                            "ranker_eval",
+                            cmd,
+                            timeout=eval_timeout,
+                            env=_step_env("ranker_eval"),
+                        )
                     except Exception as exc:  # pragma: no cover - defensive continue
                         LOG.warning("RANKER_EVAL error (continuing): %s", exc)
                         rc_eval, secs = 1, 0.0
                     stage_times["ranker_eval"] = secs
                     step_rcs["ranker_eval"] = rc_eval
                     if rc_eval:
+                        LOG.warning(
+                            "[WARN] RANKER_EVAL_FAILED rc=%s timeout_secs=%s eval_source=%s",
+                            rc_eval,
+                            eval_timeout,
+                            _ranker_eval_source_state(base_dir),
+                        )
                         LOG.warning("[WARN] RANKER_EVAL_FAILED rc=%s (continuing)", rc_eval)
                     else:
                         payload = db.load_ml_artifact_payload("ranker_eval")
@@ -2502,13 +3798,24 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 rc_eval = 0
                 secs = 0.0
                 try:
-                    rc_eval, secs = run_step("ranker_eval", cmd, timeout=60 * 3)
+                    rc_eval, secs = run_step(
+                        "ranker_eval",
+                        cmd,
+                        timeout=eval_timeout,
+                        env=_step_env("ranker_eval"),
+                    )
                 except Exception as exc:  # pragma: no cover - defensive continue
                     LOG.warning("RANKER_EVAL error (continuing): %s", exc)
                     rc_eval, secs = 1, 0.0
                 stage_times["ranker_eval"] = secs
                 step_rcs["ranker_eval"] = rc_eval
                 if rc_eval:
+                    LOG.warning(
+                        "[WARN] RANKER_EVAL_FAILED rc=%s timeout_secs=%s eval_source=%s",
+                        rc_eval,
+                        eval_timeout,
+                        _ranker_eval_source_state(base_dir),
+                    )
                     LOG.warning("[WARN] RANKER_EVAL_FAILED rc=%s (continuing)", rc_eval)
                 else:
                     payload = _read_json(DATA_DIR / "ranker_eval" / "latest.json")
@@ -2518,14 +3825,476 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         len(payload.get("deciles") or []),
                     )
 
+        if "ranker_walkforward" in steps:
+            current_step = "ranker_walkforward"
+            if db.db_enabled():
+                missing_wf: list[str] = []
+                if not db.fetch_latest_ml_artifact("features"):
+                    missing_wf.append("features")
+                if not db.fetch_latest_ml_artifact("labels"):
+                    missing_wf.append("labels")
+                if missing_wf:
+                    LOG.warning(
+                        "[WARN] RANKER_WALKFORWARD_SKIPPED reason=missing_artifacts artifacts=%s",
+                        ",".join(missing_wf),
+                    )
+                    stage_times["ranker_walkforward"] = 0.0
+                    step_rcs["ranker_walkforward"] = 0
+                else:
+                    cmd = [sys.executable, "-m", "scripts.ranker_walkforward"]
+                    if extras["ranker_walkforward"]:
+                        cmd.extend(extras["ranker_walkforward"])
+                    rc_wf = 0
+                    secs = 0.0
+                    try:
+                        rc_wf, secs = run_step(
+                            "ranker_walkforward",
+                            cmd,
+                            timeout=60 * 5,
+                            env=_step_env("ranker_walkforward"),
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive continue
+                        LOG.warning("RANKER_WALKFORWARD error (continuing): %s", exc)
+                        rc_wf, secs = 1, 0.0
+                    stage_times["ranker_walkforward"] = secs
+                    step_rcs["ranker_walkforward"] = rc_wf
+                    if rc_wf:
+                        LOG.warning("[WARN] RANKER_WALKFORWARD_FAILED rc=%s (continuing)", rc_wf)
+                    else:
+                        wf_payload = db.load_ml_artifact_payload("ranker_walkforward")
+                        LOG.info(
+                            "[INFO] RANKER_WALKFORWARD folds=%s sample_size_total=%s",
+                            int(wf_payload.get("folds_count", 0) or 0),
+                            int(wf_payload.get("sample_size_total", 0) or 0),
+                        )
+            else:
+                cmd = [sys.executable, "-m", "scripts.ranker_walkforward"]
+                if extras["ranker_walkforward"]:
+                    cmd.extend(extras["ranker_walkforward"])
+                rc_wf = 0
+                secs = 0.0
+                try:
+                    rc_wf, secs = run_step(
+                        "ranker_walkforward",
+                        cmd,
+                        timeout=60 * 5,
+                        env=_step_env("ranker_walkforward"),
+                    )
+                except Exception as exc:  # pragma: no cover - defensive continue
+                    LOG.warning("RANKER_WALKFORWARD error (continuing): %s", exc)
+                    rc_wf, secs = 1, 0.0
+                stage_times["ranker_walkforward"] = secs
+                step_rcs["ranker_walkforward"] = rc_wf
+                if rc_wf:
+                    LOG.warning("[WARN] RANKER_WALKFORWARD_FAILED rc=%s (continuing)", rc_wf)
+                else:
+                    wf_payload = _read_json(DATA_DIR / "ranker_walkforward" / "latest.json")
+                    LOG.info(
+                        "[INFO] RANKER_WALKFORWARD folds=%s sample_size_total=%s",
+                        int(wf_payload.get("folds_count", 0) or 0),
+                        int(wf_payload.get("sample_size_total", 0) or 0),
+                    )
+
+        if "ranker_strategy_eval" in steps:
+            current_step = "ranker_strategy_eval"
+            if db.db_enabled():
+                if not db.fetch_latest_ml_artifact("ranker_oos_predictions"):
+                    LOG.warning(
+                        "[WARN] RANKER_STRATEGY_EVAL_SKIPPED reason=missing_artifacts artifacts=ranker_oos_predictions"
+                    )
+                    stage_times["ranker_strategy_eval"] = 0.0
+                    step_rcs["ranker_strategy_eval"] = 0
+                else:
+                    cmd = [sys.executable, "-m", "scripts.ranker_strategy_eval"]
+                    if extras["ranker_strategy_eval"]:
+                        cmd.extend(extras["ranker_strategy_eval"])
+                    rc_strategy = 0
+                    secs = 0.0
+                    try:
+                        rc_strategy, secs = run_step(
+                            "ranker_strategy_eval",
+                            cmd,
+                            timeout=60 * 5,
+                            env=_step_env("ranker_strategy_eval"),
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive continue
+                        LOG.warning("RANKER_STRATEGY_EVAL error (continuing): %s", exc)
+                        rc_strategy, secs = 1, 0.0
+                    stage_times["ranker_strategy_eval"] = secs
+                    step_rcs["ranker_strategy_eval"] = rc_strategy
+                    if rc_strategy:
+                        LOG.warning(
+                            "[WARN] RANKER_STRATEGY_EVAL_FAILED rc=%s (continuing)",
+                            rc_strategy,
+                        )
+                    else:
+                        strategy_payload = db.load_ml_artifact_payload("ranker_strategy_eval")
+                        strategy_metrics = strategy_payload.get("metrics") or {}
+                        LOG.info(
+                            "[INFO] RANKER_STRATEGY_EVAL periods=%s cagr=%s sharpe=%s max_dd=%s",
+                            int(strategy_metrics.get("periods", 0) or 0),
+                            strategy_metrics.get("cagr"),
+                            strategy_metrics.get("sharpe"),
+                            strategy_metrics.get("max_drawdown"),
+                        )
+            else:
+                cmd = [sys.executable, "-m", "scripts.ranker_strategy_eval"]
+                if extras["ranker_strategy_eval"]:
+                    cmd.extend(extras["ranker_strategy_eval"])
+                rc_strategy = 0
+                secs = 0.0
+                try:
+                    rc_strategy, secs = run_step(
+                        "ranker_strategy_eval",
+                        cmd,
+                        timeout=60 * 5,
+                        env=_step_env("ranker_strategy_eval"),
+                    )
+                except Exception as exc:  # pragma: no cover - defensive continue
+                    LOG.warning("RANKER_STRATEGY_EVAL error (continuing): %s", exc)
+                    rc_strategy, secs = 1, 0.0
+                stage_times["ranker_strategy_eval"] = secs
+                step_rcs["ranker_strategy_eval"] = rc_strategy
+                if rc_strategy:
+                    LOG.warning("[WARN] RANKER_STRATEGY_EVAL_FAILED rc=%s (continuing)", rc_strategy)
+                else:
+                    strategy_payload = _read_json(DATA_DIR / "ranker_strategy_eval" / "latest.json")
+                    strategy_metrics = strategy_payload.get("metrics") or {}
+                    LOG.info(
+                        "[INFO] RANKER_STRATEGY_EVAL periods=%s cagr=%s sharpe=%s max_dd=%s",
+                        int(strategy_metrics.get("periods", 0) or 0),
+                        strategy_metrics.get("cagr"),
+                        strategy_metrics.get("sharpe"),
+                        strategy_metrics.get("max_drawdown"),
+                    )
+
+        if "ranker_monitor" in steps:
+            current_step = "ranker_monitor"
+            _ensure_predictions_freshness("ranker_monitor")
+            if db.db_enabled():
+                if not db.fetch_latest_ml_artifact("ranker_oos_predictions"):
+                    LOG.warning(
+                        "[WARN] RANKER_MONITOR_SKIPPED reason=missing_artifacts artifacts=ranker_oos_predictions"
+                    )
+                    stage_times["ranker_monitor"] = 0.0
+                    step_rcs["ranker_monitor"] = 0
+                else:
+                    cmd = [sys.executable, "-m", "scripts.ranker_monitor"]
+                    if extras["ranker_monitor"]:
+                        cmd.extend(extras["ranker_monitor"])
+                    rc_monitor = 0
+                    secs = 0.0
+                    try:
+                        rc_monitor, secs = run_step(
+                            "ranker_monitor",
+                            cmd,
+                            timeout=60 * 3,
+                            env=_step_env("ranker_monitor"),
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive continue
+                        LOG.warning("RANKER_MONITOR error (continuing): %s", exc)
+                        rc_monitor, secs = 1, 0.0
+                    stage_times["ranker_monitor"] = secs
+                    step_rcs["ranker_monitor"] = rc_monitor
+                    if rc_monitor:
+                        LOG.warning("[WARN] RANKER_MONITOR_FAILED rc=%s (continuing)", rc_monitor)
+                    else:
+                        monitor_payload = db.load_ml_artifact_payload("ranker_monitor")
+                        drift = monitor_payload.get("drift") or {}
+                        recent_strategy = monitor_payload.get("recent_strategy") or {}
+                        LOG.info(
+                            "[INFO] RANKER_MONITOR psi_score=%s recent_sharpe=%s recommended_action=%s",
+                            drift.get("max_psi"),
+                            recent_strategy.get("sharpe"),
+                            monitor_payload.get("recommended_action"),
+                        )
+            else:
+                cmd = [sys.executable, "-m", "scripts.ranker_monitor"]
+                if extras["ranker_monitor"]:
+                    cmd.extend(extras["ranker_monitor"])
+                rc_monitor = 0
+                secs = 0.0
+                try:
+                    rc_monitor, secs = run_step(
+                        "ranker_monitor",
+                        cmd,
+                        timeout=60 * 3,
+                        env=_step_env("ranker_monitor"),
+                    )
+                except Exception as exc:  # pragma: no cover - defensive continue
+                    LOG.warning("RANKER_MONITOR error (continuing): %s", exc)
+                    rc_monitor, secs = 1, 0.0
+                stage_times["ranker_monitor"] = secs
+                step_rcs["ranker_monitor"] = rc_monitor
+                if rc_monitor:
+                    LOG.warning("[WARN] RANKER_MONITOR_FAILED rc=%s (continuing)", rc_monitor)
+                else:
+                    monitor_payload = _read_json(DATA_DIR / "ranker_monitor" / "latest.json")
+                    drift = monitor_payload.get("drift") or {}
+                    recent_strategy = monitor_payload.get("recent_strategy") or {}
+                    LOG.info(
+                        "[INFO] RANKER_MONITOR psi_score=%s recent_sharpe=%s recommended_action=%s",
+                        drift.get("max_psi"),
+                        recent_strategy.get("sharpe"),
+                        monitor_payload.get("recommended_action"),
+                    )
+
+        if "ranker_autoremediate" in steps:
+            current_step = "ranker_autoremediate"
+            cmd = [sys.executable, "-m", "scripts.ranker_autoremediate"]
+            if extras["ranker_autoremediate"]:
+                cmd.extend(extras["ranker_autoremediate"])
+            rc_autoremediate = 0
+            secs = 0.0
+            try:
+                rc_autoremediate, secs = run_step(
+                    "ranker_autoremediate",
+                    cmd,
+                    timeout=60 * 20,
+                    env=_step_env("ranker_autoremediate"),
+                )
+            except Exception as exc:  # pragma: no cover - defensive continue
+                LOG.warning("RANKER_AUTOREMEDIATE error (continuing): %s", exc)
+                rc_autoremediate, secs = 1, 0.0
+            stage_times["ranker_autoremediate"] = secs
+            step_rcs["ranker_autoremediate"] = rc_autoremediate
+            if rc_autoremediate:
+                LOG.warning(
+                    "[WARN] RANKER_AUTOREMEDIATE_FAILED rc=%s (continuing)",
+                    rc_autoremediate,
+                )
+            else:
+                if db.db_enabled():
+                    autoremediate_payload = db.load_ml_artifact_payload("ranker_autoremediate")
+                else:
+                    autoremediate_payload = _read_json(
+                        DATA_DIR / "ranker_autoremediate" / "latest.json"
+                    )
+                decision_block = autoremediate_payload.get("decision") or {}
+                champion_block = autoremediate_payload.get("champion") or {}
+                LOG.info(
+                    "[INFO] RANKER_AUTOREMEDIATE decision=%s executed=%s champion_status=%s",
+                    decision_block.get("decision"),
+                    autoremediate_payload.get("executed"),
+                    champion_block.get("champion_status"),
+                )
+
+        if "ranker_trade_attribution" in steps:
+            current_step = "ranker_trade_attribution"
+            cmd = [sys.executable, "-m", "scripts.ranker_trade_attribution"]
+            if extras["ranker_trade_attribution"]:
+                cmd.extend(extras["ranker_trade_attribution"])
+            rc_attr = 0
+            secs = 0.0
+            try:
+                rc_attr, secs = run_step(
+                    "ranker_trade_attribution",
+                    cmd,
+                    timeout=60 * 5,
+                    env=_step_env("ranker_trade_attribution"),
+                )
+            except Exception as exc:  # pragma: no cover - defensive continue
+                LOG.warning("RANKER_TRADE_ATTRIBUTION error (continuing): %s", exc)
+                rc_attr, secs = 1, 0.0
+            stage_times["ranker_trade_attribution"] = secs
+            step_rcs["ranker_trade_attribution"] = rc_attr
+            if rc_attr:
+                LOG.warning("[WARN] RANKER_TRADE_ATTRIBUTION_FAILED rc=%s (continuing)", rc_attr)
+            else:
+                if db.db_enabled():
+                    attribution_payload = db.load_ml_artifact_payload("ranker_trade_attribution")
+                else:
+                    attribution_payload = _read_json(
+                        DATA_DIR / "ranker_trade_attribution" / "latest.json"
+                    )
+                summary = attribution_payload.get("summary") or {}
+                LOG.info(
+                    "[INFO] RANKER_TRADE_ATTRIBUTION trades_scored=%s win_rate=%s brier=%s unmatched=%s",
+                    summary.get("trades_scored"),
+                    summary.get("win_rate_scored"),
+                    summary.get("brier"),
+                    summary.get("trades_unmatched"),
+                )
+
+        if "ranker_autotune" in steps:
+            current_step = "ranker_autotune"
+            if db.db_enabled():
+                if not db.fetch_latest_ml_artifact("daily_bars"):
+                    LOG.warning(
+                        "[WARN] RANKER_AUTOTUNE_SKIPPED reason=missing_artifacts artifacts=daily_bars"
+                    )
+                    stage_times["ranker_autotune"] = 0.0
+                    step_rcs["ranker_autotune"] = 0
+                else:
+                    cmd = [sys.executable, "-m", "scripts.ranker_autotune"]
+                    if extras["ranker_autotune"]:
+                        cmd.extend(extras["ranker_autotune"])
+                    rc_autotune = 0
+                    secs = 0.0
+                    try:
+                        rc_autotune, secs = run_step("ranker_autotune", cmd, timeout=60 * 20)
+                    except Exception as exc:  # pragma: no cover - defensive continue
+                        LOG.warning("RANKER_AUTOTUNE error (continuing): %s", exc)
+                        rc_autotune, secs = 1, 0.0
+                    stage_times["ranker_autotune"] = secs
+                    step_rcs["ranker_autotune"] = rc_autotune
+                    if rc_autotune:
+                        LOG.warning("[WARN] RANKER_AUTOTUNE_FAILED rc=%s (continuing)", rc_autotune)
+                    else:
+                        autotune_payload = db.load_ml_artifact_payload("ranker_autotune")
+                        best = autotune_payload.get("best_config") or {}
+                        LOG.info(
+                            "[INFO] RANKER_AUTOTUNE best_sharpe=%s best_cagr=%s best_top_k=%s best_cost_bps=%s",
+                            best.get("sharpe"),
+                            best.get("cagr"),
+                            best.get("top_k"),
+                            best.get("cost_bps"),
+                        )
+            else:
+                cmd = [sys.executable, "-m", "scripts.ranker_autotune"]
+                if extras["ranker_autotune"]:
+                    cmd.extend(extras["ranker_autotune"])
+                rc_autotune = 0
+                secs = 0.0
+                try:
+                    rc_autotune, secs = run_step("ranker_autotune", cmd, timeout=60 * 20)
+                except Exception as exc:  # pragma: no cover - defensive continue
+                    LOG.warning("RANKER_AUTOTUNE error (continuing): %s", exc)
+                    rc_autotune, secs = 1, 0.0
+                stage_times["ranker_autotune"] = secs
+                step_rcs["ranker_autotune"] = rc_autotune
+                if rc_autotune:
+                    LOG.warning("[WARN] RANKER_AUTOTUNE_FAILED rc=%s (continuing)", rc_autotune)
+                else:
+                    autotune_payload = _read_json(DATA_DIR / "ranker_autotune" / "latest.json")
+                    best = autotune_payload.get("best_config") or {}
+                    LOG.info(
+                        "[INFO] RANKER_AUTOTUNE best_sharpe=%s best_cagr=%s best_top_k=%s best_cost_bps=%s",
+                        best.get("sharpe"),
+                        best.get("cagr"),
+                        best.get("top_k"),
+                        best.get("cost_bps"),
+                    )
+
         if getattr(args, "enrich_candidates_with_ranker", False):
-            enriched = _enrich_candidates_with_ranker(
-                base_dir=base_dir,
-                score_column=DEFAULT_RANKER_SCORE_COLUMN,
-                target_column=DEFAULT_RANKER_TARGET_COLUMN,
+            enrichment_freshness = _ensure_predictions_freshness("enrichment")
+            LOG.info(
+                "[INFO] ML_HEALTH_GUARD enabled=%s mode=%s",
+                "true" if ml_health_guard_enabled else "false",
+                ml_health_guard_mode,
             )
-            if enriched is not None:
-                _rerank_latest_candidates(base_dir, frame=enriched)
+            enrichment_blocked = False
+            if ml_health_guard_enabled:
+                health_status = load_latest_ml_health(
+                    base_dir=base_dir,
+                    logger=LOG,
+                )
+                decision = decide_ml_enrichment(
+                    health_status,
+                    mode=ml_health_guard_mode,
+                    max_age_days=resolve_ml_health_max_age_days(),
+                    pipeline_run_date=pipeline_run_date,
+                    predictions_stale=bool(enrichment_freshness.get("stale")),
+                    predictions_stale_reason=str(enrichment_freshness.get("reason") or ""),
+                )
+                reason_text = ",".join(decision.get("reasons") or []) or "none"
+                LOG.info(
+                    "[INFO] ML_ENRICHMENT_DECISION decision=%s mode=%s action=%s reason=%s psi_score=%s recent_sharpe=%s monitor_run_date=%s predictions_reason=%s",
+                    decision.get("decision"),
+                    decision.get("mode"),
+                    decision.get("recommended_action"),
+                    reason_text,
+                    decision.get("psi_score"),
+                    decision.get("recent_sharpe"),
+                    decision.get("monitor_run_date"),
+                    decision.get("predictions_stale_reason"),
+                )
+                ml_health_summary = {
+                    "decision": decision.get("decision"),
+                    "mode": decision.get("mode"),
+                    "reasons": list(decision.get("reasons") or []),
+                    "monitor_run_date": decision.get("monitor_run_date"),
+                    "psi_score": decision.get("psi_score"),
+                    "recent_sharpe": decision.get("recent_sharpe"),
+                    "source": decision.get("source"),
+                    "predictions_stale": bool(enrichment_freshness.get("stale")),
+                    "predictions_stale_reason": decision.get("predictions_stale_reason"),
+                }
+                if decision.get("decision") == "block":
+                    enrichment_blocked = True
+                    LOG.warning("[WARN] ML_ENRICHMENT_BLOCKED reason=%s", reason_text)
+                elif decision.get("decision") == "warn":
+                    LOG.warning("[WARN] ML_ENRICHMENT_WARN reason=%s", reason_text)
+                if _env_truthy(os.getenv("JBR_ML_HEALTH_ALERTS")) and decision.get(
+                    "decision"
+                ) in {"warn", "block"}:
+                    try:
+                        send_alert(
+                            "JBRAVO ML health guard action",
+                            {
+                                "decision": decision.get("decision"),
+                                "action": decision.get("recommended_action"),
+                                "reason": reason_text,
+                                "psi_score": decision.get("psi_score"),
+                                "recent_sharpe": decision.get("recent_sharpe"),
+                                "monitor_run_date": decision.get("monitor_run_date"),
+                                "source": decision.get("source"),
+                                "run_utc": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                    except Exception as exc:  # pragma: no cover - alert best-effort
+                        LOG.warning("[WARN] ML_HEALTH_ALERT_FAILED err=%s", exc)
+            else:
+                ml_health_summary = {
+                    "decision": "allow",
+                    "mode": ml_health_guard_mode,
+                    "reasons": ["guard_disabled"],
+                    "monitor_run_date": None,
+                    "psi_score": None,
+                    "recent_sharpe": None,
+                    "source": "guard_disabled",
+                    "predictions_stale": bool(enrichment_freshness.get("stale")),
+                    "predictions_stale_reason": (
+                        str(enrichment_freshness.get("reason") or "")
+                        if enrichment_freshness.get("stale")
+                        else None
+                    ),
+                }
+                LOG.info(
+                    "[INFO] ML_ENRICHMENT_DECISION decision=allow mode=%s action=none reason=guard_disabled psi_score=%s recent_sharpe=%s monitor_run_date=%s predictions_reason=%s",
+                    ml_health_guard_mode,
+                    None,
+                    None,
+                    None,
+                    (
+                        str(enrichment_freshness.get("reason") or "")
+                        if enrichment_freshness.get("stale")
+                        else None
+                    ),
+                )
+            if not enrichment_blocked:
+                enriched = _enrich_candidates_with_ranker(
+                    base_dir=base_dir,
+                    score_column=DEFAULT_RANKER_SCORE_COLUMN,
+                    target_column=DEFAULT_RANKER_TARGET_COLUMN,
+                )
+                coverage_source = "db" if db.db_enabled() else "csv"
+                coverage_frame = enriched
+                if coverage_frame is None:
+                    try:
+                        coverage_frame = _load_latest_candidates_frame(base_dir)
+                    except Exception:
+                        LOG.warning(
+                            "[WARN] MODEL_SCORE_COVERAGE_FALLBACK_FAILED reason=load_latest_candidates_error",
+                            exc_info=True,
+                        )
+                        coverage_frame = pd.DataFrame()
+                model_score_coverage_summary = _model_score_coverage_summary(
+                    coverage_frame,
+                    source=coverage_source,
+                )
+                if enriched is not None:
+                    _rerank_latest_candidates(base_dir, frame=enriched)
     except Exception as exc:  # pragma: no cover - defensive guard
         rc = 1
         LOG.exception("PIPELINE_FATAL")
@@ -2602,6 +4371,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             fallback_bars_rows_total=bars_rows_total,
             latest_source=summary_source,
         )
+        if isinstance(ml_health_summary, Mapping):
+            metrics_payload["ml_health"] = dict(ml_health_summary)
+        if isinstance(model_score_coverage_summary, Mapping):
+            metrics_payload["model_score_coverage"] = dict(model_score_coverage_summary)
         metrics = dict(metrics or {})
         metrics.update(metrics_payload)
         try:
@@ -2687,7 +4460,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 fresh_payload = {
                     "ny_date": now_ny.strftime("%Y-%m-%d"),
                     "end_ny": now_ny.isoformat(),
-                    "end_utc": datetime.utcnow().isoformat() + "Z",
+                    "end_utc": datetime.now(timezone.utc).isoformat(),
                     "rc": 0,
                     "rows": rows_for_stamp,
                 }
@@ -2729,6 +4502,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         }
         status_payload["degraded"] = bool(degraded)
         status_payload["step_rcs"] = {k: int(v) for k, v in step_rcs.items()}
+        if isinstance(ml_health_summary, Mapping):
+            status_payload["ml_health"] = dict(ml_health_summary)
+        if isinstance(model_score_coverage_summary, Mapping):
+            status_payload["model_score_coverage"] = dict(model_score_coverage_summary)
         if error_info:
             status_payload["error"] = dict(error_info)
         _write_status_json(base_dir, status_payload)
@@ -2761,6 +4538,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "trading_ok": bool(trading_ok),
             "data_ok": bool(data_ok),
         }
+        if isinstance(ml_health_summary, Mapping):
+            summary_payload["ml_health"] = dict(ml_health_summary)
+        if isinstance(model_score_coverage_summary, Mapping):
+            summary_payload["model_score_coverage"] = dict(model_score_coverage_summary)
         global _PIPELINE_SUMMARY_FOR_DB, _PIPELINE_RC, _PIPELINE_ENDED_AT
         _PIPELINE_SUMMARY_FOR_DB = dict(summary_payload)
         _PIPELINE_RC = int(rc)

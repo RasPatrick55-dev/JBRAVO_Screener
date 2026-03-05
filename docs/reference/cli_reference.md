@@ -15,8 +15,29 @@ usage: run_pipeline.py [-h] [--steps STEPS] [--reload-web {true,false}]
                        [--metrics-args-split [METRICS_ARGS_SPLIT ...]]
                        [--labels-bars-path LABELS_BARS_PATH]
                        [--ranker-eval-args RANKER_EVAL_ARGS]
+                       [--ranker-predict-args RANKER_PREDICT_ARGS]
+                       [--ranker-predict-args-split [RANKER_PREDICT_ARGS_SPLIT ...]]
                        [--ranker-eval-args-split [RANKER_EVAL_ARGS_SPLIT ...]]
-                       [--enrich-candidates-with-ranker]
+                       [--ranker-walkforward-args RANKER_WALKFORWARD_ARGS]
+                       [--ranker-walkforward-args-split [RANKER_WALKFORWARD_ARGS_SPLIT ...]]
+                       [--ranker-strategy-eval-args RANKER_STRATEGY_EVAL_ARGS]
+                       [--ranker-strategy-eval-args-split [RANKER_STRATEGY_EVAL_ARGS_SPLIT ...]]
+                       [--ranker-autotune-args RANKER_AUTOTUNE_ARGS]
+                       [--ranker-autotune-args-split [RANKER_AUTOTUNE_ARGS_SPLIT ...]]
+                       [--ranker-monitor-args RANKER_MONITOR_ARGS]
+                       [--ranker-monitor-args-split [RANKER_MONITOR_ARGS_SPLIT ...]]
+                       [--ranker-recalibrate-args RANKER_RECALIBRATE_ARGS]
+                       [--ranker-recalibrate-args-split [RANKER_RECALIBRATE_ARGS_SPLIT ...]]
+                       [--ranker-autoremediate-args RANKER_AUTOREMEDIATE_ARGS]
+                       [--ranker-autoremediate-args-split [RANKER_AUTOREMEDIATE_ARGS_SPLIT ...]]
+                       [--ranker-trade-attribution-args RANKER_TRADE_ATTRIBUTION_ARGS]
+                       [--ranker-trade-attribution-args-split [RANKER_TRADE_ATTRIBUTION_ARGS_SPLIT ...]]
+                       [--use-champion] [--champion-mode {fill,force}]
+                       [--ml-health-guard]
+                       [--ml-health-guard-mode {warn,block}]
+                       [--enrich-candidates-with-ranker] [--allow-no-screener]
+                       [--auto-refresh-predictions [AUTO_REFRESH_PREDICTIONS]]
+                       [--auto-refresh-features [AUTO_REFRESH_FEATURES]]
                        [--export-daily-bars-path EXPORT_DAILY_BARS_PATH]
 
 Run the JBRAVO daily pipeline
@@ -25,7 +46,17 @@ options:
   -h, --help            show this help message and exit
   --steps STEPS         Comma-separated list of steps to run (default:
                         screener,backtest,metrics,ranker_eval). Include
-                        'labels' to generate label CSVs.
+                        'labels' to generate label CSVs, 'ranker_predict' to
+                        refresh predictions from the latest model,
+                        'ranker_walkforward' for optional walk-forward ML
+                        evaluation, 'ranker_strategy_eval' for optional OOS
+                        strategy evaluation, 'ranker_monitor' for optional
+                        drift/health monitoring, and 'ranker_recalibrate' for
+                        optional post-hoc model probability calibration,
+                        'ranker_autotune' for optional OOS autotuning sweeps,
+                        'ranker_autoremediate' for optional health-triggered
+                        bounded autotune, and 'ranker_trade_attribution' for
+                        optional closed-trade score attribution.
   --reload-web {true,false}
                         Reload the hosted web application on completion
   --screener-args SCREENER_ARGS
@@ -51,13 +82,84 @@ options:
                         step (default: data/daily_bars.csv)
   --ranker-eval-args RANKER_EVAL_ARGS
                         Extra CLI arguments forwarded to scripts.ranker_eval
+  --ranker-predict-args RANKER_PREDICT_ARGS
+                        Extra CLI arguments forwarded to
+                        scripts.ranker_predict
+  --ranker-predict-args-split [RANKER_PREDICT_ARGS_SPLIT ...]
+                        Extra CLI arguments for scripts.ranker_predict
+                        provided as separate tokens
   --ranker-eval-args-split [RANKER_EVAL_ARGS_SPLIT ...]
                         Extra CLI arguments for scripts.ranker_eval provided
                         as separate tokens
+  --ranker-walkforward-args RANKER_WALKFORWARD_ARGS
+                        Extra CLI arguments forwarded to
+                        scripts.ranker_walkforward
+  --ranker-walkforward-args-split [RANKER_WALKFORWARD_ARGS_SPLIT ...]
+                        Extra CLI arguments for scripts.ranker_walkforward
+                        provided as separate tokens
+  --ranker-strategy-eval-args RANKER_STRATEGY_EVAL_ARGS
+                        Extra CLI arguments forwarded to
+                        scripts.ranker_strategy_eval
+  --ranker-strategy-eval-args-split [RANKER_STRATEGY_EVAL_ARGS_SPLIT ...]
+                        Extra CLI arguments for scripts.ranker_strategy_eval
+                        provided as separate tokens
+  --ranker-autotune-args RANKER_AUTOTUNE_ARGS
+                        Extra CLI arguments forwarded to
+                        scripts.ranker_autotune
+  --ranker-autotune-args-split [RANKER_AUTOTUNE_ARGS_SPLIT ...]
+                        Extra CLI arguments for scripts.ranker_autotune
+                        provided as separate tokens
+  --ranker-monitor-args RANKER_MONITOR_ARGS
+                        Extra CLI arguments forwarded to
+                        scripts.ranker_monitor
+  --ranker-monitor-args-split [RANKER_MONITOR_ARGS_SPLIT ...]
+                        Extra CLI arguments for scripts.ranker_monitor
+                        provided as separate tokens
+  --ranker-recalibrate-args RANKER_RECALIBRATE_ARGS
+                        Extra CLI arguments forwarded to
+                        scripts.ranker_recalibrate
+  --ranker-recalibrate-args-split [RANKER_RECALIBRATE_ARGS_SPLIT ...]
+                        Extra CLI arguments for scripts.ranker_recalibrate
+                        provided as separate tokens
+  --ranker-autoremediate-args RANKER_AUTOREMEDIATE_ARGS
+                        Extra CLI arguments forwarded to
+                        scripts.ranker_autoremediate
+  --ranker-autoremediate-args-split [RANKER_AUTOREMEDIATE_ARGS_SPLIT ...]
+                        Extra CLI arguments for scripts.ranker_autoremediate
+                        provided as separate tokens
+  --ranker-trade-attribution-args RANKER_TRADE_ATTRIBUTION_ARGS
+                        Extra CLI arguments forwarded to
+                        scripts.ranker_trade_attribution
+  --ranker-trade-attribution-args-split [RANKER_TRADE_ATTRIBUTION_ARGS_SPLIT ...]
+                        Extra CLI arguments for
+                        scripts.ranker_trade_attribution provided as separate
+                        tokens
+  --use-champion        Opt-in: load latest ranker_champion and apply
+                        champion-derived ML env overrides to ML analysis
+                        steps.
+  --champion-mode {fill,force}
+                        Champion env application mode: fill applies only
+                        missing keys; force overwrites existing env keys.
+  --ml-health-guard     Opt-in: gate candidate ranker enrichment using latest
+                        ranker_monitor recommended_action.
+  --ml-health-guard-mode {warn,block}
+                        ML health guard mode. warn logs and proceeds; block
+                        skips enrichment when ranker_monitor recommends
+                        action!=none.
   --enrich-candidates-with-ranker
                         Append model scores from the latest predictions file
                         onto latest_candidates.csv. Runs automatically when
                         ranker_eval is in --steps.
+  --allow-no-screener   Opt-in: allow pipeline runs without the screener step.
+                        Useful for ML-only maintenance/evaluation runs.
+  --auto-refresh-predictions [AUTO_REFRESH_PREDICTIONS]
+                        Opt-in: when predictions are stale vs latest model,
+                        rerun ranker_predict before eval/enrichment/monitor
+                        paths that consume predictions.
+  --auto-refresh-features [AUTO_REFRESH_FEATURES]
+                        Opt-in: when predictions are stale and feature/model
+                        metadata mismatch is detected, refresh features (and
+                        labels if required) before rerunning ranker_predict.
   --export-daily-bars-path EXPORT_DAILY_BARS_PATH
                         Optional path to write fetched daily bars as CSV
                         (default: data/daily_bars.csv)
@@ -69,6 +171,9 @@ options:
 usage: execute_trades.py [-h] [--source {db,path}] [--source-path SOURCE_PATH]
                          [--allocation-pct ALLOCATION_PCT]
                          [--alloc-weight-key {score,model_score,none}]
+                         [--min-model-score MIN_MODEL_SCORE]
+                         [--require-model-score REQUIRE_MODEL_SCORE]
+                         [--use-champion-execution USE_CHAMPION_EXECUTION]
                          [--min-order-usd MIN_ORDER_USD]
                          [--max-positions MAX_POSITIONS]
                          [--max-new-positions MAX_NEW_POSITIONS]
@@ -106,6 +211,7 @@ usage: execute_trades.py [-h] [--source {db,path}] [--source-path SOURCE_PATH]
                          [--reconcile-use-watermark RECONCILE_USE_WATERMARK]
                          [--reconcile-overlap-secs RECONCILE_OVERLAP_SECS]
                          [--time-window {premarket,regular,any,auto}]
+                         [--ignore-market-gate IGNORE_MARKET_GATE]
                          [--market-tz MARKET_TIMEZONE]
 
 Execute trades for pipeline candidates
@@ -120,6 +226,15 @@ options:
                         Fraction of buying power allocated per position (0-1)
   --alloc-weight-key {score,model_score,none}
                         Column used for proportional allocation weights
+  --min-model-score MIN_MODEL_SCORE
+                        Optional minimum model score threshold for candidate
+                        filtering (default 0.0)
+  --require-model-score REQUIRE_MODEL_SCORE
+                        Require model score presence before ranking/selection
+                        (default false)
+  --use-champion-execution USE_CHAMPION_EXECUTION
+                        Use champion execution defaults for score gating (fill
+                        mode: CLI flags take precedence).
   --min-order-usd MIN_ORDER_USD
                         Minimum USD notional target per slot before rounding
   --max-positions MAX_POSITIONS
@@ -128,7 +243,7 @@ options:
                         Maximum number of new entry attempts per run
   --disable-open-position-cap, --no-disable-open-position-cap
                         Disable open-position count caps as an execution
-                        blocker (default: True)
+                        blocker
   --entry-buffer-bps ENTRY_BUFFER_BPS
                         Entry buffer in basis points added to the reference
                         price
@@ -228,15 +343,18 @@ options:
   --time-window {premarket,regular,any,auto}
                         Trading time window gate controlling when orders may
                         be submitted
-  --market-tz MARKET_TIMEZONE, --market-timezone MARKET_TIMEZONE
+  --ignore-market-gate IGNORE_MARKET_GATE
+                        Diagnostic-only bypass for market time-window gating
+                        (effective only with --dry-run true or --diagnostic)
+  --market-tz, --market-timezone MARKET_TIMEZONE
                         IANA timezone name used for market window evaluation
 ```
 
 ## `python -m scripts.screener --help`
 
 ```text
-usage: screener.py [-h] --mode
-                   {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}
+usage: screener.py [-h]
+                   --mode {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}
                    [--universe {alpaca-active,csv}] [--source-csv SOURCE_CSV]
                    [--output-dir OUTPUT_DIR] [--run-date RUN_DATE]
                    [--ranker-config RANKER_CONFIG] [--local-validate]
@@ -244,6 +362,7 @@ usage: screener.py [-h] --mode
                    [--prefilter-top PREFILTER_TOP] [--full-days FULL_DAYS]
                    [--min-days-fallback MIN_DAYS_FALLBACK]
                    [--min-days-final MIN_DAYS_FINAL] [--feed {iex,sip}]
+                   [--bars-adjustment {raw,split,dividend,all}]
                    [--bars-source {http,sdk}]
                    [--fetch-mode {auto,batch,single}]
                    [--batch-size BATCH_SIZE] [--max-workers MAX_WORKERS]
@@ -293,6 +412,10 @@ options:
                         Final trading-day window if the fallback still returns
                         no bars
   --feed {iex,sip}      Market data feed to request from Alpaca
+  --bars-adjustment {raw,split,dividend,all}
+                        Corporate action adjustment for Alpaca bars
+                        (raw|split|dividend|all). Precedence: CLI >
+                        JBR_BARS_ADJUSTMENT > raw.
   --bars-source {http,sdk}
                         Source for fetching bars data
   --fetch-mode {auto,batch,single}
@@ -315,7 +438,6 @@ options:
                         disables)
   --exclude-otc, --no-exclude-otc
                         Exclude OTC symbols from the universe (default: true)
-                        (default: True)
   --verify-request      Log and capture the first bars request for debugging
   --reuse-cache {true,false}
                         Reuse cached bars batches when available (default:
