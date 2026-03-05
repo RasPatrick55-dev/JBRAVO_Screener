@@ -407,9 +407,13 @@ Good output tokens:
   - enable with `--auto-refresh-features true` or `JBR_AUTO_REFRESH_FEATURES=true`
   - compatibility token:
     - `[INFO] FEATURES_FRESHNESS stale=<true|false> reason=<...> model_feature_set=... features_feature_set=... model_feature_signature=... features_feature_signature=...`
+  - model-context token:
+    - `[INFO] AUTO_REFRESH_FEATURES_MODEL_CONTEXT model_path=... model_feature_set=... model_feature_signature=...`
   - refresh tokens:
-    - `[INFO] AUTO_REFRESH_FEATURES enabled=true stale=true -> running feature_generator feature_set=<model_feature_set|env/default>`
+    - `[INFO] AUTO_REFRESH_FEATURES enabled=true stale=true -> running feature_generator feature_set=<model_feature_set>`
     - `[INFO] AUTO_REFRESH_FEATURES_DONE rc=<rc>`
+    - if the model feature set is unavailable:
+      - `[WARN] AUTO_REFRESH_FEATURES_SKIPPED reason=model_feature_set_missing`
   - if labels are missing for refresh:
     - `[INFO] AUTO_REFRESH_FEATURES enabled=true labels_missing=true -> running labels`
 
@@ -432,8 +436,10 @@ Fresh-but-incompatible predictions troubleshooting:
   - `JBR_AUTO_REFRESH_FEATURES=true`
   - `JBR_AUTO_REFRESH_PREDICTIONS=true`
   - `JBR_STRICT_AUTO_REFRESH_PREDICTIONS=true`
+  - `JBR_STRICT_PREDICTIONS_META=true`
 - This combination forces strict compatibility checks during auto repredict and
-  prevents treating incompatible predictions as healthy.
+  prevents treating incompatible predictions as healthy. If predictions remain
+  stale/incompatible after refresh, enrichment is intentionally skipped.
 
 Strict predictions provenance troubleshooting:
 
@@ -492,6 +498,13 @@ Score-coverage troubleshooting when `pct=0`:
 - `scores_rows_for_run>0` but `joined_non_null=0`: symbol/join-key mismatch or run timestamp mismatch.
 - Sample unmatched token helps isolate failures:
   `MODEL_SCORE_JOIN_SAMPLE_UNMATCHED symbols=[...] reason=<...>`.
+- If post-refresh predictions are still stale/incompatible (or `ranker_predict`
+  returned non-zero), enrichment is intentionally skipped and no DB overlay rows
+  are written:
+  - `[WARN] CANDIDATES_ENRICH_SKIPPED reason=predictions_stale_or_incompatible stale=<true|false> pred_compatible=<...> predict_rc=<...>`
+- If enrichment merge has zero non-null matched model scores for the run,
+  overlay write is skipped:
+  - `[WARN] CANDIDATES_ENRICH_SKIPPED reason=matched_zero candidates=<N> run_ts_utc=<...> predictions_source=<...>`
 - If enrichment run timestamp is missing in candidates, the pipeline warns with:
   `MODEL_SCORE_ENRICH_RUN_TS_MISSING run_ts_utc=...`.
 

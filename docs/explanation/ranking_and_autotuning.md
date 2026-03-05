@@ -707,15 +707,26 @@ Prediction freshness enforcement:
   `--auto-refresh-features` (or `JBR_AUTO_REFRESH_FEATURES=true`):
   - pipeline compares latest model feature metadata vs latest features
     metadata and emits `FEATURES_FRESHNESS ...`
+  - pipeline emits model context before refresh:
+    - `AUTO_REFRESH_FEATURES_MODEL_CONTEXT model_path=... model_feature_set=... model_feature_signature=...`
   - on mismatch (or missing feature metadata), pipeline can refresh
     `feature_generator` (and `label_generator` only if required) before
-    rerunning `ranker_predict`. During this refresh, pipeline aligns
+    rerunning `ranker_predict`. During this refresh, pipeline forces
     `JBR_ML_FEATURE_SET` to the latest model feature set to avoid schema drift.
+  - if the model feature set is missing, feature refresh is skipped with
+    `AUTO_REFRESH_FEATURES_SKIPPED reason=model_feature_set_missing`.
 - Freshness-aware enrichment guard interaction (opt-in):
   - when `--ml-health-guard` is enabled, stale predictions add deterministic
     reason `stale_predictions` to enrichment decisioning.
   - guard `warn` mode: log warning and proceed.
   - guard `block` mode: skip enrichment overlay until predictions are refreshed.
+  - enrichment has an additional deterministic safety gate: if predictions
+    remain stale/incompatible after refresh (or `ranker_predict` returns
+    non-zero), pipeline skips enrichment and logs:
+    - `CANDIDATES_ENRICH_SKIPPED reason=predictions_stale_or_incompatible ...`
+  - enrichment DB write is also skipped when merged matches are zero
+    (`CANDIDATES_ENRICH_SKIPPED reason=matched_zero ...`) to prevent writing
+    all-null overlay rows.
 
 Feature/model compatibility guard in `ranker_predict`:
 

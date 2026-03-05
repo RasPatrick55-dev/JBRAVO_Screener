@@ -1368,13 +1368,14 @@ def _enrich_candidates_with_ranker(
         joined_non_null = int(joined_series.notna().sum())
         joined_null = max(candidates_count - joined_non_null, 0)
         LOG.info(
-            "[INFO] MODEL_SCORE_JOIN_DIAG candidates=%s scores_rows_for_run=%s joined_non_null=%s joined_null=%s run_ts_utc=%s score_col=%s",
+            "[INFO] MODEL_SCORE_JOIN_DIAG candidates=%s scores_rows_for_run=%s joined_non_null=%s joined_null=%s run_ts_utc=%s score_col=%s matched=%s",
             candidates_count,
             int(max(scores_rows_for_run, 0)),
             joined_non_null,
             joined_null,
             run_ts_utc.isoformat() if run_ts_utc is not None else None,
             score_col,
+            joined_non_null,
         )
         if joined_null <= 0:
             return
@@ -1498,6 +1499,14 @@ def _enrich_candidates_with_ranker(
             run_ts_utc=run_ts_utc,
             score_col=target_column,
         )
+        if matched <= 0:
+            LOG.warning(
+                "[WARN] CANDIDATES_ENRICH_SKIPPED reason=matched_zero candidates=%s run_ts_utc=%s predictions_source=%s",
+                int(len(candidates.index)),
+                run_ts_utc.isoformat(),
+                predictions_source,
+            )
+            return
         run_date = _extract_run_date(merged, run_ts_utc)
         written = db.upsert_screener_ranker_scores_frame(
             run_ts_utc,
@@ -3024,6 +3033,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     def _ensure_features_freshness(context: str) -> dict[str, Any]:
         model_meta = _latest_model_meta()
         features_meta, features_meta_source = _load_features_meta()
+        model_path = str(model_meta.get("model_path") or "").strip() or None
         model_feature_set = str(model_meta.get("feature_set") or "").strip().lower() or None
         model_feature_signature = str(model_meta.get("feature_signature") or "").strip() or None
         features_feature_set = str(features_meta.get("feature_set") or "").strip().lower() or None
@@ -3088,6 +3098,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "model_feature_signature": model_feature_signature,
             "features_feature_signature": features_feature_signature,
             "features_meta_source": features_meta_source,
+            "model_path": model_path,
             "context": context,
         }
 
@@ -3120,6 +3131,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return False
 
     def _ensure_predictions_freshness(context: str) -> dict[str, Any]:
+        predict_rc: int | None = None
         model_meta = _latest_model_meta()
         features_meta, _ = _load_features_meta()
         predictions_meta, predictions_meta_source = _load_predictions_meta()
@@ -3174,69 +3186,79 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 if auto_refresh_features and (
                     bool(features_freshness.get("stale")) or refresh_due_to_prediction_feature_mismatch
                 ):
-                    labels_cmd: list[str] | None = None
-                    if db.db_enabled():
-                        labels_present = bool(db.fetch_latest_ml_artifact("labels"))
-                    else:
-                        labels_present = _latest_by_glob(
-                            base_dir / "data" / "labels", "labels_*.csv"
-                        ) is not None
-                    if not labels_present:
-                        bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
-                        labels_cmd = [
-                            sys.executable,
-                            "-m",
-                            "scripts.label_generator",
-                            "--bars-path",
-                            str(bars_path),
-                            "--output-dir",
-                            str(base_dir / "data" / "labels"),
-                        ]
-                        LOG.info(
-                            "[INFO] AUTO_REFRESH_FEATURES enabled=true labels_missing=true -> running labels"
-                        )
-                        rc_labels = 0
-                        secs_labels = 0.0
-                        try:
-                            rc_labels, secs_labels = run_step(
-                                "labels",
-                                labels_cmd,
-                                timeout=60 * 5,
-                                env=_step_env("labels"),
-                            )
-                        except Exception as exc:  # pragma: no cover - defensive continue
-                            LOG.warning("AUTO_REFRESH_FEATURES labels error: %s", exc)
-                            rc_labels, secs_labels = 1, 0.0
-                        stage_times["labels"] = secs_labels
-                        step_rcs["labels"] = rc_labels
-                        if rc_labels:
-                            LOG.warning("[WARN] AUTO_REFRESH_FEATURES_LABELS_FAILED rc=%s", rc_labels)
-                    LOG.info(
-                        "[INFO] AUTO_REFRESH_FEATURES enabled=true stale=true -> running feature_generator feature_set=%s",
-                        str(features_freshness.get("model_feature_set") or "env/default"),
-                    )
-                    rc_features = 0
-                    secs_features = 0.0
-                    features_env = dict(_step_env("features") or {})
                     target_feature_set = str(
                         features_freshness.get("model_feature_set") or ""
                     ).strip().lower()
-                    if target_feature_set in {"v1", "v2"}:
-                        features_env["JBR_ML_FEATURE_SET"] = target_feature_set
-                    try:
-                        rc_features, secs_features = run_step(
-                            "features",
-                            [sys.executable, "-m", "scripts.feature_generator"],
-                            timeout=_features_timeout_secs(),
-                            env=features_env or None,
+                    LOG.info(
+                        "[INFO] AUTO_REFRESH_FEATURES_MODEL_CONTEXT model_path=%s model_feature_set=%s model_feature_signature=%s",
+                        features_freshness.get("model_path"),
+                        target_feature_set or None,
+                        features_freshness.get("model_feature_signature"),
+                    )
+                    if target_feature_set not in {"v1", "v2"}:
+                        LOG.warning(
+                            "[WARN] AUTO_REFRESH_FEATURES_SKIPPED reason=model_feature_set_missing"
                         )
-                    except Exception as exc:  # pragma: no cover - defensive continue
-                        LOG.warning("AUTO_REFRESH_FEATURES feature_generator error: %s", exc)
-                        rc_features, secs_features = 1, 0.0
-                    stage_times["features"] = secs_features
-                    step_rcs["features"] = rc_features
-                    LOG.info("[INFO] AUTO_REFRESH_FEATURES_DONE rc=%s", rc_features)
-                    _ensure_features_freshness(context)
+                    else:
+                        labels_cmd: list[str] | None = None
+                        if db.db_enabled():
+                            labels_present = bool(db.fetch_latest_ml_artifact("labels"))
+                        else:
+                            labels_present = _latest_by_glob(
+                                base_dir / "data" / "labels", "labels_*.csv"
+                            ) is not None
+                        if not labels_present:
+                            bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
+                            labels_cmd = [
+                                sys.executable,
+                                "-m",
+                                "scripts.label_generator",
+                                "--bars-path",
+                                str(bars_path),
+                                "--output-dir",
+                                str(base_dir / "data" / "labels"),
+                            ]
+                            LOG.info(
+                                "[INFO] AUTO_REFRESH_FEATURES enabled=true labels_missing=true -> running labels"
+                            )
+                            rc_labels = 0
+                            secs_labels = 0.0
+                            try:
+                                rc_labels, secs_labels = run_step(
+                                    "labels",
+                                    labels_cmd,
+                                    timeout=60 * 5,
+                                    env=_step_env("labels"),
+                                )
+                            except Exception as exc:  # pragma: no cover - defensive continue
+                                LOG.warning("AUTO_REFRESH_FEATURES labels error: %s", exc)
+                                rc_labels, secs_labels = 1, 0.0
+                            stage_times["labels"] = secs_labels
+                            step_rcs["labels"] = rc_labels
+                            if rc_labels:
+                                LOG.warning("[WARN] AUTO_REFRESH_FEATURES_LABELS_FAILED rc=%s", rc_labels)
+                        LOG.info(
+                            "[INFO] AUTO_REFRESH_FEATURES enabled=true stale=true -> running feature_generator feature_set=%s",
+                            target_feature_set,
+                        )
+                        rc_features = 0
+                        secs_features = 0.0
+                        features_env = dict(_step_env("features") or {})
+                        features_env["JBR_ML_FEATURE_SET"] = target_feature_set
+                        try:
+                            rc_features, secs_features = run_step(
+                                "features",
+                                [sys.executable, "-m", "scripts.feature_generator"],
+                                timeout=_features_timeout_secs(),
+                                env=features_env or None,
+                            )
+                        except Exception as exc:  # pragma: no cover - defensive continue
+                            LOG.warning("AUTO_REFRESH_FEATURES feature_generator error: %s", exc)
+                            rc_features, secs_features = 1, 0.0
+                        stage_times["features"] = secs_features
+                        step_rcs["features"] = rc_features
+                        LOG.info("[INFO] AUTO_REFRESH_FEATURES_DONE rc=%s", rc_features)
+                        _ensure_features_freshness(context)
                 LOG.info(
                     "[INFO] AUTO_REFRESH_PREDICTIONS enabled=true stale=true -> running ranker_predict"
                 )
@@ -3266,6 +3288,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     rc_predict, secs = 1, 0.0
                 stage_times["ranker_predict"] = secs
                 step_rcs["ranker_predict"] = rc_predict
+                predict_rc = rc_predict
                 calibrated, method = _ranker_predict_score_source_from_log(base_dir)
                 LOG.info(
                     "[INFO] RANKER_PREDICT rc=%s calibrated=%s method=%s predictions_source=%s",
@@ -3329,6 +3352,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         "[WARN] AUTO_REFRESH_PREDICTIONS_INEFFECTIVE reason=%s suggestion=enable_strict_auto_refresh_or_refresh_features",
                         reason,
                     )
+        if predict_rc is None:
+            rc_value = step_rcs.get("ranker_predict")
+            if isinstance(rc_value, int):
+                predict_rc = rc_value
         return {
             "stale": bool(stale),
             "reason": reason,
@@ -3342,6 +3369,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "pred_compatible": pred_compatible,
             "pred_missing_frac": pred_missing_frac,
             "pred_compat_reason": pred_compat_reason or None,
+            "predict_rc": predict_rc,
             "context": context,
         }
 
@@ -4272,6 +4300,36 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         else None
                     ),
                 )
+            if not enrichment_blocked:
+                pred_compatible_raw = enrichment_freshness.get("pred_compatible")
+                if isinstance(pred_compatible_raw, bool):
+                    pred_compatible = pred_compatible_raw
+                elif isinstance(pred_compatible_raw, str):
+                    lowered = pred_compatible_raw.strip().lower()
+                    if lowered in {"true", "false"}:
+                        pred_compatible = lowered == "true"
+                    else:
+                        pred_compatible = None
+                else:
+                    pred_compatible = None
+                predict_rc_raw = enrichment_freshness.get("predict_rc")
+                try:
+                    predict_rc = int(predict_rc_raw) if predict_rc_raw is not None else None
+                except Exception:
+                    predict_rc = None
+                freshness_stale = bool(enrichment_freshness.get("stale"))
+                if freshness_stale or pred_compatible is False or (predict_rc not in (None, 0)):
+                    enrichment_blocked = True
+                    LOG.warning(
+                        "[WARN] CANDIDATES_ENRICH_SKIPPED reason=predictions_stale_or_incompatible stale=%s pred_compatible=%s predict_rc=%s",
+                        str(freshness_stale).lower(),
+                        (
+                            str(pred_compatible).lower()
+                            if isinstance(pred_compatible, bool)
+                            else "unknown"
+                        ),
+                        predict_rc,
+                    )
             if not enrichment_blocked:
                 enriched = _enrich_candidates_with_ranker(
                     base_dir=base_dir,
