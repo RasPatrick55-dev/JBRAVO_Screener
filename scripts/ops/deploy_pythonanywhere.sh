@@ -35,7 +35,6 @@ export JBR_RANKER_PREDICT_TIMEOUT_SECS="${JBR_RANKER_PREDICT_TIMEOUT_SECS:-900}"
 export JBR_RANKER_EVAL_TIMEOUT_SECS="${JBR_RANKER_EVAL_TIMEOUT_SECS:-900}"
 
 python -m scripts.docs_consistency_check
-python -m scripts.dashboard_consistency_check
 python -m scripts.run_pipeline \
   --steps screener,labels,ranker_eval \
   --reload-web false \
@@ -44,6 +43,7 @@ python -m scripts.run_pipeline \
   --enrich-candidates-with-ranker \
   --use-champion \
   --screener-args "${SMOKE_SCREENER_ARGS}"
+python -m scripts.dashboard_consistency_check
 
 if [[ -n "${PYTHONANYWHERE_USERNAME:-}" && -n "${PYTHONANYWHERE_API_TOKEN:-}" && -n "${PYTHONANYWHERE_DOMAIN:-}" ]]; then
   curl -fsS -X POST \
