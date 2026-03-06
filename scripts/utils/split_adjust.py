@@ -114,8 +114,10 @@ def adjust_for_splits(
     work[group_col] = work[group_col].astype("string")
     work[time_col] = pd.to_datetime(work[time_col], utc=True, errors="coerce")
     work[price_col] = pd.to_numeric(work[price_col], errors="coerce")
-    work = work.dropna(subset=[group_col, time_col]).sort_values([group_col, time_col]).reset_index(
-        drop=True
+    work = (
+        work.dropna(subset=[group_col, time_col])
+        .sort_values([group_col, time_col])
+        .reset_index(drop=True)
     )
 
     split_events: list[_SplitEvent] = []
@@ -124,7 +126,9 @@ def adjust_for_splits(
         loc = np.asarray(list(idx), dtype=np.int64)
         if loc.size == 0:
             continue
-        close_values = pd.to_numeric(work.loc[loc, price_col], errors="coerce").to_numpy(dtype=float)
+        close_values = pd.to_numeric(work.loc[loc, price_col], errors="coerce").to_numpy(
+            dtype=float
+        )
         ratios = np.full(loc.size, np.nan, dtype=float)
         if loc.size > 1:
             prev = close_values[:-1]

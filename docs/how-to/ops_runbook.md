@@ -126,6 +126,68 @@ curl -fsS -X POST \
   "https://www.pythonanywhere.com/api/v0/user/${PYTHONANYWHERE_USERNAME}/webapps/${PYTHONANYWHERE_DOMAIN}/reload/"
 ```
 
+## PythonAnywhere API Deploy Job (No SSH)
+
+Use API task orchestration to run one deterministic deploy chain on host.
+
+Deploy script (in repo): `scripts/ops/deploy_pythonanywhere.sh`
+
+Example host command (task body):
+
+```bash
+cd /home/RasPatrick/jbravo_screener && \
+source /home/RasPatrick/.virtualenvs/jbravo-env/bin/activate && \
+bash scripts/ops/deploy_pythonanywhere.sh release/step41-delivery-20260304
+```
+
+What this does:
+
+- fetch/checkout/pull target ref
+- runs `python -m scripts.docs_consistency_check`
+- runs `python -m scripts.dashboard_consistency_check`
+- runs bounded DB-first smoke pipeline with strict freshness toggles
+- reloads web app via PythonAnywhere API when `PYTHONANYWHERE_*` env vars are present
+
+Good output tokens:
+
+- `DOCS_CONSISTENCY PASS`
+- dashboard checker exit `0` and no `FAIL` lines
+- `[INFO] STRICT_PREDICTIONS_META enabled=true ...`
+- `[INFO] PREDICTIONS_FRESHNESS stale=false reason=fresh ... pred_compatible=True`
+- `[INFO] CANDIDATES_ENRICHED destination=db ...`
+- `[INFO] MODEL_SCORE_COVERAGE ... pct=100.00`
+- `[INFO] WEBAPP_RELOAD_OK domain=<...>`
+
+## Canary Smoke Task
+
+Use script: `scripts/ops/run_canary_smoke.sh`
+
+Recommended schedule: daily or 2x/day.
+
+Example scheduled command:
+
+```bash
+cd /home/RasPatrick/jbravo_screener && \
+source /home/RasPatrick/.virtualenvs/jbravo-env/bin/activate && \
+bash scripts/ops/run_canary_smoke.sh
+```
+
+Log file:
+
+- `logs/canary_smoke_latest.log`
+
+Expected tokens:
+
+- `[INFO] CANARY_START ...`
+- `[INFO] CANARY_SUMMARY freshness=... predict=... coverage=...`
+- `[INFO] CANARY_END rc=0 ...`
+
+Recommended alert thresholds (if alerting is configured):
+
+- freshness stale (`PREDICTIONS_FRESHNESS stale=true`)
+- predict failure (`RANKER_PREDICT rc!=0`)
+- low score coverage (`MODEL_SCORE_COVERAGE pct < 80`)
+
 ## Pipeline Flags That Matter
 
 - `--steps screener,backtest,metrics,ranker_eval` controls stage execution order.

@@ -551,7 +551,9 @@ def _build_oos_match_frame(trades_frame: pd.DataFrame, oos_prepared: pd.DataFram
     if valid_trades.empty or oos_prepared.empty:
         return _ensure_columns(out)
 
-    valid_trades["entry_time"] = pd.to_datetime(valid_trades["entry_time"], utc=True, errors="coerce")
+    valid_trades["entry_time"] = pd.to_datetime(
+        valid_trades["entry_time"], utc=True, errors="coerce"
+    )
     valid_trades = valid_trades.dropna(subset=["entry_time"]).copy()
     if valid_trades.empty:
         return _ensure_columns(out)
@@ -620,7 +622,9 @@ def _build_oos_match_frame(trades_frame: pd.DataFrame, oos_prepared: pd.DataFram
     if matched.empty:
         return _ensure_columns(out)
     matched["entry_time"] = pd.to_datetime(matched["entry_time"], utc=True, errors="coerce")
-    matched["score_run_ts_utc"] = pd.to_datetime(matched["score_run_ts_utc"], utc=True, errors="coerce")
+    matched["score_run_ts_utc"] = pd.to_datetime(
+        matched["score_run_ts_utc"], utc=True, errors="coerce"
+    )
     matched = matched.dropna(subset=["entry_time", "score_run_ts_utc"]).copy()
     if matched.empty:
         return _ensure_columns(out)
@@ -630,8 +634,8 @@ def _build_oos_match_frame(trades_frame: pd.DataFrame, oos_prepared: pd.DataFram
     matched.sort_values(["trade_id", "match_priority", "score_run_ts_utc"], inplace=True)
     matched = matched.drop_duplicates(subset=["trade_id"], keep="first")
     matched["entry_to_score_lag_minutes"] = (
-        (matched["entry_time"] - matched["score_run_ts_utc"]).dt.total_seconds() / 60.0
-    )
+        matched["entry_time"] - matched["score_run_ts_utc"]
+    ).dt.total_seconds() / 60.0
 
     matched_frame = _ensure_columns(
         pd.DataFrame(
@@ -756,9 +760,7 @@ def _load_closed_trades_db(
         base_frame = _query_closed_trades_base(conn, start_dt=start_dt, end_dt=end_dt)
         mode_used = requested_mode
         if requested_mode == "entry_context" and not entry_context_table_exists:
-            raise RuntimeError(
-                "entry_context requested but trade_entry_ml_context_app unavailable"
-            )
+            raise RuntimeError("entry_context requested but trade_entry_ml_context_app unavailable")
         elif requested_mode == "scores_direct" and not score_table_exists:
             raise RuntimeError("scores_direct requested but screener_ranker_scores_app unavailable")
         elif requested_mode == "run_map" and (not run_map_table_exists or not score_table_exists):
@@ -1018,7 +1020,9 @@ def _annotate_match_status(
     work: pd.DataFrame,
     *,
     match_mode_used: str,
-) -> tuple[pd.DataFrame, dict[str, int], dict[str, float | None], dict[str, dict[str, float | None]]]:
+) -> tuple[
+    pd.DataFrame, dict[str, int], dict[str, float | None], dict[str, dict[str, float | None]]
+]:
     out = work.copy()
     match_status: list[str] = []
     match_reason: list[str] = []
@@ -1037,7 +1041,9 @@ def _annotate_match_status(
         if score_val is not None and not (isinstance(score_val, float) and np.isnan(score_val)):
             match_status.append("matched")
             match_reason.append("matched")
-            score_source.append(source_cell or ("fs" if match_mode_used == "fs" else match_mode_used))
+            score_source.append(
+                source_cell or ("fs" if match_mode_used == "fs" else match_mode_used)
+            )
             continue
 
         reason = "missing_scores"
@@ -1117,13 +1123,9 @@ def _annotate_match_status(
     )
     if bool(matched_mask.any()):
         lag_minutes = (
-            (
-                pd.to_datetime(out.loc[matched_mask, "entry_time"], utc=True, errors="coerce")
-                - pd.to_datetime(out.loc[matched_mask, "score_run_ts_utc"], utc=True, errors="coerce")
-            )
-            .dt.total_seconds()
-            / 60.0
-        )
+            pd.to_datetime(out.loc[matched_mask, "entry_time"], utc=True, errors="coerce")
+            - pd.to_datetime(out.loc[matched_mask, "score_run_ts_utc"], utc=True, errors="coerce")
+        ).dt.total_seconds() / 60.0
         lag_minutes = pd.to_numeric(lag_minutes, errors="coerce")
         lag_minutes_clean = lag_minutes.dropna()
         if not lag_minutes_clean.empty:
@@ -1236,16 +1238,25 @@ def run_trade_attribution(args: AttributionArgs) -> dict[str, Any]:
         "run_map_ts_utc",
     ):
         work[column] = pd.to_datetime(work[column], utc=True, errors="coerce")
-    for column in ("entry_price", "exit_price", "qty", "realized_pnl", "model_score_5d", "model_score"):
+    for column in (
+        "entry_price",
+        "exit_price",
+        "qty",
+        "realized_pnl",
+        "model_score_5d",
+        "model_score",
+    ):
         work[column] = pd.to_numeric(work[column], errors="coerce")
 
     score_series, score_col_used = _resolve_score_column(work, args.score_col)
     work["score_at_entry"] = pd.to_numeric(score_series, errors="coerce")
-    work, unmatched_reason_counts, lag_minutes_stats, lag_minutes_stats_by_source = _annotate_match_status(
-        work, match_mode_used=match_mode_used
+    work, unmatched_reason_counts, lag_minutes_stats, lag_minutes_stats_by_source = (
+        _annotate_match_status(work, match_mode_used=match_mode_used)
     )
     work["score_timestamp_utc"] = pd.to_datetime(
-        work["score_timestamp_utc"].where(work["score_timestamp_utc"].notna(), work["score_run_ts_utc"]),
+        work["score_timestamp_utc"].where(
+            work["score_timestamp_utc"].notna(), work["score_run_ts_utc"]
+        ),
         utc=True,
         errors="coerce",
     )
@@ -1267,8 +1278,8 @@ def run_trade_attribution(args: AttributionArgs) -> dict[str, Any]:
     valid_return = entry_price.notna() & (entry_price != 0) & exit_price.notna()
     work["trade_return_pct"] = np.nan
     work.loc[valid_return, "trade_return_pct"] = (
-        (exit_price.loc[valid_return] - entry_price.loc[valid_return]) / entry_price.loc[valid_return]
-    )
+        exit_price.loc[valid_return] - entry_price.loc[valid_return]
+    ) / entry_price.loc[valid_return]
 
     realized = pd.to_numeric(work["realized_pnl"], errors="coerce")
     win = pd.Series(pd.NA, index=work.index, dtype="boolean")
@@ -1281,7 +1292,11 @@ def run_trade_attribution(args: AttributionArgs) -> dict[str, Any]:
     scored = work.loc[work["match_status"] == "matched"].copy()
     matched_by_source = {
         str(k): int(v)
-        for k, v in scored["score_source"].fillna("unknown").value_counts(dropna=False).to_dict().items()
+        for k, v in scored["score_source"]
+        .fillna("unknown")
+        .value_counts(dropna=False)
+        .to_dict()
+        .items()
     }
     for source_name in ("entry_context", "scores_direct", "run_map", "oos_predictions"):
         matched_by_source.setdefault(source_name, 0)
@@ -1310,8 +1325,12 @@ def run_trade_attribution(args: AttributionArgs) -> dict[str, Any]:
 
     win_numeric = pd.to_numeric(scored["win"], errors="coerce")
     win_rate_scored = _safe_float(win_numeric.mean()) if not scored.empty else None
-    avg_return_scored = _safe_float(pd.to_numeric(scored["trade_return_pct"], errors="coerce").mean())
-    median_return_scored = _safe_float(pd.to_numeric(scored["trade_return_pct"], errors="coerce").median())
+    avg_return_scored = _safe_float(
+        pd.to_numeric(scored["trade_return_pct"], errors="coerce").mean()
+    )
+    median_return_scored = _safe_float(
+        pd.to_numeric(scored["trade_return_pct"], errors="coerce").median()
+    )
 
     bucket_metrics, actual_bins = _compute_bucket_metrics(scored, bins=int(args.bins))
 

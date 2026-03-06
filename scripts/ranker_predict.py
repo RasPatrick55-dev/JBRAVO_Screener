@@ -197,10 +197,14 @@ def _load_model(path: Path):
         feature_set = str(payload.get("feature_set") or "").strip().lower() or None
         feature_signature = str(payload.get("feature_signature") or "").strip() or None
         calibration_method = str(payload.get("calibration_method") or "none").strip().lower()
-        calibration_applied = bool(payload.get("calibration_applied")) or calibration_method != "none"
+        calibration_applied = (
+            bool(payload.get("calibration_applied")) or calibration_method != "none"
+        )
         posthoc_calibrator = payload.get("posthoc_score_calibrator")
         if calibration_method == "none":
-            calibration_method = str(payload.get("posthoc_calibration_method") or calibration_method).strip().lower()
+            calibration_method = (
+                str(payload.get("posthoc_calibration_method") or calibration_method).strip().lower()
+            )
         if posthoc_calibrator is not None:
             calibration_applied = True
     else:
@@ -444,8 +448,8 @@ def main(argv: list[str] | None = None) -> int:
 
     feature_columns = _resolve_feature_columns(model_path, model_feature_columns)
     LOG.info("Using %d feature columns for prediction", len(feature_columns))
-    summary_feature_set, summary_feature_signature, summary_feature_columns = _load_model_meta_from_summary(
-        model_path
+    summary_feature_set, summary_feature_signature, summary_feature_columns = (
+        _load_model_meta_from_summary(model_path)
     )
     if not model_feature_set:
         model_feature_set = summary_feature_set
@@ -519,8 +523,10 @@ def main(argv: list[str] | None = None) -> int:
         base_dir=BASE_DIR,
         prefer_db=bool(db.db_enabled()),
     )
-    if features_path is not None and features_meta_payload and not meta_matches_features_path(
-        features_meta_payload, features_path
+    if (
+        features_path is not None
+        and features_meta_payload
+        and not meta_matches_features_path(features_meta_payload, features_path)
     ):
         LOG.warning(
             "[WARN] RANKER_PREDICT_FEATURE_META_FILE_MISMATCH source=%s features_path=%s meta_output=%s meta_file_name=%s",
@@ -529,7 +535,9 @@ def main(argv: list[str] | None = None) -> int:
             features_meta_payload.get("output_path"),
             features_meta_payload.get("file_name"),
         )
-    features_feature_set = str(features_meta_payload.get("feature_set") or "").strip().lower() or None
+    features_feature_set = (
+        str(features_meta_payload.get("feature_set") or "").strip().lower() or None
+    )
     features_feature_signature = _resolve_features_signature_from_meta(features_meta_payload)
     resolved_feature_meta_source = features_meta_source
     if not features_feature_signature:
@@ -539,11 +547,7 @@ def main(argv: list[str] | None = None) -> int:
     resolved_prediction_feature_set = features_feature_set or model_feature_set
     resolved_prediction_feature_signature = features_feature_signature
     mismatch_reasons: list[str] = []
-    if (
-        model_feature_set
-        and features_feature_set
-        and model_feature_set != features_feature_set
-    ):
+    if model_feature_set and features_feature_set and model_feature_set != features_feature_set:
         mismatch_reasons.append("feature_set_mismatch")
     if (
         resolved_model_feature_signature

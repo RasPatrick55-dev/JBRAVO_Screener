@@ -228,7 +228,12 @@ def _objective(
     sharpe_v = sharpe if sharpe is not None else float("-inf")
     cagr_v = cagr if cagr is not None else float("-inf")
     max_dd_v = max_dd if max_dd is not None else float("-inf")
-    eligible = bool(sharpe is not None and sharpe >= min_sharpe and max_dd is not None and max_dd >= max_drawdown_floor)
+    eligible = bool(
+        sharpe is not None
+        and sharpe >= min_sharpe
+        and max_dd is not None
+        and max_dd >= max_drawdown_floor
+    )
     score = float("-inf")
     if eligible:
         # Primary objective: Sharpe, then CAGR. Drawdown contributes as a
@@ -610,12 +615,18 @@ def run_autotune(args: AutotuneArgs) -> dict[str, Any]:
 
     ok_rows = [row for row in results if row.get("status") == "ok"]
     eligible_rows = [row for row in ok_rows if bool(row.get("eligible"))]
-    ranked_rows = sorted(ok_rows, key=lambda row: _rank_key(row, include_eligibility=True), reverse=True)
-    best_tune_row = sorted(
-        ok_rows,
-        key=lambda row: _rank_key(row, include_eligibility=False),
-        reverse=True,
-    )[0] if ok_rows else {}
+    ranked_rows = sorted(
+        ok_rows, key=lambda row: _rank_key(row, include_eligibility=True), reverse=True
+    )
+    best_tune_row = (
+        sorted(
+            ok_rows,
+            key=lambda row: _rank_key(row, include_eligibility=False),
+            reverse=True,
+        )[0]
+        if ok_rows
+        else {}
+    )
     champion_status = "ok"
     champion_row = {}
     if eligible_rows:

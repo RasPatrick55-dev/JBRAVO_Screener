@@ -197,7 +197,10 @@ def _normalize_meta_payload(payload: Any) -> dict[str, Any]:
         return decoded if isinstance(decoded, dict) else {}
     return {}
 
-def _normalize_features_frame(df: pd.DataFrame, label_column: str) -> tuple[pd.DataFrame, list[str]]:
+
+def _normalize_features_frame(
+    df: pd.DataFrame, label_column: str
+) -> tuple[pd.DataFrame, list[str]]:
     required_columns = {"symbol", "timestamp", label_column}
     missing = required_columns - set(df.columns)
     if missing:
@@ -334,7 +337,9 @@ def _train_model(
     if effective_calibration_method != "none":
         requested_rows = max(1, int(len(train_df) * float(calibration_fraction)))
         calib_start_idx = max(1, len(train_df) - requested_rows)
-        calib_start_ts = pd.to_datetime(train_df.iloc[calib_start_idx]["timestamp"], errors="coerce")
+        calib_start_ts = pd.to_datetime(
+            train_df.iloc[calib_start_idx]["timestamp"], errors="coerce"
+        )
         if pd.isna(calib_start_ts):
             effective_calibration_method = "none"
         else:
@@ -400,7 +405,9 @@ def _train_model(
             "calibration_rows": int(calibration_rows if calibration_applied else 0),
             "calibration_fraction": float(calibration_fraction),
             "embargo_days_used": int(horizon_days),
-            "calibration_start": calibration_start.isoformat() if calibration_start is not None else None,
+            "calibration_start": calibration_start.isoformat()
+            if calibration_start is not None
+            else None,
             "calibration_end": calibration_end.isoformat() if calibration_end is not None else None,
             "train_total_rows": int(len(train_df)),
             "train_core_rows": int(len(train_core_df)),
@@ -427,7 +434,9 @@ def _train_model(
         "calibration_rows": int(calibration_rows if calibration_applied else 0),
         "calibration_fraction": float(calibration_fraction),
         "embargo_days_used": int(horizon_days),
-        "calibration_start": calibration_start.isoformat() if calibration_start is not None else None,
+        "calibration_start": calibration_start.isoformat()
+        if calibration_start is not None
+        else None,
         "calibration_end": calibration_end.isoformat() if calibration_end is not None else None,
         "train_total_rows": int(len(train_df)),
         "train_core_rows": int(len(train_core_df)),
@@ -714,7 +723,9 @@ def main(argv: list[str] | None = None) -> int:
             env_feature_set,
             feature_set_meta,
         )
-    feature_set = env_feature_set or feature_set_meta or _infer_feature_set_from_columns(feature_columns)
+    feature_set = (
+        env_feature_set or feature_set_meta or _infer_feature_set_from_columns(feature_columns)
+    )
     feature_signature_meta = str(features_meta_payload.get("feature_signature") or "").strip()
     if feature_signature_meta and feature_signature_meta != computed_feature_signature:
         LOG.warning(
@@ -762,7 +773,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if db.db_enabled() and features_meta_record:
-        snapshot_date = str(features_meta_record.get("run_date") or datetime.now(timezone.utc).date())
+        snapshot_date = str(
+            features_meta_record.get("run_date") or datetime.now(timezone.utc).date()
+        )
     else:
         snapshot_date = _extract_features_date(args.features_path)
     try:

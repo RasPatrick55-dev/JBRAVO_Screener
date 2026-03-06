@@ -161,9 +161,7 @@ def fetch_bars_http(
                     resp = requests.get(url, headers=headers, params=params, timeout=30)
                     stats["requests"] += 1
                 if resp.status_code in (401, 403):
-                    retry_endpoint = str(
-                        getattr(resp.request, "path_url", "/v2/stocks/bars") or ""
-                    )
+                    retry_endpoint = str(getattr(resp.request, "path_url", "/v2/stocks/bars") or "")
                     retry_endpoint = retry_endpoint.split("?", 1)[0] or "/v2/stocks/bars"
                     raise AlpacaUnauthorizedError(endpoint=retry_endpoint, feed=active_feed)
 

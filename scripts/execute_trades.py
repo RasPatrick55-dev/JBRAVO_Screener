@@ -6547,9 +6547,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     args = parser.parse_args(raw_args)
 
     def _arg_explicit(option: str) -> bool:
-        return any(
-            token == option or str(token).startswith(f"{option}=") for token in raw_args
-        )
+        return any(token == option or str(token).startswith(f"{option}=") for token in raw_args)
 
     setattr(args, "_min_model_score_explicit", _arg_explicit("--min-model-score"))
     setattr(args, "_require_model_score_explicit", _arg_explicit("--require-model-score"))

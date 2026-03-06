@@ -1441,9 +1441,7 @@ def _enrich_candidates_with_ranker(
         renamed = predictions.rename(columns={score_column: target_column})
         candidate_symbol_set = set(candidates["symbol"].dropna().astype(str))
         scores_rows_for_run = int(
-            renamed.loc[
-                renamed["symbol"].isin(candidate_symbol_set), target_column
-            ].notna().sum()
+            renamed.loc[renamed["symbol"].isin(candidate_symbol_set), target_column].notna().sum()
         )
         merged = candidates.merge(
             renamed[["symbol", target_column, "score_ts"]], on="symbol", how="left"
@@ -1461,11 +1459,7 @@ def _enrich_candidates_with_ranker(
         if db.db_enabled():
             optional_columns.append("score_ts")
         ordered_with_optional: list[str] = []
-        for column in ordered + [
-            col
-            for col in optional_columns
-            if col in merged.columns
-        ]:
+        for column in ordered + [col for col in optional_columns if col in merged.columns]:
             if column not in ordered_with_optional:
                 ordered_with_optional.append(column)
         merged = merged[ordered_with_optional]
@@ -3000,9 +2994,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         feature_columns = cleaned
         except Exception:
             pass
-        computed_signature = (
-            compute_feature_signature(feature_columns) if feature_columns else None
-        )
+        computed_signature = compute_feature_signature(feature_columns) if feature_columns else None
         if (
             feature_signature_stored
             and computed_signature
@@ -3075,9 +3067,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             stale = True
             reason = "feature_signature_mismatch"
         elif (
-            model_feature_set
-            and features_feature_set
-            and model_feature_set != features_feature_set
+            model_feature_set and features_feature_set and model_feature_set != features_feature_set
         ):
             stale = True
             reason = "feature_set_mismatch"
@@ -3143,16 +3133,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
         model_path = str(model_meta.get("model_path") or "")
         pred_model_path = str(predictions_meta.get("model_path") or "")
-        latest_features_set = str(
-            freshness_details.get("latest_features_feature_set") or ""
-        )
+        latest_features_set = str(freshness_details.get("latest_features_feature_set") or "")
         latest_features_signature = str(
             freshness_details.get("latest_features_feature_signature") or ""
         )
         pred_features_set = str(freshness_details.get("predictions_feature_set") or "")
-        pred_features_signature = str(
-            freshness_details.get("predictions_feature_signature") or ""
-        )
+        pred_features_signature = str(freshness_details.get("predictions_feature_signature") or "")
         pred_compatible = freshness_details.get("pred_compatible")
         pred_missing_frac = freshness_details.get("pred_missing_frac")
         pred_compat_reason = str(freshness_details.get("pred_compat_reason") or "")
@@ -3184,11 +3170,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     )
                 )
                 if auto_refresh_features and (
-                    bool(features_freshness.get("stale")) or refresh_due_to_prediction_feature_mismatch
+                    bool(features_freshness.get("stale"))
+                    or refresh_due_to_prediction_feature_mismatch
                 ):
-                    target_feature_set = str(
-                        features_freshness.get("model_feature_set") or ""
-                    ).strip().lower()
+                    target_feature_set = (
+                        str(features_freshness.get("model_feature_set") or "").strip().lower()
+                    )
                     LOG.info(
                         "[INFO] AUTO_REFRESH_FEATURES_MODEL_CONTEXT model_path=%s model_feature_set=%s model_feature_signature=%s",
                         features_freshness.get("model_path"),
@@ -3204,9 +3191,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         if db.db_enabled():
                             labels_present = bool(db.fetch_latest_ml_artifact("labels"))
                         else:
-                            labels_present = _latest_by_glob(
-                                base_dir / "data" / "labels", "labels_*.csv"
-                            ) is not None
+                            labels_present = (
+                                _latest_by_glob(base_dir / "data" / "labels", "labels_*.csv")
+                                is not None
+                            )
                         if not labels_present:
                             bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
                             labels_cmd = [
@@ -3236,7 +3224,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                             stage_times["labels"] = secs_labels
                             step_rcs["labels"] = rc_labels
                             if rc_labels:
-                                LOG.warning("[WARN] AUTO_REFRESH_FEATURES_LABELS_FAILED rc=%s", rc_labels)
+                                LOG.warning(
+                                    "[WARN] AUTO_REFRESH_FEATURES_LABELS_FAILED rc=%s", rc_labels
+                                )
                         LOG.info(
                             "[INFO] AUTO_REFRESH_FEATURES enabled=true stale=true -> running feature_generator feature_set=%s",
                             target_feature_set,
@@ -3315,9 +3305,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 latest_features_signature = str(
                     freshness_details.get("latest_features_feature_signature") or ""
                 )
-                pred_features_set = str(
-                    freshness_details.get("predictions_feature_set") or ""
-                )
+                pred_features_set = str(freshness_details.get("predictions_feature_set") or "")
                 pred_features_signature = str(
                     freshness_details.get("predictions_feature_signature") or ""
                 )
@@ -3672,17 +3660,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         ):
             # Let explicit predict step or freshness manager own prediction refresh.
             skip_internal_predict = (
-                "ranker_predict" in steps
-                or auto_refresh_predictions
-                or ml_health_guard_enabled
+                "ranker_predict" in steps or auto_refresh_predictions or ml_health_guard_enabled
             )
             if skip_internal_predict:
                 if "ranker_predict" in steps:
                     LOG.info("[INFO] RANKER_PIPELINE_SKIPPED reason=explicit_ranker_predict_step")
                 elif auto_refresh_predictions:
-                    LOG.info(
-                        "[INFO] RANKER_PIPELINE_SKIPPED reason=freshness_manager_auto_refresh"
-                    )
+                    LOG.info("[INFO] RANKER_PIPELINE_SKIPPED reason=freshness_manager_auto_refresh")
                 else:
                     LOG.info(
                         "[INFO] RANKER_PIPELINE_SKIPPED reason=guard_managed_prediction_freshness"
@@ -3727,11 +3711,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                                     "[WARN] RANKER_TRAIN_FAILED rc=%s (continuing)",
                                     rc_train,
                                 )
-                            model_path = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
+                            model_path = _latest_by_glob(
+                                base_dir / "data" / "models", "ranker_*.pkl"
+                            )
                         if model_path is None:
                             LOG.warning("[WARN] PREDICTIONS_SKIPPED reason=model_missing")
                         else:
-                            predict_timeout, predict_timeout_source = _ranker_predict_timeout_config()
+                            predict_timeout, predict_timeout_source = (
+                                _ranker_predict_timeout_config()
+                            )
                             LOG.info(
                                 "[INFO] RANKER_PREDICT_TIMEOUT secs=%s source=%s",
                                 predict_timeout,
@@ -3984,7 +3972,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 stage_times["ranker_strategy_eval"] = secs
                 step_rcs["ranker_strategy_eval"] = rc_strategy
                 if rc_strategy:
-                    LOG.warning("[WARN] RANKER_STRATEGY_EVAL_FAILED rc=%s (continuing)", rc_strategy)
+                    LOG.warning(
+                        "[WARN] RANKER_STRATEGY_EVAL_FAILED rc=%s (continuing)", rc_strategy
+                    )
                 else:
                     strategy_payload = _read_json(DATA_DIR / "ranker_strategy_eval" / "latest.json")
                     strategy_metrics = strategy_payload.get("metrics") or {}
@@ -4253,9 +4243,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     LOG.warning("[WARN] ML_ENRICHMENT_BLOCKED reason=%s", reason_text)
                 elif decision.get("decision") == "warn":
                     LOG.warning("[WARN] ML_ENRICHMENT_WARN reason=%s", reason_text)
-                if _env_truthy(os.getenv("JBR_ML_HEALTH_ALERTS")) and decision.get(
-                    "decision"
-                ) in {"warn", "block"}:
+                if _env_truthy(os.getenv("JBR_ML_HEALTH_ALERTS")) and decision.get("decision") in {
+                    "warn",
+                    "block",
+                }:
                     try:
                         send_alert(
                             "JBRAVO ML health guard action",

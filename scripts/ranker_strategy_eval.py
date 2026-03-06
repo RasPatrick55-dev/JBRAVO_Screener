@@ -179,7 +179,9 @@ def _load_oos_inputs(args: StrategyArgs) -> tuple[pd.DataFrame, str, date | None
                 "falling_back=filesystem"
             )
 
-    fallback_path = args.input_path or (BASE_DIR / "data" / "ranker_walkforward" / "oos_predictions.csv")
+    fallback_path = args.input_path or (
+        BASE_DIR / "data" / "ranker_walkforward" / "oos_predictions.csv"
+    )
     if not fallback_path.exists():
         raise FileNotFoundError(
             "OOS predictions not found. Expected DB artifact 'ranker_oos_predictions' "
@@ -260,7 +262,9 @@ def _apply_date_filter(
     return filtered, rows_in, rows_out
 
 
-def _choose_rebalance_timestamps(timestamps: list[pd.Timestamp], rebalance_days: int) -> list[pd.Timestamp]:
+def _choose_rebalance_timestamps(
+    timestamps: list[pd.Timestamp], rebalance_days: int
+) -> list[pd.Timestamp]:
     selected: list[pd.Timestamp] = []
     if not timestamps:
         return selected
@@ -339,7 +343,9 @@ def _simulate_strategy(
     return periods
 
 
-def _compute_summary_metrics(periods: pd.DataFrame, *, top_k: int, rebalance_days: int) -> dict[str, Any]:
+def _compute_summary_metrics(
+    periods: pd.DataFrame, *, top_k: int, rebalance_days: int
+) -> dict[str, Any]:
     returns = pd.to_numeric(periods["period_return"], errors="coerce").fillna(0.0)
     baseline_returns = pd.to_numeric(periods["baseline_period_return"], errors="coerce").fillna(0.0)
     equity = pd.to_numeric(periods["equity"], errors="coerce").ffill().fillna(1.0)
@@ -479,8 +485,7 @@ def run_strategy_eval(args: StrategyArgs) -> dict[str, Any]:
         horizon_days = _infer_label_horizon_days(args.target)
     if horizon_days <= 0:
         raise RuntimeError(
-            "Unable to infer horizon days from --target. "
-            "Provide --horizon-days explicitly."
+            "Unable to infer horizon days from --target. Provide --horizon-days explicitly."
         )
 
     rebalance_days = int(args.rebalance_days or horizon_days)
@@ -538,7 +543,9 @@ def run_strategy_eval(args: StrategyArgs) -> dict[str, Any]:
         cost_bps=float(args.cost_bps),
         min_score=args.min_score,
     )
-    metrics = _compute_summary_metrics(periods, top_k=int(args.top_k), rebalance_days=int(rebalance_days))
+    metrics = _compute_summary_metrics(
+        periods, top_k=int(args.top_k), rebalance_days=int(rebalance_days)
+    )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -134,7 +134,9 @@ def _load_oos_inputs(args: MonitorArgs) -> tuple[pd.DataFrame, str, date | None]
                 "falling_back=filesystem"
             )
 
-    fallback_path = args.input_path or (BASE_DIR / "data" / "ranker_walkforward" / "oos_predictions.csv")
+    fallback_path = args.input_path or (
+        BASE_DIR / "data" / "ranker_walkforward" / "oos_predictions.csv"
+    )
     if not fallback_path.exists():
         raise FileNotFoundError(
             "OOS predictions not found. Expected DB artifact 'ranker_oos_predictions' "
@@ -398,7 +400,11 @@ def _compute_calibration_drift(
     applicable = bool(recent_stats.get("applicable")) and bool(baseline_stats.get("applicable"))
     skip_reason = None
     if not applicable:
-        skip_reason = str(recent_stats.get("skip_reason") or baseline_stats.get("skip_reason") or "insufficient_rows")
+        skip_reason = str(
+            recent_stats.get("skip_reason")
+            or baseline_stats.get("skip_reason")
+            or "insufficient_rows"
+        )
     delta_ece = None
     if applicable:
         try:
@@ -458,7 +464,9 @@ def _run_strategy_metrics(
             cost_bps=float(cost_bps),
             min_score=None,
         )
-        metrics = _compute_summary_metrics(periods, top_k=int(top_k), rebalance_days=int(rebalance_days))
+        metrics = _compute_summary_metrics(
+            periods, top_k=int(top_k), rebalance_days=int(rebalance_days)
+        )
         return metrics
     except Exception as exc:
         return {
@@ -537,7 +545,9 @@ def run_monitor(args: MonitorArgs) -> dict[str, Any]:
     if work.empty:
         raise RuntimeError("OOS dataset has no usable rows after normalization.")
 
-    bounds = _window_bounds(work, recent_days=int(args.recent_days), baseline_days=int(args.baseline_days))
+    bounds = _window_bounds(
+        work, recent_days=int(args.recent_days), baseline_days=int(args.baseline_days)
+    )
     baseline = _slice_window(
         work,
         start=bounds["baseline_start"],
@@ -669,7 +679,9 @@ def run_monitor(args: MonitorArgs) -> dict[str, Any]:
     calibration_applicable = bool(calibration_block.get("calibration_applicable", False))
     calibration_skip_reason = calibration_block.get("calibration_skip_reason")
     recent_cal = calibration_payload.get("recent") if isinstance(calibration_payload, dict) else {}
-    baseline_cal = calibration_payload.get("baseline") if isinstance(calibration_payload, dict) else {}
+    baseline_cal = (
+        calibration_payload.get("baseline") if isinstance(calibration_payload, dict) else {}
+    )
     if calibration_applicable:
         LOG.info(
             "[INFO] RANKER_MONITOR_CALIBRATION bins=%s recent_ece=%s baseline_ece=%s delta_ece=%s score_min=%s score_max=%s rows_recent=%s rows_baseline=%s",

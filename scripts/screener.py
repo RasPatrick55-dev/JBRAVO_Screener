@@ -4188,9 +4188,11 @@ def _run_delta_update(args: argparse.Namespace, base_dir: Path) -> int:
     run_utc = _format_timestamp(run_ts)
 
     feed = str(getattr(args, "feed", DEFAULT_FEED) or DEFAULT_FEED).strip().lower()
-    bars_adjustment = str(
-        getattr(args, "bars_adjustment", DEFAULT_BARS_ADJUSTMENT) or DEFAULT_BARS_ADJUSTMENT
-    ).strip().lower()
+    bars_adjustment = (
+        str(getattr(args, "bars_adjustment", DEFAULT_BARS_ADJUSTMENT) or DEFAULT_BARS_ADJUSTMENT)
+        .strip()
+        .lower()
+    )
     if bars_adjustment not in set(ALPACA_BARS_ADJUSTMENTS):
         bars_adjustment = DEFAULT_BARS_ADJUSTMENT
     batch_size = max(1, int(getattr(args, "batch_size", 50)))

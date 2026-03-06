@@ -223,7 +223,9 @@ def _raw_context_candidates(conn: Any, trades_missing: pd.DataFrame) -> pd.DataF
         if model_score is None and model_score_5d is None:
             continue
         trade_info = trade_meta.get(order_id, {})
-        screener_run_ts = db.normalize_ts(context.get("screener_run_ts_utc"), field="screener_run_ts_utc")
+        screener_run_ts = db.normalize_ts(
+            context.get("screener_run_ts_utc"), field="screener_run_ts_utc"
+        )
         entry_time = db.normalize_ts(trade_info.get("entry_time"), field="entry_time")
         lag_hours = None
         if entry_time is not None and screener_run_ts is not None:
@@ -421,9 +423,7 @@ def run_backfill(args: BackfillArgs) -> dict[str, Any]:
         missing_order_id = int(
             missing["entry_order_id"].astype("string").fillna("").str.strip().eq("").sum()
         )
-        missing_entry_time = int(
-            missing["entry_time"].isna().sum()
-        )
+        missing_entry_time = int(missing["entry_time"].isna().sum())
         eligible = missing.loc[
             missing["entry_order_id"].astype("string").fillna("").str.strip().ne("")
             & missing["entry_time"].notna()
@@ -502,7 +502,9 @@ def run_backfill(args: BackfillArgs) -> dict[str, Any]:
                 "status": "dry_run" if args.dry_run else "ok",
                 "trades_total": trades_total,
                 "missing_context": missing_context,
-                "candidates_from_raw": int(raw_candidates.shape[0]) if not raw_candidates.empty else 0,
+                "candidates_from_raw": int(raw_candidates.shape[0])
+                if not raw_candidates.empty
+                else 0,
                 "candidates_from_scores": int(score_candidates.shape[0])
                 if not score_candidates.empty
                 else 0,

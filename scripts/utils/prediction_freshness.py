@@ -145,11 +145,7 @@ def evaluate_predictions_freshness(
     if not latest_features:
         reasons.append("features_meta_missing")
     else:
-        if (
-            latest_feature_set
-            and pred_feature_set
-            and latest_feature_set != pred_feature_set
-        ):
+        if latest_feature_set and pred_feature_set and latest_feature_set != pred_feature_set:
             reasons.append("pred_feature_set_mismatch")
         if (
             latest_feature_signature

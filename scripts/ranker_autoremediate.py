@@ -231,11 +231,17 @@ def _latest_model_identity() -> dict[str, Any]:
     if summary_path is not None and summary_path.exists():
         summary_payload = _read_json(summary_path)
         summary_feature_set = str(summary_payload.get("feature_set") or "").strip().lower() or None
-        summary_feature_signature = str(summary_payload.get("feature_signature") or "").strip() or None
+        summary_feature_signature = (
+            str(summary_payload.get("feature_signature") or "").strip() or None
+        )
         summary_feature_columns = _sanitize_feature_columns(summary_payload.get("feature_columns"))
     feature_columns = payload_feature_columns or summary_feature_columns
     computed_signature = compute_feature_signature(feature_columns) if feature_columns else None
-    if payload_feature_signature and computed_signature and payload_feature_signature != computed_signature:
+    if (
+        payload_feature_signature
+        and computed_signature
+        and payload_feature_signature != computed_signature
+    ):
         LOG.warning(
             "[WARN] AUTOREMEDIATE_MODEL_SIGNATURE_MISMATCH stored=%s computed=%s model_path=%s",
             payload_feature_signature,
@@ -243,7 +249,9 @@ def _latest_model_identity() -> dict[str, Any]:
             model_path,
         )
     resolved_feature_set = payload_feature_set or summary_feature_set
-    resolved_feature_signature = computed_signature or payload_feature_signature or summary_feature_signature
+    resolved_feature_signature = (
+        computed_signature or payload_feature_signature or summary_feature_signature
+    )
     return {
         "model_path": str(model_path),
         "model_mtime_utc": model_mtime_utc,
@@ -280,9 +288,13 @@ def _predictions_source_state() -> str:
 
 
 def _features_freshness_for_model(model_meta: dict[str, Any]) -> dict[str, Any]:
-    features_path = None if db.db_enabled() else _ranker_predict_find_latest(
-        BASE_DIR / "data" / "features",
-        "features_*.csv",
+    features_path = (
+        None
+        if db.db_enabled()
+        else _ranker_predict_find_latest(
+            BASE_DIR / "data" / "features",
+            "features_*.csv",
+        )
     )
     features_meta, features_meta_source = load_features_meta_for_path(
         features_path,
@@ -323,11 +335,7 @@ def _features_freshness_for_model(model_meta: dict[str, Any]) -> dict[str, Any]:
     elif model_feature_signature != features_feature_signature:
         stale = True
         reason = "feature_signature_mismatch"
-    elif (
-        model_feature_set
-        and features_feature_set
-        and model_feature_set != features_feature_set
-    ):
+    elif model_feature_set and features_feature_set and model_feature_set != features_feature_set:
         stale = True
         reason = "feature_set_mismatch"
     payload = {
@@ -642,9 +650,7 @@ def run_autoremediate(args: argparse.Namespace) -> dict[str, Any]:
                 )
             if features_freshness_after is not None and bool(features_freshness_after.get("stale")):
                 repredict_reason = (
-                    f"{repredict_reason},stale_features"
-                    if repredict_reason
-                    else "stale_features"
+                    f"{repredict_reason},stale_features" if repredict_reason else "stale_features"
                 )
             repredict_cmd_preview = [
                 sys.executable,

@@ -829,7 +829,10 @@ def main(argv: list[str] | None = None) -> int:
     if calibration_applicable:
         LOG.info(
             "[INFO] RANKER_EVAL_CALIBRATION bins=%s ece=%s mce=%s score_min=%s score_max=%s",
-            int(payload.get("calibration_bins", DEFAULT_CALIBRATION_BINS) or DEFAULT_CALIBRATION_BINS),
+            int(
+                payload.get("calibration_bins", DEFAULT_CALIBRATION_BINS)
+                or DEFAULT_CALIBRATION_BINS
+            ),
             payload.get("ece"),
             payload.get("mce"),
             payload.get("score_min"),

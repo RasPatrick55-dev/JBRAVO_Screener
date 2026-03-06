@@ -531,7 +531,9 @@ def _repair_screener_run_map_app_schema(cursor: Any) -> None:
             )
             logger.info("[INFO] SCREENER_RUN_MAP_REPAIRED action=add_run_date ok=true")
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_run_date_failed:%s", exc)
+            logger.warning(
+                "[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_run_date_failed:%s", exc
+            )
 
     try:
         has_created_at = _has_table_column(cursor, table_name, "created_at")
@@ -541,7 +543,9 @@ def _repair_screener_run_map_app_schema(cursor: Any) -> None:
             )
             logger.info("[INFO] SCREENER_RUN_MAP_REPAIRED action=add_created_at ok=true")
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_created_at_failed:%s", exc)
+        logger.warning(
+            "[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_created_at_failed:%s", exc
+        )
 
     try:
         has_run_ts = _has_table_column(cursor, table_name, "run_ts_utc")

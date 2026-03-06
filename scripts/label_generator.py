@@ -122,9 +122,7 @@ def compute_forward_returns(
 
     for horizon in sorted_horizons:
         fwd_ret_col = f"fwd_ret_{horizon}d"
-        result[fwd_ret_col] = (
-            prices.groupby(result["symbol"]).shift(-horizon) / prices - 1
-        )
+        result[fwd_ret_col] = prices.groupby(result["symbol"]).shift(-horizon) / prices - 1
     return result
 
 

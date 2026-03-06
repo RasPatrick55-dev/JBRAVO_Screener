@@ -239,7 +239,9 @@ def _load_inputs_from_fs(
     features_path: Path | None,
     labels_path: Path | None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, Path, Path | None]:
-    resolved_features = features_path or _find_latest(BASE_DIR / "data" / "features", "features_*.csv")
+    resolved_features = features_path or _find_latest(
+        BASE_DIR / "data" / "features", "features_*.csv"
+    )
     if resolved_features is None:
         raise FileNotFoundError("No features files found under data/features.")
     resolved_labels = labels_path or _find_latest(BASE_DIR / "data" / "labels", "labels_*.csv")
@@ -308,11 +310,12 @@ def run_recalibrate(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError("No trained ranker model found in data/models.")
     model, scaler, feature_columns, model_payload, summary_path = _load_model(model_path)
     source_summary_payload = _load_summary_payload(summary_path)
-    model_feature_set = str(
-        model_payload.get("feature_set")
-        or source_summary_payload.get("feature_set")
-        or ""
-    ).strip().lower() or None
+    model_feature_set = (
+        str(model_payload.get("feature_set") or source_summary_payload.get("feature_set") or "")
+        .strip()
+        .lower()
+        or None
+    )
     model_feature_signature = str(
         model_payload.get("feature_signature")
         or source_summary_payload.get("feature_signature")
@@ -346,10 +349,14 @@ def run_recalibrate(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("Calibration target contains a single class; cannot recalibrate.")
 
     computed_feature_signature = compute_feature_signature(feature_columns)
-    features_feature_set = str(features_meta_payload.get("feature_set") or "").strip().lower() or None
+    features_feature_set = (
+        str(features_meta_payload.get("feature_set") or "").strip().lower() or None
+    )
     features_feature_signature = str(features_meta_payload.get("feature_signature") or "").strip()
-    if features_path_used is not None and features_meta_payload and not meta_matches_features_path(
-        features_meta_payload, features_path_used
+    if (
+        features_path_used is not None
+        and features_meta_payload
+        and not meta_matches_features_path(features_meta_payload, features_path_used)
     ):
         LOG.warning(
             "[WARN] RANKER_RECALIBRATE_FEATURE_META_FILE_MISMATCH features_path=%s meta_output=%s meta_file_name=%s",
@@ -470,8 +477,12 @@ def run_recalibrate(args: argparse.Namespace) -> dict[str, Any]:
         "source_model_path": str(model_path),
         "input_source": inputs_source,
         "inputs": {
-            "features_path": str(features_path_used) if features_path_used is not None else "db://ml_artifacts/features",
-            "labels_path": str(labels_path_used) if labels_path_used is not None else "db://ml_artifacts/labels",
+            "features_path": str(features_path_used)
+            if features_path_used is not None
+            else "db://ml_artifacts/features",
+            "labels_path": str(labels_path_used)
+            if labels_path_used is not None
+            else "db://ml_artifacts/labels",
         },
         "calibration": {
             "requested_method": method,

@@ -141,6 +141,11 @@ def load_features_meta_for_path(
         except Exception:
             continue
         if isinstance(payload, dict):
-            source = "fs:sidecar" if candidate.name.endswith(".meta.json") and candidate.name != FEATURES_LATEST_META_NAME else "fs:latest"
+            source = (
+                "fs:sidecar"
+                if candidate.name.endswith(".meta.json")
+                and candidate.name != FEATURES_LATEST_META_NAME
+                else "fs:latest"
+            )
             return payload, source
     return {}, "missing"

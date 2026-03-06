@@ -534,8 +534,10 @@ def _aggregate_fold_values(folds: list[dict[str, Any]], key: str) -> dict[str, f
 def run_walkforward(args: WalkforwardArgs) -> dict[str, Any]:
     frame, _features_frame, _labels_frame, fwd_ret_col, artifact_run_date = _load_inputs(args)
     frame["timestamp"] = _as_utc_timestamp(frame["timestamp"])
-    frame = frame.dropna(subset=["timestamp"]).sort_values(["timestamp", "symbol"]).reset_index(
-        drop=True
+    frame = (
+        frame.dropna(subset=["timestamp"])
+        .sort_values(["timestamp", "symbol"])
+        .reset_index(drop=True)
     )
     if args.run_date is not None:
         cutoff_ts = pd.Timestamp(args.run_date).tz_localize("UTC") + pd.Timedelta(days=1)
@@ -560,7 +562,9 @@ def run_walkforward(args: WalkforwardArgs) -> dict[str, Any]:
             )
 
     horizon_days = _infer_label_horizon_days(args.target)
-    requested_embargo = int(args.embargo_days) if args.embargo_days is not None else max(horizon_days, 5)
+    requested_embargo = (
+        int(args.embargo_days) if args.embargo_days is not None else max(horizon_days, 5)
+    )
     effective_embargo = max(requested_embargo, horizon_days)
 
     requested_score_col = str(args.score_col).strip() or DEFAULT_SCORE_COL
@@ -628,7 +632,9 @@ def run_walkforward(args: WalkforwardArgs) -> dict[str, Any]:
         train_df = frame.loc[
             (frame["timestamp"] >= train_start) & (frame["timestamp"] < train_end_exclusive)
         ].copy()
-        test_df = frame.loc[(frame["timestamp"] >= test_start) & (frame["timestamp"] <= test_end)].copy()
+        test_df = frame.loc[
+            (frame["timestamp"] >= test_start) & (frame["timestamp"] <= test_end)
+        ].copy()
 
         if train_df.empty or test_df.empty:
             test_start = test_start + pd.Timedelta(days=args.step_days)

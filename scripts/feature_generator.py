@@ -82,10 +82,7 @@ def parse_args() -> argparse.Namespace:
         "--feature-set",
         choices=sorted(SUPPORTED_FEATURE_SETS),
         default=None,
-        help=(
-            "Feature set version. If omitted, reads from JBR_ML_FEATURE_SET "
-            "(default: v1)."
-        ),
+        help=("Feature set version. If omitted, reads from JBR_ML_FEATURE_SET (default: v1)."),
     )
     return parser.parse_args()
 
@@ -218,7 +215,10 @@ def _attach_adjusted_close(
         out["close_adj"] = out["close_adj"].fillna(pd.to_numeric(out["close"], errors="coerce"))
         applied = (
             "close" in out.columns
-            and (out["close_adj"] - pd.to_numeric(out["close"], errors="coerce")).abs().gt(1e-12).any()
+            and (out["close_adj"] - pd.to_numeric(out["close"], errors="coerce"))
+            .abs()
+            .gt(1e-12)
+            .any()
         )
         return out, "close_adj", bool(applied)
 
@@ -495,8 +495,8 @@ def build_feature_set(
     bars, price_col, split_applied_from_join = _attach_adjusted_close(bars, labels)
     bars_adjustment = _resolve_bars_adjustment(labels_payload.get("bars_adjustment"))
     split_adjust_mode = _resolve_split_adjust_mode(labels_payload.get("split_adjust_mode"))
-    split_adjust_applied = (
-        _truthy(labels_payload.get("split_adjust_applied")) or bool(split_applied_from_join)
+    split_adjust_applied = _truthy(labels_payload.get("split_adjust_applied")) or bool(
+        split_applied_from_join
     )
 
     label_subset = labels[LABEL_COLUMNS].copy()
@@ -588,7 +588,9 @@ def main() -> None:
         merged, latest_bars_date, latest_labels_date, feature_meta = build_feature_set(
             args.bars_path, labels_path, keep_na=args.keep_na, feature_set=feature_set
         )
-        logging.info("[INFO] FEATURES_PRICE_COL price_col=%s", feature_meta.get("price_col_used", "close"))
+        logging.info(
+            "[INFO] FEATURES_PRICE_COL price_col=%s", feature_meta.get("price_col_used", "close")
+        )
 
         run_date = _current_run_date()
         if latest_bars_date and latest_bars_date < run_date:
