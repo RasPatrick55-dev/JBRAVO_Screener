@@ -204,6 +204,11 @@ Recommended alert thresholds (if alerting is configured):
   before prediction-consuming steps (eval/enrichment/monitor checks).
   - env fallback: `JBR_AUTO_REFRESH_PREDICTIONS=true|false`
   - default is warn-only (no automatic rerun).
+- `--refresh-predictions-for-candidates` (opt-in) retries enrichment with one
+  candidate-scoped prediction refresh when overlap is zero.
+  - env fallback: `JBR_REFRESH_PREDICTIONS_FOR_CANDIDATES=true|false`
+  - only applies when `--enrich-candidates-with-ranker` is enabled
+  - bounded behavior: one retry, then normal matched-zero skip logic
 - `--export-daily-bars-path` emits Stage 0 bars CSV for ML downstream jobs.
 - `--enrich-candidates-with-ranker` (opt-in) overlays latest ranker `score_5d`
   into candidates as `model_score_5d`.
@@ -260,6 +265,14 @@ Expected guard tokens:
 - freshness-aware guard reason (when predictions are stale):
   - `reason=...stale_predictions...`
   - `warn` mode continues enrichment; `block` mode skips enrichment.
+- overlap diagnostics (enrichment root cause):
+  - `[INFO] MODEL_SCORE_OVERLAP_DIAG candidates=<N> prediction_symbols=<P> overlap=<K> run_ts_utc=<...> run_date=<...> score_col=<...>`
+  - `[INFO] MODEL_SCORE_OVERLAP_SAMPLE missing_symbols=[...] reason=<no_prediction_for_symbol|date_mismatch|run_scope_mismatch>`
+- matched-zero skip classifications:
+  - `reason=matched_zero:no_prediction_symbols`
+  - `reason=matched_zero:date_or_run_scope_mismatch`
+  - `reason=matched_zero:symbol_join_mismatch`
+  - `reason=matched_zero:null_scores_only`
 
 ## Feed And Timeout Controls
 
@@ -485,6 +498,22 @@ Recommended stale-fix flow after recalibration/retrain:
 - feature refresh (`--auto-refresh-features true`)
 - repredict (`--auto-refresh-predictions true`)
 - optional `ranker_eval` / `ranker_monitor`
+
+Matched-zero overlap remediation (production-safe):
+
+- Symptom:
+  - `CANDIDATES_ENRICH_SKIPPED reason=matched_zero:<subreason> ...`
+  - `MODEL_SCORE_COVERAGE ... pct=0.00`
+- Run with candidate-scoped retry enabled:
+  - `--refresh-predictions-for-candidates true`
+- Expected additional tokens:
+  - `[INFO] MODEL_SCORE_OVERLAP_DIAG ...`
+  - `[INFO] MODEL_SCORE_OVERLAP_SAMPLE ...`
+  - `[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES enabled=true symbols=<N> reason=matched_zero`
+  - `[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_DONE rc=<rc> predictions_source=<db|fs>:<present|missing>`
+- Post-retry expected outcomes:
+  - success path: `CANDIDATES_ENRICHED ...` and `MODEL_SCORE_COVERAGE non_null > 0`
+  - safe skip path: `CANDIDATES_ENRICH_SKIPPED reason=matched_zero:<subreason> ...`
 
 Fresh-but-incompatible predictions troubleshooting:
 

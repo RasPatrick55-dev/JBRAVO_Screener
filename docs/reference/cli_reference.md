@@ -38,6 +38,7 @@ usage: run_pipeline.py [-h] [--steps STEPS] [--reload-web {true,false}]
                        [--enrich-candidates-with-ranker] [--allow-no-screener]
                        [--auto-refresh-predictions [AUTO_REFRESH_PREDICTIONS]]
                        [--auto-refresh-features [AUTO_REFRESH_FEATURES]]
+                       [--refresh-predictions-for-candidates [REFRESH_PREDICTIONS_FOR_CANDIDATES]]
                        [--export-daily-bars-path EXPORT_DAILY_BARS_PATH]
 
 Run the JBRAVO daily pipeline
@@ -160,6 +161,11 @@ options:
                         Opt-in: when predictions are stale and feature/model
                         metadata mismatch is detected, refresh features (and
                         labels if required) before rerunning ranker_predict.
+  --refresh-predictions-for-candidates [REFRESH_PREDICTIONS_FOR_CANDIDATES]
+                        Opt-in: when enrichment overlap is zero for the
+                        current candidate universe, attempt one candidate-
+                        scoped ranker_predict refresh before final
+                        matched_zero skip.
   --export-daily-bars-path EXPORT_DAILY_BARS_PATH
                         Optional path to write fetched daily bars as CSV
                         (default: data/daily_bars.csv)

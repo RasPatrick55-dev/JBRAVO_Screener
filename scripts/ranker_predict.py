@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 from datetime import date, datetime, timezone
@@ -118,6 +119,30 @@ def _sanitize_feature_columns(columns: Any) -> list[str]:
 def _parse_boolish(value: Any) -> bool:
     text = str(value or "").strip().lower()
     return text in {"1", "true", "yes", "on"}
+
+
+def _load_symbol_scope_from_env() -> tuple[set[str], str | None]:
+    raw_path = str(os.getenv("JBR_PREDICT_SYMBOLS_PATH") or "").strip()
+    if not raw_path:
+        return set(), None
+    path = Path(raw_path)
+    if not path.exists():
+        LOG.warning("[WARN] RANKER_PREDICT_SYMBOL_SCOPE_MISSING path=%s", path)
+        return set(), str(path)
+    try:
+        symbols = {
+            str(line).strip().upper()
+            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            if str(line).strip()
+        }
+    except Exception:
+        LOG.warning(
+            "[WARN] RANKER_PREDICT_SYMBOL_SCOPE_READ_FAILED path=%s",
+            path,
+            exc_info=True,
+        )
+        return set(), str(path)
+    return symbols, str(path)
 
 
 def _normalize_features_frame(
@@ -516,6 +541,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if features_df.empty:
         LOG.error("Features input has no usable rows")
+        return 1
+    symbol_scope, symbol_scope_path = _load_symbol_scope_from_env()
+    if symbol_scope:
+        rows_before_scope = int(len(features_df.index))
+        features_df = features_df.loc[
+            features_df["symbol"].astype(str).str.upper().isin(symbol_scope)
+        ].copy()
+        LOG.info(
+            "[INFO] RANKER_PREDICT_SYMBOL_SCOPE source=env path=%s symbols=%d rows_before=%d rows_after=%d",
+            symbol_scope_path,
+            len(symbol_scope),
+            rows_before_scope,
+            int(len(features_df.index)),
+        )
+    if features_df.empty:
+        LOG.error("Features input has no usable rows after symbol scope filtering")
         return 1
 
     features_meta_payload, features_meta_source = load_features_meta_for_path(

@@ -727,6 +727,19 @@ Prediction freshness enforcement:
   - enrichment DB write is also skipped when merged matches are zero
     (`CANDIDATES_ENRICH_SKIPPED reason=matched_zero ...`) to prevent writing
     all-null overlay rows.
+  - overlap diagnostics now run before overlay write attempts:
+    - `MODEL_SCORE_OVERLAP_DIAG candidates=<N> prediction_symbols=<P> overlap=<K> ...`
+    - `MODEL_SCORE_OVERLAP_SAMPLE missing_symbols=[...] reason=<...>`
+  - matched-zero is further classified for operator triage:
+    - `matched_zero:no_prediction_symbols`
+    - `matched_zero:date_or_run_scope_mismatch`
+    - `matched_zero:symbol_join_mismatch`
+    - `matched_zero:null_scores_only`
+  - optional remediation:
+    - `--refresh-predictions-for-candidates` (or
+      `JBR_REFRESH_PREDICTIONS_FOR_CANDIDATES=true`) performs one bounded
+      candidate-scoped repredict retry before final matched-zero skip.
+    - if retry still fails, pipeline remains safe and skips overlay write.
 
 Feature/model compatibility guard in `ranker_predict`:
 

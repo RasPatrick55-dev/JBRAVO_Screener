@@ -317,6 +317,13 @@ def _resolve_auto_refresh_features(args: argparse.Namespace) -> bool:
     return _as_bool(os.getenv("JBR_AUTO_REFRESH_FEATURES"), False)
 
 
+def _resolve_refresh_predictions_for_candidates(args: argparse.Namespace) -> bool:
+    cli_value = getattr(args, "refresh_predictions_for_candidates", None)
+    if cli_value is not None:
+        return _as_bool(cli_value, False)
+    return _as_bool(os.getenv("JBR_REFRESH_PREDICTIONS_FOR_CANDIDATES"), False)
+
+
 def _resolve_strict_auto_refresh_predictions() -> bool:
     return _as_bool(os.getenv("JBR_STRICT_AUTO_REFRESH_PREDICTIONS"), False)
 
@@ -1319,6 +1326,9 @@ def _enrich_candidates_with_ranker(
     *,
     score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
     target_column: str = DEFAULT_RANKER_TARGET_COLUMN,
+    refresh_predictions_for_candidates: bool = False,
+    refresh_predictions_callback: Any = None,
+    _refresh_attempted: bool = False,
 ) -> pd.DataFrame | None:
     def _extract_candidate_run_ts(frame: pd.DataFrame) -> pd.Timestamp | None:
         if frame.empty:
@@ -1352,6 +1362,93 @@ def _enrich_candidates_with_ranker(
         if not parsed.notna().any():
             return 0
         return int((parsed == run_ts).sum())
+
+    def _build_overlap_diag(
+        candidates_frame: pd.DataFrame,
+        predictions_frame: pd.DataFrame,
+        *,
+        score_col: str,
+        run_ts_utc: pd.Timestamp | None,
+        run_date: date | None,
+    ) -> dict[str, Any]:
+        candidate_symbols: list[str] = []
+        if "symbol" in candidates_frame.columns:
+            candidate_symbols = [
+                _coerce_symbol(value)
+                for value in candidates_frame["symbol"].tolist()
+                if _coerce_symbol(value)
+            ]
+        prediction_symbols: list[str] = []
+        if "symbol" in predictions_frame.columns:
+            prediction_symbols = [
+                _coerce_symbol(value)
+                for value in predictions_frame["symbol"].tolist()
+                if _coerce_symbol(value)
+            ]
+        candidate_symbol_set = set(candidate_symbols)
+        prediction_symbol_set = set(prediction_symbols)
+        overlap_symbols = sorted(candidate_symbol_set & prediction_symbol_set)
+        overlap_count = int(len(overlap_symbols))
+        pred_ts_min = None
+        pred_ts_max = None
+        pred_date_values: set[date] = set()
+        if "score_ts" in predictions_frame.columns:
+            pred_ts = pd.to_datetime(predictions_frame["score_ts"], errors="coerce", utc=True)
+            if pred_ts.notna().any():
+                pred_ts_min = pred_ts.dropna().min()
+                pred_ts_max = pred_ts.dropna().max()
+                pred_date_values = {ts.date() for ts in pred_ts.dropna().tolist()}
+        prediction_non_null_symbols: set[str] = set()
+        if score_col in predictions_frame.columns:
+            score_series = pd.to_numeric(predictions_frame[score_col], errors="coerce")
+            prediction_non_null_symbols = {
+                _coerce_symbol(symbol)
+                for symbol in predictions_frame.loc[score_series.notna(), "symbol"].tolist()
+                if _coerce_symbol(symbol)
+            }
+        overlap_non_null = int(len(candidate_symbol_set & prediction_non_null_symbols))
+
+        LOG.info(
+            "[INFO] MODEL_SCORE_OVERLAP_DIAG candidates=%s prediction_symbols=%s overlap=%s run_ts_utc=%s run_date=%s score_col=%s pred_ts_min=%s pred_ts_max=%s",
+            int(len(candidate_symbol_set)),
+            int(len(prediction_symbol_set)),
+            overlap_count,
+            run_ts_utc.isoformat() if run_ts_utc is not None else None,
+            run_date.isoformat() if run_date is not None else None,
+            score_col,
+            pred_ts_min.isoformat() if isinstance(pred_ts_min, pd.Timestamp) else None,
+            pred_ts_max.isoformat() if isinstance(pred_ts_max, pd.Timestamp) else None,
+        )
+
+        low_overlap_threshold = max(1, int(math.ceil(len(candidate_symbol_set) * 0.25)))
+        should_sample = (
+            len(candidate_symbol_set) > 0 and overlap_count <= low_overlap_threshold
+        ) or overlap_count == 0
+        sample_missing_symbols: list[str] = []
+        overlap_reason = "no_prediction_for_symbol"
+        if should_sample:
+            missing_symbols = sorted(candidate_symbol_set - prediction_symbol_set)
+            sample_missing_symbols = missing_symbols[:10]
+            if len(prediction_symbol_set) <= 0:
+                overlap_reason = "no_prediction_for_symbol"
+            elif run_date is not None and pred_date_values and run_date not in pred_date_values:
+                overlap_reason = "date_mismatch"
+            else:
+                overlap_reason = "run_scope_mismatch"
+            LOG.info(
+                "[INFO] MODEL_SCORE_OVERLAP_SAMPLE missing_symbols=%s reason=%s",
+                sample_missing_symbols,
+                overlap_reason,
+            )
+        return {
+            "candidate_symbol_count": int(len(candidate_symbol_set)),
+            "prediction_symbol_count": int(len(prediction_symbol_set)),
+            "overlap_count": overlap_count,
+            "overlap_non_null": overlap_non_null,
+            "sample_missing_symbols": sample_missing_symbols,
+            "sample_reason": overlap_reason,
+            "prediction_dates": sorted(d.isoformat() for d in pred_date_values),
+        }
 
     def _log_model_score_join_diag(
         frame: pd.DataFrame,
@@ -1399,6 +1496,30 @@ def _enrich_candidates_with_ranker(
             reason,
         )
 
+    def _classify_matched_zero_subreason(
+        overlap_diag: Mapping[str, Any], *, run_date: date | None
+    ) -> str:
+        prediction_symbol_count = int(overlap_diag.get("prediction_symbol_count") or 0)
+        overlap_count = int(overlap_diag.get("overlap_count") or 0)
+        overlap_non_null = int(overlap_diag.get("overlap_non_null") or 0)
+        prediction_dates = overlap_diag.get("prediction_dates") or []
+        if prediction_symbol_count <= 0:
+            return "matched_zero:no_prediction_symbols"
+        if overlap_count <= 0:
+            if (
+                run_date is not None
+                and prediction_dates
+                and run_date.isoformat() not in prediction_dates
+            ):
+                return "matched_zero:date_or_run_scope_mismatch"
+            sample_reason = str(overlap_diag.get("sample_reason") or "").strip().lower()
+            if sample_reason in {"date_mismatch", "run_scope_mismatch"}:
+                return "matched_zero:date_or_run_scope_mismatch"
+            return "matched_zero:symbol_join_mismatch"
+        if overlap_non_null <= 0:
+            return "matched_zero:null_scores_only"
+        return "matched_zero:symbol_join_mismatch"
+
     base = _resolve_base_dir(base_dir)
     candidates_path = base / "data" / "latest_candidates.csv"
     candidates = _load_latest_candidates_frame(base)
@@ -1440,6 +1561,15 @@ def _enrich_candidates_with_ranker(
             predictions["symbol"] = predictions["symbol"].map(_coerce_symbol)
         renamed = predictions.rename(columns={score_column: target_column})
         candidate_symbol_set = set(candidates["symbol"].dropna().astype(str))
+        run_ts_utc = _extract_candidate_run_ts(candidates)
+        run_date = _extract_run_date(candidates, run_ts_utc)
+        overlap_diag = _build_overlap_diag(
+            candidates,
+            renamed,
+            score_col=target_column,
+            run_ts_utc=run_ts_utc,
+            run_date=run_date,
+        )
         scores_rows_for_run = int(
             renamed.loc[renamed["symbol"].isin(candidate_symbol_set), target_column].notna().sum()
         )
@@ -1473,7 +1603,6 @@ def _enrich_candidates_with_ranker(
         return
 
     if db.db_enabled():
-        run_ts_utc = _extract_candidate_run_ts(candidates)
         if run_ts_utc is None:
             LOG.warning(
                 "[WARN] CANDIDATES_ENRICH_SKIPPED reason=run_ts_missing predictions_source=%s",
@@ -1494,14 +1623,48 @@ def _enrich_candidates_with_ranker(
             score_col=target_column,
         )
         if matched <= 0:
+            matched_zero_reason = _classify_matched_zero_subreason(overlap_diag, run_date=run_date)
+            if (
+                refresh_predictions_for_candidates
+                and not _refresh_attempted
+                and callable(refresh_predictions_callback)
+                and candidate_symbol_set
+            ):
+                LOG.info(
+                    "[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES enabled=true symbols=%s reason=matched_zero",
+                    int(len(candidate_symbol_set)),
+                )
+                refresh_rc = 1
+                try:
+                    refresh_rc = int(refresh_predictions_callback(sorted(candidate_symbol_set)))
+                except Exception:
+                    LOG.warning(
+                        "AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES callback failed",
+                        exc_info=True,
+                    )
+                    refresh_rc = 1
+                LOG.info(
+                    "[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_DONE rc=%s predictions_source=%s",
+                    refresh_rc,
+                    _predictions_source_state(base),
+                )
+                if refresh_rc == 0:
+                    return _enrich_candidates_with_ranker(
+                        base,
+                        score_column=score_column,
+                        target_column=target_column,
+                        refresh_predictions_for_candidates=refresh_predictions_for_candidates,
+                        refresh_predictions_callback=refresh_predictions_callback,
+                        _refresh_attempted=True,
+                    )
             LOG.warning(
-                "[WARN] CANDIDATES_ENRICH_SKIPPED reason=matched_zero candidates=%s run_ts_utc=%s predictions_source=%s",
+                "[WARN] CANDIDATES_ENRICH_SKIPPED reason=%s candidates=%s run_ts_utc=%s predictions_source=%s",
+                matched_zero_reason,
                 int(len(candidates.index)),
                 run_ts_utc.isoformat(),
                 predictions_source,
             )
             return
-        run_date = _extract_run_date(merged, run_ts_utc)
         written = db.upsert_screener_ranker_scores_frame(
             run_ts_utc,
             merged,
@@ -2083,6 +2246,16 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help=(
             "Opt-in: when predictions are stale and feature/model metadata mismatch is detected, "
             "refresh features (and labels if required) before rerunning ranker_predict."
+        ),
+    )
+    parser.add_argument(
+        "--refresh-predictions-for-candidates",
+        nargs="?",
+        const="true",
+        default=None,
+        help=(
+            "Opt-in: when enrichment overlap is zero for the current candidate universe, "
+            "attempt one candidate-scoped ranker_predict refresh before final matched_zero skip."
         ),
     )
     parser.add_argument(
@@ -2818,12 +2991,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     ml_health_guard_mode = _resolve_ml_health_guard_mode(args)
     auto_refresh_predictions = _resolve_auto_refresh_predictions(args)
     auto_refresh_features = _resolve_auto_refresh_features(args)
+    refresh_predictions_for_candidates = _resolve_refresh_predictions_for_candidates(args)
     strict_auto_refresh_predictions = _resolve_strict_auto_refresh_predictions()
     strict_predictions_meta, strict_predictions_meta_source = _resolve_strict_predictions_meta()
     LOG.info(
         "[INFO] STRICT_PREDICTIONS_META enabled=%s source=%s",
         str(bool(strict_predictions_meta)).lower(),
         strict_predictions_meta_source,
+    )
+    LOG.info(
+        "[INFO] REFRESH_PREDICTIONS_FOR_CANDIDATES enabled=%s",
+        str(bool(refresh_predictions_for_candidates)).lower(),
     )
     champion_env: dict[str, str] = {}
     if use_champion:
@@ -3120,6 +3298,72 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 return True
         return False
 
+    def _run_labels_and_features_refresh(
+        target_feature_set: str,
+        *,
+        context: str,
+    ) -> int:
+        labels_cmd: list[str] | None = None
+        if db.db_enabled():
+            labels_present = bool(db.fetch_latest_ml_artifact("labels"))
+        else:
+            labels_present = (
+                _latest_by_glob(base_dir / "data" / "labels", "labels_*.csv") is not None
+            )
+        if not labels_present:
+            bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
+            labels_cmd = [
+                sys.executable,
+                "-m",
+                "scripts.label_generator",
+                "--bars-path",
+                str(bars_path),
+                "--output-dir",
+                str(base_dir / "data" / "labels"),
+            ]
+            LOG.info(
+                "[INFO] AUTO_REFRESH_FEATURES enabled=true labels_missing=true -> running labels"
+            )
+            rc_labels = 0
+            secs_labels = 0.0
+            try:
+                rc_labels, secs_labels = run_step(
+                    "labels",
+                    labels_cmd,
+                    timeout=60 * 5,
+                    env=_step_env("labels"),
+                )
+            except Exception as exc:  # pragma: no cover - defensive continue
+                LOG.warning("AUTO_REFRESH_FEATURES labels error: %s", exc)
+                rc_labels, secs_labels = 1, 0.0
+            stage_times["labels"] = secs_labels
+            step_rcs["labels"] = rc_labels
+            if rc_labels:
+                LOG.warning("[WARN] AUTO_REFRESH_FEATURES_LABELS_FAILED rc=%s", rc_labels)
+        LOG.info(
+            "[INFO] AUTO_REFRESH_FEATURES enabled=true stale=true -> running feature_generator feature_set=%s",
+            target_feature_set,
+        )
+        rc_features = 0
+        secs_features = 0.0
+        features_env = dict(_step_env("features") or {})
+        features_env["JBR_ML_FEATURE_SET"] = target_feature_set
+        try:
+            rc_features, secs_features = run_step(
+                "features",
+                [sys.executable, "-m", "scripts.feature_generator"],
+                timeout=_features_timeout_secs(),
+                env=features_env or None,
+            )
+        except Exception as exc:  # pragma: no cover - defensive continue
+            LOG.warning("AUTO_REFRESH_FEATURES feature_generator error: %s", exc)
+            rc_features, secs_features = 1, 0.0
+        stage_times["features"] = secs_features
+        step_rcs["features"] = rc_features
+        LOG.info("[INFO] AUTO_REFRESH_FEATURES_DONE rc=%s", rc_features)
+        _ensure_features_freshness(context)
+        return int(rc_features)
+
     def _ensure_predictions_freshness(context: str) -> dict[str, Any]:
         predict_rc: int | None = None
         model_meta = _latest_model_meta()
@@ -3187,68 +3431,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                             "[WARN] AUTO_REFRESH_FEATURES_SKIPPED reason=model_feature_set_missing"
                         )
                     else:
-                        labels_cmd: list[str] | None = None
-                        if db.db_enabled():
-                            labels_present = bool(db.fetch_latest_ml_artifact("labels"))
-                        else:
-                            labels_present = (
-                                _latest_by_glob(base_dir / "data" / "labels", "labels_*.csv")
-                                is not None
-                            )
-                        if not labels_present:
-                            bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
-                            labels_cmd = [
-                                sys.executable,
-                                "-m",
-                                "scripts.label_generator",
-                                "--bars-path",
-                                str(bars_path),
-                                "--output-dir",
-                                str(base_dir / "data" / "labels"),
-                            ]
-                            LOG.info(
-                                "[INFO] AUTO_REFRESH_FEATURES enabled=true labels_missing=true -> running labels"
-                            )
-                            rc_labels = 0
-                            secs_labels = 0.0
-                            try:
-                                rc_labels, secs_labels = run_step(
-                                    "labels",
-                                    labels_cmd,
-                                    timeout=60 * 5,
-                                    env=_step_env("labels"),
-                                )
-                            except Exception as exc:  # pragma: no cover - defensive continue
-                                LOG.warning("AUTO_REFRESH_FEATURES labels error: %s", exc)
-                                rc_labels, secs_labels = 1, 0.0
-                            stage_times["labels"] = secs_labels
-                            step_rcs["labels"] = rc_labels
-                            if rc_labels:
-                                LOG.warning(
-                                    "[WARN] AUTO_REFRESH_FEATURES_LABELS_FAILED rc=%s", rc_labels
-                                )
-                        LOG.info(
-                            "[INFO] AUTO_REFRESH_FEATURES enabled=true stale=true -> running feature_generator feature_set=%s",
+                        _run_labels_and_features_refresh(
                             target_feature_set,
+                            context=context,
                         )
-                        rc_features = 0
-                        secs_features = 0.0
-                        features_env = dict(_step_env("features") or {})
-                        features_env["JBR_ML_FEATURE_SET"] = target_feature_set
-                        try:
-                            rc_features, secs_features = run_step(
-                                "features",
-                                [sys.executable, "-m", "scripts.feature_generator"],
-                                timeout=_features_timeout_secs(),
-                                env=features_env or None,
-                            )
-                        except Exception as exc:  # pragma: no cover - defensive continue
-                            LOG.warning("AUTO_REFRESH_FEATURES feature_generator error: %s", exc)
-                            rc_features, secs_features = 1, 0.0
-                        stage_times["features"] = secs_features
-                        step_rcs["features"] = rc_features
-                        LOG.info("[INFO] AUTO_REFRESH_FEATURES_DONE rc=%s", rc_features)
-                        _ensure_features_freshness(context)
                 LOG.info(
                     "[INFO] AUTO_REFRESH_PREDICTIONS enabled=true stale=true -> running ranker_predict"
                 )
@@ -3360,6 +3546,79 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "predict_rc": predict_rc,
             "context": context,
         }
+
+    def _run_candidate_scoped_prediction_refresh(candidate_symbols: Sequence[str]) -> int:
+        normalized_symbols = [
+            _coerce_symbol(symbol) for symbol in candidate_symbols if _coerce_symbol(symbol)
+        ]
+        if not normalized_symbols:
+            return 1
+        unique_symbols = sorted(set(normalized_symbols))
+        if auto_refresh_features:
+            features_freshness = _ensure_features_freshness("candidate_scoped_refresh")
+            if bool(features_freshness.get("stale")):
+                target_feature_set = (
+                    str(features_freshness.get("model_feature_set") or "").strip().lower()
+                )
+                LOG.info(
+                    "[INFO] AUTO_REFRESH_FEATURES_MODEL_CONTEXT model_path=%s model_feature_set=%s model_feature_signature=%s",
+                    features_freshness.get("model_path"),
+                    target_feature_set or None,
+                    features_freshness.get("model_feature_signature"),
+                )
+                if target_feature_set in {"v1", "v2"}:
+                    _run_labels_and_features_refresh(
+                        target_feature_set,
+                        context="candidate_scoped_refresh",
+                    )
+                else:
+                    LOG.warning(
+                        "[WARN] AUTO_REFRESH_FEATURES_SKIPPED reason=model_feature_set_missing"
+                    )
+
+        symbols_dir = base_dir / "data" / "tmp"
+        symbols_dir.mkdir(parents=True, exist_ok=True)
+        symbols_path = symbols_dir / f"candidate_symbols_{int(time.time())}.txt"
+        symbols_path.write_text("\n".join(unique_symbols) + "\n", encoding="utf-8")
+
+        predict_timeout, _ = _ranker_predict_timeout_config()
+        cmd = [sys.executable, "-m", "scripts.ranker_predict"]
+        if extras["ranker_predict"]:
+            cmd.extend(extras["ranker_predict"])
+        if strict_auto_refresh_predictions:
+            LOG.info(
+                "[INFO] STRICT_AUTO_REFRESH_PREDICTIONS enabled=true max_missing_feature_fraction=0.2"
+            )
+            if not _has_cli_flag(cmd, "--strict-feature-match"):
+                cmd.extend(["--strict-feature-match", "true"])
+            if not _has_cli_flag(cmd, "--max-missing-feature-fraction"):
+                cmd.extend(["--max-missing-feature-fraction", "0.2"])
+
+        predict_env = dict(_step_env("ranker_predict") or {})
+        predict_env["JBR_PREDICT_SYMBOLS_PATH"] = str(symbols_path)
+        rc_predict = 0
+        secs_predict = 0.0
+        try:
+            rc_predict, secs_predict = run_step(
+                "ranker_predict",
+                cmd,
+                timeout=predict_timeout,
+                env=predict_env or None,
+            )
+        except Exception as exc:  # pragma: no cover - defensive continue
+            LOG.warning("AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES ranker_predict error: %s", exc)
+            rc_predict, secs_predict = 1, 0.0
+        stage_times["ranker_predict"] = secs_predict
+        step_rcs["ranker_predict"] = rc_predict
+        calibrated, method = _ranker_predict_score_source_from_log(base_dir)
+        LOG.info(
+            "[INFO] RANKER_PREDICT rc=%s calibrated=%s method=%s predictions_source=%s",
+            rc_predict,
+            calibrated,
+            method,
+            _predictions_source_state(base_dir),
+        )
+        return int(rc_predict)
 
     LOG.info(
         "[INFO] PIPELINE_ARGS screener=%s backtest=%s metrics=%s ranker_predict=%s ranker_eval=%s ranker_walkforward=%s ranker_strategy_eval=%s ranker_monitor=%s ranker_recalibrate=%s ranker_autotune=%s ranker_autoremediate=%s ranker_trade_attribution=%s",
@@ -4326,6 +4585,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     base_dir=base_dir,
                     score_column=DEFAULT_RANKER_SCORE_COLUMN,
                     target_column=DEFAULT_RANKER_TARGET_COLUMN,
+                    refresh_predictions_for_candidates=refresh_predictions_for_candidates,
+                    refresh_predictions_callback=_run_candidate_scoped_prediction_refresh,
                 )
                 coverage_source = "db" if db.db_enabled() else "csv"
                 coverage_frame = enriched
