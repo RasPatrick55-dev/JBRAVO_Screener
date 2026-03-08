@@ -170,8 +170,29 @@ def _extract_help_text(raw_output: str) -> str:
     for idx, line in enumerate(lines):
         if line.strip().startswith("usage:"):
             trimmed = [entry.rstrip() for entry in lines[idx:]]
-            return "\n".join(trimmed).strip()
-    return "\n".join(entry.rstrip() for entry in lines).strip()
+            return _normalize_help_text("\n".join(trimmed).strip())
+    return _normalize_help_text("\n".join(entry.rstrip() for entry in lines).strip())
+
+
+def _normalize_help_text(text: str) -> str:
+    normalized = str(text or "")
+    # argparse output varies across Python versions for aliased options with metavars.
+    normalized = re.sub(
+        r"(?P<first>--[a-z0-9-]+), (?P<second>--[a-z0-9-]+) (?P<meta>[A-Z][A-Z0-9_]+)",
+        r"\g<first> \g<meta>, \g<second> \g<meta>",
+        normalized,
+    )
+    # Strip auto-appended boolean defaults that appear only on some Python versions.
+    normalized = re.sub(r" \(default: (True|False)\)", "", normalized)
+    # Stabilize screener usage wrapping across Python versions.
+    normalized = normalized.replace(
+        "usage: screener.py [-h]\n"
+        "                   --mode {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}",
+        "usage: screener.py [-h] --mode\n"
+        "                   {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}",
+    )
+    normalized = re.sub(r"\n[ \t]+\n", "\n", normalized)
+    return normalized
 
 
 def _capture_cli_help(base_dir: Path) -> tuple[list[tuple[str, str]], list[str]]:

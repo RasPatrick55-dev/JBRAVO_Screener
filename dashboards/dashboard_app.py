@@ -7039,9 +7039,7 @@ def _execute_summary_from_metrics_table() -> tuple[dict[str, Any] | None, str]:
         )
         if ts_col is None:
             continue
-        rows = _db_fetch_all(
-            f"SELECT * FROM {table} ORDER BY {ts_col} DESC NULLS LAST LIMIT 120"
-        )
+        rows = _db_fetch_all(f"SELECT * FROM {table} ORDER BY {ts_col} DESC NULLS LAST LIMIT 120")
         if not rows:
             continue
         row, selected_reason = _execute_select_summary_row(rows)
@@ -7337,7 +7335,9 @@ def _execute_humanize_note(value: Any) -> str:
     return normalized
 
 
-def _execute_default_order_note(*, side: str = "", order_type: str = "", status_bucket: str = "") -> str:
+def _execute_default_order_note(
+    *, side: str = "", order_type: str = "", status_bucket: str = ""
+) -> str:
     side_upper = str(side or "").strip().upper()
     type_upper = str(order_type or "").strip().upper()
     status_upper = str(status_bucket or "").strip().upper()
@@ -7673,7 +7673,10 @@ def _execute_merge_order_rows(
         current_note = str(combined.get("notes") or "").strip()
         if candidate_note and (
             not current_note
-            or (_execute_is_generic_order_note(current_note) and not _execute_is_generic_order_note(candidate_note))
+            or (
+                _execute_is_generic_order_note(current_note)
+                and not _execute_is_generic_order_note(candidate_note)
+            )
         ):
             combined["notes"] = candidate_note
         merged[key] = combined
@@ -7716,7 +7719,10 @@ def _execute_enrich_alpaca_orders_with_db(
             current_notes = str(combined.get("notes") or "").strip()
             if db_notes and (
                 not current_notes
-                or (_execute_is_generic_order_note(current_notes) and not _execute_is_generic_order_note(db_notes))
+                or (
+                    _execute_is_generic_order_note(current_notes)
+                    and not _execute_is_generic_order_note(db_notes)
+                )
             ):
                 combined["notes"] = db_notes
             if combined.get("limit_stop_trail") in (None, "", "--"):

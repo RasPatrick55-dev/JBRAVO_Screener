@@ -32,6 +32,7 @@ from scripts import db
 from scripts.db_queries import get_latest_screener_candidates
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.log_rotate import rotate_if_needed
+from scripts.utils.champion_config import champion_execution_overrides, load_latest_champion
 from scripts.utils.env import load_env
 from utils.alerts import send_alert
 from utils.env import (
@@ -2098,6 +2099,9 @@ class ExecutorConfig:
     source_type: str = "db"
     allocation_pct: float = 0.05
     alloc_weight_key: str = "score"
+    min_model_score: float = 0.0
+    require_model_score: bool = False
+    use_champion_execution: bool = False
     max_positions: int = 7
     max_new_positions: int = 7
     disable_open_position_cap: bool = True
@@ -2114,6 +2118,7 @@ class ExecutorConfig:
     max_poll_secs: int = 60
     extended_hours: bool = True
     time_window: str = "auto"
+    ignore_market_gate: bool = False
     market_timezone: str = "America/New_York"
     dry_run: bool = False
     min_adv20: int = 2_000_000
@@ -2305,6 +2310,7 @@ class SubmittedOrderState:
     chase_attempts: int = 0
     chase_halted: bool = False
     next_chase_ts: Optional[float] = None
+    ml_context: Optional[Dict[str, Any]] = None
 
 
 def compute_limit_price(row: Dict[str, Any], buffer_bps: int = 75) -> float:
@@ -2773,6 +2779,8 @@ class TradeExecutor:
         self._last_buying_power_raw: Any = None
         self._prev_close_cache: Dict[str, Optional[float]] = {}
         self._ranking_key: str = "score"
+        self._model_score_alias_logged = False
+        self._ml_context_by_symbol: Dict[str, Dict[str, Any]] = {}
 
     def reconcile_closed_trades(
         self, *, lookback_days: int | None = None, limit: int | None = None
@@ -3696,9 +3704,214 @@ class TradeExecutor:
         df, warnings = _apply_candidate_defaults(normalized)
         for message in warnings:
             LOGGER.warning(message)
+        df = self._ensure_model_score_alias(df)
+        df = self._apply_model_score_gate(df)
         if rank:
             return self._rank_candidates(df)
         return df
+
+    def _ensure_model_score_alias(self, frame: pd.DataFrame) -> pd.DataFrame:
+        working = frame.copy()
+        source_column = "model_score_5d"
+        dest_column = "model_score"
+        if source_column not in working.columns:
+            return working
+        if dest_column in working.columns:
+            working[dest_column] = pd.to_numeric(working[dest_column], errors="coerce")
+            return working
+        alias_series = pd.to_numeric(working[source_column], errors="coerce")
+        working[dest_column] = alias_series
+        if not self._model_score_alias_logged:
+            LOGGER.info(
+                "[INFO] MODEL_SCORE_ALIAS source=%s dest=%s rows=%d non_null=%d",
+                source_column,
+                dest_column,
+                len(working),
+                int(alias_series.notna().sum()),
+            )
+            self._model_score_alias_logged = True
+        return working
+
+    def _apply_model_score_gate(self, frame: pd.DataFrame) -> pd.DataFrame:
+        working = self._ensure_model_score_alias(frame.copy())
+        before = int(len(working))
+        min_score = max(0.0, float(getattr(self.config, "min_model_score", 0.0) or 0.0))
+        require_score = bool(getattr(self.config, "require_model_score", False))
+
+        if "model_score" in working.columns:
+            gate_col = "model_score"
+        elif "model_score_5d" in working.columns:
+            gate_col = "model_score_5d"
+        else:
+            gate_col = "model_score"
+            working[gate_col] = pd.NA
+        gate_series = pd.to_numeric(working.get(gate_col), errors="coerce")
+        non_null = int(gate_series.notna().sum())
+        coverage_pct = (float(non_null) / float(before) * 100.0) if before > 0 else 0.0
+        LOGGER.info(
+            "[INFO] MODEL_SCORE_COVERAGE_EXEC total=%d non_null=%d pct=%.2f col_used=%s",
+            before,
+            non_null,
+            coverage_pct,
+            gate_col,
+        )
+
+        missing_mask = gate_series.isna()
+        below_min_mask = pd.Series(False, index=working.index, dtype=bool)
+        if min_score > 0:
+            below_min_mask = gate_series.notna() & (gate_series < min_score)
+
+        keep_mask = pd.Series(True, index=working.index, dtype=bool)
+        if require_score:
+            keep_mask &= ~missing_mask
+        if min_score > 0:
+            keep_mask &= ~below_min_mask
+
+        filtered = working.loc[keep_mask].copy().reset_index(drop=True)
+        LOGGER.info(
+            "[INFO] MODEL_SCORE_GATE min=%s require=%s before=%d after=%d missing=%d below_min=%d",
+            min_score,
+            str(require_score).lower(),
+            before,
+            int(len(filtered)),
+            int(missing_mask.sum()),
+            int(below_min_mask.sum()),
+        )
+        if require_score and before > 0 and filtered.empty:
+            LOGGER.warning(
+                "[WARN] MODEL_SCORE_GATE_EMPTY reason=all_rows_filtered suggestion=Run pipeline with --enrich-candidates-with-ranker and ensure ranker predictions were produced"
+            )
+        return filtered
+
+    @staticmethod
+    def _safe_numeric(value: Any) -> Optional[float]:
+        try:
+            if value is None or pd.isna(value):  # type: ignore[arg-type]
+                return None
+            numeric = float(value)
+        except Exception:
+            return None
+        if not math.isfinite(numeric):
+            return None
+        return numeric
+
+    def _capture_ml_context_from_frame(self, frame: pd.DataFrame) -> None:
+        context: Dict[str, Dict[str, Any]] = {}
+        if frame is None or frame.empty:
+            self._ml_context_by_symbol = {}
+            return
+        ordered = frame.copy()
+        for column in ("model_score", "model_score_5d"):
+            if column in ordered.columns:
+                ordered[column] = pd.to_numeric(ordered[column], errors="coerce")
+        run_ts_series = None
+        if "run_ts_utc" in ordered.columns:
+            run_ts_series = pd.to_datetime(ordered["run_ts_utc"], utc=True, errors="coerce")
+        for pos, (_, row) in enumerate(ordered.iterrows()):
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if not symbol or symbol in context:
+                continue
+            model_score = self._safe_numeric(row.get("model_score"))
+            model_score_5d = self._safe_numeric(row.get("model_score_5d"))
+            if model_score is not None:
+                score_col = "model_score"
+            elif model_score_5d is not None:
+                score_col = "model_score_5d"
+            else:
+                score_col = None
+            run_ts_val: datetime | None = None
+            if run_ts_series is not None:
+                ts_value = run_ts_series.iloc[pos]
+                if not pd.isna(ts_value):
+                    run_ts_val = ts_value.to_pydatetime()
+            context[symbol] = {
+                "symbol": symbol,
+                "model_score": model_score,
+                "model_score_5d": model_score_5d,
+                "score_col": score_col,
+                "screener_run_ts_utc": run_ts_val,
+            }
+        self._ml_context_by_symbol = context
+
+    def _context_for_symbol(self, symbol: str) -> Dict[str, Any]:
+        return dict(self._ml_context_by_symbol.get(str(symbol or "").strip().upper(), {}))
+
+    def _upsert_trade_ml_context(
+        self,
+        *,
+        order_id: str,
+        symbol: str,
+        entry_time: Any,
+        stage: str,
+    ) -> Optional[Dict[str, Any]]:
+        order_id_value = str(order_id or "").strip()
+        symbol_value = str(symbol or "").strip().upper()
+        if not order_id_value or not symbol_value:
+            return None
+        context = self._context_for_symbol(symbol_value)
+        payload: Dict[str, Any] = {
+            "order_id": order_id_value,
+            "symbol": symbol_value,
+            "entry_time": entry_time,
+            "screener_run_ts_utc": context.get("screener_run_ts_utc"),
+            "model_score": context.get("model_score"),
+            "model_score_5d": context.get("model_score_5d"),
+            "score_col": context.get("score_col") or "model_score",
+            "score_source": f"execute_trades.{stage}",
+            "raw": {
+                "stage": stage,
+                "ranking_key": self._ranking_key,
+                "source": str(getattr(self.config, "source", "") or ""),
+            },
+        }
+        source_map = {
+            "submit": "submit",
+            "chase_submit": "chase",
+            "fill": "fill",
+        }
+        source_label = source_map.get(stage, stage)
+        try:
+            ok = db.upsert_trade_entry_ml_context(payload)
+            if ok:
+                LOGGER.info(
+                    "[INFO] TRADE_ML_CONTEXT_UPSERT stage=%s order_id=%s symbol=%s model_score=%s screener_run_ts_utc=%s",
+                    stage,
+                    order_id_value,
+                    symbol_value,
+                    payload.get("model_score"),
+                    payload.get("screener_run_ts_utc"),
+                )
+                LOGGER.info(
+                    "[INFO] ENTRY_ML_CONTEXT_UPSERT_OK order_id=%s symbol=%s score=%s run_ts_utc=%s source=%s",
+                    order_id_value,
+                    symbol_value,
+                    payload.get("model_score"),
+                    payload.get("screener_run_ts_utc"),
+                    source_label,
+                )
+            else:
+                LOGGER.warning(
+                    "[WARN] ENTRY_ML_CONTEXT_UPSERT_FAILED order_id=%s err=%s",
+                    order_id_value,
+                    "upsert_returned_false",
+                )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "[WARN] TRADE_ML_CONTEXT_UPSERT_FAILED stage=%s order_id=%s symbol=%s err=%s",
+                stage,
+                order_id_value,
+                symbol_value,
+                exc,
+            )
+            LOGGER.warning(
+                "[WARN] ENTRY_ML_CONTEXT_UPSERT_FAILED order_id=%s err=%s",
+                order_id_value,
+                exc,
+            )
+        payload_out = dict(payload)
+        payload_out["screener_run_ts_utc"] = _isoformat_or_none(payload.get("screener_run_ts_utc"))
+        payload_out["entry_time"] = _isoformat_or_none(payload.get("entry_time"))
+        return payload_out
 
     def _rank_candidates(self, df: pd.DataFrame) -> pd.DataFrame:
         logger.info("RANK_CANDIDATES_ENTER rows=%d cols=%d", len(df), len(df.columns))
@@ -3752,6 +3965,12 @@ class TradeExecutor:
             reason = "missing_model_score_column"
 
         self._ranking_key = key_label
+        LOGGER.info(
+            "[INFO] RANK_COLUMN chosen=%s non_null=%d total=%d",
+            key_label,
+            non_null,
+            len(df),
+        )
         if reason:
             LOGGER.info(
                 "[INFO] CANDIDATE_RANKING key=%s rows=%d non_null=%d reason=%s",
@@ -3781,6 +4000,7 @@ class TradeExecutor:
         alloc_weight_key = str(getattr(self.config, "alloc_weight_key", "score") or "score").lower()
         working = df.copy()
         working = working.drop(columns=["alloc_weight"], errors="ignore")
+        working = self._ensure_model_score_alias(working)
         if alloc_weight_key == "none":
             return working
         if alloc_weight_key == "model_score":
@@ -3963,6 +4183,7 @@ class TradeExecutor:
     ) -> int:
         diagnostic_mode = bool(getattr(self.config, "diagnostic", False))
         weighted_df = self._apply_alloc_weight_key(df)
+        self._capture_ml_context_from_frame(weighted_df)
         self.metrics.symbols_in = len(weighted_df)
         if prefiltered is not None:
             candidates = prefiltered
@@ -3989,6 +4210,17 @@ class TradeExecutor:
             candidates = self.guard_candidates(records)
         allowed, status, resolved_window = self.evaluate_time_window()
         self.metrics.in_window = bool(allowed)
+        ignore_market_gate = bool(getattr(self.config, "ignore_market_gate", False))
+        if ignore_market_gate and not allowed:
+            if bool(self.config.dry_run) or diagnostic_mode:
+                LOGGER.warning("[WARN] MARKET_GATE_BYPASSED reason=dry_run_or_diagnostic")
+                allowed = True
+                status = "market_gate_bypassed"
+                self.metrics.in_window = True
+            else:
+                LOGGER.warning(
+                    "[WARN] MARKET_GATE_BYPASS_SKIPPED reason=requires_dry_run_or_diagnostic"
+                )
         if self.config.dry_run:
             LOGGER.info(
                 "[INFO] DRY_RUN=True — no orders will be submitted, but still perform sizing and emit skip reasons"
@@ -4726,11 +4958,19 @@ class TradeExecutor:
         order_id: str,
         status: str,
         filled_at: Any | None,
+        ml_context: Mapping[str, Any] | None = None,
     ) -> None:
         try:
             price_value = float(avg_price)
         except (TypeError, ValueError):
             price_value = 0.0
+        raw_payload: Dict[str, Any] = {
+            "event_type": "BUY_FILL",
+            "filled_at": _isoformat_or_none(filled_at),
+            "status": status,
+        }
+        if ml_context:
+            raw_payload["ml_context"] = dict(ml_context)
         try:
             record_executed_trade(
                 symbol=symbol,
@@ -4742,11 +4982,13 @@ class TradeExecutor:
                 order_type="limit",
                 timestamp=filled_at or datetime.now(timezone.utc),
                 event_type="BUY_FILL",
-                raw={
-                    "event_type": "BUY_FILL",
-                    "filled_at": _isoformat_or_none(filled_at),
-                    "status": status,
-                },
+                raw=raw_payload,
+            )
+            self._upsert_trade_ml_context(
+                order_id=order_id,
+                symbol=symbol,
+                entry_time=filled_at or datetime.now(timezone.utc),
+                stage="fill",
             )
             LOGGER.info(
                 "DB_WRITE_OK table=executed_trades event=BUY_FILL order_id=%s symbol=%s",
@@ -4948,6 +5190,12 @@ class TradeExecutor:
                 "response": _order_snapshot(submitted_order),
             },
         )
+        ml_context = self._upsert_trade_ml_context(
+            order_id=order_id,
+            symbol=prepared.symbol,
+            entry_time=submitted_at or datetime.now(timezone.utc),
+            stage="submit",
+        )
         submit_dt = self._coerce_datetime(submitted_at) or datetime.now(timezone.utc)
         submit_ts = time.time()
         chase_enabled = bool(self.config.chase_enabled)
@@ -4964,6 +5212,7 @@ class TradeExecutor:
             anchor_price=prepared.anchor_price,
             current_limit=limit_price,
             next_chase_ts=next_chase_ts,
+            ml_context=ml_context,
         )
 
     def _maybe_chase_order(
@@ -5073,6 +5322,12 @@ class TradeExecutor:
                 "response": _order_snapshot(chased_order),
             },
         )
+        state.ml_context = self._upsert_trade_ml_context(
+            order_id=chase_order_id,
+            symbol=state.symbol,
+            entry_time=chased_submitted_at or datetime.now(timezone.utc),
+            stage="chase_submit",
+        )
         state.order_id = chase_order_id
         state.submit_ts = time.time()
         state.submitted_at = self._coerce_datetime(chased_submitted_at) or datetime.now(
@@ -5169,6 +5424,7 @@ class TradeExecutor:
                         order_id,
                         state.status or "filled",
                         filled_at,
+                        state.ml_context,
                     )
                     self.attach_trailing_stop(
                         state.symbol, state.filled_qty, state.filled_avg_price, order_id
@@ -5197,6 +5453,7 @@ class TradeExecutor:
                             order_id,
                             state.status,
                             filled_at,
+                            state.ml_context,
                         )
                         self.attach_trailing_stop(
                             state.symbol, state.filled_qty, state.filled_avg_price, order_id
@@ -5308,6 +5565,12 @@ class TradeExecutor:
                 "response": _order_snapshot(submitted_order),
             },
         )
+        latest_ml_context = self._upsert_trade_ml_context(
+            order_id=order_id,
+            symbol=symbol,
+            entry_time=submitted_at or datetime.now(timezone.utc),
+            stage="submit",
+        )
 
         cancel_after_min = int(getattr(self.config, "cancel_after_min", 0) or 0)
         fill_deadline = (
@@ -5342,7 +5605,7 @@ class TradeExecutor:
         next_chase_ts: Optional[float] = submit_ts + chase_interval if chase_enabled else None
 
         def _chase_order(current_id: str) -> tuple[str, float, float] | None:
-            nonlocal chase_attempts, chase_halted
+            nonlocal chase_attempts, chase_halted, latest_ml_context
             if anchor_price is None or anchor_price <= 0:
                 self.log_info("SKIP_CHASE", symbol=symbol, reason="no_anchor")
                 chase_halted = True
@@ -5428,6 +5691,12 @@ class TradeExecutor:
                     "response": _order_snapshot(chased_order),
                 },
             )
+            latest_ml_context = self._upsert_trade_ml_context(
+                order_id=chase_order_id,
+                symbol=symbol,
+                entry_time=chased_submitted_at or datetime.now(timezone.utc),
+                stage="chase_submit",
+            )
             return chase_order_id, time.time(), candidate_limit
 
         while True:
@@ -5474,6 +5743,7 @@ class TradeExecutor:
                     order_id,
                     status,
                     filled_at,
+                    latest_ml_context,
                 )
                 self.attach_trailing_stop(symbol, filled_qty, filled_avg_price, order_id)
                 outcome["filled_qty"] = filled_qty
@@ -5501,6 +5771,7 @@ class TradeExecutor:
                     order_id,
                     status_label,
                     filled_at,
+                    latest_ml_context,
                 )
                 self.attach_trailing_stop(symbol, filled_qty, filled_avg_price, order_id)
                 outcome["filled_qty"] = filled_qty
@@ -5564,6 +5835,7 @@ class TradeExecutor:
                 order_id,
                 status_label,
                 filled_at,
+                latest_ml_context,
             )
             self.attach_trailing_stop(symbol, filled_qty, filled_avg_price, order_id)
             outcome["filled_qty"] = filled_qty
@@ -5989,6 +6261,24 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Column used for proportional allocation weights",
     )
     parser.add_argument(
+        "--min-model-score",
+        type=float,
+        default=ExecutorConfig.min_model_score,
+        help="Optional minimum model score threshold for candidate filtering (default 0.0)",
+    )
+    parser.add_argument(
+        "--require-model-score",
+        type=lambda s: s.lower() in {"1", "true", "yes", "y"},
+        default=ExecutorConfig.require_model_score,
+        help="Require model score presence before ranking/selection (default false)",
+    )
+    parser.add_argument(
+        "--use-champion-execution",
+        type=lambda s: s.lower() in {"1", "true", "yes", "y"},
+        default=ExecutorConfig.use_champion_execution,
+        help="Use champion execution defaults for score gating (fill mode: CLI flags take precedence).",
+    )
+    parser.add_argument(
         "--min-order-usd",
         type=float,
         default=ExecutorConfig.min_order_usd,
@@ -6241,13 +6531,26 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Trading time window gate controlling when orders may be submitted",
     )
     parser.add_argument(
+        "--ignore-market-gate",
+        type=lambda s: s.lower() in {"1", "true", "yes", "y"},
+        default=ExecutorConfig.ignore_market_gate,
+        help="Diagnostic-only bypass for market time-window gating (effective only with --dry-run true or --diagnostic)",
+    )
+    parser.add_argument(
         "--market-tz",
         "--market-timezone",
         dest="market_timezone",
         default=ExecutorConfig.market_timezone,
         help="IANA timezone name used for market window evaluation",
     )
-    args = parser.parse_args(argv)
+    raw_args = list(argv) if argv is not None else list(sys.argv[1:])
+    args = parser.parse_args(raw_args)
+
+    def _arg_explicit(option: str) -> bool:
+        return any(token == option or str(token).startswith(f"{option}=") for token in raw_args)
+
+    setattr(args, "_min_model_score_explicit", _arg_explicit("--min-model-score"))
+    setattr(args, "_require_model_score_explicit", _arg_explicit("--require-model-score"))
     if args.source == "path":
         if args.source_path is None:
             parser.error("--source-path is required when --source path")
@@ -6260,12 +6563,42 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 
 def build_config(args: argparse.Namespace) -> ExecutorConfig:
     market_timezone = args.market_timezone or ExecutorConfig.market_timezone
-    return ExecutorConfig(
+    min_model_score = max(0.0, float(getattr(args, "min_model_score", 0.0) or 0.0))
+    require_model_score = bool(getattr(args, "require_model_score", False))
+    use_champion_execution = bool(getattr(args, "use_champion_execution", False))
+    champion_source = "missing"
+    champion_present = False
+    champion_run_date = None
+    champion_applied = False
+    if use_champion_execution:
+        champion = load_latest_champion(Path.cwd())
+        if champion:
+            champion_source = str(champion.get("_champion_source") or "unknown")
+            champion_present = True
+            champion_run_date = champion.get("_champion_run_date") or champion.get("run_date")
+        if champion:
+            overrides = champion_execution_overrides(champion)
+            if (
+                not bool(getattr(args, "_min_model_score_explicit", False))
+                and overrides.get("min_model_score") is not None
+            ):
+                min_model_score = max(0.0, float(overrides.get("min_model_score")))
+            if (
+                not bool(getattr(args, "_require_model_score_explicit", False))
+                and overrides.get("require_model_score") is not None
+            ):
+                require_model_score = bool(overrides.get("require_model_score"))
+            champion_applied = True
+
+    config = ExecutorConfig(
         source=(args.source or "db").lower(),
         source_path=args.source_path,
         source_type=(args.source or "db").lower(),
         allocation_pct=args.allocation_pct,
         alloc_weight_key=args.alloc_weight_key,
+        min_model_score=min_model_score,
+        require_model_score=require_model_score,
+        use_champion_execution=use_champion_execution,
         max_positions=args.max_positions,
         max_new_positions=args.max_new_positions,
         disable_open_position_cap=bool(args.disable_open_position_cap),
@@ -6292,6 +6625,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         max_price=args.max_price,
         log_json=args.log_json,
         time_window=args.time_window,
+        ignore_market_gate=bool(getattr(args, "ignore_market_gate", False)),
         market_timezone=market_timezone,
         submit_at_ny=args.submit_at_ny,
         price_source=args.price_source,
@@ -6315,6 +6649,11 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
             getattr(args, "reconcile_overlap_secs", ExecutorConfig.reconcile_overlap_secs)
         ),
     )
+    setattr(config, "_exec_champion_source", champion_source)
+    setattr(config, "_exec_champion_present", champion_present)
+    setattr(config, "_exec_champion_run_date", champion_run_date)
+    setattr(config, "_exec_champion_applied", champion_applied)
+    return config
 
 
 def _seed_initial_metrics(metrics: ExecutionMetrics, config: ExecutorConfig) -> None:
@@ -6381,6 +6720,19 @@ def run_executor(
     if _EXECUTE_START_UTC is None:
         _EXECUTE_START_UTC = datetime.now(timezone.utc)
     configure_logging(config.log_json)
+    if bool(getattr(config, "use_champion_execution", False)):
+        LOGGER.info(
+            "[INFO] EXEC_CHAMPION_LOAD source=%s present=%s run_date=%s",
+            getattr(config, "_exec_champion_source", "missing"),
+            str(bool(getattr(config, "_exec_champion_present", False))).lower(),
+            getattr(config, "_exec_champion_run_date", None),
+        )
+        if bool(getattr(config, "_exec_champion_applied", False)):
+            LOGGER.info(
+                "[INFO] EXEC_CHAMPION_APPLIED min_model_score=%s require_model_score=%s mode=fill",
+                max(0.0, float(getattr(config, "min_model_score", 0.0) or 0.0)),
+                str(bool(getattr(config, "require_model_score", False))).lower(),
+            )
     metrics = ExecutionMetrics()
     _seed_initial_metrics(metrics, config)
     diagnostic_mode = bool(getattr(config, "diagnostic", False))
@@ -6412,6 +6764,18 @@ def run_executor(
         next_close_dt = _parse_clock_dt(next_close_raw)
         next_close_date = next_close_dt.astimezone(NY).date() if next_close_dt else None
         session = str(getattr(clock, "session", "") or "").lower() if clock is not None else ""
+        market_gate_bypass_enabled = bool(getattr(config, "ignore_market_gate", False)) and (
+            bool(config.dry_run) or diagnostic_mode
+        )
+        market_gate_bypass_logged = False
+
+        def _log_market_gate_bypassed() -> None:
+            nonlocal market_gate_bypass_logged
+            if market_gate_bypass_logged:
+                return
+            LOGGER.warning("[WARN] MARKET_GATE_BYPASSED reason=dry_run_or_diagnostic")
+            market_gate_bypass_logged = True
+
         strategy_run_date = ny_date.isoformat()
         market_clock_payload = {
             "ny_date": ny_date.isoformat(),
@@ -6458,7 +6822,10 @@ def run_executor(
             return 0
 
         if ny_date.weekday() >= 5:
-            return _exit_market_closed()
+            if market_gate_bypass_enabled:
+                _log_market_gate_bypassed()
+            else:
+                return _exit_market_closed()
 
         if clock is not None and not is_open:
             session_allows = session and session not in {"closed", "holiday"}
@@ -6469,7 +6836,10 @@ def run_executor(
                 and next_open_not_today
                 and (next_close_date is None or next_close_not_today)
             ):
-                return _exit_market_closed()
+                if market_gate_bypass_enabled:
+                    _log_market_gate_bypassed()
+                else:
+                    return _exit_market_closed()
         try:
             LOGGER.info("[INFO] CANDIDATE_SOURCE %s", str(config.source_type or "db"))
             frame = loader.load_candidates(rank=False)
@@ -6576,6 +6946,10 @@ def run_executor(
             candidates=len(candidates_df),
             submit_at_ny=str(config.submit_at_ny or ""),
         )
+
+        if market_gate_bypass_enabled and not in_window:
+            _log_market_gate_bypassed()
+            in_window = True
 
         reconcile_exit_mode = bool(getattr(config, "reconcile_only", False))
 

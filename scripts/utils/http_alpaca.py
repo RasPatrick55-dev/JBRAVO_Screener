@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Dict, Iterable, List, Tuple
@@ -9,6 +10,8 @@ from typing import Dict, Iterable, List, Tuple
 import requests
 
 from utils.env import AlpacaUnauthorizedError
+
+LOG = logging.getLogger(__name__)
 
 
 def _flatten_to_canonical(data: Dict) -> List[Dict]:
@@ -78,6 +81,7 @@ def fetch_bars_http(
     batch: int = 50,
     *,
     timeframe: str = "1Day",
+    adjustment: str = "raw",
     per_page: int = 10000,
     verify_hook=None,
 ) -> Tuple[List[dict], Dict[str, int]]:
@@ -111,6 +115,10 @@ def fetch_bars_http(
     first_hook = True
     last_call: List[float] = []
 
+    active_feed = (feed or "iex").strip().lower() or "iex"
+    active_adjustment = (adjustment or "raw").strip().lower() or "raw"
+    if active_adjustment not in {"raw", "split", "dividend", "all"}:
+        active_adjustment = "raw"
     for chunk in _chunk_symbols(symbols, batch):
         if not chunk:
             continue
@@ -123,7 +131,8 @@ def fetch_bars_http(
                 "timeframe": timeframe,
                 "start": start,
                 "end": end,
-                "feed": feed,
+                "feed": active_feed,
+                "adjustment": active_adjustment,
                 "limit": per_page,
             }
             if page_token:
@@ -138,8 +147,23 @@ def fetch_bars_http(
             stats["requests"] += 1
 
             if resp.status_code in (401, 403):
-                endpoint = getattr(resp.request, "path_url", "/v2/stocks/bars")
-                raise AlpacaUnauthorizedError(endpoint=endpoint, feed=feed)
+                endpoint = str(getattr(resp.request, "path_url", "/v2/stocks/bars") or "")
+                endpoint = endpoint.split("?", 1)[0] or "/v2/stocks/bars"
+                # SIP access can be unavailable on some plans; retry same request on IEX.
+                if active_feed == "sip":
+                    LOG.warning(
+                        "[WARN] ALPACA_FEED_FALLBACK from=sip to=iex reason=unauthorized endpoint=%s",
+                        endpoint,
+                    )
+                    active_feed = "iex"
+                    params["feed"] = active_feed
+                    _rate_limit_guard(last_call, 0.28)
+                    resp = requests.get(url, headers=headers, params=params, timeout=30)
+                    stats["requests"] += 1
+                if resp.status_code in (401, 403):
+                    retry_endpoint = str(getattr(resp.request, "path_url", "/v2/stocks/bars") or "")
+                    retry_endpoint = retry_endpoint.split("?", 1)[0] or "/v2/stocks/bars"
+                    raise AlpacaUnauthorizedError(endpoint=retry_endpoint, feed=active_feed)
 
             if resp.status_code == 429:
                 stats["rate_limit_hits"] += 1

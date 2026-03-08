@@ -846,9 +846,7 @@ def _audit_account_overview(
     report.add_check(endpoint=endpoint, ok=ok, detail="ok" if ok else "; ".join(details[:4]))
 
 
-def _audit_account_runtime(
-    report: AuditReport, *, requester: Any, base_url: str | None
-) -> None:
+def _audit_account_runtime(report: AuditReport, *, requester: Any, base_url: str | None) -> None:
     summary_endpoint = "/api/account/summary"
     perf_all_endpoint = "/api/account/performance?range=all"
     perf_daily_endpoint = "/api/account/performance?range=d"
@@ -987,9 +985,7 @@ def _audit_account_runtime(
             performance_basis = str(total.get("performanceBasis") or "")
             if performance_basis not in {"live_vs_close_baselines", "close_to_close"}:
                 perf_all_ok = False
-                perf_all_details.append(
-                    f"accountTotal.performanceBasis={performance_basis}"
-                )
+                perf_all_details.append(f"accountTotal.performanceBasis={performance_basis}")
 
             as_of = _parse_ts_utc(total.get("asOfUtc"))
             if as_of is None:
@@ -1039,8 +1035,7 @@ def _audit_account_runtime(
             (
                 row
                 for row in rows
-                if isinstance(row, dict)
-                and str(row.get("period") or "").strip().lower() == "daily"
+                if isinstance(row, dict) and str(row.get("period") or "").strip().lower() == "daily"
             ),
             None,
         )
@@ -1069,18 +1064,14 @@ def _audit_account_runtime(
             perf_daily_details.append("daily usd invalid")
         elif not _float_close(total_usd, daily_usd, abs_tol=1e-6):
             perf_daily_ok = False
-            perf_daily_details.append(
-                f"daily_usd mismatch total={total_usd} row={daily_usd}"
-            )
+            perf_daily_details.append(f"daily_usd mismatch total={total_usd} row={daily_usd}")
 
         if total_pct is None or daily_pct is None:
             perf_daily_ok = False
             perf_daily_details.append("daily pct invalid")
         elif not _float_close(total_pct, daily_pct, abs_tol=1e-6):
             perf_daily_ok = False
-            perf_daily_details.append(
-                f"daily_pct mismatch total={total_pct} row={daily_pct}"
-            )
+            perf_daily_details.append(f"daily_pct mismatch total={total_pct} row={daily_pct}")
 
         if (
             str(total.get("equityBasis") or "") == "live"

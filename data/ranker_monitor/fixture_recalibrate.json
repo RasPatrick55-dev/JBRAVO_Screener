@@ -1,0 +1,30 @@
+{
+  "run_date": "2026-02-28",
+  "recommended_action": "recalibrate",
+  "psi_score": 0.05,
+  "recent_sharpe": 1.0,
+  "calibration_applicable": true,
+  "calibration": {
+    "bins": 10,
+    "min_rows": 2000,
+    "score_col": "score_oos",
+    "label_col": "label_5d_pos_300bp",
+    "recent": {
+      "rows": 4000,
+      "ece": 0.12,
+      "mce": 0.22,
+      "score_min": 0.02,
+      "score_max": 0.98,
+      "reliability_table": []
+    },
+    "baseline": {
+      "rows": 8000,
+      "ece": 0.03,
+      "mce": 0.08,
+      "score_min": 0.01,
+      "score_max": 0.99,
+      "reliability_table": []
+    },
+    "delta_ece": 0.09
+  }
+}

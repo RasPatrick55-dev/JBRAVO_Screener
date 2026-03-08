@@ -413,7 +413,9 @@ def test_execute_summary_uses_alpaca_fallback_only_when_no_metrics_source(
     monkeypatch.setattr(
         module, "_execute_summary_from_metrics_table", lambda: (None, "postgres:none")
     )
-    monkeypatch.setattr(module, "_execute_summary_from_metrics_file", lambda: (None, "file:missing"))
+    monkeypatch.setattr(
+        module, "_execute_summary_from_metrics_file", lambda: (None, "file:missing")
+    )
     monkeypatch.setattr(
         module,
         "_execute_summary_counts_from_alpaca",
@@ -627,14 +629,18 @@ def test_api_logs_tail_default_and_full(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
     tail_response = client.get("/api/logs/monitor.log?tail=55")
     assert tail_response.status_code == 200
-    tail_lines = [line for line in tail_response.get_data(as_text=True).splitlines() if line.strip()]
+    tail_lines = [
+        line for line in tail_response.get_data(as_text=True).splitlines() if line.strip()
+    ]
     assert len(tail_lines) == 55
     assert tail_lines[0].endswith("monitor line 65")
     assert tail_lines[-1].endswith("monitor line 119")
 
     full_response = client.get("/api/logs/monitor.log?full=1")
     assert full_response.status_code == 200
-    full_lines = [line for line in full_response.get_data(as_text=True).splitlines() if line.strip()]
+    full_lines = [
+        line for line in full_response.get_data(as_text=True).splitlines() if line.strip()
+    ]
     assert len(full_lines) == 120
 
 
@@ -652,7 +658,9 @@ def test_account_performance_uses_live_equity_for_daily_delta(
 
     monkeypatch.setattr(module, "_fetch_account_portfolio_points", lambda **_: (points, "ok"))
     monkeypatch.setattr(module, "_account_portfolio_points_from_db", lambda **_: ([], "db_empty"))
-    monkeypatch.setattr(module, "_account_portfolio_points_from_csv", lambda **_: ([], "csv_missing"))
+    monkeypatch.setattr(
+        module, "_account_portfolio_points_from_csv", lambda **_: ([], "csv_missing")
+    )
 
     def _mock_rest(path: str, **_: object):
         if path == "/v2/account":
@@ -693,7 +701,9 @@ def test_account_summary_and_performance_total_share_live_equity(
 
     monkeypatch.setattr(module, "_fetch_account_portfolio_points", lambda **_: (points, "ok"))
     monkeypatch.setattr(module, "_account_portfolio_points_from_db", lambda **_: ([], "db_empty"))
-    monkeypatch.setattr(module, "_account_portfolio_points_from_csv", lambda **_: ([], "csv_missing"))
+    monkeypatch.setattr(
+        module, "_account_portfolio_points_from_csv", lambda **_: ([], "csv_missing")
+    )
     monkeypatch.setattr(module, "_open_positions_value_from_alpaca", lambda: 250.0)
 
     def _mock_rest(path: str, **_: object):
@@ -732,7 +742,9 @@ def test_account_performance_falls_back_to_last_close_when_live_unavailable(
 
     monkeypatch.setattr(module, "_fetch_account_portfolio_points", lambda **_: (points, "ok"))
     monkeypatch.setattr(module, "_account_portfolio_points_from_db", lambda **_: ([], "db_empty"))
-    monkeypatch.setattr(module, "_account_portfolio_points_from_csv", lambda **_: ([], "csv_missing"))
+    monkeypatch.setattr(
+        module, "_account_portfolio_points_from_csv", lambda **_: ([], "csv_missing")
+    )
     monkeypatch.setattr(module, "_alpaca_rest_get_json", lambda *_, **__: ({}, "request_failed"))
 
     client = module.app.server.test_client()

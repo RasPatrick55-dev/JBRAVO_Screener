@@ -531,7 +531,9 @@ def _repair_screener_run_map_app_schema(cursor: Any) -> None:
             )
             logger.info("[INFO] SCREENER_RUN_MAP_REPAIRED action=add_run_date ok=true")
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_run_date_failed:%s", exc)
+            logger.warning(
+                "[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_run_date_failed:%s", exc
+            )
 
     try:
         has_created_at = _has_table_column(cursor, table_name, "created_at")
@@ -541,7 +543,9 @@ def _repair_screener_run_map_app_schema(cursor: Any) -> None:
             )
             logger.info("[INFO] SCREENER_RUN_MAP_REPAIRED action=add_created_at ok=true")
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_created_at_failed:%s", exc)
+        logger.warning(
+            "[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=add_created_at_failed:%s", exc
+        )
 
     try:
         has_run_ts = _has_table_column(cursor, table_name, "run_ts_utc")
@@ -1865,6 +1869,322 @@ def ensure_ml_artifacts_table() -> None:
             pass
 
 
+def ensure_screener_ranker_scores_app_table() -> None:
+    conn = _conn_or_none()
+    if conn is None:
+        return
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS screener_ranker_scores_app (
+                        run_ts_utc TIMESTAMPTZ NOT NULL,
+                        run_date DATE,
+                        symbol TEXT NOT NULL,
+                        model_score_5d DOUBLE PRECISION,
+                        score_ts TIMESTAMPTZ,
+                        ranker_version TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        PRIMARY KEY (run_ts_utc, symbol)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_screener_ranker_scores_app_run_ts
+                    ON screener_ranker_scores_app (run_ts_utc DESC)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_screener_ranker_scores_app_symbol_run_ts
+                    ON screener_ranker_scores_app (symbol, run_ts_utc DESC)
+                    """
+                )
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_SCHEMA_FAILED table=screener_ranker_scores_app err=%s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def ensure_trade_entry_ml_context_app_table() -> None:
+    conn = _conn_or_none()
+    if conn is None:
+        return
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS trade_entry_ml_context_app (
+                        order_id TEXT PRIMARY KEY,
+                        symbol TEXT NOT NULL,
+                        entry_time TIMESTAMPTZ,
+                        screener_run_ts_utc TIMESTAMPTZ,
+                        model_score DOUBLE PRECISION,
+                        model_score_5d DOUBLE PRECISION,
+                        score_col TEXT,
+                        score_source TEXT,
+                        raw JSONB,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_trade_entry_ml_context_symbol_run_ts
+                    ON trade_entry_ml_context_app (symbol, screener_run_ts_utc DESC)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_trade_entry_ml_context_symbol_entry_time
+                    ON trade_entry_ml_context_app (symbol, entry_time DESC)
+                    """
+                )
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_SCHEMA_FAILED table=trade_entry_ml_context_app err=%s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def upsert_trade_entry_ml_context(row: Mapping[str, Any] | None) -> bool:
+    table_name = "trade_entry_ml_context_app"
+    if not row:
+        _log_write_result(False, table_name, 0, RuntimeError("missing_row"))
+        return False
+    if not db_enabled():
+        logger.warning("[WARN] DB_WRITE_FAILED table=%s err=db_disabled", table_name)
+        return False
+
+    order_id = str(row.get("order_id") or "").strip()
+    symbol = str(row.get("symbol") or "").strip().upper()
+    if not order_id:
+        _log_write_result(False, table_name, 0, RuntimeError("missing_order_id"))
+        return False
+    if not symbol:
+        _log_write_result(False, table_name, 0, RuntimeError("missing_symbol"))
+        return False
+
+    def _safe_float(value: Any) -> float | None:
+        try:
+            if value is None or pd.isna(value):  # type: ignore[arg-type]
+                return None
+            numeric = float(value)
+        except Exception:
+            return None
+        if pd.isna(numeric):  # type: ignore[arg-type]
+            return None
+        return numeric
+
+    payload = {
+        "order_id": order_id,
+        "symbol": symbol,
+        "entry_time": normalize_ts(row.get("entry_time"), field="entry_time"),
+        "screener_run_ts_utc": normalize_ts(
+            row.get("screener_run_ts_utc"), field="screener_run_ts_utc"
+        ),
+        "model_score": _safe_float(row.get("model_score")),
+        "model_score_5d": _safe_float(row.get("model_score_5d")),
+        "score_col": str(row.get("score_col") or "").strip() or None,
+        "score_source": str(row.get("score_source") or "").strip() or None,
+        "raw": _json_dumps_or_none(row.get("raw")),
+    }
+
+    ensure_trade_entry_ml_context_app_table()
+    conn = _conn_or_none()
+    if conn is None:
+        logger.warning("[WARN] DB_WRITE_FAILED table=%s err=db_disabled", table_name)
+        return False
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO trade_entry_ml_context_app (
+                        order_id,
+                        symbol,
+                        entry_time,
+                        screener_run_ts_utc,
+                        model_score,
+                        model_score_5d,
+                        score_col,
+                        score_source,
+                        raw
+                    )
+                    VALUES (
+                        %(order_id)s,
+                        %(symbol)s,
+                        %(entry_time)s,
+                        %(screener_run_ts_utc)s,
+                        %(model_score)s,
+                        %(model_score_5d)s,
+                        %(score_col)s,
+                        %(score_source)s,
+                        %(raw)s::jsonb
+                    )
+                    ON CONFLICT (order_id) DO UPDATE SET
+                        symbol = EXCLUDED.symbol,
+                        entry_time = COALESCE(EXCLUDED.entry_time, trade_entry_ml_context_app.entry_time),
+                        screener_run_ts_utc = COALESCE(
+                            EXCLUDED.screener_run_ts_utc,
+                            trade_entry_ml_context_app.screener_run_ts_utc
+                        ),
+                        model_score = COALESCE(EXCLUDED.model_score, trade_entry_ml_context_app.model_score),
+                        model_score_5d = COALESCE(
+                            EXCLUDED.model_score_5d,
+                            trade_entry_ml_context_app.model_score_5d
+                        ),
+                        score_col = COALESCE(EXCLUDED.score_col, trade_entry_ml_context_app.score_col),
+                        score_source = COALESCE(
+                            EXCLUDED.score_source,
+                            trade_entry_ml_context_app.score_source
+                        ),
+                        raw = COALESCE(EXCLUDED.raw, trade_entry_ml_context_app.raw),
+                        updated_at = now()
+                    """,
+                    payload,
+                )
+        _log_write_result(True, table_name, 1)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_WRITE_FAILED table=%s err=%s", table_name, exc)
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def upsert_screener_ranker_scores_frame(
+    run_ts_utc: Any,
+    frame: pd.DataFrame | None,
+    *,
+    run_date: Any | None = None,
+    symbol_column: str = "symbol",
+    score_column: str = "model_score_5d",
+    score_ts_column: str | None = "score_ts",
+    ranker_version: str | None = None,
+) -> int:
+    if frame is None or frame.empty:
+        return 0
+
+    normalized_run_ts = normalize_ts(run_ts_utc, field="run_ts_utc")
+    if normalized_run_ts is None:
+        return 0
+
+    ensure_screener_ranker_scores_app_table()
+    conn = _conn_or_none()
+    if conn is None:
+        return 0
+
+    run_date_value = (
+        _coerce_date(run_date)
+        if run_date is not None
+        else normalized_run_ts.astimezone(timezone.utc).date().isoformat()
+    )
+
+    rows: list[dict[str, Any]] = []
+    has_score_ts = bool(score_ts_column and score_ts_column in frame.columns)
+    for _, row in frame.iterrows():
+        raw_symbol = row.get(symbol_column) if symbol_column in row else None
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol:
+            continue
+
+        raw_score = row.get(score_column) if score_column in row else None
+        score_value: float | None
+        try:
+            if raw_score is None or pd.isna(raw_score):  # type: ignore[arg-type]
+                score_value = None
+            else:
+                score_value = float(raw_score)
+        except Exception:
+            score_value = None
+
+        score_ts = None
+        if has_score_ts and score_ts_column is not None:
+            score_ts = normalize_ts(row.get(score_ts_column), field="score_ts")
+
+        rows.append(
+            {
+                "run_ts_utc": normalized_run_ts,
+                "run_date": run_date_value,
+                "symbol": symbol,
+                "model_score_5d": score_value,
+                "score_ts": score_ts,
+                "ranker_version": ranker_version,
+            }
+        )
+
+    if not rows:
+        return 0
+    deduped_rows_by_key: dict[tuple[datetime, str], dict[str, Any]] = {}
+    for payload in rows:
+        key = (payload["run_ts_utc"], payload["symbol"])
+        deduped_rows_by_key[key] = payload
+    deduped_rows = list(deduped_rows_by_key.values())
+    dropped = len(rows) - len(deduped_rows)
+    if dropped > 0:
+        logger.warning(
+            "[WARN] UPSERT_DEDUPED table=screener_ranker_scores_app dropped=%s",
+            dropped,
+        )
+    rows = deduped_rows
+
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                extras.execute_batch(
+                    cursor,
+                    """
+                    INSERT INTO screener_ranker_scores_app (
+                        run_ts_utc,
+                        run_date,
+                        symbol,
+                        model_score_5d,
+                        score_ts,
+                        ranker_version
+                    )
+                    VALUES (
+                        %(run_ts_utc)s,
+                        %(run_date)s,
+                        %(symbol)s,
+                        %(model_score_5d)s,
+                        %(score_ts)s,
+                        %(ranker_version)s
+                    )
+                    ON CONFLICT (run_ts_utc, symbol) DO UPDATE SET
+                        run_date = EXCLUDED.run_date,
+                        model_score_5d = EXCLUDED.model_score_5d,
+                        score_ts = EXCLUDED.score_ts,
+                        ranker_version = EXCLUDED.ranker_version,
+                        created_at = now()
+                    """,
+                    rows,
+                    page_size=200,
+                )
+        _log_write_result(True, "screener_ranker_scores_app", len(rows))
+        return len(rows)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        _log_write_result(False, "screener_ranker_scores_app", 0, exc)
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def upsert_ml_artifact(
     artifact_type: str,
     run_date: Any,
@@ -2047,6 +2367,7 @@ def upsert_ml_artifact_frame(
     run_date: Any,
     frame: pd.DataFrame,
     *,
+    payload: Mapping[str, Any] | None = None,
     source: str | None = None,
     file_name: str | None = None,
 ) -> bool:
@@ -2062,6 +2383,7 @@ def upsert_ml_artifact_frame(
         artifact_type,
         run_date,
         csv_data=csv_data,
+        payload=payload,
         rows_count=rows_count,
         source=source,
         file_name=file_name,

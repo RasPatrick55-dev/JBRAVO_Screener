@@ -1,5 +1,6 @@
 -r requirements.txt
 
 # Dev-only tooling (not required in runtime deployments)
+pre-commit==4.5.1
 ruff==0.9.10
 vulture==2.14
