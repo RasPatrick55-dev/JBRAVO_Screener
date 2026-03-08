@@ -1251,8 +1251,13 @@ def _normalize_predictions_frame(
     if "timestamp" in working.columns:
         working["score_ts"] = pd.to_datetime(working["timestamp"], errors="coerce", utc=True)
         working.sort_values(by="score_ts", inplace=True)
+    if "run_date" in working.columns:
+        working["run_date"] = pd.to_datetime(working["run_date"], errors="coerce", utc=True)
     working = working.drop_duplicates(subset=["symbol"], keep="last")
-    return working[["symbol", score_column, "score_ts"]]
+    output_columns = ["symbol", score_column, "score_ts"]
+    if "run_date" in working.columns:
+        output_columns.append("run_date")
+    return working[output_columns]
 
 
 def _prepare_predictions_frame(
@@ -1392,6 +1397,12 @@ def _enrich_candidates_with_ranker(
         pred_ts_min = None
         pred_ts_max = None
         pred_date_values: set[date] = set()
+        if "run_date" in predictions_frame.columns:
+            pred_run_dates = pd.to_datetime(
+                predictions_frame["run_date"], errors="coerce", utc=True
+            )
+            if pred_run_dates.notna().any():
+                pred_date_values.update(ts.date() for ts in pred_run_dates.dropna().tolist())
         if "score_ts" in predictions_frame.columns:
             pred_ts = pd.to_datetime(predictions_frame["score_ts"], errors="coerce", utc=True)
             if pred_ts.notna().any():
@@ -1420,19 +1431,25 @@ def _enrich_candidates_with_ranker(
             pred_ts_max.isoformat() if isinstance(pred_ts_max, pd.Timestamp) else None,
         )
 
-        low_overlap_threshold = max(1, int(math.ceil(len(candidate_symbol_set) * 0.25)))
-        should_sample = (
-            len(candidate_symbol_set) > 0 and overlap_count <= low_overlap_threshold
-        ) or overlap_count == 0
+        missing_symbols = sorted(candidate_symbol_set - prediction_symbol_set)
+        missing_fraction = (
+            float(len(missing_symbols)) / float(len(candidate_symbol_set))
+            if candidate_symbol_set
+            else 0.0
+        )
+        should_sample = bool(missing_symbols) and (
+            overlap_count == 0 or missing_fraction >= 0.25
+        )
         sample_missing_symbols: list[str] = []
         overlap_reason = "no_prediction_for_symbol"
         if should_sample:
-            missing_symbols = sorted(candidate_symbol_set - prediction_symbol_set)
             sample_missing_symbols = missing_symbols[:10]
             if len(prediction_symbol_set) <= 0:
                 overlap_reason = "no_prediction_for_symbol"
             elif run_date is not None and pred_date_values and run_date not in pred_date_values:
                 overlap_reason = "date_mismatch"
+            elif missing_symbols:
+                overlap_reason = "no_prediction_for_symbol"
             else:
                 overlap_reason = "run_scope_mismatch"
             LOG.info(
@@ -3302,6 +3319,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         target_feature_set: str,
         *,
         context: str,
+        log_prefix: str = "AUTO_REFRESH_FEATURES",
     ) -> int:
         labels_cmd: list[str] | None = None
         if db.db_enabled():
@@ -3322,7 +3340,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 str(base_dir / "data" / "labels"),
             ]
             LOG.info(
-                "[INFO] AUTO_REFRESH_FEATURES enabled=true labels_missing=true -> running labels"
+                "[INFO] %s enabled=true labels_missing=true -> running labels",
+                log_prefix,
             )
             rc_labels = 0
             secs_labels = 0.0
@@ -3334,14 +3353,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     env=_step_env("labels"),
                 )
             except Exception as exc:  # pragma: no cover - defensive continue
-                LOG.warning("AUTO_REFRESH_FEATURES labels error: %s", exc)
+                LOG.warning("%s labels error: %s", log_prefix, exc)
                 rc_labels, secs_labels = 1, 0.0
             stage_times["labels"] = secs_labels
             step_rcs["labels"] = rc_labels
             if rc_labels:
-                LOG.warning("[WARN] AUTO_REFRESH_FEATURES_LABELS_FAILED rc=%s", rc_labels)
+                LOG.warning("[WARN] %s_LABELS_FAILED rc=%s", log_prefix, rc_labels)
         LOG.info(
-            "[INFO] AUTO_REFRESH_FEATURES enabled=true stale=true -> running feature_generator feature_set=%s",
+            "[INFO] %s enabled=true stale=true -> running feature_generator feature_set=%s",
+            log_prefix,
             target_feature_set,
         )
         rc_features = 0
@@ -3356,11 +3376,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 env=features_env or None,
             )
         except Exception as exc:  # pragma: no cover - defensive continue
-            LOG.warning("AUTO_REFRESH_FEATURES feature_generator error: %s", exc)
+            LOG.warning("%s feature_generator error: %s", log_prefix, exc)
             rc_features, secs_features = 1, 0.0
         stage_times["features"] = secs_features
         step_rcs["features"] = rc_features
-        LOG.info("[INFO] AUTO_REFRESH_FEATURES_DONE rc=%s", rc_features)
+        LOG.info("[INFO] %s_DONE rc=%s", log_prefix, rc_features)
         _ensure_features_freshness(context)
         return int(rc_features)
 
@@ -3554,27 +3574,30 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if not normalized_symbols:
             return 1
         unique_symbols = sorted(set(normalized_symbols))
-        if auto_refresh_features:
-            features_freshness = _ensure_features_freshness("candidate_scoped_refresh")
-            if bool(features_freshness.get("stale")):
-                target_feature_set = (
-                    str(features_freshness.get("model_feature_set") or "").strip().lower()
+        features_freshness = _ensure_features_freshness("candidate_scoped_refresh")
+        if bool(features_freshness.get("stale")):
+            target_feature_set = (
+                str(features_freshness.get("model_feature_set") or "").strip().lower()
+            )
+            LOG.info(
+                "[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_FEATURES_MODEL_CONTEXT model_path=%s model_feature_set=%s model_feature_signature=%s",
+                features_freshness.get("model_path"),
+                target_feature_set or None,
+                features_freshness.get("model_feature_signature"),
+            )
+            if target_feature_set in {"v1", "v2"}:
+                rc_features = _run_labels_and_features_refresh(
+                    target_feature_set,
+                    context="candidate_scoped_refresh",
+                    log_prefix="AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_FEATURES",
                 )
-                LOG.info(
-                    "[INFO] AUTO_REFRESH_FEATURES_MODEL_CONTEXT model_path=%s model_feature_set=%s model_feature_signature=%s",
-                    features_freshness.get("model_path"),
-                    target_feature_set or None,
-                    features_freshness.get("model_feature_signature"),
+                if rc_features != 0:
+                    return int(rc_features)
+            else:
+                LOG.warning(
+                    "[WARN] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_FEATURES_SKIPPED reason=model_feature_set_missing"
                 )
-                if target_feature_set in {"v1", "v2"}:
-                    _run_labels_and_features_refresh(
-                        target_feature_set,
-                        context="candidate_scoped_refresh",
-                    )
-                else:
-                    LOG.warning(
-                        "[WARN] AUTO_REFRESH_FEATURES_SKIPPED reason=model_feature_set_missing"
-                    )
+                return 1
 
         symbols_dir = base_dir / "data" / "tmp"
         symbols_dir.mkdir(parents=True, exist_ok=True)
@@ -3608,6 +3631,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         except Exception as exc:  # pragma: no cover - defensive continue
             LOG.warning("AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES ranker_predict error: %s", exc)
             rc_predict, secs_predict = 1, 0.0
+        finally:
+            try:
+                symbols_path.unlink(missing_ok=True)
+            except Exception:
+                LOG.debug("AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES symbol temp cleanup failed")
         stage_times["ranker_predict"] = secs_predict
         step_rcs["ranker_predict"] = rc_predict
         calibrated, method = _ranker_predict_score_source_from_log(base_dir)

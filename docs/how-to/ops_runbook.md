@@ -506,6 +506,9 @@ Matched-zero overlap remediation (production-safe):
   - `MODEL_SCORE_COVERAGE ... pct=0.00`
 - Run with candidate-scoped retry enabled:
   - `--refresh-predictions-for-candidates true`
+  - when the current feature snapshot is stale vs the latest model, the retry
+    path refreshes features first using the existing freshness logic, then
+    reruns `ranker_predict` for just the candidate symbols
 - Expected additional tokens:
   - `[INFO] MODEL_SCORE_OVERLAP_DIAG ...`
   - `[INFO] MODEL_SCORE_OVERLAP_SAMPLE ...`

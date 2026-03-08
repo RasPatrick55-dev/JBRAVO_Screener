@@ -739,6 +739,9 @@ Prediction freshness enforcement:
     - `--refresh-predictions-for-candidates` (or
       `JBR_REFRESH_PREDICTIONS_FOR_CANDIDATES=true`) performs one bounded
       candidate-scoped repredict retry before final matched-zero skip.
+    - when the current feature snapshot is stale, that retry path refreshes
+      features first using the existing freshness logic, then reruns
+      `ranker_predict` against only the candidate universe.
     - if retry still fails, pipeline remains safe and skips overlay write.
 
 Feature/model compatibility guard in `ranker_predict`:
