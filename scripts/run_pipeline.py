@@ -1437,9 +1437,7 @@ def _enrich_candidates_with_ranker(
             if candidate_symbol_set
             else 0.0
         )
-        should_sample = bool(missing_symbols) and (
-            overlap_count == 0 or missing_fraction >= 0.25
-        )
+        should_sample = bool(missing_symbols) and (overlap_count == 0 or missing_fraction >= 0.25)
         sample_missing_symbols: list[str] = []
         overlap_reason = "no_prediction_for_symbol"
         if should_sample:
