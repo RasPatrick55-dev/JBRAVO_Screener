@@ -352,15 +352,15 @@ options:
   --ignore-market-gate IGNORE_MARKET_GATE
                         Diagnostic-only bypass for market time-window gating
                         (effective only with --dry-run true or --diagnostic)
-  --market-tz, --market-timezone MARKET_TIMEZONE
+  --market-tz MARKET_TIMEZONE, --market-timezone MARKET_TIMEZONE
                         IANA timezone name used for market window evaluation
 ```
 
 ## `python -m scripts.screener --help`
 
 ```text
-usage: screener.py [-h]
-                   --mode {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}
+usage: screener.py [-h] --mode
+                   {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}
                    [--universe {alpaca-active,csv}] [--source-csv SOURCE_CSV]
                    [--output-dir OUTPUT_DIR] [--run-date RUN_DATE]
                    [--ranker-config RANKER_CONFIG] [--local-validate]
