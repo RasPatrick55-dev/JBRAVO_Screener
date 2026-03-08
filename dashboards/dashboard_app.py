@@ -54,6 +54,7 @@ from dashboards.utils import coerce_kpi_types, parse_pipeline_summary
 from dashboards.overview import overview_layout, render_timeline_table
 from dashboards.pipeline_tab import pipeline_layout
 from dashboards.ml_tab import build_predictions_table, ml_layout
+from dashboards.ml_overview_api import build_ml_overview
 from scripts.run_pipeline import write_complete_screener_metrics
 from scripts.trade_performance import (
     CACHE_PATH as TRADE_PERFORMANCE_CACHE_PATH,
@@ -10702,6 +10703,11 @@ def log_exports(filename: str):
 def api_health():
     payload = load_screener_health()
     return jsonify(payload)
+
+
+@server.route("/api/ml/overview")
+def api_ml_overview():
+    return _json_no_store(build_ml_overview(Path(BASE_DIR)))
 
 
 @app.server.route("/api/candidates")
