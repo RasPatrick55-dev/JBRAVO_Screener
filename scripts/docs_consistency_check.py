@@ -191,6 +191,7 @@ def _normalize_help_text(text: str) -> str:
         "usage: screener.py [-h] --mode\n"
         "                   {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}",
     )
+    normalized = re.sub(r"\n[ \t]+\n", "\n", normalized)
     return normalized
 
 
