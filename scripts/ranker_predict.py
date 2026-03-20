@@ -39,6 +39,10 @@ from scripts.utils.feature_schema import (
     load_features_meta_for_path,
     meta_matches_features_path,
 )
+from scripts.utils.model_selection import (
+    select_compatible_model,
+    summary_path_for_model as model_summary_path_for_model,
+)
 
 load_env()
 
@@ -254,10 +258,7 @@ def _load_model(path: Path):
 
 
 def _summary_path_for_model(model_path: Path) -> Path | None:
-    match = re.search(r"ranker_(\d{4}-\d{2}-\d{2})", model_path.name)
-    if not match:
-        return None
-    return model_path.parent / f"ranker_summary_{match.group(1)}.json"
+    return model_summary_path_for_model(model_path)
 
 
 def _load_feature_columns_from_summary(model_path: Path) -> list[str]:
@@ -441,15 +442,59 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
 
-    model_path = args.model_path
-    if model_path is None:
-        model_path = _find_latest(BASE_DIR / "data" / "models", "ranker_*.pkl")
-        if model_path is None:
-            LOG.error("No model files found in data/models")
+    features_path = args.features_path
+    features_meta: dict[str, Any] | None = None
+    if db.db_enabled():
+        features_meta = db.fetch_latest_ml_artifact("features")
+        if not features_meta:
+            LOG.error("No features artifacts found in DB (ml_artifacts: features)")
             return 1
+    else:
+        if features_path is None:
+            features_path = _find_latest(BASE_DIR / "data" / "features", "features_*.csv")
+            if features_path is None:
+                LOG.error("No features files found in data/features")
+                return 1
+
+    features_meta_payload, features_meta_source = load_features_meta_for_path(
+        features_path,
+        base_dir=BASE_DIR,
+        prefer_db=bool(db.db_enabled()),
+    )
+    selected_model_path, model_selection = select_compatible_model(
+        BASE_DIR / "data" / "models",
+        features_meta_payload,
+        requested_model_path=args.model_path,
+    )
     LOG.info(
-        "[INFO] RANKER_PREDICT_MODEL_SELECTED path=%s",
+        "[INFO] RANKER_PREDICT_MODEL_CANDIDATES total=%s compatible=%s selection_mode=%s features_feature_set=%s features_feature_signature=%s",
+        int(model_selection.get("candidate_count", 0) or 0),
+        int(model_selection.get("compatible_count", 0) or 0),
+        model_selection.get("selection_mode"),
+        model_selection.get("features_feature_set"),
+        model_selection.get("features_feature_signature"),
+    )
+    if selected_model_path is None:
+        LOG.error(
+            "[ERROR] RANKER_PREDICT_MODEL_SELECTION_FATAL reason=%s requested_model_path=%s features_feature_set=%s features_feature_signature=%s candidate_count=%s compatible_count=%s",
+            model_selection.get("reason"),
+            model_selection.get("requested_model_path"),
+            model_selection.get("features_feature_set"),
+            model_selection.get("features_feature_signature"),
+            int(model_selection.get("candidate_count", 0) or 0),
+            int(model_selection.get("compatible_count", 0) or 0),
+        )
+        return 2
+
+    model_path = selected_model_path
+    selected_model_meta = model_selection.get("selected_model_meta") or {}
+    LOG.info(
+        "[INFO] RANKER_PREDICT_MODEL_SELECTED path=%s artifact_date=%s selection_mode=%s feature_set=%s feature_signature=%s",
         model_path,
+        selected_model_meta.get("artifact_date"),
+        model_selection.get("selection_mode"),
+        selected_model_meta.get("feature_set"),
+        selected_model_meta.get("feature_signature"),
     )
 
     LOG.info("Loading model from %s", model_path)
@@ -506,13 +551,7 @@ def main(argv: list[str] | None = None) -> int:
         calibration_method,
     )
 
-    features_path = args.features_path
-    features_meta: dict[str, Any] | None = None
     if db.db_enabled():
-        features_meta = db.fetch_latest_ml_artifact("features")
-        if not features_meta:
-            LOG.error("No features artifacts found in DB (ml_artifacts: features)")
-            return 1
         LOG.info("Loading features from DB (ml_artifacts: features)")
         try:
             features_df, missing_stats = _normalize_features_frame(
@@ -522,11 +561,6 @@ def main(argv: list[str] | None = None) -> int:
             LOG.error("Failed to load features from DB: %s", exc)
             return 1
     else:
-        if features_path is None:
-            features_path = _find_latest(BASE_DIR / "data" / "features", "features_*.csv")
-            if features_path is None:
-                LOG.error("No features files found in data/features")
-                return 1
         LOG.info("Loading features from %s", features_path)
         try:
             features_df, missing_stats = _load_features(
@@ -559,11 +593,6 @@ def main(argv: list[str] | None = None) -> int:
         LOG.error("Features input has no usable rows after symbol scope filtering")
         return 1
 
-    features_meta_payload, features_meta_source = load_features_meta_for_path(
-        features_path,
-        base_dir=BASE_DIR,
-        prefer_db=bool(db.db_enabled()),
-    )
     if (
         features_path is not None
         and features_meta_payload
@@ -657,6 +686,8 @@ def main(argv: list[str] | None = None) -> int:
     model_mtime_utc = _mtime_iso(model_path)
     predictions_meta: dict[str, Any] = {
         "model_path": str(model_path),
+        "model_artifact_date": selected_model_meta.get("artifact_date"),
+        "model_selection_mode": model_selection.get("selection_mode"),
         "model_mtime_utc": model_mtime_utc,
         "model_feature_set": model_feature_set,
         "model_feature_signature": resolved_model_feature_signature,

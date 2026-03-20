@@ -42,6 +42,7 @@ from scripts.utils.ml_health_guard import (
     load_latest_ml_health,
     resolve_ml_health_max_age_days,
 )
+from scripts.utils.model_selection import load_model_artifact_meta, select_compatible_model
 from scripts.utils.prediction_freshness import evaluate_predictions_freshness
 from scripts.utils.feature_schema import compute_feature_signature, load_features_meta_for_path
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
@@ -2729,6 +2730,42 @@ def _inject_run_date_arg(args: list[str], run_date: date | None) -> list[str]:
     return cleaned
 
 
+def _coerce_date_value(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except Exception:
+        return None
+
+
+def _append_reason_tag(reason: str, tag: str) -> str:
+    normalized_reason = str(reason or "").strip()
+    normalized_tag = str(tag or "").strip()
+    if not normalized_tag:
+        return normalized_reason or "fresh"
+    tags = [part.strip() for part in normalized_reason.split(",") if part.strip()]
+    if normalized_tag not in tags:
+        tags.append(normalized_tag)
+    return ",".join(tags) if tags else "fresh"
+
+
+def _prediction_snapshot_date(predictions_meta: Mapping[str, Any] | None) -> date | None:
+    payload = dict(predictions_meta or {})
+    for key in ("snapshot_date", "run_date", "as_of_date"):
+        resolved = _coerce_date_value(payload.get(key))
+        if resolved is not None:
+            return resolved
+    return None
+
+
 def _write_refresh_metrics(metrics_path: Path) -> None:
     payload: dict[str, Any] = {
         "last_run_utc": datetime.now(timezone.utc).isoformat(),
@@ -3137,76 +3174,25 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return model_path.parent / f"ranker_summary_{match.group(1)}.json"
 
     def _latest_model_meta() -> dict[str, Any]:
-        latest_model = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
-        if latest_model is None:
+        features_meta, _ = _load_features_meta()
+        selected_model, selection = select_compatible_model(
+            base_dir / "data" / "models",
+            features_meta,
+        )
+        if selected_model is None:
             return {
                 "model_path": None,
                 "model_mtime_utc": None,
                 "feature_set": None,
                 "feature_signature": None,
                 "feature_count": 0,
+                "selection_reason": selection.get("reason"),
+                "selection_mode": selection.get("selection_mode"),
             }
-        try:
-            model_mtime_utc = datetime.fromtimestamp(
-                latest_model.stat().st_mtime, timezone.utc
-            ).isoformat()
-        except Exception:
-            model_mtime_utc = None
-        feature_set = None
-        feature_signature_stored = None
-        feature_columns: list[str] = []
-        summary_path = _summary_path_for_model(latest_model)
-        if summary_path is not None and summary_path.exists():
-            try:
-                summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
-            except Exception:
-                summary_payload = {}
-            if isinstance(summary_payload, Mapping):
-                feature_set = str(summary_payload.get("feature_set") or "").strip().lower() or None
-                feature_signature_stored = (
-                    str(summary_payload.get("feature_signature") or "").strip() or None
-                )
-                summary_cols = summary_payload.get("feature_columns")
-                if isinstance(summary_cols, list):
-                    feature_columns = [str(c).strip() for c in summary_cols if str(c).strip()]
-        try:
-            import joblib  # type: ignore
-
-            payload = joblib.load(latest_model)
-            if isinstance(payload, Mapping):
-                payload_set = str(payload.get("feature_set") or "").strip().lower() or None
-                if payload_set:
-                    feature_set = payload_set
-                payload_signature = str(payload.get("feature_signature") or "").strip() or None
-                if payload_signature:
-                    feature_signature_stored = payload_signature
-                payload_cols = payload.get("feature_columns")
-                if isinstance(payload_cols, list):
-                    cleaned = [str(c).strip() for c in payload_cols if str(c).strip()]
-                    if cleaned:
-                        feature_columns = cleaned
-        except Exception:
-            pass
-        computed_signature = compute_feature_signature(feature_columns) if feature_columns else None
-        if (
-            feature_signature_stored
-            and computed_signature
-            and feature_signature_stored != computed_signature
-        ):
-            LOG.warning(
-                "[WARN] MODEL_FEATURE_SIGNATURE_MISMATCH stored=%s computed=%s model_path=%s",
-                feature_signature_stored,
-                computed_signature,
-                latest_model,
-            )
-        resolved_signature = computed_signature or feature_signature_stored
-        return {
-            "model_path": str(latest_model),
-            "model_mtime_utc": model_mtime_utc,
-            "feature_set": feature_set,
-            "feature_signature": resolved_signature,
-            "feature_count": int(len(feature_columns)),
-        }
+        resolved = dict(load_model_artifact_meta(selected_model))
+        resolved["selection_reason"] = selection.get("reason")
+        resolved["selection_mode"] = selection.get("selection_mode")
+        return resolved
 
     def _load_features_meta() -> tuple[dict[str, Any], str]:
         return load_features_meta_for_path(
@@ -3221,6 +3207,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         model_path = str(model_meta.get("model_path") or "").strip() or None
         model_feature_set = str(model_meta.get("feature_set") or "").strip().lower() or None
         model_feature_signature = str(model_meta.get("feature_signature") or "").strip() or None
+        model_selection_reason = str(model_meta.get("selection_reason") or "").strip() or None
         features_feature_set = str(features_meta.get("feature_set") or "").strip().lower() or None
         meta_feature_signature = str(features_meta.get("feature_signature") or "").strip() or None
         features_columns = features_meta.get("feature_columns")
@@ -3246,6 +3233,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if not features_meta:
             stale = True
             reason = "features_meta_missing"
+        elif not model_path:
+            stale = True
+            reason = model_selection_reason or "compatible_model_missing"
         elif not model_feature_signature:
             stale = True
             reason = "model_signature_missing"
@@ -3287,9 +3277,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     def _load_predictions_meta() -> tuple[dict[str, Any], str]:
         if db.db_enabled():
-            payload = db.load_ml_artifact_payload("predictions")
+            record = db.fetch_latest_ml_artifact("predictions")
+            payload = record.get("payload") if isinstance(record, Mapping) else None
             if isinstance(payload, Mapping) and payload:
-                return dict(payload), "db"
+                merged = dict(payload)
+                if record:
+                    run_date_value = _coerce_date_value(record.get("run_date"))
+                    created_at_value = record.get("created_at")
+                    if run_date_value is not None and not merged.get("run_date"):
+                        merged["run_date"] = run_date_value.isoformat()
+                    if created_at_value is not None and not merged.get("created_at"):
+                        merged["created_at"] = (
+                            created_at_value.isoformat()
+                            if isinstance(created_at_value, datetime)
+                            else str(created_at_value)
+                        )
+                    if record.get("source") and not merged.get("source"):
+                        merged["source"] = record.get("source")
+                    if record.get("file_name") and not merged.get("file_name"):
+                        merged["file_name"] = record.get("file_name")
+                return merged, "db"
         meta_path = base_dir / "data" / "predictions" / "latest_meta.json"
         if meta_path.exists():
             try:
@@ -3384,40 +3391,115 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     def _ensure_predictions_freshness(context: str) -> dict[str, Any]:
         predict_rc: int | None = None
-        model_meta = _latest_model_meta()
-        features_meta, _ = _load_features_meta()
-        predictions_meta, predictions_meta_source = _load_predictions_meta()
-        stale, reason, freshness_details = evaluate_predictions_freshness(
-            model_meta,
-            features_meta,
-            predictions_meta,
-            strict_meta=bool(strict_predictions_meta),
-        )
-        model_path = str(model_meta.get("model_path") or "")
-        pred_model_path = str(predictions_meta.get("model_path") or "")
-        latest_features_set = str(freshness_details.get("latest_features_feature_set") or "")
-        latest_features_signature = str(
-            freshness_details.get("latest_features_feature_signature") or ""
-        )
-        pred_features_set = str(freshness_details.get("predictions_feature_set") or "")
-        pred_features_signature = str(freshness_details.get("predictions_feature_signature") or "")
-        pred_compatible = freshness_details.get("pred_compatible")
-        pred_missing_frac = freshness_details.get("pred_missing_frac")
-        pred_compat_reason = str(freshness_details.get("pred_compat_reason") or "")
-        LOG.info(
-            "[INFO] PREDICTIONS_FRESHNESS stale=%s reason=%s model_path=%s pred_model_path=%s latest_features_set=%s latest_features_signature=%s pred_features_set=%s pred_features_signature=%s pred_compatible=%s pred_missing_frac=%s pred_compat_reason=%s",
-            str(bool(stale)).lower(),
-            reason,
-            model_path or None,
-            pred_model_path or None,
-            latest_features_set or None,
-            latest_features_signature or None,
-            pred_features_set or None,
-            pred_features_signature or None,
-            pred_compatible,
-            pred_missing_frac,
-            pred_compat_reason or None,
-        )
+        model_meta: dict[str, Any] = {}
+        predictions_meta: dict[str, Any] = {}
+        predictions_meta_source = "missing"
+        model_path = ""
+        pred_model_path = ""
+        latest_features_set = ""
+        latest_features_signature = ""
+        pred_features_set = ""
+        pred_features_signature = ""
+        pred_compatible: Any = None
+        pred_missing_frac: Any = None
+        pred_compat_reason = ""
+        snapshot_date: date | None = None
+        snapshot_lag_days: int | None = None
+        stale = False
+        reason = "fresh"
+
+        def _refresh_prediction_state() -> tuple[dict[str, Any], dict[str, Any], str, bool, str]:
+            nonlocal model_meta
+            nonlocal predictions_meta
+            nonlocal predictions_meta_source
+            nonlocal model_path
+            nonlocal pred_model_path
+            nonlocal latest_features_set
+            nonlocal latest_features_signature
+            nonlocal pred_features_set
+            nonlocal pred_features_signature
+            nonlocal pred_compatible
+            nonlocal pred_missing_frac
+            nonlocal pred_compat_reason
+            nonlocal snapshot_date
+            nonlocal snapshot_lag_days
+
+            model_meta = _latest_model_meta()
+            features_meta, _ = _load_features_meta()
+            predictions_meta, predictions_meta_source = _load_predictions_meta()
+            stale_value, reason_value, freshness_details = evaluate_predictions_freshness(
+                model_meta,
+                features_meta,
+                predictions_meta,
+                strict_meta=bool(strict_predictions_meta),
+            )
+            snapshot_date = _prediction_snapshot_date(predictions_meta)
+            snapshot_lag_days = None
+            if snapshot_date is not None:
+                snapshot_lag_days = (pipeline_run_date - snapshot_date).days
+                if snapshot_lag_days > 1:
+                    stale_value = True
+                    reason_value = _append_reason_tag(reason_value, "snapshot_date_lag")
+            freshness_details["prediction_snapshot_date"] = (
+                snapshot_date.isoformat() if snapshot_date is not None else None
+            )
+            freshness_details["prediction_snapshot_lag_days"] = snapshot_lag_days
+            freshness_details["pipeline_run_date"] = pipeline_run_date.isoformat()
+            freshness_details["predictions_meta_source"] = predictions_meta_source
+            model_path = str(model_meta.get("model_path") or "")
+            pred_model_path = str(predictions_meta.get("model_path") or "")
+            latest_features_set = str(freshness_details.get("latest_features_feature_set") or "")
+            latest_features_signature = str(
+                freshness_details.get("latest_features_feature_signature") or ""
+            )
+            pred_features_set = str(freshness_details.get("predictions_feature_set") or "")
+            pred_features_signature = str(
+                freshness_details.get("predictions_feature_signature") or ""
+            )
+            pred_compatible = freshness_details.get("pred_compatible")
+            pred_missing_frac = freshness_details.get("pred_missing_frac")
+            pred_compat_reason = str(freshness_details.get("pred_compat_reason") or "")
+            return freshness_details, features_meta, predictions_meta_source, stale_value, reason_value
+
+        def _log_prediction_state(*, stale_value: bool, reason_value: str) -> None:
+            LOG.info(
+                "[INFO] PREDICTIONS_SNAPSHOT_FRESHNESS context=%s pipeline_run_date=%s snapshot_date=%s lag_days=%s max_lag_days=%s source=%s stale=%s reason=%s",
+                context,
+                pipeline_run_date.isoformat(),
+                snapshot_date.isoformat() if snapshot_date is not None else None,
+                snapshot_lag_days,
+                1,
+                predictions_meta_source,
+                str(bool(stale_value)).lower(),
+                reason_value,
+            )
+            LOG.info(
+                "[INFO] PREDICTIONS_FRESHNESS stale=%s reason=%s model_path=%s pred_model_path=%s latest_features_set=%s latest_features_signature=%s pred_features_set=%s pred_features_signature=%s pred_compatible=%s pred_missing_frac=%s pred_compat_reason=%s",
+                str(bool(stale_value)).lower(),
+                reason_value,
+                model_path or None,
+                pred_model_path or None,
+                latest_features_set or None,
+                latest_features_signature or None,
+                pred_features_set or None,
+                pred_features_signature or None,
+                pred_compatible,
+                pred_missing_frac,
+                pred_compat_reason or None,
+            )
+            if snapshot_lag_days is not None and snapshot_lag_days > 1:
+                LOG.error(
+                    "[ERROR] PREDICTIONS_SNAPSHOT_STALE context=%s pipeline_run_date=%s snapshot_date=%s lag_days=%s max_lag_days=%s source=%s",
+                    context,
+                    pipeline_run_date.isoformat(),
+                    snapshot_date.isoformat() if snapshot_date is not None else None,
+                    snapshot_lag_days,
+                    1,
+                    predictions_meta_source,
+                )
+
+        _, _, _, stale, reason = _refresh_prediction_state()
+        _log_prediction_state(stale_value=stale, reason_value=reason)
         if stale:
             LOG.warning("[WARN] PREDICTIONS_STALE reason=%s suggestion=run ranker_predict", reason)
             if auto_refresh_predictions and not freshness_state.get("refresh_attempted"):
@@ -3492,44 +3574,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     _predictions_source_state(base_dir),
                 )
                 LOG.info("[INFO] AUTO_REFRESH_PREDICTIONS_DONE rc=%s", rc_predict)
-                model_meta = _latest_model_meta()
-                features_meta, _ = _load_features_meta()
-                predictions_meta, predictions_meta_source = _load_predictions_meta()
-                stale, reason, freshness_details = evaluate_predictions_freshness(
-                    model_meta,
-                    features_meta,
-                    predictions_meta,
-                    strict_meta=bool(strict_predictions_meta),
-                )
-                model_path = str(model_meta.get("model_path") or "")
-                pred_model_path = str(predictions_meta.get("model_path") or "")
-                latest_features_set = str(
-                    freshness_details.get("latest_features_feature_set") or ""
-                )
-                latest_features_signature = str(
-                    freshness_details.get("latest_features_feature_signature") or ""
-                )
-                pred_features_set = str(freshness_details.get("predictions_feature_set") or "")
-                pred_features_signature = str(
-                    freshness_details.get("predictions_feature_signature") or ""
-                )
-                pred_compatible = freshness_details.get("pred_compatible")
-                pred_missing_frac = freshness_details.get("pred_missing_frac")
-                pred_compat_reason = str(freshness_details.get("pred_compat_reason") or "")
-                LOG.info(
-                    "[INFO] PREDICTIONS_FRESHNESS stale=%s reason=%s model_path=%s pred_model_path=%s latest_features_set=%s latest_features_signature=%s pred_features_set=%s pred_features_signature=%s pred_compatible=%s pred_missing_frac=%s pred_compat_reason=%s",
-                    str(bool(stale)).lower(),
-                    reason,
-                    model_path or None,
-                    pred_model_path or None,
-                    latest_features_set or None,
-                    latest_features_signature or None,
-                    pred_features_set or None,
-                    pred_features_signature or None,
-                    pred_compatible,
-                    pred_missing_frac,
-                    pred_compat_reason or None,
-                )
+                _, _, _, stale, reason = _refresh_prediction_state()
+                _log_prediction_state(stale_value=stale, reason_value=reason)
                 if stale and any(
                     token in str(reason or "")
                     for token in (
@@ -3548,12 +3594,31 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             rc_value = step_rcs.get("ranker_predict")
             if isinstance(rc_value, int):
                 predict_rc = rc_value
+        if context == "ranker_eval" and stale:
+            LOG.error(
+                "[ERROR] RANKER_EVAL_STALE_PREDICTIONS pipeline_run_date=%s snapshot_date=%s lag_days=%s reason=%s predict_rc=%s source=%s",
+                pipeline_run_date.isoformat(),
+                snapshot_date.isoformat() if snapshot_date is not None else None,
+                snapshot_lag_days,
+                reason,
+                predict_rc,
+                predictions_meta_source,
+            )
+            raise RuntimeError(
+                "ranker_eval blocked: stale prediction inputs "
+                f"(pipeline_run_date={pipeline_run_date.isoformat()} "
+                f"snapshot_date={snapshot_date.isoformat() if snapshot_date is not None else 'missing'} "
+                f"lag_days={snapshot_lag_days} reason={reason})"
+            )
         return {
             "stale": bool(stale),
             "reason": reason,
             "model_path": model_path or None,
             "pred_model_path": pred_model_path or None,
             "predictions_meta_source": predictions_meta_source,
+            "snapshot_date": snapshot_date.isoformat() if snapshot_date is not None else None,
+            "snapshot_lag_days": snapshot_lag_days,
+            "pipeline_run_date": pipeline_run_date.isoformat(),
             "latest_features_set": latest_features_set or None,
             "latest_features_signature": latest_features_signature or None,
             "pred_features_set": pred_features_set or None,
