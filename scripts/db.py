@@ -1408,6 +1408,50 @@ def fetch_latest_screener_candidate_count() -> tuple[int, Optional[date]]:
             pass
 
 
+def fetch_top_candidate_count(run_date: Any | None = None) -> tuple[int, Optional[date]]:
+    conn = _conn_or_none()
+    if conn is None:
+        return 0, None
+    try:
+        with conn.cursor() as cursor:
+            if run_date is None:
+                cursor.execute(
+                    """
+                    WITH latest_date AS (
+                        SELECT MAX(run_date) AS run_date
+                        FROM top_candidates
+                    )
+                    SELECT d.run_date, COUNT(*) AS row_count
+                    FROM top_candidates t
+                    JOIN latest_date d ON t.run_date = d.run_date
+                    GROUP BY d.run_date
+                    """
+                )
+            else:
+                run_date_value = _coerce_date(run_date)
+                cursor.execute(
+                    """
+                    SELECT run_date, COUNT(*) AS row_count
+                    FROM top_candidates
+                    WHERE run_date = %(run_date)s
+                    GROUP BY run_date
+                    """,
+                    {"run_date": run_date_value},
+                )
+            row = cursor.fetchone()
+        if not row:
+            return 0, None
+        return int(row[1] or 0), row[0]
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_READ_FAILED table=top_candidates err=%s", exc)
+        return 0, None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def fetch_latest_screener_candidates(
     limit: int | None = None,
 ) -> tuple[pd.DataFrame, Optional[date]]:
@@ -1788,9 +1832,19 @@ def ensure_latest_screener_candidates_view() -> None:
                 cursor.execute(
                     """
                     CREATE OR REPLACE VIEW latest_screener_candidates AS
-                    SELECT *
-                    FROM screener_candidates
-                    WHERE run_date = (SELECT MAX(run_date) FROM screener_candidates)
+                    WITH latest_date AS (
+                        SELECT MAX(run_date) AS run_date
+                        FROM screener_candidates
+                    ), latest_run AS (
+                        SELECT COALESCE(MAX(c.run_ts_utc), MAX(c.created_at)) AS latest_run_ts
+                        FROM screener_candidates c
+                        JOIN latest_date d ON c.run_date = d.run_date
+                    )
+                    SELECT c.*
+                    FROM screener_candidates c
+                    JOIN latest_date d ON c.run_date = d.run_date
+                    JOIN latest_run r
+                      ON COALESCE(c.run_ts_utc, c.created_at) = r.latest_run_ts
                     """
                 )
     except Exception as exc:  # pragma: no cover - defensive logging

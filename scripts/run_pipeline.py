@@ -659,10 +659,12 @@ def _should_write_candidate_csvs() -> bool:
 def compose_metrics_from_artifacts(
     base_dir: Path,
     *,
+    run_date: date | None = None,
     symbols_in: int | None = None,
     fallback_symbols_with_bars: int | None = None,
     fallback_bars_rows_total: int | None = None,
     latest_source: str | None = None,
+    final_rows_source: str = "screener_candidates",
 ) -> dict[str, Any]:
     base = Path(base_dir)
     data_dir = base / "data"
@@ -674,8 +676,12 @@ def compose_metrics_from_artifacts(
     latest_rows = 0
     scored_rows = 0
     db_rows: int | None = None
+    resolved_rows_source = str(final_rows_source or "screener_candidates").strip().lower()
     if db.db_enabled():
-        db_rows, _ = db.fetch_latest_screener_candidate_count()
+        if resolved_rows_source == "top_candidates":
+            db_rows, _ = db.fetch_top_candidate_count(run_date=run_date)
+        else:
+            db_rows, _ = db.fetch_latest_screener_candidate_count()
         rows_final = int(db_rows or 0)
     else:
         rows_final = _count_rows(data_dir / "top_candidates.csv")
@@ -686,7 +692,11 @@ def compose_metrics_from_artifacts(
         existing_metrics.get("rows_out")
     )
     if metrics_rows is not None:
-        rows_final = max(rows_final, metrics_rows)
+        if resolved_rows_source == "top_candidates":
+            if rows_final <= 0:
+                rows_final = int(metrics_rows)
+        else:
+            rows_final = max(rows_final, metrics_rows)
     if rows_final == 0 and post_stats:
         hinted = _coerce_optional_int(post_stats.get("candidates_final"))
         if hinted:
@@ -793,6 +803,7 @@ def compose_metrics_from_artifacts(
         else None,
         "rows": int(rows_final),
         "rows_premetrics": int(rows_final),
+        "rows_source": resolved_rows_source,
         "latest_source": latest_source or "unknown",
         "metrics_version": 2,
     }
@@ -1274,17 +1285,34 @@ def _prepare_predictions_frame(
     return _normalize_predictions_frame(df, score_column)
 
 
+def _predictions_glob_for_artifact(artifact_type: str) -> str:
+    if str(artifact_type or "").strip().lower() == "predictions_scoped":
+        return "predictions_scoped_*.csv"
+    return "predictions_*.csv"
+
+
 def _load_latest_predictions_frame(
-    base_dir: Path, score_column: str = DEFAULT_RANKER_SCORE_COLUMN
+    base_dir: Path,
+    score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
+    artifact_type: str = "predictions",
 ) -> tuple[pd.DataFrame, str]:
     if db.db_enabled():
-        predictions = db.load_ml_artifact_csv("predictions")
+        predictions = db.load_ml_artifact_csv(artifact_type)
         if predictions.empty:
-            return pd.DataFrame(columns=["symbol", score_column, "score_ts"]), "db:missing"
-        return _normalize_predictions_frame(predictions, score_column), "db"
-    predictions_path = _find_latest_predictions_path(base_dir)
+            return (
+                pd.DataFrame(columns=["symbol", score_column, "score_ts"]),
+                f"db:{artifact_type}:missing",
+            )
+        return _normalize_predictions_frame(predictions, score_column), f"db:{artifact_type}"
+    predictions_path = _latest_by_glob(
+        base_dir / "data" / "predictions",
+        _predictions_glob_for_artifact(artifact_type),
+    )
     if predictions_path is None:
-        return pd.DataFrame(columns=["symbol", score_column, "score_ts"]), "file:missing"
+        return (
+            pd.DataFrame(columns=["symbol", score_column, "score_ts"]),
+            f"file:{artifact_type}:missing",
+        )
     return _prepare_predictions_frame(predictions_path, score_column), str(predictions_path)
 
 
@@ -1334,6 +1362,8 @@ def _enrich_candidates_with_ranker(
     *,
     score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
     target_column: str = DEFAULT_RANKER_TARGET_COLUMN,
+    predictions_artifact_type: str = "predictions",
+    predictions_freshness: Mapping[str, Any] | None = None,
     refresh_predictions_for_candidates: bool = False,
     refresh_predictions_callback: Any = None,
     _refresh_attempted: bool = False,
@@ -1548,7 +1578,11 @@ def _enrich_candidates_with_ranker(
             "db:unknown" if db.db_enabled() else "file:unknown",
         )
         return
-    predictions, predictions_source = _load_latest_predictions_frame(base, score_column)
+    predictions, predictions_source = _load_latest_predictions_frame(
+        base,
+        score_column,
+        artifact_type=predictions_artifact_type,
+    )
     if predictions.empty:
         if db.db_enabled():
             run_ts_utc = _extract_candidate_run_ts(candidates)
@@ -1588,6 +1622,26 @@ def _enrich_candidates_with_ranker(
             run_ts_utc=run_ts_utc,
             run_date=run_date,
         )
+        predictions_are_fresh = (
+            isinstance(predictions_freshness, Mapping)
+            and not bool(predictions_freshness.get("stale"))
+        )
+        overlap_count = int(overlap_diag.get("overlap_count") or 0)
+        if predictions_are_fresh and overlap_count <= 0:
+            freshness_reason = (
+                str(predictions_freshness.get("reason") or "fresh").strip() or "fresh"
+            )
+            LOG.error(
+                "[ERROR] CANDIDATES_PREDICTION_OVERLAP_FATAL reason=fresh_predictions_zero_overlap predictions_source=%s artifact_type=%s candidates=%s prediction_symbols=%s run_ts_utc=%s run_date=%s freshness_reason=%s",
+                predictions_source,
+                predictions_artifact_type,
+                int(len(candidates.index)),
+                int(overlap_diag.get("prediction_symbol_count") or 0),
+                run_ts_utc.isoformat() if run_ts_utc is not None else None,
+                run_date.isoformat() if run_date is not None else None,
+                freshness_reason,
+            )
+            raise RuntimeError("fresh_predictions_zero_overlap")
         scores_rows_for_run = int(
             renamed.loc[renamed["symbol"].isin(candidate_symbol_set), target_column].notna().sum()
         )
@@ -1671,6 +1725,11 @@ def _enrich_candidates_with_ranker(
                         base,
                         score_column=score_column,
                         target_column=target_column,
+                        predictions_artifact_type="predictions_scoped",
+                        predictions_freshness={
+                            "stale": False,
+                            "reason": "candidate_scoped_refresh",
+                        },
                         refresh_predictions_for_candidates=refresh_predictions_for_candidates,
                         refresh_predictions_callback=refresh_predictions_callback,
                         _refresh_attempted=True,
@@ -2488,7 +2547,12 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
     return {}
 
 
-def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
+def write_complete_screener_metrics(
+    base_dir: Path,
+    *,
+    run_date: date | None = None,
+    final_rows_source: str = "screener_candidates",
+) -> dict[str, Any]:
     """Ensure ``screener_metrics.json`` contains integer KPIs even on fallback nights."""
 
     base_dir = Path(base_dir)
@@ -2568,10 +2632,12 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
 
     metrics = compose_metrics_from_artifacts(
         base_dir,
+        run_date=run_date,
         symbols_in=fallback_hint.get("symbols_in"),
         fallback_symbols_with_bars=fallback_hint.get("symbols_with_bars"),
         fallback_bars_rows_total=fallback_hint.get("bars_rows_total"),
         latest_source=fallback_hint.get("latest_source"),
+        final_rows_source=final_rows_source,
     )
     if existing_last_run:
         metrics["last_run_utc"] = existing_last_run
@@ -4676,6 +4742,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     base_dir=base_dir,
                     score_column=DEFAULT_RANKER_SCORE_COLUMN,
                     target_column=DEFAULT_RANKER_TARGET_COLUMN,
+                    predictions_freshness=enrichment_freshness,
                     refresh_predictions_for_candidates=refresh_predictions_for_candidates,
                     refresh_predictions_callback=_run_candidate_scoped_prediction_refresh,
                 )
@@ -4765,12 +4832,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if screener_rc not in (0, None) and (summary_rows or 0) > 0:
             summary_source = "fallback"
         metrics_path = base_dir / "data" / "screener_metrics.json"
+        final_rows_source = "top_candidates" if "metrics" in steps else "screener_candidates"
         metrics_payload = compose_metrics_from_artifacts(
             base_dir,
+            run_date=pipeline_run_date,
             symbols_in=symbols_in,
             fallback_symbols_with_bars=symbols_with_bars,
             fallback_bars_rows_total=bars_rows_total,
             latest_source=summary_source,
+            final_rows_source=final_rows_source,
         )
         if isinstance(ml_health_summary, Mapping):
             metrics_payload["ml_health"] = dict(ml_health_summary)
@@ -4784,6 +4854,31 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             LOG.exception("SCREENER_METRICS_WRITE_FAILED path=%s", metrics_path)
         metrics_final = ensure_canonical_metrics(_read_json(metrics_path))
         candidates_final = int(metrics_final.get("rows", 0))
+        if db.db_enabled() and final_rows_source == "top_candidates":
+            top_rows, top_run_date = db.fetch_top_candidate_count(run_date=pipeline_run_date)
+            top_rows = int(top_rows or 0)
+            if top_rows != candidates_final:
+                rc = 1
+                if error_info is None:
+                    error_info = {
+                        "step": "pipeline",
+                        "message": "final_candidate_parity_mismatch",
+                        "metrics_rows": int(candidates_final),
+                        "db_top_rows": int(top_rows),
+                        "run_date": str(top_run_date or pipeline_run_date),
+                    }
+                LOG.error(
+                    "[ERROR] FINAL_CANDIDATE_PARITY_FATAL run_date=%s metrics_rows=%s db_top_rows=%s",
+                    top_run_date or pipeline_run_date,
+                    int(candidates_final),
+                    int(top_rows),
+                )
+            else:
+                LOG.info(
+                    "[INFO] FINAL_CANDIDATE_PARITY rows=%s source=top_candidates run_date=%s",
+                    int(top_rows),
+                    top_run_date or pipeline_run_date,
+                )
         bars_rows_total_int = int(metrics_final.get("bars_rows_total", 0) or 0)
         with_bars_effective = int(metrics_final.get("symbols_with_required_bars", 0) or 0)
         with_bars_any = int(metrics_final.get("symbols_with_any_bars", with_bars_effective) or 0)
@@ -4841,7 +4936,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         rows_for_stamp = 0
         try:
             if rc != 0:
-                kpis = write_complete_screener_metrics(base_dir)
+                kpis = write_complete_screener_metrics(
+                    base_dir,
+                    run_date=pipeline_run_date,
+                    final_rows_source=final_rows_source,
+                )
             else:
                 kpis = metrics_final
             rows_for_stamp = int(kpis.get("rows") or 0)

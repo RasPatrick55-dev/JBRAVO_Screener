@@ -592,6 +592,14 @@ def main(argv: list[str] | None = None) -> int:
     if features_df.empty:
         LOG.error("Features input has no usable rows after symbol scope filtering")
         return 1
+    prediction_scope = "scoped" if symbol_scope else "full"
+    symbol_scope_count = int(len(symbol_scope))
+    LOG.info(
+        "[INFO] RANKER_PREDICT_SCOPE mode=%s symbols=%d path=%s",
+        prediction_scope,
+        symbol_scope_count,
+        symbol_scope_path,
+    )
 
     if (
         features_path is not None
@@ -680,7 +688,13 @@ def main(argv: list[str] | None = None) -> int:
         snapshot_date = _extract_features_date(features_path)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"predictions_{snapshot_date}.csv"
+    artifact_type = "predictions_scoped" if symbol_scope else "predictions"
+    output_name = (
+        f"predictions_scoped_{snapshot_date}.csv"
+        if symbol_scope
+        else f"predictions_{snapshot_date}.csv"
+    )
+    output_path = output_dir / output_name
     output_df.to_csv(output_path, index=False)
 
     model_mtime_utc = _mtime_iso(model_path)
@@ -704,6 +718,9 @@ def main(argv: list[str] | None = None) -> int:
         "model_signature": f"{model_path.name}:{model_mtime_utc or 'unknown'}",
         "predictions_path": str(output_path),
         "snapshot_date": str(snapshot_date),
+        "prediction_scope": prediction_scope,
+        "symbol_scope_count": symbol_scope_count,
+        "symbol_scope_path": symbol_scope_path,
         "rows": int(len(output_df.index)),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "feature_compat": {
@@ -741,7 +758,9 @@ def main(argv: list[str] | None = None) -> int:
         len(output_df),
         float(output_df["score_5d"].mean()) if not output_df.empty else 0.0,
     )
-    meta_sidecar = output_dir / "latest_meta.json"
+    meta_sidecar = output_dir / (
+        "latest_scoped_meta.json" if symbol_scope else "latest_meta.json"
+    )
     if _write_predictions_meta(meta_sidecar, predictions_meta):
         LOG.info(
             "[INFO] PREDICTIONS_META_WRITTEN source=fs model_path=%s model_mtime_utc=%s calibrated=%s method=%s feature_set=%s feature_signature=%s feature_meta_source=%s compatible=%s missing_frac=%.6f compat_reason=%s",
@@ -758,7 +777,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if db.db_enabled():
         ok = db.upsert_ml_artifact_frame(
-            "predictions",
+            artifact_type,
             snapshot_date,
             output_df,
             payload=predictions_meta,
@@ -767,7 +786,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if ok:
             LOG.info(
-                "[INFO] PREDICTIONS_DB_WRITTEN run_date=%s rows=%d",
+                "[INFO] PREDICTIONS_DB_WRITTEN artifact_type=%s run_date=%s rows=%d",
+                artifact_type,
                 snapshot_date,
                 len(output_df),
             )
@@ -785,7 +805,11 @@ def main(argv: list[str] | None = None) -> int:
                 reason_text,
             )
         else:
-            LOG.warning("[WARN] PREDICTIONS_DB_WRITE_FAILED run_date=%s", snapshot_date)
+            LOG.warning(
+                "[WARN] PREDICTIONS_DB_WRITE_FAILED artifact_type=%s run_date=%s",
+                artifact_type,
+                snapshot_date,
+            )
     return 0
 
 
