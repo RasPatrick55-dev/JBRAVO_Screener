@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .env
+.env.local
+.env.pythonanywhere.local
 trades.db
 pipeline.log
 assets_backup/
@@ -40,6 +42,7 @@ frontend/tsconfig.tsbuildinfo
 reports/*.json
 docs/ui-reference/*.png
 docs/ui-reference/*.jpg
+.vscode/*.local.json
 
 # Local verification artifacts
 tmp/trades_leaderboard_verify/
