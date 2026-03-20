@@ -1219,7 +1219,9 @@ def run_cmd(cmd: Sequence[str], name: str) -> int:
 
 
 def _should_enrich_candidates(args: argparse.Namespace, steps: Sequence[str]) -> bool:
-    return bool(getattr(args, "enrich_candidates_with_ranker", False))
+    return bool(
+        getattr(args, "enrich_candidates_with_ranker", False) or "ranker_eval" in set(steps)
+    )
 
 
 def _find_latest_predictions_path(base_dir: Path) -> Path | None:
@@ -4005,9 +4007,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     _predictions_source_state(base_dir),
                 )
 
-        if db.db_enabled() and (
-            "ranker_eval" in steps or getattr(args, "enrich_candidates_with_ranker", False)
-        ):
+        if db.db_enabled() and _should_enrich_candidates(args, steps):
             # Let explicit predict step or freshness manager own prediction refresh.
             skip_internal_predict = (
                 "ranker_predict" in steps or auto_refresh_predictions or ml_health_guard_enabled
@@ -4544,7 +4544,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         best.get("cost_bps"),
                     )
 
-        if getattr(args, "enrich_candidates_with_ranker", False):
+        if _should_enrich_candidates(args, steps):
             enrichment_freshness = _ensure_predictions_freshness("enrichment")
             LOG.info(
                 "[INFO] ML_HEALTH_GUARD enabled=%s mode=%s",
