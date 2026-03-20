@@ -1823,6 +1823,7 @@ def upsert_daily_bars_frame(frame: pd.DataFrame | None) -> int:
 
 
 def ensure_latest_screener_candidates_view() -> None:
+    ensure_screener_ranker_scores_app_table()
     conn = _conn_or_none()
     if conn is None:
         return
@@ -1839,12 +1840,21 @@ def ensure_latest_screener_candidates_view() -> None:
                         SELECT COALESCE(MAX(c.run_ts_utc), MAX(c.created_at)) AS latest_run_ts
                         FROM screener_candidates c
                         JOIN latest_date d ON c.run_date = d.run_date
+                    ), latest_rows AS (
+                        SELECT c.*
+                        FROM screener_candidates c
+                        JOIN latest_date d ON c.run_date = d.run_date
+                        JOIN latest_run r
+                          ON COALESCE(c.run_ts_utc, c.created_at) = r.latest_run_ts
                     )
-                    SELECT c.*
-                    FROM screener_candidates c
-                    JOIN latest_date d ON c.run_date = d.run_date
-                    JOIN latest_run r
-                      ON COALESCE(c.run_ts_utc, c.created_at) = r.latest_run_ts
+                    SELECT
+                        lr.*,
+                        rs.model_score_5d AS model_score_5d,
+                        rs.model_score_5d AS model_score
+                    FROM latest_rows lr
+                    LEFT JOIN screener_ranker_scores_app rs
+                      ON rs.run_ts_utc = lr.run_ts_utc
+                     AND UPPER(BTRIM(rs.symbol)) = UPPER(BTRIM(lr.symbol))
                     """
                 )
     except Exception as exc:  # pragma: no cover - defensive logging
@@ -1860,6 +1870,7 @@ def ensure_latest_screener_candidates_view() -> None:
 
 
 def ensure_latest_top_candidates_view() -> None:
+    ensure_screener_ranker_scores_app_table()
     conn = _conn_or_none()
     if conn is None:
         return
@@ -1869,9 +1880,28 @@ def ensure_latest_top_candidates_view() -> None:
                 cursor.execute(
                     """
                     CREATE OR REPLACE VIEW latest_top_candidates AS
-                    SELECT *
-                    FROM top_candidates
-                    WHERE run_date = (SELECT MAX(run_date) FROM top_candidates)
+                    WITH latest_date AS (
+                        SELECT MAX(run_date) AS run_date
+                        FROM top_candidates
+                    ), latest_run AS (
+                        SELECT COALESCE(MAX(c.run_ts_utc), MAX(c.created_at)) AS latest_run_ts
+                        FROM screener_candidates c
+                        JOIN latest_date d ON c.run_date = d.run_date
+                    ), latest_rows AS (
+                        SELECT t.*
+                        FROM top_candidates t
+                        JOIN latest_date d ON t.run_date = d.run_date
+                    )
+                    SELECT
+                        lr.*,
+                        r.latest_run_ts AS run_ts_utc,
+                        rs.model_score_5d AS model_score_5d,
+                        rs.model_score_5d AS model_score
+                    FROM latest_rows lr
+                    LEFT JOIN latest_run r ON TRUE
+                    LEFT JOIN screener_ranker_scores_app rs
+                      ON rs.run_ts_utc = r.latest_run_ts
+                     AND UPPER(BTRIM(rs.symbol)) = UPPER(BTRIM(lr.symbol))
                     """
                 )
     except Exception as exc:  # pragma: no cover - defensive logging
@@ -2558,6 +2588,39 @@ def upsert_top_candidates(
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "top_candidates", 0, exc)
         return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def fetch_view_dataframe(view_name: str) -> pd.DataFrame:
+    normalized_view = str(view_name or "").strip().lower()
+    allowed_views = {"latest_screener_candidates", "latest_top_candidates"}
+    if normalized_view == "latest_screener_candidates":
+        ensure_latest_screener_candidates_view()
+    elif normalized_view == "latest_top_candidates":
+        ensure_latest_top_candidates_view()
+    conn = _conn_or_none()
+    if conn is None:
+        return pd.DataFrame()
+    if normalized_view not in allowed_views:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        logger.warning("[WARN] DB_READ_FAILED view=%s err=unsupported_view", view_name)
+        return pd.DataFrame()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {normalized_view}")
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description or []]
+        return pd.DataFrame(rows, columns=columns)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning("[WARN] DB_READ_FAILED view=%s err=%s", normalized_view, exc)
+        return pd.DataFrame()
     finally:
         try:
             conn.close()

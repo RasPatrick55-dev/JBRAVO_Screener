@@ -21,6 +21,9 @@ timestamp,symbol,score,exchange,close,volume,universe_count,score_breakdown,entr
 - `metrics_daily`: aggregated daily metrics.
 - `order_events` and `trades`: execution and trade lifecycle history.
 - `latest_screener_candidates` / `latest_top_candidates`: canonical read views for current run state.
+  - In DB-first mode these current views also expose `model_score_5d` and
+    `model_score` when the app-owned ranker overlay for the current run is
+    present, so host-side verification can stay on the canonical read path.
 - `screener_ranker_scores_app`: app-owned overlay table keyed by
   `(run_ts_utc, symbol)` with `model_score_5d` from latest ranker predictions
   for DB candidate ranking assist.

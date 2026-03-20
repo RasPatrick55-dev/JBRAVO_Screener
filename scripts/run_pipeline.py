@@ -148,6 +148,7 @@ DEFAULT_LABELS_BARS_PATH = Path("data") / "daily_bars.csv"
 DEFAULT_RANKER_SCORE_COLUMN = "score_5d"
 DEFAULT_RANKER_TARGET_COLUMN = "model_score_5d"
 DEFAULT_ALLOC_WEIGHT_TOP_K = 4
+DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT = 80.0
 DEFAULT_FEATURES_TIMEOUT_SECS = 900
 DEFAULT_RANKER_PREDICT_TIMEOUT_SECS = 900
 DEFAULT_RANKER_EVAL_TIMEOUT_SECS = 180
@@ -816,8 +817,9 @@ def compose_metrics_from_artifacts(
             payload["symbols_attempted_fetch"] = fetch_any_attempted
     elif fetch_symbols_required is not None:
         payload["symbols_attempted_fetch"] = fetch_symbols_required
+    payload["candidates_final"] = int(rows_final)
     if post_stats and "candidates_final" in post_stats:
-        payload["candidates_final"] = _coerce_optional_int(
+        payload["candidates_final_raw"] = _coerce_optional_int(
             post_stats.get("candidates_final")
         ) or int(rows_final)
     return payload
@@ -1795,6 +1797,70 @@ def _enrich_candidates_with_ranker(
             run_ts_utc=run_ts_utc,
             score_col=target_column,
         )
+        candidate_count = int(len(candidates.index))
+        coverage_pct = (
+            float(matched) / float(candidate_count) * 100.0 if candidate_count > 0 else 0.0
+        )
+        if (
+            candidate_count > 0
+            and coverage_pct < DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT
+            and not _refresh_attempted
+            and callable(refresh_predictions_callback)
+            and candidate_symbol_set
+        ):
+            LOG.warning(
+                "[WARN] MODEL_SCORE_COVERAGE_LOW total=%s matched=%s pct=%.2f threshold_pct=%.2f run_ts_utc=%s predictions_source=%s",
+                candidate_count,
+                matched,
+                coverage_pct,
+                DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT,
+                run_ts_utc.isoformat(),
+                predictions_source,
+            )
+            LOG.info(
+                "[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_AUTO symbols=%s reason=low_coverage threshold_pct=%.2f",
+                int(len(candidate_symbol_set)),
+                DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT,
+            )
+            refresh_rc = 1
+            try:
+                refresh_rc = int(refresh_predictions_callback(sorted(candidate_symbol_set)))
+            except Exception:
+                LOG.warning(
+                    "AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES low coverage callback failed",
+                    exc_info=True,
+                )
+                refresh_rc = 1
+            LOG.info(
+                "[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_DONE rc=%s predictions_source=%s",
+                refresh_rc,
+                _predictions_source_state(base),
+            )
+            if refresh_rc == 0:
+                return _enrich_candidates_with_ranker(
+                    base,
+                    score_column=score_column,
+                    target_column=target_column,
+                    predictions_artifact_type="predictions_scoped",
+                    predictions_freshness={
+                        "stale": False,
+                        "reason": "candidate_scoped_refresh_low_coverage",
+                    },
+                    refresh_predictions_for_candidates=refresh_predictions_for_candidates,
+                    refresh_predictions_callback=refresh_predictions_callback,
+                    _refresh_attempted=True,
+                )
+        if candidate_count > 0 and coverage_pct < DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT:
+            LOG.error(
+                "[ERROR] MODEL_SCORE_COVERAGE_FATAL total=%s matched=%s pct=%.2f threshold_pct=%.2f run_ts_utc=%s predictions_source=%s",
+                candidate_count,
+                matched,
+                coverage_pct,
+                DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT,
+                run_ts_utc.isoformat(),
+                predictions_source,
+            )
+            raise RuntimeError("low_model_score_coverage")
         if matched <= 0:
             matched_zero_reason = _classify_matched_zero_subreason(overlap_diag, run_date=run_date)
             if (
@@ -1860,6 +1926,16 @@ def _enrich_candidates_with_ranker(
         LOG.info(
             "[INFO] CANDIDATES_ENRICHED destination=db table=screener_ranker_scores_app rows=%s run_ts_utc=%s",
             written,
+            run_ts_utc.isoformat(),
+        )
+        LOG.info(
+            "[INFO] OVERLAY_ROW_COUNT rows=%s run_ts_utc=%s",
+            written,
+            run_ts_utc.isoformat(),
+        )
+        LOG.info(
+            "[INFO] OVERLAY_NON_NULL_SCORE_COUNT non_null=%s run_ts_utc=%s",
+            matched,
             run_ts_utc.isoformat(),
         )
         return merged
@@ -5084,9 +5160,35 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             LOG.exception("SCREENER_METRICS_WRITE_FAILED path=%s", metrics_path)
         metrics_final = ensure_canonical_metrics(_read_json(metrics_path))
         candidates_final = int(metrics_final.get("rows", 0))
+        metrics_candidates_final = _coerce_optional_int(metrics_final.get("candidates_final"))
         if db.db_enabled() and final_rows_source == "top_candidates":
             top_rows, top_run_date = db.fetch_top_candidate_count(run_date=pipeline_run_date)
             top_rows = int(top_rows or 0)
+            LOG.info(
+                "[INFO] FINAL_CANDIDATE_ROW_COUNT rows=%s source=%s run_date=%s",
+                int(candidates_final),
+                final_rows_source,
+                top_run_date or pipeline_run_date,
+            )
+            screener_view_df = db.fetch_view_dataframe("latest_screener_candidates")
+            top_view_df = db.fetch_view_dataframe("latest_top_candidates")
+            for view_name, view_frame in (
+                ("latest_screener_candidates", screener_view_df),
+                ("latest_top_candidates", top_view_df),
+            ):
+                has_score = "model_score_5d" in view_frame.columns
+                non_null_scores = (
+                    int(pd.to_numeric(view_frame["model_score_5d"], errors="coerce").notna().sum())
+                    if has_score
+                    else 0
+                )
+                LOG.info(
+                    "[INFO] CANONICAL_CURRENT_VIEW_ROW_COUNT view=%s rows=%s has_model_score_5d=%s non_null_model_score_5d=%s",
+                    view_name,
+                    int(len(view_frame.index)),
+                    str(bool(has_score)).lower(),
+                    non_null_scores,
+                )
             if top_rows != candidates_final:
                 rc = 1
                 if error_info is None:
@@ -5107,6 +5209,39 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 LOG.info(
                     "[INFO] FINAL_CANDIDATE_PARITY rows=%s source=top_candidates run_date=%s",
                     int(top_rows),
+                    top_run_date or pipeline_run_date,
+                )
+            top_view_rows = int(len(top_view_df.index))
+            if top_view_rows != top_rows:
+                rc = 1
+                if error_info is None:
+                    error_info = {
+                        "step": "pipeline",
+                        "message": "canonical_view_parity_mismatch",
+                        "db_top_rows": int(top_rows),
+                        "view_rows": int(top_view_rows),
+                        "run_date": str(top_run_date or pipeline_run_date),
+                    }
+                LOG.error(
+                    "[ERROR] CANDIDATE_PARITY_MISMATCH reason=latest_top_candidates_vs_top_candidates db_top_rows=%s canonical_rows=%s run_date=%s",
+                    int(top_rows),
+                    int(top_view_rows),
+                    top_run_date or pipeline_run_date,
+                )
+            if metrics_candidates_final is not None and metrics_candidates_final != top_view_rows:
+                rc = 1
+                if error_info is None:
+                    error_info = {
+                        "step": "pipeline",
+                        "message": "candidates_final_mismatch",
+                        "metrics_candidates_final": int(metrics_candidates_final),
+                        "canonical_rows": int(top_view_rows),
+                        "run_date": str(top_run_date or pipeline_run_date),
+                    }
+                LOG.error(
+                    "[ERROR] CANDIDATE_PARITY_MISMATCH reason=candidates_final_vs_latest_top_candidates metrics_candidates_final=%s canonical_rows=%s run_date=%s",
+                    int(metrics_candidates_final),
+                    int(top_view_rows),
                     top_run_date or pipeline_run_date,
                 )
         bars_rows_total_int = int(metrics_final.get("bars_rows_total", 0) or 0)
