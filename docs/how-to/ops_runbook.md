@@ -139,7 +139,9 @@ bash bin/run_premarket_once.sh --dry-run
 - For repeated valid occurrences, the last choice wins. Every malformed
   explicit value fails immediately, even if a later choice would be valid.
 - An invalid environment value fails if it remains effective. A valid CLI
-  choice can override it. An explicit empty value is invalid.
+  choice can override it. An explicit empty CLI operand (`--dry-run ""`) is invalid.
+  An unset or empty `JBRAVO_DRY_RUN` defaults to `false` when no CLI choice
+  overrides it.
 - Unknown options and option-like values, such as `--dry-run --source db`,
   fail without invoking the executor. Validation occurs after directory
   setup, activation, configuration loading and required-variable checks,
@@ -160,6 +162,95 @@ Validate the wrapper contract only through the isolated synthetic harness.
 Its argument and failure-path evidence does not establish deployment,
 end-to-end production safety, complete executor safety or profitability.
 Do not run the real wrapper as a test merely because `--dry-run` is present.
+
+#### Current-source contract validation
+
+The supported entry point selects the wrapper and contract cases from the
+checkout containing the launcher, regardless of the caller's current directory.
+It does not replay a historical evidence directory. From this checkout, use:
+
+```text
+python -I -S -B tools/premarket_contract/run_isolated.py candidate --output ABSENT_RUN_DIRECTORY --deps QUALIFIED_OFFLINE_PYTEST_DIRECTORY
+```
+
+Replace the two directory operands with absolute paths outside this checkout.
+The output directory must not exist; its parent must already exist. The offline
+tooling directory must contain the qualified pytest dependency closure, including
+`pytest`, `_pytest`, `pluggy`, `packaging`, `iniconfig`, `pygments`, and `py.py`.
+No dependencies are downloaded or installed. Windows requires existing Ubuntu
+WSL; qualified Linux can invoke the same launcher directly. Both paths require
+existing Python 3, Bubblewrap, real Bash, and functioning namespace support.
+The verified setup uses Windows Python 3.13.2, Ubuntu Python 3.12.3,
+Bubblewrap 0.9.0, Bash 5.2.21 and offline pytest 9.0.3.
+
+The launcher stages and hashes the current source and tooling, exposes only
+read-only inputs/system runtime, and runs the contract cases inside private network,
+mount and PID namespaces. HOME, activation, configuration, logs and temporary
+files are synthetic. Strict doubles intercept Python, executor/account checks,
+snapshots, logging and the absolute WSGI touch; real trading code is not imported.
+Never substitute a real operational wrapper invocation for this entry point.
+
+Before Bash runs the captured wrapper bytes, a test-local `BASH_ENV` bootstrap
+installs inherited DEBUG observation and per-shell completion records. A dedicated
+record channel is independent of stdout/stderr and command exit status. The
+harness checks the records after execution; it does not prevent the attempted
+command from executing. Bubblewrap remains the execution boundary. A finite
+reviewed policy covers wrapper-originated Bash simple-command attempts, including
+functions, explicit subshells, command substitutions and redirection substitutions.
+Unapproved commands and absolute executables fail validation even when output and
+shell failures are suppressed. Approved `python`, `tee` and `touch` commands still
+require the existing exact double argument/program checks. Synthetic activation,
+configuration and observer-runtime commands have separately identified policies.
+Missing, malformed, failed or incomplete observation also fails validation.
+Bash may replace a sole external command substitution with an executable and
+omit its EXIT record; the attempted command is retained and that incomplete
+child observation is rejected. No complete trace is claimed for that case.
+
+These are Bash command-attempt observations, not syscall tracing, native-process
+observation or arbitrary hostile-code containment. Shell expansion is checked
+through its containing command and any observed nested command substitutions;
+non-command expansion effects are not independently traced. Double internals and
+launcher/runtime activity are governed by their explicit test boundaries, not
+silently admitted as wrapper commands. The unchanged wrapper has a positive
+observation check on every invocation. Separately identified synthetic wrapper
+variants cover the exact review probes and relevant command contexts; they must
+be rejected. Observation-failure fixtures must likewise retain rejection evidence.
+
+Ordinary repository discovery finds one host supervisor in
+`tests/test_premarket_wrapper_contract.py`. The behavioral payload is in
+`tools/premarket_contract/contract.py`; it is not directly default-collected.
+The supervisor retains `alpaca_optional` so missing credentials cannot skip it.
+It requires `JBRAVO_CONTRACT_DEPS` to identify the same qualified offline tooling
+and `JBRAVO_CONTRACT_OUTPUT_ROOT` to identify existing disposable evidence storage.
+In a controlled repository test environment with its existing SDK dependencies,
+the targeted command is `python -m pytest tests/test_premarket_wrapper_contract.py`.
+The real repository conftest still imports the Alpaca SDK; its dependency
+requirements are separate from the standalone runner. No production credentials
+are required or should be supplied. This does not make unrelated repository tests
+safe to run or add contract coverage to the docs-consistency CI workflow.
+
+A qualified supervisor launches the isolated suite and reports one supervisor
+result separately from 65 original behavioral cases and 11 command-attempt
+regressions. The original cases make 74 wrapper invocations; the regressions make
+11 more. These 85 nested invocations are not additional tests. Missing configuration/tooling, invalid inputs, failed isolation,
+child failure, incomplete inventories and essential skips produce nonzero failure;
+zero selected cases cannot pass. The launcher has no host/production fallback.
+A Linux watchdog bounds the child (240 seconds by default, adjustable downward
+with `--timeout-seconds`) and terminates/reaps it on timeout, returning 124.
+An unconfirmed launcher timeout remains a failure requiring evidence inspection.
+
+Each fresh output directory retains `source-selection.json`, the input manifest
+and copies, `launch.json`, `isolation.json`, `syntax.json`, `command.json`, native
+logs, `junit.xml`, `cases.jsonl`, `result.json`, `supervision.json` and
+`launcher-result.json` as their phases complete. Each wrapper attempt also retains
+`command-observations/` bootstrap, actual executed wrapper, raw per-shell streams
+and recorder-failure channel. `cases.jsonl` distinguishes selected-source identity,
+executed variant identity, observation completeness and validation outcome. Prerequisite failures retain the
+available failure evidence; later-phase files may be absent. Result counts keep
+selected/executed/passed/failed/errored/skipped/deselected cases separate from
+wrapper invocations. Interrupted progress is explicitly incomplete. Supervisor
+outputs use a unique `supervisor-...` subdirectory. These are current-source
+synthetic checks, not deployment, broker-safety or trading authorization.
 
 Force web refresh (PythonAnywhere API preferred):
 
