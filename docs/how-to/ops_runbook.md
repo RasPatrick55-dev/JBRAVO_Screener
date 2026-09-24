@@ -116,6 +116,51 @@ Run one premarket execution pass:
 cd /home/RasPatrick/jbravo_screener && source /home/RasPatrick/.virtualenvs/jbravo-env/bin/activate && set -a; . ~/.config/jbravo/.env; set +a; bash bin/run_premarket_once.sh
 ```
 
+### Premarket dry-run arguments
+
+The wrapper loads its existing virtual-environment activation and
+`~/.config/jbravo/.env` before resolving dry-run mode. With no CLI choice,
+the effective `JBRAVO_DRY_RUN` value from that environment is used; an unset or
+empty value defaults to `false`, preserving ordinary paper execution.
+
+Explicit CLI choices override that setting:
+
+```bash
+bash bin/run_premarket_once.sh --dry-run true
+bash bin/run_premarket_once.sh --dry-run false
+bash bin/run_premarket_once.sh --dry-run
+```
+
+- Bare `--dry-run` selects `true`, including when followed by another
+  `--dry-run` occurrence.
+- Values are case-insensitive: `true`, `1`, `yes`, `y` select true;
+  `false`, `0`, `no`, `n` select false. Whitespace and other spellings,
+  including `on`/`off`, are invalid.
+- For repeated valid occurrences, the last choice wins. Every malformed
+  explicit value fails immediately, even if a later choice would be valid.
+- An invalid environment value fails if it remains effective. A valid CLI
+  choice can override it. An explicit empty value is invalid.
+- Unknown options and option-like values, such as `--dry-run --source db`,
+  fail without invoking the executor. Validation occurs after directory
+  setup, activation, configuration loading and required-variable checks,
+  but before the pipeline gate and later operational commands.
+
+The wrapper forwards one normalized `--dry-run true` or `--dry-run false`
+pair through the executor's existing interface. Trading arguments and the
+paper-only, PostgreSQL-first workflow remain unchanged.
+
+Executor dry-run suppresses new submissions through its existing standard
+path; it is not a sandbox, permission grant or guarantee of zero side effects.
+A real wrapper invocation can still perform database/pipeline and account
+checks, connection checks, logging, executor reconciliation/metrics,
+premarket snapshots and the final WSGI touch/web reload. It does not establish
+a universal cancellation or broker-mutation guard.
+
+Validate the wrapper contract only through the isolated synthetic harness.
+Its argument and failure-path evidence does not establish deployment,
+end-to-end production safety, complete executor safety or profitability.
+Do not run the real wrapper as a test merely because `--dry-run` is present.
+
 Force web refresh (PythonAnywhere API preferred):
 
 ```bash
