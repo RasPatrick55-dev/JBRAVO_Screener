@@ -22,11 +22,32 @@ set +a
 
 DRY_RUN="${JBRAVO_DRY_RUN:-false}"
 
+normalize_dry_run() {
+  case "${1,,}" in
+    true|1|yes|y)
+      DRY_RUN=true
+      ;;
+    false|0|no|n)
+      DRY_RUN=false
+      ;;
+    *)
+      echo "Invalid dry-run value; use true,false,1,0,yes,no,y,n." >&2
+      exit 2
+      ;;
+  esac
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
-      DRY_RUN="${2:-true}"
-      shift 2
+      # A following --dry-run starts another occurrence; the last valid choice wins.
+      if [[ $# -eq 1 || "${2-}" == --dry-run ]]; then
+        DRY_RUN=true
+        shift
+      else
+        normalize_dry_run "$2"
+        shift 2
+      fi
       ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -34,6 +55,9 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Validate the effective environment value only when CLI choices did not replace it.
+normalize_dry_run "$DRY_RUN"
 
 # Require successful pipeline (database gate)
 PIPELINE_GATE=$(python - <<'PY'
@@ -126,6 +150,7 @@ python -m scripts.check_connection || echo "[WARN] connection probe failed (non-
 
 # Execute trades
 python -m scripts.execute_trades \
+  --dry-run "$DRY_RUN" \
   --source db \
   --price-source blended \
   --ref-buffer-pct 0.75 \
