@@ -109,6 +109,169 @@ def test_multipage_binding_calendar_and_explicit_request(tmp_path, settings):
         body = (root / binding["path"]).read_bytes()
         assert binding["bytes"] == len(body) and binding["sha256"] == collector.digest(body)
     assert "capture-manifest.json" not in [b["path"] for b in manifest["files"]]
+    assert "diagnostic_recording" not in manifest
+    assert not (root / "bar-validation-diagnostic.json").exists()
+
+
+def assert_saved_bindings(root, manifest):
+    assert {p.name for p in root.iterdir()} == {
+        "capture-manifest.json", *(binding["path"] for binding in manifest["files"])}
+    for binding in manifest["files"]:
+        body = (root / binding["path"]).read_bytes()
+        assert binding["bytes"] == len(body)
+        assert binding["sha256"] == collector.digest(body)
+
+
+@pytest.mark.parametrize("field,value,rule,code,kind,rendered", [
+    ("c", 0, "strictly_positive", "INVALID_OHLCV", "int", "0"),
+    ("v", -1, "nonnegative", "INVALID_OHLCV", "int", "-1"),
+    ("n", 1.5, "integral", "FRACTIONAL_VOLUME_OR_COUNT", "Decimal", "1.5"),
+    ("vw", 0, "strictly_positive", "INVALID_OHLCV", "int", "0"),
+    ("h", 100, "high_at_or_above_open_and_close", "OHLC_RANGE_CONFLICT", "int", "100"),
+    ("l", 101, "low_at_or_below_open_and_close", "OHLC_RANGE_CONFLICT", "int", "101"),
+    ("t", "2024-01-02T05:00:00", "aware_iso8601_microsecond_precision",
+     "INVALID_TIMESTAMP_REPRESENTATION", "str", "2024-01-02T05:00:00"),
+])
+def test_bar_diagnostic_distinguishes_field_rule_and_body_binding(
+        tmp_path, settings, field, value, rule, code, kind, rendered):
+    payload = bars()
+    payload["ALK"][0][field] = value
+    provider, root, manifest = run(tmp_path, settings, Provider([{"bars": payload}]))
+    diagnostic_body = (root / "bar-validation-diagnostic.json").read_bytes()
+    diagnostic = json.loads(diagnostic_body)
+    assert len(diagnostic_body) <= 4096
+    assert diagnostic["schema"] == "jbravo.bar-validation-diagnostic.v1"
+    assert diagnostic["primary_error_code"] == code == failure(root)
+    assert diagnostic["usable_dataset"] is False
+    assert (diagnostic["field"], diagnostic["validation_rule"]) == (field, rule)
+    assert diagnostic["offending_value"] == {
+        "type": kind, "value": rendered, "characters": len(rendered), "truncated": False}
+    assert diagnostic["request_ordinal"] == 2 and diagnostic["page_ordinal"] == 1
+    assert diagnostic["symbol"] == "ALK" and diagnostic["bar_index"] == 0
+    assert diagnostic["bar_index_basis"] == "zero_based_within_symbol_page"
+    assert diagnostic["supplied_timestamp"]["value"] == payload["ALK"][0]["t"]
+    assert diagnostic["response_body_binding"] == {
+        "bytes": len(provider.responses[-1].body),
+        "sha256": collector.digest(provider.responses[-1].body)}
+    assert manifest["status"] == "FAILED" and len(provider.calls) == 2
+    assert manifest["diagnostic_recording"]["status"] == "RECORDED"
+    assert not (root / "dataset.json").exists() and not (root / "page-001.json").exists()
+    assert_saved_bindings(root, manifest)
+
+
+def test_second_page_failure_retains_validated_page_and_exact_location(tmp_path, settings):
+    second = bars(range(4, 6))
+    second["SPY"][1]["v"] = -2
+    provider = Provider([{"bars": bars(range(2, 4)), "next_page_token": "next"},
+                         {"bars": second}])
+    provider, root, manifest = run(tmp_path, settings, provider)
+    diagnostic = json.loads((root / "bar-validation-diagnostic.json").read_bytes())
+    assert (diagnostic["request_ordinal"], diagnostic["page_ordinal"]) == (3, 2)
+    assert (diagnostic["symbol"], diagnostic["bar_index"]) == ("SPY", 1)
+    assert diagnostic["supplied_timestamp"]["value"] == bar(5)["t"]
+    assert diagnostic["response_body_binding"]["sha256"] == collector.digest(provider.responses[2].body)
+    assert (root / "page-001.json").exists() and not (root / "page-002.json").exists()
+    assert manifest["requests_attempted"] == 3 and manifest["status"] == "FAILED"
+    assert not (root / "dataset.json").exists()
+    assert_saved_bindings(root, manifest)
+
+
+@pytest.mark.parametrize("value,rendered,kind", [
+    ("9" * 2000, "9" * 128, "str"),
+    ("APCA-API-SECRET-KEY=synthetic-credential", "OMITTED_NON_NUMERIC_TEXT", "str"),
+    ({"authorization": "synthetic-credential"}, "OMITTED_NON_SCALAR", "dict"),
+    (None, "null", "NoneType"),
+    (True, "true", "bool"),
+])
+def test_bar_diagnostic_bounds_values_without_leaking_arbitrary_text(
+        tmp_path, settings, value, rendered, kind):
+    payload = bars()
+    payload["ALK"][0]["c"] = value
+    _, root, manifest = run(tmp_path, settings, Provider([{"bars": payload}]))
+    body = (root / "bar-validation-diagnostic.json").read_bytes()
+    diagnostic = json.loads(body)
+    assert len(body) <= 4096
+    assert diagnostic["offending_value"]["value"] == rendered
+    assert diagnostic["offending_value"]["type"] == kind
+    assert diagnostic["offending_value"]["truncated"] is (kind in ("str", "dict"))
+    assert diagnostic["primary_error_code"] == "INVALID_OHLCV_TYPE"
+    assert diagnostic["validation_rule"] == "numeric_type_excluding_bool"
+    assert all("synthetic-credential" not in p.read_text() and
+               "APCA-API-SECRET-KEY" not in p.read_text() for p in root.iterdir())
+    assert manifest["status"] == "FAILED"
+    assert_saved_bindings(root, manifest)
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_diagnostic_recording_failure_preserves_primary_failure_and_bindings(
+        tmp_path, settings, monkeypatch, partial):
+    payload = bars()
+    payload["ALK"][0]["v"] = -1
+    original_save = collector.save
+    attempts = []
+    def save(root, name, value):
+        if name == "bar-validation-diagnostic.json":
+            attempts.append(name)
+            # The primary outcome must already have been saved.
+            assert failure(root) == "INVALID_OHLCV"
+            if partial:
+                with (root / name).open("xb") as handle:
+                    handle.write(b'{"schema":')
+            raise OSError("synthetic-credential in diagnostic write exception")
+        return original_save(root, name, value)
+    monkeypatch.setattr(collector, "save", save)
+    provider = Provider([{"bars": payload}])
+    result = collector.capture(provider, settings, tmp_path / "jbravo-research-data", "fixture")
+    root = Path(result["root"])
+    manifest_body = (root / "capture-manifest.json").read_bytes()
+    manifest = json.loads(manifest_body)
+    assert result["manifest"]["bytes"] == len(manifest_body)
+    assert result["manifest"]["sha256"] == collector.digest(manifest_body)
+    assert manifest["status"] == result["status"] == "FAILED"
+    assert json.loads((root / "failure.json").read_bytes()) == {
+        "code": "INVALID_OHLCV", "usable_dataset": False}
+    assert len(provider.calls) == 2 and len(attempts) == 1
+    assert manifest["diagnostic_recording"] == {
+        "status": "FAILED", "path": "bar-validation-diagnostic.json", "error_type": "OSError",
+        "unbound_partial_possible": not partial}
+    if partial:
+        binding = next(b for b in manifest["files"] if b["path"] == "bar-validation-diagnostic.json")
+        assert binding["diagnostic_status"] == "PARTIAL_UNVERIFIED"
+    else:
+        assert not (root / "bar-validation-diagnostic.json").exists()
+    assert all("synthetic-credential" not in p.read_text() for p in root.iterdir())
+    assert not (root / "dataset.json").exists()
+    assert_saved_bindings(root, manifest)
+
+
+def test_missing_field_and_malformed_bar_are_diagnosed_without_coercion(tmp_path, settings):
+    payload = bars()
+    del payload["ALK"][0]["v"]
+    _, root, manifest = run(tmp_path, settings, Provider([{"bars": payload}]))
+    diagnostic = json.loads((root / "bar-validation-diagnostic.json").read_bytes())
+    assert (diagnostic["field"], diagnostic["validation_rule"]) == ("v", "required_field_present")
+    assert failure(root) == "MALFORMED_BAR" and manifest["status"] == "FAILED"
+    with pytest.raises(collector.BarValidationError) as caught:
+        collector.parse_bar("ALK", ["not a bar"], settings, {r["date"] for r in calendar()})
+    assert caught.value.diagnostic["offending_value"]["value"] == "OMITTED_NON_SCALAR"
+
+
+@pytest.mark.parametrize("mode,field,rule", [
+    ("conflict", "c", "identical_duplicate"),
+    ("order", "t", "increasing_new_bar_timestamp"),
+])
+def test_duplicate_and_order_failures_retain_field_diagnostics(tmp_path, settings, mode, field, rule):
+    payload = bars()
+    if mode == "conflict":
+        payload["ALK"].insert(1, dict(bar(2), c=101))
+    else:
+        payload["ALK"].reverse()
+    _, root, manifest = run(tmp_path, settings, Provider([{"bars": payload}]))
+    diagnostic = json.loads((root / "bar-validation-diagnostic.json").read_bytes())
+    assert (diagnostic["field"], diagnostic["validation_rule"], diagnostic["bar_index"]) == (field, rule, 1)
+    assert diagnostic["primary_error_code"] == failure(root)
+    assert manifest["status"] == "FAILED"
+    assert_saved_bindings(root, manifest)
 
 
 def test_missing_session_reports_holiday_weekend_and_uncertain_eligibility(tmp_path, settings):

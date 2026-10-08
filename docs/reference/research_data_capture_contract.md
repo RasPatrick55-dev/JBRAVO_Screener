@@ -102,6 +102,43 @@ and bound by size/hash. `capture-manifest.json` is written last, excludes itself
 and its final measured identity is returned. Partial receipts remain under a
 FAILED manifest and must not be used as a completed dataset.
 
+### Bounded bar-validation diagnostics
+
+Bar-level field, duplicate and ordering failures additionally attempt to save
+`bar-validation-diagnostic.json` (schema `jbravo.bar-validation-diagnostic.v1`).
+It records the original `primary_error_code`, `usable_dataset: false`, exact
+field and validation rule, symbol, zero-based index within that symbol's page,
+and supplied timestamp. Request ordinals are one-based including the calendar;
+bar-page ordinals are one-based excluding the calendar. The response-body byte
+length and SHA-256 bind the failing page without archiving its response body.
+Only the first rejected bar is reported; preceding validated pages remain
+partial evidence, and the failing page is not saved as a validated page.
+
+An offending value includes its parsed Python type (JSON decimals are `Decimal`),
+a scalar rendering capped at 128 characters, and explicit truncation information.
+Only numeric-looking strings and timestamp-shaped strings may be rendered.
+Arbitrary text and containers are omitted with a marker, not serialized or
+coerced into accepted bars. Numeric/timestamp representations are diagnostic
+data, not authentication data; headers, credentials, raw exceptions and complete
+responses are never included. The entire diagnostic JSON is capped at 4,096 bytes.
+Rules, accepted values, effective requests, pagination and capture budgets remain
+unchanged. Missing required fields identify the missing field rather than inventing
+a supplied value.
+
+`failure.json` is saved first with the original code and unusable status. A
+secondary diagnostic-write/readback failure cannot replace that primary outcome:
+the manifest records `diagnostic_recording.status: FAILED` and only the secondary
+exception type. A readable partial diagnostic of at most 4,096 bytes is bound as
+`PARTIAL_UNVERIFIED`, never accepted as valid diagnostic JSON; otherwise the
+possible unbound partial is explicit. No write is retried. Primary-failure,
+receipt or manifest storage failures can still prevent a complete saved outcome.
+Existing filesystem-race and remote-cancellation limitations remain.
+
+This additive source change does not diagnose the previously failed real capture's
+specific offending field: its retained `INVALID_OHLCV` code alone cannot do so.
+That capture remains FAILED with its one execution consumed and two provider
+requests recorded; unused request capacity does not authorize another execution.
+
 ## Offline verification and untested paths
 
 `tests/test_research_data_capture.py` imports the real collector and exercises
@@ -147,3 +184,34 @@ resolving into the source tree, an ordinary external capture path, and a final
 destination inside the source tree. Rejections assert zero dispatched requests
 and no new output. **Revision allowance: 1/2 consumed.** The original exported
 patch remains unchanged; the revised patch is a separate review artifact.
+
+### Validation-diagnostics revision verification
+
+`JBRAVO_CAPTURE_VALIDATION_DIAGNOSTICS_001` is additive to integrated canonical
+commit `75822b595519e93bd3b9917d314cb32162270399` and grants two new offline test
+invocations without replenishing previous allowances. Invocation 1 used:
+
+```text
+C:\Users\RasPa\miniconda3\python.exe -B -m pytest --noconftest -p no:cacheprovider tests/test_research_data_capture.py -q --tb=short
+```
+
+Result: **55 passed, 1 skipped**, exit 0, process duration **3.5231076 seconds**,
+with no timeout under the 180-second ceiling. Plugin autoload and bytecode writes
+were disabled, and the process environment excluded provider/DB credentials.
+**New allowance: 1/2 consumed; no failed invocation.** The skip remains Windows
+denying actual symlink creation, with the existing inert reparse checks passing.
+
+The tests use normal collector import, synthetic provider responses and temporary
+storage. New cases distinguish price, volume, trade-count, VWAP, range, timestamp,
+missing-field, duplicate and ordering failures; verify second-page/within-symbol
+location and response-body bindings; bound or omit offending values; and force
+diagnostic-write failures both before writing and after a partial write. They
+verify that primary failure codes, unusable status and saved artifact/manifest
+bindings survive those secondary failures. Ordinary successful validation emits
+no failure diagnostic. Sockets and child processes are forbidden in the fixtures.
+
+No real provider, credential, remote filesystem or production database path was
+exercised. Live compatibility, remote cancellation, concurrent filesystem races
+and failures storing the primary failure/receipts/manifest remain unqualified.
+The original failed capture, patches and verification history remain unchanged;
+this revision is uncommitted and awaits Board review. No retrieval is authorized.

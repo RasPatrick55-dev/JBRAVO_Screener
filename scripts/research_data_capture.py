@@ -51,6 +51,36 @@ class CaptureError(Exception):
     """Codes contain no provider body, authentication material or raw exception."""
 
 
+def diagnostic_value(value, *, timestamp=False):
+    """Bound scalar renderings; never serialize arbitrary text or containers."""
+    kind = type(value).__name__[:64]
+    if isinstance(value, str):
+        pattern = r"[0-9TtZz:+. -]+" if timestamp else r"[+\-0-9.eE]+|[+-]?(?:NaN|Infinity)"
+        if not re.fullmatch(pattern, value):
+            return {"type": kind, "value": "OMITTED_NON_NUMERIC_TEXT",
+                    "characters": len(value), "truncated": True}
+        text = value
+    elif value is None or isinstance(value, bool):
+        text = json.dumps(value)
+    elif isinstance(value, (int, float, Decimal)):
+        try:
+            text = str(value)
+        except Exception:
+            return {"type": kind, "value": "OMITTED_UNRENDERABLE_NUMBER", "truncated": True}
+    else:
+        return {"type": kind, "value": "OMITTED_NON_SCALAR", "truncated": True}
+    return {"type": kind, "value": text[:128], "characters": len(text),
+            "truncated": len(text) > 128}
+
+
+class BarValidationError(CaptureError):
+    """Retain the original error code with a separate bounded diagnostic."""
+    def __init__(self, code, field, rule, value):
+        super().__init__(code)
+        self.diagnostic = {"field": field, "validation_rule": rule,
+                           "offending_value": diagnostic_value(value, timestamp=field == "t")}
+
+
 def digest(body):
     return hashlib.sha256(body).hexdigest()
 
@@ -195,17 +225,25 @@ def strict_json(body):
         raise CaptureError("MALFORMED_RESPONSE") from None
 
 
-def number(value, integer=False, positive=False):
+def number(value, integer=False, positive=False, *, field=None):
+    def reject(code, rule):
+        if field is None:
+            raise CaptureError(code)
+        raise BarValidationError(code, field, rule, value)
     if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
-        raise CaptureError("INVALID_OHLCV_TYPE")
+        reject("INVALID_OHLCV_TYPE", "numeric_type_excluding_bool")
     try:
         result = Decimal(str(value))
     except InvalidOperation:
-        raise CaptureError("INVALID_OHLCV") from None
-    if not result.is_finite() or result < 0 or (positive and result <= 0):
-        raise CaptureError("INVALID_OHLCV")
+        reject("INVALID_OHLCV", "decimal_conversion")
+    if not result.is_finite():
+        reject("INVALID_OHLCV", "finite_numeric")
+    if result < 0:
+        reject("INVALID_OHLCV", "nonnegative")
+    if positive and result <= 0:
+        reject("INVALID_OHLCV", "strictly_positive")
     if integer and result != result.to_integral_value():
-        raise CaptureError("FRACTIONAL_VOLUME_OR_COUNT")
+        reject("FRACTIONAL_VOLUME_OR_COUNT", "integral")
     if integer:
         return int(result)
     text = format(result, "f")
@@ -234,31 +272,38 @@ def parse_calendar(payload, start, end):
 
 
 def parse_bar(symbol, bar, settings, sessions):
-    if not isinstance(bar, dict) or not {"t", "o", "h", "l", "c", "v"} <= bar.keys():
-        raise CaptureError("MALFORMED_BAR")
+    if not isinstance(bar, dict):
+        raise BarValidationError("MALFORMED_BAR", "$bar", "object_with_required_fields", bar)
+    for field in ("t", "o", "h", "l", "c", "v"):
+        if field not in bar:
+            raise BarValidationError("MALFORMED_BAR", field, "required_field_present", None)
     raw = bar["t"]
     if not isinstance(raw, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})", raw):
-        raise CaptureError("INVALID_TIMESTAMP_REPRESENTATION")
+        raise BarValidationError("INVALID_TIMESTAMP_REPRESENTATION", "t", "aware_iso8601_microsecond_precision", raw)
     try:
         stamp = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
-        raise CaptureError("INVALID_TIMESTAMP") from None
+        raise BarValidationError("INVALID_TIMESTAMP", "t", "valid_iso8601_timestamp", raw) from None
     start, end = settings.validate()
     if not datetime.combine(start, daytime(), timezone.utc) <= stamp < datetime.combine(end + timedelta(days=1), daytime(), timezone.utc):
-        raise CaptureError("BAR_OUTSIDE_UTC_WINDOW")
+        raise BarValidationError("BAR_OUTSIDE_UTC_WINDOW", "t", "requested_utc_window", raw)
     local = stamp.astimezone(NY)
     day = local.date().isoformat()
-    if day not in sessions or local.time() != daytime():
-        raise CaptureError("BAR_NOT_AT_EXCHANGE_DAILY_SESSION")
+    if day not in sessions:
+        raise BarValidationError("BAR_NOT_AT_EXCHANGE_DAILY_SESSION", "t", "returned_calendar_session", raw)
+    if local.time() != daytime():
+        raise BarValidationError("BAR_NOT_AT_EXCHANGE_DAILY_SESSION", "t", "exchange_midnight", raw)
     record = {"symbol": symbol, "session": day, "timestamp_utc": stamp.isoformat(),
-              **{key: number(bar[key], positive=True) for key in ("o", "h", "l", "c")},
-              "v": number(bar["v"], integer=True)}
-    if Decimal(record["l"]) > min(Decimal(record["o"]), Decimal(record["c"])) or Decimal(record["h"]) < max(Decimal(record["o"]), Decimal(record["c"])):
-        raise CaptureError("OHLC_RANGE_CONFLICT")
+              **{key: number(bar[key], positive=True, field=key) for key in ("o", "h", "l", "c")},
+              "v": number(bar["v"], integer=True, field="v")}
+    if Decimal(record["l"]) > min(Decimal(record["o"]), Decimal(record["c"])):
+        raise BarValidationError("OHLC_RANGE_CONFLICT", "l", "low_at_or_below_open_and_close", bar["l"])
+    if Decimal(record["h"]) < max(Decimal(record["o"]), Decimal(record["c"])):
+        raise BarValidationError("OHLC_RANGE_CONFLICT", "h", "high_at_or_above_open_and_close", bar["h"])
     if "n" in bar:
-        record["n"] = number(bar["n"], integer=True)
+        record["n"] = number(bar["n"], integer=True, field="n")
     if "vw" in bar:
-        record["vw"] = number(bar["vw"], positive=True)
+        record["vw"] = number(bar["vw"], positive=True, field="vw")
     return record
 
 
@@ -296,6 +341,7 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
     deadline = begun + limits.elapsed_seconds
     root = new_output(research_base, capture_id)
     files, ledger = [], []
+    diagnostic_recording = None
     byte_count, duplicates = 0, 0
     data, last = {}, {}
     def remaining():
@@ -382,21 +428,33 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
                 raise CaptureError("PAGE_RECORD_LIMIT")
             page = []
             for symbol, rows in bars.items():
-                for bar in rows:
+                for bar_index, bar in enumerate(rows):
                     remaining()
-                    record = parse_bar(symbol, bar, settings, sessions)
-                    key = (symbol, record["session"])
-                    if key in data:
-                        if data[key] != record:
-                            raise CaptureError("CONFLICTING_DUPLICATE")
-                        if record["timestamp_utc"] < last[symbol]:
-                            raise CaptureError("PROVIDER_ORDER_CONFLICT")
-                        duplicates += 1
-                    elif symbol in last and record["timestamp_utc"] <= last[symbol]:
-                        raise CaptureError("PROVIDER_ORDER_CONFLICT")
-                    else:
-                        data[key] = record
-                        last[symbol] = record["timestamp_utc"]
+                    try:
+                        record = parse_bar(symbol, bar, settings, sessions)
+                        key = (symbol, record["session"])
+                        if key in data:
+                            if data[key] != record:
+                                field = next(field for field in ("timestamp_utc", "o", "h", "l", "c", "v", "n", "vw")
+                                             if data[key].get(field) != record.get(field))
+                                field = "t" if field == "timestamp_utc" else field
+                                raise BarValidationError("CONFLICTING_DUPLICATE", field, "identical_duplicate", bar.get(field))
+                            if record["timestamp_utc"] < last[symbol]:
+                                raise BarValidationError("PROVIDER_ORDER_CONFLICT", "t", "nondecreasing_duplicate_timestamp", bar["t"])
+                            duplicates += 1
+                        elif symbol in last and record["timestamp_utc"] <= last[symbol]:
+                            raise BarValidationError("PROVIDER_ORDER_CONFLICT", "t", "increasing_new_bar_timestamp", bar["t"])
+                        else:
+                            data[key] = record
+                            last[symbol] = record["timestamp_utc"]
+                    except BarValidationError as exc:
+                        exc.diagnostic.update({"request_ordinal": ledger[-1]["ordinal"],
+                                               "page_ordinal": len(ledger) - 1, "symbol": symbol,
+                                               "bar_index": bar_index, "bar_index_basis": "zero_based_within_symbol_page",
+                                               "supplied_timestamp": diagnostic_value(bar.get("t") if isinstance(bar, dict) else None, timestamp=True),
+                                               "response_body_binding": {"bytes": ledger[-1]["raw_body_bytes"],
+                                                                         "sha256": ledger[-1]["raw_body_sha256"]}})
+                        raise
                     page.append(record)
             files.append(save(root, f"page-{len(ledger)-1:03d}.json", {"bars": page,
                              "next_token_sha256": digest(next_token.encode()) if next_token else None}))
@@ -423,8 +481,32 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
         disposition = "CAPTURE_COMPLETE_WITH_COVERAGE_GAPS" if any(missing.values()) else "CAPTURE_COMPLETE"
     except Exception as exc:
         code = str(exc) if isinstance(exc, CaptureError) else "LOCAL_ERROR_" + type(exc).__name__
+        # Save the primary failure first; optional diagnostics cannot replace it.
         files.append(save(root, "failure.json", {"code": code, "usable_dataset": False}))
         disposition = "FAILED"
+        if isinstance(exc, BarValidationError):
+            name = "bar-validation-diagnostic.json"
+            diagnostic = {"schema": "jbravo.bar-validation-diagnostic.v1",
+                          "primary_error_code": code, "usable_dataset": False, **exc.diagnostic}
+            try:
+                if len(json_bytes(diagnostic)) > 4096:
+                    raise CaptureError("DIAGNOSTIC_SIZE_LIMIT")
+                files.append(save(root, name, diagnostic))
+                diagnostic_recording = {"status": "RECORDED", "path": name}
+            except Exception as recording_error:
+                diagnostic_recording = {"status": "FAILED", "path": name,
+                                        "error_type": type(recording_error).__name__,
+                                        "unbound_partial_possible": True}
+                # A readable bounded partial file is hash-bound, never called valid JSON.
+                try:
+                    with (root / name).open("rb") as handle:
+                        partial = handle.read(4097)
+                    if len(partial) <= 4096:
+                        files.append({"path": name, "bytes": len(partial), "sha256": digest(partial),
+                                      "diagnostic_status": "PARTIAL_UNVERIFIED"})
+                        diagnostic_recording["unbound_partial_possible"] = False
+                except Exception:
+                    pass
     files.append(save(root, "request-receipts.json", ledger))
     if disposition.startswith("CAPTURE_COMPLETE"):
         try:
@@ -439,6 +521,8 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
                                    "No historical provenance recovery or untouched-period claim",
                                    "Local timeout does not prove remote request termination",
                                    "Failed/incomplete streams have unknown transfer totals"]}
+    if diagnostic_recording is not None:
+        manifest["diagnostic_recording"] = diagnostic_recording
     for binding in files:
         actual = (root / binding["path"]).read_bytes()
         if len(actual) != binding["bytes"] or digest(actual) != binding["sha256"]:
