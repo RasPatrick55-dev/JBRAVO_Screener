@@ -25,6 +25,10 @@ from zoneinfo import ZoneInfo
 
 SYMBOLS = ("ALK", "FN", "HBAN", "HMY", "LOGI", "MIRM", "NBIS", "NVST",
            "PLUG", "RGLD", "SKY", "SPY", "SRRK", "STLD", "VSCO")
+DEFAULT_PROFILE = "default"
+SUPPLEMENT_PROFILE = "vsxy-continuity-supplement"
+PROFILES = (DEFAULT_PROFILE, SUPPLEMENT_PROFILE)
+SUPPLEMENT_SYMBOLS = ("SPY", "VSXY")
 DATA_URL = "https://data.alpaca.markets/v2/stocks/bars"
 CALENDAR_URL = "https://paper-api.alpaca.markets/v2/calendar"
 REPO = Path(__file__).resolve().parents[1]
@@ -120,8 +124,27 @@ class Settings:
     adjustment: str
     currency: str
     asof: str
+    profile: str = DEFAULT_PROFILE
+
+    @property
+    def symbols(self):
+        if self.profile not in PROFILES:
+            raise CaptureError("UNSUPPORTED_PROFILE")
+        return SUPPLEMENT_SYMBOLS if self.profile == SUPPLEMENT_PROFILE else SYMBOLS
+
+    def selection(self):
+        supplement = self.profile == SUPPLEMENT_PROFILE
+        return {"profile": self.profile, "symbols": self.symbols, "benchmark": "SPY",
+                "universe": "selected-symbol research universe",
+                "selection_source": ("JBRAVO_VSXY_SUPPLEMENT_CAPTURE_PROFILE_001 Board policy"
+                                     if supplement else "canonical data/history_cache fourteen filenames plus SPY"),
+                "selection_rationale": ("VSXY ticker-continuity comparison supplement with SPY benchmark; not stitched history"
+                                        if supplement else "Fourteen retained cache symbols plus SPY benchmark"),
+                "selection_source_sha256": {} if supplement else CACHE_SHA256,
+                "historical_eligible_membership": "UNKNOWN"}
 
     def validate(self):
+        self.symbols  # reject unsupported profiles before any output or request
         start, end = iso_day(self.start_date), iso_day(self.end_date)
         iso_day(self.asof)
         if start > end or (end - start).days > 3660:
@@ -130,11 +153,15 @@ class Settings:
             raise CaptureError("UNSUPPORTED_EXPLICIT_SETTINGS")
         if self.currency != "USD":
             raise CaptureError("UNSUPPORTED_CURRENCY")
+        if self.profile == SUPPLEMENT_PROFILE and (
+                self.start_date, self.end_date, self.feed, self.adjustment, self.currency, self.asof
+        ) != ("2026-05-18", "2026-10-07", "sip", "raw", "USD", "2026-10-08"):
+            raise CaptureError("PROFILE_SETTINGS_MISMATCH")
         return start, end
 
     def params(self):
         start, end = self.validate()
-        return {"symbols": ",".join(SYMBOLS), "timeframe": "1Day",
+        return {"symbols": ",".join(self.symbols), "timeframe": "1Day",
                 "start": start.isoformat() + "T00:00:00Z",
                 "end": (end + timedelta(days=1)).isoformat() + "T00:00:00Z",
                 "feed": self.feed, "adjustment": self.adjustment,
@@ -150,13 +177,21 @@ class Limits:
     elapsed_seconds: float = 120.0
     request_seconds: float = 15.0
 
-    def validate(self):
-        for field, ceiling in (("requests", 41), ("page_bytes", 4 * 1024 * 1024),
-                               ("total_bytes", 32 * 1024 * 1024)):
+    @classmethod
+    def for_profile(cls, profile):
+        if profile not in PROFILES:
+            raise CaptureError("UNSUPPORTED_PROFILE")
+        return cls(requests=3, total_bytes=8 * 1024 * 1024, elapsed_seconds=60.0) if profile == SUPPLEMENT_PROFILE else cls()
+
+    def validate(self, profile=DEFAULT_PROFILE):
+        ceilings = self.for_profile(profile)
+        for field in ("requests", "page_bytes", "total_bytes"):
+            ceiling = getattr(ceilings, field)
             value = getattr(self, field)
             if type(value) is not int or not 1 <= value <= ceiling:
                 raise CaptureError("INVALID_LIMITS")
-        for field, ceiling in (("elapsed_seconds", 120), ("request_seconds", 15)):
+        for field in ("elapsed_seconds", "request_seconds"):
+            ceiling = getattr(ceilings, field)
             value = getattr(self, field)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= ceiling:
                 raise CaptureError("INVALID_LIMITS")
@@ -343,11 +378,13 @@ def new_output(base, capture_id):
     return root
 
 
-def capture(client, settings, research_base, capture_id, limits=Limits(), *, clock=time.monotonic,
+def capture(client, settings, research_base, capture_id, limits=None, *, clock=time.monotonic,
             utcnow=lambda: datetime.now(timezone.utc)):
     """Return a saved manifest. Fail closed; partial receipts remain isolated."""
     start, end = settings.validate()
-    limits.validate()
+    limits = Limits.for_profile(settings.profile) if limits is None else limits
+    limits.validate(settings.profile)
+    symbols, selection = settings.symbols, settings.selection()
     begun = clock()
     deadline = begun + limits.elapsed_seconds
     root = new_output(research_base, capture_id)
@@ -407,11 +444,7 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
         receipt["disposition"] = "RECEIVED_WITHIN_LIMITS"
         return payload
     try:
-        files.append(save(root, "symbols.json", {"symbols": SYMBOLS, "benchmark": "SPY",
-                         "universe": "selected-symbol research universe",
-                         "selection_source": "canonical data/history_cache fourteen filenames plus SPY",
-                         "selection_source_sha256": CACHE_SHA256,
-                         "historical_eligible_membership": "UNKNOWN"}))
+        files.append(save(root, "symbols.json", selection))
         files.append(save(root, "request-contract.json", {"settings": asdict(settings), "limits": asdict(limits),
                          "bars_params": settings.params(), "end_boundary": "exclusive client validation",
                          "symbol_mapping": "literal identifiers; explicit provider asof; no alias fallback",
@@ -435,7 +468,7 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
             if next_token in seen:
                 raise CaptureError("REPEATED_PAGE_TOKEN")
             bars = payload["bars"]
-            if set(bars) - set(SYMBOLS) or any(not isinstance(rows, list) for rows in bars.values()):
+            if set(bars) - set(symbols) or any(not isinstance(rows, list) for rows in bars.values()):
                 raise CaptureError("UNREQUESTED_SYMBOL_OR_MALFORMED_ROWS")
             if sum(map(len, bars.values())) > 10000:
                 raise CaptureError("PAGE_RECORD_LIMIT")
@@ -493,7 +526,7 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
                 break
             seen.add(next_token)
             token = next_token
-        missing = {symbol: [day for day in sessions if (symbol, day) not in data] for symbol in SYMBOLS}
+        missing = {symbol: [day for day in sessions if (symbol, day) not in data] for symbol in symbols}
         non_sessions = []
         for offset in range((end - start).days + 1):
             day = start + timedelta(days=offset)
@@ -561,6 +594,8 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
             files.append(save(root, "failure.json", {"code": "ELAPSED_LIMIT", "usable_dataset": False}))
             disposition = "FAILED"
     manifest = {"schema": "jbravo.research-capture.v1", "status": disposition, "files": files,
+                "profile": settings.profile, "symbols": symbols,
+                "selection_rationale": selection["selection_rationale"], "effective_limits": asdict(limits),
                 "quality_summary": quality_binding, "quality_disposition": quality["disposition"],
                 "qualified_for_research": False,
                 "requests_attempted": len(ledger), "completed_body_bytes": byte_count,
@@ -585,17 +620,17 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", choices=PROFILES, default=DEFAULT_PROFILE)
     for name in ("start-date", "end-date", "feed", "adjustment", "currency", "asof", "capture-id"):
         parser.add_argument("--" + name, required=True)
     args = parser.parse_args(argv)
-    settings = Settings(args.start_date, args.end_date, args.feed, args.adjustment, args.currency, args.asof)
-    key, secret = os.environ.get("APCA_API_KEY_ID"), os.environ.get("APCA_API_SECRET_KEY")
-    if not key or not secret:
-        print("AUTHENTICATION_UNAVAILABLE", file=sys.stderr)
-        return 1
+    settings = Settings(args.start_date, args.end_date, args.feed, args.adjustment, args.currency, args.asof, args.profile)
     client = None
     try:
         settings.validate()
+        key, secret = os.environ.get("APCA_API_KEY_ID"), os.environ.get("APCA_API_SECRET_KEY")
+        if not key or not secret:
+            raise CaptureError("AUTHENTICATION_UNAVAILABLE")
         client = HTTPClient(key, secret)
         result = capture(client, settings, Path.home() / "jbravo-research-data", args.capture_id)
         print(json.dumps(result))
