@@ -286,8 +286,8 @@ def test_cash_and_position_invariants_with_existing_cost_model(simulator):
     assert not bt.positions and not bt.pending_exits
     assert bt.cash == pytest.approx(1000 - 5 * 100 * 1.01 - 2 + 5 * 110 * 0.99 - 2)
     assert all(equity >= 0 for _, equity in bt.equity_curve)
-    # Gross Trade.pnl remains a separately documented, pre-existing limitation.
-    assert bt.trades[0].pnl == 50
+    assert bt.trades[0].gross_pnl == 50
+    assert bt.trades[0].pnl == bt.trades[0].net_pnl == pytest.approx(35.5)
 
 
 def test_unaffordable_entry_attempt_does_not_create_position(simulator):
@@ -325,6 +325,7 @@ def test_single_share_partial_does_not_sell_or_charge_a_fee(simulator):
 TRADE_COLUMNS = [
     "symbol", "entry_time", "exit_time", "entry_price", "exit_price", "qty",
     "pnl", "exit_reason", "mfe_pct", "exit_pct", "exit_efficiency",
+    "gross_pnl", "entry_fee", "entry_slippage", "exit_fee", "exit_slippage", "net_pnl",
 ]
 
 
@@ -405,7 +406,7 @@ def test_actual_caller_exports_zero_trade_summary_with_terminal_signal(
                 for call in export.call_args_list}
     assert set(exported) == {"trades_log.csv", "equity_curve.csv", "backtest_results.csv"}
     trades = exported["trades_log.csv"]
-    assert trades.empty and list(trades.columns) == [*TRADE_COLUMNS, "net_pnl"]
+    assert trades.empty and list(trades.columns) == TRADE_COLUMNS
     pd.testing.assert_frame_equal(exported["equity_curve.csv"], bt.equity().reset_index())
     summary = exported["backtest_results.csv"]
     assert len(summary) == 1 and summary.iloc[0]["symbol"] == "AAA"

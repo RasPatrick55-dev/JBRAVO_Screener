@@ -420,10 +420,22 @@ class Position:
     trailing_stop: Optional[float] = None
     atr_stop: Optional[float] = None
     partial_taken: bool = False
+    entry_fee_remaining: float = 0.0
+    entry_slippage_remaining: float = 0.0
+
+    @property
+    def cost_basis(self) -> float:
+        """Remaining cash-funded basis, including unallocated entry costs."""
+        return (
+            self.qty * self.entry_price + self.entry_fee_remaining
+            + self.entry_slippage_remaining
+        )
 
 
 @dataclass
 class Trade:
+    """One executed exit: pnl is a net_pnl compatibility alias; gross is explicit."""
+
     symbol: str
     entry_time: pd.Timestamp
     exit_time: pd.Timestamp
@@ -435,6 +447,12 @@ class Trade:
     mfe_pct: float = 0.0
     exit_pct: float = 0.0
     exit_efficiency: float = 0.0
+    gross_pnl: float = 0.0
+    entry_fee: float = 0.0
+    entry_slippage: float = 0.0
+    exit_fee: float = 0.0
+    exit_slippage: float = 0.0
+    net_pnl: float = 0.0
 
 
 def evaluate_exit_signals(position_state, indicators, trail_state, debug_flags=None) -> list[str]:
@@ -605,6 +623,8 @@ class PortfolioBacktester:
             max_price=price,
             trailing_stop=trailing,
             atr_stop=atr_stop,
+            entry_fee_remaining=self.trade_cost,
+            entry_slippage_remaining=cost - qty * price - self.trade_cost,
         )
         logger.info("Opened %s @ %.2f (%d shares)", symbol, price, qty)
 
@@ -664,25 +684,7 @@ class PortfolioBacktester:
         if pos is None or pos.qty <= 1:
             return
         sell_qty = max(1, pos.qty // 2)
-        proceeds = sell_qty * price * (1 - self.slippage) - self.trade_cost
-        self.cash += proceeds
-        pnl = (price - pos.entry_price) * sell_qty
-        metrics = self._compute_trade_metrics(pos, price)
-        self.trades.append(
-            Trade(
-                symbol=symbol,
-                entry_time=pos.entry_time,
-                exit_time=date,
-                entry_price=pos.entry_price,
-                exit_price=price,
-                qty=sell_qty,
-                pnl=pnl,
-                exit_reason=reason,
-                mfe_pct=metrics["mfe_pct"],
-                exit_pct=metrics["exit_pct"],
-                exit_efficiency=metrics["exit_efficiency"],
-            )
-        )
+        self._record_exit(pos, sell_qty, price, date, reason)
         pos.qty -= sell_qty
         pos.partial_taken = True
         pos.max_price = max(pos.max_price, price)
@@ -690,26 +692,51 @@ class PortfolioBacktester:
 
     def _close_position(self, symbol: str, price: float, date: pd.Timestamp, reason: str) -> None:
         pos = self.positions.pop(symbol)
-        proceeds = pos.qty * price * (1 - self.slippage) - self.trade_cost
+        self._record_exit(pos, pos.qty, price, date, reason)
+        logger.info("Closed %s @ %.2f reason=%s", symbol, price, reason)
+
+    def _record_exit(
+        self, pos: Position, qty: int, price: float, date: pd.Timestamp, reason: str
+    ) -> None:
+        """Allocate entry costs once; the final exit absorbs the remaining residual."""
+        if qty <= 0 or qty > pos.qty:
+            raise ValueError("Exit quantity must be positive and within the position")
+        if qty == pos.qty:
+            entry_fee = pos.entry_fee_remaining
+            entry_slippage = pos.entry_slippage_remaining
+        else:
+            fraction = qty / pos.qty
+            entry_fee = pos.entry_fee_remaining * fraction
+            entry_slippage = pos.entry_slippage_remaining * fraction
+        proceeds = qty * price * (1 - self.slippage) - self.trade_cost
+        exit_slippage = qty * price - proceeds - self.trade_cost
+        gross_pnl = (price - pos.entry_price) * qty
+        net_pnl = proceeds - (qty * pos.entry_price + entry_fee + entry_slippage)
         self.cash += proceeds
-        pnl = (price - pos.entry_price) * pos.qty
+        pos.entry_fee_remaining -= entry_fee
+        pos.entry_slippage_remaining -= entry_slippage
         metrics = self._compute_trade_metrics(pos, price)
         self.trades.append(
             Trade(
-                symbol=symbol,
+                symbol=pos.symbol,
                 entry_time=pos.entry_time,
                 exit_time=date,
                 entry_price=pos.entry_price,
                 exit_price=price,
-                qty=pos.qty,
-                pnl=pnl,
+                qty=qty,
+                pnl=net_pnl,
                 exit_reason=reason,
                 mfe_pct=metrics["mfe_pct"],
                 exit_pct=metrics["exit_pct"],
                 exit_efficiency=metrics["exit_efficiency"],
+                gross_pnl=gross_pnl,
+                entry_fee=entry_fee,
+                entry_slippage=entry_slippage,
+                exit_fee=self.trade_cost,
+                exit_slippage=exit_slippage,
+                net_pnl=net_pnl,
             )
         )
-        logger.info("Closed %s @ %.2f reason=%s", symbol, price, reason)
 
     @staticmethod
     def _compute_trade_metrics(pos: Position, exit_price: float) -> dict:
@@ -885,12 +912,19 @@ class PortfolioBacktester:
         equity_df = self.equity()
         daily_returns = equity_df["equity"].pct_change().dropna()
         total_return = equity_df["equity"].iloc[-1] / self.initial_cash - 1
-        cagr = (1 + total_return) ** (252 / len(daily_returns)) - 1
+        cagr = (
+            (1 + total_return) ** (252 / len(daily_returns)) - 1
+            if len(daily_returns) else 0.0
+        )
 
-        wins = [t.pnl for t in self.trades if t.pnl > 0]
-        losses = [t.pnl for t in self.trades if t.pnl <= 0]
+        wins = [t.net_pnl for t in self.trades if t.net_pnl > 0]
+        losses = [t.net_pnl for t in self.trades if t.net_pnl < 0]
         win_rate = len(wins) / len(self.trades) * 100 if self.trades else 0
-        profit_factor = sum(wins) / abs(sum(losses)) if losses else float("inf")
+        gains, loss_total = sum(wins), abs(sum(losses))
+        profit_factor = (
+            gains / loss_total if loss_total > 0
+            else float("inf") if gains > 0 else 0.0
+        )
 
         cummax = equity_df["equity"].cummax()
         drawdown = (equity_df["equity"] - cummax) / cummax
@@ -898,11 +932,19 @@ class PortfolioBacktester:
 
         sharpe = (
             np.sqrt(252) * daily_returns.mean() / daily_returns.std()
-            if daily_returns.std() != 0
+            if pd.notna(daily_returns.std()) and daily_returns.std() != 0
             else 0
         )
         downside = daily_returns[daily_returns < 0].std()
-        sortino = np.sqrt(252) * daily_returns.mean() / downside if downside != 0 else 0
+        sortino = (
+            np.sqrt(252) * daily_returns.mean() / downside
+            if pd.notna(downside) and downside != 0 else 0
+        )
+        open_basis = sum(pos.cost_basis for pos in self.positions.values())
+        marked_value = sum(
+            pos.qty * self.last_prices.get(symbol, pos.entry_price)
+            for symbol, pos in self.positions.items()
+        )
 
         return {
             "Total Return": round(total_return * 100, 2),
@@ -912,6 +954,9 @@ class PortfolioBacktester:
             "Max Drawdown": round(max_dd * 100, 2),
             "Sharpe": round(sharpe, 2),
             "Sortino": round(sortino, 2),
+            "Realized Net P&L": round(sum(t.net_pnl for t in self.trades), 2),
+            "Remaining Cost Basis": round(open_basis, 2),
+            "Unrealized P&L": round(marked_value - open_basis, 2),
         }
 
 
@@ -1034,11 +1079,6 @@ def run_backtest(
         bt.run()
         trades_df = bt.results()
 
-        if not trades_df.empty:
-            trades_df["net_pnl"] = trades_df["pnl"]
-        else:
-            trades_df["net_pnl"] = []
-
         # Ensure timestamp columns for dashboard compatibility
         if "entry_time" not in trades_df.columns and "entry_date" in trades_df.columns:
             trades_df["entry_time"] = trades_df["entry_date"]
@@ -1056,14 +1096,14 @@ def run_backtest(
 
         if "exit_reason" in trades_df.columns and not trades_df.empty:
             grouped = trades_df.copy()
-            grouped["win"] = grouped["pnl"] > 0
+            grouped["win"] = grouped["net_pnl"] > 0
             reason_stats = (
                 grouped.groupby("exit_reason")
                 .agg(
-                    trades=("pnl", "size"),
+                    trades=("net_pnl", "size"),
                     win_rate=("win", "mean"),
-                    avg_pnl=("pnl", "mean"),
-                    total_pnl=("pnl", "sum"),
+                    avg_pnl=("net_pnl", "mean"),
+                    total_pnl=("net_pnl", "sum"),
                 )
                 .reset_index()
             )
@@ -1079,11 +1119,11 @@ def run_backtest(
             symbol_groups = trades_df.groupby("symbol")
 
             summary_df = symbol_groups.agg(
-                trades=("pnl", "size"),
-                wins=("pnl", lambda x: (x > 0).sum()),
-                losses=("pnl", lambda x: (x <= 0).sum()),
-                net_pnl=("pnl", "sum"),
-                expectancy=("pnl", "mean"),
+                trades=("net_pnl", "size"),
+                wins=("net_pnl", lambda x: (x > 0).sum()),
+                losses=("net_pnl", lambda x: (x <= 0).sum()),
+                net_pnl=("net_pnl", "sum"),
+                expectancy=("net_pnl", "mean"),
             ).reset_index()
 
             summary_df["win_rate"] = summary_df["wins"] / summary_df["trades"] * 100
@@ -1095,13 +1135,13 @@ def run_backtest(
                     return float("inf") if gains > 0 else 0.0
                 return float(gains / abs(losses))
 
-            profit_factors = symbol_groups["pnl"].apply(_profit_factor)
+            profit_factors = symbol_groups["net_pnl"].apply(_profit_factor)
 
             def _max_drawdown(group: pd.DataFrame) -> float:
                 ordered = group.sort_values("exit_time") if "exit_time" in group else group
-                cumulative = ordered["pnl"].cumsum()
-                if cumulative.empty:
-                    return 0.0
+                cumulative = pd.concat(
+                    [pd.Series([0.0]), ordered["net_pnl"].cumsum()], ignore_index=True,
+                )
                 drawdown = cumulative - cumulative.cummax()
                 return float(drawdown.min()) if not drawdown.empty else 0.0
 
@@ -1113,9 +1153,9 @@ def run_backtest(
                         pd.to_numeric(group["entry_price"], errors="coerce")
                         * pd.to_numeric(group["qty"], errors="coerce").abs()
                     )
-                    returns = group["pnl"] / entry_val.replace(0, np.nan)
+                    returns = group["net_pnl"] / entry_val.replace(0, np.nan)
                 else:
-                    returns = group["pnl"]
+                    returns = group["net_pnl"]
                 return returns.replace([np.inf, -np.inf], np.nan).dropna()
 
             def _sharpe(group: pd.DataFrame) -> float:
