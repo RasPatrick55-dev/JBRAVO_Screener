@@ -960,6 +960,21 @@ class PortfolioBacktester:
         }
 
 
+def _validate_execution_costs(trade_cost: float, slippage: float) -> None:
+    """Fees are nonnegative currency per fill; slippage is a fraction in [0, 1)."""
+    try:
+        valid_fee = not isinstance(trade_cost, bool) and math.isfinite(trade_cost) and trade_cost >= 0
+        valid_slippage = (
+            not isinstance(slippage, bool) and math.isfinite(slippage) and 0 <= slippage < 1
+        )
+    except (TypeError, ValueError):
+        raise ValueError("Costs must be finite numeric values") from None
+    if not valid_fee:
+        raise ValueError("trade_cost must be finite and nonnegative")
+    if not valid_slippage:
+        raise ValueError("slippage must be finite and in [0, 1)")
+
+
 def run_backtest(
     symbols: List[str],
     *,
@@ -971,7 +986,10 @@ def run_backtest(
     min_history_bars: Optional[int] = None,
     export_csv: bool = True,
     enable_db: bool = True,
+    trade_cost: float = 0.0,
+    slippage: float = 0.0,
 ) -> dict:
+    _validate_execution_costs(trade_cost, slippage)
     QUICK_MAX_SYMBOLS = 20
     QUICK_MAX_DAYS = 120
 
@@ -1050,7 +1068,7 @@ def run_backtest(
 
     if not data:
         logger.error("No valid data to run backtest.")
-        return {"tested": 0, "skipped": len(valid_symbols)}
+        raise ValueError("No symbols were successfully evaluated: missing or unusable input bars")
 
     trail_pct = CONFIG.get("trail_pct", 0.03)
     if not CONFIG.get("use_trailing_stop", True):
@@ -1058,6 +1076,8 @@ def run_backtest(
 
     bt = PortfolioBacktester(
         data,
+        trade_cost=trade_cost,
+        slippage=slippage,
         trail_pct=trail_pct,
         max_hold_days=CONFIG.get("max_hold_days", 7),
         atr_multiple=CONFIG.get("atr_multiple", 1.0),
@@ -1068,6 +1088,7 @@ def run_backtest(
         enable_ema_exit=CONFIG.get("enable_ema_exit", True),
         enable_trailing_exit=CONFIG.get("enable_trailing_exit", True),
     )
+    logger.info("BACKTEST_COSTS trade_cost=%s slippage=%s", trade_cost, slippage)
 
     trades_path = os.path.join(BASE_DIR, "data", "trades_log.csv")
     equity_path = os.path.join(BASE_DIR, "data", "equity_curve.csv")
@@ -1252,13 +1273,10 @@ def run_backtest(
                     )
                     logger.info("BACKTEST_RESULTS_INSERTED rows=%d", len(summary_df))
                 else:
-                    logger.warning(
-                        "BACKTEST_DB_FAIL run_date=%s err=%s",
-                        backtest_run_date,
-                        "noop_or_error",
-                    )
+                    raise RuntimeError("Mandatory backtest database output was not saved")
             except Exception as exc:  # pragma: no cover - defensive guard
                 logger.warning("BACKTEST_DB_FAIL run_date=%s err=%s", backtest_run_date, exc)
+                raise
 
         if export_csv:
             write_csv_atomic(trades_path, trades_df)
@@ -1289,6 +1307,14 @@ def run_backtest(
 
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the JBRAVO backtest")
+    parser.add_argument(
+        "--trade-cost", type=float, default=0.0,
+        help="Nonnegative currency fee per executed fill (default: 0, uncalibrated)",
+    )
+    parser.add_argument(
+        "--slippage", type=float, default=0.0,
+        help="Adverse price fraction in [0, 1), e.g. 0.001 = 10 bp (default: 0)",
+    )
     parser.add_argument(
         "--source",
         default=os.path.join(BASE_DIR, "data", "latest_candidates.csv"),
@@ -1346,7 +1372,12 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Override run_date for DB writes (YYYY-MM-DD)",
     )
-    return parser.parse_args(argv if argv is not None else None)
+    args = parser.parse_args(argv if argv is not None else None)
+    try:
+        _validate_execution_costs(args.trade_cost, args.slippage)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def _parse_run_date_arg(value: Optional[str]) -> Optional[date]:
@@ -1536,7 +1567,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if len(symbols) == 0:
         logger.info("BACKTEST_CANDIDATES_EMPTY source=db")
-        logger.info("Backtest: no candidates today - skipping.")
+        logger.error("Backtest: no candidates available; no symbols evaluated.")
         end_time = datetime.utcnow()
         elapsed_time = end_time - start_time
         logger.info("Script finished in %s", elapsed_time)
@@ -1545,13 +1576,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 conn.close()
         except Exception:
             pass
-        return 0
+        return 2
 
     try:
         if symbols_source:
             logger.info("Loaded %d symbols from %s", len(symbols), symbols_source)
         run_backtest(
             symbols,
+            trade_cost=args.trade_cost,
+            slippage=args.slippage,
             max_symbols=args.max_symbols,
             max_days=args.max_days,
             quick=args.quick,
@@ -1564,7 +1597,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         logger.info("Backtest script finished")
     except Exception as exc:
         logger.error("Backtest failed: %s", exc)
+        return 1
     finally:
+        conn.close()
         end_time = datetime.utcnow()
         elapsed_time = end_time - start_time
         logger.info("Script finished in %s", elapsed_time)

@@ -228,16 +228,15 @@ def test_actual_caller_and_pnl_first_consumer_use_net_results(simulator, monkeyp
     instances = []
 
     def with_costs(data, **kwargs):
-        # Existing caller defaults remain unchanged. Inject existing constructor
-        # parameters at this mocked boundary to exercise nonzero-cost caller data.
-        bt = actual_backtester(data, trade_cost=3, slippage=0.01, **kwargs)
+        bt = actual_backtester(data, **kwargs)
         instances.append(bt)
         return bt
 
     monkeypatch.setattr(simulator, "PortfolioBacktester", with_costs)
     run_date = frame.index[-1].date()
     assert simulator.run_backtest(["AAA"], run_date=run_date, lookback_days=len(frame),
-                                 min_history_bars=len(frame)) == {"tested": 1, "skipped": 0}
+                                 min_history_bars=len(frame), trade_cost=3,
+                                 slippage=0.01) == {"tested": 1, "skipped": 0}
     backfill.assert_not_called()
     load.assert_called_once_with("AAA", end_date=run_date)
     bt = instances[0]
