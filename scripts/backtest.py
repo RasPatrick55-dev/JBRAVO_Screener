@@ -518,7 +518,12 @@ def evaluate_exit_signals(position_state, indicators, trail_state, debug_flags=N
 
 
 class PortfolioBacktester:
-    """Simple portfolio level backtester for the JBravo strategy."""
+    """Daily-bar simulation with next-observed-open fills.
+
+    Completed-bar signals cannot fill on their signal bar. Protective stops
+    use levels known before the bar; closing information adjusts future levels.
+    See docs/explanation/backtest_data_flow.md for the OHLC ambiguity contract.
+    """
 
     def __init__(
         self,
@@ -561,14 +566,19 @@ class PortfolioBacktester:
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
         self.equity_curve: List[tuple[pd.Timestamp, float]] = []
+        self.pending_entries: Dict[str, pd.Series] = {}
+        self.pending_exits: Dict[str, List[str]] = {}
+        self.last_prices: Dict[str, float] = {}
 
         # Build a unified date index
         indices = [df.index for df in self.data.values()]
         self.dates = sorted(set().union(*indices))
         self.rsi_high_memory: Dict[str, dict] = {}
 
-    def _open_position(self, symbol: str, row: pd.Series, date: pd.Timestamp) -> None:
-        price = float(row["close"])
+    def _open_position(
+        self, symbol: str, row: pd.Series, date: pd.Timestamp, signal_row: pd.Series
+    ) -> None:
+        price = float(row["open"])
         alloc = self.cash * self.alloc_pct
         qty = math.floor(alloc / price)
         if qty <= 0:
@@ -582,17 +592,17 @@ class PortfolioBacktester:
             trailing = price * (1 - float(self.trail_pct))
 
         atr_stop = None
-        atr_value = pd.to_numeric(row.get("ATR14"), errors="coerce")
+        # Only the preceding signal bar's ATR is available at this open.
+        atr_value = pd.to_numeric(signal_row.get("ATR14"), errors="coerce")
         if pd.notna(atr_value) and atr_value > 0 and self.atr_multiple > 0:
             atr_stop = max(0.0, price - self.atr_multiple * float(atr_value))
-        high_price = float(row.get("high", price))
         self.positions[symbol] = Position(
             symbol=symbol,
             qty=qty,
             entry_price=price,
             entry_time=date,
             highest_close=price,
-            max_price=max(price, high_price),
+            max_price=price,
             trailing_stop=trailing,
             atr_stop=atr_stop,
         )
@@ -675,11 +685,7 @@ class PortfolioBacktester:
         )
         pos.qty -= sell_qty
         pos.partial_taken = True
-        gain_pct = (price - pos.entry_price) / pos.entry_price * 100 if pos.entry_price else 0
-        desired_pct = self._desired_trail_pct(gain_pct)
-        pos.highest_close = max(pos.highest_close, price)
         pos.max_price = max(pos.max_price, price)
-        pos.trailing_stop = pos.highest_close * (1 - desired_pct)
         logger.info("Scaled out %s: sold %d @ %.2f reason=%s", symbol, sell_qty, price, reason)
 
     def _close_position(self, symbol: str, price: float, date: pd.Timestamp, reason: str) -> None:
@@ -718,106 +724,130 @@ class PortfolioBacktester:
             "exit_efficiency": exit_efficiency,
         }
 
+    @staticmethod
+    def _bar_prices(row: pd.Series) -> tuple[float, float, float, float]:
+        """Reject missing/invalid OHLC instead of inventing a fill price."""
+        prices = tuple(
+            float(row.get(key, np.nan)) for key in ("open", "high", "low", "close")
+        )
+        opening, high, low, close = prices
+        if (
+            not all(math.isfinite(price) and price > 0 for price in prices)
+            or low > min(opening, close)
+            or high < max(opening, close)
+            or low > high
+        ):
+            raise ValueError("Causal fills require finite, positive, consistent OHLC")
+        return opening, high, low, close
+
+    def _protective_stop(self, pos: Position) -> tuple[Optional[float], str]:
+        """For a long, the highest active stop is encountered first; ATR wins ties."""
+        stops = []
+        if pos.atr_stop is not None:
+            stops.append((pos.atr_stop, "ATR_STOP"))
+        if self.use_trailing and self.enable_trailing_exit and pos.trailing_stop is not None:
+            stops.append((pos.trailing_stop, "TRAIL_STOP"))
+        return max(stops, key=lambda stop: stop[0]) if stops else (None, "")
+
+    def _update_completed_bar(self, symbol: str, row: pd.Series, date: pd.Timestamp) -> None:
+        """Adjust surviving stops and queue close-derived exits for a later open."""
+        pos = self.positions[symbol]
+        _, high, _, close = self._bar_prices(row)
+        pos.max_price = max(pos.max_price, high, close)
+        pos.highest_close = max(pos.highest_close, close)
+        gain_pct = (pos.max_price - pos.entry_price) / pos.entry_price * 100
+        if self.use_trailing and self.enable_trailing_exit:
+            candidate = pos.max_price * (1 - self._desired_trail_pct(gain_pct))
+            pos.trailing_stop = max(pos.trailing_stop or 0.0, candidate)
+        atr = pd.to_numeric(row.get("ATR14"), errors="coerce")
+        if pd.notna(atr) and atr > 0 and self.atr_multiple > 0:
+            candidate = max(0.0, close - self.atr_multiple * float(atr))
+            pos.atr_stop = max(pos.atr_stop or 0.0, candidate)
+
+        df = self.data[symbol]
+        prev_idx = df.index.get_loc(date) - 1
+        previous = df.iloc[prev_idx] if prev_idx >= 0 else None
+        divergence = (
+            self.enable_rsi_divergence
+            and "rsi" in row
+            and self._check_rsi_divergence(symbol, close, float(row["rsi"]))
+        )
+        reasons = evaluate_exit_signals(
+            position_state={
+                "entry_price": pos.entry_price,
+                "partial_taken": pos.partial_taken,
+                "hold_days": (date - pos.entry_time).days,
+            },
+            indicators={
+                "current": row,
+                "previous": previous,
+                "rsi_divergence": divergence,
+                "is_shooting_star": self._is_shooting_star(row),
+            },
+            trail_state={
+                # Protective levels have already been tested for this bar.
+                "enable_ema_exit": self.enable_ema_exit,
+                "enable_macd_exit": self.enable_macd_exit,
+                "enable_partial_exit": self.enable_partial_exit,
+                "enable_rsi_divergence": self.enable_rsi_divergence,
+                "enable_candlestick_exit": self.enable_candlestick_exit,
+                "max_hold_days": self.max_hold_days,
+            },
+        )
+        full_exit = [reason for reason in reasons if reason != "PARTIAL_5PCT"]
+        if reasons:
+            self.pending_exits[symbol] = full_exit or ["PARTIAL_5PCT"]
+
     def run(self) -> None:
         for date in self.dates:
-            # Update trailing stops and evaluate exits
+            rows = {
+                symbol: df.loc[date] for symbol, df in self.data.items() if date in df.index
+            }
+            prices = {symbol: self._bar_prices(row) for symbol, row in rows.items()}
+
+            # Opening gap stops precede queued full exits, which precede partials.
             for symbol in list(self.positions):
-                df = self.data[symbol]
-                if date not in df.index:
+                if symbol not in rows:
                     continue
-                row = df.loc[date]
                 pos = self.positions[symbol]
-                close = float(row["close"])
-                low = float(row.get("low", close))
-                high = float(row.get("high", close))
+                opening = prices[symbol][0]
+                pos.max_price = max(pos.max_price, opening)
+                stop, stop_reason = self._protective_stop(pos)
+                reasons = self.pending_exits.pop(symbol, [])
+                if stop is not None and opening <= stop:
+                    self._close_position(symbol, opening, date, stop_reason)
+                elif reasons and reasons != ["PARTIAL_5PCT"]:
+                    self._close_position(symbol, opening, date, ";".join(reasons))
+                elif reasons:
+                    self._scale_out_position(symbol, opening, date, "PARTIAL_5PCT")
 
-                pos.max_price = max(pos.max_price, high, close)
-                pos.highest_close = max(pos.highest_close, close)
+            # Each signal is attempted once, at its symbol's next observed open.
+            # Missing symbol bars leave the signal intact; no bar is fabricated.
+            for symbol in list(self.pending_entries):
+                if symbol not in rows:
+                    continue
+                signal_row = self.pending_entries.pop(symbol)
+                if symbol not in self.positions and len(self.positions) < self.max_positions:
+                    self._open_position(symbol, rows[symbol], date, signal_row)
 
-                gain_pct = (
-                    (pos.max_price - pos.entry_price) / pos.entry_price * 100
-                    if pos.entry_price
-                    else 0
-                )
-                desired_pct = self._desired_trail_pct(gain_pct)
-
-                if self.use_trailing and self.enable_trailing_exit:
-                    trailing_candidate = pos.max_price * (1 - desired_pct)
-                    if pos.trailing_stop is None:
-                        pos.trailing_stop = trailing_candidate
-                    else:
-                        pos.trailing_stop = max(pos.trailing_stop, trailing_candidate)
-
-                atr_value = pd.to_numeric(row.get("ATR14"), errors="coerce")
-                if pd.notna(atr_value) and atr_value > 0 and self.atr_multiple > 0:
-                    atr_candidate = close - self.atr_multiple * float(atr_value)
-                    atr_candidate = max(0.0, atr_candidate)
-                    if pos.atr_stop is None:
-                        pos.atr_stop = atr_candidate
-                    else:
-                        pos.atr_stop = max(pos.atr_stop, atr_candidate)
-
-                hold_days = (date - pos.entry_time).days
-
-                prev_idx = df.index.get_loc(date) - 1
-                prev_row = df.iloc[prev_idx] if prev_idx >= 0 else None
-                rsi_divergence = (
-                    self.enable_rsi_divergence
-                    and "rsi" in row
-                    and self._check_rsi_divergence(symbol, close, float(row["rsi"]))
-                )
-
-                reasons = evaluate_exit_signals(
-                    position_state={
-                        "entry_price": pos.entry_price,
-                        "partial_taken": pos.partial_taken,
-                        "hold_days": hold_days,
-                    },
-                    indicators={
-                        "current": row,
-                        "previous": prev_row,
-                        "rsi_divergence": rsi_divergence,
-                        "is_shooting_star": self._is_shooting_star(row),
-                    },
-                    trail_state={
-                        "atr_stop": pos.atr_stop,
-                        "trailing_stop": pos.trailing_stop,
-                        "enable_trailing_exit": self.enable_trailing_exit,
-                        "enable_macd_exit": self.enable_macd_exit,
-                        "enable_partial_exit": self.enable_partial_exit,
-                        "enable_rsi_divergence": self.enable_rsi_divergence,
-                        "enable_candlestick_exit": self.enable_candlestick_exit,
-                        "enable_ema_exit": self.enable_ema_exit,
-                        "max_hold_days": self.max_hold_days,
-                    },
-                )
-
-                if "PARTIAL_5PCT" in reasons and self.enable_partial_exit and not pos.partial_taken:
-                    self._scale_out_position(symbol, close, date, "PARTIAL_5PCT")
-                    reasons = [r for r in reasons if r != "PARTIAL_5PCT"]
-                    if not reasons:
-                        continue
-
-                exit_price: Optional[float] = None
-                if "ATR_STOP" in reasons and pos.atr_stop is not None and low <= pos.atr_stop:
-                    exit_price = pos.atr_stop
-                elif (
-                    "TRAIL_STOP" in reasons
-                    and pos.trailing_stop is not None
-                    and low <= pos.trailing_stop
-                ):
-                    exit_price = pos.trailing_stop
+            # Intrabar stops use only pre-existing levels (including entry stops).
+            # Do not assume the current high happened before a stopped-out low.
+            for symbol in list(self.positions):
+                if symbol not in rows:
+                    continue
+                pos = self.positions[symbol]
+                opening, _, low, _ = prices[symbol]
+                stop, stop_reason = self._protective_stop(pos)
+                if stop is not None and low <= stop:
+                    self._close_position(symbol, min(opening, stop), date, stop_reason)
+                    self.pending_exits.pop(symbol, None)
                 else:
-                    exit_price = close
+                    self._update_completed_bar(symbol, rows[symbol], date)
 
-                if reasons:
-                    reason_text = ";".join(dict.fromkeys(reasons))
-                    self._close_position(symbol, float(exit_price), date, reason_text)
-
-            # Determine today's top candidates
+            # Ranking formula/order is unchanged; only execution is deferred.
             scores = []
             for symbol, df in self.data.items():
-                if symbol in self.positions and len(self.positions) >= self.max_positions:
+                if symbol in self.positions or symbol in self.pending_entries:
                     continue
                 if date not in df.index:
                     continue
@@ -828,21 +858,18 @@ class PortfolioBacktester:
             scores.sort(key=lambda x: x[1], reverse=True)
             new_trades = 0
             for symbol, _, row in scores:
-                if symbol in self.positions:
-                    continue
-                if len(self.positions) >= self.max_positions:
+                if len(self.positions) + len(self.pending_entries) >= self.max_positions:
                     break
                 if new_trades >= self.top_n:
                     break
-                self._open_position(symbol, row, date)
+                self.pending_entries[symbol] = row.copy()
                 new_trades += 1
 
             # Calculate equity
+            self.last_prices.update({symbol: price[3] for symbol, price in prices.items()})
             equity = self.cash
             for sym, pos in self.positions.items():
-                df = self.data[sym]
-                if date in df.index:
-                    equity += pos.qty * df.loc[date, "close"]
+                equity += pos.qty * self.last_prices.get(sym, pos.entry_price)
             self.equity_curve.append((date, equity))
 
     def results(self) -> pd.DataFrame:
