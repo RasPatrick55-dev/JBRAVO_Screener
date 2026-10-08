@@ -6,6 +6,11 @@ storage, ranking, execution and schedules are unchanged. Import is inert.
 
 ## Universe and provenance
 
+The normal CLI accepts `--profile default` (also the default when omitted) or
+`--profile vsxy-continuity-supplement`. An unknown profile is rejected. The
+default profile preserves the fifteen-symbol selection below and its existing
+limits; dates/feed/adjustment/asof remain explicit required arguments.
+
 Sorted manifest: **ALK, FN, HBAN, HMY, LOGI, MIRM, NBIS, NVST, PLUG, RGLD, SKY,
 SPY, SRRK, STLD, VSCO**. Fourteen symbols come from canonical
 `data/history_cache/*.csv` filenames inspected on 2026-10-08; SPY is added only
@@ -18,6 +23,62 @@ membership. Current identifiers and the explicit provider mapping date cannot
 recover delisted securities, eliminate survivorship bias, reconstruct original
 requests or establish an untouched evaluation period. Existing retained model
 evaluation records also prevent assuming prior periods were unseen.
+
+## VSXY continuity supplement profile
+
+`JBRAVO_VSXY_SUPPLEMENT_CAPTURE_PROFILE_001` defines a separate, sorted
+**SPY, VSXY** selected-symbol research population. VSXY is selected for a future
+ticker-continuity comparison, with SPY as benchmark, not from the original
+fourteen cache files. Its `symbols.json` records that Board-policy source and
+rationale and an empty `selection_source_sha256` map. No cache hash is attributed
+to VSXY. This profile neither stitches histories nor verifies security identity.
+
+All six explicit settings must match this profile exactly:
+
+| Field | Enforced value |
+|---|---|
+| Session dates | 2026-05-18 through 2026-10-07 inclusive |
+| UTC boundaries | `2026-05-18T00:00:00Z` to `2026-10-08T00:00:00Z` |
+| Boundary validation | Existing start-inclusive, end-exclusive validation |
+| Bars / order | `1Day` / `asc` |
+| Feed / adjustment / currency | `sip` / `raw` / `USD` |
+| Symbol mapping | Literal SPY, VSXY; explicit `asof=2026-10-08` |
+| GET ceiling | 3 total: one calendar request plus at most two bar pages |
+| Decoded bodies | 4 MiB per response; 8 MiB aggregate, including calendar |
+| Local acceptance / request wait | 60 seconds / at most 15 seconds |
+| Retries / redirects / fallback | Zero |
+
+The unchanged CLI still requires a new capture ID. Example argument set (source
+contract only; this packet authorizes no execution or retrieval):
+
+```text
+--profile vsxy-continuity-supplement --start-date 2026-05-18
+--end-date 2026-10-07 --feed sip --adjustment raw --currency USD
+--asof 2026-10-08 --capture-id <separately-authorized-new-id>
+```
+
+Programmatic callers may reduce limits, but cannot exceed the selected profile's
+ceilings. Omitted `limits` resolves to that profile's defaults; explicitly
+passing the old `Limits()` to a supplement is rejected rather than silently
+clamped. Unsupported profiles, mismatching settings and invalid limits fail
+before output creation or request dispatch. CLI setting validation also precedes
+HTTP-client construction. Output containment and collision checks remain intact.
+
+`symbols.json`, `request-contract.json` and the final manifest bind the profile
+and symbols. Selection rationale is recorded in `symbols.json` and the manifest;
+effective limits are recorded in the request contract and manifest. Request/page
+receipts continue binding actual requests and response bodies. Quality flags,
+mandatory-field failures, pagination stops and bounded diagnostics are unchanged.
+All profiles retain `qualified_for_research: false`, even on completion/CLI exit
+zero. `asof` enables provider mapping; it does not prove historical eligibility.
+
+Offline regressions use normal module import and the actual CLI with a synthetic
+HTTP client, temporary output and blocked socket/child-process boundaries. They
+cover exact supplement requests, two-page completion, request/byte/time ceilings,
+reduced limits, pre-output incompatibility rejection, provenance, exclusive-end
+validation and quality/failure bindings. No live response, SIP entitlement,
+remote cancellation, filesystem race, corporate-action treatment, complete
+calendar, security continuity or research readiness is qualified by these tests.
 
 ## Proposed settings for Board review
 

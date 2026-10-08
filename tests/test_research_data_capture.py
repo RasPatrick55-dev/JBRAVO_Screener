@@ -1,5 +1,6 @@
 """Normal import; synthetic HTTP responses only, no SDK, DB or provider access."""
 import copy
+from dataclasses import asdict, replace
 import io
 import json
 from decimal import Decimal
@@ -85,6 +86,218 @@ def run(tmp_path, settings, provider=None, **kwargs):
 
 def failure(root):
     return json.loads((root / "failure.json").read_text())["code"]
+
+
+@pytest.fixture
+def supplement():
+    return collector.Settings("2026-05-18", "2026-10-07", "sip", "raw", "USD",
+                              "2026-10-08", collector.SUPPLEMENT_PROFILE)
+
+
+SUPPLEMENT_DAYS = ("2026-05-18", "2026-06-02", "2026-10-07")
+
+
+def supplement_bars(days=SUPPLEMENT_DAYS):
+    return {symbol: [{**bar(2), "t": day + "T04:00:00Z"} for day in days]
+            for symbol in ("SPY", "VSXY")}
+
+
+def supplement_provider(pages=None):
+    provider = Provider(pages if pages is not None else [{"bars": supplement_bars()}])
+    def transform(response):
+        if "symbols" not in response.effective_params:
+            response.body = collector.json_bytes([
+                {"date": day, "open": "09:30", "close": "16:00"}
+                for day in SUPPLEMENT_DAYS])
+        return response
+    provider.transform = transform
+    return provider
+
+
+def test_default_profile_preserves_selection_and_limits(tmp_path, settings):
+    _, root, manifest = run(tmp_path, settings)
+    selection = json.loads((root / "symbols.json").read_bytes())
+    contract = json.loads((root / "request-contract.json").read_bytes())
+    assert manifest["profile"] == settings.profile == "default"
+    assert manifest["symbols"] == selection["symbols"] == list(collector.SYMBOLS)
+    assert selection["selection_source"] == "canonical data/history_cache fourteen filenames plus SPY"
+    assert selection["selection_source_sha256"] == collector.CACHE_SHA256
+    assert contract["limits"] == manifest["effective_limits"] == asdict(collector.Limits())
+    assert not manifest["qualified_for_research"]
+    assert_saved_bindings(root, manifest)
+
+
+def test_supplement_exact_requests_provenance_and_two_pages(tmp_path, supplement):
+    provider = supplement_provider([
+        {"bars": supplement_bars(SUPPLEMENT_DAYS[:2]), "next_page_token": "next"},
+        {"bars": supplement_bars(SUPPLEMENT_DAYS[2:])}])
+    _, root, manifest = run(tmp_path, supplement, provider)
+    assert manifest["status"] == "CAPTURE_COMPLETE"
+    assert manifest["requests_attempted"] == len(provider.calls) == 3
+    assert provider.calls[0][1] == {"start": "2026-05-18", "end": "2026-10-07"}
+    expected = {"symbols": "SPY,VSXY", "timeframe": "1Day", "sort": "asc",
+                "start": "2026-05-18T00:00:00Z", "end": "2026-10-08T00:00:00Z",
+                "feed": "sip", "adjustment": "raw", "currency": "USD",
+                "asof": "2026-10-08", "limit": 10000}
+    assert provider.calls[1][1] == expected
+    assert provider.calls[2][1] == {**expected, "page_token": "next"}
+    assert all(0 < call[2] <= 15 and call[3] == 4 * 1024 * 1024 for call in provider.calls)
+    selection = json.loads((root / "symbols.json").read_bytes())
+    contract = json.loads((root / "request-contract.json").read_bytes())
+    assert manifest["profile"] == contract["settings"]["profile"] == selection["profile"] == supplement.profile
+    assert manifest["symbols"] == selection["symbols"] == ["SPY", "VSXY"]
+    assert selection["selection_source_sha256"] == {}
+    assert "history_cache" not in json.dumps(selection)
+    assert manifest["selection_rationale"] == selection["selection_rationale"]
+    assert contract["limits"] == manifest["effective_limits"] == {
+        "requests": 3, "page_bytes": 4 * 1024 * 1024, "total_bytes": 8 * 1024 * 1024,
+        "elapsed_seconds": 60.0, "request_seconds": 15.0}
+    assert len(json.loads((root / "dataset.json").read_bytes())) == 6
+    assert manifest["qualified_for_research"] is False
+    assert_saved_bindings(root, manifest)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("profile", "unknown"), ("start_date", "2026-05-17"), ("end_date", "2026-10-06"),
+    ("feed", "iex"), ("adjustment", "all"), ("currency", "EUR"), ("asof", "2026-10-07")])
+def test_incompatible_profile_settings_precede_output_and_requests(tmp_path, supplement, field, value):
+    provider = supplement_provider()
+    with pytest.raises(collector.CaptureError):
+        collector.capture(provider, replace(supplement, **{field: value}), tmp_path / "absent", "fixture")
+    assert provider.calls == [] and not (tmp_path / "absent").exists()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("requests", 4), ("page_bytes", 4 * 1024 * 1024 + 1),
+    ("total_bytes", 8 * 1024 * 1024 + 1), ("elapsed_seconds", 60.01), ("request_seconds", 15.01)])
+def test_supplement_cannot_inherit_or_expand_default_ceilings(tmp_path, supplement, field, value):
+    provider = supplement_provider()
+    limits = replace(collector.Limits.for_profile(supplement.profile), **{field: value})
+    with pytest.raises(collector.CaptureError, match="INVALID_LIMITS"):
+        collector.capture(provider, supplement, tmp_path / "absent", "fixture", limits)
+    assert provider.calls == [] and not (tmp_path / "absent").exists()
+
+
+def test_supplement_stops_before_third_bar_page(tmp_path, supplement):
+    provider = supplement_provider([
+        {"bars": supplement_bars(SUPPLEMENT_DAYS[:1]), "next_page_token": "first"},
+        {"bars": supplement_bars(SUPPLEMENT_DAYS[1:2]), "next_page_token": "second"},
+        {"bars": supplement_bars(SUPPLEMENT_DAYS[2:])}])
+    _, root, manifest = run(tmp_path, supplement, provider)
+    assert len(provider.calls) == manifest["requests_attempted"] == 3
+    assert len(provider.pages) == 1 and failure(root) == "REQUEST_LIMIT"
+    assert not (root / "dataset.json").exists()
+    assert_saved_bindings(root, manifest)
+
+
+def test_supplement_aggregate_capacity_includes_calendar(tmp_path, supplement):
+    provider = supplement_provider([
+        {"bars": supplement_bars(SUPPLEMENT_DAYS[:1]), "next_page_token": "next"},
+        {"bars": supplement_bars(SUPPLEMENT_DAYS[1:])}])
+    previous = provider.transform
+    def padded(response):
+        response = previous(response)
+        if "symbols" in response.effective_params:
+            # Whitespace is valid JSON, but still consumes decoded-body budget.
+            response.body += b" " * (4 * 1024 * 1024 - 1 - len(response.body))
+        return response
+    provider.transform = padded
+    _, root, manifest = run(tmp_path, supplement, provider)
+    assert failure(root) == "RESPONSE_BYTE_LIMIT" and manifest["status"] == "FAILED"
+    assert provider.calls[-1][3] == 8 * 1024 * 1024 - sum(len(r.body) for r in provider.responses[:-1])
+    assert provider.calls[-1][3] < 4 * 1024 * 1024
+    assert not (root / "dataset.json").exists()
+    assert_saved_bindings(root, manifest)
+
+
+def test_supplement_sixty_second_deadline_and_reduced_wait(tmp_path, supplement):
+    now = [0.0]
+    provider = supplement_provider()
+    provider.after = lambda: now.__setitem__(0, 60.0)
+    _, root, manifest = run(tmp_path, supplement, provider, clock=lambda: now[0])
+    assert failure(root) == "ELAPSED_LIMIT" and len(provider.calls) == 1
+    assert manifest["elapsed_seconds"] == 60.0
+    assert_saved_bindings(root, manifest)
+
+
+def test_supplement_can_reduce_limits(tmp_path, supplement):
+    limits = collector.Limits(3, 4096, 8192, 30, 2)
+    provider, root, manifest = run(tmp_path, supplement, supplement_provider(), limits=limits)
+    assert manifest["status"] == "CAPTURE_COMPLETE"
+    assert manifest["effective_limits"] == asdict(limits)
+    assert all(call[2] <= 2 and call[3] <= 4096 for call in provider.calls)
+    assert_saved_bindings(root, manifest)
+
+
+@pytest.mark.parametrize("mode,code", [("quality", None), ("invalid", "OHLC_RANGE_CONFLICT"),
+                                      ("missing-spy", "MISSING_SPY_BENCHMARK_SESSIONS"), ("foreign", "UNREQUESTED_SYMBOL_OR_MALFORMED_ROWS")])
+def test_supplement_preserves_quality_and_failures(tmp_path, supplement, mode, code):
+    payload = supplement_bars()
+    if mode == "quality":
+        payload["VSXY"][0].update(v=0, vw=0)
+    elif mode == "invalid":
+        payload["VSXY"][0]["h"] = 90
+    elif mode == "missing-spy":
+        del payload["SPY"]
+    else:
+        payload["VSCO"] = payload["VSXY"]
+    _, root, manifest = run(tmp_path, supplement, supplement_provider([{"bars": payload}]))
+    assert manifest["qualified_for_research"] is False
+    if code is not None:
+        assert manifest["status"] == "FAILED" and failure(root) == code
+        assert not (root / "dataset.json").exists()
+        if mode == "invalid":
+            diagnostic = json.loads((root / "bar-validation-diagnostic.json").read_bytes())
+            assert diagnostic["symbol"] == "VSXY" and diagnostic["field"] == "h"
+    else:
+        assert manifest["status"] == "CAPTURE_COMPLETE_UNQUALIFIED_DATA"
+        quality = json.loads((root / "quality-summary.json").read_bytes())
+        assert quality["flagged_bars"] == 1 and quality["total_findings"] == 2
+        assert quality["findings"][0]["symbol"] == "VSXY"
+    assert_saved_bindings(root, manifest)
+
+
+def supplement_cli():
+    return ["--profile", collector.SUPPLEMENT_PROFILE, "--start-date", "2026-05-18",
+            "--end-date", "2026-10-07", "--feed", "sip", "--adjustment", "raw",
+            "--currency", "USD", "--asof", "2026-10-08", "--capture-id", "cli"]
+
+
+def test_supplement_exclusive_end_remains_enforced(tmp_path, supplement):
+    payload = supplement_bars()
+    payload["VSXY"][-1]["t"] = "2026-10-08T00:00:00Z"
+    _, root, manifest = run(tmp_path, supplement, supplement_provider([{"bars": payload}]))
+    assert failure(root) == "BAR_OUTSIDE_UTC_WINDOW" and manifest["status"] == "FAILED"
+    assert_saved_bindings(root, manifest)
+
+
+def test_actual_cli_selects_supplement(tmp_path, monkeypatch):
+    provider = supplement_provider()
+    monkeypatch.setenv("APCA_API_KEY_ID", "synthetic-key")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "synthetic-secret")
+    monkeypatch.setattr(collector, "HTTPClient", lambda *args: provider)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert collector.main(supplement_cli()) == 0 and provider.closed
+    manifest = json.loads((tmp_path / "jbravo-research-data" / "cli" / "capture-manifest.json").read_bytes())
+    assert manifest["symbols"] == ["SPY", "VSXY"] and manifest["effective_limits"]["requests"] == 3
+    assert not manifest["qualified_for_research"]
+
+
+@pytest.mark.parametrize("option,value", [("--profile", "unknown"), ("--feed", "iex")])
+def test_cli_rejects_profile_mismatch_before_client_or_output(tmp_path, monkeypatch, option, value):
+    def forbidden(*args):
+        raise AssertionError("Client constructed for invalid profile")
+    monkeypatch.setattr(collector, "HTTPClient", forbidden)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    args = supplement_cli()
+    args[args.index(option) + 1] = value
+    if option == "--profile":
+        with pytest.raises(SystemExit) as caught:
+            collector.main(args)
+        assert caught.value.code == 2
+    else:
+        assert collector.main(args) == 1
+    assert not (tmp_path / "jbravo-research-data").exists()
 
 
 def test_multipage_binding_calendar_and_explicit_request(tmp_path, settings):
