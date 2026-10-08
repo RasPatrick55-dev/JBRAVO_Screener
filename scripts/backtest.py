@@ -873,7 +873,7 @@ class PortfolioBacktester:
             self.equity_curve.append((date, equity))
 
     def results(self) -> pd.DataFrame:
-        return pd.DataFrame(self.trades)
+        return pd.DataFrame(self.trades, columns=list(Trade.__dataclass_fields__))
 
     def equity(self) -> pd.DataFrame:
         return pd.DataFrame(self.equity_curve, columns=["date", "equity"]).set_index("date")

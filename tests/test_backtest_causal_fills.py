@@ -1,19 +1,23 @@
-"""Synthetic tests of the actual simulator definitions, without runtime imports.
+"""Synthetic tests of the actual simulator and caller, without runtime imports.
 
 backtest's module initialization loads credentials/config and initializes logging.
-Compile only its simulator definitions to keep these tests entirely in memory.
+Compile its simulator and run_backtest definitions; mock external caller boundaries.
 Run with --noconftest to avoid the repository's Alpaca-dependent conftest import.
 """
 
 import ast
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 import logging
 import math
+import os
 from pathlib import Path
+import re
 import socket
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Dict, List, Optional
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -27,7 +31,7 @@ pytestmark = pytest.mark.alpaca_optional
 def simulator():
     source = Path(__file__).parents[1] / "scripts" / "backtest.py"
     parsed = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    names = {"Position", "Trade", "evaluate_exit_signals", "PortfolioBacktester"}
+    names = {"Position", "Trade", "evaluate_exit_signals", "PortfolioBacktester", "run_backtest"}
     definitions = [node for node in parsed.body if getattr(node, "name", None) in names]
     assert {node.name for node in definitions} == names
     future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
@@ -36,6 +40,7 @@ def simulator():
     module.__dict__.update(
         dataclass=dataclass, math=math, np=np, pd=pd, Dict=Dict, List=List,
         Optional=Optional, logger=logging.getLogger("jbravo_causal_simulator_tests"),
+        date=date, datetime=datetime, timezone=timezone, os=os, re=re,
     )
     sys.modules[module.__name__] = module
     try:
@@ -108,6 +113,8 @@ def test_terminal_exit_remains_pending_without_forced_liquidation(simulator):
     assert bt.pending_exits == {"AAA": ["EMA20_BREAK"]}
     assert bt.positions["AAA"].qty == 10 and not bt.trades
     assert bt.equity_curve[-1][1] == 10_000
+    assert bt.results().empty
+    assert list(bt.results().columns) == TRADE_COLUMNS
 
 
 def test_ranking_order_is_preserved(simulator):
@@ -313,3 +320,101 @@ def test_single_share_partial_does_not_sell_or_charge_a_fee(simulator):
     bt.run()
     assert bt.positions["AAA"].qty == 1
     assert bt.cash == 9900 and not bt.trades
+
+
+TRADE_COLUMNS = [
+    "symbol", "entry_time", "exit_time", "entry_price", "exit_price", "qty",
+    "pnl", "exit_reason", "mfe_pct", "exit_pct", "exit_efficiency",
+]
+
+
+def test_empty_results_preserve_trade_schema(simulator):
+    bt = backtester(simulator, {"AAA": bars({})})
+    bt.run()
+    result = bt.results()
+    assert result.empty
+    assert list(result.columns) == TRADE_COLUMNS
+    assert not bt.trades and not bt.positions
+
+
+def test_nonempty_results_preserve_existing_schema_and_values(simulator):
+    bt = backtester(simulator, {"AAA": bars(dict(low=94))})
+    seed(simulator, bt, atr_stop=95)
+    bt.run()
+    result = bt.results()
+    assert len(result) == 1
+    assert list(result.columns) == TRADE_COLUMNS
+    pd.testing.assert_frame_equal(result, pd.DataFrame(bt.trades))
+
+
+@pytest.mark.parametrize("pending", ["entry", "exit"])
+def test_actual_caller_exports_zero_trade_summary_with_terminal_signal(
+    simulator, monkeypatch, pending,
+):
+    # Execute the unchanged caller body and real simulator, not a fake result object.
+    # Indicator/provider/DB/export boundaries stay mocked; no file is written.
+    frame = (bars({}, dict(score=5)) if pending == "entry"
+             else bars(dict(score=5), dict(ema20=110)))
+    load = Mock(return_value=frame.copy(deep=True))
+    backfill = Mock(side_effect=AssertionError("Unexpected provider backfill"))
+    insert = Mock(return_value=True)
+    export = Mock()
+    monkeypatch.setattr(simulator, "BASE_DIR", "synthetic-only", raising=False)
+    monkeypatch.setattr(simulator, "CONFIG", {
+        "use_trailing_stop": False, "atr_multiple": 0, "max_hold_days": 100,
+        "enable_macd_exit": False, "enable_partial_exit": False,
+        "enable_candlestick_exit": False, "enable_ema_exit": True,
+    }, raising=False)
+    monkeypatch.setattr(simulator, "load_bars_from_db", load, raising=False)
+    monkeypatch.setattr(simulator, "_maybe_backfill_bars", backfill, raising=False)
+    monkeypatch.setattr(simulator, "compute_indicators", lambda df: df, raising=False)
+    monkeypatch.setattr(simulator, "composite_score", lambda df: df["score"], raising=False)
+    monkeypatch.setattr(simulator, "prepare_series", lambda df: df, raising=False)
+    monkeypatch.setattr(simulator, "db", SimpleNamespace(insert_backtest_results=insert),
+                        raising=False)
+    monkeypatch.setattr(simulator, "write_csv_atomic", export, raising=False)
+    actual_backtester = simulator.PortfolioBacktester
+    instances = []
+
+    def capture_backtester(*args, **kwargs):
+        bt = actual_backtester(*args, **kwargs)
+        instances.append(bt)
+        return bt
+
+    monkeypatch.setattr(simulator, "PortfolioBacktester", capture_backtester)
+    run_date = date(2024, 1, 3)
+    outcome = simulator.run_backtest(
+        ["AAA"], run_date=run_date, lookback_days=2, min_history_bars=2,
+        export_csv=True, enable_db=True,
+    )
+    assert outcome == {"tested": 1, "skipped": 0}
+    load.assert_called_once_with("AAA", end_date=run_date)
+    backfill.assert_not_called()
+    assert len(instances) == 1
+    bt = instances[0]
+    assert not bt.trades
+    if pending == "entry":
+        assert list(bt.pending_entries) == ["AAA"] and not bt.positions
+        assert bt.cash == bt.initial_cash
+    else:
+        assert bt.pending_exits == {"AAA": ["EMA20_BREAK"]}
+        assert bt.positions["AAA"].qty > 0
+
+    assert export.call_count == 3
+    exported = {os.path.basename(call.args[0]): call.args[1]
+                for call in export.call_args_list}
+    assert set(exported) == {"trades_log.csv", "equity_curve.csv", "backtest_results.csv"}
+    trades = exported["trades_log.csv"]
+    assert trades.empty and list(trades.columns) == [*TRADE_COLUMNS, "net_pnl"]
+    pd.testing.assert_frame_equal(exported["equity_curve.csv"], bt.equity().reset_index())
+    summary = exported["backtest_results.csv"]
+    assert len(summary) == 1 and summary.iloc[0]["symbol"] == "AAA"
+    for column in ["trades", "wins", "losses", "net_pnl", "win_rate", "expectancy",
+                   "profit_factor", "max_drawdown", "sharpe", "sortino"]:
+        assert summary.iloc[0][column] == 0
+    assert summary.iloc[0]["run_date"] == run_date
+    assert summary.iloc[0]["symbols_tested"] == 1
+    assert summary.iloc[0]["timestamp"]
+    insert.assert_called_once()
+    assert insert.call_args.args[0] == run_date
+    pd.testing.assert_frame_equal(insert.call_args.args[1], summary)
