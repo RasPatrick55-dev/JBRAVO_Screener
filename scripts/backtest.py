@@ -1574,8 +1574,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             if conn:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("BACKTEST_CONNECTION_CLEANUP_FAILED: %s", exc, exc_info=True)
         return 2
 
     try:
@@ -1599,7 +1599,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         logger.error("Backtest failed: %s", exc)
         return 1
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception as exc:
+            logger.warning("BACKTEST_CONNECTION_CLEANUP_FAILED: %s", exc, exc_info=True)
         end_time = datetime.utcnow()
         elapsed_time = end_time - start_time
         logger.info("Script finished in %s", elapsed_time)

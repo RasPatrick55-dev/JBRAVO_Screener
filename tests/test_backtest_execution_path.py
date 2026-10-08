@@ -274,6 +274,70 @@ def test_actual_nonempty_csv_exports_and_costs(normal_module):
     assert (context.storage / "data" / "exit_reason_metrics.csv").is_file()
 
 
+def fail_main_connection_cleanup(context, monkeypatch):
+    """Fail only the CLI-owned connection, leaving bar-loader cleanup ordinary."""
+    connect = context.module.db.get_db_conn
+
+    def connect_with_failing_close():
+        is_main_connection = not context.store.connections
+        connection = connect()
+        if is_main_connection:
+            connection.close = Mock(side_effect=OSError("synthetic close failure"))
+        return connection
+
+    monkeypatch.setattr(context.module.db, "get_db_conn", connect_with_failing_close)
+
+
+def test_main_success_survives_connection_close_failure(normal_module, monkeypatch):
+    context = normal_module
+    fail_main_connection_cleanup(context, monkeypatch)
+
+    assert context.module.main(cli_arguments(context)) == 0
+    assert context.instances and context.store.outputs
+    context.store.connections[0].close.assert_called_once_with()
+    assert all(connection.closed for connection in context.store.connections[1:])
+    log = (context.storage / "backtest.log").read_text(encoding="utf-8")
+    assert "BACKTEST_CONNECTION_CLEANUP_FAILED: synthetic close failure" in log
+    assert "Backtest failed:" not in log
+
+
+@pytest.mark.parametrize("failure", ["simulation", "output"])
+def test_main_primary_failure_survives_connection_close_failure(
+    normal_module, monkeypatch, failure
+):
+    context = normal_module
+    fail_main_connection_cleanup(context, monkeypatch)
+    if failure == "simulation":
+        def fail_run(self):
+            raise RuntimeError("synthetic simulation failure")
+        monkeypatch.setattr(context.bt_type, "run", fail_run)
+        expected_error = "synthetic simulation failure"
+    else:
+        def fail_output(*args):
+            raise OSError("synthetic output failure")
+        monkeypatch.setattr(context.module.db, "insert_backtest_results", fail_output)
+        expected_error = "synthetic output failure"
+
+    assert context.module.main(cli_arguments(context)) == 1
+    context.store.connections[0].close.assert_called_once_with()
+    assert context.instances and not context.store.outputs
+    assert all(connection.closed for connection in context.store.connections[1:])
+    log = (context.storage / "backtest.log").read_text(encoding="utf-8")
+    assert f"Backtest failed: {expected_error}" in log
+    assert "BACKTEST_CONNECTION_CLEANUP_FAILED: synthetic close failure" in log
+
+
+def test_main_success_with_ordinary_connection_cleanup(normal_module):
+    context = normal_module
+
+    assert context.module.main(cli_arguments(context)) == 0
+    assert context.instances and context.store.outputs
+    assert all(connection.closed for connection in context.store.connections)
+    log = (context.storage / "backtest.log").read_text(encoding="utf-8")
+    assert "BACKTEST_CONNECTION_CLEANUP_FAILED" not in log
+    assert "Backtest failed:" not in log
+
+
 @pytest.mark.parametrize("pending", ["entry", "exit"])
 def test_zero_trade_run_succeeds_and_exports_schema(normal_module, pending):
     context = normal_module

@@ -148,7 +148,10 @@ Requested database output is mandatory: a false insert result or exception
 also fails. The CLI returns 1 on simulation/output failure, 2 for unavailable
 mandatory DB/candidates or an invalid run date, and argparse returns 2 for
 invalid cost arguments. Empty candidates are an unsuccessful unevaluated run,
-not an ordinary zero-trade result. Connections are closed after simulation.
+not an ordinary zero-trade result. Connection cleanup is attempted after simulation.
+A close exception logs `BACKTEST_CONNECTION_CLEANUP_FAILED` without replacing
+the established success (0), simulation/output failure (1), or empty-candidate
+failure (2) outcome. A cleanup warning does not establish that the connection closed.
 Successful CLI runs remain DB-first with CSV export disabled, including the
 deprecated `--export-csv` flag. Direct callers can enable temporary CSV exports;
 the equity CSV retains its existing `date,equity` schema.
