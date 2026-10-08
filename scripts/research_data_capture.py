@@ -29,6 +29,8 @@ DATA_URL = "https://data.alpaca.markets/v2/stocks/bars"
 CALENDAR_URL = "https://paper-api.alpaca.markets/v2/calendar"
 REPO = Path(__file__).resolve().parents[1]
 NY = ZoneInfo("America/New_York")
+QUALITY_SAMPLE_LIMIT = 100
+QUALITY_FIELDS = {"ZERO_VWAP_UNQUALIFIED": "vw", "ZERO_VOLUME_UNQUALIFIED": "v"}
 # Current read-only cache identities bind selection, not historical provenance.
 CACHE_SHA256 = dict(zip((s for s in SYMBOLS if s != "SPY"), (
     "506b31c4c01927362c29a1937d52f50ce5d416994b0fde5f11c6b66759c041a9",
@@ -303,7 +305,16 @@ def parse_bar(symbol, bar, settings, sessions):
     if "n" in bar:
         record["n"] = number(bar["n"], integer=True, field="n")
     if "vw" in bar:
-        record["vw"] = number(bar["vw"], positive=True, field="vw")
+        # Preserve zero in the same exact-decimal projection as other prices.
+        # It is provider data, not a positive price or a research-qualified value.
+        record["vw"] = number(bar["vw"], field="vw")
+    flags = []
+    if "vw" in record and Decimal(record["vw"]) == 0:
+        flags.append("ZERO_VWAP_UNQUALIFIED")
+    if record["v"] == 0:
+        flags.append("ZERO_VOLUME_UNQUALIFIED")
+    if flags:
+        record["quality_flags"] = flags
     return record
 
 
@@ -344,6 +355,8 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
     diagnostic_recording = None
     byte_count, duplicates = 0, 0
     data, last = {}, {}
+    quality_counts = dict.fromkeys(QUALITY_FIELDS, 0)
+    quality_samples, quality_bar_count = [], 0
     def remaining():
         seconds = deadline - clock()
         if seconds <= 0:
@@ -447,6 +460,23 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
                         else:
                             data[key] = record
                             last[symbol] = record["timestamp_utc"]
+                            flags = record.get("quality_flags", [])
+                            quality_bar_count += bool(flags)
+                            for flag in flags:
+                                quality_counts[flag] += 1
+                                if len(quality_samples) < QUALITY_SAMPLE_LIMIT:
+                                    field = QUALITY_FIELDS[flag]
+                                    quality_samples.append({
+                                        "code": flag, "field": field, "rule": "zero_is_unqualified",
+                                        "supplied_value": diagnostic_value(bar[field]),
+                                        "symbol": symbol, "session": record["session"],
+                                        "supplied_timestamp": diagnostic_value(bar["t"], timestamp=True),
+                                        "request_ordinal": ledger[-1]["ordinal"],
+                                        "page_ordinal": len(ledger) - 1, "bar_index": bar_index,
+                                        "bar_index_basis": "zero_based_within_symbol_page",
+                                        "response_body_binding": {
+                                            "bytes": ledger[-1]["raw_body_bytes"],
+                                            "sha256": ledger[-1]["raw_body_sha256"]}})
                     except BarValidationError as exc:
                         exc.diagnostic.update({"request_ordinal": ledger[-1]["ordinal"],
                                                "page_ordinal": len(ledger) - 1, "symbol": symbol,
@@ -479,6 +509,8 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
         files.append(save(root, "dataset.json", [data[key] for key in sorted(data)]))
         remaining()
         disposition = "CAPTURE_COMPLETE_WITH_COVERAGE_GAPS" if any(missing.values()) else "CAPTURE_COMPLETE"
+        if quality_bar_count:
+            disposition = "CAPTURE_COMPLETE_UNQUALIFIED_DATA"
     except Exception as exc:
         code = str(exc) if isinstance(exc, CaptureError) else "LOCAL_ERROR_" + type(exc).__name__
         # Save the primary failure first; optional diagnostics cannot replace it.
@@ -507,6 +539,20 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
                         diagnostic_recording["unbound_partial_possible"] = False
                 except Exception:
                     pass
+    total_findings = sum(quality_counts.values())
+    quality = {"schema": "jbravo.bar-quality.v1", "qualified_for_research": False,
+               "disposition": "UNQUALIFIED_DATA" if total_findings else "NO_LISTED_ANOMALIES_OBSERVED",
+               "coverage": "all captured unique bars" if disposition.startswith("CAPTURE_COMPLETE")
+                           else "validated unique bars before failure; incomplete capture",
+               "unique_bars_inspected": len(data), "flagged_bars": quality_bar_count,
+               "counts_by_code": quality_counts,
+               "counts_by_field": {field: quality_counts[code] for code, field in QUALITY_FIELDS.items()},
+               "total_findings": total_findings, "sample_limit": QUALITY_SAMPLE_LIMIT,
+               "findings": quality_samples, "omitted_findings": total_findings - len(quality_samples),
+               "sample_truncated": total_findings > len(quality_samples),
+               "cause_and_historical_eligibility": "UNKNOWN"}
+    quality_binding = save(root, "quality-summary.json", quality)
+    files.append(quality_binding)
     files.append(save(root, "request-receipts.json", ledger))
     if disposition.startswith("CAPTURE_COMPLETE"):
         try:
@@ -515,6 +561,8 @@ def capture(client, settings, research_base, capture_id, limits=Limits(), *, clo
             files.append(save(root, "failure.json", {"code": "ELAPSED_LIMIT", "usable_dataset": False}))
             disposition = "FAILED"
     manifest = {"schema": "jbravo.research-capture.v1", "status": disposition, "files": files,
+                "quality_summary": quality_binding, "quality_disposition": quality["disposition"],
+                "qualified_for_research": False,
                 "requests_attempted": len(ledger), "completed_body_bytes": byte_count,
                 "elapsed_seconds": clock() - begun, "sealed_utc": utcnow().isoformat(),
                 "qualifications": ["Selected symbols, not historical eligible universe",
