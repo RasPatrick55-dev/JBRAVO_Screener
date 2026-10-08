@@ -30,7 +30,7 @@ evaluation records also prevent assuming prior periods were unseen.
 | Feed | `sip`; entitlement is unverified; failure stops, never falls back to IEX |
 | Adjustment | `raw`; no silent corporate-action adjustment. This does not make raw bars suitable for returns across splits/dividends |
 | Currency | Explicit `USD` |
-| Mapping | Explicit `asof=2026-10-08`, literal symbols, no alias substitution |
+| Mapping | Explicit `asof=2026-10-08` enables provider symbol mapping; literal request symbols, no local alias fallback; not historical eligibility proof |
 | Calendar | Alpaca paper endpoint `/v2/calendar`, same inclusive date range; exchange times interpreted in America/New_York |
 | Output | `%USERPROFILE%/jbravo-research-data/<new-capture-id>/` |
 
@@ -134,6 +134,71 @@ possible unbound partial is explicit. No write is retried. Primary-failure,
 receipt or manifest storage failures can still prevent a complete saved outcome.
 Existing filesystem-race and remote-cancellation limitations remain.
 
+### Provider capture versus bar quality
+
+`JBRAVO_RESEARCH_BAR_QUALITY_CONTRACT_001`, based on
+`b9ceaca57b310bac7b0be78cddcb794a58bfbbde`, changes only the treatment of numeric
+zero VWAP and explicit quality reporting. Supplied negative, nonfinite, malformed,
+Boolean, null or text VWAP remains rejected. Mandatory OHLC prices remain finite
+and strictly positive with the existing range checks; volume remains finite,
+nonnegative and integral. Trade-count and timestamp checks are unchanged.
+
+A supplied numeric zero VWAP is retained exactly as zero in the existing
+exact-decimal string projection (`vw: "0"`; negative zero preserves its sign).
+Numeric formatting already canonicalizes trailing zeroes; the dataset is not a
+byte-for-byte archive of provider JSON. Zero is never converted to an OHLC price,
+invented VWAP, positive usable price or absent field. Each affected page/dataset
+record carries `ZERO_VWAP_UNQUALIFIED` in `quality_flags`. Zero volume is preserved
+as integer zero and independently flagged `ZERO_VOLUME_UNQUALIFIED`. A bar can
+carry both flags. Neither flag explains its cause or establishes liquidity,
+trading eligibility, corporate-action treatment or suitability for evaluation.
+An absent optional VWAP remains absent; it is not filled in or counted as zero.
+
+`quality-summary.json` (schema `jbravo.bar-quality.v1`) is saved even for clean or
+failed captures and hash-bound in both the manifest's `files` and `quality_summary`.
+It records unique validated-bar and flagged-bar counts, exact per-code/per-field
+counts, and up to 100 deterministic per-field finding samples in encounter order.
+Each sample has bounded supplied-value/timestamp renderings, field/rule, symbol,
+session, request/page/bar ordinals and the completed response body's size/hash.
+`omitted_findings` and `sample_truncated` explicitly describe the sample limit;
+aggregate counts include all observed unique bars, and all anomalies in captured
+bars remain flagged in page/dataset records. Identical duplicates are counted
+once for quality, just as they are deduplicated from the dataset. On failure,
+quality coverage means only unique bars validated before the stop, potentially
+including bars from an unsaved failing page; it does not describe a full dataset.
+The existing sanitized diagnostic renderer bounds each value to 128 characters;
+fixed fields and bounded identifiers keep each sample below 4,096 bytes.
+
+A successfully completed capture with either flag reports
+`CAPTURE_COMPLETE_UNQUALIFIED_DATA`, taking precedence over the coverage-gap
+completion label. `coverage.json` still records those gaps, and missing SPY or
+mandatory validation/storage/deadline errors still yield `FAILED`. No rejected
+mandatory field is skipped or repaired. `quality_disposition: UNQUALIFIED_DATA`
+is separate from successful transport/pagination. An anomaly-free capture retains
+its existing completion label but reports only `NO_LISTED_ANOMALIES_OBSERVED`.
+Every manifest and quality summary has `qualified_for_research: false`.
+CLI exit 0 means capture completion, including unqualified data, never research
+readiness or evaluation permission. Consumers must inspect the disposition and
+quality artifacts rather than use process success as acceptance. Quality-summary
+storage failures, like other mandatory evidence-storage failures, can prevent a
+final manifest; they are not silently ignored or retried.
+
+Local consumer inspection: `scripts/backtest.py:load_bars_from_db` selects date,
+open, high, low, close and volume; `_normalize_api_bars` projects the same OHLCV
+fields. `prepare_series`, `compute_atr`, `composite_score`, `PortfolioBacktester`
+and `scripts/indicators.py:compute_indicators` use OHLCV/derived indicators, not
+VWAP. Repository Python searches found no VWAP consumer outside this collector
+and its tests. Thus VWAP is not required by the intended current backtest, while
+volume is used in scoring/OBV. There is no existing research `dataset.json` to
+backtest loader: this inspection is a static dependency finding, not integration
+qualification or authority to evaluate flagged data. Production fetching,
+storage, ranking, paper execution and request settings/limits remain unchanged.
+
+Neither failed real capture is read, altered or reclassified by this offline
+packet. As-of provider mapping cannot prove historical universe membership;
+raw corporate actions, provenance, unseen performance and profitability remain
+unqualified. Any future retrieval or evaluation requires separate Board authority.
+
 This additive source change does not diagnose the previously failed real capture's
 specific offending field: its retained `INVALID_OHLCV` code alone cannot do so.
 That capture remains FAILED with its one execution consumed and two provider
@@ -215,3 +280,40 @@ exercised. Live compatibility, remote cancellation, concurrent filesystem races
 and failures storing the primary failure/receipts/manifest remain unqualified.
 The original failed capture, patches and verification history remain unchanged;
 this revision is uncommitted and awaits Board review. No retrieval is authorized.
+
+### Bar-quality contract verification
+
+This packet grants two new offline invocations, independently of all prior
+consumed allowances. Both used the existing Python 3.13.2 Miniconda interpreter:
+
+```text
+C:\Users\RasPa\miniconda3\python.exe -B -m pytest --noconftest -p no:cacheprovider tests/test_research_data_capture.py -q --tb=short
+```
+
+| Invocation | Actual outcome | Measured process duration |
+|---|---|---|
+| 1 | Exit 1 before collection: `No module named pytest`; no tests executed | 0.0448665 s |
+| 2 | Exit 0: **75 passed, 1 skipped** | 3.6841632 s |
+
+The isolated first environment did not expose the already installed user-site
+pytest. Invocation 2 explicitly bound the existing
+`C:\Users\RasPa\AppData\Roaming\Python\Python313\site-packages` via `PYTHONPATH`
+and retained `APPDATA`; no installation or package change occurred. Both process
+environments excluded provider/database authentication variables, disabled plugin
+autoload and bytecode writes, and enforced a 180-second timeout. Neither timed
+out. **2/2 consumed**, with the failed invocation retained separately. The skip
+is Windows denying test symlink creation; inert reparse-attribute checks passed.
+
+Tests use normal collector import, synthetic provider responses, existing socket
+and child-process prohibitions, and temporary output only. Added regressions
+cover supported zero representations, positive/absent VWAP, negative/nonfinite/
+malformed VWAP rejection, independent zero-volume flags, exact quality counts
+with duplicate removal, sample truncation, coverage-gap precedence, mandatory
+failure precedence, response-body and manifest bindings, final tamper detection,
+and CLI completion without research qualification. Existing mandatory-field,
+pagination, limits, containment and diagnostic failure tests remain in the suite.
+
+No backtest or provider integration was executed. Actual concurrent filesystem
+redirection, remote cancellation, live provider compatibility and evidence-storage
+failures remain unqualified. The source increment is uncommitted and awaits Board
+review; no capture, evaluation, publication or operational permission follows.

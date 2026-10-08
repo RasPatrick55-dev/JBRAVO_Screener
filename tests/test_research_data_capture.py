@@ -2,6 +2,7 @@
 import copy
 import io
 import json
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 import socket
@@ -126,7 +127,7 @@ def assert_saved_bindings(root, manifest):
     ("c", 0, "strictly_positive", "INVALID_OHLCV", "int", "0"),
     ("v", -1, "nonnegative", "INVALID_OHLCV", "int", "-1"),
     ("n", 1.5, "integral", "FRACTIONAL_VOLUME_OR_COUNT", "Decimal", "1.5"),
-    ("vw", 0, "strictly_positive", "INVALID_OHLCV", "int", "0"),
+    ("vw", -1, "nonnegative", "INVALID_OHLCV", "int", "-1"),
     ("h", 100, "high_at_or_above_open_and_close", "OHLC_RANGE_CONFLICT", "int", "100"),
     ("l", 101, "low_at_or_below_open_and_close", "OHLC_RANGE_CONFLICT", "int", "101"),
     ("t", "2024-01-02T05:00:00", "aware_iso8601_microsecond_precision",
@@ -537,3 +538,141 @@ def test_http_adapter_actual_prepared_params_and_bounded_stream(monkeypatch):
     with pytest.raises(collector.CaptureError, match="PAGE_BYTE_LIMIT"):
         client.get(collector.CALENDAR_URL, {}, 1, 2)
     client.close()
+
+
+@pytest.mark.parametrize("value,projection", [(0, "0"), (0.0, "0"),
+                                               (Decimal("0.000"), "0"),
+                                               (Decimal("-0.0"), "-0")])
+def test_zero_vwap_preserves_exact_numeric_value_without_inventing_price(settings, value, projection):
+    supplied = {**bar(2), "vw": value}
+    record = collector.parse_bar("NBIS", supplied, settings, {r["date"] for r in calendar()})
+    assert record["vw"] == projection and Decimal(record["vw"]) == Decimal(str(value))
+    assert record["quality_flags"] == ["ZERO_VWAP_UNQUALIFIED"]
+    assert supplied["vw"] is value
+    assert record["o"] == "100" and record["c"] == "102"
+
+
+@pytest.mark.parametrize("value", [-1, float("nan"), float("inf"), float("-inf"),
+                                   "0", "bad", None, True, {}])
+def test_invalid_vwap_remains_rejected(settings, value):
+    with pytest.raises(collector.BarValidationError) as caught:
+        collector.parse_bar("ALK", {**bar(2), "vw": value}, settings,
+                            {r["date"] for r in calendar()})
+    assert caught.value.diagnostic["field"] == "vw"
+
+
+@pytest.mark.parametrize("field,code,value", [("vw", "ZERO_VWAP_UNQUALIFIED", "0"),
+                                              ("v", "ZERO_VOLUME_UNQUALIFIED", 0)])
+def test_quality_findings_bind_data_source_counts_and_manifest(tmp_path, settings, field, code, value):
+    payload = bars()
+    payload["NBIS"][0][field] = 0
+    provider, root, manifest = run(tmp_path, settings, Provider([{"bars": payload}]))
+    assert manifest["status"] == "CAPTURE_COMPLETE_UNQUALIFIED_DATA"
+    assert manifest["quality_disposition"] == "UNQUALIFIED_DATA"
+    assert manifest["qualified_for_research"] is False
+    dataset = json.loads((root / "dataset.json").read_bytes())
+    record = next(r for r in dataset if r["symbol"] == "NBIS" and r["session"] == "2024-01-02")
+    assert record[field] == value and record["quality_flags"] == [code]
+    quality = json.loads((root / "quality-summary.json").read_bytes())
+    assert quality["counts_by_code"][code] == quality["counts_by_field"][field] == 1
+    assert quality["total_findings"] == quality["flagged_bars"] == 1
+    assert quality["unique_bars_inspected"] == 60
+    assert quality["omitted_findings"] == 0 and not quality["sample_truncated"]
+    finding = quality["findings"][0]
+    assert (finding["code"], finding["field"], finding["symbol"], finding["bar_index"]) == (code, field, "NBIS", 0)
+    assert (finding["request_ordinal"], finding["page_ordinal"]) == (2, 1)
+    assert finding["supplied_value"]["value"] == "0"
+    assert finding["supplied_timestamp"]["value"] == bar(2)["t"]
+    assert finding["response_body_binding"] == {
+        "bytes": len(provider.responses[1].body), "sha256": collector.digest(provider.responses[1].body)}
+    assert len(collector.json_bytes(finding)) <= 4096
+    assert manifest["quality_summary"] in manifest["files"]
+    assert not (root / "failure.json").exists()
+    assert_saved_bindings(root, manifest)
+
+
+def test_positive_and_absent_optional_vwap_do_not_claim_research_readiness(tmp_path, settings):
+    payload = bars()
+    del payload["ALK"][0]["vw"]
+    _, root, manifest = run(tmp_path, settings, Provider([{"bars": payload}]))
+    assert manifest["status"] == "CAPTURE_COMPLETE"
+    assert manifest["quality_disposition"] == "NO_LISTED_ANOMALIES_OBSERVED"
+    assert manifest["qualified_for_research"] is False
+    quality = json.loads((root / "quality-summary.json").read_bytes())
+    assert quality["total_findings"] == 0 and quality["findings"] == []
+    records = json.loads((root / "dataset.json").read_bytes())
+    assert "vw" not in records[0]
+    assert records[1]["vw"] == "101.5" and "quality_flags" not in records[1]
+    assert_saved_bindings(root, manifest)
+
+
+def test_quality_sample_cap_counts_all_unique_bars_and_preserves_all_flags(tmp_path, settings):
+    payload = bars()
+    for rows in payload.values():
+        for row in rows:
+            row.update(v=0, vw=0)
+    payload["ALK"].insert(1, copy.deepcopy(payload["ALK"][0]))
+    # A coverage gap must not mask the stronger unqualified-data disposition.
+    payload["NBIS"].pop()
+    _, root, manifest = run(tmp_path, settings, Provider([{"bars": payload}]))
+    quality = json.loads((root / "quality-summary.json").read_bytes())
+    assert quality["flagged_bars"] == quality["unique_bars_inspected"] == 59
+    assert quality["counts_by_code"] == {"ZERO_VWAP_UNQUALIFIED": 59, "ZERO_VOLUME_UNQUALIFIED": 59}
+    assert quality["total_findings"] == 118
+    assert len(quality["findings"]) == quality["sample_limit"] == 100
+    assert quality["omitted_findings"] == 18 and quality["sample_truncated"]
+    assert all(len(collector.json_bytes(f)) <= 4096 for f in quality["findings"])
+    records = json.loads((root / "dataset.json").read_bytes())
+    assert len(records) == 59
+    assert all(r["vw"] == "0" and r["v"] == 0 and len(r["quality_flags"]) == 2 for r in records)
+    coverage = json.loads((root / "coverage.json").read_bytes())
+    assert coverage["identical_duplicates_removed"] == 1
+    assert coverage["missing_sessions"]["NBIS"] == ["2024-01-05"]
+    assert manifest["status"] == "CAPTURE_COMPLETE_UNQUALIFIED_DATA"
+    assert_saved_bindings(root, manifest)
+
+
+def test_quality_flags_do_not_mask_mandatory_failure(tmp_path, settings):
+    first = bars(range(2, 4))
+    first["ALK"][0].update(vw=0, v=0)
+    second = bars(range(4, 6))
+    second["ALK"][0].update(vw=0, c=0)
+    provider = Provider([{"bars": first, "next_page_token": "next"}, {"bars": second}])
+    _, root, manifest = run(tmp_path, settings, provider)
+    assert manifest["status"] == "FAILED" and failure(root) == "INVALID_OHLCV"
+    diagnostic = json.loads((root / "bar-validation-diagnostic.json").read_bytes())
+    assert (diagnostic["field"], diagnostic["validation_rule"]) == ("c", "strictly_positive")
+    assert not (root / "dataset.json").exists()
+    quality = json.loads((root / "quality-summary.json").read_bytes())
+    assert quality["total_findings"] == 2 and quality["flagged_bars"] == 1
+    assert "incomplete" in quality["coverage"]
+    assert_saved_bindings(root, manifest)
+
+
+def test_quality_summary_tampering_fails_final_binding_check(tmp_path, settings, monkeypatch):
+    save = collector.save
+    def tamper(root, name, value):
+        result = save(root, name, value)
+        if name == "request-receipts.json":
+            (root / "quality-summary.json").write_bytes(b"{}\n")
+        return result
+    monkeypatch.setattr(collector, "save", tamper)
+    with pytest.raises(collector.CaptureError, match="FINAL_ARTIFACT_BINDING_MISMATCH"):
+        run(tmp_path, settings)
+    assert not (tmp_path / "jbravo-research-data" / "fixture" / "capture-manifest.json").exists()
+
+
+def test_cli_returns_capture_success_but_explicitly_unqualified_data(tmp_path, settings, monkeypatch):
+    payload = bars()
+    payload["SPY"][0]["vw"] = 0
+    provider = Provider([{"bars": payload}])
+    monkeypatch.setenv("APCA_API_KEY_ID", "fixture-key")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "fixture-secret")
+    monkeypatch.setattr(collector, "HTTPClient", lambda key, secret: provider)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert collector.main(["--start-date", settings.start_date, "--end-date", settings.end_date,
+        "--feed", "sip", "--adjustment", "raw", "--currency", "USD", "--asof", settings.asof,
+        "--capture-id", "cli-quality"]) == 0
+    manifest = json.loads((tmp_path / "jbravo-research-data" / "cli-quality" / "capture-manifest.json").read_bytes())
+    assert manifest["status"] == "CAPTURE_COMPLETE_UNQUALIFIED_DATA"
+    assert manifest["qualified_for_research"] is False and provider.closed
