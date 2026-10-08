@@ -31,7 +31,8 @@ pytestmark = pytest.mark.alpaca_optional
 def simulator():
     source = Path(__file__).parents[1] / "scripts" / "backtest.py"
     parsed = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    names = {"Position", "Trade", "evaluate_exit_signals", "PortfolioBacktester", "run_backtest"}
+    names = {"Position", "Trade", "evaluate_exit_signals", "PortfolioBacktester",
+             "_validate_execution_costs", "run_backtest"}
     definitions = [node for node in parsed.body if getattr(node, "name", None) in names]
     assert {node.name for node in definitions} == names
     future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
