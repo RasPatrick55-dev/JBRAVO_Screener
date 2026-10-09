@@ -8,7 +8,11 @@ environment; no retry or rollback is attempted.
 
 Activities retain `--lookback-days 30`. Reconciliation retains watermark use,
 14-day fallback lookback, limit 500, overlap 300 seconds and poll setting 1 second.
-Its immutable arguments add `--reconcile-only true --dry-run true`; neither an
+Its immutable arguments add `--reconcile-only true --dry-run true`,
+`--submit-at-ny ''` and `--ignore-market-gate true`. The empty submit time disables
+the executor's default 07:00 ET wait; the supported market-gate bypass allows this
+no-order reconciliation to run before market hours, on weekends and holidays.
+Dry-run enables that bypass without enabling order execution. Neither an
 arbitrary module nor an order-mode override is accepted by this CLI. Dry-run here
 prevents orders; it does **not** make reconciliation read-only: the existing job
 still writes trade history and watermark records. The snapshot also writes its
@@ -33,7 +37,7 @@ increment.
   to 2 MiB with possible overshoot between polls; this is not a provider request or
   wire-byte budget. It does not establish remote cancellation or undo partial writes.
 - Nonzero exit, timeout, excess output, missing completion markers or known error
-  markers makes the run fail and leaves later stages `not_run`. Legacy reconciliation
+  markers make the run fail and leave later stages `not_run`. Legacy reconciliation
   can suppress errors; therefore `RECONCILE_START`, `RECONCILE_END` and
   `RECONCILE_WATERMARK_UPDATE` are required, and its broker/database failure or
   watermark-disabled markers fail even with exit zero. A missing trade decoration
@@ -82,9 +86,16 @@ reviewable cutover plan, not proof of deployment or permission to start trading.
 ## Offline verification
 
 Run `python -m unittest discover -s tests -p test_account_sync.py -v`.
-Tests use only standard-library mocks and temporary storage, avoiding repository
-pytest conftest's Alpaca import. They do not import the three application modules,
-load credential files, connect to a provider/database or execute the jobs. Mocked
-process tests validate supervision, not PythonAnywhere process-group behavior or
-live API/database semantics. Host/virtualenv/shell integration and actual scheduled
-execution remain to be verified after publication and controlled cutover.
+Supervisor tests use standard-library mocks and temporary storage, avoiding repository
+pytest conftest's Alpaca import. Gate integration tests additionally require pandas,
+dateutil and timezone data. They import the executor normally with provider, database,
+environment, alerts and telemetry boundaries replaced before import. The real parser,
+configuration builder, submit-time helper and dispatcher market gates execute against
+synthetic pre-07:00 ET, weekend and holiday clocks. An empty candidate frame verifies
+that reconciliation still reaches its branch; candidate loading/ranking, reconciliation
+persistence, metrics and broker operations are doubles. Actual dispatcher logs feed the
+supervisor's completion checks, and later snapshot-stage reachability is asserted with
+a synthetic snapshot result. No credential file, provider/database connection, order or
+real child job is used. This does not qualify full initialization, live reconciliation,
+PythonAnywhere process groups or actual scheduled execution. Host integration still
+requires verification after publication and controlled cutover.
