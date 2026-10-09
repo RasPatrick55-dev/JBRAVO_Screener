@@ -2263,6 +2263,10 @@ def _extract_split_tokens(
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the JBRAVO daily pipeline")
     parser.add_argument(
+        "--postflight-report", action="store_true",
+        help="Write run-bound health facts for the read-only primary postflight checker",
+    )
+    parser.add_argument(
         "--steps",
         default=None,
         help=(
@@ -4120,6 +4124,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     error_info: dict[str, Any] | None = None
     degraded = False
     zero_candidates_alerted = False
+    labels_rows = 0
+    enrichment_freshness = None
     try:
         if "screener" in steps:
             current_step = "screener"
@@ -5450,6 +5456,30 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         except Exception:
             LOG.warning("ACCOUNT_EQUITY_REFRESH_FAILED", exc_info=True)
         _reload_dashboard(args.reload_web.lower() == "true")
+        if getattr(args, "postflight_report", False):
+            try:
+                from scripts.pipeline_postflight import publish_health
+                publish_health(
+                    base_dir, started_at=started_dt, finished_at=datetime.now(timezone.utc),
+                    pipeline_rc=rc, steps=steps, step_rcs=step_rcs,
+                    stage_times=stage_times, degraded=degraded, labels_rows=labels_rows,
+                    freshness=enrichment_freshness, coverage=model_score_coverage_summary,
+                    ml_health=ml_health_summary,
+                    controls={
+                        "strict_predictions_meta": bool(strict_predictions_meta),
+                        "strict_auto_refresh_predictions": bool(strict_auto_refresh_predictions),
+                        "auto_refresh_features": bool(auto_refresh_features),
+                        "auto_refresh_predictions": bool(auto_refresh_predictions),
+                        "use_champion": bool(use_champion),
+                        "ml_health_guard": bool(ml_health_guard_enabled),
+                        "refresh_predictions_for_candidates": bool(refresh_predictions_for_candidates),
+                    },
+                )
+            except Exception as failure:
+                # Recording cannot convert a primary failure into success.
+                LOG.error("POSTFLIGHT_RECORD_FAILED error_type=%s", type(failure).__name__)
+                if rc == 0:
+                    rc = 1
         should_raise = LOG.name != "pipeline" or os.environ.get(
             "JBR_PIPELINE_RAISE", ""
         ).lower() in {
