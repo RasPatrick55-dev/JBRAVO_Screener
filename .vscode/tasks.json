@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Probe PythonAnywhere env",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "scripts.pythonanywhere_env_probe"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "PythonAnywhere API handshake",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "scripts.pythonanywhere_env_probe", "--handshake"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

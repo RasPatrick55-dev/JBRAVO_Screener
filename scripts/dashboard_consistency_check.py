@@ -60,6 +60,7 @@ EXECUTION_SKIP_TOKENS = (
 )
 
 CANDIDATE_CANONICAL_LOWER = {"symbol", "score"}
+MIN_MODEL_SCORE_COVERAGE_PCT = 80.0
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -142,6 +143,23 @@ def _safe_read_csv(path: Path) -> tuple[pd.DataFrame | None, dict[str, Any]]:
         df = pd.read_csv(path)
     except Exception as exc:  # pragma: no cover - defensive
         LOGGER.warning("Failed to read CSV %s: %s", path, exc)
+        info["error"] = str(exc)
+        return None, info
+    info["present"] = True
+    info["rows"] = int(len(df.index))
+    info["columns"] = list(df.columns)
+    return df, info
+
+
+def _safe_read_db_view(view_name: str) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    info: dict[str, Any] = {"path": f"db://{view_name}", "present": False}
+    if not db_module.db_enabled():
+        info["error"] = "db_disabled"
+        return None, info
+    try:
+        df = db_module.fetch_view_dataframe(view_name)
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.warning("Failed to read DB view %s: %s", view_name, exc)
         info["error"] = str(exc)
         return None, info
     info["present"] = True
@@ -401,7 +419,10 @@ def _analyze_candidates(df: pd.DataFrame | None, info: dict[str, Any]) -> dict[s
         sequence_slice = canonical_sequence[: len(canonical_list)]
         matches_order = sequence_slice == canonical_list
         has_all = all(name in canonical_sequence for name in canonical_list)
-        analysis["canonical"] = matches_order and has_all and not missing_score_breakdown
+        is_db_view = str(info.get("path") or "").startswith("db://")
+        analysis["canonical"] = (
+            has_all and not missing_score_breakdown if is_db_view else matches_order and has_all and not missing_score_breakdown
+        )
     if df is None or df.empty:
         return analysis
     analysis["row_count"] = int(len(df.index))
@@ -742,6 +763,10 @@ def _csv_exports_enabled(top_info: Mapping[str, Any]) -> bool:
 
 
 def _db_view_row_count(view_name: str) -> tuple[int | None, str | None]:
+    if view_name == "latest_screener_candidates":
+        db_module.ensure_latest_screener_candidates_view()
+    elif view_name == "latest_top_candidates":
+        db_module.ensure_latest_top_candidates_view()
     conn = db_module.get_db_conn()
     if conn is None:
         return None, "db_connect_failed_or_disabled"
@@ -752,6 +777,57 @@ def _db_view_row_count(view_name: str) -> tuple[int | None, str | None]:
         return int((row or [0])[0] or 0), None
     except Exception as exc:
         return None, str(exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _db_view_candidate_stats(view_name: str) -> tuple[dict[str, Any], str | None]:
+    allowed_views = {"latest_screener_candidates", "latest_top_candidates"}
+    if view_name not in allowed_views:
+        return {}, "unsupported_view"
+    if view_name == "latest_screener_candidates":
+        db_module.ensure_latest_screener_candidates_view()
+    elif view_name == "latest_top_candidates":
+        db_module.ensure_latest_top_candidates_view()
+    conn = db_module.get_db_conn()
+    if conn is None:
+        return {}, "db_connect_failed_or_disabled"
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = %(table_name)s
+                  AND column_name = 'model_score_5d'
+                LIMIT 1
+                """,
+                {"table_name": view_name},
+            )
+            has_score = cursor.fetchone() is not None
+            if has_score:
+                cursor.execute(
+                    f"SELECT COUNT(*) AS row_count, COUNT(model_score_5d) AS non_null_count FROM {view_name}"
+                )
+                row = cursor.fetchone()
+                return {
+                    "rows": int((row or [0, 0])[0] or 0),
+                    "non_null_scores": int((row or [0, 0])[1] or 0),
+                    "has_score_column": True,
+                }, None
+            cursor.execute(f"SELECT COUNT(*) AS row_count FROM {view_name}")
+            row = cursor.fetchone()
+            return {
+                "rows": int((row or [0])[0] or 0),
+                "non_null_scores": None,
+                "has_score_column": False,
+            }, None
+    except Exception as exc:
+        return {}, str(exc)
     finally:
         try:
             conn.close()
@@ -772,6 +848,7 @@ def run_assertions(base_dir: Path) -> list[str]:
     top_rows = _coerce_int(top_info.get("rows"))
     rows_metric = _coerce_int(metrics.get("rows"))
     latest_rows = _coerce_int(latest_info.get("rows"))
+    candidates_final_metric = _coerce_int(metrics.get("candidates_final"))
 
     if _csv_exports_enabled(top_info):
         if top_rows is None or rows_metric is None or top_rows != rows_metric:
@@ -798,8 +875,41 @@ def run_assertions(base_dir: Path) -> list[str]:
                 errors.append(
                     f"[PARITY_DB] latest_top_candidates rows={db_top_rows} does not match screener_metrics.json rows={rows_metric}"
                 )
+            if (
+                candidates_final_metric is not None
+                and db_top_rows is not None
+                and db_top_rows != candidates_final_metric
+            ):
+                errors.append(
+                    "[PARITY_DB] latest_top_candidates rows="
+                    f"{db_top_rows} does not match screener_metrics.json candidates_final={candidates_final_metric}"
+                )
             if db_latest_rows in (None, 0):
                 errors.append("[DB] latest_screener_candidates empty")
+            latest_stats, latest_stats_err = _db_view_candidate_stats("latest_screener_candidates")
+            top_stats, top_stats_err = _db_view_candidate_stats("latest_top_candidates")
+            if latest_stats_err or top_stats_err:
+                LOGGER.warning(
+                    "[CHECK] DB_VIEW_SCORE_ASSERTIONS_SKIPPED latest_err=%s top_err=%s",
+                    latest_stats_err,
+                    top_stats_err,
+                )
+            else:
+                for view_name, stats in (
+                    ("latest_screener_candidates", latest_stats),
+                    ("latest_top_candidates", top_stats),
+                ):
+                    row_count = int(stats.get("rows") or 0)
+                    has_score = bool(stats.get("has_score_column"))
+                    non_null = stats.get("non_null_scores")
+                    if row_count <= 0 or not has_score or non_null is None:
+                        continue
+                    coverage_pct = float(non_null) / float(row_count) * 100.0
+                    if coverage_pct < MIN_MODEL_SCORE_COVERAGE_PCT:
+                        errors.append(
+                            f"[ML_DB] {view_name} model_score_5d coverage={coverage_pct:.2f}% "
+                            f"({non_null}/{row_count}) below threshold={MIN_MODEL_SCORE_COVERAGE_PCT:.2f}%"
+                        )
 
     for key in ("bars_rows_total_fetch", "symbols_with_any_bars", "symbols_with_required_bars"):
         if _coerce_int(metrics.get(key)) is None:
@@ -851,6 +961,13 @@ def generate_report(
     latest_df, latest_info = _safe_read_csv(base / "data" / "latest_candidates.csv")
     top_df, top_info = _safe_read_csv(base / "data" / "top_candidates.csv")
     scored_df, scored_info = _safe_read_csv(base / "data" / "scored_candidates.csv")
+    if db_module.db_enabled():
+        latest_db_df, latest_db_info = _safe_read_db_view("latest_screener_candidates")
+        top_db_df, top_db_info = _safe_read_db_view("latest_top_candidates")
+        if latest_db_df is not None and latest_db_info.get("present"):
+            latest_df, latest_info = latest_db_df, latest_db_info
+        if top_db_df is not None and top_db_info.get("present"):
+            top_df, top_info = top_db_df, top_db_info
     execute_metrics, execute_info = _safe_read_json(base / "data" / "execute_metrics.json")
     predictions_df, predictions_info = _safe_read_csv(base / "data" / "predictions" / "latest.csv")
     ranker_eval, ranker_info = _safe_read_json(base / "data" / "ranker_eval" / "latest.json")

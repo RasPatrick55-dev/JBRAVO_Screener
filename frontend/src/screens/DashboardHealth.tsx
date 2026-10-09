@@ -202,14 +202,6 @@ const pythonAnywhereResourceDefaults = [
   { label: "Postgres Storage", value: 10 },
 ];
 
-const mlDailyImprovementsDefaults = [
-  { label: "Plume", active: true },
-  { label: "Fun", active: true },
-  { label: "Perth", active: false },
-  { label: "Process", active: false },
-  { label: "JF", active: false },
-];
-
 const pythonAnywhereTasksDefaults = [
   { name: "Run Pipeline", frequency: "Daily", time: "03:45 UTC" },
   { name: "Screener Backtest", frequency: "Daily", time: "04:00 UTC" },
@@ -1616,7 +1608,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
             <div className="grid gap-4 lg:grid-cols-3">
               <AlpacaCard value={alpacaEquity} />
               <PythonAnywhereResources resources={pythonAnywhereResourceRows} />
-              <MLDailyImprovements items={mlDailyImprovementsDefaults} />
+              <MLDailyImprovements onOpenPipeline={() => onTabSelect?.("ML Pipeline")} />
             </div>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <LatestLogsTable rows={latestLogsRows} />

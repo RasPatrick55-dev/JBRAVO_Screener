@@ -42,6 +42,7 @@ from scripts.utils.ml_health_guard import (
     load_latest_ml_health,
     resolve_ml_health_max_age_days,
 )
+from scripts.utils.model_selection import load_model_artifact_meta, select_compatible_model
 from scripts.utils.prediction_freshness import evaluate_predictions_freshness
 from scripts.utils.feature_schema import compute_feature_signature, load_features_meta_for_path
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
@@ -147,6 +148,7 @@ DEFAULT_LABELS_BARS_PATH = Path("data") / "daily_bars.csv"
 DEFAULT_RANKER_SCORE_COLUMN = "score_5d"
 DEFAULT_RANKER_TARGET_COLUMN = "model_score_5d"
 DEFAULT_ALLOC_WEIGHT_TOP_K = 4
+DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT = 80.0
 DEFAULT_FEATURES_TIMEOUT_SECS = 900
 DEFAULT_RANKER_PREDICT_TIMEOUT_SECS = 900
 DEFAULT_RANKER_EVAL_TIMEOUT_SECS = 180
@@ -658,10 +660,12 @@ def _should_write_candidate_csvs() -> bool:
 def compose_metrics_from_artifacts(
     base_dir: Path,
     *,
+    run_date: date | None = None,
     symbols_in: int | None = None,
     fallback_symbols_with_bars: int | None = None,
     fallback_bars_rows_total: int | None = None,
     latest_source: str | None = None,
+    final_rows_source: str = "screener_candidates",
 ) -> dict[str, Any]:
     base = Path(base_dir)
     data_dir = base / "data"
@@ -673,8 +677,12 @@ def compose_metrics_from_artifacts(
     latest_rows = 0
     scored_rows = 0
     db_rows: int | None = None
+    resolved_rows_source = str(final_rows_source or "screener_candidates").strip().lower()
     if db.db_enabled():
-        db_rows, _ = db.fetch_latest_screener_candidate_count()
+        if resolved_rows_source == "top_candidates":
+            db_rows, _ = db.fetch_top_candidate_count(run_date=run_date)
+        else:
+            db_rows, _ = db.fetch_latest_screener_candidate_count()
         rows_final = int(db_rows or 0)
     else:
         rows_final = _count_rows(data_dir / "top_candidates.csv")
@@ -685,7 +693,11 @@ def compose_metrics_from_artifacts(
         existing_metrics.get("rows_out")
     )
     if metrics_rows is not None:
-        rows_final = max(rows_final, metrics_rows)
+        if resolved_rows_source == "top_candidates":
+            if rows_final <= 0:
+                rows_final = int(metrics_rows)
+        else:
+            rows_final = max(rows_final, metrics_rows)
     if rows_final == 0 and post_stats:
         hinted = _coerce_optional_int(post_stats.get("candidates_final"))
         if hinted:
@@ -792,6 +804,7 @@ def compose_metrics_from_artifacts(
         else None,
         "rows": int(rows_final),
         "rows_premetrics": int(rows_final),
+        "rows_source": resolved_rows_source,
         "latest_source": latest_source or "unknown",
         "metrics_version": 2,
     }
@@ -804,8 +817,9 @@ def compose_metrics_from_artifacts(
             payload["symbols_attempted_fetch"] = fetch_any_attempted
     elif fetch_symbols_required is not None:
         payload["symbols_attempted_fetch"] = fetch_symbols_required
+    payload["candidates_final"] = int(rows_final)
     if post_stats and "candidates_final" in post_stats:
-        payload["candidates_final"] = _coerce_optional_int(
+        payload["candidates_final_raw"] = _coerce_optional_int(
             post_stats.get("candidates_final")
         ) or int(rows_final)
     return payload
@@ -1218,7 +1232,9 @@ def run_cmd(cmd: Sequence[str], name: str) -> int:
 
 
 def _should_enrich_candidates(args: argparse.Namespace, steps: Sequence[str]) -> bool:
-    return bool(getattr(args, "enrich_candidates_with_ranker", False))
+    return bool(
+        getattr(args, "enrich_candidates_with_ranker", False) or "ranker_eval" in set(steps)
+    )
 
 
 def _find_latest_predictions_path(base_dir: Path) -> Path | None:
@@ -1271,18 +1287,134 @@ def _prepare_predictions_frame(
     return _normalize_predictions_frame(df, score_column)
 
 
+def _predictions_glob_for_artifact(artifact_type: str) -> str:
+    if str(artifact_type or "").strip().lower() == "predictions_scoped":
+        return "predictions_scoped_*.csv"
+    return "predictions_*.csv"
+
+
 def _load_latest_predictions_frame(
-    base_dir: Path, score_column: str = DEFAULT_RANKER_SCORE_COLUMN
+    base_dir: Path,
+    score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
+    artifact_type: str = "predictions",
 ) -> tuple[pd.DataFrame, str]:
     if db.db_enabled():
-        predictions = db.load_ml_artifact_csv("predictions")
+        predictions = db.load_ml_artifact_csv(artifact_type)
         if predictions.empty:
-            return pd.DataFrame(columns=["symbol", score_column, "score_ts"]), "db:missing"
-        return _normalize_predictions_frame(predictions, score_column), "db"
-    predictions_path = _find_latest_predictions_path(base_dir)
+            return (
+                pd.DataFrame(columns=["symbol", score_column, "score_ts"]),
+                f"db:{artifact_type}:missing",
+            )
+        return _normalize_predictions_frame(predictions, score_column), f"db:{artifact_type}"
+    predictions_path = _latest_by_glob(
+        base_dir / "data" / "predictions",
+        _predictions_glob_for_artifact(artifact_type),
+    )
     if predictions_path is None:
-        return pd.DataFrame(columns=["symbol", score_column, "score_ts"]), "file:missing"
+        return (
+            pd.DataFrame(columns=["symbol", score_column, "score_ts"]),
+            f"file:{artifact_type}:missing",
+        )
     return _prepare_predictions_frame(predictions_path, score_column), str(predictions_path)
+
+
+def _prediction_candidate_overlap_state(
+    base_dir: Path,
+    *,
+    score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
+    artifact_type: str = "predictions",
+) -> dict[str, Any]:
+    candidates = _load_latest_candidates_frame(base_dir)
+    predictions, predictions_source = _load_latest_predictions_frame(
+        base_dir,
+        score_column,
+        artifact_type=artifact_type,
+    )
+
+    candidate_symbols = (
+        {
+            _coerce_symbol(value)
+            for value in candidates.get("symbol", pd.Series(dtype="string")).tolist()
+            if _coerce_symbol(value)
+        }
+        if isinstance(candidates, pd.DataFrame)
+        else set()
+    )
+    prediction_symbols = (
+        {
+            _coerce_symbol(value)
+            for value in predictions.get("symbol", pd.Series(dtype="string")).tolist()
+            if _coerce_symbol(value)
+        }
+        if isinstance(predictions, pd.DataFrame)
+        else set()
+    )
+    prediction_non_null_symbols: set[str] = set()
+    if isinstance(predictions, pd.DataFrame) and not predictions.empty and score_column in predictions.columns:
+        score_series = pd.to_numeric(predictions[score_column], errors="coerce")
+        prediction_non_null_symbols = {
+            _coerce_symbol(value)
+            for value in predictions.loc[score_series.notna(), "symbol"].tolist()
+            if _coerce_symbol(value)
+        }
+
+    run_ts_utc = None
+    if isinstance(candidates, pd.DataFrame) and not candidates.empty and "run_ts_utc" in candidates.columns:
+        parsed_run_ts = pd.to_datetime(candidates["run_ts_utc"], errors="coerce", utc=True)
+        if parsed_run_ts.notna().any():
+            try:
+                run_ts_utc = parsed_run_ts.dropna().max()
+            except Exception:
+                run_ts_utc = None
+
+    run_date = None
+    if isinstance(candidates, pd.DataFrame) and not candidates.empty and "run_date" in candidates.columns:
+        parsed_run_date = pd.to_datetime(candidates["run_date"], errors="coerce", utc=True)
+        if parsed_run_date.notna().any():
+            try:
+                run_date = parsed_run_date.dropna().max().date()
+            except Exception:
+                run_date = None
+    if run_date is None and isinstance(run_ts_utc, pd.Timestamp):
+        try:
+            run_date = run_ts_utc.date()
+        except Exception:
+            run_date = None
+
+    overlap_symbols = sorted(candidate_symbols & prediction_symbols)
+    overlap_non_null = sorted(candidate_symbols & prediction_non_null_symbols)
+    missing_symbols = sorted(candidate_symbols - prediction_symbols)
+
+    LOG.info(
+        "[INFO] PREDICTIONS_CANDIDATE_OVERLAP candidates=%s prediction_symbols=%s overlap=%s overlap_non_null=%s predictions_source=%s artifact_type=%s run_ts_utc=%s run_date=%s",
+        int(len(candidate_symbols)),
+        int(len(prediction_symbols)),
+        int(len(overlap_symbols)),
+        int(len(overlap_non_null)),
+        predictions_source,
+        artifact_type,
+        run_ts_utc.isoformat() if isinstance(run_ts_utc, pd.Timestamp) else None,
+        run_date.isoformat() if isinstance(run_date, date) else None,
+    )
+    if candidate_symbols and not overlap_symbols:
+        LOG.info(
+            "[INFO] PREDICTIONS_CANDIDATE_OVERLAP_SAMPLE missing_symbols=%s predictions_source=%s artifact_type=%s",
+            missing_symbols[:10],
+            predictions_source,
+            artifact_type,
+        )
+
+    return {
+        "candidate_symbol_count": int(len(candidate_symbols)),
+        "prediction_symbol_count": int(len(prediction_symbols)),
+        "overlap_count": int(len(overlap_symbols)),
+        "overlap_non_null_count": int(len(overlap_non_null)),
+        "predictions_source": predictions_source,
+        "artifact_type": artifact_type,
+        "run_ts_utc": run_ts_utc.isoformat() if isinstance(run_ts_utc, pd.Timestamp) else None,
+        "run_date": run_date.isoformat() if isinstance(run_date, date) else None,
+        "missing_symbols_sample": missing_symbols[:10],
+    }
 
 
 def enrich_candidates_with_predictions(
@@ -1331,6 +1463,8 @@ def _enrich_candidates_with_ranker(
     *,
     score_column: str = DEFAULT_RANKER_SCORE_COLUMN,
     target_column: str = DEFAULT_RANKER_TARGET_COLUMN,
+    predictions_artifact_type: str = "predictions",
+    predictions_freshness: Mapping[str, Any] | None = None,
     refresh_predictions_for_candidates: bool = False,
     refresh_predictions_callback: Any = None,
     _refresh_attempted: bool = False,
@@ -1545,7 +1679,11 @@ def _enrich_candidates_with_ranker(
             "db:unknown" if db.db_enabled() else "file:unknown",
         )
         return
-    predictions, predictions_source = _load_latest_predictions_frame(base, score_column)
+    predictions, predictions_source = _load_latest_predictions_frame(
+        base,
+        score_column,
+        artifact_type=predictions_artifact_type,
+    )
     if predictions.empty:
         if db.db_enabled():
             run_ts_utc = _extract_candidate_run_ts(candidates)
@@ -1585,6 +1723,26 @@ def _enrich_candidates_with_ranker(
             run_ts_utc=run_ts_utc,
             run_date=run_date,
         )
+        predictions_are_fresh = (
+            isinstance(predictions_freshness, Mapping)
+            and not bool(predictions_freshness.get("stale"))
+        )
+        overlap_count = int(overlap_diag.get("overlap_count") or 0)
+        if predictions_are_fresh and overlap_count <= 0:
+            freshness_reason = (
+                str(predictions_freshness.get("reason") or "fresh").strip() or "fresh"
+            )
+            LOG.error(
+                "[ERROR] CANDIDATES_PREDICTION_OVERLAP_FATAL reason=fresh_predictions_zero_overlap predictions_source=%s artifact_type=%s candidates=%s prediction_symbols=%s run_ts_utc=%s run_date=%s freshness_reason=%s",
+                predictions_source,
+                predictions_artifact_type,
+                int(len(candidates.index)),
+                int(overlap_diag.get("prediction_symbol_count") or 0),
+                run_ts_utc.isoformat() if run_ts_utc is not None else None,
+                run_date.isoformat() if run_date is not None else None,
+                freshness_reason,
+            )
+            raise RuntimeError("fresh_predictions_zero_overlap")
         scores_rows_for_run = int(
             renamed.loc[renamed["symbol"].isin(candidate_symbol_set), target_column].notna().sum()
         )
@@ -1608,6 +1766,8 @@ def _enrich_candidates_with_ranker(
             if column not in ordered_with_optional:
                 ordered_with_optional.append(column)
         merged = merged[ordered_with_optional]
+    except RuntimeError:
+        raise
     except Exception:
         LOG.warning(
             "[WARN] CANDIDATES_ENRICH_FAILED reason=merge_error candidates_path=%s predictions_source=%s",
@@ -1637,6 +1797,70 @@ def _enrich_candidates_with_ranker(
             run_ts_utc=run_ts_utc,
             score_col=target_column,
         )
+        candidate_count = int(len(candidates.index))
+        coverage_pct = (
+            float(matched) / float(candidate_count) * 100.0 if candidate_count > 0 else 0.0
+        )
+        if (
+            candidate_count > 0
+            and coverage_pct < DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT
+            and not _refresh_attempted
+            and callable(refresh_predictions_callback)
+            and candidate_symbol_set
+        ):
+            LOG.warning(
+                "[WARN] MODEL_SCORE_COVERAGE_LOW total=%s matched=%s pct=%.2f threshold_pct=%.2f run_ts_utc=%s predictions_source=%s",
+                candidate_count,
+                matched,
+                coverage_pct,
+                DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT,
+                run_ts_utc.isoformat(),
+                predictions_source,
+            )
+            LOG.info(
+                "[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_AUTO symbols=%s reason=low_coverage threshold_pct=%.2f",
+                int(len(candidate_symbol_set)),
+                DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT,
+            )
+            refresh_rc = 1
+            try:
+                refresh_rc = int(refresh_predictions_callback(sorted(candidate_symbol_set)))
+            except Exception:
+                LOG.warning(
+                    "AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES low coverage callback failed",
+                    exc_info=True,
+                )
+                refresh_rc = 1
+            LOG.info(
+                "[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_DONE rc=%s predictions_source=%s",
+                refresh_rc,
+                _predictions_source_state(base),
+            )
+            if refresh_rc == 0:
+                return _enrich_candidates_with_ranker(
+                    base,
+                    score_column=score_column,
+                    target_column=target_column,
+                    predictions_artifact_type="predictions_scoped",
+                    predictions_freshness={
+                        "stale": False,
+                        "reason": "candidate_scoped_refresh_low_coverage",
+                    },
+                    refresh_predictions_for_candidates=refresh_predictions_for_candidates,
+                    refresh_predictions_callback=refresh_predictions_callback,
+                    _refresh_attempted=True,
+                )
+        if candidate_count > 0 and coverage_pct < DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT:
+            LOG.error(
+                "[ERROR] MODEL_SCORE_COVERAGE_FATAL total=%s matched=%s pct=%.2f threshold_pct=%.2f run_ts_utc=%s predictions_source=%s",
+                candidate_count,
+                matched,
+                coverage_pct,
+                DEFAULT_MODEL_SCORE_MIN_COVERAGE_PCT,
+                run_ts_utc.isoformat(),
+                predictions_source,
+            )
+            raise RuntimeError("low_model_score_coverage")
         if matched <= 0:
             matched_zero_reason = _classify_matched_zero_subreason(overlap_diag, run_date=run_date)
             if (
@@ -1668,6 +1892,11 @@ def _enrich_candidates_with_ranker(
                         base,
                         score_column=score_column,
                         target_column=target_column,
+                        predictions_artifact_type="predictions_scoped",
+                        predictions_freshness={
+                            "stale": False,
+                            "reason": "candidate_scoped_refresh",
+                        },
                         refresh_predictions_for_candidates=refresh_predictions_for_candidates,
                         refresh_predictions_callback=refresh_predictions_callback,
                         _refresh_attempted=True,
@@ -1697,6 +1926,16 @@ def _enrich_candidates_with_ranker(
         LOG.info(
             "[INFO] CANDIDATES_ENRICHED destination=db table=screener_ranker_scores_app rows=%s run_ts_utc=%s",
             written,
+            run_ts_utc.isoformat(),
+        )
+        LOG.info(
+            "[INFO] OVERLAY_ROW_COUNT rows=%s run_ts_utc=%s",
+            written,
+            run_ts_utc.isoformat(),
+        )
+        LOG.info(
+            "[INFO] OVERLAY_NON_NULL_SCORE_COUNT non_null=%s run_ts_utc=%s",
+            matched,
             run_ts_utc.isoformat(),
         )
         return merged
@@ -2485,7 +2724,12 @@ def _derive_universe_prefix_counts(base_dir: Path) -> Dict[str, int]:
     return {}
 
 
-def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
+def write_complete_screener_metrics(
+    base_dir: Path,
+    *,
+    run_date: date | None = None,
+    final_rows_source: str = "screener_candidates",
+) -> dict[str, Any]:
     """Ensure ``screener_metrics.json`` contains integer KPIs even on fallback nights."""
 
     base_dir = Path(base_dir)
@@ -2565,10 +2809,12 @@ def write_complete_screener_metrics(base_dir: Path) -> dict[str, Any]:
 
     metrics = compose_metrics_from_artifacts(
         base_dir,
+        run_date=run_date,
         symbols_in=fallback_hint.get("symbols_in"),
         fallback_symbols_with_bars=fallback_hint.get("symbols_with_bars"),
         fallback_bars_rows_total=fallback_hint.get("bars_rows_total"),
         latest_source=fallback_hint.get("latest_source"),
+        final_rows_source=final_rows_source,
     )
     if existing_last_run:
         metrics["last_run_utc"] = existing_last_run
@@ -2727,6 +2973,42 @@ def _inject_run_date_arg(args: list[str], run_date: date | None) -> list[str]:
         cleaned.append(token)
     cleaned.extend(["--run-date", run_date.isoformat()])
     return cleaned
+
+
+def _coerce_date_value(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except Exception:
+        return None
+
+
+def _append_reason_tag(reason: str, tag: str) -> str:
+    normalized_reason = str(reason or "").strip()
+    normalized_tag = str(tag or "").strip()
+    if not normalized_tag:
+        return normalized_reason or "fresh"
+    tags = [part.strip() for part in normalized_reason.split(",") if part.strip()]
+    if normalized_tag not in tags:
+        tags.append(normalized_tag)
+    return ",".join(tags) if tags else "fresh"
+
+
+def _prediction_snapshot_date(predictions_meta: Mapping[str, Any] | None) -> date | None:
+    payload = dict(predictions_meta or {})
+    for key in ("snapshot_date", "run_date", "as_of_date"):
+        resolved = _coerce_date_value(payload.get(key))
+        if resolved is not None:
+            return resolved
+    return None
 
 
 def _write_refresh_metrics(metrics_path: Path) -> None:
@@ -3137,76 +3419,25 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return model_path.parent / f"ranker_summary_{match.group(1)}.json"
 
     def _latest_model_meta() -> dict[str, Any]:
-        latest_model = _latest_by_glob(base_dir / "data" / "models", "ranker_*.pkl")
-        if latest_model is None:
+        features_meta, _ = _load_features_meta()
+        selected_model, selection = select_compatible_model(
+            base_dir / "data" / "models",
+            features_meta,
+        )
+        if selected_model is None:
             return {
                 "model_path": None,
                 "model_mtime_utc": None,
                 "feature_set": None,
                 "feature_signature": None,
                 "feature_count": 0,
+                "selection_reason": selection.get("reason"),
+                "selection_mode": selection.get("selection_mode"),
             }
-        try:
-            model_mtime_utc = datetime.fromtimestamp(
-                latest_model.stat().st_mtime, timezone.utc
-            ).isoformat()
-        except Exception:
-            model_mtime_utc = None
-        feature_set = None
-        feature_signature_stored = None
-        feature_columns: list[str] = []
-        summary_path = _summary_path_for_model(latest_model)
-        if summary_path is not None and summary_path.exists():
-            try:
-                summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
-            except Exception:
-                summary_payload = {}
-            if isinstance(summary_payload, Mapping):
-                feature_set = str(summary_payload.get("feature_set") or "").strip().lower() or None
-                feature_signature_stored = (
-                    str(summary_payload.get("feature_signature") or "").strip() or None
-                )
-                summary_cols = summary_payload.get("feature_columns")
-                if isinstance(summary_cols, list):
-                    feature_columns = [str(c).strip() for c in summary_cols if str(c).strip()]
-        try:
-            import joblib  # type: ignore
-
-            payload = joblib.load(latest_model)
-            if isinstance(payload, Mapping):
-                payload_set = str(payload.get("feature_set") or "").strip().lower() or None
-                if payload_set:
-                    feature_set = payload_set
-                payload_signature = str(payload.get("feature_signature") or "").strip() or None
-                if payload_signature:
-                    feature_signature_stored = payload_signature
-                payload_cols = payload.get("feature_columns")
-                if isinstance(payload_cols, list):
-                    cleaned = [str(c).strip() for c in payload_cols if str(c).strip()]
-                    if cleaned:
-                        feature_columns = cleaned
-        except Exception:
-            pass
-        computed_signature = compute_feature_signature(feature_columns) if feature_columns else None
-        if (
-            feature_signature_stored
-            and computed_signature
-            and feature_signature_stored != computed_signature
-        ):
-            LOG.warning(
-                "[WARN] MODEL_FEATURE_SIGNATURE_MISMATCH stored=%s computed=%s model_path=%s",
-                feature_signature_stored,
-                computed_signature,
-                latest_model,
-            )
-        resolved_signature = computed_signature or feature_signature_stored
-        return {
-            "model_path": str(latest_model),
-            "model_mtime_utc": model_mtime_utc,
-            "feature_set": feature_set,
-            "feature_signature": resolved_signature,
-            "feature_count": int(len(feature_columns)),
-        }
+        resolved = dict(load_model_artifact_meta(selected_model))
+        resolved["selection_reason"] = selection.get("reason")
+        resolved["selection_mode"] = selection.get("selection_mode")
+        return resolved
 
     def _load_features_meta() -> tuple[dict[str, Any], str]:
         return load_features_meta_for_path(
@@ -3221,6 +3452,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         model_path = str(model_meta.get("model_path") or "").strip() or None
         model_feature_set = str(model_meta.get("feature_set") or "").strip().lower() or None
         model_feature_signature = str(model_meta.get("feature_signature") or "").strip() or None
+        model_selection_reason = str(model_meta.get("selection_reason") or "").strip() or None
         features_feature_set = str(features_meta.get("feature_set") or "").strip().lower() or None
         meta_feature_signature = str(features_meta.get("feature_signature") or "").strip() or None
         features_columns = features_meta.get("feature_columns")
@@ -3246,6 +3478,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if not features_meta:
             stale = True
             reason = "features_meta_missing"
+        elif not model_path:
+            stale = True
+            reason = model_selection_reason or "compatible_model_missing"
         elif not model_feature_signature:
             stale = True
             reason = "model_signature_missing"
@@ -3287,9 +3522,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     def _load_predictions_meta() -> tuple[dict[str, Any], str]:
         if db.db_enabled():
-            payload = db.load_ml_artifact_payload("predictions")
+            record = db.fetch_latest_ml_artifact("predictions")
+            payload = record.get("payload") if isinstance(record, Mapping) else None
             if isinstance(payload, Mapping) and payload:
-                return dict(payload), "db"
+                merged = dict(payload)
+                if record:
+                    run_date_value = _coerce_date_value(record.get("run_date"))
+                    created_at_value = record.get("created_at")
+                    if run_date_value is not None and not merged.get("run_date"):
+                        merged["run_date"] = run_date_value.isoformat()
+                    if created_at_value is not None and not merged.get("created_at"):
+                        merged["created_at"] = (
+                            created_at_value.isoformat()
+                            if isinstance(created_at_value, datetime)
+                            else str(created_at_value)
+                        )
+                    if record.get("source") and not merged.get("source"):
+                        merged["source"] = record.get("source")
+                    if record.get("file_name") and not merged.get("file_name"):
+                        merged["file_name"] = record.get("file_name")
+                return merged, "db"
         meta_path = base_dir / "data" / "predictions" / "latest_meta.json"
         if meta_path.exists():
             try:
@@ -3318,6 +3570,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         *,
         context: str,
         log_prefix: str = "AUTO_REFRESH_FEATURES",
+        refresh_labels: bool = False,
     ) -> int:
         labels_cmd: list[str] | None = None
         if db.db_enabled():
@@ -3326,7 +3579,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             labels_present = (
                 _latest_by_glob(base_dir / "data" / "labels", "labels_*.csv") is not None
             )
-        if not labels_present:
+        if refresh_labels or not labels_present:
             bars_path = _resolve_labels_bars_path(args.labels_bars_path, base_dir)
             labels_cmd = [
                 sys.executable,
@@ -3337,10 +3590,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 "--output-dir",
                 str(base_dir / "data" / "labels"),
             ]
-            LOG.info(
-                "[INFO] %s enabled=true labels_missing=true -> running labels",
-                log_prefix,
-            )
+            if refresh_labels:
+                LOG.info(
+                    "[INFO] %s enabled=true labels_refresh=forced -> running labels",
+                    log_prefix,
+                )
+            else:
+                LOG.info(
+                    "[INFO] %s enabled=true labels_missing=true -> running labels",
+                    log_prefix,
+                )
             rc_labels = 0
             secs_labels = 0.0
             try:
@@ -3382,42 +3641,119 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         _ensure_features_freshness(context)
         return int(rc_features)
 
-    def _ensure_predictions_freshness(context: str) -> dict[str, Any]:
+    def _ensure_predictions_freshness(
+        context: str, *, allow_overlap_realign: bool = True
+    ) -> dict[str, Any]:
         predict_rc: int | None = None
-        model_meta = _latest_model_meta()
-        features_meta, _ = _load_features_meta()
-        predictions_meta, predictions_meta_source = _load_predictions_meta()
-        stale, reason, freshness_details = evaluate_predictions_freshness(
-            model_meta,
-            features_meta,
-            predictions_meta,
-            strict_meta=bool(strict_predictions_meta),
-        )
-        model_path = str(model_meta.get("model_path") or "")
-        pred_model_path = str(predictions_meta.get("model_path") or "")
-        latest_features_set = str(freshness_details.get("latest_features_feature_set") or "")
-        latest_features_signature = str(
-            freshness_details.get("latest_features_feature_signature") or ""
-        )
-        pred_features_set = str(freshness_details.get("predictions_feature_set") or "")
-        pred_features_signature = str(freshness_details.get("predictions_feature_signature") or "")
-        pred_compatible = freshness_details.get("pred_compatible")
-        pred_missing_frac = freshness_details.get("pred_missing_frac")
-        pred_compat_reason = str(freshness_details.get("pred_compat_reason") or "")
-        LOG.info(
-            "[INFO] PREDICTIONS_FRESHNESS stale=%s reason=%s model_path=%s pred_model_path=%s latest_features_set=%s latest_features_signature=%s pred_features_set=%s pred_features_signature=%s pred_compatible=%s pred_missing_frac=%s pred_compat_reason=%s",
-            str(bool(stale)).lower(),
-            reason,
-            model_path or None,
-            pred_model_path or None,
-            latest_features_set or None,
-            latest_features_signature or None,
-            pred_features_set or None,
-            pred_features_signature or None,
-            pred_compatible,
-            pred_missing_frac,
-            pred_compat_reason or None,
-        )
+        model_meta: dict[str, Any] = {}
+        predictions_meta: dict[str, Any] = {}
+        predictions_meta_source = "missing"
+        model_path = ""
+        pred_model_path = ""
+        latest_features_set = ""
+        latest_features_signature = ""
+        pred_features_set = ""
+        pred_features_signature = ""
+        pred_compatible: Any = None
+        pred_missing_frac: Any = None
+        pred_compat_reason = ""
+        snapshot_date: date | None = None
+        snapshot_lag_days: int | None = None
+        stale = False
+        reason = "fresh"
+
+        def _refresh_prediction_state() -> tuple[dict[str, Any], dict[str, Any], str, bool, str]:
+            nonlocal model_meta
+            nonlocal predictions_meta
+            nonlocal predictions_meta_source
+            nonlocal model_path
+            nonlocal pred_model_path
+            nonlocal latest_features_set
+            nonlocal latest_features_signature
+            nonlocal pred_features_set
+            nonlocal pred_features_signature
+            nonlocal pred_compatible
+            nonlocal pred_missing_frac
+            nonlocal pred_compat_reason
+            nonlocal snapshot_date
+            nonlocal snapshot_lag_days
+
+            model_meta = _latest_model_meta()
+            features_meta, _ = _load_features_meta()
+            predictions_meta, predictions_meta_source = _load_predictions_meta()
+            stale_value, reason_value, freshness_details = evaluate_predictions_freshness(
+                model_meta,
+                features_meta,
+                predictions_meta,
+                strict_meta=bool(strict_predictions_meta),
+            )
+            snapshot_date = _prediction_snapshot_date(predictions_meta)
+            snapshot_lag_days = None
+            if snapshot_date is not None:
+                snapshot_lag_days = (pipeline_run_date - snapshot_date).days
+                if snapshot_lag_days > 1:
+                    stale_value = True
+                    reason_value = _append_reason_tag(reason_value, "snapshot_date_lag")
+            freshness_details["prediction_snapshot_date"] = (
+                snapshot_date.isoformat() if snapshot_date is not None else None
+            )
+            freshness_details["prediction_snapshot_lag_days"] = snapshot_lag_days
+            freshness_details["pipeline_run_date"] = pipeline_run_date.isoformat()
+            freshness_details["predictions_meta_source"] = predictions_meta_source
+            model_path = str(model_meta.get("model_path") or "")
+            pred_model_path = str(predictions_meta.get("model_path") or "")
+            latest_features_set = str(freshness_details.get("latest_features_feature_set") or "")
+            latest_features_signature = str(
+                freshness_details.get("latest_features_feature_signature") or ""
+            )
+            pred_features_set = str(freshness_details.get("predictions_feature_set") or "")
+            pred_features_signature = str(
+                freshness_details.get("predictions_feature_signature") or ""
+            )
+            pred_compatible = freshness_details.get("pred_compatible")
+            pred_missing_frac = freshness_details.get("pred_missing_frac")
+            pred_compat_reason = str(freshness_details.get("pred_compat_reason") or "")
+            return freshness_details, features_meta, predictions_meta_source, stale_value, reason_value
+
+        def _log_prediction_state(*, stale_value: bool, reason_value: str) -> None:
+            LOG.info(
+                "[INFO] PREDICTIONS_SNAPSHOT_FRESHNESS context=%s pipeline_run_date=%s snapshot_date=%s lag_days=%s max_lag_days=%s source=%s stale=%s reason=%s",
+                context,
+                pipeline_run_date.isoformat(),
+                snapshot_date.isoformat() if snapshot_date is not None else None,
+                snapshot_lag_days,
+                1,
+                predictions_meta_source,
+                str(bool(stale_value)).lower(),
+                reason_value,
+            )
+            LOG.info(
+                "[INFO] PREDICTIONS_FRESHNESS stale=%s reason=%s model_path=%s pred_model_path=%s latest_features_set=%s latest_features_signature=%s pred_features_set=%s pred_features_signature=%s pred_compatible=%s pred_missing_frac=%s pred_compat_reason=%s",
+                str(bool(stale_value)).lower(),
+                reason_value,
+                model_path or None,
+                pred_model_path or None,
+                latest_features_set or None,
+                latest_features_signature or None,
+                pred_features_set or None,
+                pred_features_signature or None,
+                pred_compatible,
+                pred_missing_frac,
+                pred_compat_reason or None,
+            )
+            if snapshot_lag_days is not None and snapshot_lag_days > 1:
+                LOG.error(
+                    "[ERROR] PREDICTIONS_SNAPSHOT_STALE context=%s pipeline_run_date=%s snapshot_date=%s lag_days=%s max_lag_days=%s source=%s",
+                    context,
+                    pipeline_run_date.isoformat(),
+                    snapshot_date.isoformat() if snapshot_date is not None else None,
+                    snapshot_lag_days,
+                    1,
+                    predictions_meta_source,
+                )
+
+        _, _, _, stale, reason = _refresh_prediction_state()
+        _log_prediction_state(stale_value=stale, reason_value=reason)
         if stale:
             LOG.warning("[WARN] PREDICTIONS_STALE reason=%s suggestion=run ranker_predict", reason)
             if auto_refresh_predictions and not freshness_state.get("refresh_attempted"):
@@ -3492,44 +3828,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     _predictions_source_state(base_dir),
                 )
                 LOG.info("[INFO] AUTO_REFRESH_PREDICTIONS_DONE rc=%s", rc_predict)
-                model_meta = _latest_model_meta()
-                features_meta, _ = _load_features_meta()
-                predictions_meta, predictions_meta_source = _load_predictions_meta()
-                stale, reason, freshness_details = evaluate_predictions_freshness(
-                    model_meta,
-                    features_meta,
-                    predictions_meta,
-                    strict_meta=bool(strict_predictions_meta),
-                )
-                model_path = str(model_meta.get("model_path") or "")
-                pred_model_path = str(predictions_meta.get("model_path") or "")
-                latest_features_set = str(
-                    freshness_details.get("latest_features_feature_set") or ""
-                )
-                latest_features_signature = str(
-                    freshness_details.get("latest_features_feature_signature") or ""
-                )
-                pred_features_set = str(freshness_details.get("predictions_feature_set") or "")
-                pred_features_signature = str(
-                    freshness_details.get("predictions_feature_signature") or ""
-                )
-                pred_compatible = freshness_details.get("pred_compatible")
-                pred_missing_frac = freshness_details.get("pred_missing_frac")
-                pred_compat_reason = str(freshness_details.get("pred_compat_reason") or "")
-                LOG.info(
-                    "[INFO] PREDICTIONS_FRESHNESS stale=%s reason=%s model_path=%s pred_model_path=%s latest_features_set=%s latest_features_signature=%s pred_features_set=%s pred_features_signature=%s pred_compatible=%s pred_missing_frac=%s pred_compat_reason=%s",
-                    str(bool(stale)).lower(),
-                    reason,
-                    model_path or None,
-                    pred_model_path or None,
-                    latest_features_set or None,
-                    latest_features_signature or None,
-                    pred_features_set or None,
-                    pred_features_signature or None,
-                    pred_compatible,
-                    pred_missing_frac,
-                    pred_compat_reason or None,
-                )
+                _, _, _, stale, reason = _refresh_prediction_state()
+                _log_prediction_state(stale_value=stale, reason_value=reason)
                 if stale and any(
                     token in str(reason or "")
                     for token in (
@@ -3544,16 +3844,148 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         "[WARN] AUTO_REFRESH_PREDICTIONS_INEFFECTIVE reason=%s suggestion=enable_strict_auto_refresh_or_refresh_features",
                         reason,
                     )
+        if (
+            allow_overlap_realign
+            and not stale
+            and db.db_enabled()
+            and "screener" in steps
+            and context in {"ranker_eval", "enrichment"}
+        ):
+            overlap_state = _prediction_candidate_overlap_state(base_dir)
+            candidate_symbol_count = int(overlap_state.get("candidate_symbol_count") or 0)
+            overlap_count = int(overlap_state.get("overlap_count") or 0)
+            if candidate_symbol_count > 0 and overlap_count <= 0:
+                features_freshness = _ensure_features_freshness(f"{context}_overlap_realign")
+                target_feature_set = (
+                    str(
+                        features_freshness.get("model_feature_set")
+                        or features_freshness.get("features_feature_set")
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
+                if target_feature_set not in {"v1", "v2"}:
+                    LOG.error(
+                        "[ERROR] PREDICTIONS_CANDIDATE_OVERLAP_FATAL context=%s reason=model_feature_set_missing candidates=%s prediction_symbols=%s run_date=%s",
+                        context,
+                        candidate_symbol_count,
+                        int(overlap_state.get("prediction_symbol_count") or 0),
+                        overlap_state.get("run_date"),
+                    )
+                    raise RuntimeError("predictions_candidate_overlap_feature_set_missing")
+                LOG.info(
+                    "[INFO] PREDICTIONS_CANDIDATE_OVERLAP_REFRESH context=%s reason=fresh_predictions_zero_overlap target_feature_set=%s candidates=%s prediction_symbols=%s",
+                    context,
+                    target_feature_set,
+                    candidate_symbol_count,
+                    int(overlap_state.get("prediction_symbol_count") or 0),
+                )
+                rc_refresh = _run_labels_and_features_refresh(
+                    target_feature_set,
+                    context=f"{context}_overlap_realign",
+                    log_prefix="AUTO_REFRESH_PREDICTIONS_FOR_CURRENT_CANDIDATES",
+                    refresh_labels=True,
+                )
+                if rc_refresh != 0:
+                    raise RuntimeError(
+                        f"predictions_candidate_overlap_refresh_failed rc={int(rc_refresh)}"
+                    )
+                predict_timeout, _ = _ranker_predict_timeout_config()
+                cmd = [sys.executable, "-m", "scripts.ranker_predict"]
+                if extras["ranker_predict"]:
+                    cmd.extend(extras["ranker_predict"])
+                if strict_auto_refresh_predictions:
+                    LOG.info(
+                        "[INFO] STRICT_AUTO_REFRESH_PREDICTIONS enabled=true max_missing_feature_fraction=0.2"
+                    )
+                    if not _has_cli_flag(cmd, "--strict-feature-match"):
+                        cmd.extend(["--strict-feature-match", "true"])
+                    if not _has_cli_flag(cmd, "--max-missing-feature-fraction"):
+                        cmd.extend(["--max-missing-feature-fraction", "0.2"])
+                rc_predict = 0
+                secs = 0.0
+                try:
+                    rc_predict, secs = run_step(
+                        "ranker_predict",
+                        cmd,
+                        timeout=predict_timeout,
+                        env=_step_env("ranker_predict"),
+                    )
+                except Exception as exc:  # pragma: no cover - defensive continue
+                    LOG.warning(
+                        "AUTO_REFRESH_PREDICTIONS_FOR_CURRENT_CANDIDATES ranker_predict error: %s",
+                        exc,
+                    )
+                    rc_predict, secs = 1, 0.0
+                stage_times["ranker_predict"] = secs
+                step_rcs["ranker_predict"] = rc_predict
+                predict_rc = rc_predict
+                calibrated, method = _ranker_predict_score_source_from_log(base_dir)
+                LOG.info(
+                    "[INFO] RANKER_PREDICT rc=%s calibrated=%s method=%s predictions_source=%s",
+                    rc_predict,
+                    calibrated,
+                    method,
+                    _predictions_source_state(base_dir),
+                )
+                LOG.info(
+                    "[INFO] PREDICTIONS_CANDIDATE_OVERLAP_REFRESH_DONE context=%s rc=%s predictions_source=%s",
+                    context,
+                    rc_predict,
+                    _predictions_source_state(base_dir),
+                )
+                if rc_predict != 0:
+                    raise RuntimeError(
+                        f"predictions_candidate_overlap_predict_failed rc={int(rc_predict)}"
+                    )
+                refreshed = _ensure_predictions_freshness(
+                    context,
+                    allow_overlap_realign=False,
+                )
+                overlap_after = _prediction_candidate_overlap_state(base_dir)
+                if (
+                    int(overlap_after.get("candidate_symbol_count") or 0) > 0
+                    and int(overlap_after.get("overlap_count") or 0) <= 0
+                ):
+                    LOG.error(
+                        "[ERROR] PREDICTIONS_CANDIDATE_OVERLAP_FATAL context=%s reason=fresh_predictions_zero_overlap candidates=%s prediction_symbols=%s run_date=%s",
+                        context,
+                        int(overlap_after.get("candidate_symbol_count") or 0),
+                        int(overlap_after.get("prediction_symbol_count") or 0),
+                        overlap_after.get("run_date"),
+                    )
+                    raise RuntimeError("fresh_predictions_zero_overlap")
+                return refreshed
         if predict_rc is None:
             rc_value = step_rcs.get("ranker_predict")
             if isinstance(rc_value, int):
                 predict_rc = rc_value
+        if context == "ranker_eval" and stale:
+            LOG.error(
+                "[ERROR] RANKER_EVAL_STALE_PREDICTIONS pipeline_run_date=%s snapshot_date=%s lag_days=%s reason=%s predict_rc=%s source=%s",
+                pipeline_run_date.isoformat(),
+                snapshot_date.isoformat() if snapshot_date is not None else None,
+                snapshot_lag_days,
+                reason,
+                predict_rc,
+                predictions_meta_source,
+            )
+            raise RuntimeError(
+                "ranker_eval blocked: stale prediction inputs "
+                f"(pipeline_run_date={pipeline_run_date.isoformat()} "
+                f"snapshot_date={snapshot_date.isoformat() if snapshot_date is not None else 'missing'} "
+                f"lag_days={snapshot_lag_days} reason={reason})"
+            )
         return {
             "stale": bool(stale),
             "reason": reason,
             "model_path": model_path or None,
             "pred_model_path": pred_model_path or None,
             "predictions_meta_source": predictions_meta_source,
+            "snapshot_date": snapshot_date.isoformat() if snapshot_date is not None else None,
+            "snapshot_lag_days": snapshot_lag_days,
+            "pipeline_run_date": pipeline_run_date.isoformat(),
             "latest_features_set": latest_features_set or None,
             "latest_features_signature": latest_features_signature or None,
             "pred_features_set": pred_features_set or None,
@@ -3573,29 +4005,36 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             return 1
         unique_symbols = sorted(set(normalized_symbols))
         features_freshness = _ensure_features_freshness("candidate_scoped_refresh")
-        if bool(features_freshness.get("stale")):
-            target_feature_set = (
-                str(features_freshness.get("model_feature_set") or "").strip().lower()
+        target_feature_set = (
+            str(
+                features_freshness.get("model_feature_set")
+                or features_freshness.get("features_feature_set")
+                or ""
             )
-            LOG.info(
-                "[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_FEATURES_MODEL_CONTEXT model_path=%s model_feature_set=%s model_feature_signature=%s",
-                features_freshness.get("model_path"),
-                target_feature_set or None,
-                features_freshness.get("model_feature_signature"),
+            .strip()
+            .lower()
+        )
+        LOG.info(
+            "[INFO] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_FEATURES_MODEL_CONTEXT model_path=%s model_feature_set=%s model_feature_signature=%s force_labels=%s",
+            features_freshness.get("model_path"),
+            target_feature_set or None,
+            features_freshness.get("model_feature_signature"),
+            "true",
+        )
+        if target_feature_set in {"v1", "v2"}:
+            rc_features = _run_labels_and_features_refresh(
+                target_feature_set,
+                context="candidate_scoped_refresh",
+                log_prefix="AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_FEATURES",
+                refresh_labels=True,
             )
-            if target_feature_set in {"v1", "v2"}:
-                rc_features = _run_labels_and_features_refresh(
-                    target_feature_set,
-                    context="candidate_scoped_refresh",
-                    log_prefix="AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_FEATURES",
-                )
-                if rc_features != 0:
-                    return int(rc_features)
-            else:
-                LOG.warning(
-                    "[WARN] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_FEATURES_SKIPPED reason=model_feature_set_missing"
-                )
-                return 1
+            if rc_features != 0:
+                return int(rc_features)
+        else:
+            LOG.warning(
+                "[WARN] AUTO_REFRESH_PREDICTIONS_FOR_CANDIDATES_FEATURES_SKIPPED reason=model_feature_set_missing"
+            )
+            return 1
 
         symbols_dir = base_dir / "data" / "tmp"
         symbols_dir.mkdir(parents=True, exist_ok=True)
@@ -3940,9 +4379,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     _predictions_source_state(base_dir),
                 )
 
-        if db.db_enabled() and (
-            "ranker_eval" in steps or getattr(args, "enrich_candidates_with_ranker", False)
-        ):
+        if db.db_enabled() and _should_enrich_candidates(args, steps):
             # Let explicit predict step or freshness manager own prediction refresh.
             skip_internal_predict = (
                 "ranker_predict" in steps or auto_refresh_predictions or ml_health_guard_enabled
@@ -4479,7 +4916,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         best.get("cost_bps"),
                     )
 
-        if getattr(args, "enrich_candidates_with_ranker", False):
+        if _should_enrich_candidates(args, steps):
             enrichment_freshness = _ensure_predictions_freshness("enrichment")
             LOG.info(
                 "[INFO] ML_HEALTH_GUARD enabled=%s mode=%s",
@@ -4611,6 +5048,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     base_dir=base_dir,
                     score_column=DEFAULT_RANKER_SCORE_COLUMN,
                     target_column=DEFAULT_RANKER_TARGET_COLUMN,
+                    predictions_freshness=enrichment_freshness,
                     refresh_predictions_for_candidates=refresh_predictions_for_candidates,
                     refresh_predictions_callback=_run_candidate_scoped_prediction_refresh,
                 )
@@ -4700,12 +5138,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if screener_rc not in (0, None) and (summary_rows or 0) > 0:
             summary_source = "fallback"
         metrics_path = base_dir / "data" / "screener_metrics.json"
+        final_rows_source = "top_candidates" if "metrics" in steps else "screener_candidates"
         metrics_payload = compose_metrics_from_artifacts(
             base_dir,
+            run_date=pipeline_run_date,
             symbols_in=symbols_in,
             fallback_symbols_with_bars=symbols_with_bars,
             fallback_bars_rows_total=bars_rows_total,
             latest_source=summary_source,
+            final_rows_source=final_rows_source,
         )
         if isinstance(ml_health_summary, Mapping):
             metrics_payload["ml_health"] = dict(ml_health_summary)
@@ -4719,6 +5160,90 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             LOG.exception("SCREENER_METRICS_WRITE_FAILED path=%s", metrics_path)
         metrics_final = ensure_canonical_metrics(_read_json(metrics_path))
         candidates_final = int(metrics_final.get("rows", 0))
+        metrics_candidates_final = _coerce_optional_int(metrics_final.get("candidates_final"))
+        if db.db_enabled() and final_rows_source == "top_candidates":
+            top_rows, top_run_date = db.fetch_top_candidate_count(run_date=pipeline_run_date)
+            top_rows = int(top_rows or 0)
+            LOG.info(
+                "[INFO] FINAL_CANDIDATE_ROW_COUNT rows=%s source=%s run_date=%s",
+                int(candidates_final),
+                final_rows_source,
+                top_run_date or pipeline_run_date,
+            )
+            screener_view_df = db.fetch_view_dataframe("latest_screener_candidates")
+            top_view_df = db.fetch_view_dataframe("latest_top_candidates")
+            for view_name, view_frame in (
+                ("latest_screener_candidates", screener_view_df),
+                ("latest_top_candidates", top_view_df),
+            ):
+                has_score = "model_score_5d" in view_frame.columns
+                non_null_scores = (
+                    int(pd.to_numeric(view_frame["model_score_5d"], errors="coerce").notna().sum())
+                    if has_score
+                    else 0
+                )
+                LOG.info(
+                    "[INFO] CANONICAL_CURRENT_VIEW_ROW_COUNT view=%s rows=%s has_model_score_5d=%s non_null_model_score_5d=%s",
+                    view_name,
+                    int(len(view_frame.index)),
+                    str(bool(has_score)).lower(),
+                    non_null_scores,
+                )
+            if top_rows != candidates_final:
+                rc = 1
+                if error_info is None:
+                    error_info = {
+                        "step": "pipeline",
+                        "message": "final_candidate_parity_mismatch",
+                        "metrics_rows": int(candidates_final),
+                        "db_top_rows": int(top_rows),
+                        "run_date": str(top_run_date or pipeline_run_date),
+                    }
+                LOG.error(
+                    "[ERROR] FINAL_CANDIDATE_PARITY_FATAL run_date=%s metrics_rows=%s db_top_rows=%s",
+                    top_run_date or pipeline_run_date,
+                    int(candidates_final),
+                    int(top_rows),
+                )
+            else:
+                LOG.info(
+                    "[INFO] FINAL_CANDIDATE_PARITY rows=%s source=top_candidates run_date=%s",
+                    int(top_rows),
+                    top_run_date or pipeline_run_date,
+                )
+            top_view_rows = int(len(top_view_df.index))
+            if top_view_rows != top_rows:
+                rc = 1
+                if error_info is None:
+                    error_info = {
+                        "step": "pipeline",
+                        "message": "canonical_view_parity_mismatch",
+                        "db_top_rows": int(top_rows),
+                        "view_rows": int(top_view_rows),
+                        "run_date": str(top_run_date or pipeline_run_date),
+                    }
+                LOG.error(
+                    "[ERROR] CANDIDATE_PARITY_MISMATCH reason=latest_top_candidates_vs_top_candidates db_top_rows=%s canonical_rows=%s run_date=%s",
+                    int(top_rows),
+                    int(top_view_rows),
+                    top_run_date or pipeline_run_date,
+                )
+            if metrics_candidates_final is not None and metrics_candidates_final != top_view_rows:
+                rc = 1
+                if error_info is None:
+                    error_info = {
+                        "step": "pipeline",
+                        "message": "candidates_final_mismatch",
+                        "metrics_candidates_final": int(metrics_candidates_final),
+                        "canonical_rows": int(top_view_rows),
+                        "run_date": str(top_run_date or pipeline_run_date),
+                    }
+                LOG.error(
+                    "[ERROR] CANDIDATE_PARITY_MISMATCH reason=candidates_final_vs_latest_top_candidates metrics_candidates_final=%s canonical_rows=%s run_date=%s",
+                    int(metrics_candidates_final),
+                    int(top_view_rows),
+                    top_run_date or pipeline_run_date,
+                )
         bars_rows_total_int = int(metrics_final.get("bars_rows_total", 0) or 0)
         with_bars_effective = int(metrics_final.get("symbols_with_required_bars", 0) or 0)
         with_bars_any = int(metrics_final.get("symbols_with_any_bars", with_bars_effective) or 0)
@@ -4776,7 +5301,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         rows_for_stamp = 0
         try:
             if rc != 0:
-                kpis = write_complete_screener_metrics(base_dir)
+                kpis = write_complete_screener_metrics(
+                    base_dir,
+                    run_date=pipeline_run_date,
+                    final_rows_source=final_rows_source,
+                )
             else:
                 kpis = metrics_final
             rows_for_stamp = int(kpis.get("rows") or 0)
