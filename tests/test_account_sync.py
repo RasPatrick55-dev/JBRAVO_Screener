@@ -1,4 +1,4 @@
-"""Offline workflow tests: no application module, provider or database import."""
+"""Offline supervisor tests and normal executor gate integration with external doubles."""
 import contextlib
 from datetime import datetime, timedelta
 import hashlib
