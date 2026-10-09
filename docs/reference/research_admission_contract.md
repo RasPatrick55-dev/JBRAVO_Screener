@@ -3,7 +3,9 @@
 Original work item: `JBRAVO_RESEARCH_ADMISSION_BOUNDARY_001`, source base
 `c41016344f3a86925d590f0e43f6c8bc314f1d1d`. Narrow correction:
 `JBRAVO_RESEARCH_ADMISSION_BOUNDARY_CORRECTION_001`, current source base
-`3939fd951c7f346703fa054d814fbcf4bf565cd9`. Historical strategy/foundation
+`3939fd951c7f346703fa054d814fbcf4bf565cd9`. Snapshot-retention continuation:
+`JBRAVO_RESEARCH_ADMISSION_SNAPSHOT_RETENTION_001`, reconciled source base
+`d67d36760e7a87a1ce7fa07a3d00a1ab86286125`. Historical strategy/foundation
 provenance remains bound to its named original variant, not automatically
 refreshed by current-base operational changes. Python API:
 `scripts.research_admission.validate_specification(metadata)`.
@@ -19,6 +21,16 @@ uses `FrozenMetadata.entries` tuples for objects and tuples for arrays. Scalar
 values retain their supplied types and values. `decision.to_dict()` makes a fresh
 mutable copy; modifying the submission or that copy cannot alter the decision.
 There is no registry, timestamp generation, default input, repair or supersession.
+
+`AdmissionDecision.specification` supports frozen objects, tuples for arrays,
+and built-in str/int/float/bool/None scalars. Its frozen Boolean
+`specification_retained` records presence independently of value or truthiness.
+Direct construction of `AdmissionDecision` now requires that keyword-only flag;
+the validator sets it explicitly and its public call signature is unchanged.
+`to_dict()` keeps the same output keys. Safely inspected JSON null is reported as
+`specification=null, specification_retained=true`; unsafe/oversized omission is
+`specification=null, specification_retained=false`. False, zero, empty strings
+and empty lists retain their exact types and values with presence true.
 
 | Outcome | Meaning |
 | --- | --- |
@@ -41,6 +53,15 @@ Unsafe traversal stops immediately; these decisions have no snapshot and may
 omit blockers below the stopped boundary. Finite malformed metadata is retained
 without repair. Nonfinite floats are retained for diagnostics, with
 `metadata_bytes=null`; that invalid snapshot cannot be serialized as strict JSON.
+
+After safe traversal and aggregate-byte accounting, a non-object root is
+`INVALID_SPEC` with root `TYPE` at `$`, specimen kind `UNKNOWN`, and all three
+authority/qualification flags false. Its exact frozen scalar/list value is
+retained without repair. Under-budget NaN, Infinity and -Infinity roots retain
+diagnostic snapshots with both root `NONFINITE` and `TYPE`, and null byte counts.
+Unsafe/oversized roots stop before freezing and omit snapshots; reasons below
+the stopped boundary need not be discovered. All traversal and aggregate limits
+remain unchanged. Snapshot retention supplies no schema or evidence acceptance.
 
 ## Exact v1 schema
 
@@ -283,19 +304,31 @@ leaving prior exposure UNKNOWN or using uncalibrated/zero primary costs blocks.
 A malformed SHA-256 adds INVALID_SPEC while preserving discoverable HOLD reasons.
 Fully consistent fictional declarations exercise only the structural outcome.
 
-Run only the 36 scoped synthetic cases, with plugin autoload and bytecode disabled:
+Run only the 52 scoped synthetic cases, with plugin autoload and bytecode disabled:
 
 ```text
 python -B -m pytest --noconftest -p no:cacheprovider -o addopts= tests/test_research_admission.py -q
 ```
 
-The original allocation stays exhausted at 2/2 invocations. The correction packet
-supplies a separate maximum of two invocations, at most 36 collected cases each,
-externally capped at 60 seconds each and 120 cumulative process seconds. The four
-new cases cover NaN/positive/negative infinity combined with two individually
+The original allocation stays exhausted at 2/2 invocations. The historical
+aggregate-size correction remains 1/2 used, with 36/36 passed; its unused attempt
+is not transferred. Its separate ceiling was two invocations, at most 36 cases
+each, 60 seconds each and 120 cumulative controller seconds. Its four added
+cases cover NaN/positive/negative infinity combined with two individually
 under-limit but aggregate-oversized strings, bounded under-limit nonfinite
 diagnostics, and finite exact-byte equality/one-byte overflow. The existing 32
-cases and their effect guards remain. The test fixture installs
+cases and their effect guards remain, as do all 36 accepted aggregate-correction
+cases. Snapshot retention adds 16 cases: eight finite root shapes, three
+nonfinite roots, four oversized/unsafe root boundaries, and detached immutable
+root snapshots. New validator/output-copy calls use the same effect guards.
+This snapshot task has its own unchanged maximum of two pytest invocations,
+52 collected cases each, externally capped at 60 seconds each and 120 cumulative
+controller seconds. The retained old-base preflight stop used zero invocations,
+cases and controller seconds; reconciliation continues this allocation without
+a reset. Stop after the first complete success; attempt two needs an in-scope
+fix or unresolved failure. No collection-only run or ad hoc probe is allowed.
+Original, aggregate-correction and snapshot attempts remain separately retained.
+The test fixture installs
 socket/process/write/mkdir/logging/environment/import guards before normal
 module import and every validator/output-copy call, then restores boundaries
 between operations so pytest bookkeeping can run. Standard-library and source
