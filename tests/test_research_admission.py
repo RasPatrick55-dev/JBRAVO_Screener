@@ -1,4 +1,4 @@
-"""36 inline synthetic cases. No bot imports, datasets, subprocesses or evaluation."""
+"""52 inline synthetic cases. No bot imports, datasets, subprocesses or evaluation."""
 
 import builtins
 from contextlib import contextmanager
@@ -92,6 +92,11 @@ def admission(monkeypatch):
                 result = module.validate_specification(spec)
                 result.to_dict()
                 return result
+
+        @staticmethod
+        def to_dict(decision):
+            with effects_forbidden(monkeypatch):
+                return decision.to_dict()
     return GuardedAdmission()
 
 
@@ -450,3 +455,119 @@ def test_finite_exact_byte_boundary(admission):
     assert overflow.specification is None
     assert overflow.metadata_bytes == 512 * 1024 + 1
     assert spec == overflow_original
+
+
+def assert_invalid_root(decision, output):
+    assert decision.outcome == output["outcome"] == "INVALID_SPEC"
+    assert decision.specimen_kind == output["specimen_kind"] == "UNKNOWN"
+    for field in ("research_qualified", "execution_authorized",
+                  "acceptance_declarations_verified"):
+        assert getattr(decision, field) is False
+        assert output[field] is False
+    assert decision.reasons == tuple(sorted(decision.reasons))
+
+
+@pytest.mark.parametrize("root,records", [
+    pytest.param(None, 1, id="null"),
+    pytest.param(False, 1, id="false"),
+    pytest.param(True, 1, id="true"),
+    pytest.param(0, 1, id="zero"),
+    pytest.param(1.25, 1, id="finite-float"),
+    pytest.param("", 1, id="empty-string"),
+    pytest.param([], 1, id="empty-list"),
+    pytest.param([{"items": [None, False, 0]}], 7, id="nested-list-object"),
+])
+def test_retained_finite_root(admission, root, records):
+    original = deepcopy(root)
+    result = admission.validate_specification(root)
+    output = admission.to_dict(result)
+    assert_invalid_root(result, output)
+    assert [(r.field, r.code, r.invalid) for r in result.reasons] == [("$", "TYPE", True)]
+    assert result.specification_retained is True
+    assert output["specification_retained"] is True
+    assert type(output["specification"]) is type(root)
+    assert output["specification"] == original
+    assert type(result.specification) is (tuple if type(root) is list else type(root))
+    expected_bytes = len(json.dumps(root, sort_keys=True, ensure_ascii=True,
+                                   separators=(",", ":"), allow_nan=False).encode("utf-8"))
+    assert result.metadata_bytes == output["metadata_bytes"] == expected_bytes
+    assert result.metadata_records == output["metadata_records"] == records
+    assert set(output) == {"outcome", "specimen_kind", "research_qualified",
+                           "execution_authorized", "acceptance_declarations_verified",
+                           "specification_retained", "specification", "metadata_bytes",
+                           "metadata_records", "reasons"}
+    assert type(root) is type(original)
+    assert root == original
+
+
+@pytest.mark.parametrize("root", [math.nan, math.inf, -math.inf],
+                         ids=["nan", "positive-infinity", "negative-infinity"])
+def test_retained_nonfinite_root(admission, root):
+    result = admission.validate_specification(root)
+    output = admission.to_dict(result)
+    assert_invalid_root(result, output)
+    assert {(r.field, r.code, r.invalid) for r in result.reasons} == {
+        ("$", "NONFINITE", True), ("$", "TYPE", True)}
+    assert result.specification_retained is True
+    assert output["specification_retained"] is True
+    assert result.specification is root
+    assert type(output["specification"]) is float
+    assert math.isnan(output["specification"]) if math.isnan(root) else output["specification"] == root
+    assert result.metadata_bytes is output["metadata_bytes"] is None
+    assert result.metadata_records == output["metadata_records"] == 1
+    with pytest.raises(ValueError):
+        json.dumps(output, allow_nan=False)
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("oversized-string", "BYTE_LIMIT"), ("oversized-list", "BYTE_LIMIT"),
+    ("cycle", "CYCLE"), ("non-json", "NON_JSON_TYPE"),
+])
+def test_unretained_root_boundary(admission, case, expected):
+    if case == "oversized-string":
+        root = "x" * (512 * 1024)  # Individual limit passes; JSON quotes overflow.
+    elif case == "oversized-list":
+        root = ["x" * 300_000, "y" * 300_000]
+    elif case == "cycle":
+        root = []
+        root.append(root)
+    else:
+        root = object()
+    result = admission.validate_specification(root)
+    output = admission.to_dict(result)
+    assert_invalid_root(result, output)
+    assert expected in {r.code for r in result.reasons}
+    assert result.specification_retained is False
+    assert output["specification_retained"] is False
+    assert result.specification is output["specification"] is None
+    if case.startswith("oversized"):
+        assert result.metadata_bytes > 512 * 1024
+    else:
+        assert result.metadata_bytes is None
+
+
+def test_retained_root_detachment_and_immutability(admission):
+    root = [{"items": [None, False, 0]}, []]
+    original = deepcopy(root)
+    result = admission.validate_specification(root)
+    output = admission.to_dict(result)
+    assert_invalid_root(result, output)
+    root[0]["items"][1] = True
+    root[0]["new"] = "submitted mutation"
+    root.append("submitted mutation")
+    output["specification"][0]["items"].append("copy mutation")
+    output["specification"][1].append("copy mutation")
+    output["reasons"][0]["invalid"] = False
+    fresh = admission.to_dict(result)
+    assert fresh is not output
+    assert fresh["specification"] == original
+    assert fresh["specification_retained"] is True
+    assert fresh["reasons"][0]["invalid"] is True
+    assert type(result.specification) is tuple
+    assert type(result.specification[0].entries) is tuple
+    with pytest.raises(FrozenInstanceError):
+        result.specification_retained = False
+    with pytest.raises(FrozenInstanceError):
+        result.specification[0].entries = ()
+    with pytest.raises(TypeError):
+        result.specification[0] = None

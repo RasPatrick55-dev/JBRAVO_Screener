@@ -51,10 +51,11 @@ class Reason:
 class AdmissionDecision:
     outcome: str
     specimen_kind: str
-    specification: FrozenMetadata | None
+    specification: FrozenMetadata | tuple | str | int | float | bool | None
     reasons: tuple[Reason, ...]
     metadata_bytes: int | None
     metadata_records: int
+    specification_retained: bool = field(kw_only=True)
     research_qualified: bool = field(default=False, init=False)
     execution_authorized: bool = field(default=False, init=False)
     acceptance_declarations_verified: bool = field(default=False, init=False)
@@ -65,7 +66,7 @@ class AdmissionDecision:
             "outcome": self.outcome, "specimen_kind": self.specimen_kind,
             "research_qualified": False, "execution_authorized": False,
             "acceptance_declarations_verified": False,
-            "specification_retained": self.specification is not None,
+            "specification_retained": self.specification_retained,
             "specification": _thaw(self.specification),
             "metadata_bytes": self.metadata_bytes, "metadata_records": self.metadata_records,
             "reasons": [dict(field=r.field, code=r.code, evidence_id=r.evidence_id,
@@ -128,11 +129,12 @@ def validate_specification(specification) -> AdmissionDecision:
         elif kind is float and not math.isfinite(value):
             reason("NONFINITE", path, invalid=True)
 
-    def decision(snapshot, kind="UNKNOWN"):
+    def decision(snapshot, kind="UNKNOWN", *, retained=False):
         ordered = tuple(sorted(set(reasons)))
         outcome = ("INVALID_SPEC" if any(r.invalid for r in ordered) else
                    "HOLD" if ordered else "STRUCTURALLY_READY_FOR_EVIDENCE_REVIEW")
-        return AdmissionDecision(outcome, kind, snapshot, ordered, size, records)
+        return AdmissionDecision(outcome, kind, snapshot, ordered, size, records,
+                                 specification_retained=retained)
 
     try:
         inspect(specification, "$", 0, set())
@@ -257,7 +259,7 @@ def validate_specification(specification) -> AdmissionDecision:
 
     if type(specification) is not dict:
         reason("TYPE", "$", invalid=True)
-        return decision(None)
+        return decision(_freeze(specification), retained=True)
     root = obj(specification, "$", ("schema", "specimen_kind", "strategy", "experiment",
                                      "inputs", "acceptance_declarations"))
     enum(root.get("schema"), "$.schema", (SCHEMA,))
@@ -503,4 +505,5 @@ def validate_specification(specification) -> AdmissionDecision:
         reason("MISSING_ACCEPTANCE_DECLARATION", "$.acceptance_declarations", identity)
     # Retain every submitted field, including false/null qualifiers and references.
     kind = root.get("specimen_kind")
-    return decision(_freeze(specification), kind if type(kind) is str else "UNKNOWN")
+    return decision(_freeze(specification), kind if type(kind) is str else "UNKNOWN",
+                    retained=True)
