@@ -4942,6 +4942,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     pipeline_run_date=pipeline_run_date,
                     predictions_stale=bool(enrichment_freshness.get("stale")),
                     predictions_stale_reason=str(enrichment_freshness.get("reason") or ""),
+                    require_monitor_provenance=True,
                 )
                 reason_text = ",".join(decision.get("reasons") or []) or "none"
                 LOG.info(
@@ -4960,12 +4961,32 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     "mode": decision.get("mode"),
                     "reasons": list(decision.get("reasons") or []),
                     "monitor_run_date": decision.get("monitor_run_date"),
+                    "monitor_run_date_source": decision.get("monitor_run_date_source"),
+                    "monitor_artifact_run_date": decision.get("monitor_artifact_run_date"),
+                    "monitor_generated_at": decision.get("monitor_generated_at"),
+                    "monitor_generation_age_seconds": decision.get("monitor_generation_age_seconds"),
+                    "monitor_input_coverage": decision.get("monitor_input_coverage"),
+                    "monitor_input_age_days": decision.get("monitor_input_age_days"),
+                    "monitor_input_source": decision.get("monitor_input_source"),
+                    "monitor_observed_at": decision.get("monitor_observed_at"),
+                    "monitor_input_reference_date": decision.get("monitor_input_reference_date"),
+                    "max_age_days": decision.get("max_age_days"),
+                    "monitor_provenance_required": decision.get("monitor_provenance_required"),
+                    "monitor_provenance_reasons": decision.get("monitor_provenance_reasons"),
                     "psi_score": decision.get("psi_score"),
                     "recent_sharpe": decision.get("recent_sharpe"),
                     "source": decision.get("source"),
                     "predictions_stale": bool(enrichment_freshness.get("stale")),
                     "predictions_stale_reason": decision.get("predictions_stale_reason"),
                 }
+                LOG.info(
+                    "[INFO] ML_HEALTH_PROVENANCE generated_at=%s generation_age_seconds=%s "
+                    "input_dataset_end=%s input_age_days=%s",
+                    decision.get("monitor_generated_at"),
+                    decision.get("monitor_generation_age_seconds"),
+                    (decision.get("monitor_input_coverage") or {}).get("dataset_end"),
+                    decision.get("monitor_input_age_days"),
+                )
                 if decision.get("decision") == "block":
                     enrichment_blocked = True
                     LOG.warning("[WARN] ML_ENRICHMENT_BLOCKED reason=%s", reason_text)
