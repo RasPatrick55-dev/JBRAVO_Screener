@@ -2,6 +2,17 @@
 
 Documentation entry point: `docs/INDEX.md`
 
+Research declaration boundary: [contract](docs/reference/research_admission_contract.md).
+For its scoped synthetic verification, set `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and
+`PYTHONDONTWRITEBYTECODE=1`, then run under the implementation packet's external
+60-second timeout and finite attempt allowance:
+
+```text
+python -B -m pytest --noconftest -p no:cacheprovider -o addopts= tests/test_research_admission.py -q
+```
+
+These declaration checks do not qualify historical data or authorize execution.
+
 ## Current Operating Mode
 
 - Paper-only trading workflow.
