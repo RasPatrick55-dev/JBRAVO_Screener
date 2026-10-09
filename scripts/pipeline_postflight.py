@@ -19,9 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_STEPS = ('screener', 'backtest', 'metrics', 'labels', 'ranker_eval')
 SOURCE_FILES = ('scripts/run_pipeline.py', 'scripts/pipeline_postflight.py',
                 'scripts/primary_pipeline.py', 'scripts/ops/run_primary_pipeline.sh',
-                'scripts/ops/run_canary_smoke.sh')
+                'scripts/ops/run_canary_smoke.sh', 'scripts/utils/ml_health_guard.py')
 MAX_REPORT_BYTES = 64 * 1024
 MAX_SOURCE_BYTES = 1024 * 1024
+ML_PROVENANCE_FIELDS = ('monitor_run_date', 'monitor_run_date_source', 'monitor_artifact_run_date',
+                        'monitor_generated_at', 'monitor_generation_age_seconds',
+                        'monitor_input_coverage', 'monitor_input_age_days', 'monitor_input_source',
+                        'monitor_observed_at', 'monitor_input_reference_date', 'max_age_days', 'source', 'mode',
+                        'monitor_provenance_required', 'monitor_provenance_reasons')
 
 
 def _utc(value):
@@ -186,7 +191,8 @@ def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, ste
                          'predict_rc': freshness.get('predict_rc'), 'snapshot_date': freshness.get('snapshot_date')},
         'coverage': {key: (coverage or {}).get(key) for key in ('total', 'non_null', 'pct', 'run_ts_utc')},
         'ml_health': {'decision': health.get('decision') if health.get('decision') in ('allow', 'warn', 'block') else None,
-                      'reasons': reasons if isinstance(reasons, list) else None},
+                      'reasons': reasons if isinstance(reasons, list) else None,
+                      **{field: health[field] for field in ML_PROVENANCE_FIELDS if field in health}},
         'controls': dict(controls), 'source_bindings': {},
     }
     for relative in SOURCE_FILES:
@@ -235,6 +241,8 @@ def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=
         if _read(history, MAX_REPORT_BYTES) != data:
             raise ValueError('history_binding_mismatch')
         result['report_binding'] = _binding(data)
+        # Display provenance only after source/history saved-byte checks pass.
+        result['ml_health'] = record['ml_health']
         return result
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return {'status': 'failed', 'failures': ['missing_malformed_or_unbound_report'],

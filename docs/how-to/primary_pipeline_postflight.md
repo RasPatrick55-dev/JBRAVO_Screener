@@ -60,6 +60,54 @@ runbook's suggested alert threshold of 80 percent. Zero candidates can be a
 valid software outcome but cannot establish candidate-score coverage.
 Failed or skipped stages and malformed/absent/inconsistent evidence fail.
 
+### Monitor generation and input coverage
+
+The enrichment guard reports three distinct dates. `monitor_run_date` is the
+legacy payload/artifact label; `monitor_run_date_source` identifies the payload
+or DB-record fallback, and `monitor_artifact_run_date` retains the DB label.
+Neither label is a substitute for the other two clocks:
+
+- `monitor_generated_at` is the existing monitor payload's `run_utc`, normalized
+  to UTC only when it is an explicit timezone-aware timestamp.
+- `monitor_input_coverage` carries the existing `windows` dataset, baseline and
+  recent start/end session dates and row counts. `monitor_input_source` reports
+  the supplied input location; it is not a hash binding or proof of provenance.
+
+The guard reports `monitor_observed_at`, generation age in seconds, the pipeline
+reference session date, and input age in calendar days. Both use the existing
+`JBR_ML_HEALTH_MAX_AGE_DAYS` limit (default seven): generation age is elapsed time;
+dataset/recent endpoints are compared with the pipeline reference date. The
+legacy artifact-label age check remains, including `stale_monitor`.
+Old reports lacking generation/coverage evidence remain explicitly incomplete;
+a recent artifact date or freshly generated report cannot make old inputs green.
+
+Health reasons distinguish missing/invalid generation times, future generation,
+stale generation, missing/invalid coverage fields, empty/invalid row counts,
+inconsistent windows/counts, future/stale dataset/recent endpoints, and input
+coverage after generation. Session dates must be exact ISO dates; naive or
+malformed generation timestamps are rejected. A nominal recent-window start
+before the actual dataset start is allowed, matching the existing monitor's
+short-dataset construction. Overlapping baseline/recent windows remain allowed;
+this check does not qualify their statistical suitability or OOS provenance.
+
+DB-first loading and warn/block modes remain unchanged. The pipeline explicitly
+sets `require_monitor_provenance=True`, recorded as `monitor_provenance_required`.
+`monitor_provenance_reasons` reports the distinct generation/coverage assessment.
+Warn continues
+enrichment with explicit health reasons and degraded postflight; block prevents
+enrichment. The shared guard is also used by `ranker_autoremediate`; its existing
+default policy and legacy artifact-date parsing remain unchanged. It can inspect
+the additional provenance reasons, but they do not change its decision unless
+that caller separately opts in. No remediation,
+training, monitor refresh or workflow/schedule change is executed by this repair.
+Adding monitor preparation to the primary workflow remains a separate decision.
+
+Synthetic provenance tests normally import the guard with the production DB and
+utility-package initializer replaced before import. They exercise DB/FS loading
+with inert records, date/count validation, and the real saved postflight path.
+The pipeline summary assignment is source-extracted; full legacy pipeline import,
+real DB contents, provider execution and scheduled host integration remain untested.
+
 Source byte identities for the pipeline, checker and entry launchers, plus the immutable run
 record, are verified before acceptance of the report. This is local binding,
 not independent attestation or proof of every underlying database write.
@@ -101,7 +149,9 @@ remain separate review gates. No host change occurred in offline verification.
 Synthetic tests import the new producer/checker and primary caller normally,
 use temporary storage, and block network and subprocess dispatch. They exercise
 success, failures, skipped stages, stale/unknown/degraded health, coverage,
-source/history bindings, strict JSON and saved-byte paths. Existing pipeline
+source/history bindings, strict JSON and saved-byte paths. The source bindings
+also cover `scripts/utils/ml_health_guard.py`, whose decision reaches the report.
+Existing pipeline
 parser and opt-in recording hook are source-extracted for bounded execution;
 the complete legacy pipeline import and actual screener/ML/DB/provider/reload
 paths are not exercised. Shell contracts are inspected, not executed by these
