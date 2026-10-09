@@ -5,9 +5,12 @@ No credentials, application imports, database calls, subprocesses or broker call
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 import hashlib
 import json
+import math
+from numbers import Integral, Real
 import os
 from pathlib import Path
 import re
@@ -76,7 +79,59 @@ def utc(value):
     return pipeline._utc(value)
 
 
+def candidate_values(rows, *, ordered=False):
+    """Bind complete loaded values, types and presence; never save candidate values.
+
+    Missing floats are tagged, not coerced to zero. Date/time representations and
+    Decimal quantities retain their supplied precision. Unsupported values fail.
+    """
+    def encode(value):
+        if value is None:
+            return ['null']
+        if type(value) is bool:
+            return ['bool', value]
+        if isinstance(value, datetime):
+            return ['datetime', value.isoformat()]
+        if isinstance(value, date):
+            return ['date', value.isoformat()]
+        if isinstance(value, str):
+            return ['string', value]
+        if isinstance(value, Decimal):
+            if not value.is_finite():
+                raise ValueError('invalid_candidate_value')
+            return ['decimal', str(value)]
+        if isinstance(value, Integral):
+            return ['integer', str(value)]
+        if isinstance(value, Real):
+            number = float(value)
+            if math.isnan(number):
+                return ['missing_float']
+            if not math.isfinite(number):
+                raise ValueError('invalid_candidate_value')
+            return ['float', number.hex()]
+        if isinstance(value, (list, tuple)):
+            return ['sequence', [encode(item) for item in value]]
+        if isinstance(value, dict):
+            if any(not isinstance(k, str) for k in value):
+                raise ValueError('invalid_candidate_field')
+            return ['object', [[k, encode(value[k])] for k in sorted(value)]]
+        # pandas nullable scalars are missing, rather than arbitrary str coercion.
+        if type(value).__module__ == 'pandas._libs.missing' and type(value).__name__ == 'NAType':
+            return ['missing_nullable']
+        raise ValueError('unsupported_candidate_value')
+
+    if not isinstance(rows, list) or len(rows) > MAX_CANDIDATES or any(not isinstance(r, dict) for r in rows):
+        raise ValueError('invalid_candidate_population')
+    population = rows if ordered else sorted(rows, key=lambda row: row.get('symbol', ''))
+    data = json.dumps([encode(row) for row in population], separators=(',', ':'),
+                      ensure_ascii=False, allow_nan=False).encode()
+    if len(data) > 4 * 1024 * 1024:
+        raise ValueError('candidate_value_binding_oversize')
+    return binding(data)
+
+
 def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
+              prior_value_binding=None,
               max_age_seconds=MAX_AGE_SECONDS):
     """Require healthy bound primary evidence, then the exact declared DB batch.
 
@@ -129,6 +184,9 @@ def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
             result['candidate_binding'] = binding(json.dumps(
                 sorted(identities, key=lambda r: r['symbol']), sort_keys=True).encode())
             result['candidate_count'] = len(rows)
+            result['candidate_value_binding'] = candidate_values(rows)
+            if prior_value_binding is not None and result['candidate_value_binding'] != prior_value_binding:
+                raise ValueError('candidate_values_changed')
         result['status'] = 'pass'
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         # Never persist raw exceptions, paths, credentials or database rows.
@@ -219,6 +277,13 @@ def publish_receipt(base_dir, *, role, started_at, finished_at, rc, metrics,
               'cancellation_policy': 'minutes_from_submission',
               'cancel_after_min': getattr(config, 'cancel_after_min', None),
               'poll_detach_seconds': getattr(config, 'poll_detach_secs', None),
+              'task_attribution': {'declared_task_id': getattr(config, 'scheduler_task_id', None),
+                                   'basis': 'explicit_process_configuration',
+                                   'independently_verified': False},
+              'candidate_snapshot': getattr(config, '_entry_db_snapshot', None),
+              'raw_candidate_value_binding': getattr(config, '_entry_raw_value_binding', None),
+              'filtered_candidate_value_binding': getattr(config, '_entry_filtered_binding', None),
+              'execution_candidate_binding': getattr(config, '_entry_execution_binding', None),
               'effective_settings': {key: getattr(config, key, None) for key in (
                   'source', 'dry_run', 'diagnostic', 'reconcile_only', 'submit_at_ny',
                   'time_window', 'extended_hours', 'allocation_pct', 'min_order_usd',
@@ -249,7 +314,8 @@ def publish_receipt(base_dir, *, role, started_at, finished_at, rc, metrics,
     return record
 
 
-def inspect_receipt(base_dir=ROOT, *, role='premarket', now=None, max_age_seconds=MAX_AGE_SECONDS):
+def inspect_receipt(base_dir=ROOT, *, role='premarket', now=None, max_age_seconds=MAX_AGE_SECONDS,
+                    expected_task_id=None):
     now = utc(now or datetime.now(timezone.utc))
     root = Path(base_dir)
     try:
@@ -258,6 +324,16 @@ def inspect_receipt(base_dir=ROOT, *, role='premarket', now=None, max_age_second
         directory = root / 'reports/executor' / role
         data = read(directory / 'latest.json')
         record = decode(data)
+        attribution = record.get('task_attribution', {})
+        if not isinstance(attribution, dict) or (attribution and (
+                attribution.get('basis') != 'explicit_process_configuration' or
+                attribution.get('independently_verified') is not False)):
+            raise ValueError('invalid_task_attribution')
+        task_id = attribution.get('declared_task_id')
+        if task_id is not None and (not isinstance(task_id, str) or not re.fullmatch('[1-9][0-9]{0,11}', task_id)):
+            raise ValueError('invalid_task_attribution')
+        if expected_task_id is not None and task_id != expected_task_id:
+            return {'status': 'failed', 'reason': 'task_attribution_missing_or_mismatched'}
         if type(record.get('schema_version')) is not int or record['schema_version'] != 1 or record.get('role') != role or not re.fullmatch(
                 '[0-9a-f]{32}', record.get('run_id', '')):
             raise ValueError('invalid_receipt_identity')
@@ -285,6 +361,59 @@ def inspect_receipt(base_dir=ROOT, *, role='premarket', now=None, max_age_second
         return {'status': record['health'], 'receipt_binding': binding(data), 'record': record}
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return {'status': 'failed', 'reason': 'missing_stale_malformed_or_unbound_receipt'}
+
+
+def deadline_plan(inspection, *, now=None):
+    """Read-only proposal for a future supervised cancel-and-confirm worker.
+
+    Consumes validated receipts only. It cannot call a broker, mutate an order,
+    submit a replacement, or claim remote cancellation. No account-wide sweep.
+    """
+    now = utc(now or datetime.now(timezone.utc))
+    result = {'status': 'blocked', 'reasons': [], 'orders': [], 'broker_calls': 0,
+              'cancellation_enforced': False, 'operating_acceptance': False}
+    if inspection.get('status') not in {'ok', 'pending_confirmation', 'skipped', 'no_orders'}:
+        result['reasons'] = ['validated_entry_receipt_required']
+        return result
+    record = inspection.get('record', {})
+    if record.get('role') != 'premarket' or record.get('process_rc') != 0:
+        result['reasons'] = ['successful_entry_role_required']
+        return result
+    if record.get('observations_truncated') or record.get('unobserved_submissions'):
+        result['reasons'] = ['incomplete_order_population']
+        return result
+    states = {}
+    try:
+        for item in record['order_observations']:
+            state = states.setdefault(item['order_id'], {'symbol': item['symbol'], 'deadline': None})
+            if state['symbol'] != item['symbol']:
+                raise ValueError('contradictory_order_identity')
+            if item.get('deadline') is not None:
+                deadline = utc(item['deadline'])
+                if state['deadline'] is not None and state['deadline'] != deadline:
+                    raise ValueError('contradictory_order_deadline')
+                state['deadline'] = deadline
+            if state.get('state') in TERMINAL and item['state'] not in TERMINAL:
+                raise ValueError('terminal_state_regressed')
+            if state.get('state') in TERMINAL and item['state'] != state['state']:
+                raise ValueError('contradictory_terminal_state')
+            state['state'] = item['state']
+        planned = []
+        for order_id, state in states.items():
+            if state['state'] in TERMINAL:
+                continue
+            if state['deadline'] is None:
+                raise ValueError('missing_cancellation_deadline')
+            action = ('confirm_existing_request' if state['state'] == 'cancel_requested' else
+                      'cancel_and_confirm' if now >= state['deadline'] else 'wait_until_deadline')
+            planned.append({'order_id': order_id, 'symbol': state['symbol'],
+                            'deadline': state['deadline'].isoformat(), 'proposed_action': action,
+                            'requires_broker_identity_side_account_and_state_check': True})
+        result['orders'] = planned
+        result['status'] = 'action_required' if any(p['proposed_action'] != 'wait_until_deadline' for p in planned) else 'no_action_due'
+    except (KeyError, TypeError, ValueError) as error:
+        result['reasons'] = [str(error) if type(error) is ValueError else 'malformed_order_population']
+    return result
 
 
 def log_tail(base_dir=ROOT, *, max_bytes=MAX_BYTES, max_events=40):
@@ -332,16 +461,20 @@ def log_tail(base_dir=ROOT, *, max_bytes=MAX_BYTES, max_events=40):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('inspect', 'logs'))
+    parser.add_argument('operation', choices=('inspect', 'logs', 'deadlines'))
     parser.add_argument('--base-dir', type=Path, default=ROOT)
     parser.add_argument('--role', choices=ROLES, default='premarket')
+    parser.add_argument('--expected-task-id')
     args = parser.parse_args(argv)
     try:
-        result = log_tail(args.base_dir) if args.operation == 'logs' else inspect_receipt(args.base_dir, role=args.role)
+        result = log_tail(args.base_dir) if args.operation == 'logs' else inspect_receipt(
+            args.base_dir, role=args.role, expected_task_id=args.expected_task_id)
+        if args.operation == 'deadlines':
+            result = deadline_plan(result)
     except (OSError, ValueError):
         result = {'status': 'failed', 'reason': 'log_unavailable_or_unsafe'}
     print(json.dumps(result, sort_keys=True, allow_nan=False))
-    return 1 if result.get('status') in {'failed', 'pending_confirmation'} else 0
+    return 1 if result.get('status') in {'failed', 'pending_confirmation', 'blocked', 'action_required'} else 0
 
 
 if __name__ == '__main__':
