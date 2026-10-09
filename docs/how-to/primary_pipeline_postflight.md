@@ -9,7 +9,9 @@ This is a software contract, not research qualification or trading acceptance.
 Use `bash scripts/ops/run_primary_pipeline.sh` for the daily primary task.
 It loads the existing virtualenv and process environment, holds a nonblocking
 `flock` for the invocation, and calls `scripts.primary_pipeline` once.
-It does not change the executor, monitor or hourly account synchronization.
+It does not dispatch the executor or hourly account synchronization. The
+[session handoff contract](../reference/session_signal_handoff.md) now fixes
+completed-session preparation and completion-triggered postflight for this path.
 In particular, `bin/run_pipeline_task.sh` is an executor launcher despite its
 name and must not be repurposed.
 
@@ -37,6 +39,12 @@ arguments/environment; do not copy inline credentials into commands or reports.
 Do not infer a production-universe setting from the smoke task.
 
 ## Run-bound health
+
+The primary path additionally requires the completed-session handoff and matching
+active invocation. Only its successful same-invocation postflight creates the
+completion record consumed by ordinary entries. The standalone scheduled reader
+does not create completion. Source, deployment and scheduler changes require review;
+the historical schedule below is not an adopted cutover for the new opening policy.
 
 The opt-in `--postflight-report` hook records selected facts directly from the
 same pipeline invocation after its normal finalization. Ordinary callers
@@ -123,7 +131,7 @@ bot/provider/database module, dispatches no application child process, and
 creates no reports/logs/caches. The scheduler itself retains stdout. Historic
 canary logs are untouched. This check does not repair or refresh anything.
 
-Default checks require a run started and finished on the current UTC day,
+For legacy reports, default checks require a run started and finished on the current UTC day,
 no future timestamps, and age at most 7,200 seconds measured from its start.
 The current 03:45 UTC primary and 04:20 UTC postflight fit this window after
 successful completion. Slow/incomplete/missing primary runs fail; previous-day

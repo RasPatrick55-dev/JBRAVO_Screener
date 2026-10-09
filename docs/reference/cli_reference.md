@@ -199,7 +199,7 @@ usage: execute_trades.py [-h] [--source {db,path}] [--source-path SOURCE_PATH]
                          [--max-poll-secs MAX_POLL_SECS]
                          [--extended-hours EXTENDED_HOURS]
                          [--submit-at-ny SUBMIT_AT_NY]
-                         [--price-source {prevclose,entry,close,blended}]
+                         [--price-source {signal,prevclose,entry,close,blended}]
                          [--price-band-pct PRICE_BAND_PCT]
                          [--price-band-action {clamp,skip}]
                          [--chase-interval-minutes CHASE_INTERVAL_MINUTES]
@@ -288,10 +288,9 @@ options:
   --submit-at-ny SUBMIT_AT_NY
                         Target HH:MM in America/New_York to start submitting
                         (premarket)
-  --price-source {prevclose,entry,close,blended}
-                        Anchor price source for limit orders (prevclose falls
-                        back to snapshot/bars/entry, blended uses prevclose
-                        and live reference prices)
+  --price-source {signal,prevclose,entry,close,blended}
+                        signal uses the completed-session frozen close; legacy
+                        modes are diagnostic only for unbound entries
   --price-band-pct PRICE_BAND_PCT
                         Safety band percent for prevclose anchoring (default
                         10.0)
@@ -356,7 +355,7 @@ options:
   --ignore-market-gate IGNORE_MARKET_GATE
                         Diagnostic-only bypass for market time-window gating
                         (effective only with --dry-run true or --diagnostic)
-  --market-tz MARKET_TIMEZONE, --market-timezone MARKET_TIMEZONE
+  --market-tz, --market-timezone MARKET_TIMEZONE
                         IANA timezone name used for market window evaluation
 ```
 

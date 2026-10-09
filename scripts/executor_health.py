@@ -5,12 +5,10 @@ No credentials, application imports, database calls, subprocesses or broker call
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
-from numbers import Integral, Real
 import os
 from pathlib import Path
 import re
@@ -18,6 +16,7 @@ import stat
 import uuid
 
 from scripts import pipeline_postflight as pipeline
+from scripts import signal_handoff
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_AGE_SECONDS = 43200  # Same UTC day, at most 12 hours; overnight preparation.
@@ -26,7 +25,7 @@ MAX_CANDIDATES = 10000
 MAX_OBSERVATIONS = 64
 ROLES = ('premarket', 'reconciliation', 'diagnostic', 'dry_run', 'unresolved')
 SOURCES = ('scripts/execute_trades.py', 'scripts/executor_health.py',
-           'scripts/db_queries.py', 'scripts/pipeline_postflight.py')
+           'scripts/db_queries.py', 'scripts/pipeline_postflight.py', 'scripts/signal_handoff.py')
 TERMINAL = {'filled', 'canceled', 'expired', 'rejected'}
 OBSERVATION_STATES = TERMINAL | {'submitted', 'resting', 'cancel_requested',
                                 'cancel_failed', 'cancel_unavailable'}
@@ -79,64 +78,18 @@ def utc(value):
     return pipeline._utc(value)
 
 
-def candidate_values(rows, *, ordered=False):
-    """Bind complete loaded values, types and presence; never save candidate values.
-
-    Missing floats are tagged, not coerced to zero. Date/time representations and
-    Decimal quantities retain their supplied precision. Unsupported values fail.
-    """
-    def encode(value):
-        if value is None:
-            return ['null']
-        if type(value) is bool:
-            return ['bool', value]
-        if isinstance(value, datetime):
-            return ['datetime', value.isoformat()]
-        if isinstance(value, date):
-            return ['date', value.isoformat()]
-        if isinstance(value, str):
-            return ['string', value]
-        if isinstance(value, Decimal):
-            if not value.is_finite():
-                raise ValueError('invalid_candidate_value')
-            return ['decimal', str(value)]
-        if isinstance(value, Integral):
-            return ['integer', str(value)]
-        if isinstance(value, Real):
-            number = float(value)
-            if math.isnan(number):
-                return ['missing_float']
-            if not math.isfinite(number):
-                raise ValueError('invalid_candidate_value')
-            return ['float', number.hex()]
-        if isinstance(value, (list, tuple)):
-            return ['sequence', [encode(item) for item in value]]
-        if isinstance(value, dict):
-            if any(not isinstance(k, str) for k in value):
-                raise ValueError('invalid_candidate_field')
-            return ['object', [[k, encode(value[k])] for k in sorted(value)]]
-        # pandas nullable scalars are missing, rather than arbitrary str coercion.
-        if type(value).__module__ == 'pandas._libs.missing' and type(value).__name__ == 'NAType':
-            return ['missing_nullable']
-        raise ValueError('unsupported_candidate_value')
-
-    if not isinstance(rows, list) or len(rows) > MAX_CANDIDATES or any(not isinstance(r, dict) for r in rows):
-        raise ValueError('invalid_candidate_population')
-    population = rows if ordered else sorted(rows, key=lambda row: row.get('symbol', ''))
-    data = json.dumps([encode(row) for row in population], separators=(',', ':'),
-                      ensure_ascii=False, allow_nan=False).encode()
-    if len(data) > 4 * 1024 * 1024:
-        raise ValueError('candidate_value_binding_oversize')
-    return binding(data)
+# Shared exact representation used by both producer and consumer.
+candidate_values = signal_handoff.candidate_values
 
 
 def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
               prior_value_binding=None,
-              max_age_seconds=MAX_AGE_SECONDS):
-    """Require healthy bound primary evidence, then the exact declared DB batch.
+              max_age_seconds=MAX_AGE_SECONDS, require_session=False, for_entry=False):
+    """Inspect legacy health or require a completed, frozen session handoff.
 
-    Batch linkage proves timestamp/count/unique membership, not independent
-    historical data quality or an atomic database snapshot through submission.
+    The executor explicitly requires session/completion; legacy mode only keeps
+    historical diagnostics compatible. No mode proves independent data quality
+    or holds a database snapshot through submission.
     """
     now = utc(now or datetime.now(timezone.utc))
     root = Path(base_dir)
@@ -145,7 +98,8 @@ def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
               'operating_acceptance': False}
     try:
         health = pipeline.check_health(root, now=now, expected_day=now.date(),
-                                       max_age_seconds=max_age_seconds)
+                                       max_age_seconds=max_age_seconds, require_session=require_session,
+                                       require_completion=require_session)
         if health['status'] != 'ok':
             result['reasons'] = ['pipeline_' + r for r in
                                  health.get('failures', []) + health.get('qualifications', [])]
@@ -161,6 +115,12 @@ def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
         record = decode(data)
         result.update(pipeline_run_id=health['run_id'], pipeline_binding=identity,
                       candidate_run_ts_utc=record['coverage']['run_ts_utc'])
+        if record.get('session') is not None:
+            signal_handoff.validate_session(record['session'], started=record['started_at'],
+                finished=record['finished_at'], now=now, for_entry=for_entry)
+            result.update(session=record['session'], frozen_candidates=record['frozen_candidates'])
+            result.update(preparation_started_at=record['started_at'],
+                          preparation_finished_at=record['finished_at'])
         if rows is not None:
             if not isinstance(rows, list) or len(rows) > MAX_CANDIDATES:
                 raise ValueError('candidate_population_invalid_or_oversize')
@@ -178,13 +138,17 @@ def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
                 symbols.add(symbol)
                 if utc(row.get('run_ts_utc')) != expected:
                     raise ValueError('candidate_batch_mismatch')
-                # run_date need not equal preparation date: previous-session labels
-                # are allowed only through this same-day, bound preparation batch.
+                # Legacy diagnostics allow previous-session labels. Session mode
+                # additionally validates run_date/bar date and producer values below.
                 identities.append({'symbol': symbol, 'run_ts_utc': expected.isoformat()})
             result['candidate_binding'] = binding(json.dumps(
                 sorted(identities, key=lambda r: r['symbol']), sort_keys=True).encode())
             result['candidate_count'] = len(rows)
             result['candidate_value_binding'] = candidate_values(rows)
+            if record.get('session') is not None:
+                actual = signal_handoff.freeze_candidates(rows, record['session'], run_ts=expected)
+                if actual != record['frozen_candidates']:
+                    raise ValueError('producer_candidate_values_changed')
             if prior_value_binding is not None and result['candidate_value_binding'] != prior_value_binding:
                 raise ValueError('candidate_values_changed')
         result['status'] = 'pass'
@@ -287,7 +251,8 @@ def publish_receipt(base_dir, *, role, started_at, finished_at, rc, metrics,
               'effective_settings': {key: getattr(config, key, None) for key in (
                   'source', 'dry_run', 'diagnostic', 'reconcile_only', 'submit_at_ny',
                   'time_window', 'extended_hours', 'allocation_pct', 'min_order_usd',
-                  'max_new_positions', 'disable_open_position_cap', 'trailing_percent')},
+                  'max_new_positions', 'disable_open_position_cap', 'trailing_percent',
+                  'price_source', 'limit_buffer_pct', 'max_gap_pct')},
               'research_qualified': False, 'operating_acceptance': False,
               'source_bindings': {p: binding(read(root / p, 1024 * 1024)) for p in SOURCES}}
     directory = root / 'reports/executor' / role

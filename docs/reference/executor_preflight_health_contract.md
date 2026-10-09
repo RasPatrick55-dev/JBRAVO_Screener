@@ -1,74 +1,38 @@
 # Executor preflight and health contract
 
-This contract adds an entry-readiness gate and per-role execution receipts. It
-does not change sizing, ranking, order parameters, retries, cancellation timing,
-protective SELL behavior, schedules or paper-only safeguards. Local verification
-is not Board acceptance or proof of deployed behavior.
+This contract retains per-role receipts and entry-readiness checks. The current
+ordinary entry policy is the [completed-session signal handoff](session_signal_handoff.md).
+It changes the opening target and price anchor/cap policy while preserving ranking,
+sizing formulas, protective SELL behavior, reconciliation and schedules. Local
+verification is not Board acceptance or proof of deployed behavior.
 
 ## Candidate readiness
 
-An ordinary entry run must use PostgreSQL candidates and a valid
-`reports/pipeline_postflight/latest.json`. The executor runs the existing
-postflight assessment itself: the primary must have succeeded without degraded
-health, with its required stages, controls, predictions, monitor/ML health and
-candidate coverage passing. Its immutable history must match and its source
-bindings must match current source. This checks the primary's saved health report;
-it does not prove that a separately scheduled postflight command ran.
+Ordinary DB-backed entries require a completed-session primary report, matching
+immutable history/source bindings, the active primary invocation and its successful
+completion-triggered postflight record. Starting a new primary invocation invalidates
+old completion even if that invocation fails. Required stages, controls, predictions,
+monitor/ML health and full candidate coverage must pass. Legacy reports retain their
+same-UTC-day/12-hour diagnostic assessment but cannot satisfy ordinary entry readiness.
 
-The primary must have started and finished on the current UTC date, with no future
-finish, and started no more than **43,200 seconds (12 hours)** earlier. This
-executor policy accommodates overnight preparation and the existing 07:00
-America/New_York submission wait. It does not change the standalone postflight
-CLI's two-hour default. A missing, failed, degraded, stale or unbound report blocks
-new entries with a precise reason and unsuccessful outcome. Zero-candidate primary
-reports currently assess as degraded and therefore also block entries.
+The primary freezes the complete typed candidate-value digest and supplied daily
+close references from its exact scored batch in a read-only repeatable-read snapshot.
+The executor selects only that run date/timestamp; it cannot fall back to an older
+batch. Raw values must equal the producer digest. Filtered and ranked frames retain
+their separate mutation checks. BUY gates recheck report/selection bindings, the
+04:00–09:30 ET execution session and the frozen-price cap. Existing reports are not
+retroactively upgraded. See the linked contract for session/cutoff/price semantics.
 
-Before normalization/model-score filtering, every loaded DB row must have an
-explicit aware `run_ts_utc` equal to the report's candidate-batch timestamp.
-The population count must equal its declared total and symbols must be valid
-and unique. The loader's existing older-date fallback remains available for
-inspection but cannot pass this entry gate with an old preparation timestamp.
-A previous-session `run_date` label is permitted only when preparation linkage
-passes; a row label alone is not freshness evidence.
+The loader rolls back and closes its snapshot after materializing its frame; optional
+ranker-join recovery retains its savepoint behavior. Standalone diagnostic callers
+keep their older-date fallback and previous connection ownership. This is not a DB
+lock through submission or independent proof of live contents. The digest does not
+archive all underlying features; the supplied source label may be unknown.
 
-Existing score filters and ranking remain unchanged. Retained rows must be a
-subset of the validated batch with unchanged symbol/timestamp relationships.
-The report is checked before loading, after loading, after submission wait and
-immediately before each logical BUY submission. A different latest report during
-the run blocks rather than silently rebinding the candidates. BUY symbols must
-belong to the retained selection; SELL/protective submissions keep their existing
-path. Reconciliation-only and diagnostic runs, and path-based dry-runs, do not
-require entry evidence. Ordinary path-based entry runs now fail closed.
-
-Batch linkage still checks the primary's symbol/count/timestamp claim. A second
-digest now covers **all loaded candidate values**, including field presence,
-numeric types/precision and nested feature values. Raw candidates are deep-copied,
-and their initial digest remains fixed even after a rejected subsequent check.
-Filtered inputs and the ordered ranked execution frame have separate bindings;
-later mutations block BUY submission. Only hashes, not candidate values, enter
-the execution receipt. This does not bind the primary's original feature values:
-its report does not yet carry an independently captured complete value digest.
-Closing that last cross-stage gap requires the primary workflow to record the same
-complete-value digest from its final read-only candidate snapshot, keyed by batch
-timestamp and query/serialization version. The executor must then require equality
-to that frozen digest, rather than creating an expectation from its later read.
-Existing reports cannot be retroactively upgraded. This protocol extension needs
-its own primary/executor compatibility tests and source review; it is not implemented
-by the local snapshot protection in this increment.
-
-The actual loader uses one PostgreSQL **repeatable-read, read-only** connection for
-timestamp selection, candidate/ranker reads and the older-date fallback. The query
-helper accepts this caller-owned connection without closing it. Optional ranker
-join recovery uses a savepoint rather than discarding that snapshot. The loader
-rolls back and closes after materializing its frame. Standalone callers retain
-their previous connection ownership behavior. Receipt snapshot metadata describes
-this implementation path; it is not independent proof of a live database run.
-The snapshot ends at load time, not at order submission. Later database changes
-cannot update the loaded frame; live price hydration remains a separate existing
-input. No historical eligibility or independent data-quality claim follows.
-The existing broker clock, reconciliation and authentication paths may
-still run before an entry is rejected. This gate does not make those paths
-offline or side-effect-free.
+Reconciliation-only and diagnostic runs, and path dry-runs, retain their separate
+roles. Ordinary path-based entries fail closed. Existing broker-clock, reconciliation
+and authentication paths may still run before an entry is rejected: the entry gate
+does not make the whole executor offline or free of side effects.
 
 ## Run attribution and receipts
 

@@ -148,8 +148,12 @@ def get_latest_screener_candidates(
     *,
     limit: int | None = None,
     connection: Any = None,
+    exact_run_ts: Any = None,
 ) -> tuple[pd.DataFrame, Any | None]:
-    """Return candidates scoped to the latest screener run timestamp for ``run_date``."""
+    """Read latest batch, or only ``exact_run_ts`` without falling back to another batch.
+
+    Caller-owned connections retain their snapshot and cleanup responsibility.
+    """
 
     owned = connection is None
     conn = db.get_db_conn() if owned else connection
@@ -170,19 +174,22 @@ def get_latest_screener_candidates(
     scores_rows_for_run = 0
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT COALESCE(
-                    max(run_ts_utc),
-                    max(created_at)
-                ) AS latest_run_ts
-                FROM screener_candidates
-                WHERE run_date = %(run_date)s
-                """,
-                {"run_date": run_date_value},
-            )
-            row = cursor.fetchone()
-            latest_run_ts = row[0] if row else None
+            if exact_run_ts is not None:
+                latest_run_ts = exact_run_ts
+            else:
+                cursor.execute(
+                    """
+                    SELECT COALESCE(
+                        max(run_ts_utc),
+                        max(created_at)
+                    ) AS latest_run_ts
+                    FROM screener_candidates
+                    WHERE run_date = %(run_date)s
+                    """,
+                    {"run_date": run_date_value},
+                )
+                row = cursor.fetchone()
+                latest_run_ts = row[0] if row else None
 
             if latest_run_ts is None:
                 LOGGER.info(

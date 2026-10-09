@@ -13,13 +13,18 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import uuid
+
+from scripts import signal_handoff
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_STEPS = ('screener', 'backtest', 'metrics', 'labels', 'ranker_eval')
 SOURCE_FILES = ('scripts/run_pipeline.py', 'scripts/pipeline_postflight.py',
                 'scripts/primary_pipeline.py', 'scripts/ops/run_primary_pipeline.sh',
-                'scripts/ops/run_canary_smoke.sh', 'scripts/utils/ml_health_guard.py')
+                'scripts/ops/run_canary_smoke.sh', 'scripts/utils/ml_health_guard.py',
+                'scripts/signal_handoff.py', 'scripts/db_queries.py',
+                'scripts/utils/calendar.py', 'scripts/screener.py')
 MAX_REPORT_BYTES = 64 * 1024
 MAX_SOURCE_BYTES = 1024 * 1024
 ML_PROVENANCE_FIELDS = ('monitor_run_date', 'monitor_run_date_source', 'monitor_artifact_run_date',
@@ -27,6 +32,38 @@ ML_PROVENANCE_FIELDS = ('monitor_run_date', 'monitor_run_date_source', 'monitor_
                         'monitor_input_coverage', 'monitor_input_age_days', 'monitor_input_source',
                         'monitor_observed_at', 'monitor_input_reference_date', 'max_age_days', 'source', 'mode',
                         'monitor_provenance_required', 'monitor_provenance_reasons')
+
+
+def _save_control(base_dir, name, record):
+    directory = Path(base_dir) / 'reports' / 'pipeline_postflight'
+    _ordinary(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    data = (json.dumps(record, sort_keys=True, allow_nan=False) + '\n').encode()
+    path = directory / name
+    _ordinary(path)
+    temporary = directory / (uuid.uuid4().hex + '.tmp')
+    with temporary.open('xb') as handle:
+        handle.write(data)
+    if _read(temporary, MAX_REPORT_BYTES) != data:
+        raise OSError('control_readback_failed')
+    os.replace(temporary, path)
+    if _read(path, MAX_REPORT_BYTES) != data:
+        raise OSError('control_readback_failed')
+
+
+def begin_primary(base_dir, started):
+    invocation = {'id': uuid.uuid4().hex, 'started_at': started.isoformat()}
+    # Invalidate prior completion BEFORE dispatch. Failed or interrupted work
+    # cannot borrow an earlier green report from the same signal session.
+    _save_control(base_dir, 'active-primary.json', invocation)
+    return invocation
+
+
+def complete_primary(base_dir, invocation, result):
+    if result['status'] != 'ok' or not result.get('session'):
+        raise ValueError('postflight_not_eligible')
+    _save_control(base_dir, 'completed-primary.json',
+                  {'id': invocation['id'], 'report_binding': result['report_binding']})
 
 
 def _utc(value):
@@ -42,6 +79,12 @@ def _ordinary(path):
     for part in (path, *path.parents):
         if part.is_symlink():
             raise ValueError('symlink_path')
+        try:
+            attributes = part.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(attributes.st_mode) or getattr(attributes, 'st_file_attributes', 0) & 0x400:
+            raise ValueError('redirected_path')
 
 
 def _read(path, limit):
@@ -74,7 +117,7 @@ def _number(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None):
+def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, require_session=False):
     """Assess declared outcomes; success is not trading or research acceptance."""
     failures, warnings = [], []
     if not isinstance(record, dict) or type(record.get('schema_version')) is not int or record['schema_version'] != 1:
@@ -83,9 +126,35 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None):
     if not isinstance(run_id, str) or not re.fullmatch('[0-9a-f]{32}', run_id):
         raise ValueError('invalid_run_id')
     started, finished = _utc(record.get('started_at')), _utc(record.get('finished_at'))
-    if started > finished or finished > now or (now - started).total_seconds() > max_age_seconds:
+    session = record.get('session')
+    if require_session and session is None:
+        failures.append('session_handoff_missing')
+    if session is not None:
+        signal_handoff.validate_session(session, started=started, finished=finished, now=now)
+        snapshot = record.get('frozen_candidates')
+        if (not isinstance(snapshot, dict) or type(snapshot.get('count')) is not int or snapshot['count'] <= 0
+                or snapshot.get('binding_version') != 1 or snapshot.get('query_contract') != 'candidate_ranker_join_v1'
+                or snapshot.get('count') != record.get('coverage', {}).get('total')
+                or not isinstance(snapshot.get('references'), list)
+                or len(snapshot['references']) != snapshot['count']
+                or not isinstance(snapshot.get('value_binding'), dict)):
+            raise ValueError('invalid_frozen_candidates')
+        value_binding = snapshot['value_binding']
+        if (type(value_binding.get('bytes')) is not int or not 0 < value_binding['bytes'] <= 4 * 1024 * 1024
+                or not isinstance(value_binding.get('sha256'), str)
+                or not re.fullmatch('[0-9a-f]{64}', value_binding['sha256'])):
+            raise ValueError('invalid_frozen_candidate_binding')
+        references = snapshot['references']
+        if len({r['symbol'] for r in references}) != len(references):
+            raise ValueError('duplicate_frozen_reference')
+        for item in references:
+            signal_handoff.reference(snapshot, item['symbol'])
+            if (item['field'] != 'close' or signal_handoff.utc(item['bar_timestamp']) !=
+                    signal_handoff._at(date.fromisoformat(session['signal_session']), '00:00')):
+                raise ValueError('frozen_reference_session_mismatch')
+    if started > finished or finished > now or (session is None and (now - started).total_seconds() > max_age_seconds):
         failures.append('invalid_or_stale_run_window')
-    if started.date() != expected_day or finished.date() != expected_day:
+    if session is None and (started.date() != expected_day or finished.date() != expected_day):
         failures.append('wrong_run_day')
     if not_before is not None and started < not_before:
         failures.append('report_predates_invocation')
@@ -169,7 +238,8 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None):
 
 
 def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, step_rcs,
-                   stage_times, degraded, labels_rows, freshness, coverage, ml_health, controls):
+                   stage_times, degraded, labels_rows, freshness, coverage, ml_health, controls,
+                   session=None, frozen_candidates=None, invocation_id=None):
     """The pipeline writes selected facts from this invocation, not shared-log greps."""
     base_dir = Path(base_dir)
     freshness = freshness if isinstance(freshness, dict) else {}
@@ -195,6 +265,8 @@ def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, ste
                       **{field: health[field] for field in ML_PROVENANCE_FIELDS if field in health}},
         'controls': dict(controls), 'source_bindings': {},
     }
+    if session is not None:
+        record.update(session=session, frozen_candidates=frozen_candidates, invocation_id=invocation_id)
     for relative in SOURCE_FILES:
         record['source_bindings'][relative] = _binding(_read(base_dir / relative, MAX_SOURCE_BYTES))
     # Ensure malformed facts cannot silently become successful JSON.
@@ -223,7 +295,8 @@ def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, ste
     return record
 
 
-def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=7200, not_before=None):
+def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=7200, not_before=None,
+                 require_session=False, require_completion=False):
     now = now or datetime.now(timezone.utc)
     expected_day = expected_day or now.date()
     if not _number(max_age_seconds) or not 0 < max_age_seconds <= 86400:
@@ -233,19 +306,34 @@ def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=
     try:
         data = _read(path, MAX_REPORT_BYTES)
         record = json.loads(data.decode('utf-8'), object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
-        result = assess(record, now=now, expected_day=expected_day, max_age_seconds=max_age_seconds, not_before=not_before)
+        result = assess(record, now=now, expected_day=expected_day, max_age_seconds=max_age_seconds,
+                        not_before=not_before, require_session=require_session)
         for relative in SOURCE_FILES:
             if record.get('source_bindings', {}).get(relative) != _binding(_read(base_dir / relative, MAX_SOURCE_BYTES)):
                 raise ValueError('source_binding_mismatch')
         history = path.parent / ('run-' + record['run_id'] + '.json')
         if _read(history, MAX_REPORT_BYTES) != data:
             raise ValueError('history_binding_mismatch')
+        if require_session or require_completion:
+            active = json.loads(_read(path.parent / 'active-primary.json', MAX_REPORT_BYTES),
+                                object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
+            if (record.get('invocation_id') != active['id'] or not re.fullmatch('[0-9a-f]{32}', active['id'])
+                    or _utc(record['started_at']) < _utc(active['started_at'])):
+                raise ValueError('primary_invocation_binding_mismatch')
+            if require_completion:
+                completion = json.loads(_read(path.parent / 'completed-primary.json', MAX_REPORT_BYTES),
+                                        object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
+                if completion != {'id': active['id'], 'report_binding': _binding(data)}:
+                    raise ValueError('postflight_completion_binding_mismatch')
         result['report_binding'] = _binding(data)
         # Display provenance only after source/history saved-byte checks pass.
         result['ml_health'] = record['ml_health']
+        if record.get('session') is not None:
+            result.update(session=record['session'], frozen_candidates=record['frozen_candidates'])
         return result
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
-        return {'status': 'failed', 'failures': ['missing_malformed_or_unbound_report'],
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as failure:
+        reason = str(failure) if type(failure) is ValueError and re.fullmatch('[a-z_]{1,80}', str(failure)) else 'missing_malformed_or_unbound_report'
+        return {'status': 'failed', 'failures': [reason],
                 'qualifications': [], 'research_qualified': False, 'operating_acceptance': False}
 
 

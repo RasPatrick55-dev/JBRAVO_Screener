@@ -13,8 +13,9 @@ FIXED_ARGS = (
     '--use-champion', '--ml-health-guard', '--ml-health-guard-mode', 'warn',
     '--enrich-candidates-with-ranker', '--refresh-predictions-for-candidates', 'true',
     '--auto-refresh-features', 'true', '--auto-refresh-predictions', 'true', '--postflight-report',
+    '--session-handoff',
 )
-FIXED_FLAGS = {arg for arg in FIXED_ARGS if arg.startswith('--')} | {'--allow-no-screener'}
+FIXED_FLAGS = {arg for arg in FIXED_ARGS if arg.startswith('--')} | {'--allow-no-screener', '--handoff-invocation'}
 
 
 def build_arguments(argv):
@@ -38,10 +39,12 @@ def main(argv=None, *, pipeline_main=None, base_dir=ROOT):
     os.environ.setdefault('JBR_STRICT_AUTO_REFRESH_PREDICTIONS', 'true')
     os.environ.setdefault('JBR_RANKER_PREDICT_TIMEOUT_SECS', '900')
     os.environ.setdefault('JBR_RANKER_EVAL_TIMEOUT_SECS', '900')
-    if pipeline_main is None:
-        from scripts.run_pipeline import main as pipeline_main
     started = datetime.now(timezone.utc)
     try:
+        invocation = pipeline_postflight.begin_primary(base_dir, started)
+        if pipeline_main is None:
+            from scripts.run_pipeline import main as pipeline_main
+        arguments.extend(['--handoff-invocation', invocation['id']])
         try:
             rc = pipeline_main(arguments)
         except SystemExit as completion:
@@ -53,7 +56,12 @@ def main(argv=None, *, pipeline_main=None, base_dir=ROOT):
         print(json.dumps({'status': 'failed', 'reason': 'pipeline_exception',
                           'error_type': type(failure).__name__}), flush=True)
         return 1
-    result = pipeline_postflight.check_health(base_dir, not_before=started)
+    result = pipeline_postflight.check_health(base_dir, not_before=started, require_session=True)
+    if result['status'] == 'ok':
+        try:
+            pipeline_postflight.complete_primary(base_dir, invocation, result)
+        except (OSError, ValueError):
+            result = {'status': 'failed', 'failures': ['postflight_completion_record_failed']}
     print(json.dumps(result, sort_keys=True, allow_nan=False), flush=True)
     return 0 if result['status'] == 'ok' else 1
 

@@ -19,6 +19,9 @@ from unittest import mock
 
 from scripts import pipeline_postflight as postflight
 from scripts import primary_pipeline as primary
+import pytest
+
+pytestmark = pytest.mark.alpaca_optional
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
@@ -226,8 +229,9 @@ class PostflightTests(unittest.TestCase):
                          coverage=self.facts['coverage'] | {'run_ts_utc': started.isoformat()})
             return 0
         with mock.patch.dict(os.environ, {}, clear=True), contextlib.redirect_stdout(io.StringIO()):
+            # A legacy success report is insufficient for the new primary path.
             self.assertEqual(primary.main(['--backtest-quick', 'true', '--reload-web', 'false'],
-                             pipeline_main=pipeline, base_dir=self.root), 0)
+                             pipeline_main=pipeline, base_dir=self.root), 1)
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0].count('--steps'), 1)
         self.assertEqual(calls[0][calls[0].index('--steps') + 1], ','.join(postflight.REQUIRED_STEPS))
@@ -264,7 +268,7 @@ class PostflightTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, {'scripts.run_pipeline': module}), \
              mock.patch.dict(os.environ, {'JBR_STRICT_PREDICTIONS_META': 'false'}), \
              contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(primary.main([], base_dir=self.root), 0)
+            self.assertEqual(primary.main([], base_dir=self.root), 1)
             self.assertEqual(os.environ['JBR_STRICT_PREDICTIONS_META'], 'false')
 
     def test_real_pipeline_argument_parser_accepts_primary_contract(self):
@@ -296,7 +300,7 @@ class PostflightTests(unittest.TestCase):
                  and any(isinstance(a, ast.Constant) and a.value == 'postflight_report' for a in n.test.args)]
         self.assertEqual(len(hooks), 1)
         executable = compile(ast.fix_missing_locations(ast.Module(body=hooks, type_ignores=[])), 'pipeline_recording_hook', 'exec')
-        namespace = dict(base_dir=self.root, args=SimpleNamespace(postflight_report=True), started_dt=self.started,
+        namespace = dict(base_dir=self.root, args=SimpleNamespace(postflight_report=True), session_context=None, started_dt=self.started,
             datetime=datetime, timezone=timezone, rc=0, steps=self.facts['steps'], step_rcs=self.facts['step_rcs'],
             stage_times=self.facts['stage_times'], degraded=False, labels_rows=120,
             enrichment_freshness=self.facts['freshness'], model_score_coverage_summary=self.facts['coverage'],
