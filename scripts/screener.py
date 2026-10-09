@@ -5876,6 +5876,15 @@ def write_outputs(
         top_df = pd.DataFrame(columns=TOP_CANDIDATE_COLUMNS)
     if scored_df is None:
         scored_df = pd.DataFrame()
+    db_insert_frame = pd.DataFrame()
+    canonical_candidate_rows = int(top_df.shape[0]) if isinstance(top_df, pd.DataFrame) else 0
+    if mode in {"screener", "full-nightly"} and db.db_enabled():
+        try:
+            db_insert_frame = _prepare_screener_db_frame(top_df, scored_df)
+            canonical_candidate_rows = int(db_insert_frame.shape[0])
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("[WARN] SCREENER_DB_FRAME_PREP_FAILED err=%s", exc)
+            db_insert_frame = pd.DataFrame()
 
     sentiment_enabled = bool(stats.get("sentiment_enabled"))
     if sentiment_enabled and "sentiment" not in scored_df.columns:
@@ -5964,7 +5973,7 @@ def write_outputs(
     metrics = {
         "last_run_utc": _format_timestamp(now),
         "status": status,
-        "rows": int(top_df.shape[0]),
+        "rows": int(canonical_candidate_rows),
         "ranked_rows": scored_count,
         "symbols_in": scored_count,
         "candidates_out": int(stats.get("candidates_out", 0)),
@@ -5980,9 +5989,11 @@ def write_outputs(
         "skips": {key: int(skip_reasons.get(key, 0)) for key in SKIP_KEYS},
     }
     if debug_no_gates_enabled:
-        metrics["candidates_final"] = min(6, scored_count)
+        metrics["candidates_final_raw"] = min(6, scored_count)
+        metrics["candidates_final"] = int(canonical_candidate_rows)
     else:
-        metrics["candidates_final"] = int(top_df.shape[0])
+        metrics["candidates_final_raw"] = int(top_df.shape[0])
+        metrics["candidates_final"] = int(canonical_candidate_rows)
     metrics["sentiment_enabled"] = sentiment_enabled
     metrics["sentiment_missing_count"] = sentiment_missing
     metrics["sentiment_avg"] = float(sentiment_avg) if sentiment_avg is not None else None
@@ -6139,7 +6150,7 @@ def write_outputs(
 
     if mode in {"screener", "full-nightly"} and db.db_enabled():
         try:
-            insert_frame = _prepare_screener_db_frame(top_df, scored_df)
+            insert_frame = db_insert_frame.copy() if not db_insert_frame.empty else _prepare_screener_db_frame(top_df, scored_df)
             gated_rows = int(
                 stats.get("gated_rows", top_df.shape[0] if isinstance(top_df, pd.DataFrame) else 0)
                 or 0
@@ -6157,6 +6168,12 @@ def write_outputs(
                 int(insert_frame.shape[0]),
                 dropped_incomplete,
                 int(pruned),
+            )
+            LOGGER.info(
+                "[INFO] FINAL_CANDIDATE_ROW_COUNT rows=%s source=screener_db_ingest run_date=%s raw_top_rows=%s",
+                int(insert_frame.shape[0]),
+                run_date_value,
+                int(top_df.shape[0]),
             )
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning("[WARN] DB_WRITE_FAILED table=screener_candidates err=%s", exc)

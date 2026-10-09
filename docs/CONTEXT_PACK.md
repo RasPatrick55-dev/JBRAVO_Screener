@@ -20,8 +20,11 @@ Repository invariants:
 
 - `docs/how-to/ops_runbook.md`
 - `docs/how-to/dev_setup.md`
+- `docs/how-to/pythonanywhere_credentials.md`
 - `scripts/docs_consistency_check.py`
 - `scripts/dashboard_consistency_check.py`
+- `scripts/pythonanywhere_env_probe.py`
+- `scripts/utils/pythonanywhere_env.py`
 
 ## C) Guardrails / CI
 

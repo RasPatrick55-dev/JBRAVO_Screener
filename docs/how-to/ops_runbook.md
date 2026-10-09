@@ -7,6 +7,22 @@
 - CSV files are debug/parachute artifacts only and must not be treated as the system of record.
 - DB config precedence: `DATABASE_URL` -> `DB_*` -> disabled unless `JBR_DEV_DB_DEFAULTS=true`.
 
+## PythonAnywhere API Credentials (Local VS Code + Codex)
+
+Use [pythonanywhere_credentials.md](pythonanywhere_credentials.md) as the single source of truth for PythonAnywhere API credential lookup.
+
+- Never commit PythonAnywhere credentials.
+- Never upload `~/.config/jbravo/.env`, `%USERPROFILE%\.config\jbravo\.env`, `.env.local`, or `.env.pythonanywhere.local` to any context pack.
+- Local API helpers resolve `PA_USERNAME`, `PA_TOKEN`, and `PA_HOST` from:
+  1. process environment
+  2. user-level env file
+  3. repo-local ignored env files
+- Required remote-command handshake:
+  1. list consoles
+  2. send `pwd`
+  3. confirm `get_latest_output`
+- If `pwd` fails or PythonAnywhere returns HTTP `412`, stop and report the blocker instead of claiming remote execution.
+
 ## DB Connection Playbook (Local VS Code + PythonAnywhere)
 
 Use this section when you see `DB_CONNECT_FAIL` or `DB_MIGRATE_FAILED`.

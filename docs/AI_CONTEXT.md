@@ -10,6 +10,9 @@ This file is the single source of truth for assistant context in this repo.
 - CSV candidate files are non-authoritative and exist only for debug/parachute workflows.
 - Candidate CSV export is optional via `JBR_WRITE_CANDIDATE_CSVS=true`.
 - DB config precedence is `DATABASE_URL` first, then `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`; otherwise DB is treated as disabled (unless `JBR_DEV_DB_DEFAULTS=true` is set for local fallback).
+- PythonAnywhere API credentials for local VS Code + Codex use `PA_USERNAME`, `PA_TOKEN`, and `PA_HOST` with the canonical lookup contract in `docs/how-to/pythonanywhere_credentials.md`.
+- Never upload `~/.config/jbravo/.env`, `%USERPROFILE%\.config\jbravo\.env`, `.env.local`, or `.env.pythonanywhere.local` to any context pack.
+- Before claiming remote PythonAnywhere execution, list consoles, send `pwd`, and confirm `get_latest_output` succeeds. If the API returns HTTP `412`, stop and report that the console must be started in a browser first.
 
 ## Canonical Daily One-Liners
 
@@ -38,3 +41,5 @@ python -m scripts.docs_consistency_check
 This regenerates CLI reference docs and fails if docs drift from paper-only + DB-first policy.
 
 For local hook setup, see `docs/how-to/dev_setup.md`.
+
+For PythonAnywhere API credential lookup and the required console handshake, see `docs/how-to/pythonanywhere_credentials.md`.

@@ -38,6 +38,7 @@ mkdir -p "$(dirname "${CANARY_LOG}")"
     --ml-health-guard-mode warn \
     --enrich-candidates-with-ranker \
     --use-champion \
+    --refresh-predictions-for-candidates \
     --screener-args "${SCREENER_ARGS}"
   rc=$?
   set -e
