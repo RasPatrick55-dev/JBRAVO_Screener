@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import math
@@ -1471,7 +1472,9 @@ def _check_entry_preflight(config, frame=None, *, raw_batch=False):
         supplied = frame.to_dict(orient='records') if frame is not None else None
         rows = (supplied if raw_batch else getattr(config, '_entry_candidate_rows', supplied)) if supplied is not None else None
         result = executor_health.preflight(
-            Path.cwd(), rows=rows, prior_binding=previous.get('pipeline_binding'))
+            Path.cwd(), rows=rows,
+            prior_binding=getattr(config, '_entry_pipeline_binding', previous.get('pipeline_binding')),
+            prior_value_binding=getattr(config, '_entry_raw_value_binding', previous.get('candidate_value_binding')))
         if supplied is not None and result['status'] == 'pass':
             expected = {row['symbol']: executor_health.utc(row['run_ts_utc']) for row in rows}
             try:
@@ -1482,8 +1485,17 @@ def _check_entry_preflight(config, frame=None, *, raw_batch=False):
             if not valid_subset or len({row.get('symbol') for row in supplied}) != len(supplied):
                 result = {'status': 'blocked', 'reasons': ['filtered_candidates_not_in_bound_batch']}
         if rows is not None and result['status'] == 'pass':
-            config._entry_candidate_rows = [dict(row) for row in rows]
+            config._entry_pipeline_binding = result['pipeline_binding']
+            config._entry_raw_value_binding = result['candidate_value_binding']
+            config._entry_candidate_rows = copy.deepcopy(rows)
             config._entry_allowed_symbols = {row['symbol'] for row in supplied}
+            if not raw_batch:
+                value_binding = executor_health.candidate_values(supplied)
+                previous_filtered = getattr(config, '_entry_filtered_binding', value_binding)
+                if value_binding != previous_filtered:
+                    result = {'status': 'blocked', 'reasons': ['filtered_candidate_values_changed']}
+                else:
+                    config._entry_filtered_binding = value_binding
     config._entry_preflight = result
     LOGGER.info('EXECUTOR_PREFLIGHT status=%s reasons=%s', result['status'], result.get('reasons', []))
     return result
@@ -1954,6 +1966,7 @@ def load_candidates_from_db(
         connection = db.get_db_conn()
         if connection is None:
             raise CandidateLoadError("Database connection unavailable")
+        connection.set_session(isolation_level='REPEATABLE READ', readonly=True, autocommit=False)
         if diagnostic:
             try:
                 with connection.cursor() as cursor:
@@ -1963,15 +1976,24 @@ def load_candidates_from_db(
             except Exception as exc:  # pragma: no cover - diagnostic logging
                 LOGGER.info("DB_PING ok=false err=%s", exc)
         run_date_value = datetime.now(timezone.utc).date()
-        df, latest_run_ts = get_latest_screener_candidates(run_date_value)
+        df, latest_run_ts = get_latest_screener_candidates(run_date_value, connection=connection)
         if latest_run_ts is None:
-            run_date_value = db.fetch_latest_run_date("screener_candidates")
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT MAX(run_date) FROM screener_candidates")
+                row = cursor.fetchone()
+                run_date_value = row[0] if row else None
             if run_date_value is not None:
-                df, latest_run_ts = get_latest_screener_candidates(run_date_value)
+                df, latest_run_ts = get_latest_screener_candidates(run_date_value, connection=connection)
+        df.attrs['executor_snapshot'] = {'isolation': 'repeatable_read', 'read_only': True,
+                                         'scope': 'candidate_load_only'}
     except Exception as exc:
         raise CandidateLoadError(f"Failed to load candidates from database: {exc}") from exc
     finally:
         if connection is not None:
+            try:
+                connection.rollback()
+            except Exception:
+                LOGGER.debug("Failed to roll back candidate read transaction", exc_info=True)
             try:
                 connection.close()
             except Exception:
@@ -2129,6 +2151,7 @@ class ExecutorConfig:
     source: str = "db"
     source_path: Optional[Path] = None
     source_type: str = "db"
+    scheduler_task_id: Optional[str] = None
     allocation_pct: float = 0.05
     alloc_weight_key: str = "score"
     min_model_score: float = 0.0
@@ -2180,6 +2203,8 @@ class ExecutorConfig:
     reconcile_overlap_secs: int = 300
 
     def __post_init__(self) -> None:
+        if self.scheduler_task_id is not None and not re.fullmatch(r'[1-9][0-9]{0,11}', self.scheduler_task_id):
+            raise ValueError('invalid_scheduler_task_id')
         selected_source = self.source or self.source_type or "db"
         normalized_source = str(selected_source).strip().lower()
         if normalized_source == "csv":
@@ -3700,6 +3725,7 @@ class TradeExecutor:
             df["symbol"] = df["symbol"].astype("string").str.upper()
         if source_type == 'db' and _check_entry_preflight(self.config, df, raw_batch=True)['status'] == 'blocked':
             raise CandidateLoadError('Executor preflight rejected the database batch')
+        self.config._entry_db_snapshot = copy.deepcopy(df.attrs.get('executor_snapshot'))
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
@@ -6011,7 +6037,13 @@ class TradeExecutor:
                 result = {'status': 'blocked', 'reasons': ['submission_symbol_not_in_bound_batch']}
             else:
                 result = executor_health.preflight(Path.cwd(), rows=rows,
-                                                    prior_binding=prior.get('pipeline_binding'))
+                    prior_binding=getattr(self.config, '_entry_pipeline_binding', prior.get('pipeline_binding')),
+                    prior_value_binding=getattr(self.config, '_entry_raw_value_binding', prior.get('candidate_value_binding')))
+                if result['status'] == 'pass' and hasattr(self.config, '_entry_execution_frame'):
+                    actual = executor_health.candidate_values(
+                        self.config._entry_execution_frame.to_dict(orient='records'), ordered=True)
+                    if actual != self.config._entry_execution_binding:
+                        result = {'status': 'blocked', 'reasons': ['execution_candidate_values_changed']}
             self.config._entry_preflight = result
             if result['status'] != 'pass':
                 self.metrics.record_skip('DATA_MISSING', count=1)
@@ -6670,6 +6702,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
 
     config = ExecutorConfig(
         source=(args.source or "db").lower(),
+        scheduler_task_id=os.environ.get('JBRAVO_SCHEDULER_TASK_ID'),
         source_path=args.source_path,
         source_type=(args.source or "db").lower(),
         allocation_pct=args.allocation_pct,
@@ -6974,6 +7007,9 @@ def run_executor(
 
         candidates_df = loader._rank_candidates(frame)
         candidates_df = loader._apply_alloc_weight_key(candidates_df)
+        config._entry_execution_frame = candidates_df
+        config._entry_execution_binding = executor_health.candidate_values(
+            candidates_df.to_dict(orient='records'), ordered=True)
 
         try:
             base_alloc_pct = float(config.allocation_pct)

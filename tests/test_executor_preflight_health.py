@@ -21,10 +21,16 @@ import unittest
 from unittest import mock
 
 import pandas as pd
+try:
+    import pytest
+except ModuleNotFoundError:  # Keep the documented unittest runner available.
+    pytest = None
 from scripts import executor_health as health
 from scripts import pipeline_postflight as pipeline
 
 SOURCE = Path(__file__).resolve().parents[1]
+if pytest is not None:
+    pytestmark = pytest.mark.alpaca_optional
 
 
 class Fixture(unittest.TestCase):
@@ -208,6 +214,91 @@ class ReceiptTests(Fixture):
         self.assertEqual(health.inspect_receipt(self.root, now=self.now)['status'], 'failed')
 
 
+class AssuranceTests(Fixture):
+    def test_candidate_binding_detects_price_feature_and_optional_presence_changes(self):
+        original = [r | {'close': 10.0, 'features': {'atr': 2.0}, 'optional': None} for r in self.rows]
+        first = self.gate(rows=original)
+        for field, value in (('close', 10.01), ('features', {'atr': 2.01})):
+            changed = [original[0] | {field: value}, original[1]]
+            self.assertEqual(self.gate(rows=changed, prior_value_binding=first['candidate_value_binding'])['reasons'], ['candidate_values_changed'])
+        missing = [dict(row) for row in original]; del missing[0]['optional']
+        self.assertNotEqual(health.candidate_values(missing), health.candidate_values(original))
+        self.assertEqual(health.candidate_values(original), health.candidate_values(list(reversed(original))))
+        self.assertNotEqual(health.candidate_values(original, ordered=True), health.candidate_values(list(reversed(original)), ordered=True))
+
+    def test_candidate_scalar_precision_and_unsupported_values(self):
+        from decimal import Decimal
+        row = self.rows[0] | {'price': Decimal('1.0000000000000001')}
+        self.assertNotEqual(health.candidate_values([row]), health.candidate_values([row | {'price': Decimal('1.0000000000000002')}]))
+        for value in (float('inf'), Decimal('NaN'), object()):
+            with self.assertRaises(ValueError): health.candidate_values([row | {'price': value}])
+        health.candidate_values([row | {'price': float('nan'), 'optional': pd.NA}])
+
+    def test_explicit_task_attribution_never_becomes_scheduler_proof(self):
+        config = SimpleNamespace(scheduler_task_id='1326478')
+        record = self.receipt(config=config)
+        self.assertFalse(record['task_attribution']['independently_verified'])
+        self.assertEqual(health.inspect_receipt(self.root, now=self.now, expected_task_id='1326478')['status'], 'no_orders')
+        self.assertEqual(health.inspect_receipt(self.root, now=self.now, expected_task_id='1322138')['reason'], 'task_attribution_missing_or_mismatched')
+        self.receipt()
+        self.assertEqual(health.inspect_receipt(self.root, now=self.now, expected_task_id='1326478')['status'], 'failed')
+
+    def pending(self, *, deadline=None, observations=None, **changes):
+        metric = SimpleNamespace()
+        health.observe(metric, order_id='o1', symbol='AAA', state='resting', deadline=deadline or self.now + timedelta(minutes=35))
+        config = SimpleNamespace(_entry_preflight=self.gate())
+        self.receipt(config=config, metrics=self.metrics | {'orders_submitted': 1},
+                     observations=observations or metric._order_observations, **changes)
+        return health.inspect_receipt(self.root, now=self.now)
+
+    def test_deadline_due_cancel_plan_and_early_wait_are_read_only(self):
+        inspection = self.pending(deadline=self.now + timedelta(seconds=1))
+        early = health.deadline_plan(inspection, now=self.now)
+        due = health.deadline_plan(inspection, now=self.now + timedelta(seconds=1))
+        self.assertEqual(early['orders'][0]['proposed_action'], 'wait_until_deadline')
+        self.assertEqual(due['orders'][0]['proposed_action'], 'cancel_and_confirm')
+        self.assertEqual(due['broker_calls'], 0)
+        self.assertFalse(due['cancellation_enforced'])
+        self.assertTrue(due['orders'][0]['requires_broker_identity_side_account_and_state_check'])
+
+    def test_acknowledged_cancel_only_plans_confirmation_and_terminal_plans_nothing(self):
+        metric = SimpleNamespace()
+        health.observe(metric, order_id='o1', symbol='AAA', state='resting', deadline=self.now)
+        health.observe(metric, order_id='o1', symbol='AAA', state='cancel_requested')
+        inspection = self.pending(observations=metric._order_observations)
+        self.assertEqual(health.deadline_plan(inspection, now=self.now)['orders'][0]['proposed_action'], 'confirm_existing_request')
+        health.observe(metric, order_id='o1', symbol='AAA', state='canceled')
+        self.assertEqual(health.deadline_plan(self.pending(observations=metric._order_observations), now=self.now)['orders'], [])
+
+    def test_missing_deadline_unknown_or_truncated_population_cannot_plan(self):
+        metric = SimpleNamespace()
+        health.observe(metric, order_id='o1', symbol='AAA', state='submitted')
+        self.assertEqual(health.deadline_plan(self.pending(observations=metric._order_observations), now=self.now)['reasons'], ['missing_cancellation_deadline'])
+        self.assertEqual(health.deadline_plan(self.pending(observations_truncated=True), now=self.now)['reasons'], ['incomplete_order_population'])
+        self.assertEqual(health.deadline_plan({'status': 'failed'}, now=self.now)['orders'], [])
+
+    def test_contradictory_order_evidence_cannot_plan(self):
+        metric = SimpleNamespace()
+        health.observe(metric, order_id='o1', symbol='AAA', state='resting', deadline=self.now)
+        original = self.pending(observations=metric._order_observations)
+        first = original['record']['order_observations'][0]
+        for changes, reason in (({'symbol': 'BBB'}, 'contradictory_order_identity'),
+                                ({'deadline': (self.now + timedelta(seconds=1)).isoformat()}, 'contradictory_order_deadline')):
+            altered = dict(original); altered['record'] = original['record'] | {'order_observations': [first, first | changes]}
+            self.assertEqual(health.deadline_plan(altered, now=self.now)['reasons'], [reason])
+        for state, reason in (('resting', 'terminal_state_regressed'), ('expired', 'contradictory_terminal_state')):
+            altered = dict(original); altered['record'] = original['record'] | {'order_observations': [first | {'state': 'canceled'}, first | {'state': state}]}
+            self.assertEqual(health.deadline_plan(altered, now=self.now)['reasons'], [reason])
+
+    def test_forged_scheduler_attestation_is_rejected(self):
+        record = self.receipt(config=SimpleNamespace(scheduler_task_id='1326478'))
+        record['task_attribution']['independently_verified'] = True
+        data = json.dumps(record).encode()
+        for name in ('latest.json', 'run-' + record['run_id'] + '.json'):
+            (self.root / 'reports/executor/premarket' / name).write_bytes(data)
+        self.assertEqual(health.inspect_receipt(self.root, now=self.now)['status'], 'failed')
+
+
 class LogTests(Fixture):
     def test_large_log_seeks_bounded_tail_and_sanitizes(self):
         path = self.root / 'logs/execute_task.log'
@@ -272,7 +363,7 @@ class CallerTests(Fixture):
         self.stack.enter_context(mock.patch.object(self.mod, 'send_alert', return_value=None))
         self.stack.enter_context(mock.patch.object(self.mod, '_count_db_candidates', return_value=0))
         actual = health.preflight
-        self.stack.enter_context(mock.patch.object(health, 'preflight', side_effect=lambda *a, **k: actual(*a, now=self.now, **k)))
+        self.stack.enter_context(mock.patch.object(health, 'preflight', side_effect=lambda *a, **k: actual(*a, **({'now': self.now} | k))))
 
     def test_real_cli_role_separation_and_recording(self):
         def run(config, **kwargs):
@@ -284,6 +375,131 @@ class CallerTests(Fixture):
             self.assertEqual(self.mod.main(['--reconcile-only', 'true']), 0)
         self.assertEqual(json.loads((self.root / 'reports/executor/premarket/latest.json').read_bytes())['run_id'], entry['run_id'])
         self.assertEqual(json.loads((self.root / 'reports/executor/reconciliation/latest.json').read_bytes())['role'], 'reconciliation')
+
+    def test_task_id_is_delivered_by_actual_config_builder_and_invalid_value_rejected(self):
+        with mock.patch.dict(os.environ, {'JBRAVO_SCHEDULER_TASK_ID': '1326478'}):
+            self.assertEqual(self.mod.build_config(self.mod.parse_args([])).scheduler_task_id, '1326478')
+        with mock.patch.dict(os.environ, {'JBRAVO_SCHEDULER_TASK_ID': 'not-a-task'}):
+            with self.assertRaises(ValueError): self.mod.build_config(self.mod.parse_args([]))
+
+    def test_changed_raw_or_filtered_values_block_actual_gate(self):
+        config = self.mod.ExecutorConfig()
+        raw = pd.DataFrame([r | {'score': 1, 'close': 10.0} for r in self.rows])
+        self.assertEqual(self.mod._check_entry_preflight(config, raw, raw_batch=True)['status'], 'pass')
+        self.assertEqual(self.mod._check_entry_preflight(config, raw)['status'], 'pass')
+        raw.loc[0, 'close'] = 10.5
+        self.assertEqual(self.mod._check_entry_preflight(config, raw)['reasons'], ['filtered_candidate_values_changed'])
+        config._entry_candidate_rows[0]['close'] = 999.0
+        self.assertEqual(self.mod._check_entry_preflight(config, raw)['reasons'], ['candidate_values_changed'])
+
+    def test_changed_execution_frame_blocks_buy_without_altering_sell(self):
+        config = self.mod.ExecutorConfig()
+        config._entry_preflight = self.gate()
+        config._entry_candidate_rows = self.rows
+        config._entry_execution_frame = pd.DataFrame([r | {'close': 10.0} for r in self.rows])
+        config._entry_execution_binding = health.candidate_values(config._entry_execution_frame.to_dict('records'), ordered=True)
+        config._entry_execution_frame.loc[0, 'close'] = 11.0
+        executor = self.mod.TradeExecutor(config, SimpleNamespace(), self.mod.ExecutionMetrics())
+        with mock.patch.object(executor, '_submit_order', return_value=SimpleNamespace(id='synthetic')) as submit:
+            self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA')))
+            submit.assert_not_called()
+            self.assertIsNotNone(executor.submit_with_retries(SimpleNamespace(side='sell', symbol='AAA')))
+            self.assertEqual(submit.call_count, 1)
+
+    def test_real_loader_uses_one_readonly_snapshot_and_rolls_back_before_close(self):
+        events = []
+        connection = SimpleNamespace(
+            set_session=lambda **kw: events.append(('session', kw)),
+            rollback=lambda: events.append(('rollback',)), close=lambda: events.append(('close',)))
+        frame = pd.DataFrame(self.rows)
+        def query(day, *, connection):
+            events.append(('query', connection)); return frame, self.batch
+        with mock.patch.object(self.mod.db, 'db_config_preview', return_value={'enabled': True}, create=True), \
+             mock.patch.object(self.mod.db, 'get_db_conn', return_value=connection, create=True) as connect, \
+             mock.patch.object(self.mod, 'get_latest_screener_candidates', side_effect=query):
+            loaded = self.mod.load_candidates_from_db()
+        connect.assert_called_once()
+        self.assertEqual(events[0], ('session', {'isolation_level': 'REPEATABLE READ', 'readonly': True, 'autocommit': False}))
+        self.assertIs(events[1][1], connection)
+        self.assertEqual(events[-2:], [('rollback',), ('close',)])
+        self.assertEqual(loaded.attrs['executor_snapshot']['scope'], 'candidate_load_only')
+
+    def test_query_join_fallback_keeps_caller_snapshot_open(self):
+        prior = sys.modules.pop('scripts.db_queries')
+        try:
+            queries = importlib.import_module('scripts.db_queries')
+            commands = []
+            cursor = mock.MagicMock()
+            cursor.__enter__.return_value = cursor
+            cursor.execute.side_effect = lambda sql, *args: commands.append(sql.strip())
+            cursor.fetchone.return_value = (self.batch,)
+            connection = SimpleNamespace(cursor=lambda: cursor, close=mock.Mock(), rollback=mock.Mock())
+            with mock.patch.object(queries, '_fetch_latest_candidate_rows', side_effect=[RuntimeError('join unavailable'), ([('AAA', 1)], ['symbol', 'score'])]):
+                frame, timestamp = queries.get_latest_screener_candidates(self.now.date(), connection=connection)
+            self.assertEqual(timestamp, self.batch)
+            self.assertEqual(frame['symbol'].tolist(), ['AAA'])
+            self.assertIn('SAVEPOINT executor_ranker_join', commands)
+            self.assertIn('ROLLBACK TO SAVEPOINT executor_ranker_join', commands)
+            self.assertIn('RELEASE SAVEPOINT executor_ranker_join', commands)
+            connection.rollback.assert_not_called(); connection.close.assert_not_called()
+        finally:
+            sys.modules['scripts.db_queries'] = prior
+
+    def test_loader_date_fallback_and_query_error_preserve_connection_ownership(self):
+        cursor = mock.MagicMock(); cursor.__enter__.return_value = cursor
+        cursor.fetchone.return_value = (self.now.date() - timedelta(days=1),)
+        connection = SimpleNamespace(cursor=lambda: cursor, set_session=mock.Mock(), rollback=mock.Mock(), close=mock.Mock())
+        with mock.patch.object(self.mod.db, 'db_config_preview', return_value={'enabled': True}, create=True), \
+             mock.patch.object(self.mod.db, 'get_db_conn', return_value=connection, create=True), \
+             mock.patch.object(self.mod, 'get_latest_screener_candidates', side_effect=[(pd.DataFrame(), None), (pd.DataFrame(self.rows), self.batch)]) as query:
+            self.mod.load_candidates_from_db()
+        self.assertEqual(query.call_count, 2)
+        self.assertTrue(all(call.kwargs['connection'] is connection for call in query.call_args_list))
+        cursor.execute.assert_called_once_with('SELECT MAX(run_date) FROM screener_candidates')
+        connection.rollback.assert_called_once(); connection.close.assert_called_once()
+        connection.rollback.reset_mock(); connection.close.reset_mock()
+        with mock.patch.object(self.mod.db, 'db_config_preview', return_value={'enabled': True}, create=True), \
+             mock.patch.object(self.mod.db, 'get_db_conn', return_value=connection, create=True), \
+             mock.patch.object(self.mod, 'get_latest_screener_candidates', side_effect=RuntimeError('synthetic')):
+            with self.assertRaises(self.mod.CandidateLoadError): self.mod.load_candidates_from_db()
+        connection.rollback.assert_called_once(); connection.close.assert_called_once()
+
+    def test_standalone_query_still_closes_its_owned_connection(self):
+        prior = sys.modules.pop('scripts.db_queries')
+        try:
+            queries = importlib.import_module('scripts.db_queries')
+            cursor = mock.MagicMock(); cursor.__enter__.return_value = cursor
+            cursor.fetchone.return_value = (None,)
+            connection = SimpleNamespace(cursor=lambda: cursor, close=mock.Mock())
+            with mock.patch.object(queries.db, 'get_db_conn', return_value=connection, create=True):
+                frame, timestamp = queries.get_latest_screener_candidates(self.now.date())
+            self.assertTrue(frame.empty); self.assertIsNone(timestamp)
+            connection.close.assert_called_once()
+        finally:
+            sys.modules['scripts.db_queries'] = prior
+
+    def test_actual_sizing_dry_run_uses_normal_executor_with_mocked_transport(self):
+        config = self.mod.ExecutorConfig(source='path', source_path=self.root / 'unused.csv',
+            dry_run=True, time_window='any', allocation_pct=.01, min_order_usd=500,
+            allow_bump_to_one=False)
+        frame = pd.DataFrame([{'symbol': 'AAA', 'close': 95.0, 'entry_price': 95.0,
+            'score': 2.0, 'universe_count': 10, 'score_breakdown': '{}'}])
+        metrics = self.mod.ExecutionMetrics()
+        executor = self.mod.TradeExecutor(config, None, metrics)
+        with mock.patch.object(executor, 'fetch_buying_power', return_value=2000), \
+             mock.patch.object(executor, 'fetch_open_order_symbols', return_value=(set(), 0, 0)), \
+             mock.patch.object(executor, 'evaluate_time_window', return_value=(True, 'ok', 'any')), \
+             mock.patch.object(self.mod, '_fetch_prevclose_snapshot', return_value=95.0), \
+             mock.patch.object(self.mod, '_fetch_prev_close_from_alpaca', return_value=95.0), \
+             mock.patch.object(self.mod, '_fetch_latest_trade_from_alpaca', return_value={'price': 95.0, 'feed': 'synthetic'}), \
+             mock.patch.object(self.mod, '_fetch_latest_quote_from_alpaca', return_value={'ask': 95.0, 'feed': 'synthetic'}), \
+             mock.patch.object(executor, '_submit_order', side_effect=AssertionError('no_order')) as submit, \
+             mock.patch.object(executor, 'log_info') as logged:
+            self.assertEqual(executor.execute(frame, prefiltered=frame.to_dict('records')), 0)
+        submit.assert_not_called()
+        calculations = [c for c in logged.call_args_list if c.args and c.args[0] == 'DRY_RUN_ORDER']
+        self.assertTrue(calculations)
+        self.assertEqual(int(calculations[0].kwargs['qty']), 5)
 
     def test_receipt_failure_changes_only_success_outcome(self):
         for rc in (0, 1, 2):
@@ -443,7 +659,12 @@ class CallerTests(Fixture):
         docs = (SOURCE / 'docs/reference/cli_reference.md').read_text(encoding='utf-8')
         section = docs.split('## `python -m scripts.execute_trades --help`', 1)[1]
         text = section.split('```text\n', 1)[1].split('```', 1)[0]
-        self.assertEqual(text.rstrip(), out.getvalue().rstrip())
+        # Python 3.13 prints a shared metavar once for these two aliases. Preserve
+        # all other wording/values; this is formatting, not a relaxed CLI contract.
+        def alias_format(value):
+            return value.replace('--market-tz MARKET_TIMEZONE, --market-timezone MARKET_TIMEZONE',
+                                 '--market-tz, --market-timezone MARKET_TIMEZONE').rstrip()
+        self.assertEqual(alias_format(text), alias_format(out.getvalue()))
 
     def test_buy_gate_failure_produces_unsuccessful_actual_caller_outcome(self):
         config = self.mod.ExecutorConfig(source='db', reconcile_auto=False, submit_at_ny='')
