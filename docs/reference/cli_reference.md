@@ -277,8 +277,9 @@ options:
   --trailing-percent TRAILING_PERCENT
                         Percent trail for the protective stop order
   --cancel-after-min CANCEL_AFTER_MIN
-                        Minutes after regular market open to cancel unfilled
-                        orders
+                        Minutes from order submission to the unfilled-order
+                        cancellation deadline; polling may detach earlier (not
+                        confirmation)
   --max-poll-secs MAX_POLL_SECS
                         Seconds to poll an order before detaching (no cancel)
                         and moving on
