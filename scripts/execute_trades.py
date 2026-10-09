@@ -32,6 +32,7 @@ from scripts import db
 from scripts.db_queries import get_latest_screener_candidates
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.log_rotate import rotate_if_needed
+from scripts import executor_health
 from scripts.utils.champion_config import champion_execution_overrides, load_latest_champion
 from scripts.utils.env import load_env
 from utils.alerts import send_alert
@@ -842,7 +843,9 @@ def _write_execute_metrics_error(
 ) -> None:
     """Persist an error snapshot so dashboards surface a clear banner."""
 
-    existing = _load_execute_metrics() or {}
+    # Shared latest metrics may belong to hourly reconciliation or an older run.
+    # Only observations produced within this invocation belong in its error receipt.
+    existing = _EXECUTE_METRICS_PAYLOAD or {}
     if not isinstance(existing, dict):
         existing = {}
     payload: Dict[str, Any] = dict(existing)
@@ -1455,6 +1458,35 @@ def _wait_until_submit_at(target: Optional[str]) -> None:
         sleep_for = min(60, max(5, remaining / 4))
         time.sleep(sleep_for)
         now_ny = datetime.now(ny)
+
+
+def _check_entry_preflight(config, frame=None, *, raw_batch=False):
+    """Fail closed for entries; diagnostic/path dry-runs and reconciliation stay separate."""
+    if config.reconcile_only or config.diagnostic or (config.dry_run and config.source == 'path'):
+        return {'status': 'not_applicable_no_entry_orders'}
+    if config.source != 'db':
+        result = {'status': 'blocked', 'reasons': ['candidate_source_unbound']}
+    else:
+        previous = getattr(config, '_entry_preflight', {})
+        supplied = frame.to_dict(orient='records') if frame is not None else None
+        rows = (supplied if raw_batch else getattr(config, '_entry_candidate_rows', supplied)) if supplied is not None else None
+        result = executor_health.preflight(
+            Path.cwd(), rows=rows, prior_binding=previous.get('pipeline_binding'))
+        if supplied is not None and result['status'] == 'pass':
+            expected = {row['symbol']: executor_health.utc(row['run_ts_utc']) for row in rows}
+            try:
+                valid_subset = all(row['symbol'] in expected and
+                    executor_health.utc(row['run_ts_utc']) == expected[row['symbol']] for row in supplied)
+            except (KeyError, ValueError, TypeError):
+                valid_subset = False
+            if not valid_subset or len({row.get('symbol') for row in supplied}) != len(supplied):
+                result = {'status': 'blocked', 'reasons': ['filtered_candidates_not_in_bound_batch']}
+        if rows is not None and result['status'] == 'pass':
+            config._entry_candidate_rows = [dict(row) for row in rows]
+            config._entry_allowed_symbols = {row['symbol'] for row in supplied}
+    config._entry_preflight = result
+    LOGGER.info('EXECUTOR_PREFLIGHT status=%s reasons=%s', result['status'], result.get('reasons', []))
+    return result
 
 
 def _record_auth_error(
@@ -2767,6 +2799,10 @@ class TradeExecutor:
         self.config = config
         self.client = client
         self.metrics = metrics
+        if not hasattr(metrics, '_order_observations'):
+            metrics._order_observations = []
+        config._entry_order_observations = metrics._order_observations
+        metrics._observation_config = config
         self.sleep = sleep_fn or time.sleep
         self.bar_cache = DailyBarCache(config.bar_directories)
         self.hydrator = OptionalFieldHydrator(client, self.bar_cache)
@@ -3662,6 +3698,8 @@ class TradeExecutor:
         df.columns = normalized_columns
         if "symbol" in df.columns:
             df["symbol"] = df["symbol"].astype("string").str.upper()
+        if source_type == 'db' and _check_entry_preflight(self.config, df, raw_batch=True)['status'] == 'blocked':
+            raise CandidateLoadError('Executor preflight rejected the database batch')
         if df.empty:
             LOGGER.info("[INFO] NO_CANDIDATES_IN_SOURCE")
             return df
@@ -5376,6 +5414,8 @@ class TradeExecutor:
                         until_utc = (
                             order.submitted_at + timedelta(minutes=cancel_after_min)
                         ).isoformat()
+                    executor_health.observe(self.metrics, order_id=order.order_id,
+                                            symbol=order.symbol, state='resting', deadline=until_utc)
                     self.log_info(
                         "ORDER_RESTING",
                         order_id=order.order_id,
@@ -5402,6 +5442,9 @@ class TradeExecutor:
                     _warn_context("alpaca.get_order", f"{order_id}: {exc}")
                     continue
                 state.status = str(getattr(order, "status", "")).lower()
+                if state.status in executor_health.TERMINAL:
+                    executor_health.observe(self.metrics, order_id=order_id,
+                                            symbol=state.symbol, state=state.status)
                 state.filled_qty = float(getattr(order, "filled_qty", state.filled_qty) or 0)
                 state.filled_avg_price = getattr(order, "filled_avg_price", state.filled_avg_price)
                 if state.status == "filled" or state.filled_qty >= state.qty:
@@ -5721,6 +5764,8 @@ class TradeExecutor:
                 break
             last_order_snapshot = order
             status = str(getattr(order, "status", "")).lower()
+            if status in executor_health.TERMINAL:
+                executor_health.observe(self.metrics, order_id=order_id, symbol=symbol, state=status)
             filled_qty = float(getattr(order, "filled_qty", filled_qty) or 0)
             filled_avg_price = getattr(order, "filled_avg_price", filled_avg_price)
             if status == "filled":
@@ -5807,6 +5852,9 @@ class TradeExecutor:
             )
         elif remaining > 0:
             until_utc = fill_deadline.isoformat() if fill_deadline else ""
+            if status not in executor_health.TERMINAL:
+                executor_health.observe(self.metrics, order_id=order_id, symbol=symbol,
+                                        state='resting', deadline=until_utc or None)
             self.log_info(
                 "ORDER_RESTING",
                 order_id=order_id,
@@ -5856,7 +5904,11 @@ class TradeExecutor:
                 self.client.cancel_order(order_id)
             else:  # pragma: no cover - defensive fallback
                 LOGGER.warning("Client has no cancel method; unable to cancel %s", order_id)
+                executor_health.observe(self.metrics, order_id=order_id, symbol=symbol, state='cancel_unavailable')
+                return
+            executor_health.observe(self.metrics, order_id=order_id, symbol=symbol, state='cancel_requested')
         except Exception as exc:
+            executor_health.observe(self.metrics, order_id=order_id, symbol=symbol, state='cancel_failed')
             _warn_context("alpaca.cancel_order", f"{order_id}: {exc}")
 
     def attach_trailing_stop(
@@ -5945,6 +5997,28 @@ class TradeExecutor:
             return None
         if self.client is None:
             return None
+        # Recheck immediately before BUY submission, including direct method callers.
+        # SELL/protective orders retain their existing behavior and dependencies.
+        side_value = _extract_request_field(request, 'side', '')
+        side = str(getattr(side_value, 'value', side_value)).lower()
+        if side == 'buy':
+            rows = getattr(self.config, '_entry_candidate_rows', None)
+            prior = getattr(self.config, '_entry_preflight', {})
+            if self.config.dry_run or rows is None or prior.get('status') != 'pass':
+                result = {'status': 'blocked', 'reasons': ['unbound_or_dry_run_submission']}
+            elif _extract_request_field(request, 'symbol', None) not in getattr(
+                    self.config, '_entry_allowed_symbols', {row['symbol'] for row in rows}):
+                result = {'status': 'blocked', 'reasons': ['submission_symbol_not_in_bound_batch']}
+            else:
+                result = executor_health.preflight(Path.cwd(), rows=rows,
+                                                    prior_binding=prior.get('pipeline_binding'))
+            self.config._entry_preflight = result
+            if result['status'] != 'pass':
+                self.metrics.record_skip('DATA_MISSING', count=1)
+                self.metrics.exit_reason = 'PREFLIGHT'
+                self.metrics.status = 'blocked'
+                LOGGER.error('EXECUTOR_PREFLIGHT status=blocked reasons=%s', result['reasons'])
+                return None
         attempts = 3
         backoff = 1.5
         delay = 1.0
@@ -5954,6 +6028,10 @@ class TradeExecutor:
                 log_info("alpaca.submit_order_http", attempt=attempt)
                 _enforce_order_price_ticks(request)
                 result = self._submit_order(request)
+                if side == 'buy' and result is not None:
+                    executor_health.observe(self.metrics, order_id=getattr(result, 'id', ''),
+                                            symbol=_extract_request_field(request, 'symbol', ''),
+                                            state='submitted')
                 if attempt > 1:
                     self.log_info("API_RETRY_SUCCESS", attempt=attempt)
                 return result
@@ -6054,7 +6132,7 @@ class TradeExecutor:
         global _EXECUTOR_RUN_WRITTEN
         if _EXECUTOR_RUN_WRITTEN:
             return
-        run_payload = _load_execute_metrics() or self.metrics.as_dict()
+        run_payload = _EXECUTE_METRICS_PAYLOAD or self.metrics.as_dict()
         if _EXECUTE_START_UTC and "run_started_utc" not in run_payload:
             run_payload["run_started_utc"] = _EXECUTE_START_UTC.isoformat()
         if _EXECUTE_FINISH_UTC and "run_finished_utc" not in run_payload:
@@ -6074,7 +6152,7 @@ class TradeExecutor:
 
     def persist_metrics(self) -> None:
         payload = self.metrics.as_dict()
-        existing: Dict[str, Any] = _load_execute_metrics() or {}
+        existing: Dict[str, Any] = _EXECUTE_METRICS_PAYLOAD or {}
         merged = dict(existing)
         merged.update(payload)
         existing_skips = existing.get("skips") if isinstance(existing.get("skips"), Mapping) else {}
@@ -6356,7 +6434,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--cancel-after-min",
         type=int,
         default=ExecutorConfig.cancel_after_min,
-        help="Minutes after regular market open to cancel unfilled orders",
+        help="Minutes from order submission to the unfilled-order cancellation deadline; polling may detach earlier (not confirmation)",
     )
     parser.add_argument(
         "--max-poll-secs",
@@ -6842,6 +6920,12 @@ def run_executor(
                     return _exit_market_closed()
         try:
             LOGGER.info("[INFO] CANDIDATE_SOURCE %s", str(config.source_type or "db"))
+            if _check_entry_preflight(config)['status'] == 'blocked':
+                metrics.record_skip('DATA_MISSING', count=1)
+                metrics.status = 'blocked'
+                metrics.exit_reason = 'PREFLIGHT'
+                loader.persist_metrics()
+                return 1
             frame = loader.load_candidates(rank=False)
         except CandidateLoadError as exc:
             LOGGER.error("%s", exc)
@@ -6852,6 +6936,15 @@ def run_executor(
                 detail=str(exc),
                 exception=exc.__class__.__name__,
             )
+            if getattr(config, '_entry_preflight', {}).get('status') == 'blocked':
+                metrics.status = 'blocked'
+                metrics.exit_reason = 'PREFLIGHT'
+            loader.persist_metrics()
+            return 1
+        if _check_entry_preflight(config, frame)['status'] == 'blocked':
+            metrics.record_skip('DATA_MISSING', count=max(1, len(frame)))
+            metrics.status = 'blocked'
+            metrics.exit_reason = 'PREFLIGHT'
             loader.persist_metrics()
             return 1
         if str(config.source_type or "").lower() == "db":
@@ -6904,6 +6997,12 @@ def run_executor(
         )
 
         _wait_until_submit_at(config.submit_at_ny)
+        if _check_entry_preflight(config, frame)['status'] == 'blocked':
+            metrics.record_skip('DATA_MISSING', count=max(1, len(frame)))
+            metrics.status = 'blocked'
+            metrics.exit_reason = 'PREFLIGHT'
+            loader.persist_metrics()
+            return 1
         configured_window = config.time_window or "auto"
         win, in_window, now_ny = _resolve_time_window(configured_window)
         trading_probe = client if client is not None else None
@@ -7062,7 +7161,13 @@ def run_executor(
 
         records = executor.hydrate_candidates(candidates_df)
         filtered = executor.guard_candidates(records)
-        return executor.execute(candidates_df, prefiltered=filtered)
+        result = executor.execute(candidates_df, prefiltered=filtered)
+        if getattr(config, '_entry_preflight', {}).get('status') == 'blocked':
+            metrics.status = 'blocked'
+            metrics.exit_reason = 'PREFLIGHT'
+            executor.persist_metrics()
+            return 1
+        return result
     finally:
         if auto_reconcile_enabled:
             _run_auto_reconcile(loader, config, stage="end")
@@ -7115,7 +7220,7 @@ def _help_requested(argv: Optional[Iterable[str]] = None) -> bool:
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
-    global _EXECUTE_START_UTC, _EXECUTE_FINISH_UTC
+    global _EXECUTE_START_UTC, _EXECUTE_FINISH_UTC, _EXECUTE_METRICS_PAYLOAD
     if _help_requested(argv):
         try:
             parse_args(argv)
@@ -7128,14 +7233,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 return 1
         return 0
     rotate_if_needed("logs/execute_trades.log", max_bytes=10_000_000, max_age_days=14, keep=14)
-    if _EXECUTE_START_UTC is None:
-        _EXECUTE_START_UTC = datetime.now(timezone.utc)
+    _EXECUTE_START_UTC = datetime.now(timezone.utc)
     _EXECUTE_FINISH_UTC = None
-    _bootstrap_env()
+    _EXECUTE_METRICS_PAYLOAD = None
     rc = 1
     metrics_payload: Dict[str, Any] | None = None
     status: str | None = None
+    config = None
+    role = 'unresolved'
     try:
+        _bootstrap_env()
+        args = parse_args(argv)
+        role = ('reconciliation' if args.reconcile_only else 'diagnostic' if args.diagnostic
+                else 'dry_run' if args.dry_run else 'premarket')
         try:
             creds_snapshot = assert_alpaca_creds()
         except AlpacaCredentialsError as exc:
@@ -7165,7 +7275,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             json.dumps(creds_snapshot, sort_keys=True),
         )
 
-        args = parse_args(argv)
         log_info("ALLOC_WEIGHT_MODE", key=args.alloc_weight_key)
         LOGGER.info(
             "[INFO] EXEC_CONFIG ext_hours=%s alloc=%.2f max_daily_entries=%d trail_pct=%.1f",
@@ -7176,7 +7285,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
         config = build_config(args)
         rc = run_executor(config, creds_snapshot=creds_snapshot)
-        metrics_payload = _load_execute_metrics()
+        metrics_payload = _EXECUTE_METRICS_PAYLOAD
         if metrics_payload is None:
             fallback_metrics = ExecutionMetrics().as_dict()
             fallback_metrics["status"] = "ok" if rc == 0 else "error"
@@ -7231,6 +7340,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             except Exception:
                 LOGGER.debug("ALERT_EXECUTE_SKIPS_FAILED", exc_info=True)
         return rc
+    except SystemExit as exc:
+        rc = exc.code if type(exc.code) is int else 1
+        raise
     except AlpacaUnauthorizedError as exc:
         LOGGER.error(
             '[ERROR] ALPACA_UNAUTHORIZED endpoint=%s feed=%s hint="check keys/base urls"',
@@ -7286,6 +7398,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             )
         except Exception:
             LOGGER.debug("METRICS_WRITE_FAILED", exc_info=True)
+        try:
+            receipt_metrics = _EXECUTE_METRICS_PAYLOAD or metrics_payload or {}
+            observations = getattr(config, '_entry_order_observations', ()) if config else ()
+            executor_health.publish_receipt(
+                Path.cwd(), role=role, started_at=_EXECUTE_START_UTC,
+                finished_at=_EXECUTE_FINISH_UTC, rc=rc, metrics=receipt_metrics,
+                config=config, observations=observations,
+                observations_truncated=bool(getattr(config, '_entry_observations_truncated', False)))
+        except Exception:
+            LOGGER.error('EXECUTOR_RECEIPT_FAILED reason=recording_or_binding_failure')
+            # Preserve primary failure; a successful operation without its mandatory
+            # receipt must nevertheless be an unsuccessful CLI outcome.
+            if rc == 0:
+                return 1
 
 
 def _warn_context(context: str, message: str) -> None:
