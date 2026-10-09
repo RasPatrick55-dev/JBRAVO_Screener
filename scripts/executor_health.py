@@ -402,12 +402,17 @@ def deadline_plan(inspection, *, now=None):
         for order_id, state in states.items():
             if state['state'] in TERMINAL:
                 continue
-            if state['deadline'] is None:
-                raise ValueError('missing_cancellation_deadline')
-            action = ('confirm_existing_request' if state['state'] == 'cancel_requested' else
-                      'cancel_and_confirm' if now >= state['deadline'] else 'wait_until_deadline')
+            if state['state'] == 'cancel_requested':
+                # Confirmation is already due after acknowledgment; no deadline
+                # is needed to decide whether to request cancellation again.
+                action = 'confirm_existing_request'
+            else:
+                if state['deadline'] is None:
+                    raise ValueError('missing_cancellation_deadline')
+                action = 'cancel_and_confirm' if now >= state['deadline'] else 'wait_until_deadline'
             planned.append({'order_id': order_id, 'symbol': state['symbol'],
-                            'deadline': state['deadline'].isoformat(), 'proposed_action': action,
+                            'deadline': state['deadline'].isoformat() if state['deadline'] is not None else None,
+                            'proposed_action': action,
                             'requires_broker_identity_side_account_and_state_check': True})
         result['orders'] = planned
         result['status'] = 'action_required' if any(p['proposed_action'] != 'wait_until_deadline' for p in planned) else 'no_action_due'

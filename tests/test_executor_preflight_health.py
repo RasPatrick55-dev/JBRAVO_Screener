@@ -270,6 +270,74 @@ class AssuranceTests(Fixture):
         health.observe(metric, order_id='o1', symbol='AAA', state='canceled')
         self.assertEqual(health.deadline_plan(self.pending(observations=metric._order_observations), now=self.now)['orders'], [])
 
+    def test_acknowledgement_without_deadline_plans_confirmation_only(self):
+        metric = SimpleNamespace()
+        health.observe(metric, order_id='o1', symbol='AAA', state='cancel_requested')
+        for omit_deadline in (False, True):
+            with self.subTest(omit_deadline=omit_deadline):
+                observation = dict(metric._order_observations[0])
+                if omit_deadline:
+                    del observation['deadline']
+                inspection = self.pending(observations=[observation])
+                self.assertEqual(inspection['status'], 'pending_confirmation')
+                before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+                result = health.deadline_plan(inspection, now=self.now)
+                self.assertEqual(result['status'], 'action_required')
+                self.assertEqual(result['reasons'], [])
+                self.assertEqual(result['orders'], [{
+                    'order_id': 'o1', 'symbol': 'AAA', 'deadline': None,
+                    'proposed_action': 'confirm_existing_request',
+                    'requires_broker_identity_side_account_and_state_check': True}])
+                self.assertEqual(result['broker_calls'], 0)
+                self.assertFalse(result['cancellation_enforced'])
+                self.assertFalse(result['operating_acceptance'])
+                self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_acknowledgement_retains_known_deadline_before_due(self):
+        metric = SimpleNamespace()
+        deadline = self.now + timedelta(minutes=35)
+        health.observe(metric, order_id='o1', symbol='AAA', state='cancel_requested', deadline=deadline)
+        result = health.deadline_plan(self.pending(observations=metric._order_observations), now=self.now)
+        self.assertEqual(result['status'], 'action_required')
+        self.assertEqual(result['orders'][0]['proposed_action'], 'confirm_existing_request')
+        self.assertEqual(result['orders'][0]['deadline'], deadline.isoformat())
+
+    def test_acknowledgement_terminal_followup_without_deadline_plans_nothing(self):
+        metric = SimpleNamespace()
+        health.observe(metric, order_id='o1', symbol='AAA', state='cancel_requested')
+        health.observe(metric, order_id='o1', symbol='AAA', state='canceled')
+        result = health.deadline_plan(self.pending(observations=metric._order_observations), now=self.now)
+        self.assertEqual(result['status'], 'no_action_due')
+        self.assertEqual(result['orders'], [])
+
+    def test_acknowledgement_does_not_mask_another_missing_deadline(self):
+        metric = SimpleNamespace()
+        health.observe(metric, order_id='o1', symbol='AAA', state='cancel_requested')
+        for state in ('submitted', 'resting'):
+            with self.subTest(state=state):
+                other = dict(metric._order_observations[0], order_id='o2', symbol='BBB', state=state)
+                self.receipt(config=SimpleNamespace(_entry_preflight=self.gate()),
+                             observations=[metric._order_observations[0], other],
+                             metrics=self.metrics | {'orders_submitted': 2})
+                inspection = health.inspect_receipt(self.root, now=self.now)
+                result = health.deadline_plan(inspection, now=self.now)
+                self.assertEqual(result['status'], 'blocked')
+                self.assertEqual(result['reasons'], ['missing_cancellation_deadline'])
+                self.assertEqual(result['orders'], [])
+
+    def test_acknowledgement_malformed_and_conflicting_deadlines_remain_blocked(self):
+        metric = SimpleNamespace()
+        health.observe(metric, order_id='o1', symbol='AAA', state='cancel_requested', deadline=self.now)
+        first = metric._order_observations[0]
+        with self.assertRaises(ValueError):
+            self.pending(observations=[first | {'deadline': 'not-a-timestamp'}])
+        inspection = self.pending(observations=[first, first | {
+            'deadline': (self.now + timedelta(seconds=1)).isoformat()}])
+        result = health.deadline_plan(inspection, now=self.now)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertEqual(result['reasons'], ['contradictory_order_deadline'])
+        self.assertEqual(result['orders'], [])
+
     def test_missing_deadline_unknown_or_truncated_population_cannot_plan(self):
         metric = SimpleNamespace()
         health.observe(metric, order_id='o1', symbol='AAA', state='submitted')
@@ -555,6 +623,34 @@ class CallerTests(Fixture):
         client.cancel_order_by_id.side_effect = RuntimeError('synthetic')
         executor.cancel_order('o1', 'AAA')
         self.assertEqual(metric._order_observations[-1]['state'], 'cancel_failed')
+
+    def test_actual_acknowledgement_only_receipt_reaches_confirmation_cli(self):
+        metric = self.mod.ExecutionMetrics()
+        client = SimpleNamespace(cancel_order_by_id=mock.Mock())
+        config = self.mod.ExecutorConfig(scheduler_task_id='1326478')
+        config._entry_preflight = self.gate()
+        executor = self.mod.TradeExecutor(config, client, metric)
+        executor.cancel_order('o1', 'AAA')
+        client.cancel_order_by_id.assert_called_once_with('o1')
+        self.assertIsNone(metric._order_observations[0]['deadline'])
+        record = self.receipt(config=config, metrics=self.metrics | {
+            'orders_submitted': 1, 'orders_canceled': 1}, observations=metric._order_observations)
+        self.assertEqual(record['health'], 'pending_confirmation')
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        actual_inspect = health.inspect_receipt
+        with mock.patch.object(health, 'inspect_receipt', side_effect=lambda base, **kw:
+                               actual_inspect(base, now=self.now, **kw)), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(health.main(['deadlines', '--base-dir', str(self.root),
+                                        '--expected-task-id', '1326478']), 1)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['status'], 'action_required')
+        self.assertEqual(result['orders'][0]['proposed_action'], 'confirm_existing_request')
+        self.assertIsNone(result['orders'][0]['deadline'])
+        self.assertEqual(result['broker_calls'], 0)
+        self.assertFalse(result['cancellation_enforced'])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        client.cancel_order_by_id.assert_called_once_with('o1')
 
     def test_actual_poll_detachment_is_pending_without_cancellation(self):
         metric = self.mod.ExecutionMetrics()
