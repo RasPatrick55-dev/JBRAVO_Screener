@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -46,6 +46,7 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _parse_date(value: Any) -> date | None:
+    """Legacy artifact-label parsing retained for existing non-pipeline callers."""
     if value is None or value == "":
         return None
     if isinstance(value, date) and not isinstance(value, datetime):
@@ -60,10 +61,17 @@ def _parse_date(value: Any) -> date | None:
     except Exception:
         pass
     try:
-        normalized = text.replace("Z", "+00:00")
-        return datetime.fromisoformat(normalized).date()
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
     except Exception:
         return None
+
+
+def _strict_monitor_date(value: Any) -> date | None:
+    parsed = _coverage_date(value)
+    if parsed is not None:
+        return parsed
+    timestamp = _generation_time(value)
+    return timestamp.date() if timestamp is not None else None
 
 
 def _normalize_action(value: Any) -> str:
@@ -71,6 +79,117 @@ def _normalize_action(value: Any) -> str:
     if not text:
         return "none"
     return _ACTION_ALIASES.get(text, text)
+
+
+def _coverage_date(value: Any) -> date | None:
+    """Coverage is a session date, not a timestamp or an artifact date."""
+    if type(value) is date:
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = date.fromisoformat(value)
+        return parsed if parsed.isoformat() == value else None
+    except ValueError:
+        return None
+
+
+def _generation_time(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    try:
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _monitor_provenance(payload, *, now, reference_date, max_age_days):
+    """Assess report age and OOS coverage independently; never substitute dates."""
+    reasons = []
+    input_source = payload.get("monitor_input_source")
+    if input_source in (None, ""):
+        reasons.append("missing_monitor_input_source")
+    elif not isinstance(input_source, str):
+        reasons.append("invalid_monitor_input_source")
+    raw_generation = payload.get("monitor_generated_at")
+    generated = _generation_time(raw_generation)
+    if raw_generation in (None, ""):
+        reasons.append("missing_monitor_generation_time")
+    elif generated is None:
+        reasons.append("invalid_monitor_generation_time")
+    if generated is not None:
+        if generated > now:
+            reasons.append("future_monitor_generation_time")
+        elif (now - generated).total_seconds() > max_age_days * 86400:
+            reasons.append("stale_monitor_generation")
+
+    raw_coverage = payload.get("monitor_input_coverage")
+    dates, counts = {}, {}
+    date_fields = ("dataset_start", "dataset_end", "baseline_start", "baseline_end",
+                   "recent_start", "recent_end")
+    count_fields = ("population_rows", "baseline_rows", "recent_rows")
+    if raw_coverage is None:
+        reasons.append("missing_monitor_input_coverage")
+    elif not isinstance(raw_coverage, Mapping):
+        reasons.append("invalid_monitor_input_coverage")
+    else:
+        for field in date_fields:
+            raw = raw_coverage.get(field)
+            dates[field] = _coverage_date(raw)
+            if raw in (None, ""):
+                reasons.append("missing_monitor_input_" + field)
+            elif dates[field] is None:
+                reasons.append("invalid_monitor_input_" + field)
+        for field in count_fields:
+            raw = raw_coverage.get(field)
+            counts[field] = raw if type(raw) is int and raw >= 0 else None
+            if raw is None:
+                reasons.append("missing_monitor_input_" + field)
+            elif counts[field] is None:
+                reasons.append("invalid_monitor_input_" + field)
+            elif raw == 0:
+                reasons.append("empty_monitor_input_" + field)
+        if all(dates.get(field) is not None for field in date_fields):
+            start, end = dates["dataset_start"], dates["dataset_end"]
+            # recent_start is the nominal rolling-window boundary and may
+            # precede dataset_start for a short dataset produced by the monitor.
+            if (start > end or not start <= dates["baseline_start"] <= dates["baseline_end"] <= end
+                    or dates["recent_start"] > dates["recent_end"]
+                    or not start <= dates["recent_end"] <= end):
+                reasons.append("inconsistent_monitor_input_windows")
+        population = counts.get("population_rows")
+        if population is not None and any(counts.get(field) is not None and counts[field] > population
+                                           for field in ("baseline_rows", "recent_rows")):
+            reasons.append("inconsistent_monitor_input_row_counts")
+        for field in ("dataset_end", "recent_end"):
+            end = dates.get(field)
+            if end is not None and reference_date is not None:
+                if end > reference_date:
+                    reasons.append("future_monitor_input_" + field)
+                elif (reference_date - end).days > max_age_days:
+                    reasons.append("stale_monitor_input_" + field)
+            if generated is not None and end is not None and end > generated.date():
+                reasons.append("monitor_input_after_generation")
+    return {
+        "monitor_generated_at": generated.isoformat() if generated else None,
+        "monitor_generation_age_seconds": (now - generated).total_seconds() if generated else None,
+        "monitor_input_coverage": {
+            **{field: dates[field].isoformat() if dates.get(field) else None for field in date_fields},
+            **{field: counts.get(field) for field in count_fields},
+        },
+        "monitor_input_age_days": ((reference_date - dates["dataset_end"]).days
+                                   if reference_date is not None and dates.get("dataset_end") else None),
+        "provenance_reasons": sorted(set(reasons)),
+    }
 
 
 def _extract_health(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -99,6 +218,10 @@ def _extract_health(payload: Mapping[str, Any]) -> dict[str, Any]:
         "psi_score": psi_score,
         "recent_sharpe": recent_sharpe,
         "run_date": run_date_text,
+        "monitor_generated_at": payload.get("run_utc"),
+        "monitor_input_coverage": payload.get("windows"),
+        "monitor_input_source": payload.get("data_source"),
+        "run_date_source": "payload" if run_date_text is not None else "missing",
     }
 
 
@@ -161,6 +284,11 @@ def load_latest_ml_health(
         "psi_score": None,
         "recent_sharpe": None,
         "run_date": None,
+        "run_date_source": "missing",
+        "artifact_run_date": None,
+        "monitor_generated_at": None,
+        "monitor_input_coverage": None,
+        "monitor_input_source": None,
     }
 
     try:
@@ -174,7 +302,9 @@ def load_latest_ml_health(
                     if run_date in (None, "") and record.get("run_date") is not None:
                         run_date = str(record.get("run_date"))
                         health["run_date"] = run_date
-                    result = {**default, **health, "present": True, "source": "db"}
+                        health["run_date_source"] = "db_record"
+                    result = {**default, **health, "present": True, "source": "db",
+                              "artifact_run_date": str(record["run_date"]) if record.get("run_date") is not None else None}
                     log.info(
                         "[INFO] ML_HEALTH_LOAD source=db present=true run_date=%s",
                         result.get("run_date"),
@@ -222,9 +352,13 @@ def decide_ml_enrichment(
     pipeline_run_date: date | None,
     predictions_stale: bool | None = None,
     predictions_stale_reason: str | None = None,
+    now: datetime | None = None,
+    require_monitor_provenance: bool = False,
 ) -> dict[str, Any]:
     """Return deterministic enrichment decision from monitor payload + policy."""
 
+    if type(require_monitor_provenance) is not bool:
+        raise ValueError("boolean_monitor_provenance_policy_required")
     normalized_mode = str(mode or "").strip().lower()
     if normalized_mode not in {"warn", "block"}:
         normalized_mode = "warn"
@@ -235,30 +369,47 @@ def decide_ml_enrichment(
     if max_age < 0:
         max_age = DEFAULT_MAX_AGE_DAYS
 
+    observed_at = _generation_time(datetime.now(timezone.utc) if now is None else now)
+    if observed_at is None:
+        raise ValueError("aware_monitor_reference_time_required")
+    reference_date = _coverage_date(pipeline_run_date)
+
     payload = dict(monitor_payload or {})
     present = bool(payload.get("present"))
     action = _normalize_action(payload.get("recommended_action"))
     source = str(payload.get("source") or "missing")
     psi_score = _safe_float(payload.get("psi_score"))
     recent_sharpe = _safe_float(payload.get("recent_sharpe"))
-    monitor_run_date = _parse_date(payload.get("run_date"))
+    monitor_run_date = (_strict_monitor_date if require_monitor_provenance else _parse_date)(payload.get("run_date"))
 
     reasons: list[str] = []
     if not present:
         reasons.append("missing_monitor")
+    if reference_date is None and require_monitor_provenance:
+        reasons.append("missing_or_invalid_monitor_reference_date")
     if action == "recalibrate":
         reasons.append("action_recalibrate")
     elif action == "retrain":
         reasons.append("action_retrain")
     elif action != "none":
         reasons.append(f"action_{action}")
-    if pipeline_run_date is not None:
+    if reference_date is not None:
         if monitor_run_date is None:
             reasons.append("stale_monitor")
+            if require_monitor_provenance:
+                reasons.append("missing_monitor_run_date" if payload.get("run_date") in (None, "")
+                               else "invalid_monitor_run_date")
         else:
-            age_days = (pipeline_run_date - monitor_run_date).days
+            age_days = (reference_date - monitor_run_date).days
             if age_days > max_age:
                 reasons.append("stale_monitor")
+            if require_monitor_provenance and monitor_run_date > observed_at.date():
+                reasons.append("future_monitor_run_date")
+    provenance = _monitor_provenance(payload, now=observed_at, reference_date=reference_date,
+                                    max_age_days=max_age)
+    provenance_reasons = provenance.pop("provenance_reasons")
+    if require_monitor_provenance:
+        reasons.extend(provenance_reasons)
     if predictions_stale is True:
         reasons.append("stale_predictions")
 
@@ -277,6 +428,15 @@ def decide_ml_enrichment(
         "monitor_run_date": monitor_run_date.isoformat() if monitor_run_date else None,
         "source": source,
         "max_age_days": max_age,
+        "monitor_provenance_required": require_monitor_provenance,
+        "monitor_provenance_reasons": provenance_reasons,
+        "monitor_observed_at": observed_at.isoformat(),
+        "monitor_input_reference_date": reference_date.isoformat() if reference_date else None,
+        "monitor_run_date_source": payload.get("run_date_source", "unspecified"),
+        "monitor_artifact_run_date": payload.get("artifact_run_date"),
+        "monitor_input_source": (payload.get("monitor_input_source")
+                                 if isinstance(payload.get("monitor_input_source"), str) else None),
+        **provenance,
         "predictions_stale_reason": (
             str(predictions_stale_reason).strip() if predictions_stale_reason else None
         ),
