@@ -40,10 +40,33 @@ belong to the retained selection; SELL/protective submissions keep their existin
 path. Reconciliation-only and diagnostic runs, and path-based dry-runs, do not
 require entry evidence. Ordinary path-based entry runs now fail closed.
 
-Batch linkage and its receipt fingerprint cover symbol/timestamp membership,
-not every price/feature field. They do not establish an atomic database snapshot,
-independent data quality, historical eligibility or freedom from filesystem/DB
-races. The existing broker clock, reconciliation and authentication paths may
+Batch linkage still checks the primary's symbol/count/timestamp claim. A second
+digest now covers **all loaded candidate values**, including field presence,
+numeric types/precision and nested feature values. Raw candidates are deep-copied,
+and their initial digest remains fixed even after a rejected subsequent check.
+Filtered inputs and the ordered ranked execution frame have separate bindings;
+later mutations block BUY submission. Only hashes, not candidate values, enter
+the execution receipt. This does not bind the primary's original feature values:
+its report does not yet carry an independently captured complete value digest.
+Closing that last cross-stage gap requires the primary workflow to record the same
+complete-value digest from its final read-only candidate snapshot, keyed by batch
+timestamp and query/serialization version. The executor must then require equality
+to that frozen digest, rather than creating an expectation from its later read.
+Existing reports cannot be retroactively upgraded. This protocol extension needs
+its own primary/executor compatibility tests and source review; it is not implemented
+by the local snapshot protection in this increment.
+
+The actual loader uses one PostgreSQL **repeatable-read, read-only** connection for
+timestamp selection, candidate/ranker reads and the older-date fallback. The query
+helper accepts this caller-owned connection without closing it. Optional ranker
+join recovery uses a savepoint rather than discarding that snapshot. The loader
+rolls back and closes after materializing its frame. Standalone callers retain
+their previous connection ownership behavior. Receipt snapshot metadata describes
+this implementation path; it is not independent proof of a live database run.
+The snapshot ends at load time, not at order submission. Later database changes
+cannot update the loaded frame; live price hydration remains a separate existing
+input. No historical eligibility or independent data-quality claim follows.
+The existing broker clock, reconciliation and authentication paths may
 still run before an entry is rejected. This gate does not make those paths
 offline or side-effect-free.
 
@@ -53,7 +76,14 @@ Each actual CLI invocation attempts to save an exclusive
 `reports/executor/<role>/run-<uuid>.json` and an atomically replaced same-role
 `latest.json`. Roles are `premarket` (ordinary entry CLI), `reconciliation`,
 `diagnostic`, `dry_run` and `unresolved` (initialization/argument failure).
-These identify CLI roles, not proof of a particular scheduler/task ID. Hourly
+An explicitly supplied `JBRAVO_SCHEDULER_TASK_ID` is validated as a positive decimal
+ID and carried through the normal config builder into `task_attribution`.
+`independently_verified` stays false: an environment declaration is not scheduler
+attestation. Missing IDs remain explicit and preserve ordinary CLI compatibility.
+Inspection with `--expected-task-id 1326478` rejects absent or different IDs.
+This source change does not edit task commands; a separately approved cutover must
+add that declaration and bind the configured command through provider readback.
+Hourly
 reconciliation cannot overwrite the entry role's receipt. Existing shared
 `data/execute_metrics.json` remains for compatibility and is not task evidence.
 
@@ -77,6 +107,8 @@ Read-only inspection, from the repository root:
 python -m scripts.executor_health inspect --role premarket
 python -m scripts.executor_health inspect --role reconciliation
 python -m scripts.executor_health logs
+python -m scripts.executor_health inspect --role premarket --expected-task-id 1326478
+python -m scripts.executor_health deadlines --role premarket --expected-task-id 1326478
 ```
 
 Receipt inspection strictly decodes JSON, checks role/history/source bindings,
@@ -105,10 +137,31 @@ unconfirmed. Up to 64 observations are retained, with explicit truncation.
 Pending or truncated confirmation remains `pending_confirmation`; reported
 cancellation failures remain failed.
 
-No new broker polling, cancellation, monitor behavior or provider call is added.
-A later terminal-state confirmation and any deadline enforcement after detach
-need a separately reviewed operational mechanism. This packet makes that gap
-visible rather than claiming that cancellation is now guaranteed.
+`deadlines` is a **read-only plan**, not an active cancellation command. It consumes
+an eligible entry receipt and preserves the observed order-ID/symbol/deadline
+relationships. It reports waiting, due cancel-and-confirm proposals, or confirmation
+of an already acknowledged request. Terminal orders propose no action. Missing
+deadlines, contradictory identities/deadlines, terminal regression, failed receipts,
+unknown submissions and truncated observation populations block the plan. It
+performs zero broker calls and always reports `cancellation_enforced: false`.
+Exit 1 denotes a blocked plan or due action; exit 0 means no action due, not
+successful cancellation.
+
+The proposed enforcement increment is one supervised, paper-account-bound worker
+that survives executor polling detachment, reads only its registered BUY order IDs,
+checks account/side/symbol/current state before touching them, cancels each due
+unfilled remainder once, and separately polls terminal state for a finite window.
+It must preserve fills/partial fills and existing protective SELL behavior, record
+late or absent confirmation as unresolved, use an overlap lock, and recover its
+durable registry after interruption. An hourly account job cannot meet a 35-minute
+deadline; the worker needs an explicitly reviewed wake-up/deadline contract.
+No account-wide cancel sweep, replacement order, active worker or new schedule is
+introduced here. Broker failure, worker loss and remote cancellation remain real
+failure modes; software cannot guarantee remote completion.
+
+Before activation, the Board must review the mutation policy, finite broker-call
+and confirmation limits, identity binding, partial-fill protection and supervised
+runtime. Live cancellation and orders remain outside this local increment.
 
 ## Bounded log review
 
@@ -136,7 +189,35 @@ database or order is exercised. Tests use temporary files and block network and
 child processes. Existing postflight tests include source-extracted pipeline
 hooks, so they do not establish full normal pipeline initialization.
 
-End-to-end sizing, broker transport/retries, real cancellation completion,
+The suite now carries the repository's `alpaca_optional` marker when pytest is
+available; its documented unittest runner remains usable without pytest installed.
+The standard pytest credential fixture can therefore run these tests with no
+credentials. A new normal-import dry-run case also exercises actual sizing with
+synthetic prices and buying power, and asserts the calculated quantity without
+submitting an order. PostgreSQL transaction calls are tested through a fake
+connection and actual query-helper recovery, not a real database.
+
+End-to-end broker transport/retries, real cancellation completion,
 concurrent execution, scheduled invocation, actual database content and live host
 integration remain unqualified. Required Board review and separate publication,
 merge/deployment authorization precede use on PythonAnywhere.
+
+## Remaining operational acceptance sequence
+
+1. Review this local diff and new offline verification history, then separately
+   authorize publication/integration. Preserve all earlier failed attempts.
+2. Qualify live initialization without orders using an explicitly approved
+   paper-account diagnostic: fixed source/dependencies, bounded account/clock and
+   repeatable-read candidate reads, no auto-reconciliation/write paths. This requires
+   its own exact request/query and output limits; a dry-run name alone is insufficient.
+3. Approve task-ID command cutover without changing its existing order settings or
+   schedule. Read back the configured command and bind its ID/hash to the receipt.
+4. Inspect the next naturally scheduled receipt and its history/source bindings,
+   primary/candidate linkage and return status. A missing receipt is missing evidence,
+   not proof the task failed or never ran. An entry receipt remains distinct from
+   independent broker terminal-state evidence.
+5. Review and qualify the separate cancellation worker before any activation.
+
+This list is a proposed acceptance route, not permission to run host diagnostics,
+queries, scheduled tasks, orders or cancellation. Research/operating acceptance
+remains false. No full pipeline or live integration is established by mocks.

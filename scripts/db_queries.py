@@ -147,17 +147,20 @@ def get_latest_screener_candidates(
     run_date: Any,
     *,
     limit: int | None = None,
+    connection: Any = None,
 ) -> tuple[pd.DataFrame, Any | None]:
     """Return candidates scoped to the latest screener run timestamp for ``run_date``."""
 
-    conn = db.get_db_conn()
+    owned = connection is None
+    conn = db.get_db_conn() if owned else connection
     if conn is None:
         return pd.DataFrame(), None
 
     run_date_value = _coerce_run_date(run_date)
     if run_date_value is None:
         try:
-            conn.close()
+            if owned:
+                conn.close()
         except Exception:
             pass
         return pd.DataFrame(), None
@@ -188,6 +191,8 @@ def get_latest_screener_candidates(
                 )
                 return pd.DataFrame(), None
 
+            if not owned:
+                cursor.execute("SAVEPOINT executor_ranker_join")
             try:
                 rows, columns = _fetch_latest_candidate_rows(
                     cursor,
@@ -197,12 +202,18 @@ def get_latest_screener_candidates(
                     include_ranker_scores=True,
                 )
                 scores_rows_for_run = _count_scores_rows_for_run(cursor, latest_run_ts)
+                if not owned:
+                    cursor.execute("RELEASE SAVEPOINT executor_ranker_join")
             except Exception as exc:
                 LOGGER.warning("[WARN] RANKER_SCORE_JOIN_SKIPPED err=%s", exc)
                 try:
-                    conn.rollback()
+                    if owned:
+                        conn.rollback()
+                    else:
+                        cursor.execute("ROLLBACK TO SAVEPOINT executor_ranker_join")
                 except Exception:
-                    pass
+                    if not owned:
+                        raise
                 include_ranker_scores = False
                 rows, columns = _fetch_latest_candidate_rows(
                     cursor,
@@ -212,9 +223,12 @@ def get_latest_screener_candidates(
                     include_ranker_scores=False,
                 )
                 scores_rows_for_run = 0
+                if not owned:
+                    cursor.execute("RELEASE SAVEPOINT executor_ranker_join")
     finally:
         try:
-            conn.close()
+            if owned:
+                conn.close()
         except Exception:
             pass
 
