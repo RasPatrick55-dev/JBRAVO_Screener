@@ -140,8 +140,14 @@ cancellation failures remain failed.
 `deadlines` is a **read-only plan**, not an active cancellation command. It consumes
 an eligible entry receipt and preserves the observed order-ID/symbol/deadline
 relationships. It reports waiting, due cancel-and-confirm proposals, or confirmation
-of an already acknowledged request. Terminal orders propose no action. Missing
-deadlines, contradictory identities/deadlines, terminal regression, failed receipts,
+of an already acknowledged request. A validated `cancel_requested` observation
+requires confirmation immediately, even if no deadline was recorded or a supplied
+deadline is still in the future. Its proposal is only `confirm_existing_request`,
+never another cancellation request. An absent deadline is returned as JSON `null`;
+the planner does not invent one. Any supplied deadline is still validated and
+preserved, and contradictory deadlines still block the plan. Terminal orders
+propose no action. Missing deadlines for unrequested cancellations,
+contradictory identities/deadlines, terminal regression, failed receipts,
 unknown submissions and truncated observation populations block the plan. It
 performs zero broker calls and always reports `cancellation_enforced: false`.
 Exit 1 denotes a blocked plan or due action; exit 0 means no action due, not
