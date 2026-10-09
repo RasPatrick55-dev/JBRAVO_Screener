@@ -312,33 +312,22 @@ Good output tokens:
 
 ## Canary Smoke Task
 
-Use script: `scripts/ops/run_canary_smoke.sh`
+The compatibility script `scripts/ops/run_canary_smoke.sh` is now a read-only
+postflight checker. It does not run a limited-universe screener, regenerate
+labels/predictions or update candidates. The primary task must first migrate
+to `scripts/ops/run_primary_pipeline.sh`, which owns existing primary stages
+and the required ML preparation in one invocation.
 
-Recommended schedule: daily or 2x/day.
+See [Primary ML preparation and read-only postflight](primary_pipeline_postflight.md)
+for review/cutover gates, legacy argument preservation, source/run bindings,
+freshness windows and offline limitations. Do not deploy the checker alone.
 
-Example scheduled command:
-
-```bash
-cd /home/RasPatrick/jbravo_screener && \
-source /home/RasPatrick/.virtualenvs/jbravo-env/bin/activate && \
-bash scripts/ops/run_canary_smoke.sh
-```
-
-Log file:
-
-- `logs/canary_smoke_latest.log`
-
-Expected tokens:
-
-- `[INFO] CANARY_START ...`
-- `[INFO] CANARY_SUMMARY freshness=... predict=... coverage=...`
-- `[INFO] CANARY_END rc=0 ...`
-
-Recommended alert thresholds (if alerting is configured):
-
-- freshness stale (`PREDICTIONS_FRESHNESS stale=true`)
-- predict failure (`RANKER_PREDICT rc!=0`)
-- low score coverage (`MODEL_SCORE_COVERAGE pct < 80`)
+Scheduler stdout contains a structured status: `ok`, `degraded` or `failed`.
+Only `ok` exits zero. The report is scoped to one primary run and is read from
+`reports/pipeline_postflight/latest.json`, checked against its immutable history
+record and current source identities. Missing/skipped stages, stale predictions,
+monitor warnings and incomplete score coverage cannot silently appear green.
+Prior `logs/canary_smoke_latest.log` contents remain historical evidence.
 
 ## Pipeline Flags That Matter
 
