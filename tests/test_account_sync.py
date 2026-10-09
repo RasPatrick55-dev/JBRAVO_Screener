@@ -1,12 +1,21 @@
 """Offline workflow tests: no application module, provider or database import."""
 import contextlib
+from datetime import datetime, timedelta
 import hashlib
+import importlib
 import io
 import json
+import logging
+import os
 from pathlib import Path
+import socket
+import subprocess
+import sys
 import tempfile
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 from scripts import account_sync as sync
 
@@ -138,6 +147,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(sync.STAGES[0].args, ('--lookback-days', '30'))
         args = dict(zip(sync.STAGES[1].args[::2], sync.STAGES[1].args[1::2]))
         self.assertEqual(args, {'--reconcile-only': 'true', '--dry-run': 'true',
+            '--submit-at-ny': '', '--ignore-market-gate': 'true',
             '--reconcile-use-watermark': 'true', '--reconcile-lookback-days': '14',
             '--reconcile-limit': '500', '--reconcile-overlap-secs': '300', '--max-poll-secs': '1'})
         self.assertEqual(sync.STAGES[2].args, ())
@@ -226,6 +236,138 @@ class StageTests(unittest.TestCase):
     def test_spawn_failure_propagates(self):
         with mock.patch.object(sync.subprocess, 'Popen', side_effect=OSError()), self.assertRaises(OSError):
             sync.run_stage(sync.STAGES[0], 300, 123)
+
+
+class ExecutorGateIntegrationTests(unittest.TestCase):
+    """Normal executor import/parser/dispatcher, with all external effects blocked.
+
+    The real wait helper and market gates execute. Candidate retrieval/ranking,
+    broker authentication, reconciliation persistence and metrics are doubles;
+    this verifies gate reachability, not live reconciliation semantics.
+    """
+
+    def setUp(self):
+        # Import pandas before blocking sockets; no application imports yet.
+        import pandas as pd
+        self.pd = pd
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.storage = self.stack.enter_context(tempfile.TemporaryDirectory())
+        self.stack.enter_context(mock.patch.dict(os.environ, {}, clear=True))
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError('external effect forbidden')
+
+        self.forbidden = forbidden
+        for target in ('socket.socket', 'socket.create_connection', 'subprocess.Popen', 'os.system'):
+            self.stack.enter_context(mock.patch(target, side_effect=forbidden))
+        self.stack.enter_context(mock.patch('time.sleep', side_effect=forbidden))
+
+        def module(name, **fields):
+            value = ModuleType(name)
+            value.__dict__.update(fields)
+            return value
+
+        boundaries = {
+            'requests': module('requests', get=forbidden, post=forbidden, HTTPError=RuntimeError),
+            'alpaca': module('alpaca', __path__=[]),
+            'scripts.db': module('scripts.db', db_enabled=forbidden, get_engine=forbidden),
+            'scripts.db_queries': module('scripts.db_queries', get_latest_screener_candidates=forbidden),
+            'scripts.utils': module('scripts.utils', __path__=[]),
+            'scripts.utils.champion_config': module('scripts.utils.champion_config',
+                champion_execution_overrides=forbidden, load_latest_champion=forbidden),
+            'scripts.utils.env': module('scripts.utils.env', load_env=forbidden),
+            'utils': module('utils', __path__=[], write_csv_atomic=forbidden),
+            'utils.alerts': module('utils.alerts', send_alert=forbidden),
+            'utils.env': module('utils.env', AlpacaCredentialsError=RuntimeError,
+                AlpacaUnauthorizedError=RuntimeError, assert_alpaca_creds=forbidden,
+                get_alpaca_creds=forbidden),
+            'utils.telemetry': module('utils.telemetry', log_event=forbidden, get_version=forbidden),
+        }
+        self.stack.enter_context(mock.patch.dict(sys.modules, boundaries))
+        self.stack.enter_context(mock.patch.object(sys.modules['scripts'], 'db', boundaries['scripts.db'], create=True))
+        sys.modules.pop('scripts.execute_trades', None)
+        self.executor = importlib.import_module('scripts.execute_trades')
+        self.addCleanup(lambda: sys.modules.pop('scripts.execute_trades', None))
+        for name in ('configure_logging', 'write_execute_metrics', '_paper_only_guard'):
+            self.stack.enter_context(mock.patch.object(self.executor, name))
+        self.stack.enter_context(mock.patch.object(self.executor, '_load_execute_metrics', return_value={}))
+        self.stack.enter_context(mock.patch.object(self.executor, '_create_trading_client', side_effect=forbidden))
+
+    def exercise_clock(self, when, session, next_open_days=0):
+        now = datetime.fromisoformat(when).replace(tzinfo=ZoneInfo('America/New_York'))
+        clock = SimpleNamespace(timestamp=now.isoformat(), is_open=False, session=session,
+            next_open=(now + timedelta(days=next_open_days)).replace(hour=9, minute=30).isoformat(),
+            next_close=(now + timedelta(days=next_open_days)).replace(hour=16, minute=0).isoformat())
+        frame = self.pd.DataFrame(columns=['symbol', 'run_date'])
+        client = mock.Mock()
+        client.get_clock.return_value = clock
+        client.submit_order.side_effect = self.forbidden
+        loader = mock.Mock()
+        loader._get_trading_clock.return_value = clock
+        loader.load_candidates.return_value = frame
+        loader._rank_candidates.return_value = frame
+        loader._apply_alloc_weight_key.return_value = frame
+        execution = mock.Mock()
+        execution.execute.side_effect = self.forbidden
+        execution.execute_order.side_effect = self.forbidden
+        execution.hydrate_candidates.side_effect = self.forbidden
+        messages = io.StringIO()
+        logger = logging.Logger('offline-executor-gates', logging.INFO)
+        logger.addHandler(logging.StreamHandler(messages))
+        execution.reconcile_closed_trades.side_effect = lambda: logger.info(
+            'RECONCILE_START\nRECONCILE_END\nRECONCILE_WATERMARK_UPDATE')
+        stage = sync.STAGES[1]
+        args = self.executor.parse_args(list(stage.args))
+        config = self.executor.build_config(args)
+        self.assertTrue(config.reconcile_only)
+        self.assertTrue(config.dry_run)
+        self.assertTrue(config.ignore_market_gate)
+        self.assertEqual(config.submit_at_ny, '')
+        self.assertTrue(config.reconcile_use_watermark)
+        calls = []
+
+        def runner(current, timeout, descriptor):
+            calls.append(current.name)
+            if current.name != 'reconciliation':
+                return successful_stage()
+            with mock.patch.object(self.executor, 'LOGGER', logger), \
+                    mock.patch.object(self.executor, '_ny_now', return_value=now), \
+                    mock.patch.object(self.executor, 'TradeExecutor', side_effect=[loader, execution]), \
+                    mock.patch.object(self.executor, '_wait_until_submit_at', wraps=self.executor._wait_until_submit_at) as wait:
+                code = self.executor.run_executor(config, client=client)
+                self.assertEqual(code, 0)
+                wait.assert_called_once_with('')
+            # Feed the actual dispatcher log into the unchanged supervisor check.
+            process = mock.Mock(returncode=code)
+            process.poll.return_value = code
+            def spawn(command, **options):
+                self.assertEqual(command, [sys.executable, '-m', current.module, *stage.args])
+                options['stdout'].write(messages.getvalue().encode())
+                return process
+            with mock.patch.object(sync.subprocess, 'Popen', side_effect=spawn):
+                return sync.run_stage(current, timeout, descriptor)
+
+        result = sync.run_workflow(Path(self.storage) / 'health', runner=runner)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(calls, ['activities', 'reconciliation', 'snapshot'])
+        execution.reconcile_closed_trades.assert_called_once_with()
+        execution.execute.assert_not_called()
+        execution.hydrate_candidates.assert_not_called()
+        client.submit_order.assert_not_called()
+        self.assertEqual(result['stages'][2]['status'], 'ok')
+        return messages.getvalue()
+
+    def test_before_0700_et_reconciles_without_waiting(self):
+        self.exercise_clock('2026-10-09T06:15:00', 'premarket')
+
+    def test_weekend_closed_session_reconciles_and_reaches_snapshot(self):
+        text = self.exercise_clock('2026-10-10T06:15:00', 'closed', 2)
+        self.assertIn('MARKET_GATE_BYPASSED', text)
+
+    def test_weekday_holiday_closed_session_reconciles(self):
+        text = self.exercise_clock('2026-12-25T06:15:00', 'holiday', 3)
+        self.assertIn('MARKET_GATE_BYPASSED', text)
 
 
 if __name__ == '__main__':
