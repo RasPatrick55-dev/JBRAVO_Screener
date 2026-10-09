@@ -27,6 +27,7 @@ except ModuleNotFoundError:  # Keep the documented unittest runner available.
     pytest = None
 from scripts import executor_health as health
 from scripts import pipeline_postflight as pipeline
+from scripts import signal_handoff
 
 SOURCE = Path(__file__).resolve().parents[1]
 if pytest is not None:
@@ -402,8 +403,26 @@ class LogTests(Fixture):
 
 
 class CallerTests(Fixture):
+    def publish(self, **changes):
+        if not hasattr(self, 'session'):
+            return super().publish(**changes)
+        snapshot = signal_handoff.freeze_candidates(self.rows, self.session, run_ts=self.batch)
+        record = super().publish(session=self.session, frozen_candidates=snapshot,
+                                 invocation_id=self.invocation['id'], **changes)
+        result = pipeline.check_health(self.root, now=self.now, require_session=True)
+        if result['status'] == 'ok':
+            pipeline.complete_primary(self.root, self.invocation, result)
+        return record
+
     def setUp(self):
         super().setUp()
+        calendar = [{'date': day, 'open': '09:30', 'close': '16:00'}
+                    for day in ('2026-10-08', '2026-10-09')]
+        self.session = signal_handoff.session_contract(calendar, now=self.start)
+        self.rows = [row | {'timestamp': '2026-10-08T04:00:00Z', 'close': 10.0, 'score': 1}
+                     for row in self.rows]
+        self.invocation = pipeline.begin_primary(self.root, self.start)
+        self.publish()
         self.stack = contextlib.ExitStack(); self.addCleanup(self.stack.close)
         self.old_cwd = Path.cwd(); os.chdir(self.root); self.addCleanup(os.chdir, self.old_cwd)
         def forbidden(*a, **k): raise AssertionError('external_boundary_forbidden')
@@ -425,6 +444,12 @@ class CallerTests(Fixture):
         self.addCleanup(sys.modules.pop, 'scripts.execute_trades', None)
         self.mod.METRICS_PATH = self.root / 'data/execute_metrics.json'
         self.mod._EXECUTE_START_UTC = None
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = self.now
+                return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+        self.stack.enter_context(mock.patch.object(self.mod, 'datetime', FixedDateTime))
         self.stack.enter_context(mock.patch.object(self.mod, '_bootstrap_env', return_value=[]))
         self.stack.enter_context(mock.patch.object(self.mod, 'assert_alpaca_creds', return_value={}))
         self.stack.enter_context(mock.patch.object(self.mod, 'configure_logging', return_value=None))
@@ -458,7 +483,7 @@ class CallerTests(Fixture):
         raw.loc[0, 'close'] = 10.5
         self.assertEqual(self.mod._check_entry_preflight(config, raw)['reasons'], ['filtered_candidate_values_changed'])
         config._entry_candidate_rows[0]['close'] = 999.0
-        self.assertEqual(self.mod._check_entry_preflight(config, raw)['reasons'], ['candidate_values_changed'])
+        self.assertEqual(self.mod._check_entry_preflight(config, raw)['reasons'], ['producer_candidate_values_changed'])
 
     def test_changed_execution_frame_blocks_buy_without_altering_sell(self):
         config = self.mod.ExecutorConfig()
@@ -549,7 +574,7 @@ class CallerTests(Fixture):
     def test_actual_sizing_dry_run_uses_normal_executor_with_mocked_transport(self):
         config = self.mod.ExecutorConfig(source='path', source_path=self.root / 'unused.csv',
             dry_run=True, time_window='any', allocation_pct=.01, min_order_usd=500,
-            allow_bump_to_one=False)
+            allow_bump_to_one=False, price_source='blended')
         frame = pd.DataFrame([{'symbol': 'AAA', 'close': 95.0, 'entry_price': 95.0,
             'score': 2.0, 'universe_count': 10, 'score_breakdown': '{}'}])
         metrics = self.mod.ExecutionMetrics()
@@ -577,7 +602,7 @@ class CallerTests(Fixture):
 
     def test_entry_gate_after_wait_and_fallback_rows(self):
         config = self.mod.ExecutorConfig(source='db', reconcile_auto=False)
-        frame = pd.DataFrame([r | {'score': 1, 'close': 10} for r in self.rows])
+        frame = pd.DataFrame(self.rows)
         clock = SimpleNamespace(timestamp=self.now, is_open=False, next_open=self.now.replace(hour=13, minute=30),
                                 next_close=self.now.replace(hour=20), session='premarket')
         with mock.patch.object(self.mod.TradeExecutor, '_get_trading_clock', return_value=clock), \
@@ -586,7 +611,7 @@ class CallerTests(Fixture):
              mock.patch.object(self.mod.TradeExecutor, '_rank_candidates', side_effect=lambda x: x), \
              mock.patch.object(self.mod.TradeExecutor, '_apply_alloc_weight_key', side_effect=lambda x: x), \
              mock.patch.object(self.mod.TradeExecutor, '_log_top_candidates'), \
-             mock.patch.object(self.mod, '_wait_until_submit_at', side_effect=lambda x: self.publish()), \
+             mock.patch.object(self.mod, '_wait_until_submit_at', side_effect=lambda x, **kw: self.publish()), \
              mock.patch.object(self.mod, '_create_trading_client', side_effect=AssertionError('no_trading_client')):
             self.assertEqual(self.mod.run_executor(config), 1)
         self.assertEqual(config._entry_preflight['reasons'], ['pipeline_changed_after_candidate_load'])
@@ -612,6 +637,79 @@ class CallerTests(Fixture):
             request = SimpleNamespace(side='buy', symbol='AAA', limit_price=10)
             self.assertIsNotNone(executor.submit_with_retries(request))
             submit.assert_called_once_with(request)
+
+    def test_bound_loader_queries_exact_signal_date_and_batch_without_latest_fallback(self):
+        cursor = mock.MagicMock(); cursor.__enter__.return_value = cursor
+        conn = SimpleNamespace(cursor=lambda: cursor, set_session=mock.Mock(), rollback=mock.Mock(), close=mock.Mock())
+        gate = self.gate()
+        with mock.patch.object(self.mod.db, 'db_config_preview', return_value={'enabled': True}, create=True), \
+             mock.patch.object(self.mod.db, 'get_db_conn', return_value=conn, create=True), \
+             mock.patch.object(self.mod, 'get_latest_screener_candidates', return_value=(pd.DataFrame(), self.batch)) as query:
+            result = self.mod.load_candidates_from_db(handoff=gate)
+        self.assertTrue(result.empty)
+        query.assert_called_once_with(datetime(2026, 10, 8).date(), connection=conn, exact_run_ts=self.batch)
+        cursor.execute.assert_not_called()
+        conn.rollback.assert_called_once(); conn.close.assert_called_once()
+
+    def test_session_policy_rejects_old_opening_and_price_overrides(self):
+        for changes in ({'submit_at_ny': '07:00'}, {'price_source': 'blended'},
+                        {'time_window': 'regular'}, {'extended_hours': False}):
+            with self.subTest(changes=changes):
+                result = self.mod._check_entry_preflight(self.mod.ExecutorConfig(**changes))
+                self.assertEqual(result['reasons'], ['session_entry_policy_incompatible'])
+        for changes in ({'limit_buffer_pct': float('nan')}, {'max_gap_pct': -1}, {'max_gap_pct': float('inf')}):
+            with self.subTest(changes=changes):
+                result = self.mod._check_entry_preflight(self.mod.ExecutorConfig(**changes))
+                self.assertEqual(result['reasons'], ['invalid_signal_price_policy'])
+
+    def test_actual_opening_wait_and_premarket_bounds_are_four_eastern(self):
+        self.now = self.now.replace(hour=7, minute=59, second=58)
+        calls = []
+        def advance(seconds):
+            calls.append(seconds)
+            self.now += timedelta(seconds=seconds)
+        with mock.patch.object(self.mod.time, 'sleep', side_effect=advance):
+            self.mod._wait_until_submit_at('04:00', session_open=self.session['entry_open_utc'])
+        self.assertEqual(sum(calls), 2)
+        self.assertEqual(self.now.hour, 8)
+        self.assertEqual(self.mod._premarket_bounds_strings(), ('04:00', '09:30'))
+        win, allowed, _ = self.mod._resolve_time_window('auto')
+        self.assertEqual((win, allowed), ('premarket', True))
+
+    def test_direct_buy_and_chase_replacement_cannot_exceed_frozen_cap_or_expiry(self):
+        for limit, expected in ((10.05, True), (10.3, True), (10.31, False), (float('nan'), False)):
+            with self.subTest(limit=limit):
+                config = self.mod.ExecutorConfig()
+                config._entry_preflight = self.gate(); config._entry_candidate_rows = self.rows
+                executor = self.mod.TradeExecutor(config, SimpleNamespace(), self.mod.ExecutionMetrics())
+                with mock.patch.object(executor, '_submit_order', return_value=SimpleNamespace(id='synthetic')) as submit:
+                    result = executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA', limit_price=limit))
+                self.assertEqual(result is not None, expected)
+                self.assertEqual(submit.call_count, int(expected))
+        self.now = self.now.replace(hour=13, minute=30)
+        with mock.patch.object(executor, '_submit_order') as submit:
+            self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA', limit_price=10)))
+            submit.assert_not_called()
+
+    def test_real_planner_uses_signal_close_without_live_price_replacement(self):
+        config = self.mod.ExecutorConfig(source='db', dry_run=True, min_order_usd=500, allocation_pct=.01)
+        config._entry_preflight = self.gate(); config._entry_candidate_rows = self.rows
+        frame = pd.DataFrame(self.rows)
+        executor = self.mod.TradeExecutor(config, None, self.mod.ExecutionMetrics())
+        with mock.patch.object(executor, 'fetch_buying_power', return_value=2000), \
+             mock.patch.object(executor, 'fetch_open_order_symbols', return_value=(set(), 0, 0)), \
+             mock.patch.object(executor, 'evaluate_time_window', return_value=(True, 'ok', 'premarket')), \
+             mock.patch.object(executor, 'resolve_limit_price', side_effect=AssertionError('no_prevclose_replacement')), \
+             mock.patch.object(self.mod, '_fetch_latest_trade_from_alpaca', side_effect=AssertionError('no_live_replacement')), \
+             mock.patch.object(self.mod, '_fetch_latest_quote_from_alpaca', side_effect=AssertionError('no_live_replacement')), \
+             mock.patch.object(executor, '_submit_order', side_effect=AssertionError('no_order')), \
+             mock.patch.object(executor, 'log_info') as logged:
+            self.assertEqual(executor.execute(frame, prefiltered=frame.to_dict('records')), 0)
+        plans = [call for call in logged.call_args_list if call.args and call.args[0] == 'DRY_RUN_ORDER']
+        self.assertEqual(len(plans), 2)
+        for call in plans:
+            self.assertEqual(float(call.kwargs['limit_price']), 10.05)
+            self.assertEqual(int(call.kwargs['qty']), 49)
 
     def test_cancel_acknowledgment_and_failure_are_not_terminal_confirmation(self):
         metric = self.mod.ExecutionMetrics()
@@ -690,6 +788,8 @@ class CallerTests(Fixture):
         executor = self.mod.TradeExecutor(config, None, self.mod.ExecutionMetrics())
         frame = pd.DataFrame([r | {'score': 1, 'close': 10, 'model_score': score}
                               for r, score in zip(self.rows, (.8, .2))])
+        self.rows = frame.to_dict('records')
+        self.publish()
         with mock.patch.object(self.mod, 'load_candidates_from_db', return_value=frame):
             loaded = executor.load_candidates(rank=False)
         self.assertEqual(list(loaded['symbol']), ['AAA'])
@@ -763,8 +863,8 @@ class CallerTests(Fixture):
         self.assertEqual(alias_format(text), alias_format(out.getvalue()))
 
     def test_buy_gate_failure_produces_unsuccessful_actual_caller_outcome(self):
-        config = self.mod.ExecutorConfig(source='db', reconcile_auto=False, submit_at_ny='')
-        frame = pd.DataFrame([r | {'score': 1, 'close': 10} for r in self.rows])
+        config = self.mod.ExecutorConfig(source='db', reconcile_auto=False)
+        frame = pd.DataFrame(self.rows)
         clock = SimpleNamespace(timestamp=self.now, is_open=False, next_open=self.now.replace(hour=13, minute=30),
                                 next_close=self.now.replace(hour=20))
         def execute(executor, *args, **kwargs):

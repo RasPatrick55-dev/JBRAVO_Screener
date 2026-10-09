@@ -15,7 +15,7 @@ import time
 import time as _time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone, time as dtime
+from datetime import date, datetime, timedelta, timezone, time as dtime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +31,7 @@ import requests
 
 from scripts import db
 from scripts.db_queries import get_latest_screener_candidates
+from scripts import signal_handoff
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.log_rotate import rotate_if_needed
 from scripts import executor_health
@@ -1270,7 +1271,7 @@ def _parse_hhmm(raw: str | None, default: tuple[int, int]) -> tuple[int, int]:
 
 
 def _premarket_bounds_components() -> tuple[tuple[int, int], tuple[int, int]]:
-    default_start = (7, 0)
+    default_start = (4, 0)
     default_end = (9, 30)
     start = _parse_hhmm(os.getenv("JBRAVO_PREMARKET_START"), default_start)
     end = _parse_hhmm(os.getenv("JBRAVO_PREMARKET_END"), default_end)
@@ -1423,7 +1424,7 @@ def _resolve_time_window(requested: str):
     return "closed", False, now
 
 
-def _wait_until_submit_at(target: Optional[str]) -> None:
+def _wait_until_submit_at(target: Optional[str], *, session_open=None) -> None:
     value = (target or "").strip()
     if not value:
         return
@@ -1438,7 +1439,8 @@ def _wait_until_submit_at(target: Optional[str]) -> None:
         LOGGER.warning("[WARN] submit_at_ny out of range value=%s -> skipping wait", value)
         return
     ny = ZoneInfo("America/New_York")
-    target_dt = datetime.now(ny).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    target_dt = (signal_handoff.utc(session_open).astimezone(ny) if session_open else
+                 datetime.now(ny).replace(hour=hour, minute=minute, second=0, microsecond=0))
     now_ny = datetime.now(ny)
     if now_ny >= target_dt:
         LOGGER.info(
@@ -1456,7 +1458,9 @@ def _wait_until_submit_at(target: Optional[str]) -> None:
                 value,
                 remaining_seconds,
             )
-        sleep_for = min(60, max(5, remaining / 4))
+        # Never deliberately sleep past the opening when less than five seconds
+        # remain. Actual wake/submission latency still requires host observation.
+        sleep_for = min(60, remaining)
         time.sleep(sleep_for)
         now_ny = datetime.now(ny)
 
@@ -1474,7 +1478,19 @@ def _check_entry_preflight(config, frame=None, *, raw_batch=False):
         result = executor_health.preflight(
             Path.cwd(), rows=rows,
             prior_binding=getattr(config, '_entry_pipeline_binding', previous.get('pipeline_binding')),
-            prior_value_binding=getattr(config, '_entry_raw_value_binding', previous.get('candidate_value_binding')))
+            prior_value_binding=getattr(config, '_entry_raw_value_binding', previous.get('candidate_value_binding')),
+            require_session=True)
+        if result['status'] == 'pass' and (config.submit_at_ny != '04:00'
+                or config.price_source != 'signal' or not config.extended_hours
+                or config.time_window not in ('auto', 'premarket')):
+            result = {'status': 'blocked', 'reasons': ['session_entry_policy_incompatible']}
+        if result['status'] == 'pass':
+            try:
+                snapshot = result['frozen_candidates']
+                signal_handoff.price_limit(snapshot, snapshot['references'][0]['symbol'],
+                    buffer_pct=config.limit_buffer_pct, max_gap_pct=config.max_gap_pct)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                result = {'status': 'blocked', 'reasons': ['invalid_signal_price_policy']}
         if supplied is not None and result['status'] == 'pass':
             expected = {row['symbol']: executor_health.utc(row['run_ts_utc']) for row in rows}
             try:
@@ -1912,6 +1928,7 @@ def load_candidates_from_db(
     metrics: ExecutionMetrics | None = None,
     record_skip: Optional[Callable[..., Any]] = None,
     diagnostic: bool = False,
+    handoff: Mapping[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Load the latest screener candidates from PostgreSQL."""
 
@@ -1975,9 +1992,16 @@ def load_candidates_from_db(
                 LOGGER.info("DB_PING ok=true")
             except Exception as exc:  # pragma: no cover - diagnostic logging
                 LOGGER.info("DB_PING ok=false err=%s", exc)
-        run_date_value = datetime.now(timezone.utc).date()
-        df, latest_run_ts = get_latest_screener_candidates(run_date_value, connection=connection)
-        if latest_run_ts is None:
+        bound_session = handoff.get('session') if isinstance(handoff, Mapping) else None
+        if bound_session:
+            run_date_value = date.fromisoformat(bound_session['signal_session'])
+            latest_run_ts = executor_health.utc(handoff['candidate_run_ts_utc'])
+            df, latest_run_ts = get_latest_screener_candidates(run_date_value, connection=connection,
+                                                              exact_run_ts=latest_run_ts)
+        else:
+            run_date_value = datetime.now(timezone.utc).date()
+            df, latest_run_ts = get_latest_screener_candidates(run_date_value, connection=connection)
+        if latest_run_ts is None and not bound_session:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT MAX(run_date) FROM screener_candidates")
                 row = cursor.fetchone()
@@ -2186,8 +2210,8 @@ class ExecutorConfig:
     allow_fractional: bool = False
     position_sizer: str = "notional"
     atr_target_pct: float = 0.02
-    submit_at_ny: str = "07:00"
-    price_source: str = "blended"
+    submit_at_ny: str = "04:00"
+    price_source: str = "signal"
     price_band_pct: float = 10.0
     price_band_action: str = "clamp"
     chase_interval_minutes: int = 5
@@ -3680,6 +3704,7 @@ class TradeExecutor:
             metrics=self.metrics,
             record_skip=self.record_skip_reason,
             diagnostic=bool(getattr(self.config, "diagnostic", False)),
+            handoff=getattr(self.config, '_entry_preflight', None),
         )
         if "symbol" in df.columns:
             df["symbol"] = df["symbol"].astype("string").str.upper()
@@ -4458,9 +4483,18 @@ class TradeExecutor:
             reference_price: Optional[float] = None
             limit_source = "prev_close_only"
             mode = (
-                price_mode if price_mode in {"prevclose", "entry", "close", "blended"} else "entry"
+                price_mode if price_mode in {"signal", "prevclose", "entry", "close", "blended"} else "entry"
             )
-            if mode in {"prevclose", "blended"}:
+            if mode == 'signal':
+                try:
+                    snapshot = self.config._entry_preflight['frozen_candidates']
+                    anchor_price = float(signal_handoff.reference(snapshot, symbol))
+                    price_f = price_ref = anchor_price
+                    anchor_label = 'frozen_signal_close'
+                except (KeyError, ValueError, AttributeError):
+                    self.record_skip_reason('PRICE_BOUNDS', symbol=symbol, detail='unbound_signal_reference')
+                    continue
+            elif mode in {"prevclose", "blended"}:
                 anchor_price = self.resolve_limit_price(symbol, record)
                 if anchor_price is None or anchor_price <= 0:
                     self.record_skip_reason(
@@ -4592,7 +4626,15 @@ class TradeExecutor:
                 if adjusted_ref is not None:
                     price_ref = adjusted_ref
 
-            if mode in {"prevclose", "blended"}:
+            if mode == 'signal':
+                try:
+                    limit_px = signal_handoff.price_limit(snapshot, symbol,
+                        buffer_pct=self.config.limit_buffer_pct, max_gap_pct=self.config.max_gap_pct)
+                except ValueError:
+                    self.record_skip_reason('PRICE_BOUNDS', symbol=symbol, detail='invalid_signal_price_policy')
+                    continue
+                limit_source = 'frozen_signal_close'
+            elif mode in {"prevclose", "blended"}:
                 anchor_val = max(0.0, float(anchor_price or 0.0))
                 reference_val = price_ref if price_ref > 0 else anchor_val
                 gap_pct = None
@@ -4712,7 +4754,7 @@ class TradeExecutor:
                 atr_scale,
             )
 
-            if mode in {"prevclose", "blended"}:
+            if mode in {"signal", "prevclose", "blended"}:
                 limit_price_raw = limit_px
             else:
                 limit_price_raw = compute_limit_price(record, self.config.entry_buffer_bps)
@@ -6038,7 +6080,8 @@ class TradeExecutor:
             else:
                 result = executor_health.preflight(Path.cwd(), rows=rows,
                     prior_binding=getattr(self.config, '_entry_pipeline_binding', prior.get('pipeline_binding')),
-                    prior_value_binding=getattr(self.config, '_entry_raw_value_binding', prior.get('candidate_value_binding')))
+                    prior_value_binding=getattr(self.config, '_entry_raw_value_binding', prior.get('candidate_value_binding')),
+                    require_session=True, for_entry=True)
                 if result['status'] == 'pass' and hasattr(self.config, '_entry_execution_frame'):
                     actual = executor_health.candidate_values(
                         self.config._entry_execution_frame.to_dict(orient='records'), ordered=True)
@@ -6056,9 +6099,32 @@ class TradeExecutor:
         delay = 1.0
         last_error: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
+            if side == 'buy' and not self.config.reconcile_only:
+                try:
+                    gate = self.config._entry_preflight
+                    signal_handoff.validate_session(gate['session'], started=gate['preparation_started_at'],
+                        finished=gate['preparation_finished_at'], now=datetime.now(timezone.utc), for_entry=True)
+                    if (self.config.price_source != 'signal' or self.config.submit_at_ny != '04:00'
+                            or not self.config.extended_hours or self.config.time_window not in ('auto', 'premarket')):
+                        raise ValueError('session_entry_policy_incompatible')
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    self.metrics.record_skip('DATA_MISSING', count=1)
+                    self.metrics.exit_reason = 'PREFLIGHT'
+                    self.metrics.status = 'blocked'
+                    return None
             try:
                 log_info("alpaca.submit_order_http", attempt=attempt)
                 _enforce_order_price_ticks(request)
+                if side == 'buy' and not self.config.reconcile_only:
+                    # Also constrain tick corrections and replacement/chase
+                    # submissions. A later quote must never bypass this cap.
+                    cap = signal_handoff.price_cap(gate['frozen_candidates'],
+                        _extract_request_field(request, 'symbol', ''), self.config.max_gap_pct)
+                    limit = _extract_request_field(request, 'limit_price', None)
+                    if (isinstance(limit, bool) or limit is None or not math.isfinite(float(limit))
+                            or not 0 < float(limit) <= cap):
+                        self.record_skip_reason('PRICE_BOUNDS', detail='frozen_signal_cap_exceeded')
+                        return None
                 result = self._submit_order(request)
                 if side == 'buy' and result is not None:
                     executor_health.observe(self.metrics, order_id=getattr(result, 'id', ''),
@@ -6488,10 +6554,10 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--price-source",
-        choices=("prevclose", "entry", "close", "blended"),
+        choices=("signal", "prevclose", "entry", "close", "blended"),
         default=ExecutorConfig.price_source,
         help=(
-            "Anchor price source for limit orders (prevclose falls back to snapshot/bars/entry, blended uses prevclose and live reference prices)"
+            "signal uses the completed-session frozen close; legacy modes are diagnostic only for unbound entries"
         ),
     )
     parser.add_argument(
@@ -7032,7 +7098,8 @@ def run_executor(
             source_df=candidates_df,
         )
 
-        _wait_until_submit_at(config.submit_at_ny)
+        _wait_until_submit_at(config.submit_at_ny, session_open=getattr(
+            config, '_entry_preflight', {}).get('session', {}).get('entry_open_utc'))
         if _check_entry_preflight(config, frame)['status'] == 'blocked':
             metrics.record_skip('DATA_MISSING', count=max(1, len(frame)))
             metrics.status = 'blocked'

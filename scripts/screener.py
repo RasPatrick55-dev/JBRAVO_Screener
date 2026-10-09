@@ -2570,8 +2570,11 @@ def _load_alpaca_universe(
                 trading_client,
                 window_days,
                 end_date=run_date_override,
+                session_cutoff=os.environ.get('JBRAVO_SESSION_HANDOFF') == '1',
             )
         except Exception as exc:
+            if os.environ.get('JBRAVO_SESSION_HANDOFF') == '1':
+                raise RuntimeError('qualified_session_window_unavailable') from exc
             LOGGER.error(
                 "Failed to determine trading window for %d days: %s",
                 window_days,

@@ -2266,6 +2266,9 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--postflight-report", action="store_true",
         help="Write run-bound health facts for the read-only primary postflight checker",
     )
+    parser.add_argument('--session-handoff', action='store_true',
+                        help='Require completed extended-session cutoff and freeze the entry handoff')
+    parser.add_argument('--handoff-invocation', help='Primary controller invocation binding')
     parser.add_argument(
         "--steps",
         default=None,
@@ -3255,6 +3258,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         LOG.error("[ERROR] ENV_MISSING_KEYS=%s", f"[{', '.join(missing_keys)}]")
         raise SystemExit(2)
     args = parse_args(argv)
+    session_context = None
+    if args.session_handoff:
+        from scripts.screener import _create_trading_client
+        from scripts.utils.calendar import completed_signal_session
+        session_context = completed_signal_session(_create_trading_client())
+        os.environ['JBRAVO_SESSION_HANDOFF'] = '1'
     steps = tuple(determine_steps(args.steps))
     if not db.db_enabled():
         LOG.error("[ERROR] DB_REQUIRED: DATABASE_URL/DB_* not configured.")
@@ -3278,7 +3287,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if "screener" not in steps and allow_no_screener:
         LOG.info("[INFO] ALLOW_NO_SCREENER enabled=true steps=%s", ",".join(steps))
     LOG.info("[INFO] PIPELINE_START steps=%s", ",".join(steps))
-    pipeline_run_date = _resolve_pipeline_run_date()
+    pipeline_run_date = (date.fromisoformat(session_context['signal_session'])
+                         if session_context else _resolve_pipeline_run_date())
     LOG.info(
         "[INFO] PIPELINE_RUN_DATE run_date=%s tz=America/New_York",
         pipeline_run_date.isoformat(),
@@ -5480,12 +5490,37 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if getattr(args, "postflight_report", False):
             try:
                 from scripts.pipeline_postflight import publish_health
+                frozen_candidates = None
+                if session_context is not None and rc == 0:
+                    # Same exact query/columns as the executor, including ranker
+                    # scores. Freeze within a read-only repeatable-read snapshot.
+                    from scripts.signal_handoff import freeze_candidates
+                    snapshot_conn = db.get_db_conn()
+                    if snapshot_conn is None:
+                        raise ValueError('signal_snapshot_connection_missing')
+                    try:
+                        snapshot_conn.set_session(isolation_level='REPEATABLE READ', readonly=True,
+                                                  autocommit=False)
+                        candidate_frame, candidate_ts = get_latest_screener_candidates(
+                            pipeline_run_date, connection=snapshot_conn,
+                            exact_run_ts=model_score_coverage_summary['run_ts_utc'])
+                        frozen_candidates = freeze_candidates(candidate_frame.to_dict(orient='records'),
+                            session_context, run_ts=model_score_coverage_summary['run_ts_utc'])
+                        if frozen_candidates['count'] != model_score_coverage_summary['total']:
+                            raise ValueError('signal_snapshot_count_mismatch')
+                    finally:
+                        try:
+                            snapshot_conn.rollback()
+                        finally:
+                            snapshot_conn.close()
                 publish_health(
                     base_dir, started_at=started_dt, finished_at=datetime.now(timezone.utc),
                     pipeline_rc=rc, steps=steps, step_rcs=step_rcs,
                     stage_times=stage_times, degraded=degraded, labels_rows=labels_rows,
                     freshness=enrichment_freshness, coverage=model_score_coverage_summary,
                     ml_health=ml_health_summary,
+                    session=session_context, frozen_candidates=frozen_candidates,
+                    invocation_id=getattr(args, 'handoff_invocation', None),
                     controls={
                         "strict_predictions_meta": bool(strict_predictions_meta),
                         "strict_auto_refresh_predictions": bool(strict_auto_refresh_predictions),
