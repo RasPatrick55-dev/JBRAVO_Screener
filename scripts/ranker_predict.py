@@ -664,6 +664,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    capture_enabled = _parse_boolish(os.getenv('JBR_CAPTURE_PRODUCTION_SCORES'))
+    if capture_enabled:
+        from scripts.production_score_capture import capture, scoring_binding
+        try:
+            observed_model = scoring_binding(model, scaler, feature_columns, args.label_column, posthoc_calibrator)
+            observed_features = features_df[['symbol', 'timestamp', *feature_columns]].copy(deep=True)
+        except Exception:
+            LOG.error('[ERROR] PRODUCTION_SCORE_CAPTURE_BINDING_FAILED')
+            return 2
     probs = _predict(
         features_df,
         model,
@@ -686,6 +695,16 @@ def main(argv: list[str] | None = None) -> int:
         snapshot_date = str(features_meta.get("run_date") or datetime.now(timezone.utc).date())
     else:
         snapshot_date = _extract_features_date(features_path)
+    score_capture = None
+    if capture_enabled:
+        try:
+            if scoring_binding(model, scaler, feature_columns, args.label_column, posthoc_calibrator) != observed_model:
+                raise ValueError('scoring_bundle_changed_during_prediction')
+            score_capture = capture(BASE_DIR, observed_features, output_df, snapshot_date=snapshot_date,
+                                    model_binding=observed_model)
+        except Exception:
+            LOG.error('[ERROR] PRODUCTION_SCORE_CAPTURE_FAILED')
+            return 2
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact_type = "predictions_scoped" if symbol_scope else "predictions"
@@ -699,6 +718,7 @@ def main(argv: list[str] | None = None) -> int:
 
     model_mtime_utc = _mtime_iso(model_path)
     predictions_meta: dict[str, Any] = {
+        'production_score_capture': score_capture,
         "model_path": str(model_path),
         "model_artifact_date": selected_model_meta.get("artifact_date"),
         "model_selection_mode": model_selection.get("selection_mode"),

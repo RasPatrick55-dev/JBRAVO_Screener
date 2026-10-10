@@ -4,6 +4,10 @@ The primary pipeline owns screening and ML preparation. The former canary
 becomes a postflight reader; it must not publish a newer 30-symbol candidate run.
 This is a software contract, not research qualification or trading acceptance.
 
+The primary also starts preserving [forward predictor observations](../reference/production_score_observations.md)
+when it actually refreshes predictions. These append-only packets begin the
+missing model-evidence path; they do not clear the existing ML health gate.
+
 ## Primary invocation
 
 Use `bash scripts/ops/run_primary_pipeline.sh` for the daily primary task.
@@ -24,6 +28,8 @@ No training, tuning, ranker remediation or extra strategy evaluation is added.
 
 Champion selection, candidate enrichment, candidate-scoped prediction refresh,
 automatic feature/prediction refresh and the ML health guard are enabled.
+Both label-generation paths use the canonical signal-session `--run-date`, so
+weekend preparation does not publish labels under a different wall-clock date.
 The guard retains warn mode: warning does not silently change enrichment or
 execution policy. It produces degraded postflight and an unsuccessful wrapper
 result. Strict prediction metadata and strict automatic refresh default true;
