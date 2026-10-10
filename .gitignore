@@ -18,6 +18,7 @@ data/trade_performance_cache.json
 data/trade_performance_cache.json.*
 data/*.json
 data/predictions/
+data/production_score_history/
 data/predictions/*
 data/cache/
 .pytest_cache/
