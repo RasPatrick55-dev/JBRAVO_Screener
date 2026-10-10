@@ -2877,14 +2877,17 @@ def reconcile_sell_fill(
                         raise ValueError("trade_state_mismatch")
                     if row[4] not in (None, "", order_id):
                         raise ValueError("trade_exit_conflict")
+                    # Missing fields do not make existing exit evidence replaceable.
+                    # Validate each supplied field before inserting or decorating.
+                    if (
+                        (row[5] is not None and normalize_ts(row[5]) != normalized_time)
+                        or (row[6] is not None and number(row[6]) != number(exit_price))
+                        or (row[7] is not None and row[7] != exit_reason)
+                    ):
+                        raise ValueError("trade_exit_conflict")
                     exit_complete = (state == "CLOSED" and row[4] == order_id
                                         and row[5] is not None and row[6] is not None
                                         and row[7] is not None)
-                    if exit_complete and (
-                        normalize_ts(row[5]) != normalized_time
-                        or number(row[6]) != number(exit_price) or row[7] != exit_reason
-                    ):
-                        raise ValueError("trade_exit_conflict")
                     if state == "CLOSED" and not decorate and not exit_complete:
                         raise ValueError("trade_state_mismatch")
                     already_complete = exit_complete and row[8] is not None

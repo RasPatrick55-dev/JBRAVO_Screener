@@ -619,6 +619,74 @@ class AtomicFillTests(unittest.TestCase):
         self.assertFalse(self.fill())
         self.assertEqual(self.transaction.statements, [])
 
+    def assert_fill_conflict_preserves_state(self, *, decorate=True):
+        original_trade = copy.deepcopy(self.transaction.trade)
+        original_events = copy.deepcopy(self.transaction.events)
+        self.assertFalse(self.fill(decorate=decorate))
+        self.assertEqual(self.transaction.trade, original_trade)
+        self.assertEqual(self.transaction.events, original_events)
+        self.assertEqual(self.transaction.commits, 0)
+        self.assertEqual(self.transaction.rollbacks, 1)
+        self.assertFalse(any('INSERT INTO order_events' in sql or 'UPDATE trades' in sql
+                             for sql in self.transaction.statements))
+
+    def test_partial_closed_exit_conflicts_block_each_present_field(self):
+        conflicts = {4: 'other-order', 5: NOW.replace(hour=11),
+                     6: 12, 7: 'TRAIL_STOP'}
+        matching = ['sell-1', NOW, 11, 'SELL_FILL']
+        for field, value in conflicts.items():
+            for missing in (5, 6, 7):
+                if missing == field:
+                    continue
+                with self.subTest(field=field, missing=missing):
+                    self.setup_transaction(closed=True)
+                    self.transaction.trade[4:8] = matching
+                    self.transaction.trade[field] = value
+                    self.transaction.trade[missing] = None
+                    self.transaction.events = [('XYZ', 2, 'filled', NOW)]
+                    self.assert_fill_conflict_preserves_state()
+
+    def test_partial_closed_exit_matches_fill_each_missing_field_once(self):
+        for missing in (4, 5, 6, 7):
+            with self.subTest(missing=missing):
+                self.setup_transaction(closed=True)
+                self.transaction.trade[4:8] = ['sell-1', NOW.isoformat(), '11.00', 'SELL_FILL']
+                self.transaction.trade[missing] = None
+                self.transaction.events = [('XYZ', 2, 'filled', NOW)]
+                self.assertTrue(self.fill(decorate=True))
+                self.assertEqual(self.transaction.trade[4:9], ['sell-1', NOW, 11.0, 'SELL_FILL', 2.0])
+                self.assertTrue(self.fill(decorate=True))
+                self.assertEqual(len(self.transaction.events), 1)
+                self.assertEqual(sum('UPDATE trades' in sql for sql in self.transaction.statements), 1)
+                self.assertFalse(any('INSERT INTO order_events' in sql
+                                     for sql in self.transaction.statements))
+
+    def test_only_one_matching_exit_field_can_be_completed(self):
+        for field, value in {4: 'sell-1', 5: NOW, 6: '11.00', 7: 'SELL_FILL'}.items():
+            with self.subTest(field=field):
+                self.setup_transaction(closed=True)
+                self.transaction.trade[field] = value
+                self.assertTrue(self.fill(decorate=True))
+                self.assertEqual(self.transaction.trade[4:9], ['sell-1', NOW, 11.0, 'SELL_FILL', 2.0])
+                self.assertEqual(len(self.transaction.events), 1)
+
+    def test_invalid_present_partial_exit_fields_are_not_missing(self):
+        for field, value in ((5, 'invalid'), (6, 0), (6, float('nan')),
+                             (6, 'invalid'), (6, True), (7, '')):
+            with self.subTest(field=field, value=value):
+                self.setup_transaction(closed=True)
+                self.transaction.trade[field] = value
+                self.assert_fill_conflict_preserves_state()
+
+    def test_complete_closed_exit_conflicts_still_block(self):
+        for field, value in {4: 'other-order', 5: NOW.replace(hour=11),
+                             6: 12, 7: 'TRAIL_STOP'}.items():
+            with self.subTest(field=field):
+                self.setup_transaction(closed=True)
+                self.transaction.trade[4:9] = ['sell-1', NOW, 11, 'SELL_FILL', 2]
+                self.transaction.trade[field] = value
+                self.assert_fill_conflict_preserves_state()
+
     def test_existing_transaction_cannot_be_committed_by_this_helper(self):
         self.setup_transaction()
         self.transaction.transaction_status = 2
@@ -761,6 +829,36 @@ class SharedConnectionCallerTests(unittest.TestCase):
         self.assertFalse(self.caller.reconcile_closed_trades())
         self.assertEqual(self.connection.events, [])
         self.assertNotIn('write', self.connection.transaction_modes)
+
+    def test_partial_exit_conflict_holds_caller_watermark_and_state(self):
+        for field, value in {5: NOW.replace(hour=11), 6: 12, 7: 'TRAIL_STOP'}.items():
+            with self.subTest(field=field):
+                self.setup_caller(closed=True)
+                self.connection.trade[4] = 'sell-1'
+                self.connection.trade[field] = value
+                original = copy.deepcopy(self.connection.trade)
+                previous_watermark = self.connection.last_after
+                self.assertFalse(self.caller.reconcile_closed_trades())
+                self.assertEqual(self.connection.trade, original)
+                self.assertEqual(self.connection.events, [])
+                self.assertEqual(self.connection.last_after, previous_watermark)
+                self.assertEqual(self.connection.get_transaction_status(), 0)
+                self.assertEqual(self.connection.rollbacks, 1)
+                self.assertFalse(any('UPDATE trades' in sql or 'INSERT INTO order_events' in sql
+                                     or 'INSERT INTO reconcile_state' in sql
+                                     for sql in self.connection.statements))
+
+    def test_matching_partial_exit_is_completed_through_shared_caller(self):
+        self.setup_caller(closed=True)
+        self.connection.trade[4:8] = ['sell-1', NOW.isoformat(), None, 'SELL_FILL']
+        self.connection.events = [('XYZ', 2, 'filled', NOW)]
+        self.assertTrue(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.trade[4:9], ['sell-1', NOW, 11.0, 'SELL_FILL', 2.0])
+        self.assertEqual(self.connection.get_transaction_status(), 0)
+        self.assertTrue(any('INSERT INTO reconcile_state' in sql for sql in self.connection.statements))
+        self.assertTrue(self.caller.reconcile_closed_trades())
+        self.assertEqual(len(self.connection.events), 1)
+        self.assertEqual(sum('UPDATE trades' in sql for sql in self.connection.statements), 1)
 
     def test_strict_read_rejects_caller_owned_transaction_without_committing(self):
         self.setup_caller()

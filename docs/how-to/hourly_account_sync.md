@@ -160,7 +160,10 @@ event. It does not commit a caller's already active transaction. An order-keyed 
 advisory lock serializes participating reconcilers, and `FOR UPDATE` locks the
 trade before checking its existing exit. An identical prior event is reused;
 multiple events or conflicting symbol, quantity, fill status or timestamp block
-the update. A conflicting existing trade exit also blocks. Failed insertion or
+the update. A conflicting existing trade exit also blocks. Each existing non-null
+exit timestamp, price and reason is checked independently, even when other exit
+fields are missing. Matching partial exits can be completed; missing fields never
+authorize overwriting conflicting existing evidence. Failed insertion or
 trade update rolls back both writes. A successful transaction can be repeated
 without inserting another event, including when its commit acknowledgement was
 lost. The caller holds its watermark on failure; it does not retry immediately.
