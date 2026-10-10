@@ -363,23 +363,25 @@ def _scoring_model_binding(model: Any, scaler: Any, features: list[str], target:
     This is runtime provenance for a research fold, not production acceptance.
     Library versions may change the serialization of equivalent model objects.
     """
+    score_column = OOS_SCORE_COL
     try:
         content = pickle.dumps(
-            {"model": model, "scaler": scaler, "features": list(features), "target": target},
+            {"model": model, "scaler": scaler, "features": list(features), "target": target,
+             "score_column": score_column},
             protocol=4,
         )
         return {
             "model_sha256": hashlib.sha256(content).hexdigest(),
             "model_binding_bytes": len(content),
-            "model_binding_kind": "scoring_bundle_pickle_sha256_v1",
+            "model_binding_kind": "scoring_bundle_pickle_sha256_v2",
             "model_role": "walkforward_fold",
-            "model_score_column": OOS_SCORE_COL, "model_target": target,
+            "model_score_column": score_column, "model_target": target,
         }
     except Exception as exc:
         # Binding failure must not change the scores or silently assert identity.
         return {"model_sha256": None, "model_binding_bytes": None,
                 "model_binding_kind": "unbound", "model_role": "walkforward_fold",
-                "model_score_column": OOS_SCORE_COL, "model_target": target,
+                "model_score_column": score_column, "model_target": target,
                 "model_binding_error": type(exc).__name__}
 
 

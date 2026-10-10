@@ -360,7 +360,7 @@ def _model_comparison(
                     lambda value: isinstance(value, str)
                     and re.fullmatch(r"[0-9a-f]{64}", value) is not None
                 )
-                & frame["model_binding_kind"].eq("scoring_bundle_pickle_sha256_v1")
+                & frame["model_binding_kind"].eq("scoring_bundle_pickle_sha256_v2")
                 & frame["model_role"].eq("walkforward_fold")
                 & frame["model_score_column"].eq(score_col)
                 & frame["model_target"].eq(target)

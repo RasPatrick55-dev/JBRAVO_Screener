@@ -108,7 +108,7 @@ class MonitorContractTests(unittest.TestCase):
                              TARGET: label, RETURN: 0.1 if label else -0.1,
                              "score_oos": score, "fold_id": fold,
                              "model_sha256": digest, "model_binding_bytes": 128,
-                             "model_binding_kind": "scoring_bundle_pickle_sha256_v1",
+                             "model_binding_kind": "scoring_bundle_pickle_sha256_v2",
                              "model_score_column": "score_oos", "model_target": TARGET,
                              "model_role": "walkforward_fold"})
         for index in range(incomplete):
@@ -256,6 +256,19 @@ class MonitorContractTests(unittest.TestCase):
                 self.assertEqual(result["scope"], "unknown_model_diagnostic")
                 self.assertEqual(result["windows"]["baseline"]["unbound_rows"], 100)
 
+    def test_legacy_v1_fingerprint_remains_unbound_and_investigation_only(self):
+        frame = self.population()
+        frame["model_binding_kind"] = "scoring_bundle_pickle_sha256_v1"
+        result = self.run_cli(frame)
+        context = result["model_comparison"]
+        self.assertEqual(context["scope"], "unknown_model_diagnostic")
+        for window in context["windows"].values():
+            self.assertEqual(window["bound_rows"], 0)
+            self.assertEqual(window["unbound_rows"], window["rows"])
+        self.assertIn("score_model_identity_unbound", context["reasons"])
+        self.assertFalse(context["production_drift_established"])
+        self.assertEqual(result["recommended_action"], "investigate")
+
     def test_overlap_is_reported_not_silently_deduplicated(self):
         frame = self.population()
         baseline = pd.concat([frame.iloc[:100], frame.iloc[:100]], ignore_index=True)
@@ -275,6 +288,23 @@ class MonitorContractTests(unittest.TestCase):
             ({"coefficient": 1}, {"mean": 0}, ["x", "y"], "other_target"),
         ):
             self.assertNotEqual(first["model_sha256"], bind(model, scaler, features, target)["model_sha256"])
+
+    def test_fingerprint_binds_scored_column_without_changing_scores(self):
+        train = pd.DataFrame({"x": range(8), TARGET: [0] * 8})
+        bindings, scores = [], []
+        for column in ("score_oos", "other_score", "score_oos"):
+            with mock.patch.object(self.walkforward, "OOS_SCORE_COL", column):
+                sink = {}
+                predictions, _, _ = self.walkforward._predict_fold_proba_retrained(
+                    train, train.iloc[:2], ["x"], TARGET, "none", binding_sink=sink)
+                bindings.append(sink)
+                scores.append(predictions)
+                self.assertEqual(sink["model_score_column"], column)
+                self.assertEqual(sink["model_binding_kind"], "scoring_bundle_pickle_sha256_v2")
+        self.assertNotEqual(bindings[0]["model_sha256"], bindings[1]["model_sha256"])
+        self.assertEqual(bindings[0], bindings[2])
+        for predictions in scores:
+            np.testing.assert_array_equal(predictions, [0.0, 0.0])
 
     def test_binding_failure_does_not_assert_identity(self):
         result = self.walkforward._scoring_model_binding(lambda: None, None, ["x"], TARGET)
@@ -314,6 +344,10 @@ class MonitorContractTests(unittest.TestCase):
             rows = saved.loc[saved["fold_id"] == fold["fold"]]
             self.assertEqual(set(rows["model_sha256"]), {fold["model_sha256"]})
             self.assertEqual(set(rows["model_binding_bytes"]), {fold["model_binding_bytes"]})
+            self.assertEqual(fold["model_binding_kind"], "scoring_bundle_pickle_sha256_v2")
+            self.assertEqual(set(rows["model_binding_kind"]), {fold["model_binding_kind"]})
+            self.assertEqual(fold["model_score_column"], self.walkforward.OOS_SCORE_COL)
+            self.assertEqual(set(rows["model_score_column"]), {fold["model_score_column"]})
 
     def test_database_csv_value_gets_exact_input_binding_without_live_database(self):
         value = self.population().to_csv(index=False)
