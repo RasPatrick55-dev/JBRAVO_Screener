@@ -32,8 +32,6 @@ from scripts.utils.fwd_return_sanity import (  # noqa: E402
 )
 from utils.env import load_env  # noqa: E402
 
-load_env()
-
 LOG = logging.getLogger("ranker_strategy_eval")
 logging.basicConfig(
     level=logging.INFO,
@@ -480,6 +478,7 @@ def _run_param_sweep(
 
 
 def run_strategy_eval(args: StrategyArgs) -> dict[str, Any]:
+    load_env()
     horizon_days = int(args.horizon_days or 0)
     if horizon_days <= 0:
         horizon_days = _infer_label_horizon_days(args.target)

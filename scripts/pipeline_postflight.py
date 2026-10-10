@@ -26,7 +26,8 @@ SOURCE_FILES = ('scripts/run_pipeline.py', 'scripts/pipeline_postflight.py',
                 'scripts/signal_handoff.py', 'scripts/db_queries.py',
                 'scripts/utils/calendar.py', 'scripts/screener.py')
 SOURCE_FILES += ('scripts/label_generator.py', 'scripts/ranker_predict.py',
-                 'scripts/production_score_capture.py')
+                 'scripts/production_score_capture.py', 'scripts/production_evidence.py',
+                 'scripts/ranker_monitor.py', 'scripts/ranker_strategy_eval.py')
 MAX_REPORT_BYTES = 64 * 1024
 MAX_SOURCE_BYTES = 1024 * 1024
 ML_PROVENANCE_FIELDS = ('monitor_run_date', 'monitor_run_date_source', 'monitor_artifact_run_date',

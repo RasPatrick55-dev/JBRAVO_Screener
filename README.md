@@ -5,6 +5,9 @@ Documentation entry point: `docs/INDEX.md`
 Acceptance evidence preparation: [forward predictor observations and session labels](docs/reference/production_score_observations.md).
 The primary preserves new score observations when it refreshes predictions;
 these records do not clear model or trading acceptance gates.
+The [production evidence consumer](docs/reference/production_evidence_qualification.md)
+verifies reviewed comparable score populations and mature outcomes and saves an
+isolated monitor candidate. Publication and full acceptance remain separate.
 
 Research declaration boundary: [contract](docs/reference/research_admission_contract.md).
 For its scoped synthetic verification, set `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and

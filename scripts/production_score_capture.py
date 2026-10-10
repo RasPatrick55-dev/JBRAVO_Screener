@@ -15,10 +15,28 @@ import uuid
 import pandas as pd
 
 MAX_BYTES = 64 * 1024 * 1024
+PRODUCER_FILES = ('scripts/ranker_predict.py', 'scripts/production_score_capture.py',
+                  'scripts/primary_pipeline.py')
 
 
 def binding(content):
     return {'bytes': len(content), 'sha256': hashlib.sha256(content).hexdigest()}
+
+
+def producer_binding():
+    """Bind ordinary files from the running producer checkout, not output paths."""
+    root = Path(__file__).resolve().parents[1]
+    result = {}
+    for relative in PRODUCER_FILES:
+        file = root / relative
+        if any(part.is_symlink() for part in (file, *file.parents)):
+            raise ValueError('producer_symlink_rejected')
+        with file.open('rb') as handle:
+            content = handle.read(MAX_BYTES + 1)
+        if not 0 < len(content) <= MAX_BYTES:
+            raise ValueError('producer_size_rejected')
+        result[relative] = binding(content)
+    return result
 
 
 def scoring_binding(model, scaler, feature_columns, target, calibrator):
@@ -46,7 +64,8 @@ def save(path, content):
     return binding(content)
 
 
-def capture(base_dir, features, predictions, *, snapshot_date, model_binding, generated_at=None):
+def capture(base_dir, features, predictions, *, snapshot_date, model_binding, generated_at=None,
+            producer_sources=None):
     day = date.fromisoformat(str(snapshot_date))
     now = generated_at or datetime.now(timezone.utc)
     if now.tzinfo is None or now.utcoffset() is None or day > now.astimezone(timezone.utc).date():
@@ -76,6 +95,9 @@ def capture(base_dir, features, predictions, *, snapshot_date, model_binding, ge
         raise ValueError('capture_score_ineligible')
     if any(not math.isfinite(float(x)) for x in current[names].to_numpy().ravel()):
         raise ValueError('capture_features_ineligible')
+    source_identity = producer_binding()
+    if producer_sources is not None and producer_sources != source_identity:
+        raise ValueError('producer_changed_during_prediction')
     directory = Path(base_dir) / 'data' / 'production_score_history'
     for part in (directory, *directory.parents):
         if part.is_symlink():
@@ -83,9 +105,10 @@ def capture(base_dir, features, predictions, *, snapshot_date, model_binding, ge
     directory.mkdir(parents=True, exist_ok=True)
     packet = directory / uuid.uuid4().hex
     packet.mkdir()
-    manifest = {'schema': 'jbravo.production-score-observation.v1', 'capture_id': packet.name,
+    manifest = {'schema': 'jbravo.production-score-observation.v2', 'capture_id': packet.name,
         'observed_at_utc': now.astimezone(timezone.utc).isoformat(), 'signal_session': day.isoformat(),
         'rows': len(scores), 'model_binding': model_binding,
+        'producer_sources': source_identity,
         'feature_representation': 'normalized_imputed_predictor_input',
         'features': save(packet / 'features.csv', current.to_csv(index=False).encode()),
         'predictions': save(packet / 'predictions.csv', scores.to_csv(index=False).encode()),
@@ -94,4 +117,5 @@ def capture(base_dir, features, predictions, *, snapshot_date, model_binding, ge
     identity = save(packet / 'manifest.json', (json.dumps(manifest, sort_keys=True, allow_nan=False) + '\n').encode())
     return {'manifest_path': str(packet / 'manifest.json'), 'manifest_binding': identity,
             'rows': len(scores), 'signal_session': day.isoformat(), 'model_binding': model_binding,
+            'producer_sources': source_identity,
             'research_qualified': False, 'operating_acceptance': False}
