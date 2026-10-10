@@ -5,7 +5,7 @@ The executor uses the same pre-import isolation as the hourly gate tests.
 """
 import contextlib
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import importlib
 import io
 import json
@@ -22,6 +22,12 @@ from scripts import account_sync as sync
 NOW = datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
 
 
+class FrozenRunClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return NOW.astimezone(tz) if tz is not None else NOW.replace(tzinfo=None)
+
+
 def order(**changes):
     return dict(id='sell-1', symbol='XYZ', side='sell', status='filled',
                 filled_at=NOW.isoformat(), updated_at=NOW.isoformat(),
@@ -33,6 +39,7 @@ class ReconciliationTests(unittest.TestCase):
 
     def prepare(self, *, open_trades=None, missing=None, orders=None, positions=None):
         module = self.executor
+        self.stack.enter_context(mock.patch.object(module, 'datetime', FrozenRunClock))
         self.messages = io.StringIO()
         logger = logging.Logger('synthetic-reconciliation', logging.INFO)
         logger.addHandler(logging.StreamHandler(self.messages))
@@ -78,6 +85,30 @@ class ReconciliationTests(unittest.TestCase):
             self.writes[name].assert_not_called()
         self.client.submit_order.assert_not_called()
         self.client.cancel_order_by_id.assert_not_called()
+
+    def test_each_future_order_time_blocks_before_any_trade_write(self):
+        for field in ('updated_at', 'filled_at', 'submitted_at', 'created_at'):
+            with self.subTest(field=field):
+                self.prepare(orders=[order(**{field: (NOW + timedelta(microseconds=1)).isoformat()})])
+                self.assertFalse(self.run.reconcile_closed_trades())
+                self.no_mutations()
+                self.assertIn('reason=future_timestamp', self.messages.getvalue())
+
+    def test_order_time_cutoff_and_equivalent_offset_are_accepted(self):
+        for value in (NOW.isoformat(), (NOW - timedelta(microseconds=1)).isoformat(),
+                      '2026-10-09T08:00:00-04:00'):
+            with self.subTest(value=value):
+                self.prepare(open_trades=[], orders=[order(updated_at=value, filled_at=value)])
+                self.assertTrue(self.run.reconcile_closed_trades())
+                saved = self.writes['set_reconcile_state'].call_args.args[1]
+                self.assertLessEqual(saved, NOW)
+
+    def test_future_saved_order_watermark_stops_before_broker_read(self):
+        self.prepare(open_trades=[])
+        self.writes['get_reconcile_state'].return_value = {'last_after': NOW + timedelta(microseconds=1)}
+        self.assertFalse(self.run.reconcile_closed_trades())
+        self.orders.assert_not_called()
+        self.no_mutations()
 
     def test_position_failure_is_not_an_empty_account(self):
         self.prepare()
@@ -243,6 +274,7 @@ class ActivityTests(unittest.TestCase):
         sys.modules.pop('scripts.fetch_account_activities', None)
         self.addCleanup(lambda: sys.modules.pop('scripts.fetch_account_activities', None))
         self.activities = importlib.import_module('scripts.fetch_account_activities')
+        self.stack.enter_context(mock.patch.object(self.activities, 'datetime', FrozenRunClock))
         self.insert = self.stack.enter_context(mock.patch.object(self.activities, 'insert_activities',
                                                                 return_value=(0, None, None)))
         self.watermark = self.stack.enter_context(mock.patch.object(self.activities, 'save_watermark',
@@ -259,6 +291,45 @@ class ActivityTests(unittest.TestCase):
         self.run_pages([([], None)])
         self.insert.assert_called_once()
         self.watermark.assert_not_called()
+
+    def test_future_activity_time_blocks_entire_batch_before_insertion(self):
+        for field in ('transaction_time', 'processed_at', 'date', 'timestamp'):
+            with self.subTest(field=field):
+                self.prepare()
+                record = self.activity()
+                record.pop('transaction_time')
+                record['id'] = 'act-future'
+                record[field] = (NOW + timedelta(microseconds=1)).isoformat()
+                with self.assertRaisesRegex(RuntimeError, 'ACT_PAYLOAD_INVALID'):
+                    self.run_pages([([self.activity(), record], 'next'), ([], None)])
+                self.insert.assert_not_called()
+                self.watermark.assert_not_called()
+
+    def test_activity_time_cutoff_offsets_and_fixed_run_clock(self):
+        self.prepare()
+        values = (NOW.isoformat(), (NOW - timedelta(microseconds=1)).isoformat(),
+                  '2026-10-09T08:00:00-04:00')
+        records = [self.activity() | {'id': str(i), 'transaction_time': value}
+                   for i, value in enumerate(values)]
+        self.insert.return_value = (3, values[-1], values[-1])
+        with mock.patch.object(self.activities, 'fetch_activities', return_value=records), \
+                mock.patch.object(self.activities, 'datetime', wraps=FrozenRunClock) as clock:
+            self.activities._run_incremental(self.args, 'https://synthetic.invalid', object(), NOW.isoformat())
+        clock.now.assert_called_once_with(timezone.utc)
+        self.watermark.assert_called_once()
+
+    def test_future_since_or_stored_activity_watermark_stops_before_fetch(self):
+        future = (NOW + timedelta(microseconds=1)).isoformat()
+        for since, saved in ((future, NOW.isoformat()), (None, future), (NOW.isoformat(), future)):
+            with self.subTest(since=since, saved=saved):
+                self.prepare()
+                self.args.since_ts = since
+                with mock.patch.object(self.activities, 'fetch_activities') as fetch, \
+                        self.assertRaisesRegex(RuntimeError, 'ACT_WATERMARK_INVALID'):
+                    self.activities._run_incremental(self.args, 'https://synthetic.invalid', object(), saved)
+                fetch.assert_not_called()
+                self.insert.assert_not_called()
+                self.watermark.assert_not_called()
 
     def test_partial_page_failure_never_inserts_or_advances(self):
         self.prepare()
@@ -438,6 +509,29 @@ class DatabaseReadTests(unittest.TestCase):
         self.assertEqual(self.module.get_reconcile_state(self.conn, strict=True), {})
         self.assertEqual(self.module.get_open_trades(self.conn, strict=True), [])
         self.assertEqual(self.module.get_closed_trades_missing_exit(self.conn, NOW, strict=True), [])
+
+    def test_strict_read_rejects_bad_identity_even_after_a_valid_record(self):
+        for field, values in (('trade_id', (None, True, 0, -1, '1', 1.5)),
+                              ('symbol', (None, '', ' ', 3, ' XYZ', 'XYZ '))):
+            for value in values:
+                for name in ('get_open_trades', 'get_closed_trades_missing_exit'):
+                    with self.subTest(field=field, value=value, reader=name):
+                        self.read_module()
+                        self.cursor.fetchall.return_value = [dict(trade_id=1, symbol='XYZ'),
+                            dict(trade_id=2, symbol='ABC') | {field: value}]
+                        args = (self.conn,) if name == 'get_open_trades' else (self.conn, NOW)
+                        with self.assertRaisesRegex(RuntimeError, 'RECONCILE_DB_INVALID_TRADE'):
+                            getattr(self.module, name)(*args, strict=True)
+
+    def test_legacy_reads_keep_records_while_strict_valid_identity_passes(self):
+        self.read_module()
+        for name, args in (('get_open_trades', (self.conn,)),
+                           ('get_closed_trades_missing_exit', (self.conn, NOW))):
+            with self.subTest(reader=name):
+                self.cursor.fetchall.return_value = [dict(trade_id=1, symbol='BRK.B')]
+                self.assertEqual(getattr(self.module, name)(*args, strict=True), self.cursor.fetchall.return_value)
+                self.cursor.fetchall.return_value = [dict(trade_id=None, symbol='')]
+                self.assertEqual(getattr(self.module, name)(*args), self.cursor.fetchall.return_value)
 
     def test_saturated_database_windows_are_not_complete(self):
         self.read_module()
@@ -889,6 +983,7 @@ class SharedConnectionCallerTests(unittest.TestCase):
 
     def setup_caller(self, *, closed=False):
         self.read_module()
+        self.stack.enter_context(mock.patch.object(self.executor, 'datetime', FrozenRunClock))
         self.connection = SharedConnectionFixture(closed=closed)
         # Restore the actual module's connection ownership path; get_db_conn is
         # the sole fake database boundary. No reader or writer is mocked.
@@ -944,6 +1039,21 @@ class SharedConnectionCallerTests(unittest.TestCase):
                     self.assertFalse(any('UPDATE trades' in sql or 'INSERT INTO order_events' in sql
                                          or 'INSERT INTO reconcile_state' in sql
                                          for sql in self.connection.statements))
+
+    def test_invalid_symbol_strict_reader_blocks_shared_caller_watermark(self):
+        for closed in (False, True):
+            with self.subTest(closed=closed):
+                self.setup_caller(closed=closed)
+                self.connection.trade[3] = ''
+                original = copy.deepcopy(self.connection.trade)
+                watermark = self.connection.last_after
+                self.assertFalse(self.caller.reconcile_closed_trades())
+                self.assertEqual(self.connection.trade, original)
+                self.assertEqual(self.connection.last_after, watermark)
+                self.assertEqual(self.connection.events, [])
+                self.assertFalse(any('UPDATE trades' in sql or 'INSERT INTO order_events' in sql
+                                     or 'INSERT INTO reconcile_state' in sql
+                                     for sql in self.connection.statements))
 
     def test_read_failure_rolls_back_without_fill_or_watermark_write(self):
         self.setup_caller()

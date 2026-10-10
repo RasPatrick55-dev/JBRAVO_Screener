@@ -327,7 +327,8 @@ def insert_activities(
 
 
 def compute_since(
-    args_since: Optional[str], watermark: Optional[str], lookback_days: int
+    args_since: Optional[str], watermark: Optional[str], lookback_days: int,
+    *, now_utc: Optional[datetime] = None,
 ) -> Tuple[Optional[str], str]:
     since_candidate = args_since or watermark
     origin = "args" if args_since else "watermark" if watermark else "lookback"
@@ -337,7 +338,7 @@ def compute_since(
         if ts:
             return ts.isoformat(), origin
 
-    fallback_ts = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    fallback_ts = (now_utc if now_utc is not None else datetime.now(timezone.utc)) - timedelta(days=lookback_days)
     return fallback_ts.isoformat(), origin
 
 
@@ -432,8 +433,17 @@ def _is_newer_watermark(candidate: Optional[str], current: Optional[str]) -> boo
 def _run_incremental(
     args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]
 ) -> None:
-    since_iso, origin = compute_since(args.since_ts, watermark, args.lookback_days)
-    if (args.since_ts or watermark) and _parse_timestamp(args.since_ts or watermark) is None:
+    # Freeze the acceptance clock before fetching. Do not repair a previously
+    # future watermark or allow an explicit since override to hide it.
+    run_started_utc = datetime.now(timezone.utc)
+    for value in (args.since_ts, watermark):
+        if value is not None:
+            parsed = _parse_timestamp(value)
+            if parsed is None or parsed > run_started_utc:
+                raise RuntimeError("ACT_WATERMARK_INVALID")
+    since_iso, origin = compute_since(args.since_ts, watermark, args.lookback_days,
+                                     now_utc=run_started_utc)
+    if _parse_timestamp(since_iso) > run_started_utc:
         raise RuntimeError("ACT_WATERMARK_INVALID")
     max_pages = max(1, int(args.max_pages))
     page_size = _normalize_page_size(args.page_size)
@@ -454,6 +464,9 @@ def _run_incremental(
         normalized, _ = _normalize_activity(activity)
         if (not normalized["activity_id"] or not normalized["activity_type"]
                 or normalized["transaction_time"] is None):
+            raise RuntimeError("ACT_PAYLOAD_INVALID")
+        if normalized["transaction_time"] > run_started_utc:
+            logger.warning("[WARN] ACT_PAYLOAD_INVALID reason=future_timestamp")
             raise RuntimeError("ACT_PAYLOAD_INVALID")
     logger.info("[INFO] ACT_COVERAGE_COMPLETE count=%s", len(activities))
     logger.info("[INFO] ACT_FETCH_OK count=%s", len(activities))

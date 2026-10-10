@@ -2972,6 +2972,20 @@ def reconcile_sell_fill(
         return False
 
 
+def _reconciliation_trade_records(rows: Any, *, strict: bool) -> list[dict[str, Any]]:
+    records = [dict(row) for row in rows]
+    if strict:
+        for record in records:
+            trade_id, symbol = record.get("trade_id"), record.get("symbol")
+            # PostgreSQL BIGSERIAL returns an integer. Do not coerce malformed
+            # identity data or let the caller silently skip unresolved trades.
+            if (type(trade_id) is not int or trade_id <= 0
+                    or not isinstance(symbol, str) or not symbol.strip()
+                    or symbol != symbol.strip()):
+                raise RuntimeError("RECONCILE_DB_INVALID_TRADE")
+    return records
+
+
 def get_open_trades(
     engine: Optional[PGConnection] = None, limit: int = 200, *, strict: bool = False
 ) -> list[dict[str, Any]]:
@@ -2997,11 +3011,12 @@ def get_open_trades(
                     rows = cursor.fetchall()
                     if strict and len(rows) >= limit:
                         raise RuntimeError("RECONCILE_DB_INCOMPLETE")
-                    return [dict(row) for row in rows]
+                    return _reconciliation_trade_records(rows, strict=strict)
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
             if strict:
-                if isinstance(exc, RuntimeError) and str(exc) == "RECONCILE_DB_INCOMPLETE":
+                if isinstance(exc, RuntimeError) and str(exc) in (
+                        "RECONCILE_DB_INCOMPLETE", "RECONCILE_DB_INVALID_TRADE"):
                     raise
                 raise RuntimeError("RECONCILE_DB_READ_FAILED") from None
             return []
@@ -3035,11 +3050,12 @@ def get_closed_trades_missing_exit(
                     rows = cursor.fetchall()
                     if strict and len(rows) >= limit:
                         raise RuntimeError("RECONCILE_DB_INCOMPLETE")
-                    return [dict(row) for row in rows]
+                    return _reconciliation_trade_records(rows, strict=strict)
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
             if strict:
-                if isinstance(exc, RuntimeError) and str(exc) == "RECONCILE_DB_INCOMPLETE":
+                if isinstance(exc, RuntimeError) and str(exc) in (
+                        "RECONCILE_DB_INCOMPLETE", "RECONCILE_DB_INVALID_TRADE"):
                     raise
                 raise RuntimeError("RECONCILE_DB_READ_FAILED") from None
             return []

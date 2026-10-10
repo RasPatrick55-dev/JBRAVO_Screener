@@ -2927,6 +2927,9 @@ class TradeExecutor:
                 if reconcile_state.get("last_after") is not None and last_after is None:
                     LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=invalid_timestamp")
                     return False
+                if last_after is not None and last_after > now_utc:
+                    LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=future_timestamp")
+                    return False
                 if last_after is not None:
                     fetch_after_dt = last_after
                 else:
@@ -2966,6 +2969,14 @@ class TradeExecutor:
                         LOGGER.warning("[WARN] RECONCILE_ORDERS_INVALID")
                         raise ValueError("invalid_order_record")
                     seen_ids.add(order["id"])
+                    # Fixed run-start cutoff, zero clock-skew tolerance. Check
+                    # every timestamp used for attribution/watermark fallback,
+                    # rather than allowing an earlier field to hide a future one.
+                    for field in ("updated_at", "filled_at", "submitted_at", "created_at"):
+                        timestamp = db.normalize_ts(order.get(field), field=field)
+                        if timestamp is not None and timestamp > now_utc:
+                            LOGGER.warning("[WARN] RECONCILE_ORDERS_INVALID reason=future_timestamp field=%s", field)
+                            raise ValueError("future_order_timestamp")
                     if str(order["side"]).lower() == "sell" and str(order["status"]).lower() == "filled":
                         try:
                             price = Decimal(str(order.get("filled_avg_price")))

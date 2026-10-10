@@ -225,6 +225,42 @@ tokens and conflicting nonempty aliases fail as `ACT_PAYLOAD_INVALID`, without
 insertion or watermark advancement. Nonempty string tokens are passed unchanged;
 the literal string `"0"` remains valid. These rules do not establish provider
 history completeness.
+
+Strict open/missing-exit readers validate every returned record before handing
+the batch to the caller. A trade ID must be a positive Python integer (the
+PostgreSQL BIGSERIAL representation, excluding Boolean values). A symbol must
+be a nonblank string without surrounding whitespace. Unusable identities fail
+as `RECONCILE_DB_INVALID_TRADE`, rather than being silently skipped with a
+successful watermark. Non-strict legacy readers retain their previous behavior.
+
+Order reconciliation and incremental activity ingestion each freeze their UTC
+run-start time before retrieval. The accepted upper bound is that instant, with
+zero clock-skew tolerance. Each parseable order `updated_at`, `filled_at`,
+`submitted_at` and `created_at` must be at or before it; an earlier preferred
+field cannot hide a later future field. Activity transaction time uses the
+existing normalization/fallback fields (`transaction_time`, `processed_at`,
+`date`, `timestamp`) and must meet the same bound. Any future event rejects the
+retrieved batch before fill/exit or activity writes. Neither watermark may be
+advanced into the future. A future stored watermark, or activity `since` value,
+fails before retrieval; an explicit valid `since` does not excuse a future
+stored watermark. No existing watermark is silently repaired or clamped.
+Activity lookback boundaries use the same frozen clock.
+
+Time failures use existing health markers (`RECONCILE_ORDERS_INVALID`,
+`RECONCILE_WATERMARK_DISABLED`, `ACT_PAYLOAD_INVALID`, `ACT_WATERMARK_INVALID`),
+with a bounded future-timestamp reason where applicable. Events created during
+the request or provider clock skew can conservatively block that run; later
+scheduled runs may accept them. These checks do not establish complete broker
+history or alter schedules, order behavior, ranking or sizing. Activity backfill
+semantics are unchanged; this bound applies to the hourly incremental path.
+
+The existing `tests/test_reconcile_trades.py` caller regressions now use strict
+reader signatures and the atomic `reconcile_sell_fill` API, checking that legacy
+independent event/decorate writers are not called. They share the pre-import
+offline boundary fixture and run in the bounded unittest suite; their pytest
+`alpaca_optional` marker is retained. Full repository pytest/plugin/conftest
+integration and live database/provider behavior remain unqualified.
+
 Supervisor tests use standard-library mocks and temporary storage, avoiding repository
 pytest conftest's Alpaca import. Gate integration tests additionally require pandas,
 dateutil and timezone data. They import the executor normally with provider, database,
