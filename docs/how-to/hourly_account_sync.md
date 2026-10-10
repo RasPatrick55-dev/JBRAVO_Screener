@@ -186,13 +186,32 @@ active caller transaction rejection. Provider and connection boundaries remain
 synthetic; no live database was accessed.
 A trade whose exit fields are complete but realized P&L is missing still needs
 decoration; the helper computes that value while reusing the matching fill event.
+Before writing an event or completing an exit, the helper requires positive,
+finite stored trade quantity and entry price, both representable as positive
+finite floats. Exit price must meet the same representation requirement.
+Realized P&L retains the existing gross formula
+`(exit_price - entry_price) * trade_qty`; it is not cost-adjusted. The computed
+result must be finite; zero and negative P&L are valid. Missing, malformed,
+nonpositive, nonfinite, overflowed or underflowed basis values fail the transaction
+without fill/exit writes or caller watermark advancement. An existing non-null
+P&L must be finite and equal to the computed value using explicit decimal
+representations of the stored value and the float result, without tolerance.
+Conflicts are rejected rather than silently corrected. These checks also apply
+when a completed exit is retried. They do not change fill attribution, sizing or
+the existing gross-P&L assumptions.
 The decoration reader also includes trades missing only `exit_time` or
 `exit_reason`, even if price, order ID and realized P&L are populated. Conflicts
 and missing ownership keep the caller's watermark unchanged.
 
 This ownership rule covers participating reconciliation transactions, not all
-legacy writers: there is no database-wide uniqueness constraint or migration in
-this increment. Existing duplicate ownership is rejected, not repaired. The
+legacy writers: there is no database-wide uniqueness constraint in this
+increment. The normal migration source declares a nonunique
+`idx_trades_exit_order_id` index on `trades(exit_order_id)` with `IF NOT EXISTS`
+for the ownership lookup. Offline regressions exercise the normal upgrade and
+statement paths through a mock connection, including index failure propagation.
+No migration has been applied by this correction; installed index state,
+query plans, lock duration and live concurrency remain unverified. Existing
+duplicate ownership is rejected, not repaired. The
 caller's latest-sell-by-symbol matching heuristic is unchanged; multiple
 unbound trades can still require manual attribution. One may complete before
 another blocks, because the job is not one transaction. The same fill cannot

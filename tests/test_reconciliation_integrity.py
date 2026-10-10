@@ -588,6 +588,53 @@ class AtomicFillTests(unittest.TestCase):
         self.assertEqual((self.transaction.trade[0], len(self.transaction.events)), ('CLOSED', 1))
         self.assertEqual(self.transaction.realized_pnl, 2.0)
 
+    def test_invalid_trade_basis_blocks_open_partial_and_complete_exits(self):
+        invalid = (None, '', 'bad', True, 0, -1, 'NaN', 'Infinity', '1e400', '1e-400')
+        for state in ('open', 'partial', 'complete'):
+            for field in (1, 2):
+                for value in invalid:
+                    with self.subTest(state=state, field=field, value=value):
+                        self.setup_transaction(closed=state != 'open')
+                        if state != 'open':
+                            self.transaction.trade[4:8] = ['sell-1', NOW, 11, 'SELL_FILL']
+                            self.transaction.events = [('XYZ', 2, 'filled', NOW)]
+                        if state == 'complete':
+                            self.transaction.trade[8] = 2.0
+                        self.transaction.trade[field] = value
+                        self.assert_fill_conflict_preserves_state(decorate=state != 'open')
+
+    def test_realized_pnl_preserves_gain_loss_zero_and_fractional_quantity(self):
+        for qty, price, expected in ((2, 11, 2), (2, 9, -2), (2, 10, 0), ('0.5', 11, 0.5)):
+            with self.subTest(qty=qty, price=price):
+                self.setup_transaction()
+                self.transaction.trade[1] = qty
+                self.assertTrue(self.fill(qty=qty, exit_price=price))
+                self.assertEqual(self.transaction.trade[8], expected)
+                self.assertTrue(self.fill(qty=qty, exit_price=price))
+                self.assertEqual(len(self.transaction.events), 1)
+
+    def test_nonfinite_computed_pnl_rolls_back_before_writes(self):
+        self.setup_transaction()
+        self.transaction.trade[1:3] = [1e308, 1]
+        original = copy.deepcopy(self.transaction.trade)
+        self.assertFalse(self.fill(qty=1e308, exit_price=1e308))
+        self.assertEqual(self.transaction.trade, original)
+        self.assertEqual(self.transaction.events, [])
+        self.assertEqual(self.transaction.rollbacks, 1)
+        self.assertFalse(any('INSERT INTO order_events' in sql or 'UPDATE trades' in sql
+                             for sql in self.transaction.statements))
+
+    def test_invalid_or_conflicting_saved_pnl_is_not_overwritten_or_reused(self):
+        for value in (True, 'bad', 'NaN', 'Infinity', 3.0):
+            for complete in (False, True):
+                with self.subTest(value=value, complete=complete):
+                    self.setup_transaction(closed=True)
+                    self.transaction.trade[4:9] = ['sell-1', NOW, 11, 'SELL_FILL', value]
+                    if not complete:
+                        self.transaction.trade[5] = None
+                    self.transaction.events = [('XYZ', 2, 'filled', NOW)]
+                    self.assert_fill_conflict_preserves_state()
+
     def test_close_and_decoration_failure_roll_back_event_and_retry(self):
         for decorate in (False, True):
             with self.subTest(decorate=decorate):
@@ -878,6 +925,26 @@ class SharedConnectionCallerTests(unittest.TestCase):
                 self.assertEqual(len(self.connection.events), 1)
                 self.assertEqual(self.connection.get_transaction_status(), 0)
 
+    def test_invalid_trade_basis_holds_caller_watermark_without_fill_writes(self):
+        for closed in (False, True):
+            for field, value in ((1, None), (1, 0), (2, None), (2, 'NaN')):
+                with self.subTest(closed=closed, field=field, value=value):
+                    self.setup_caller(closed=closed)
+                    if closed:
+                        self.connection.trade[4:8] = ['sell-1', NOW, 11, 'SELL_FILL']
+                        self.connection.events = [('XYZ', 2, 'filled', NOW)]
+                    self.connection.trade[field] = value
+                    original = copy.deepcopy(self.connection.trade)
+                    events = copy.deepcopy(self.connection.events)
+                    watermark = self.connection.last_after
+                    self.assertFalse(self.caller.reconcile_closed_trades())
+                    self.assertEqual(self.connection.trade, original)
+                    self.assertEqual(self.connection.events, events)
+                    self.assertEqual(self.connection.last_after, watermark)
+                    self.assertFalse(any('UPDATE trades' in sql or 'INSERT INTO order_events' in sql
+                                         or 'INSERT INTO reconcile_state' in sql
+                                         for sql in self.connection.statements))
+
     def test_read_failure_rolls_back_without_fill_or_watermark_write(self):
         self.setup_caller()
         self.connection.read_failure = 'open'
@@ -1002,6 +1069,40 @@ class SharedConnectionCallerTests(unittest.TestCase):
         self.assertEqual(self.connection.get_transaction_status(), 2)
         self.assertEqual(self.connection.commits, 0)
         self.assertEqual(self.connection.transaction_modes, [])
+
+
+class MigrationIndexTests(unittest.TestCase):
+    setUp = hourly_tests.ExecutorGateIntegrationTests.setUp
+
+    def prepare_migration(self):
+        spec = importlib.util.spec_from_file_location('offline_migration', sync.ROOT / 'scripts/db_migrate.py')
+        self.migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.migration)
+        self.stack.enter_context(mock.patch.object(self.migration, '_repair_screener_candidates_schema'))
+        self.stack.enter_context(mock.patch.object(self.migration, 'ensure_schema', return_value=True))
+
+    def test_normal_upgrade_routes_nonunique_idempotent_ownership_index(self):
+        self.prepare_migration()
+        ddl = 'CREATE INDEX IF NOT EXISTS idx_trades_exit_order_id ON trades(exit_order_id);'
+        conn = mock.MagicMock()
+        conn.__enter__.return_value = conn
+        cursor = conn.cursor.return_value.__enter__.return_value
+        # Exercise the normal upgrade and statement execution paths, not a live DB.
+        self.assertTrue(self.migration.run_upgrade(conn))
+        self.assertTrue(self.migration.run_upgrade(conn))
+        self.assertEqual(cursor.execute.call_args_list.count(mock.call(ddl)), 2)
+
+    def test_ownership_index_failure_makes_upgrade_unsuccessful(self):
+        self.prepare_migration()
+        conn = mock.MagicMock()
+        conn.__enter__.return_value = conn
+        cursor = conn.cursor.return_value.__enter__.return_value
+        def execute(statement):
+            if 'idx_trades_exit_order_id' in statement:
+                raise RuntimeError('synthetic index failure')
+        cursor.execute.side_effect = execute
+        self.assertFalse(self.migration.run_upgrade(conn))
+        self.migration.ensure_schema.assert_not_called()
 
 
 if __name__ == '__main__':

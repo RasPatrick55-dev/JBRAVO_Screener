@@ -199,6 +199,7 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);",
     "CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);",
     "CREATE INDEX IF NOT EXISTS idx_trades_exit_time ON trades(exit_time);",
+    "CREATE INDEX IF NOT EXISTS idx_trades_exit_order_id ON trades(exit_order_id);",
     "CREATE INDEX IF NOT EXISTS idx_trades_api_requests_created_at ON trades_api_requests(created_at DESC);",
 ]
 

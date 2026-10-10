@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import math
 import os
 from pathlib import Path
 from contextlib import contextmanager
@@ -2834,13 +2835,19 @@ def reconcile_sell_fill(
             raise ValueError("invalid_fill_number")
         return result
 
+    def positive_float(value: Any) -> float:
+        result = float(number(value))
+        if not math.isfinite(result) or result <= 0:
+            raise ValueError("invalid_trade_basis")
+        return result
+
     try:
         if (not isinstance(order_id, str) or not order_id.strip()
                 or not isinstance(symbol, str) or not symbol.strip()
                 or not isinstance(status, str) or status.lower() != "filled"):
             raise ValueError("invalid_fill_identity")
         fill_qty = number(qty)
-        number(exit_price)
+        fill_price = positive_float(exit_price)
         normalized_time = normalize_ts(event_time, field="event_time")
         if normalized_time is None:
             raise ValueError("invalid_fill_time")
@@ -2891,6 +2898,21 @@ def reconcile_sell_fill(
                                         and row[7] is not None)
                     if state == "CLOSED" and not decorate and not exit_complete:
                         raise ValueError("trade_state_mismatch")
+                    # Preserve the existing gross-P&L formula, but require its
+                    # complete, finite basis before any event or trade write.
+                    # Completed exits must pass the same checks on repeat calls.
+                    trade_qty = positive_float(row[1])
+                    entry_price = positive_float(row[2])
+                    realized = (fill_price - entry_price) * trade_qty
+                    if not math.isfinite(realized):
+                        raise ValueError("invalid_realized_pnl")
+                    if row[8] is not None:
+                        if isinstance(row[8], bool):
+                            raise ValueError("trade_pnl_conflict")
+                        saved_pnl = Decimal(str(row[8]))
+                        if not saved_pnl.is_finite() or saved_pnl != Decimal(str(realized)):
+                            raise ValueError("trade_pnl_conflict")
+                    payload["realized_pnl"] = realized
                     already_complete = exit_complete and row[8] is not None
                     # The order lock serializes claims by participating writers.
                     # Persist ownership in trades.exit_order_id in the same
@@ -2930,15 +2952,6 @@ def reconcile_sell_fill(
                             payload,
                         )
                     if not already_complete:
-                        realized = None
-                        try:
-                            if row[2] is not None:
-                                realized = float(exit_price) - float(row[2])
-                                if row[1] is not None:
-                                    realized *= float(row[1])
-                        except (TypeError, ValueError, OverflowError):
-                            pass
-                        payload["realized_pnl"] = realized
                         cursor.execute(
                             """UPDATE trades SET exit_order_id=%(order_id)s,
                                exit_time=%(event_time)s, exit_price=%(exit_price)s,
