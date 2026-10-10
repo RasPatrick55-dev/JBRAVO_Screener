@@ -8,9 +8,11 @@ overlap leakage.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
+import pickle
 import re
 import sys
 from dataclasses import dataclass
@@ -355,16 +357,49 @@ def _predict_fold_proba(
     return np.full(test_df.shape[0], float(y_train.mean()))
 
 
+def _scoring_model_binding(model: Any, scaler: Any, features: list[str], target: str) -> dict[str, Any]:
+    """Fingerprint the actual scoring bundle; serialize only, never load a pickle.
+
+    This is runtime provenance for a research fold, not production acceptance.
+    Library versions may change the serialization of equivalent model objects.
+    """
+    try:
+        content = pickle.dumps(
+            {"model": model, "scaler": scaler, "features": list(features), "target": target},
+            protocol=4,
+        )
+        return {
+            "model_sha256": hashlib.sha256(content).hexdigest(),
+            "model_binding_bytes": len(content),
+            "model_binding_kind": "scoring_bundle_pickle_sha256_v1",
+            "model_role": "walkforward_fold",
+            "model_score_column": OOS_SCORE_COL, "model_target": target,
+        }
+    except Exception as exc:
+        # Binding failure must not change the scores or silently assert identity.
+        return {"model_sha256": None, "model_binding_bytes": None,
+                "model_binding_kind": "unbound", "model_role": "walkforward_fold",
+                "model_score_column": OOS_SCORE_COL, "model_target": target,
+                "model_binding_error": type(exc).__name__}
+
+
 def _predict_fold_proba_retrained(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     feature_columns: list[str],
     target: str,
     calibrate: str,
+    *,
+    binding_sink: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, str, str]:
+    def bind(model: Any, scaler: Any = None) -> None:
+        if binding_sink is not None:
+            binding_sink.update(_scoring_model_binding(model, scaler, feature_columns, target))
+
     y_train = pd.to_numeric(train_df[target], errors="coerce").fillna(0).astype(int)
     if y_train.nunique(dropna=True) < 2:
         base_prob = float(y_train.mean() if not y_train.empty else 0.0)
+        bind({"constant_probability": base_prob})
         return (
             np.full(test_df.shape[0], base_prob),
             "constant_baseline",
@@ -375,6 +410,7 @@ def _predict_fold_proba_retrained(
     X_test = test_df[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
     if not SKLEARN_AVAILABLE or LogisticRegression is None:
+        bind({"constant_probability": float(y_train.mean())})
         return (
             np.full(test_df.shape[0], float(y_train.mean())),
             "constant_baseline",
@@ -383,6 +419,7 @@ def _predict_fold_proba_retrained(
 
     X_train_fit = X_train.to_numpy()
     X_test_fit = X_test.to_numpy()
+    scaler = None
     if StandardScaler is not None:
         scaler = StandardScaler()
         X_train_fit = scaler.fit_transform(X_train)
@@ -412,6 +449,7 @@ def _predict_fold_proba_retrained(
                         cv=cv_folds,
                     )
                 calibrated_model.fit(X_train_fit, y_train)
+                bind(calibrated_model, scaler)
                 return (
                     calibrated_model.predict_proba(X_test_fit)[:, -1],
                     "logistic_regression_calibrated",
@@ -431,6 +469,7 @@ def _predict_fold_proba_retrained(
 
     base_model.fit(X_train_fit, y_train)
     probs = base_model.predict_proba(X_test_fit)[:, -1]
+    bind(base_model, scaler)
     return probs, model_type, calibration_used
 
 
@@ -642,6 +681,9 @@ def run_walkforward(args: WalkforwardArgs) -> dict[str, Any]:
 
         fold_model_type = "precomputed_score"
         fold_calibration = "none"
+        fold_binding = {"model_sha256": None, "model_binding_bytes": None,
+                        "model_binding_kind": "unbound", "model_role": "precomputed_unbound",
+                        "model_score_column": OOS_SCORE_COL, "model_target": args.target}
         if retrain_active:
             probs, fold_model_type, fold_calibration = _predict_fold_proba_retrained(
                 train_df,
@@ -649,6 +691,7 @@ def run_walkforward(args: WalkforwardArgs) -> dict[str, Any]:
                 feature_columns,
                 args.target,
                 calibrate_mode,
+                binding_sink=fold_binding,
             )
             test_df[score_col] = probs
             model_types_used.add(fold_model_type)
@@ -674,6 +717,7 @@ def run_walkforward(args: WalkforwardArgs) -> dict[str, Any]:
             "score_source": score_source,
             "model_type": fold_model_type,
             "calibration": fold_calibration,
+            **fold_binding,
             **fold_metrics,
         }
         folds.append(fold_payload)
@@ -703,6 +747,9 @@ def run_walkforward(args: WalkforwardArgs) -> dict[str, Any]:
         fold_oos["fold_id"] = int(fold_index)
         fold_oos[OOS_SCORE_COL] = pd.to_numeric(test_df[score_col], errors="coerce")
         fold_oos["score_source"] = score_source
+        for key in ("model_sha256", "model_binding_bytes", "model_binding_kind", "model_role",
+                    "model_score_column", "model_target"):
+            fold_oos[key] = fold_binding[key]
         oos_frames.append(fold_oos)
 
         test_start = test_start + pd.Timedelta(days=args.step_days)
@@ -803,6 +850,8 @@ def run_walkforward(args: WalkforwardArgs) -> dict[str, Any]:
     if fwd_ret_col:
         ordered_oos_cols.append(fwd_ret_col)
     ordered_oos_cols.extend(["fold_id", OOS_SCORE_COL, "score_source"])
+    ordered_oos_cols.extend(["model_sha256", "model_binding_bytes", "model_binding_kind", "model_role"])
+    ordered_oos_cols.extend(["model_score_column", "model_target"])
     for column in ordered_oos_cols:
         if column not in oos_predictions.columns:
             oos_predictions[column] = np.nan

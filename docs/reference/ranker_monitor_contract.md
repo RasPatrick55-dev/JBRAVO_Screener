@@ -1,0 +1,90 @@
+# Ranker monitoring: mature outcomes and scoring identity
+
+This contract corrects monitoring statistics. It does not qualify the production
+model, authorize training, or change ranking, sizing, schedules or execution.
+The existing deployed warning remains in place until source review, verification
+and a separately approved deployment. Existing reports are not rewritten.
+
+## Binary outcomes
+
+The selected binary target uses explicit categories `[0, 1]`, including when one
+category has zero observations. Quantile bins remain available for continuous
+fields but cannot represent binary prevalence. Report category counts, positive
+prevalence and recent-minus-baseline prevalence. PSI uses the existing `1e-6`
+probability floor and normalization; the floor is disclosed rather than altering
+observed counts. Missing/nonbinary labels make binary PSI insufficient, not zero.
+Thresholds remain unchanged. These are population diagnostics, not causal proof
+of a production-model defect.
+
+## Completed forward outcomes
+
+Calibration requires a finite matching forward return, an exact binary label,
+and a finite probability score. Missing/nonfinite forward returns are incomplete
+outcomes even when a generated label contains zero. They cannot contribute to
+ECE, reliability tables or prevalence. No new labels or returns are manufactured.
+The existing score-range check and minimum-row threshold remain in force.
+
+Each calibration window records its input and eligible row counts and disjoint
+exclusions, in order: incomplete outcomes, invalid labels, invalid scores.
+Missing forward-return columns or inadequate eligible counts remain explicitly
+unavailable. A finite stored return is the current maturity evidence; it does not
+independently prove that upstream labels were generated causally or correctly.
+The existing calendar-day window policy is retained. Bounds use usable mature
+data as before; a tail beyond those bounds is not an evaluated window.
+
+## Scoring identity and interpretation
+
+New walk-forward output binds each fold's actual fitted estimator (including its
+calibrator), scaler, ordered feature names and target using SHA-256 of a protocol-4
+pickle serialization. Constant fallbacks bind their actual probability instead.
+This code serializes trusted, newly constructed objects only; it never unpickles
+an input. CSV rows and fold reports contain the digest, serialized byte count,
+`scoring_bundle_pickle_sha256_v1`, `walkforward_fold` role, scored column and
+model target. Bindings cannot be borrowed for another score column or target. Serialization can
+vary by runtime/library version: equality is bundle identity, not a new general
+equivalence rule. A binding failure records an unbound identity without changing
+scores. Model files are neither loaded nor replaced for this fingerprinting.
+
+Precomputed predictions remain unbound: a score-column name, fold ID, latest
+model path, feature-schema hash or champion pointer does not establish which
+model produced those historical scores. No identity is retrofitted into saved
+history. The monitor also records the exact consumed CSV bytes (or UTF-8 database
+CSV value) and checks per-fold identities within and across windows. This is
+recorded producer provenance, not an independent attestation of score generation.
+
+Bound research folds are `cross_model_diagnostic`; absent, invalid or conflicting
+bindings are `unknown_model_diagnostic`. Reports list identities in both windows
+and their intersection, eligible/unbound counts and unique symbol/session counts.
+Neither scope establishes production drift. There is deliberately no input flag
+that promotes a research fold to an accepted production model.
+
+Pooled PSI, ECE and strategy metrics retain fold-row weighting. Overlapping folds
+can repeat a symbol/session; no row is silently deduplicated. Secondary score
+columns do not inherit the selected score's model binding. Existing strategy
+metrics are diagnostic and do not establish an unbiased production return.
+
+`diagnostic_recommended_action` retains the old threshold calculation for review.
+`recommended_action` is `investigate`, with model-comparison and unavailable-input
+reasons. Thus a low PSI cannot clear an identity gap; a high cross-model PSI cannot
+silently recommend replacing production. The unchanged health guard treats this
+as a warning (or block under its existing mode). The auto-remediation consumer
+explicitly skips training, recalibration, feature refresh and prediction refresh
+for `investigate`, including when not in dry-run mode.
+
+An actual production-drift decision needs independently bound fixed-model score
+history, model/scaler/feature identity and comparable evaluation populations.
+This increment does not add that capture or qualify the existing unbound history.
+
+## Offline verification boundary
+
+`python -B -m unittest tests.test_ranker_monitor_contract -v` loads the normal
+monitor, walk-forward and auto-remediation modules with environment loading,
+database, SDK-package initialization and the production predictor boundary
+mocked before import. Network and child-process dispatch are forbidden. Synthetic
+CSV inputs and all output use temporary directories. The monitor's actual CLI,
+normalization, calibration, PSI and JSON reporting run; strategy simulation is
+stubbed because no strategy evaluation is authorized. Synthetic fold models test
+identity propagation; no retained data or production model is scored or trained.
+
+These checks do not establish host integration, database publication, historical
+model continuity, upstream label causality, cost calibration or profitability.
