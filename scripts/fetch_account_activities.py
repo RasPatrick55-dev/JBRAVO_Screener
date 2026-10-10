@@ -192,19 +192,25 @@ def _pagination_token(response: requests.Response, payload: Any) -> Optional[str
         "x-next-page-token",
         "apca-next-page-token",
     ]
-    for key in header_keys:
-        token = response.headers.get(key)
-        if token:
-            return token
+    tokens = []
+    sources = [(response.headers, header_keys)]
     if isinstance(payload, dict):
-        token = (
-            payload.get("next_page_token") or payload.get("page_token") or payload.get("next_token")
-        )
-        if token:
-            if not isinstance(token, str):
+        sources.append((payload, ("next_page_token", "page_token", "next_token")))
+    for source, keys in sources:
+        for key in keys:
+            if key not in source:
+                continue
+            token = source[key]
+            # Only absent, null and the empty string denote no continuation.
+            # Falsy nonstrings must not become terminal pagination evidence.
+            if token is None or (isinstance(token, str) and token == ""):
+                continue
+            if not isinstance(token, str) or not token.strip():
                 raise RuntimeError("ACT_PAYLOAD_INVALID")
-            return token
-    return None
+            tokens.append(token)
+    if len(set(tokens)) > 1:
+        raise RuntimeError("ACT_PAYLOAD_INVALID")
+    return tokens[0] if tokens else None
 
 
 def _request_activity_page(

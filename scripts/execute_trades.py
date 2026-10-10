@@ -3190,36 +3190,24 @@ class TradeExecutor:
                     )
                     order_id = str(order.get("id") or order.get("order_id") or "")
                     try:
-                        event_saved = db.insert_order_event(
+                        closed = db.reconcile_sell_fill(
                             engine=engine,
-                            event_type="SELL_FILL",
+                            trade_id=trade_id,
                             symbol=symbol,
                             qty=order.get("filled_qty", order.get("qty")),
                             order_id=order_id,
                             status=str(order.get("status", "")),
                             event_time=exit_time_raw,
                             raw=_order_snapshot(order),
-                        )
-                        if event_saved is not True:
-                            raise RuntimeError("order_event_not_saved")
-                    except Exception as exc:  # pragma: no cover - defensive guard
-                        unresolved = True
-                        LOGGER.warning(
-                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=order_event err=%s",
-                            trade_id,
-                            symbol,
-                            exc,
-                        )
-                    try:
-                        closed = db.close_trade(
-                            engine, trade_id, order_id, exit_time_raw, exit_price, exit_reason
+                            exit_price=exit_price,
+                            exit_reason=exit_reason,
                         )
                     except Exception as exc:  # pragma: no cover - defensive guard
                         LOGGER.warning(
-                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
+                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=atomic_fill error_type=%s",
                             trade_id,
                             symbol,
-                            exc,
+                            type(exc).__name__,
                         )
                         closed = False
                     if closed:
@@ -3287,56 +3275,25 @@ class TradeExecutor:
             order_id = str(order.get("id") or order.get("order_id") or "")
 
             try:
-                event_saved = db.insert_order_event(
+                decorated = db.reconcile_sell_fill(
                     engine=engine,
-                    event_type="SELL_FILL",
+                    trade_id=trade_id,
                     symbol=symbol,
                     qty=order.get("filled_qty", order.get("qty")),
                     order_id=order_id,
                     status=str(order.get("status", "")),
                     event_time=exit_time_raw,
                     raw=_order_snapshot(order),
-                )
-                if event_saved is not True:
-                    raise RuntimeError("order_event_not_saved")
-            except Exception as exc:  # pragma: no cover - defensive guard
-                unresolved = True
-                LOGGER.warning(
-                    "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=order_event err=%s",
-                    trade_id,
-                    symbol,
-                    exc,
-                )
-
-            realized_pnl = None
-            try:
-                entry_price_value = trade.get("entry_price")
-                qty_value = trade.get("qty")
-                if (
-                    exit_price is not None
-                    and entry_price_value is not None
-                    and qty_value is not None
-                ):
-                    realized_pnl = (float(exit_price) - float(entry_price_value)) * float(qty_value)
-            except Exception:
-                realized_pnl = None
-
-            try:
-                decorated = db.decorate_trade_exit(
-                    engine=engine,
-                    trade_id=trade_id,
-                    exit_order_id=order_id,
-                    exit_time=exit_time_raw,
                     exit_price=exit_price,
                     exit_reason=exit_reason,
-                    realized_pnl=realized_pnl,
+                    decorate=True,
                 )
             except Exception as exc:  # pragma: no cover - defensive guard
                 LOGGER.warning(
-                    "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=decorate_exit err=%s",
+                    "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=atomic_fill error_type=%s",
                     trade_id,
                     symbol,
-                    exc,
+                    type(exc).__name__,
                 )
                 decorated = False
 

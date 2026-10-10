@@ -140,6 +140,52 @@ are blocked. They exercise actual reconciliation/ingestion logic, strict databas
 readers and supervisor health, including incomplete-run caller failure. They do not
 establish live API pagination semantics, database rollback, remote cancellation or
 host integration. Schedules, ranking, sizing and order execution remain unchanged.
+
+### Reconciliation fill retry contract
+
+Strict reconciliation readers (`get_reconcile_state`, `get_open_trades` and
+`get_closed_trades_missing_exit`) own one read-only transaction each. They require
+an idle, non-autocommit connection; success ends the transaction, and a read error
+rolls it back. An already active caller transaction is rejected without committing
+or rolling back that caller's work. Non-strict readers preserve their legacy
+ownership behavior. The normal reconciliation caller can reuse the same idle
+connection for a subsequent fill or watermark write. These separate read
+transactions do not establish a simultaneous broker/database snapshot.
+
+For reconciliation of an observed filled sell, `reconcile_sell_fill` records the
+`SELL_FILL` event and closes/decorates its trade in one PostgreSQL transaction.
+It requires an idle connection with autocommit disabled, and explicitly selects
+transaction-local `READ COMMITTED` so a lock waiter sees the previous committed
+event. It does not commit a caller's already active transaction. An order-keyed transaction
+advisory lock serializes participating reconcilers, and `FOR UPDATE` locks the
+trade before checking its existing exit. An identical prior event is reused;
+multiple events or conflicting symbol, quantity, fill status or timestamp block
+the update. A conflicting existing trade exit also blocks. Failed insertion or
+trade update rolls back both writes. A successful transaction can be repeated
+without inserting another event, including when its commit acknowledgement was
+lost. The caller holds its watermark on failure; it does not retry immediately.
+
+This is a per-fill transaction, not a transaction spanning the whole hourly job.
+Legacy event writers do not take these locks, and existing duplicate/missing
+history is not automatically repaired. Position-only closure remains a separate
+operation until a fill is available for decoration. PostgreSQL locking, rollback
+and concurrent execution have not been verified against a live database: offline
+tests exercise the actual helper with an in-memory transaction model, including
+insert/update failures, rollback, repeat calls and lost acknowledgement. A shared
+connection caller regression also executes the real strict readers and atomic
+writer through closure and decoration, including read/completion failures and
+active caller transaction rejection. Provider and connection boundaries remain
+synthetic; no live database was accessed.
+A trade whose exit fields are complete but realized P&L is missing still needs
+decoration; the helper computes that value while reusing the matching fill event.
+
+Activity pagination validates every supplied recognized token, including header
+and body aliases, before accepting completion. Only absent keys, null and an empty
+string mean no continuation. Falsy nonstrings (`0`, `false`, `[]`, `{}`), whitespace
+tokens and conflicting nonempty aliases fail as `ACT_PAYLOAD_INVALID`, without
+insertion or watermark advancement. Nonempty string tokens are passed unchanged;
+the literal string `"0"` remains valid. These rules do not establish provider
+history completeness.
 Supervisor tests use standard-library mocks and temporary storage, avoiding repository
 pytest conftest's Alpaca import. Gate integration tests additionally require pandas,
 dateutil and timezone data. They import the executor normally with provider, database,

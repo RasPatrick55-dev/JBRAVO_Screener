@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, Iterator, Mapping, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -266,6 +267,25 @@ def _maybe_conn(engine: Optional[PGConnection]) -> Iterator[Optional[PGConnectio
             conn.close()
         except Exception:
             pass
+
+
+@contextmanager
+def _reconciliation_read_transaction(conn: PGConnection, *, strict: bool) -> Iterator[None]:
+    """Own strict reconciliation reads without committing a caller's work.
+
+    Legacy non-strict callers retain their existing transaction behavior.
+    A strict read starts idle, owns a read-only transaction and ends it before
+    the connection can be passed to an atomic write.
+    """
+    if not strict:
+        yield
+        return
+    if conn.autocommit or conn.get_transaction_status() != 0:
+        raise RuntimeError("RECONCILE_DB_TRANSACTION_NOT_IDLE")
+    with conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SET TRANSACTION READ ONLY")
+        yield
 
 
 def _conn_or_none() -> Optional[PGConnection]:
@@ -597,9 +617,10 @@ def get_reconcile_state(engine: Optional[PGConnection] = None, *, strict: bool =
                 raise RuntimeError("RECONCILE_DB_UNAVAILABLE")
             return {}
         try:
-            with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
-                cursor.execute("SELECT last_after, last_ran_at FROM reconcile_state WHERE id=1")
-                row = cursor.fetchone()
+            with _reconciliation_read_transaction(conn, strict=strict):
+                with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
+                    cursor.execute("SELECT last_after, last_ran_at FROM reconcile_state WHERE id=1")
+                    row = cursor.fetchone()
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_RECONCILE_STATE_FETCH err=%s", exc)
             if strict:
@@ -2793,6 +2814,132 @@ def insert_order_event(
             return False
 
 
+def reconcile_sell_fill(
+    engine: Optional[PGConnection], trade_id: Any, *, symbol: str, qty: Any,
+    order_id: str, status: str, event_time: Any, raw: Any,
+    exit_price: Any, exit_reason: str, decorate: bool = False,
+) -> bool:
+    """Commit a reconciliation SELL_FILL and its trade update together.
+
+    Participating reconcilers serialize by broker order, then lock the trade.
+    A prior identical event is reused; conflicting/duplicate events block.
+    Legacy event writers do not participate in this locking contract.
+    """
+    def number(value: Any) -> Decimal:
+        if isinstance(value, bool):
+            raise ValueError("invalid_fill_number")
+        result = Decimal(str(value))
+        if not result.is_finite() or result <= 0:
+            raise ValueError("invalid_fill_number")
+        return result
+
+    try:
+        if (not isinstance(order_id, str) or not order_id.strip()
+                or not isinstance(symbol, str) or not symbol.strip()
+                or not isinstance(status, str) or status.lower() != "filled"):
+            raise ValueError("invalid_fill_identity")
+        fill_qty = number(qty)
+        number(exit_price)
+        normalized_time = normalize_ts(event_time, field="event_time")
+        if normalized_time is None:
+            raise ValueError("invalid_fill_time")
+        payload = dict(trade_id=trade_id, symbol=symbol.upper(), qty=qty,
+                       order_id=order_id, status=status, event_time=normalized_time,
+                       raw=_json_dumps_or_none(raw), exit_price=exit_price,
+                       exit_reason=exit_reason)
+        with _maybe_conn(engine) as conn:
+            if (conn is None or conn.autocommit
+                    or conn.get_transaction_status() != 0):  # psycopg2: idle
+                raise ValueError("transaction_connection_required")
+            with conn:
+                with conn.cursor() as cursor:
+                    # A waiter must see the previous lock holder's committed
+                    # event after acquiring the advisory lock. Freeze statement
+                    # snapshots, rather than inheriting repeatable-read defaults.
+                    cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                    # Colliding hash keys only serialize unrelated orders; they
+                    # cannot cause event identities to compare equal.
+                    cursor.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext(%(key)s))",
+                        {"key": "jbravo:SELL_FILL:" + order_id},
+                    )
+                    cursor.execute(
+                        """SELECT status, qty, entry_price, symbol, exit_order_id,
+                                  exit_time, exit_price, exit_reason, realized_pnl
+                           FROM trades WHERE trade_id=%(trade_id)s FOR UPDATE""",
+                        payload,
+                    )
+                    row = cursor.fetchone()
+                    if row is None or row[3] != payload["symbol"]:
+                        raise ValueError("trade_identity_mismatch")
+                    state = (row[0] or "").upper()
+                    if state not in ("OPEN", "CLOSED") or (decorate and state != "CLOSED"):
+                        raise ValueError("trade_state_mismatch")
+                    if row[4] not in (None, "", order_id):
+                        raise ValueError("trade_exit_conflict")
+                    exit_complete = (state == "CLOSED" and row[4] == order_id
+                                        and row[5] is not None and row[6] is not None
+                                        and row[7] is not None)
+                    if exit_complete and (
+                        normalize_ts(row[5]) != normalized_time
+                        or number(row[6]) != number(exit_price) or row[7] != exit_reason
+                    ):
+                        raise ValueError("trade_exit_conflict")
+                    if state == "CLOSED" and not decorate and not exit_complete:
+                        raise ValueError("trade_state_mismatch")
+                    already_complete = exit_complete and row[8] is not None
+                    cursor.execute(
+                        """SELECT symbol, qty, status, event_time FROM order_events
+                           WHERE order_id=%(order_id)s AND event_type='SELL_FILL'""",
+                        payload,
+                    )
+                    events = cursor.fetchall()
+                    if len(events) > 1:
+                        raise ValueError("duplicate_fill_events")
+                    if events:
+                        event = events[0]
+                        if (event[0] != payload["symbol"] or number(event[1]) != fill_qty
+                                or (event[2] or "").lower() != status.lower()
+                                or normalize_ts(event[3]) != normalized_time):
+                            raise ValueError("fill_event_conflict")
+                    else:
+                        cursor.execute(
+                            """INSERT INTO order_events
+                               (symbol, qty, order_id, status, event_type, event_time, raw)
+                               VALUES (%(symbol)s, %(qty)s, %(order_id)s, %(status)s,
+                                       'SELL_FILL', %(event_time)s, CAST(%(raw)s AS JSONB))""",
+                            payload,
+                        )
+                    if not already_complete:
+                        realized = None
+                        try:
+                            if row[2] is not None:
+                                realized = float(exit_price) - float(row[2])
+                                if row[1] is not None:
+                                    realized *= float(row[1])
+                        except (TypeError, ValueError, OverflowError):
+                            pass
+                        payload["realized_pnl"] = realized
+                        cursor.execute(
+                            """UPDATE trades SET exit_order_id=%(order_id)s,
+                               exit_time=%(event_time)s, exit_price=%(exit_price)s,
+                               realized_pnl=%(realized_pnl)s, exit_reason=%(exit_reason)s,
+                               status='CLOSED', updated_at=now()
+                               WHERE trade_id=%(trade_id)s""",
+                            payload,
+                        )
+                        if cursor.rowcount != 1:
+                            raise ValueError("trade_update_missing")
+        _log_write_result(True, "reconciliation_fill", 1)
+        return True
+    except Exception as exc:
+        # Do not copy database/provider exception text into application logs.
+        logger.warning("[WARN] RECONCILE_DB_FAIL stage=atomic_fill error_type=%s",
+                       type(exc).__name__)
+        _log_write_result(False, "reconciliation_fill", 0, RuntimeError("atomic_fill_failed"))
+        return False
+
+
 def get_open_trades(
     engine: Optional[PGConnection] = None, limit: int = 200, *, strict: bool = False
 ) -> list[dict[str, Any]]:
@@ -2803,21 +2950,22 @@ def get_open_trades(
                 raise RuntimeError("RECONCILE_DB_UNAVAILABLE")
             return []
         try:
-            with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
-                cursor.execute(
-                    """
-                    SELECT trade_id, symbol, qty, entry_time, entry_price, entry_order_id
-                    FROM trades
-                    WHERE status='OPEN'
-                    ORDER BY entry_time DESC NULLS LAST, trade_id DESC
-                    LIMIT %(limit)s
-                    """,
-                    {"limit": limit},
-                )
-                rows = cursor.fetchall()
-                if strict and len(rows) >= limit:
-                    raise RuntimeError("RECONCILE_DB_INCOMPLETE")
-                return [dict(row) for row in rows]
+            with _reconciliation_read_transaction(conn, strict=strict):
+                with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
+                    cursor.execute(
+                        """
+                        SELECT trade_id, symbol, qty, entry_time, entry_price, entry_order_id
+                        FROM trades
+                        WHERE status='OPEN'
+                        ORDER BY entry_time DESC NULLS LAST, trade_id DESC
+                        LIMIT %(limit)s
+                        """,
+                        {"limit": limit},
+                    )
+                    rows = cursor.fetchall()
+                    if strict and len(rows) >= limit:
+                        raise RuntimeError("RECONCILE_DB_INCOMPLETE")
+                    return [dict(row) for row in rows]
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
             if strict:
@@ -2837,23 +2985,24 @@ def get_closed_trades_missing_exit(
                 raise RuntimeError("RECONCILE_DB_UNAVAILABLE")
             return []
         try:
-            with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
-                cursor.execute(
-                    """
-                    SELECT trade_id, symbol, qty, entry_price, exit_price, exit_order_id, exit_time, realized_pnl
-                    FROM trades
-                    WHERE status='CLOSED'
-                      AND (exit_price IS NULL OR exit_order_id IS NULL OR realized_pnl IS NULL)
-                      AND updated_at >= %(updated_after)s
-                    ORDER BY updated_at DESC NULLS LAST, trade_id DESC
-                    LIMIT %(limit)s
-                    """,
-                    {"updated_after": updated_after, "limit": limit},
-                )
-                rows = cursor.fetchall()
-                if strict and len(rows) >= limit:
-                    raise RuntimeError("RECONCILE_DB_INCOMPLETE")
-                return [dict(row) for row in rows]
+            with _reconciliation_read_transaction(conn, strict=strict):
+                with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
+                    cursor.execute(
+                        """
+                        SELECT trade_id, symbol, qty, entry_price, exit_price, exit_order_id, exit_time, realized_pnl
+                        FROM trades
+                        WHERE status='CLOSED'
+                          AND (exit_price IS NULL OR exit_order_id IS NULL OR realized_pnl IS NULL)
+                          AND updated_at >= %(updated_after)s
+                        ORDER BY updated_at DESC NULLS LAST, trade_id DESC
+                        LIMIT %(limit)s
+                        """,
+                        {"updated_after": updated_after, "limit": limit},
+                    )
+                    rows = cursor.fetchall()
+                    if strict and len(rows) >= limit:
+                        raise RuntimeError("RECONCILE_DB_INCOMPLETE")
+                    return [dict(row) for row in rows]
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
             if strict:

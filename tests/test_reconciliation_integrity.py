@@ -4,6 +4,7 @@ Run with unittest (repository pytest conftest imports the external Alpaca SDK).
 The executor uses the same pre-import isolation as the hourly gate tests.
 """
 import contextlib
+import copy
 from datetime import datetime, timezone
 import importlib
 import io
@@ -47,7 +48,7 @@ class ReconciliationTests(unittest.TestCase):
                 get_open_trades=[self.trade] if open_trades is None else open_trades,
                 get_closed_trades_missing_exit=[] if missing is None else missing,
                 set_reconcile_state=True, close_trade=True, insert_order_event=True,
-                decorate_trade_exit=True).items():
+                decorate_trade_exit=True, reconcile_sell_fill=True).items():
             patched = self.stack.enter_context(mock.patch.object(db, name,
                         return_value=result, create=True))
             self.writes[name] = patched
@@ -72,7 +73,8 @@ class ReconciliationTests(unittest.TestCase):
                                        module.ExecutionMetrics())
 
     def no_mutations(self):
-        for name in ('close_trade', 'insert_order_event', 'decorate_trade_exit', 'set_reconcile_state'):
+        for name in ('close_trade', 'insert_order_event', 'decorate_trade_exit',
+                     'reconcile_sell_fill', 'set_reconcile_state'):
             self.writes[name].assert_not_called()
         self.client.submit_order.assert_not_called()
         self.client.cancel_order_by_id.assert_not_called()
@@ -134,9 +136,11 @@ class ReconciliationTests(unittest.TestCase):
     def test_usable_filled_exit_retains_existing_terms_and_overlap(self):
         self.prepare(orders=[order()], positions=[SimpleNamespace(symbol='XYZ', qty='2')])
         self.assertTrue(self.run.reconcile_closed_trades())
-        args = self.writes['close_trade'].call_args.args
-        self.assertEqual(args[1:3], (1, 'sell-1'))
-        self.assertEqual(args[4:], (11.0, 'SELL_FILL'))
+        args = self.writes['reconcile_sell_fill'].call_args.kwargs
+        self.assertEqual((args['trade_id'], args['order_id']), (1, 'sell-1'))
+        self.assertEqual((args['exit_price'], args['exit_reason']), (11.0, 'SELL_FILL'))
+        self.writes['close_trade'].assert_not_called()
+        self.writes['insert_order_event'].assert_not_called()
         self.assertEqual(self.writes['set_reconcile_state'].call_args.args[1].timestamp(),
                          NOW.timestamp() - 300)
 
@@ -167,14 +171,34 @@ class ReconciliationTests(unittest.TestCase):
         self.writes['set_reconcile_state'].assert_not_called()
         self.assertIn('RECONCILE_DECORATE_MISS', self.messages.getvalue())
 
-    def test_failed_event_or_decoration_holds_watermark(self):
-        for failing in ('insert_order_event', 'decorate_trade_exit'):
-            with self.subTest(failing=failing):
+    def test_failed_atomic_fill_or_decoration_holds_watermark(self):
+        for decorate in (False, True):
+            with self.subTest(decorate=decorate):
                 self.prepare(open_trades=[], orders=[order()])
-                self.writes['get_closed_trades_missing_exit'].return_value = [self.trade]
-                self.writes[failing].return_value = False
+                self.writes['get_closed_trades_missing_exit' if decorate else 'get_open_trades'].return_value = [self.trade]
+                self.client.get_all_positions.return_value = [SimpleNamespace(symbol='XYZ', qty='2')]
+                self.writes['reconcile_sell_fill'].return_value = False
                 self.assertFalse(self.run.reconcile_closed_trades())
                 self.writes['set_reconcile_state'].assert_not_called()
+                self.writes['insert_order_event'].assert_not_called()
+                self.writes['decorate_trade_exit'].assert_not_called()
+
+    def test_atomic_decoration_uses_the_same_fill_contract(self):
+        self.prepare(open_trades=[], orders=[order()])
+        self.writes['get_closed_trades_missing_exit'].return_value = [self.trade]
+        self.assertTrue(self.run.reconcile_closed_trades())
+        self.assertTrue(self.writes['reconcile_sell_fill'].call_args.kwargs['decorate'])
+        self.writes['insert_order_event'].assert_not_called()
+        self.writes['decorate_trade_exit'].assert_not_called()
+
+    def test_atomic_fill_exception_holds_watermark_without_independent_writes(self):
+        self.prepare(orders=[order()], positions=[SimpleNamespace(symbol='XYZ', qty='2')])
+        self.writes['reconcile_sell_fill'].side_effect = RuntimeError('private-db-text')
+        self.assertFalse(self.run.reconcile_closed_trades())
+        self.writes['close_trade'].assert_not_called()
+        self.writes['insert_order_event'].assert_not_called()
+        self.writes['set_reconcile_state'].assert_not_called()
+        self.assertNotIn('private-db-text', self.messages.getvalue())
 
     def test_failed_closed_trade_read_holds_watermark(self):
         self.prepare(open_trades=[])
@@ -303,6 +327,45 @@ class ActivityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'ACT_DB_READ_FAILED'):
             self.activities.load_watermark(conn, strict=True)
 
+    def test_all_supplied_tokens_are_validated_before_any_write(self):
+        self.prepare()
+        for key in ('next_page_token', 'page_token', 'next_token'):
+            for token in (0, False, [], {}, 0.0, True, '   '):
+                with self.subTest(key=key, token=token):
+                    payload = {'activities': [self.activity()], key: token}
+                    response = mock.Mock(ok=True, headers={})
+                    response.json.return_value = payload
+                    with mock.patch.object(self.activities, '_build_headers', return_value={}), \
+                            mock.patch.object(self.activities.requests, 'get', return_value=response), \
+                            self.assertRaisesRegex(RuntimeError, 'ACT_PAYLOAD_INVALID'):
+                        self.activities._run_incremental(self.args, 'https://synthetic.invalid',
+                                                         object(), NOW.isoformat())
+                    self.insert.assert_not_called()
+                    self.watermark.assert_not_called()
+
+    def test_token_absence_null_empty_and_literal_zero_string(self):
+        self.prepare()
+        for payload in ({}, {'next_page_token': None}, {'next_page_token': ''}):
+            with self.subTest(payload=payload):
+                self.assertIsNone(self.activities._pagination_token(SimpleNamespace(headers={}), payload))
+        self.assertEqual(self.activities._pagination_token(SimpleNamespace(headers={}),
+                         {'next_page_token': '0'}), '0')
+
+    def test_valid_aliases_cannot_mask_invalid_or_conflicting_tokens(self):
+        self.prepare()
+        for headers, payload in (
+            ({'Next-Page-Token': 'next'}, {'next_page_token': False}),
+            ({}, {'next_page_token': 'next', 'page_token': []}),
+            ({'Next-Page-Token': 0}, {}),
+            ({'Next-Page-Token': 'next'}, {'next_page_token': 'other'}),
+        ):
+            with self.subTest(headers=headers, payload=payload), \
+                    self.assertRaisesRegex(RuntimeError, 'ACT_PAYLOAD_INVALID'):
+                self.activities._pagination_token(SimpleNamespace(headers=headers), payload)
+        self.assertEqual(self.activities._pagination_token(
+            SimpleNamespace(headers={'Next-Page-Token': 'next'}),
+            {'next_page_token': 'next', 'page_token': 'next'}), 'next')
+
 
 class HealthTests(unittest.TestCase):
     invoke = hourly_tests.StageTests.invoke
@@ -352,7 +415,10 @@ class DatabaseReadTests(unittest.TestCase):
         self.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.module)
         self.conn = mock.MagicMock()
+        self.conn.autocommit = False
+        self.conn.get_transaction_status.return_value = 0
         self.cursor = self.conn.cursor.return_value.__enter__.return_value
+        self.original_maybe_conn = self.module._maybe_conn
         self.stack.enter_context(mock.patch.object(self.module, '_maybe_conn',
                                     side_effect=lambda unused: contextlib.nullcontext(self.conn)))
 
@@ -386,6 +452,333 @@ class DatabaseReadTests(unittest.TestCase):
         self.cursor.fetchone.return_value = {'last_after': 'invalid'}
         with self.assertRaisesRegex(RuntimeError, 'RECONCILE_DB_INVALID_WATERMARK'):
             self.module.get_reconcile_state(self.conn, strict=True)
+
+
+class TransactionFixture:
+    """In-memory transaction model; never connects to a database.
+
+    SQL route assertions require the real helper to acquire both locks, read
+    existing events and perform its writes within one transaction. Commit
+    acknowledgement loss can be injected after durable state is recorded.
+    """
+    autocommit = False
+
+    def __init__(self, *, closed=False):
+        self.trade = ['CLOSED' if closed else 'OPEN', 2, 10, 'XYZ', None, None, None, None, None]
+        self.events = []
+        self.fail = None
+        self.statements = []
+        self.commits = self.rollbacks = 0
+        self.rowcount = 1
+        self.transaction_status = 0
+
+    def get_transaction_status(self):
+        return self.transaction_status
+
+    def __enter__(self):
+        self.pending_trade = copy.deepcopy(self.trade)
+        self.pending_events = copy.deepcopy(self.events)
+        self.order_locked = self.trade_locked = False
+        self.read_committed = False
+        return self
+
+    def __exit__(self, kind, value, trace):
+        self.transaction_status = 0
+        if kind is not None:
+            self.rollbacks += 1
+        else:
+            self.trade = self.pending_trade
+            self.events = self.pending_events
+            self.commits += 1
+            if self.fail == 'commit_ack':
+                self.fail = None
+                raise RuntimeError('synthetic lost commit acknowledgement')
+        return False
+
+    @contextlib.contextmanager
+    def cursor(self, **unused):
+        yield self
+
+    def execute(self, sql, params=None):
+        self.transaction_status = 2  # SELECT also begins a psycopg2 transaction.
+        self.statements.append(sql)
+        if sql == 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED':
+            self.read_committed = True
+        elif 'pg_advisory_xact_lock' in sql:
+            if not self.read_committed:
+                raise AssertionError('statement snapshot contract required before lock')
+            if params['key'] != 'jbravo:SELL_FILL:sell-1':
+                raise AssertionError('unexpected advisory lock identity')
+            self.order_locked = True
+        elif 'SELECT status' in sql:
+            if not self.order_locked or 'FOR UPDATE' not in sql:
+                raise AssertionError('trade must be locked after broker order')
+            self.trade_locked = True
+        elif 'SELECT symbol' in sql:
+            if not self.trade_locked or "event_type='SELL_FILL'" not in sql:
+                raise AssertionError('event identity lookup must follow locks')
+        elif 'INSERT INTO order_events' in sql:
+            if self.fail == 'insert':
+                raise RuntimeError('synthetic event insert failure')
+            self.pending_events.append((params['symbol'], params['qty'], params['status'],
+                                        params['event_time']))
+        elif 'UPDATE trades' in sql:
+            if self.fail == 'update':
+                raise RuntimeError('synthetic trade update failure')
+            self.pending_trade[0] = 'CLOSED'
+            self.pending_trade[4:8] = [params['order_id'], params['event_time'],
+                                      params['exit_price'], params['exit_reason']]
+            self.realized_pnl = params['realized_pnl']
+            self.pending_trade[8] = params['realized_pnl']
+        else:
+            raise AssertionError('unexpected SQL route')
+
+    def fetchone(self):
+        return tuple(self.pending_trade)
+
+    def fetchall(self):
+        return copy.deepcopy(self.pending_events)
+
+
+class AtomicFillTests(unittest.TestCase):
+    setUp = hourly_tests.ExecutorGateIntegrationTests.setUp
+    prepare = ActivityTests.prepare
+    read_module = DatabaseReadTests.read_module
+
+    def setup_transaction(self, **options):
+        self.read_module()
+        self.transaction = TransactionFixture(**options)
+        self.stack.enter_context(mock.patch.object(self.module, '_maybe_conn',
+            side_effect=lambda unused: contextlib.nullcontext(self.transaction)))
+        self.parameters = dict(symbol='XYZ', qty='2', order_id='sell-1', status='filled',
+                               event_time=NOW, raw=order(), exit_price=11.0, exit_reason='SELL_FILL')
+
+    def fill(self, **changes):
+        return self.module.reconcile_sell_fill(self.transaction, 1, **(self.parameters | changes))
+
+    def test_insert_failure_rolls_back_and_retry_closes_once(self):
+        self.setup_transaction()
+        self.transaction.fail = 'insert'
+        self.assertFalse(self.fill())
+        self.assertEqual((self.transaction.trade[0], self.transaction.events), ('OPEN', []))
+        self.transaction.fail = None
+        self.assertTrue(self.fill())
+        self.assertEqual((self.transaction.trade[0], len(self.transaction.events)), ('CLOSED', 1))
+        self.assertEqual(self.transaction.realized_pnl, 2.0)
+
+    def test_close_and_decoration_failure_roll_back_event_and_retry(self):
+        for decorate in (False, True):
+            with self.subTest(decorate=decorate):
+                self.setup_transaction(closed=decorate)
+                original = copy.deepcopy(self.transaction.trade)
+                self.transaction.fail = 'update'
+                self.assertFalse(self.fill(decorate=decorate))
+                self.assertEqual(self.transaction.events, [])
+                self.assertEqual(self.transaction.trade, original)
+                self.assertEqual(self.transaction.rollbacks, 1)
+                self.transaction.fail = None
+                self.assertTrue(self.fill(decorate=decorate))
+                self.assertTrue(self.fill(decorate=decorate))
+                self.assertEqual(len(self.transaction.events), 1)
+                self.assertEqual(sum('UPDATE trades' in sql for sql in self.transaction.statements), 2)
+
+    def test_lost_commit_acknowledgement_retries_without_duplicate(self):
+        self.setup_transaction()
+        self.transaction.fail = 'commit_ack'
+        self.assertFalse(self.fill())
+        self.assertEqual((self.transaction.trade[0], len(self.transaction.events)), ('CLOSED', 1))
+        self.assertTrue(self.fill())
+        self.assertEqual(len(self.transaction.events), 1)
+        self.assertEqual(sum('UPDATE trades' in sql for sql in self.transaction.statements), 1)
+
+    def test_matching_prior_event_is_reused_for_incomplete_trade(self):
+        self.setup_transaction()
+        self.transaction.events = [('XYZ', 2, 'filled', NOW)]
+        self.assertTrue(self.fill())
+        self.assertEqual(len(self.transaction.events), 1)
+        self.assertFalse(any('INSERT INTO order_events' in sql for sql in self.transaction.statements))
+
+    def test_conflicting_duplicate_events_and_trade_exit_block(self):
+        self.setup_transaction()
+        for events in ([('XYZ', 3, 'filled', NOW)],
+                       [('XYZ', 2, 'filled', NOW)] * 2,
+                       [('OTHER', 2, 'filled', NOW)]):
+            with self.subTest(events=events):
+                self.transaction.events = events
+                self.assertFalse(self.fill())
+                self.assertEqual(self.transaction.trade[0], 'OPEN')
+                self.assertEqual(self.transaction.events, events)
+        self.transaction.events = []
+        self.transaction.trade[4] = 'different-order'
+        self.assertFalse(self.fill())
+        self.assertEqual(self.transaction.events, [])
+
+    def test_autocommit_cannot_claim_atomic_success(self):
+        self.setup_transaction()
+        self.transaction.autocommit = True
+        self.assertFalse(self.fill())
+        self.assertEqual(self.transaction.statements, [])
+
+    def test_existing_transaction_cannot_be_committed_by_this_helper(self):
+        self.setup_transaction()
+        self.transaction.transaction_status = 2
+        self.assertFalse(self.fill())
+        self.assertEqual(self.transaction.statements, [])
+        self.assertEqual(self.transaction.commits, 0)
+
+
+class SharedConnectionFixture(TransactionFixture):
+    """Model read-to-write ownership on one connection, not separate mocks."""
+    def __init__(self, **options):
+        super().__init__(**options)
+        self.last_after = NOW
+        self.read_failure = None
+        self.read_commit_failure = False
+        self.transaction_modes = []
+
+    def __enter__(self):
+        super().__enter__()
+        self.read_only = False
+        return self
+
+    def __exit__(self, kind, value, trace):
+        self.transaction_modes.append('read' if self.read_only else 'write')
+        if kind is None and self.read_only and self.read_commit_failure:
+            self.transaction_status = 0
+            self.rollbacks += 1
+            raise RuntimeError('synthetic read completion failure')
+        return super().__exit__(kind, value, trace)
+
+    def execute(self, sql, params=None):
+        self.transaction_status = 2
+        if sql == 'SET TRANSACTION READ ONLY':
+            self.statements.append(sql)
+            self.read_only = True
+        elif 'SELECT last_after' in sql:
+            self.statements.append(sql)
+            self.selected = 'watermark'
+        elif "WHERE status='OPEN'" in sql:
+            self.statements.append(sql)
+            if self.read_failure == 'open':
+                raise RuntimeError('synthetic open read failure')
+            self.selected = 'open'
+        elif "WHERE status='CLOSED'" in sql:
+            self.statements.append(sql)
+            self.selected = 'missing'
+        elif 'INSERT INTO reconcile_state' in sql:
+            if self.read_only:
+                raise AssertionError('watermark write in read transaction')
+            self.statements.append(sql)
+            self.last_after = params['last_after']
+        else:
+            if self.read_only:
+                raise AssertionError('atomic write must start a separate transaction')
+            self.selected = 'fill'
+            super().execute(sql, params)
+
+    def fetchone(self):
+        if self.selected == 'watermark':
+            return {'last_after': self.last_after, 'last_ran_at': NOW}
+        return super().fetchone()
+
+    def fetchall(self):
+        if self.selected in ('open', 'missing'):
+            row = self.trade
+            eligible = row[0] == 'OPEN' if self.selected == 'open' else (
+                row[0] == 'CLOSED' and (row[4] is None or row[6] is None or row[8] is None))
+            return [dict(trade_id=1, symbol=row[3], qty=row[1], entry_price=row[2],
+                         entry_time=NOW, entry_order_id='entry-1', exit_order_id=row[4],
+                         exit_time=row[5], exit_price=row[6])] if eligible else []
+        return super().fetchall()
+
+
+class SharedConnectionCallerTests(unittest.TestCase):
+    setUp = hourly_tests.ExecutorGateIntegrationTests.setUp
+    prepare = ActivityTests.prepare
+    read_module = DatabaseReadTests.read_module
+
+    def setup_caller(self, *, closed=False):
+        self.read_module()
+        self.connection = SharedConnectionFixture(closed=closed)
+        # Restore the actual module's connection ownership path; get_db_conn is
+        # the sole fake database boundary. No reader or writer is mocked.
+        self.stack.enter_context(mock.patch.object(self.module, '_maybe_conn',
+                                                  self.original_maybe_conn))
+        self.stack.enter_context(mock.patch.object(self.module, 'db_enabled', return_value=True))
+        self.stack.enter_context(mock.patch.object(self.module, 'get_db_conn',
+                                                  return_value=self.connection))
+        self.stack.enter_context(mock.patch.object(self.executor, 'db', self.module))
+        self.stack.enter_context(mock.patch.object(self.executor, 'log_info'))
+        self.stack.enter_context(mock.patch.object(self.executor, 'alpaca_list_orders_http',
+                                                  return_value=[order()]))
+        client = mock.Mock()
+        client.get_all_positions.return_value = [SimpleNamespace(symbol='XYZ', qty='2')]
+        client.submit_order.side_effect = self.forbidden
+        client.cancel_order_by_id.side_effect = self.forbidden
+        self.caller = self.executor.TradeExecutor(self.executor.ExecutorConfig(), client,
+                                                 self.executor.ExecutionMetrics())
+
+    def test_shared_connection_reads_end_before_close_and_decoration(self):
+        for closed in (False, True):
+            with self.subTest(closed=closed):
+                self.setup_caller(closed=closed)
+                self.assertTrue(self.caller.reconcile_closed_trades())
+                self.assertEqual(self.connection.get_transaction_status(), 0)
+                self.assertEqual(self.connection.trade[0], 'CLOSED')
+                self.assertEqual(len(self.connection.events), 1)
+                self.assertEqual(self.connection.transaction_modes,
+                    ['read', 'read', 'read', 'write', 'write'] if closed else
+                    ['read', 'read', 'write', 'read', 'write'])
+                # Run again through the same caller and connection. Completed
+                # trades disappear from the readers and no fill is reinserted.
+                self.assertTrue(self.caller.reconcile_closed_trades())
+                self.assertEqual(len(self.connection.events), 1)
+                self.assertEqual(self.connection.get_transaction_status(), 0)
+
+    def test_read_failure_rolls_back_without_fill_or_watermark_write(self):
+        self.setup_caller()
+        self.connection.read_failure = 'open'
+        self.assertFalse(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.get_transaction_status(), 0)
+        self.assertEqual(self.connection.events, [])
+        self.assertEqual(self.connection.trade[0], 'OPEN')
+        self.assertEqual(self.connection.rollbacks, 1)
+        self.assertNotIn('write', self.connection.transaction_modes)
+
+    def test_decoration_of_missing_realized_pnl_reuses_the_existing_event(self):
+        self.setup_caller(closed=True)
+        self.connection.trade[4:8] = ['sell-1', NOW, 11, 'SELL_FILL']
+        self.connection.events = [('XYZ', 2, 'filled', NOW)]
+        self.assertTrue(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.trade[8], 2.0)
+        self.assertEqual(len(self.connection.events), 1)
+        self.assertTrue(self.caller.reconcile_closed_trades())
+        self.assertEqual(len(self.connection.events), 1)
+
+    def test_read_completion_failure_stops_caller_before_writes(self):
+        self.setup_caller()
+        self.connection.read_commit_failure = True
+        self.assertFalse(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.events, [])
+        self.assertNotIn('write', self.connection.transaction_modes)
+
+    def test_strict_read_rejects_caller_owned_transaction_without_committing(self):
+        self.setup_caller()
+        self.connection.transaction_status = 2
+        with self.assertRaisesRegex(RuntimeError, 'RECONCILE_DB_READ_FAILED'):
+            self.module.get_open_trades(self.connection, strict=True)
+        self.assertEqual(self.connection.get_transaction_status(), 2)
+        self.assertEqual(self.connection.commits, 0)
+        self.assertEqual(self.connection.rollbacks, 0)
+        self.assertEqual(self.connection.statements, [])
+
+    def test_legacy_non_strict_read_does_not_end_caller_transaction(self):
+        self.setup_caller()
+        self.connection.transaction_status = 2
+        self.assertEqual(len(self.module.get_open_trades(self.connection)), 1)
+        self.assertEqual(self.connection.get_transaction_status(), 2)
+        self.assertEqual(self.connection.commits, 0)
+        self.assertEqual(self.connection.transaction_modes, [])
 
 
 if __name__ == '__main__':
