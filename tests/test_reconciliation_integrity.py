@@ -464,6 +464,7 @@ class TransactionFixture:
     autocommit = False
 
     def __init__(self, *, closed=False):
+        self.trades = {}
         self.trade = ['CLOSED' if closed else 'OPEN', 2, 10, 'XYZ', None, None, None, None, None]
         self.events = []
         self.fail = None
@@ -472,13 +473,23 @@ class TransactionFixture:
         self.rowcount = 1
         self.transaction_status = 0
 
+    @property
+    def trade(self):
+        return self.trades[1]
+
+    @trade.setter
+    def trade(self, value):
+        self.trades[1] = value
+
     def get_transaction_status(self):
         return self.transaction_status
 
     def __enter__(self):
-        self.pending_trade = copy.deepcopy(self.trade)
+        self.pending_trades = copy.deepcopy(self.trades)
+        self.pending_trade = self.pending_trades[1]
         self.pending_events = copy.deepcopy(self.events)
         self.order_locked = self.trade_locked = False
+        self.ownership_checked = False
         self.read_committed = False
         return self
 
@@ -487,7 +498,7 @@ class TransactionFixture:
         if kind is not None:
             self.rollbacks += 1
         else:
-            self.trade = self.pending_trade
+            self.trades = self.pending_trades
             self.events = self.pending_events
             self.commits += 1
             if self.fail == 'commit_ack':
@@ -514,9 +525,18 @@ class TransactionFixture:
             if not self.order_locked or 'FOR UPDATE' not in sql:
                 raise AssertionError('trade must be locked after broker order')
             self.trade_locked = True
+            self.pending_trade = self.pending_trades[params['trade_id']]
+        elif 'SELECT trade_id FROM trades' in sql:
+            if not self.trade_locked or 'LIMIT 2' not in sql:
+                raise AssertionError('bounded ownership lookup must follow locks')
+            self.result_kind = 'owners'
+            self.ownership_checked = True
+            self.owners = [(key,) for key, row in self.pending_trades.items()
+                           if row[4] == params['order_id']][:2]
         elif 'SELECT symbol' in sql:
-            if not self.trade_locked or "event_type='SELL_FILL'" not in sql:
-                raise AssertionError('event identity lookup must follow locks')
+            if not self.trade_locked or not self.ownership_checked or "event_type='SELL_FILL'" not in sql:
+                raise AssertionError('event identity lookup must follow locks and ownership check')
+            self.result_kind = 'events'
         elif 'INSERT INTO order_events' in sql:
             if self.fail == 'insert':
                 raise RuntimeError('synthetic event insert failure')
@@ -537,6 +557,8 @@ class TransactionFixture:
         return tuple(self.pending_trade)
 
     def fetchall(self):
+        if self.result_kind == 'owners':
+            return self.owners
         return copy.deepcopy(self.pending_events)
 
 
@@ -593,6 +615,7 @@ class AtomicFillTests(unittest.TestCase):
 
     def test_matching_prior_event_is_reused_for_incomplete_trade(self):
         self.setup_transaction()
+        self.transaction.trade[4] = 'sell-1'
         self.transaction.events = [('XYZ', 2, 'filled', NOW)]
         self.assertTrue(self.fill())
         self.assertEqual(len(self.transaction.events), 1)
@@ -600,6 +623,7 @@ class AtomicFillTests(unittest.TestCase):
 
     def test_conflicting_duplicate_events_and_trade_exit_block(self):
         self.setup_transaction()
+        self.transaction.trade[4] = 'sell-1'
         for events in ([('XYZ', 3, 'filled', NOW)],
                        [('XYZ', 2, 'filled', NOW)] * 2,
                        [('OTHER', 2, 'filled', NOW)]):
@@ -652,14 +676,60 @@ class AtomicFillTests(unittest.TestCase):
                 self.setup_transaction(closed=True)
                 self.transaction.trade[4:8] = ['sell-1', NOW.isoformat(), '11.00', 'SELL_FILL']
                 self.transaction.trade[missing] = None
-                self.transaction.events = [('XYZ', 2, 'filled', NOW)]
+                self.transaction.events = [] if missing == 4 else [('XYZ', 2, 'filled', NOW)]
                 self.assertTrue(self.fill(decorate=True))
                 self.assertEqual(self.transaction.trade[4:9], ['sell-1', NOW, 11.0, 'SELL_FILL', 2.0])
                 self.assertTrue(self.fill(decorate=True))
                 self.assertEqual(len(self.transaction.events), 1)
                 self.assertEqual(sum('UPDATE trades' in sql for sql in self.transaction.statements), 1)
-                self.assertFalse(any('INSERT INTO order_events' in sql
-                                     for sql in self.transaction.statements))
+                self.assertEqual(sum('INSERT INTO order_events' in sql
+                                     for sql in self.transaction.statements), int(missing == 4))
+
+    def test_existing_unbound_event_cannot_be_assigned_by_matching_fields(self):
+        self.setup_transaction(closed=True)
+        self.transaction.events = [('XYZ', 2, 'filled', NOW)]
+        self.assert_fill_conflict_preserves_state()
+
+    def test_order_cannot_be_reused_by_a_second_trade(self):
+        for closed in (False, True):
+            with self.subTest(closed=closed):
+                self.setup_transaction(closed=closed)
+                self.transaction.trades[2] = copy.deepcopy(self.transaction.trade)
+                self.assertTrue(self.fill(decorate=closed))
+                original = copy.deepcopy(self.transaction.trades)
+                events = copy.deepcopy(self.transaction.events)
+                self.assertFalse(self.module.reconcile_sell_fill(
+                    self.transaction, 2, **(self.parameters | {'decorate': closed})))
+                self.assertEqual(self.transaction.trades, original)
+                self.assertEqual(self.transaction.events, events)
+                self.assertTrue(self.fill(decorate=closed))
+                self.assertEqual(len(self.transaction.events), 1)
+
+    def test_duplicate_trade_owners_and_other_owner_without_event_block(self):
+        for duplicate in (False, True):
+            with self.subTest(duplicate=duplicate):
+                self.setup_transaction(closed=True)
+                other = copy.deepcopy(self.transaction.trade)
+                other[4] = 'sell-1'
+                self.transaction.trades[2] = other
+                if duplicate:
+                    self.transaction.trade[4] = 'sell-1'
+                original = copy.deepcopy(self.transaction.trades)
+                self.assert_fill_conflict_preserves_state()
+                self.assertEqual(self.transaction.trades, original)
+
+    def test_failed_write_does_not_leave_fill_owned(self):
+        self.setup_transaction(closed=True)
+        self.transaction.trades[2] = copy.deepcopy(self.transaction.trade)
+        self.transaction.fail = 'update'
+        self.assertFalse(self.fill(decorate=True))
+        self.assertIsNone(self.transaction.trade[4])
+        self.assertEqual(self.transaction.events, [])
+        self.transaction.fail = None
+        self.assertTrue(self.module.reconcile_sell_fill(
+            self.transaction, 2, **(self.parameters | {'decorate': True})))
+        self.assertEqual(self.transaction.trades[2][4], 'sell-1')
+        self.assertIsNone(self.transaction.trade[4])
 
     def test_only_one_matching_exit_field_can_be_completed(self):
         for field, value in {4: 'sell-1', 5: NOW, 6: '11.00', 7: 'SELL_FILL'}.items():
@@ -731,6 +801,8 @@ class SharedConnectionFixture(TransactionFixture):
                 raise RuntimeError('synthetic open read failure')
             self.selected = 'open'
         elif "WHERE status='CLOSED'" in sql:
+            if 'exit_time IS NULL' not in sql or 'exit_reason IS NULL' not in sql:
+                raise AssertionError('missing time and reason must be queried')
             self.statements.append(sql)
             self.selected = 'missing'
         elif 'INSERT INTO reconcile_state' in sql:
@@ -751,12 +823,15 @@ class SharedConnectionFixture(TransactionFixture):
 
     def fetchall(self):
         if self.selected in ('open', 'missing'):
-            row = self.trade
-            eligible = row[0] == 'OPEN' if self.selected == 'open' else (
-                row[0] == 'CLOSED' and (row[4] is None or row[6] is None or row[8] is None))
-            return [dict(trade_id=1, symbol=row[3], qty=row[1], entry_price=row[2],
+            rows = []
+            for trade_id, row in self.trades.items():
+                eligible = row[0] == 'OPEN' if self.selected == 'open' else (
+                    row[0] == 'CLOSED' and any(row[i] is None for i in (4, 5, 6, 7, 8)))
+                if eligible:
+                    rows.append(dict(trade_id=trade_id, symbol=row[3], qty=row[1], entry_price=row[2],
                          entry_time=NOW, entry_order_id='entry-1', exit_order_id=row[4],
-                         exit_time=row[5], exit_price=row[6])] if eligible else []
+                         exit_time=row[5], exit_price=row[6], exit_reason=row[7], realized_pnl=row[8]))
+            return rows
         return super().fetchall()
 
 
@@ -859,6 +934,56 @@ class SharedConnectionCallerTests(unittest.TestCase):
         self.assertTrue(self.caller.reconcile_closed_trades())
         self.assertEqual(len(self.connection.events), 1)
         self.assertEqual(sum('UPDATE trades' in sql for sql in self.connection.statements), 1)
+
+    def test_missing_only_exit_time_or_reason_is_decorated(self):
+        for missing in (5, 7):
+            with self.subTest(missing=missing):
+                self.setup_caller(closed=True)
+                self.connection.trade[4:9] = ['sell-1', NOW, 11, 'SELL_FILL', 2.0]
+                self.connection.trade[missing] = None
+                self.connection.events = [('XYZ', 2, 'filled', NOW)]
+                self.assertTrue(self.caller.reconcile_closed_trades())
+                self.assertEqual(self.connection.trade[4:9], ['sell-1', NOW, 11.0, 'SELL_FILL', 2.0])
+                self.assertEqual(len(self.connection.events), 1)
+                self.assertTrue(self.caller.reconcile_closed_trades())
+                self.assertEqual(sum('UPDATE trades' in sql for sql in self.connection.statements), 1)
+
+    def test_conflict_when_only_time_or_reason_is_missing_holds_watermark(self):
+        for missing, conflicting, value in ((5, 6, 12), (7, 5, NOW.replace(hour=11))):
+            with self.subTest(missing=missing):
+                self.setup_caller(closed=True)
+                self.connection.trade[4:9] = ['sell-1', NOW, 11, 'SELL_FILL', 2.0]
+                self.connection.trade[missing] = None
+                self.connection.trade[conflicting] = value
+                original = copy.deepcopy(self.connection.trade)
+                watermark = self.connection.last_after
+                self.assertFalse(self.caller.reconcile_closed_trades())
+                self.assertEqual(self.connection.trade, original)
+                self.assertEqual(self.connection.last_after, watermark)
+                self.assertEqual(self.connection.events, [])
+
+    def test_two_missing_trades_cannot_share_latest_symbol_fill(self):
+        self.setup_caller(closed=True)
+        self.connection.trades[2] = copy.deepcopy(self.connection.trade)
+        original_second = copy.deepcopy(self.connection.trades[2])
+        watermark = self.connection.last_after
+        self.assertFalse(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.trade[4], 'sell-1')
+        self.assertEqual(self.connection.trades[2], original_second)
+        self.assertEqual(len(self.connection.events), 1)
+        self.assertEqual(self.connection.last_after, watermark)
+        self.assertFalse(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.trades[2], original_second)
+        self.assertEqual(len(self.connection.events), 1)
+
+    def test_orphan_event_holds_caller_watermark_without_decorating(self):
+        self.setup_caller(closed=True)
+        self.connection.events = [('XYZ', 2, 'filled', NOW)]
+        original = copy.deepcopy(self.connection.trade)
+        watermark = self.connection.last_after
+        self.assertFalse(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.trade, original)
+        self.assertEqual(self.connection.last_after, watermark)
 
     def test_strict_read_rejects_caller_owned_transaction_without_committing(self):
         self.setup_caller()

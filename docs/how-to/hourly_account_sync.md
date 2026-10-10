@@ -158,8 +158,13 @@ It requires an idle connection with autocommit disabled, and explicitly selects
 transaction-local `READ COMMITTED` so a lock waiter sees the previous committed
 event. It does not commit a caller's already active transaction. An order-keyed transaction
 advisory lock serializes participating reconcilers, and `FOR UPDATE` locks the
-trade before checking its existing exit. An identical prior event is reused;
-multiple events or conflicting symbol, quantity, fill status or timestamp block
+trade before checking its existing exit. A bounded lookup of all trades' exit
+order bindings runs under that same order lock. Another owner or multiple owners
+block without a write. Ownership is persisted as the target trade's
+`exit_order_id`, atomically with the event. An identical prior event is reused
+only when that order is uniquely bound to this trade; an orphan legacy event
+blocks because its fill fields alone cannot identify its owner.
+Multiple events or conflicting symbol, quantity, fill status or timestamp block
 the update. A conflicting existing trade exit also blocks. Each existing non-null
 exit timestamp, price and reason is checked independently, even when other exit
 fields are missing. Matching partial exits can be completed; missing fields never
@@ -181,6 +186,18 @@ active caller transaction rejection. Provider and connection boundaries remain
 synthetic; no live database was accessed.
 A trade whose exit fields are complete but realized P&L is missing still needs
 decoration; the helper computes that value while reusing the matching fill event.
+The decoration reader also includes trades missing only `exit_time` or
+`exit_reason`, even if price, order ID and realized P&L are populated. Conflicts
+and missing ownership keep the caller's watermark unchanged.
+
+This ownership rule covers participating reconciliation transactions, not all
+legacy writers: there is no database-wide uniqueness constraint or migration in
+this increment. Existing duplicate ownership is rejected, not repaired. The
+caller's latest-sell-by-symbol matching heuristic is unchanged; multiple
+unbound trades can still require manual attribution. One may complete before
+another blocks, because the job is not one transaction. The same fill cannot
+complete both through the participating helper. Offline multi-trade caller
+regressions model this behavior; live concurrency remains unqualified.
 
 Activity pagination validates every supplied recognized token, including header
 and body aliases, before accepting completion. Only absent keys, null and an empty

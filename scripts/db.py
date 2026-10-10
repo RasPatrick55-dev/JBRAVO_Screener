@@ -2822,7 +2822,8 @@ def reconcile_sell_fill(
     """Commit a reconciliation SELL_FILL and its trade update together.
 
     Participating reconcilers serialize by broker order, then lock the trade.
-    A prior identical event is reused; conflicting/duplicate events block.
+    A prior identical event is reused only for its uniquely bound trade.
+    Conflicting/duplicate events and another trade's ownership block.
     Legacy event writers do not participate in this locking contract.
     """
     def number(value: Any) -> Decimal:
@@ -2891,6 +2892,17 @@ def reconcile_sell_fill(
                     if state == "CLOSED" and not decorate and not exit_complete:
                         raise ValueError("trade_state_mismatch")
                     already_complete = exit_complete and row[8] is not None
+                    # The order lock serializes claims by participating writers.
+                    # Persist ownership in trades.exit_order_id in the same
+                    # transaction as the event; never reuse another trade's fill.
+                    cursor.execute(
+                        """SELECT trade_id FROM trades
+                           WHERE exit_order_id=%(order_id)s LIMIT 2""",
+                        payload,
+                    )
+                    owners = cursor.fetchall()
+                    if owners and (len(owners) != 1 or owners[0][0] != trade_id):
+                        raise ValueError("fill_trade_ownership_conflict")
                     cursor.execute(
                         """SELECT symbol, qty, status, event_time FROM order_events
                            WHERE order_id=%(order_id)s AND event_type='SELL_FILL'""",
@@ -2900,6 +2912,10 @@ def reconcile_sell_fill(
                     if len(events) > 1:
                         raise ValueError("duplicate_fill_events")
                     if events:
+                        if not owners:
+                            # Legacy orphan events contain no trade identity.
+                            # Matching fill fields cannot establish ownership.
+                            raise ValueError("fill_trade_ownership_missing")
                         event = events[0]
                         if (event[0] != payload["symbol"] or number(event[1]) != fill_qty
                                 or (event[2] or "").lower() != status.lower()
@@ -2992,10 +3008,11 @@ def get_closed_trades_missing_exit(
                 with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
                     cursor.execute(
                         """
-                        SELECT trade_id, symbol, qty, entry_price, exit_price, exit_order_id, exit_time, realized_pnl
+                        SELECT trade_id, symbol, qty, entry_price, exit_price, exit_order_id, exit_time, exit_reason, realized_pnl
                         FROM trades
                         WHERE status='CLOSED'
-                          AND (exit_price IS NULL OR exit_order_id IS NULL OR realized_pnl IS NULL)
+                          AND (exit_price IS NULL OR exit_order_id IS NULL OR exit_time IS NULL
+                               OR exit_reason IS NULL OR realized_pnl IS NULL)
                           AND updated_at >= %(updated_after)s
                         ORDER BY updated_at DESC NULLS LAST, trade_id DESC
                         LIMIT %(limit)s
