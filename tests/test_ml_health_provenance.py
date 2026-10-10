@@ -80,6 +80,34 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(result['monitor_input_coverage'], payload()['windows'])
         self.assertEqual(result['monitor_artifact_run_date'], '2026-10-08')
         self.assertEqual(result['monitor_observed_at'], NOW.isoformat())
+        self.assertFalse(result['monitor_refresh_due'])
+        self.assertEqual(result['monitor_refresh_headroom_days'], 6)
+
+    def test_refresh_advisory_precedes_expiration_without_clearing_drift(self):
+        for age, due, decision in ((5, False, 'allow'), (6, True, 'allow'),
+                                   (7, True, 'allow'), (8, True, 'warn')):
+            with self.subTest(age=age):
+                value = payload()
+                end = (DAY - timedelta(days=age)).isoformat()
+                value['windows'].update(dataset_end=end, recent_end=end)
+                result = self.decide(self.loaded(value))
+                self.assertEqual((result['monitor_refresh_due'], result['decision']), (due, decision))
+                self.assertEqual(result['monitor_refresh_headroom_days'], 7 - age)
+                self.assertEqual(result['monitor_input_valid_through'], (DAY + timedelta(days=7-age)).isoformat())
+        value['recommended_action'] = 'investigate'
+        result = self.decide(self.loaded(value))
+        self.assertIn('action_investigate', result['reasons'])
+        self.assertEqual(result['decision'], 'warn')
+
+    def test_generation_age_and_unknown_inputs_also_require_refresh(self):
+        value = payload()
+        value['run_utc'] = (NOW - timedelta(days=6, hours=1)).isoformat()
+        result = self.decide(self.loaded(value))
+        self.assertTrue(result['monitor_refresh_due'])
+        self.assertEqual(result['monitor_refresh_headroom_days'], 0)
+        unknown = self.decide(self.loaded({'recommended_action': 'none'}))
+        self.assertTrue(unknown['monitor_refresh_due'])
+        self.assertIsNone(unknown['monitor_refresh_headroom_days'])
 
     def test_db_record_date_never_substitutes_for_generation_or_coverage(self):
         legacy = {'recommended_action': 'none', 'run_date': None}

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -179,6 +179,19 @@ def _monitor_provenance(payload, *, now, reference_date, max_age_days):
                     reasons.append("stale_monitor_input_" + field)
             if generated is not None and end is not None and end > generated.date():
                 reasons.append("monitor_input_after_generation")
+    ends = [dates.get(field) for field in ("dataset_end", "recent_end")]
+    try:
+        input_valid_through = (min(ends) + timedelta(days=max_age_days)
+                               if all(end is not None for end in ends) else None)
+        generation_valid_until = generated + timedelta(days=max_age_days) if generated else None
+    except OverflowError:
+        input_valid_through = generation_valid_until = None
+    headroom = []
+    if input_valid_through is not None and reference_date is not None:
+        headroom.append((input_valid_through - reference_date).days)
+    if generation_valid_until is not None:
+        headroom.append(int((generation_valid_until - now).total_seconds() // 86400))
+    refresh_headroom = min(headroom) if len(headroom) == 2 else None
     return {
         "monitor_generated_at": generated.isoformat() if generated else None,
         "monitor_generation_age_seconds": (now - generated).total_seconds() if generated else None,
@@ -189,6 +202,12 @@ def _monitor_provenance(payload, *, now, reference_date, max_age_days):
         "monitor_input_age_days": ((reference_date - dates["dataset_end"]).days
                                    if reference_date is not None and dates.get("dataset_end") else None),
         "provenance_reasons": sorted(set(reasons)),
+        # Advisory only: start refreshing with one day of headroom. This never
+        # clears a provenance/drift warning or launches a model operation.
+        "monitor_refresh_due": bool(reasons) or refresh_headroom is None or refresh_headroom <= 1,
+        "monitor_refresh_headroom_days": refresh_headroom,
+        "monitor_input_valid_through": input_valid_through.isoformat() if input_valid_through else None,
+        "monitor_generation_valid_until": generation_valid_until.isoformat() if generation_valid_until else None,
     }
 
 

@@ -30,6 +30,8 @@ MAX_SOURCE_BYTES = 1024 * 1024
 ML_PROVENANCE_FIELDS = ('monitor_run_date', 'monitor_run_date_source', 'monitor_artifact_run_date',
                         'monitor_generated_at', 'monitor_generation_age_seconds',
                         'monitor_input_coverage', 'monitor_input_age_days', 'monitor_input_source',
+                        'monitor_refresh_due', 'monitor_refresh_headroom_days',
+                        'monitor_input_valid_through', 'monitor_generation_valid_until',
                         'monitor_observed_at', 'monitor_input_reference_date', 'max_age_days', 'source', 'mode',
                         'monitor_provenance_required', 'monitor_provenance_reasons')
 

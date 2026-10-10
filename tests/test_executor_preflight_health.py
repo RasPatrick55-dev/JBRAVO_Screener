@@ -632,11 +632,94 @@ class CallerTests(Fixture):
                           config.trailing_percent, config.cancel_after_min, config.poll_detach_secs), (.06, 300, 4, 3, 35, 60))
         config._entry_preflight = health.preflight(self.root, rows=self.rows)
         config._entry_candidate_rows = self.rows
-        executor = self.mod.TradeExecutor(config, SimpleNamespace(), self.mod.ExecutionMetrics())
+        client = SimpleNamespace(get_asset=mock.Mock(return_value=SimpleNamespace(status='active', tradable=True)))
+        executor = self.mod.TradeExecutor(config, client, self.mod.ExecutionMetrics())
         with mock.patch.object(executor, '_submit_order', return_value=SimpleNamespace(id='synthetic')) as submit:
             request = SimpleNamespace(side='buy', symbol='AAA', limit_price=10)
             self.assertIsNotNone(executor.submit_with_retries(request))
             submit.assert_called_once_with(request)
+            client.get_asset.assert_called_once_with('AAA')
+
+    def entry_executor(self, asset=None, lookup_error=None):
+        config = self.mod.ExecutorConfig()
+        config._entry_candidate_rows = self.rows
+        config._entry_preflight = self.gate()
+        client = SimpleNamespace(get_asset=mock.Mock(return_value=asset, side_effect=lookup_error))
+        return self.mod.TradeExecutor(config, client, self.mod.ExecutionMetrics())
+
+    def test_inactive_and_untradable_entries_are_skipped_before_broker_submit(self):
+        for asset, reason in ((SimpleNamespace(status=SimpleNamespace(value='inactive'), tradable=True), 'ASSET_INACTIVE'),
+                              (SimpleNamespace(status='active', tradable=False), 'ASSET_NOT_TRADABLE')):
+            executor = self.entry_executor(asset)
+            with mock.patch.object(executor, '_submit_order') as submit:
+                self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA', limit_price=10)))
+                submit.assert_not_called()
+            self.assertEqual(executor.metrics.skipped_reasons[reason], 1)
+            self.assertEqual(executor.metrics.api_failures, 0)
+            self.assertEqual(executor.metrics.api_retries, 0)
+
+    def test_failed_or_unknown_asset_lookup_blocks_entries_as_operational_failure(self):
+        for asset, error in ((None, RuntimeError('inert')), (SimpleNamespace(status='unknown', tradable=True), None),
+                             (SimpleNamespace(status='active', tradable=None), None)):
+            executor = self.entry_executor(asset, error)
+            with mock.patch.object(executor, '_submit_order') as submit:
+                self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA', limit_price=10)))
+                submit.assert_not_called()
+            self.assertEqual(executor.metrics.api_failures, 1)
+            self.assertEqual(executor.metrics.skipped_reasons['API_FAIL'], 1)
+
+    def test_asset_lookup_is_not_applied_to_protective_sells_or_diagnostics(self):
+        executor = self.entry_executor(lookup_error=AssertionError('no_asset_lookup'))
+        with mock.patch.object(executor, '_submit_order', return_value=SimpleNamespace(id='stop')) as submit:
+            self.assertIsNotNone(executor.submit_with_retries(SimpleNamespace(side='sell', symbol='AAA')))
+            executor.config.diagnostic = True
+            self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA')))
+            self.assertEqual(submit.call_count, 1)
+        executor.client.get_asset.assert_not_called()
+
+    def test_asset_eligibility_rechecked_on_retry(self):
+        executor = self.entry_executor()
+        executor.client.get_asset.side_effect = [SimpleNamespace(status='active', tradable=True),
+                                               SimpleNamespace(status='inactive', tradable=True)]
+        with mock.patch.object(executor, '_submit_order', side_effect=RuntimeError('temporary')) as submit, \
+             mock.patch.object(executor, 'sleep'):
+            self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA', limit_price=10)))
+        self.assertEqual(submit.call_count, 1)
+        self.assertEqual(executor.client.get_asset.call_count, 2)
+        # A previous submission failure is still visible even if eligibility changes.
+        self.assertEqual(executor.metrics.skipped_reasons['ASSET_INACTIVE'], 1)
+        self.assertEqual(executor.metrics.api_failures, 1)
+
+    def test_permanent_http_rejection_is_not_retried(self):
+        executor = self.entry_executor(SimpleNamespace(status='active', tradable=True))
+        error = self.mod.requests.HTTPError('inert rejection')
+        error.response = SimpleNamespace(status_code=422, text='asset is inactive')
+        with mock.patch.object(executor, '_submit_order', side_effect=error) as submit, \
+             mock.patch.object(executor, 'sleep') as sleep:
+            self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA', limit_price=10)))
+        submit.assert_called_once()
+        sleep.assert_not_called()
+        self.assertEqual(executor.metrics.api_failures, 1)
+
+    def test_actual_execution_returns_failure_when_submission_failed(self):
+        config = self.mod.ExecutorConfig(time_window='any', price_source='close', min_order_usd=100,
+                                        allocation_pct=.10, allow_bump_to_one=True)
+        frame = pd.DataFrame([dict(symbol='AAA', close=95.0, entry_price=95.0, score=2.0)])
+        metrics = self.mod.ExecutionMetrics()
+        executor = self.mod.TradeExecutor(config, None, metrics)
+        def fail(order):
+            metrics.api_failures += 1
+            return None
+        with mock.patch.object(executor, 'fetch_buying_power', return_value=2000), \
+             mock.patch.object(executor, 'fetch_open_order_symbols', return_value=(set(), 0, 0)), \
+             mock.patch.object(executor, 'count_daily_buy_submits', return_value=0), \
+             mock.patch.object(executor, 'evaluate_time_window', return_value=(True, 'ok', 'any')), \
+             mock.patch.object(executor, 'submit_prepared_order', side_effect=fail) as submit:
+            self.assertEqual(executor.execute(frame, prefiltered=frame.to_dict('records')), 1)
+        submit.assert_called_once()
+        self.assertEqual((metrics.status, metrics.exit_reason), ('error', 'API_FAIL'))
+        saved = json.loads(self.mod.METRICS_PATH.read_bytes())
+        self.assertEqual((saved['status'], saved['api_failures']), ('error', 1))
 
     def test_bound_loader_queries_exact_signal_date_and_batch_without_latest_fallback(self):
         cursor = mock.MagicMock(); cursor.__enter__.return_value = cursor
@@ -681,7 +764,8 @@ class CallerTests(Fixture):
             with self.subTest(limit=limit):
                 config = self.mod.ExecutorConfig()
                 config._entry_preflight = self.gate(); config._entry_candidate_rows = self.rows
-                executor = self.mod.TradeExecutor(config, SimpleNamespace(), self.mod.ExecutionMetrics())
+                client = SimpleNamespace(get_asset=mock.Mock(return_value=SimpleNamespace(status='active', tradable=True)))
+                executor = self.mod.TradeExecutor(config, client, self.mod.ExecutionMetrics())
                 with mock.patch.object(executor, '_submit_order', return_value=SimpleNamespace(id='synthetic')) as submit:
                     result = executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA', limit_price=limit))
                 self.assertEqual(result is not None, expected)
