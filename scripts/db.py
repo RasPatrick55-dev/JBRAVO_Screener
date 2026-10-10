@@ -590,9 +590,11 @@ def _repair_screener_run_map_app_schema(cursor: Any) -> None:
         logger.warning("[WARN] SCREENER_RUN_MAP_SCHEMA_MISMATCH detail=pk_inspect_failed:%s", exc)
 
 
-def get_reconcile_state(engine: Optional[PGConnection] = None) -> dict[str, Any]:
+def get_reconcile_state(engine: Optional[PGConnection] = None, *, strict: bool = False) -> dict[str, Any]:
     with _maybe_conn(engine) as conn:
         if conn is None:
+            if strict:
+                raise RuntimeError("RECONCILE_DB_UNAVAILABLE")
             return {}
         try:
             with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
@@ -600,12 +602,16 @@ def get_reconcile_state(engine: Optional[PGConnection] = None) -> dict[str, Any]
                 row = cursor.fetchone()
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_RECONCILE_STATE_FETCH err=%s", exc)
+            if strict:
+                raise RuntimeError("RECONCILE_DB_READ_FAILED") from None
             return {}
 
     if not row:
         return {}
 
     last_after = normalize_ts(row.get("last_after"), field="last_after")
+    if strict and row.get("last_after") is not None and last_after is None:
+        raise RuntimeError("RECONCILE_DB_INVALID_WATERMARK")
     last_ran_at = normalize_ts(row.get("last_ran_at"), field="last_ran_at")
     return {"last_after": last_after, "last_ran_at": last_ran_at}
 
@@ -2788,11 +2794,13 @@ def insert_order_event(
 
 
 def get_open_trades(
-    engine: Optional[PGConnection] = None, limit: int = 200
+    engine: Optional[PGConnection] = None, limit: int = 200, *, strict: bool = False
 ) -> list[dict[str, Any]]:
     limit = max(1, int(limit or 0))
     with _maybe_conn(engine) as conn:
         if conn is None:
+            if strict:
+                raise RuntimeError("RECONCILE_DB_UNAVAILABLE")
             return []
         try:
             with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
@@ -2807,18 +2815,26 @@ def get_open_trades(
                     {"limit": limit},
                 )
                 rows = cursor.fetchall()
+                if strict and len(rows) >= limit:
+                    raise RuntimeError("RECONCILE_DB_INCOMPLETE")
                 return [dict(row) for row in rows]
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
+            if strict:
+                if isinstance(exc, RuntimeError) and str(exc) == "RECONCILE_DB_INCOMPLETE":
+                    raise
+                raise RuntimeError("RECONCILE_DB_READ_FAILED") from None
             return []
 
 
 def get_closed_trades_missing_exit(
-    engine: Optional[PGConnection], updated_after: datetime, limit: int = 200
+    engine: Optional[PGConnection], updated_after: datetime, limit: int = 200, *, strict: bool = False
 ) -> list[dict[str, Any]]:
     limit = max(1, int(limit or 0))
     with _maybe_conn(engine) as conn:
         if conn is None:
+            if strict:
+                raise RuntimeError("RECONCILE_DB_UNAVAILABLE")
             return []
         try:
             with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
@@ -2835,9 +2851,15 @@ def get_closed_trades_missing_exit(
                     {"updated_after": updated_after, "limit": limit},
                 )
                 rows = cursor.fetchall()
+                if strict and len(rows) >= limit:
+                    raise RuntimeError("RECONCILE_DB_INCOMPLETE")
                 return [dict(row) for row in rows]
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
+            if strict:
+                if isinstance(exc, RuntimeError) and str(exc) == "RECONCILE_DB_INCOMPLETE":
+                    raise
+                raise RuntimeError("RECONCILE_DB_READ_FAILED") from None
             return []
 
 

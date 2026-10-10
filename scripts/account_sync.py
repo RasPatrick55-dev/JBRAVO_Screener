@@ -33,19 +33,31 @@ class Stage:
 
 STAGES = (
     Stage('activities', 'scripts.fetch_account_activities', ('--lookback-days', '30'),
-          ('ACT_START', 'ACT_FETCH_OK', 'ACT_DB_OK'), ('ACT_FAIL', 'ACT_WATERMARK_FAIL')),
+          ('ACT_START', 'ACT_COVERAGE_COMPLETE', 'ACT_FETCH_OK', 'ACT_DB_OK'),
+          ('ACT_FAIL', 'ACT_WATERMARK_FAIL', 'ACT_PAGINATION_INCOMPLETE',
+           'ACT_PAYLOAD_INVALID', 'ACT_REQUEST_FAILED', 'ACT_WATERMARK_INVALID', 'ACT_DB_READ_FAILED')),
     Stage('reconciliation', 'scripts.execute_trades',
           ('--reconcile-only', 'true', '--dry-run', 'true', '--submit-at-ny', '',
            '--ignore-market-gate', 'true', '--reconcile-use-watermark',
            'true', '--reconcile-lookback-days', '14', '--reconcile-limit', '500',
            '--reconcile-overlap-secs', '300', '--max-poll-secs', '1'),
-          ('RECONCILE_START', 'RECONCILE_END', 'RECONCILE_WATERMARK_UPDATE'),
+          ('RECONCILE_START', 'RECONCILE_COVERAGE_COMPLETE', 'RECONCILE_END', 'RECONCILE_WATERMARK_UPDATE'),
           ('RECONCILE_DB_FAIL', 'RECONCILE_ALPACA_FAIL', 'RECONCILE_WATERMARK_DISABLED',
-           'AUTH_FAIL', 'ALPACA_UNAUTHORIZED')),
+           'AUTH_FAIL', 'ALPACA_UNAUTHORIZED', 'RECONCILE_POSITIONS_UNAVAILABLE',
+           'RECONCILE_ORDERS_UNAVAILABLE', 'RECONCILE_ORDERS_INVALID',
+           'RECONCILE_ORDERS_INCOMPLETE', 'RECONCILE_WATERMARK_HELD', 'RECONCILE_DB_INCOMPLETE')),
     Stage('snapshot', 'scripts.fetch_account_snapshot', (),
           ('ACCT_SNAP_START', 'ACCT_SNAP_FETCH_OK', 'ACCT_SNAP_DB_OK'), ('ACCT_SNAP_FAIL',)),
 )
 GENERIC_FAILURES = ('[ERROR]', 'Traceback (most recent call last):')
+INTEGRITY_REASONS = (
+    'RECONCILE_POSITIONS_UNAVAILABLE', 'RECONCILE_ORDERS_INVALID',
+    'RECONCILE_ORDERS_UNAVAILABLE', 'RECONCILE_ORDERS_INCOMPLETE',
+    'ACT_PAGINATION_INCOMPLETE', 'ACT_PAYLOAD_INVALID', 'ACT_REQUEST_FAILED',
+    'ACT_WATERMARK_INVALID', 'ACT_WATERMARK_FAIL', 'ACT_DB_READ_FAILED',
+    'RECONCILE_DB_INCOMPLETE', 'RECONCILE_DB_FAIL',
+    'RECONCILE_WATERMARK_DISABLED', 'RECONCILE_WATERMARK_HELD',
+)
 
 
 class OverlapError(Exception):
@@ -133,6 +145,9 @@ def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
         text = output.read(OUTPUT_LIMIT).decode('utf-8', errors='replace')
     failures = [marker for marker in (*stage.failures, *GENERIC_FAILURES) if marker in text]
     missing = [marker for marker in stage.required if marker not in text]
+    health_reasons = [marker for marker in INTEGRITY_REASONS if marker in failures]
+    if health_reasons:
+        reason = reason or health_reasons[0]
     qualifications = []
     if stage.name == 'reconciliation' and 'RECONCILE_DECORATE_MISS' in text:
         qualifications.append('RECONCILE_DECORATE_MISS')
@@ -144,6 +159,7 @@ def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
         'elapsed_seconds': time.monotonic() - started, 'output_bytes': size,
         'failure_markers': failures, 'missing_completion_markers': missing,
         'qualifications': qualifications,
+        'health_reasons': health_reasons,
     }
 
 
@@ -164,7 +180,8 @@ def run_workflow(state_dir: Path, stage_timeout: float = 300, *, runner=run_stag
     }
     try:
         with workflow_lock(state_dir / 'account-sync.lock') as lock_fd:
-            for relative in ('scripts/account_sync.py', *(s.module.replace('.', '/') + '.py' for s in STAGES)):
+            for relative in ('scripts/account_sync.py', 'scripts/db.py',
+                             *(s.module.replace('.', '/') + '.py' for s in STAGES)):
                 data = (ROOT / relative).read_bytes()
                 report['source_bindings'][relative] = {
                     'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),

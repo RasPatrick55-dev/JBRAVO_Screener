@@ -52,8 +52,10 @@ def _parse_timestamp(value: Any) -> Optional[datetime]:
     return parsed
 
 
-def _table_columns(engine: Optional[PGConnection], table: str) -> set[str]:
+def _table_columns(engine: Optional[PGConnection], table: str, *, strict: bool = False) -> set[str]:
     if engine is None:
+        if strict:
+            raise RuntimeError("ACT_DB_READ_FAILED")
         return set()
     try:
         with engine.cursor() as cursor:
@@ -69,11 +71,13 @@ def _table_columns(engine: Optional[PGConnection], table: str) -> set[str]:
             rows = cursor.fetchall()
             return {row[0] for row in rows}
     except Exception:
+        if strict:
+            raise RuntimeError("ACT_DB_READ_FAILED") from None
         return set()
 
 
-def load_watermark(engine: Optional[PGConnection]) -> Optional[str]:
-    columns = _table_columns(engine, "reconcile_state")
+def load_watermark(engine: Optional[PGConnection], *, strict: bool = False) -> Optional[str]:
+    columns = _table_columns(engine, "reconcile_state", strict=strict)
     if {"key", "value"} <= columns:
         try:
             with engine.cursor() as cursor:
@@ -84,6 +88,8 @@ def load_watermark(engine: Optional[PGConnection]) -> Optional[str]:
                 row = cursor.fetchone()
                 return str(row[0]) if row and row[0] is not None else None
         except Exception:
+            if strict:
+                raise RuntimeError("ACT_DB_READ_FAILED") from None
             return None
 
     if {"id", "last_after"} <= columns:
@@ -100,8 +106,12 @@ def load_watermark(engine: Optional[PGConnection]) -> Optional[str]:
                     return row[0].isoformat()
                 return str(row[0])
         except Exception:
+            if strict:
+                raise RuntimeError("ACT_DB_READ_FAILED") from None
             return None
 
+    if strict:
+        raise RuntimeError("ACT_DB_READ_FAILED")
     return None
 
 
@@ -191,7 +201,9 @@ def _pagination_token(response: requests.Response, payload: Any) -> Optional[str
             payload.get("next_page_token") or payload.get("page_token") or payload.get("next_token")
         )
         if token:
-            return str(token)
+            if not isinstance(token, str):
+                raise RuntimeError("ACT_PAYLOAD_INVALID")
+            return token
     return None
 
 
@@ -203,11 +215,11 @@ def _request_activity_page(
     headers = _build_headers()
     resp = requests.get(url, headers=headers, params=params, timeout=30)
     if not resp.ok:
-        raise RuntimeError(f"activities_request_failed status={resp.status_code} body={resp.text}")
+        raise RuntimeError(f"ACT_REQUEST_FAILED status={resp.status_code}")
     try:
         payload = resp.json()
     except Exception as exc:
-        raise RuntimeError(f"invalid_json_response err={exc}") from exc
+        raise RuntimeError("ACT_PAYLOAD_INVALID") from None
 
     activities: List[Dict[str, Any]] = []
     if isinstance(payload, list):
@@ -218,6 +230,10 @@ def _request_activity_page(
         and isinstance(payload["activities"], list)
     ):
         activities.extend(payload["activities"])
+    else:
+        raise RuntimeError("ACT_PAYLOAD_INVALID")
+    if any(not isinstance(activity, dict) for activity in activities):
+        raise RuntimeError("ACT_PAYLOAD_INVALID")
 
     token = _pagination_token(resp, payload)
     return activities, token
@@ -363,6 +379,7 @@ def fetch_activities(
 
     activities: List[Dict[str, Any]] = []
     page_count = 0
+    seen_tokens = set()
     while True:
         page_count += 1
         if page_count > max_pages:
@@ -373,11 +390,17 @@ def fetch_activities(
                 after or "",
                 until or "",
             )
-            break
+            raise RuntimeError("ACT_PAGINATION_INCOMPLETE")
         results, token = _request_activity_page(base_url, params)
         activities.extend(results)
         if not token:
+            # A full page without a continuation contract is not proof of exhaustion.
+            if len(results) >= page_size:
+                raise RuntimeError("ACT_PAGINATION_INCOMPLETE")
             break
+        if token in seen_tokens:
+            raise RuntimeError("ACT_PAGINATION_INCOMPLETE")
+        seen_tokens.add(token)
         params["page_token"] = token
 
     return activities
@@ -404,6 +427,8 @@ def _run_incremental(
     args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]
 ) -> None:
     since_iso, origin = compute_since(args.since_ts, watermark, args.lookback_days)
+    if (args.since_ts or watermark) and _parse_timestamp(args.since_ts or watermark) is None:
+        raise RuntimeError("ACT_WATERMARK_INVALID")
     max_pages = max(1, int(args.max_pages))
     page_size = _normalize_page_size(args.page_size)
 
@@ -418,6 +443,13 @@ def _run_incremental(
     )
 
     activities = fetch_activities(base_url, since_iso, None, page_size, max_pages)
+    # Validate all identities/time coverage before any insert or watermark update.
+    for activity in activities:
+        normalized, _ = _normalize_activity(activity)
+        if (not normalized["activity_id"] or not normalized["activity_type"]
+                or normalized["transaction_time"] is None):
+            raise RuntimeError("ACT_PAYLOAD_INVALID")
+    logger.info("[INFO] ACT_COVERAGE_COMPLETE count=%s", len(activities))
     logger.info("[INFO] ACT_FETCH_OK count=%s", len(activities))
 
     inserted, watermark_candidate, _ = insert_activities(engine, activities)
@@ -428,6 +460,7 @@ def _run_incremental(
             logger.info("[INFO] ACT_WATERMARK_OK value=%s", watermark_candidate)
         else:
             logger.error("[ERROR] ACT_WATERMARK_FAIL value=%s", watermark_candidate)
+            raise RuntimeError("ACT_WATERMARK_FAIL")
 
 
 def _build_backfill_windows(
@@ -615,7 +648,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             raise RuntimeError("db_unavailable")
 
         try:
-            watermark = load_watermark(conn)
+            watermark = load_watermark(conn, strict=args.mode == "incremental")
             if args.mode == "backfill":
                 _run_backfill(args, base_url, conn, watermark)
             else:

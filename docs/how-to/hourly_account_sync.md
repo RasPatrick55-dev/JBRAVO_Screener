@@ -10,7 +10,7 @@ Activities retain `--lookback-days 30`. Reconciliation retains watermark use,
 14-day fallback lookback, limit 500, overlap 300 seconds and poll setting 1 second.
 Its immutable arguments add `--reconcile-only true --dry-run true`,
 `--submit-at-ny ''` and `--ignore-market-gate true`. The empty submit time disables
-the executor's default 07:00 ET wait; the supported market-gate bypass allows this
+the executor's default 04:00 ET wait; the supported market-gate bypass allows this
 no-order reconciliation to run before market hours, on weekends and holidays.
 Dry-run enables that bypass without enabling order execution. Neither an
 arbitrary module nor an order-mode override is accepted by this CLI. Dry-run here
@@ -25,6 +25,51 @@ existing executor metrics writes; separating those shared metrics is outside thi
 increment.
 
 ## Health and failure contract
+
+### Reconciliation integrity
+
+The activity ingestor distinguishes a valid empty list from malformed responses,
+unavailable saved-watermark reads, incomplete pagination and failed requests. Its
+incremental path buffers and validates the entire bounded batch before inserting
+activities. A page-cap exhaustion, repeated continuation token or full page without
+a continuation token fails without batch insertion or watermark advancement.
+An invalid activity identity/time also fails before insertion. A failed watermark
+write returns an unsuccessful outcome; any preceding committed insert remains.
+`ACT_COVERAGE_COMPLETE` means the requested bounded chain passed these checks, not
+that every historical activity or the provider's whole account history is proven.
+The historical backfill mode is not qualified by this incremental contract.
+
+Reconciliation validates the order response before trade-state writes. An empty
+list is usable evidence; unavailable/malformed data or missing identities/timestamps
+is not. A response reaching the configured 500-order limit is conservatively
+incomplete: descending retrieval does not prove that older orders were included.
+It fails without closing/decorating trades, inserting order events or advancing
+the reconciliation watermark. No extra provider pages, retries or changed order
+submission behavior are introduced. A genuinely terminal exactly-full window also
+blocks until completeness can be established separately.
+
+When open trades require position evidence, a failed/malformed position read stops
+before writes. A successfully retrieved empty position list retains the existing
+`POSITION_CLOSED` rule; this does not invent a fill price. Valid fills retain the
+existing matching, price, quantity and exit-reason rules. Strict database readers
+separate initial/empty state from read failure and saturated 200-row windows.
+Their other callers retain the existing non-strict default.
+
+Unresolved exit decoration, failed database writes/reads or unavailable watermark
+state prevents watermark advancement. Earlier committed writes are not rolled back;
+the workflow is not a cross-stage transaction or a snapshot of simultaneous broker
+and database state. Existing 14-day fallback, two-day decoration lookback, 300-second
+overlap and activity request parameters remain unchanged; bounded-window completion
+does not establish historical completeness, attribution or matching correctness.
+
+The reconcile-only caller returns nonzero for incomplete reconciliation. Hourly
+health requires `ACT_COVERAGE_COMPLETE` / `RECONCILE_COVERAGE_COMPLETE` and retains
+allowlisted `health_reasons`, such as `RECONCILE_POSITIONS_UNAVAILABLE`,
+`RECONCILE_ORDERS_INCOMPLETE`, `ACT_PAGINATION_INCOMPLETE` and
+`RECONCILE_WATERMARK_HELD`. Later stages remain `not_run` after failure. Raw provider
+response/error text is not included in these health records. Auto-reconciliation
+uses the same safer reconciliation method but its existing dispatcher still ignores
+the Boolean result; this change does not impose a new trading-entry gate.
 
 - An OS lock prevents concurrent invocations of this new workflow. It does not lock
   the old individual schedules or the separate executor/monitor. On POSIX the owned
@@ -41,7 +86,8 @@ increment.
   can suppress errors; therefore `RECONCILE_START`, `RECONCILE_END` and
   `RECONCILE_WATERMARK_UPDATE` are required, and its broker/database failure or
   watermark-disabled markers fail even with exit zero. A missing trade decoration
-  produces `degraded`, also unsuccessful, and stops the sequence.
+  stops the sequence: the corrected caller returns failure; a legacy zero-exit
+  result with this marker is classified `degraded`, also unsuccessful.
 - Per-run JSON is retained beneath `logs/account_sync/`; `latest.json` is atomically
   replaced under the lock and reopened. An overlapping invocation returns nonzero
   and retains its own record without overwriting the active run's latest result.
@@ -86,6 +132,14 @@ reviewable cutover plan, not proof of deployment or permission to start trading.
 ## Offline verification
 
 Run `python -m unittest discover -s tests -p test_account_sync.py -v`.
+Also run `python -m unittest discover -s tests -p test_reconciliation_integrity.py -v`.
+Integrity tests normally import the executor, activity ingestor and database reader
+module with external modules replaced before import. Broker reads and database
+operations are inert doubles; socket, process and environment-loading boundaries
+are blocked. They exercise actual reconciliation/ingestion logic, strict database
+readers and supervisor health, including incomplete-run caller failure. They do not
+establish live API pagination semantics, database rollback, remote cancellation or
+host integration. Schedules, ranking, sizing and order execution remain unchanged.
 Supervisor tests use standard-library mocks and temporary storage, avoiding repository
 pytest conftest's Alpaca import. Gate integration tests additionally require pandas,
 dateutil and timezone data. They import the executor normally with provider, database,
