@@ -7,10 +7,12 @@ and does not place orders.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import logging
 import math
+import re
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -83,6 +85,8 @@ def _parse_run_date(value: str | None) -> date | None:
 
 
 def _json_safe(value: Any) -> Any:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
     if isinstance(value, dict):
         return {str(k): _json_safe(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -118,6 +122,11 @@ def _load_oos_inputs(args: MonitorArgs) -> tuple[pd.DataFrame, str, date | None]
             if csv_data:
                 try:
                     frame = pd.read_csv(io.StringIO(str(csv_data)))
+                    content = str(csv_data).encode("utf-8")
+                    frame.attrs["input_binding"] = {
+                        "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest(),
+                        "representation": "database_csv_data_utf8",
+                    }
                 except Exception as exc:
                     raise RuntimeError(
                         f"Failed reading DB artifact ranker_oos_predictions CSV: {exc}"
@@ -142,7 +151,12 @@ def _load_oos_inputs(args: MonitorArgs) -> tuple[pd.DataFrame, str, date | None]
             "OOS predictions not found. Expected DB artifact 'ranker_oos_predictions' "
             f"or file {fallback_path}."
         )
-    frame = pd.read_csv(fallback_path)
+    content = fallback_path.read_bytes()
+    frame = pd.read_csv(io.BytesIO(content))
+    frame.attrs["input_binding"] = {
+        "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest(),
+        "representation": "saved_csv_bytes",
+    }
     return frame, str(fallback_path), args.run_date
 
 
@@ -290,11 +304,116 @@ def _compute_psi(
     }
 
 
+def _compute_binary_psi(
+    ref: pd.Series, cur: pd.Series, *, warn: float, alert: float
+) -> dict[str, Any]:
+    """Compare fixed categories 0/1; quantile bins are inappropriate for labels."""
+    populations = []
+    for values in (ref, cur):
+        numeric = pd.to_numeric(values, errors="coerce")
+        valid = numeric.isin([0, 1])
+        counts = [int((numeric.loc[valid] == category).sum()) for category in (0, 1)]
+        populations.append({
+            "counts": counts, "rows": int(valid.sum()),
+            "invalid_rows": int((~valid).sum()),
+            "prevalence": float(numeric.loc[valid].mean()) if valid.any() else None,
+        })
+    baseline, recent = populations
+    out = {
+        "method": "binary_categories", "categories": [0, 1], "bins_used": 2,
+        "baseline": baseline, "recent": recent,
+        "ref_count": baseline["rows"], "cur_count": recent["rows"],
+        "psi": None, "level": "insufficient", "prevalence_delta": None,
+        "smoothing_epsilon": 1e-6,
+    }
+    if not baseline["rows"] or not recent["rows"]:
+        return out
+    out["prevalence_delta"] = recent["prevalence"] - baseline["prevalence"]
+    if baseline["invalid_rows"] or recent["invalid_rows"]:
+        return out
+    percentages = []
+    for population in populations:
+        pct = np.clip(np.array(population["counts"], dtype=float) / population["rows"],
+                      1e-6, None)
+        percentages.append(pct / pct.sum())
+    ref_pct, cur_pct = percentages
+    psi = float(np.sum((cur_pct - ref_pct) * np.log(cur_pct / ref_pct)))
+    out.update(psi=psi, level="alert" if psi >= alert else "warn" if psi >= warn else "stable")
+    return out
+
+
+def _model_comparison(
+    baseline: pd.DataFrame, recent: pd.DataFrame, *,
+    score_col: str = DEFAULT_SCORE_COL, target: str = DEFAULT_TARGET,
+) -> dict[str, Any]:
+    """Report scoring provenance without equating fold models to production."""
+    windows = {}
+    for name, frame in (("baseline", baseline), ("recent", recent)):
+        required = {"model_sha256", "model_binding_bytes", "model_binding_kind", "model_role",
+                    "model_score_column", "model_target"}
+        missing = sorted(required - set(frame.columns))
+        valid = pd.Series(False, index=frame.index)
+        if not missing:
+            sizes = pd.to_numeric(frame["model_binding_bytes"], errors="coerce")
+            valid = (
+                frame["model_sha256"].map(
+                    lambda value: isinstance(value, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+                )
+                & frame["model_binding_kind"].eq("scoring_bundle_pickle_sha256_v1")
+                & frame["model_role"].eq("walkforward_fold")
+                & frame["model_score_column"].eq(score_col)
+                & frame["model_target"].eq(target)
+                & np.isfinite(sizes) & sizes.gt(0) & sizes.mod(1).eq(0)
+            ).fillna(False)
+        identities = (sorted(frame.loc[valid, "model_sha256"].unique().tolist())
+                      if not missing else [])
+        conflicts = []
+        if "fold_id" in frame and not missing:
+            for fold, group in frame.groupby("fold_id", dropna=False):
+                if group["model_sha256"].nunique(dropna=False) != 1:
+                    conflicts.append(str(fold))
+        windows[name] = {
+            "rows": int(len(frame)), "bound_rows": int(valid.sum()),
+            "unbound_rows": int((~valid).sum()), "missing_fields": missing,
+            "model_sha256": identities, "conflicting_fold_ids": conflicts,
+            "unique_symbol_sessions": int(frame[["symbol", "timestamp"]].drop_duplicates().shape[0]),
+        }
+    reasons = []
+    if any(window["unbound_rows"] for window in windows.values()):
+        reasons.append("score_model_identity_unbound")
+    if any(window["conflicting_fold_ids"] for window in windows.values()):
+        reasons.append("conflicting_fold_model_identity")
+    # A fold ID can appear in both windows: its binding must be consistent there too.
+    combined = pd.concat([baseline, recent], ignore_index=True)
+    if {"model_sha256", "model_binding_bytes"} <= set(combined.columns):
+        if (combined.groupby("model_sha256")["model_binding_bytes"]
+                .nunique(dropna=False).gt(1).any()):
+            reasons.append("conflicting_model_binding_size")
+    if {"fold_id", "model_sha256"} <= set(combined.columns):
+        if (combined.groupby("fold_id", dropna=False)["model_sha256"]
+                .nunique(dropna=False).gt(1).any()):
+            reasons.append("conflicting_fold_model_identity_across_windows")
+    scope = "unknown_model_diagnostic" if reasons else "cross_model_diagnostic"
+    reasons.append("production_score_history_binding_unestablished")
+    if scope == "cross_model_diagnostic":
+        reasons.append("walkforward_scores_not_production_drift")
+    return {
+        "scope": scope, "production_drift_established": False,
+        "score_col": score_col, "target": target,
+        "weighting": "fold_rows_no_silent_deduplication", "windows": windows,
+        "common_model_sha256": sorted(set(windows["baseline"]["model_sha256"])
+                                      & set(windows["recent"]["model_sha256"])),
+        "reasons": reasons,
+    }
+
+
 def _compute_calibration_window(
     frame: pd.DataFrame,
     *,
     label_col: str,
     score_col: str,
+    fwd_ret_col: str,
     bins: int,
     min_rows: int,
 ) -> dict[str, Any]:
@@ -302,6 +421,10 @@ def _compute_calibration_window(
         "applicable": False,
         "skip_reason": None,
         "rows": 0,
+        "input_rows": int(len(frame)),
+        "excluded_unmatured_rows": 0,
+        "excluded_invalid_label_rows": 0,
+        "excluded_invalid_score_rows": 0,
         "ece": None,
         "mce": None,
         "score_min": None,
@@ -314,10 +437,20 @@ def _compute_calibration_window(
     if score_col not in frame.columns:
         out["skip_reason"] = "missing_score"
         return out
+    if fwd_ret_col not in frame.columns:
+        out["skip_reason"] = "missing_forward_return"
+        return out
 
     labels = pd.to_numeric(frame[label_col], errors="coerce")
     scores = pd.to_numeric(frame[score_col], errors="coerce")
-    valid = labels.notna() & scores.notna()
+    mature = np.isfinite(pd.to_numeric(frame[fwd_ret_col], errors="coerce"))
+    binary = labels.isin([0, 1])
+    finite_score = np.isfinite(scores)
+    # Disjoint exclusions: missing/nonfinite outcomes, then labels, then scores.
+    out["excluded_unmatured_rows"] = int((~mature).sum())
+    out["excluded_invalid_label_rows"] = int((mature & ~binary).sum())
+    out["excluded_invalid_score_rows"] = int((mature & binary & ~finite_score).sum())
+    valid = mature & binary & finite_score
     rows = int(valid.sum())
     out["rows"] = rows
     if rows <= 0:
@@ -380,6 +513,7 @@ def _compute_calibration_drift(
     baseline: pd.DataFrame,
     label_col: str,
     score_col: str,
+    fwd_ret_col: str,
     bins: int,
     min_rows: int,
 ) -> dict[str, Any]:
@@ -387,6 +521,7 @@ def _compute_calibration_drift(
         recent,
         label_col=label_col,
         score_col=score_col,
+        fwd_ret_col=fwd_ret_col,
         bins=bins,
         min_rows=min_rows,
     )
@@ -394,6 +529,7 @@ def _compute_calibration_drift(
         baseline,
         label_col=label_col,
         score_col=score_col,
+        fwd_ret_col=fwd_ret_col,
         bins=bins,
         min_rows=min_rows,
     )
@@ -419,7 +555,10 @@ def _compute_calibration_drift(
             "min_rows": int(max(1, min_rows)),
             "score_col": score_col,
             "label_col": label_col,
+            "fwd_return_column": fwd_ret_col,
+            "outcome_policy": "finite_matching_forward_return_and_binary_label",
             "recent": {
+                **recent_stats,
                 "rows": int(recent_stats.get("rows") or 0),
                 "ece": recent_stats.get("ece"),
                 "mce": recent_stats.get("mce"),
@@ -428,6 +567,7 @@ def _compute_calibration_drift(
                 "reliability_table": recent_stats.get("reliability_table") or [],
             },
             "baseline": {
+                **baseline_stats,
                 "rows": int(baseline_stats.get("rows") or 0),
                 "ece": baseline_stats.get("ece"),
                 "mce": baseline_stats.get("mce"),
@@ -541,7 +681,10 @@ def run_monitor(args: MonitorArgs) -> dict[str, Any]:
 
     score_col = _resolve_score_column(raw, args.score_col)
     fwd_ret_col = _resolve_fwd_return_column(raw, horizon_days)
-    work = _prepare_frame(raw, score_col=score_col, fwd_ret_col=fwd_ret_col)
+    mature = np.isfinite(pd.to_numeric(raw[fwd_ret_col], errors="coerce"))
+    finite_score = np.isfinite(pd.to_numeric(raw[score_col], errors="coerce"))
+    work = _prepare_frame(raw.loc[mature & finite_score],
+                          score_col=score_col, fwd_ret_col=fwd_ret_col)
     if work.empty:
         raise RuntimeError("OOS dataset has no usable rows after normalization.")
 
@@ -563,6 +706,7 @@ def run_monitor(args: MonitorArgs) -> dict[str, Any]:
     if baseline.empty:
         LOG.warning("[WARN] RANKER_MONITOR_BASELINE_EMPTY fallback=full_dataset")
         baseline = work.copy()
+    model_comparison = _model_comparison(baseline, recent, score_col=score_col, target=args.target)
 
     drift_cols = _default_drift_columns(
         work,
@@ -579,13 +723,17 @@ def run_monitor(args: MonitorArgs) -> dict[str, Any]:
     warn_cols: list[str] = []
     alert_cols: list[str] = []
     for col in drift_cols:
-        psi_row = _compute_psi(
-            baseline[col],
-            recent[col],
-            bins=int(args.psi_bins),
-            warn=float(args.psi_warn),
-            alert=float(args.psi_alert),
-        )
+        if col == args.target:
+            psi_row = _compute_binary_psi(baseline[col], recent[col],
+                                          warn=args.psi_warn, alert=args.psi_alert)
+        else:
+            psi_row = _compute_psi(
+                baseline[col], recent[col], bins=int(args.psi_bins),
+                warn=float(args.psi_warn), alert=float(args.psi_alert),
+            )
+        psi_row["interpretation"] = (model_comparison["scope"] if col == score_col
+                                     else "unbound_secondary_score_diagnostic"
+                                     if col.startswith("score_") else "population_diagnostic")
         drift[col] = psi_row
         psi_value = psi_row.get("psi")
         if psi_value is not None:
@@ -672,10 +820,12 @@ def run_monitor(args: MonitorArgs) -> dict[str, Any]:
         baseline=calibration_baseline,
         label_col=args.target,
         score_col=score_col,
+        fwd_ret_col=fwd_ret_col,
         bins=int(args.calibration_bins),
         min_rows=int(args.calibration_min_rows),
     )
     calibration_payload = calibration_block.get("calibration") or {}
+    calibration_payload["interpretation"] = model_comparison["scope"]
     calibration_applicable = bool(calibration_block.get("calibration_applicable", False))
     calibration_skip_reason = calibration_block.get("calibration_skip_reason")
     recent_cal = calibration_payload.get("recent") if isinstance(calibration_payload, dict) else {}
@@ -721,6 +871,18 @@ def run_monitor(args: MonitorArgs) -> dict[str, Any]:
         recent_sharpe_warn=float(args.recent_sharpe_warn),
         recent_sharpe_alert=float(args.recent_sharpe_alert),
     )
+    diagnostic_action = recommended_action
+    # These artifacts describe research folds, not bound production-model history.
+    # Never target production retraining/recalibration from their pooled statistics.
+    recommended_action = "investigate"
+    recommendation_reasons.extend(model_comparison["reasons"])
+    if not calibration_applicable:
+        recommendation_reasons.append(f"calibration_unavailable:{calibration_skip_reason}")
+    for name, stats in (("baseline", baseline_cal), ("recent", recent_cal)):
+        if stats.get("excluded_invalid_label_rows") or stats.get("excluded_invalid_score_rows"):
+            recommendation_reasons.append(f"invalid_calibration_inputs:{name}")
+    if any(row.get("level") == "insufficient" for row in drift.values()):
+        recommendation_reasons.append("insufficient_drift_inputs")
 
     champion = load_latest_champion(BASE_DIR)
     champion_summary = None
@@ -737,6 +899,14 @@ def run_monitor(args: MonitorArgs) -> dict[str, Any]:
         "run_date": str(args.run_date) if args.run_date else None,
         "target": args.target,
         "data_source": data_source,
+        "input_binding": raw.attrs.get("input_binding"),
+        "monitor_contract_version": 2,
+        "model_comparison": model_comparison,
+        "outcome_maturity": {
+            "input_rows": int(len(raw)), "finite_forward_return_rows": int(mature.sum()),
+            "incomplete_forward_return_rows": int((~mature).sum()),
+            "fwd_return_column": fwd_ret_col,
+        },
         "score_col_requested": args.score_col,
         "score_col_used": score_col,
         "fwd_return_column": fwd_ret_col,
@@ -766,12 +936,14 @@ def run_monitor(args: MonitorArgs) -> dict[str, Any]:
             "alert_cols": alert_cols,
         },
         "calibration_applicable": calibration_applicable,
+        "calibration_skip_reason": calibration_skip_reason,
         "calibration": calibration_payload,
         "recent_strategy": recent_metrics,
         "baseline_strategy": baseline_metrics,
         "recent_sharpe_warn": float(args.recent_sharpe_warn),
         "recent_sharpe_alert": float(args.recent_sharpe_alert),
         "recommended_action": recommended_action,
+        "diagnostic_recommended_action": diagnostic_action,
         "recommendation_reasons": recommendation_reasons,
     }
     if champion_summary is not None:

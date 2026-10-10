@@ -540,7 +540,10 @@ def run_autoremediate(args: argparse.Namespace) -> dict[str, Any]:
     action = str(decision.get("recommended_action") or "none").strip().lower()
     wants_recalibrate = "action_recalibrate" in reasons or action == "recalibrate"
 
-    if decision.get("decision") != "allow" and not dry_run:
+    investigate_only = action == "investigate"
+    if investigate_only:
+        LOG.warning("[WARN] AUTOREMEDIATE_INVESTIGATION_ONLY no_model_change=true")
+    if decision.get("decision") != "allow" and not dry_run and not investigate_only:
         if wants_recalibrate:
             remediation_kind = "recalibrate"
             LOG.info("[INFO] AUTOREMEDIATE_RECALIBRATE_START target=%s", args.target)
@@ -589,7 +592,7 @@ def run_autoremediate(args: argparse.Namespace) -> dict[str, Any]:
             repredict_skipped_reason,
         )
     elif not executed:
-        repredict_skipped_reason = "prior_step_failed"
+        repredict_skipped_reason = "investigation_required" if investigate_only else "prior_step_failed"
         LOG.info(
             "[INFO] AUTOREMEDIATE_REPREDICT_SKIPPED reason=%s",
             repredict_skipped_reason,
@@ -714,16 +717,19 @@ def run_autoremediate(args: argparse.Namespace) -> dict[str, Any]:
         },
         "executed": bool(executed),
         "remediation_kind": remediation_kind,
+        "remediation_skipped_reason": "investigation_required" if investigate_only else None,
         "recalibrate": {
             "executed": bool(remediation_kind == "recalibrate" and executed),
-            "requested": bool(decision.get("decision") != "allow" and wants_recalibrate),
+            "requested": bool(decision.get("decision") != "allow" and wants_recalibrate
+                              and not investigate_only),
             "rc": recalibrate_rc,
             "elapsed_secs": recalibrate_elapsed_secs,
             "cmd": recalibrate_cmd,
         },
         "autotune": {
             "executed": bool(remediation_kind == "retrain" and executed),
-            "requested": bool(decision.get("decision") != "allow" and not wants_recalibrate),
+            "requested": bool(decision.get("decision") != "allow" and not wants_recalibrate
+                              and not investigate_only),
             "rc": autotune_rc,
             "elapsed_secs": autotune_elapsed_secs,
             "cmd": autotune_cmd,
