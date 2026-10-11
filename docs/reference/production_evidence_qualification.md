@@ -14,8 +14,8 @@ changed bytes are rejected.
    baseline trading open. Its approval records `approval_id`, `reviewer` and
    aware `approved_at_utc`. It fixes the full model bundle, three producer source
    identities, ordered features, target `label_5d_pos_300bp`, score `score_5d`,
-   symbol universe, bound exchange calendar, disjoint baseline/recent windows
-   and exact policy. The universe policy is
+   symbol universe, bound exchange calendar, disjoint baseline/recent windows,
+   explicit `window_lengths` and exact metric policy. The universe policy is
    `all_reviewed_symbols_every_session`. It requires at least 25 symbols;
    actual windows must also meet the 2,000-row calibration minimum.
 2. A byte-bound `jbravo.market-session-calendar.v1` JSON record with `venue=XNYS`
@@ -50,16 +50,28 @@ changed bytes are rejected.
    treat an agent-created template as their authorization. Bind the review's
    exact SHA externally when authorizing evaluation.
 
-The module's `POLICY` is the exact JSON policy for the plan. Existing defaults
-remain: 252 baseline calendar days, 63 recent calendar days, at least 2,000 rows
-per calibration window, ten PSI/calibration bins, PSI warn/alert 0.10/0.25,
+The plan's `window_lengths` object must contain exactly
+`baseline_calendar_days` and `recent_calendar_days`, each a positive integer.
+Each length must equal its window's inclusive start/end date span. Both windows
+must remain disjoint and contain exchange sessions. These lengths are fixed by
+the independently approved, byte-bound plan before scoring begins; there is no
+CLI override or implicit fallback. Changing them requires a new reviewed plan,
+which must still be approved before its first baseline trading open. The report
+records the selected lengths, and the health guard checks them against its dates.
+
+The existing monitor CLI defaults of 252 baseline and 63 recent calendar days
+are configurable defaults, not a qualification minimum. This consumer does not
+require 315 calendar days. Reviewers must justify the planned windows using
+population comparability, session coverage and dependence between observations.
+Meeting a raw row count alone does not establish statistical adequacy. Shorter
+reviewed lengths do not waive complete capture, outcome or freshness checks and
+do not guarantee healthy results or operating acceptance.
+
+The module's `POLICY` remains the exact JSON metric policy for the plan:
+at least 2,000 rows per calibration window, ten PSI/calibration bins, PSI warn/alert 0.10/0.25,
 ECE warn/alert 0.05/0.10, top 25, cost proxy 5 bps, five-session forward horizon,
-five-calendar-day strategy rebalance and Sharpe warn/alert 0.30/0.00. Shortened
-windows, overlapping windows or changed thresholds fail. A smaller study would
-need a separately justified and reviewed policy change; this consumer cannot
-grant one. With no qualified history, the retained disjoint window durations
-require forward collection over 315 calendar days plus outcome maturation.
-This is a coverage requirement, not a promise of eventual healthy results.
+five-calendar-day strategy rebalance and Sharpe warn/alert 0.30/0.00. Overlapping
+windows, lengths inconsistent with reviewed dates or changed thresholds fail.
 
 ## Causal outcome join
 

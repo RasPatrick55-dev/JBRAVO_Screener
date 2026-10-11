@@ -213,7 +213,8 @@ def _monitor_provenance(payload, *, now, reference_date, max_age_days):
 
 def _production_qualification_reasons(payload, current_capture):
     """A saved candidate is not an approved publication or current model proof."""
-    from scripts.production_evidence import POLICY, identity, model_identity, MAX_OUTPUT_BYTES, PRODUCER_FILES
+    from scripts.production_evidence import (POLICY, identity, model_identity,
+                                            reviewed_window_bounds, MAX_OUTPUT_BYTES, PRODUCER_FILES)
     reasons = []
     if any(payload.get(key) is not True for key in ('qualified_for_monitoring',
             'monitor_candidate_eligible', 'publication_approved')):
@@ -243,6 +244,12 @@ def _production_qualification_reasons(payload, current_capture):
             or comparison.get('common_model_sha256') != ([expected['sha256']] if expected else [])):
         reasons.append('production_comparison_unestablished')
     windows = payload.get('windows')
+    try:
+        reviewed_window_bounds({name + suffix: windows.get(name + suffix)
+                                for name in ('baseline', 'recent') for suffix in ('_start', '_end')},
+                               payload.get('window_lengths'))
+    except (ValueError, TypeError, AttributeError):
+        reasons.append('production_window_design_invalid')
     if (payload.get('missing_capture_sessions') != [] or type(payload.get('incomplete_outcome_rows')) is not int
             or payload['incomplete_outcome_rows'] != 0 or not isinstance(windows, Mapping)
             or any(type(windows.get(key)) is not int or windows[key] < POLICY['calibration_min_rows']

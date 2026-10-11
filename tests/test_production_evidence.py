@@ -58,6 +58,7 @@ class ProductionEvidenceTests(unittest.TestCase):
         self.symbols = ['S' + str(i) for i in range(60)]
         self.model = capture.scoring_binding({'fixture': 1}, None, ['x'], evidence.TARGET, None)
         self.plan = {'schema': 'jbravo.production-evidence-plan.v1', 'policy': evidence.POLICY,
+            'window_lengths': {'baseline_calendar_days': 252, 'recent_calendar_days': 63},
             'approval': {'approval_id': 'synthetic-plan-only', 'reviewer': 'test-fixture',
                          'approved_at_utc': '2026-01-02T12:00:00Z'},
             'model_binding': self.model, 'producer_sources': capture.producer_binding(),
@@ -154,7 +155,7 @@ class ProductionEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'bytes_changed'):
             self.consume([ref])
 
-    def test_plan_rejects_overlap_shortened_windows_and_changed_thresholds(self):
+    def test_plan_rejects_overlap_unreviewed_lengths_and_changed_thresholds(self):
         for mutation in ('overlap', 'duration', 'threshold', 'late_registration'):
             plan = copy.deepcopy(self.plan)
             if mutation == 'overlap': plan['windows']['recent_start'] = plan['windows']['baseline_end']
@@ -163,6 +164,32 @@ class ProductionEvidenceTests(unittest.TestCase):
             else: plan['approval']['approved_at_utc'] = '2026-01-05T22:00:00Z'
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 self.validate(plan)
+
+    def test_plan_accepts_reviewed_lengths_and_original_monitor_defaults(self):
+        bounds, _, _ = self.validate()
+        self.assertEqual((bounds['baseline_end'] - bounds['baseline_start']).days + 1, 252)
+        plan = copy.deepcopy(self.plan)
+        plan['window_lengths'] = {'baseline_calendar_days': 70, 'recent_calendar_days': 49}
+        plan['windows'] = {'baseline_start': '2026-07-20', 'baseline_end': '2026-09-27',
+                           'recent_start': '2026-09-28', 'recent_end': '2026-11-15'}
+        self.validate(plan)
+
+    def test_plan_requires_explicit_positive_integer_window_lengths(self):
+        for value in (None, {}, {'baseline_calendar_days': 70},
+                      {'baseline_calendar_days': 70, 'recent_calendar_days': 49, 'extra': 1}):
+            plan = copy.deepcopy(self.plan)
+            plan['window_lengths'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'window_lengths_required'):
+                self.validate(plan)
+        for value in (0, -1, True, 49.0, '49'):
+            plan = copy.deepcopy(self.plan)
+            plan['window_lengths']['recent_calendar_days'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'window_lengths_required'):
+                self.validate(plan)
+        plan = copy.deepcopy(self.plan)
+        del plan['window_lengths']
+        with self.assertRaisesRegex(ValueError, 'window_lengths_required'):
+            self.validate(plan)
 
     def test_join_uses_five_sessions_across_weekend_and_recomputes_label(self):
         rows, bars, sessions = self.tiny_outcomes()
@@ -256,11 +283,12 @@ class ProductionEvidenceTests(unittest.TestCase):
         candidate = {'monitor_contract_version': 3, 'recommended_action': 'none',
             'qualified_for_monitoring': True, 'monitor_candidate_eligible': True,
             'publication_approved': False, 'policy': evidence.POLICY,
+            'window_lengths': self.plan['window_lengths'],
             'model_binding': self.model, 'producer_sources': self.plan['producer_sources'],
             'model_comparison': {'scope': 'reviewed_fixed_production_model',
                 'production_drift_established': True, 'common_model_sha256': [self.model['sha256']]},
             'missing_capture_sessions': [], 'incomplete_outcome_rows': 0,
-            'windows': {'baseline_rows': 3000, 'recent_rows': 3000},
+            'windows': {**self.plan['windows'], 'baseline_rows': 3000, 'recent_rows': 3000},
             **{key: capture.binding(b'fixture') for key in ('review_binding', 'plan_binding',
                 'calendar_binding', 'bars_binding', 'qualified_rows_binding')}}
         current = {'model_binding': self.model, 'producer_sources': self.plan['producer_sources']}
@@ -268,6 +296,15 @@ class ProductionEvidenceTests(unittest.TestCase):
         # This synthetic boolean is not a real publication approval.
         candidate['publication_approved'] = True
         self.assertEqual(self.guard._extract_health(candidate, current)['recommended_action'], 'none')
+        for mutation in ('missing', 'mismatch', 'overlap'):
+            invalid = copy.deepcopy(candidate)
+            if mutation == 'missing': del invalid['window_lengths']
+            elif mutation == 'mismatch': invalid['window_lengths']['recent_calendar_days'] += 1
+            else: invalid['windows']['recent_start'] = invalid['windows']['baseline_end']
+            result = self.guard._extract_health(invalid, current)
+            with self.subTest(mutation=mutation):
+                self.assertEqual(result['recommended_action'], 'investigate')
+                self.assertIn('production_window_design_invalid', result['monitor_production_qualification_reasons'])
         changed = copy.deepcopy(current)
         changed['model_binding']['sha256'] = 'a' * 64
         result = self.guard._extract_health(candidate, changed)
@@ -301,6 +338,10 @@ class ProductionEvidenceTests(unittest.TestCase):
             self.assertEqual(ast.unparse(function.body[0]), 'load_env()')
 
     def test_full_bound_packet_reaches_only_a_healthy_unpublished_candidate(self):
+        # Shorter lengths are synthetic examples, not a recommended production study.
+        self.plan['window_lengths'] = {'baseline_calendar_days': 70, 'recent_calendar_days': 49}
+        self.plan['windows'] = {'baseline_start': '2026-07-20', 'baseline_end': '2026-09-27',
+                                'recent_start': '2026-09-28', 'recent_end': '2026-11-15'}
         bounds, sessions, cohorts = self.validate()
         references = []
         for index, session in enumerate(cohorts['baseline'] + cohorts['recent']):
@@ -346,6 +387,7 @@ class ProductionEvidenceTests(unittest.TestCase):
         self.assertFalse(report['operating_acceptance'])
         self.assertEqual(report['recommended_action'], 'none')
         self.assertEqual(report['incomplete_outcome_rows'], 0)
+        self.assertEqual(report['window_lengths'], self.plan['window_lengths'])
         self.assertGreater(report['windows']['recent_rows'], 2000)
         saved = evidence.save_result(self.root, report, rows)
         self.assertTrue(saved['monitor_candidate_eligible'])
@@ -355,6 +397,19 @@ class ProductionEvidenceTests(unittest.TestCase):
         rejected, _ = evidence.evaluate(self.root, self.save('incomplete-review.json', review), now=self.now)
         self.assertFalse(rejected['monitor_candidate_eligible'])
         self.assertIn('missing_production_score_sessions', rejected['recommendation_reasons'])
+        # A complete shorter plan still cannot waive the existing population minimum.
+        short_plan = copy.deepcopy(self.plan)
+        short_plan['window_lengths'] = {'baseline_calendar_days': 2, 'recent_calendar_days': 2}
+        short_plan['windows'] = {'baseline_start': '2026-11-10', 'baseline_end': '2026-11-11',
+                                 'recent_start': '2026-11-12', 'recent_end': '2026-11-13'}
+        review['plan'] = self.save('short-plan.json', short_plan)
+        review['captures'] = [ref for session, ref in zip(cohorts['baseline'] + cohorts['recent'], references)
+                              if date(2026, 11, 10) <= session <= date(2026, 11, 13)]
+        rejected, _ = evidence.evaluate(self.root, self.save('short-review.json', review), now=self.now)
+        self.assertEqual(rejected['missing_capture_sessions'], [])
+        self.assertEqual(rejected['incomplete_outcome_rows'], 0)
+        self.assertFalse(rejected['monitor_candidate_eligible'])
+        self.assertIn('insufficient_comparable_rows', rejected['recommendation_reasons'])
 
 
 if __name__ == '__main__':

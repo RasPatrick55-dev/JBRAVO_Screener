@@ -25,8 +25,7 @@ RETURN = 'fwd_ret_5d'
 MAX_BYTES = 64 * 1024 * 1024
 MAX_OUTPUT_BYTES = 128 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
-POLICY = {'baseline_calendar_days': 252, 'recent_calendar_days': 63,
-          'calibration_min_rows': 2000, 'psi_bins': 10, 'psi_warn': .10,
+POLICY = {'calibration_min_rows': 2000, 'psi_bins': 10, 'psi_warn': .10,
           'psi_alert': .25, 'calibration_bins': 10, 'calibration_ece_warn': .05,
           'calibration_ece_alert': .10, 'top_k': 25, 'cost_bps': 5.,
           'horizon_sessions': 5, 'rebalance_calendar_days': 5,
@@ -138,6 +137,25 @@ def model_identity(value):
     return value
 
 
+def reviewed_window_bounds(windows, lengths):
+    """Lengths are preregistered study inputs, not fixed monitor defaults."""
+    names = ('baseline', 'recent')
+    if (not isinstance(lengths, dict)
+            or set(lengths) != {name + '_calendar_days' for name in names}
+            or any(type(value) is not int or value < 1 for value in lengths.values())):
+        raise ValueError('reviewed_window_lengths_required')
+    expected = {name + suffix for name in names for suffix in ('_start', '_end')}
+    if not isinstance(windows, dict) or set(windows) != expected:
+        raise ValueError('explicit_disjoint_windows_required')
+    bounds = {key: day(value) for key, value in windows.items()}
+    if not bounds['baseline_start'] <= bounds['baseline_end'] < bounds['recent_start'] <= bounds['recent_end']:
+        raise ValueError('overlapping_or_inverted_windows')
+    for name in names:
+        if (bounds[name + '_end'] - bounds[name + '_start']).days + 1 != lengths[name + '_calendar_days']:
+            raise ValueError('reviewed_window_length_mismatch')
+    return bounds
+
+
 def validate_plan(plan, calendar, *, now):
     if plan.get('schema') != 'jbravo.production-evidence-plan.v1' or plan.get('policy') != POLICY:
         raise ValueError('unchanged_production_monitor_policy_required')
@@ -155,16 +173,7 @@ def validate_plan(plan, calendar, *, now):
             or len(set(symbols)) != len(symbols)
             or any(not isinstance(s, str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,31}', s) for s in symbols)):
         raise ValueError('reviewed_symbol_population_required')
-    windows = plan.get('windows', {})
-    expected = {'baseline_start', 'baseline_end', 'recent_start', 'recent_end'}
-    if not isinstance(windows, dict) or set(windows) != expected:
-        raise ValueError('explicit_disjoint_windows_required')
-    bounds = {key: day(value) for key, value in windows.items()}
-    if not bounds['baseline_start'] <= bounds['baseline_end'] < bounds['recent_start'] <= bounds['recent_end']:
-        raise ValueError('overlapping_or_inverted_windows')
-    for name in ('baseline', 'recent'):
-        if (bounds[name + '_end'] - bounds[name + '_start']).days + 1 != POLICY[name + '_calendar_days']:
-            raise ValueError('monitor_window_duration_changed')
+    bounds = reviewed_window_bounds(plan.get('windows'), plan.get('window_lengths'))
     if calendar.get('schema') != 'jbravo.market-session-calendar.v1' or calendar.get('venue') != 'XNYS':
         raise ValueError('bound_exchange_calendar_required')
     sessions = calendar.get('sessions')
@@ -474,7 +483,8 @@ def evaluate(root, review_reference, *, now=None):
               'run_utc': now.isoformat(), 'run_date': signal.isoformat(), 'target': TARGET,
               'data_source': 'reviewed://production_score_observations', 'windows': coverage,
               'model_binding': plan['model_binding'], 'producer_sources': plan['producer_sources'],
-              'policy': POLICY, 'review_binding': {key: review_reference[key] for key in ('bytes', 'sha256')},
+              'policy': POLICY, 'window_lengths': dict(plan['window_lengths']),
+              'review_binding': {key: review_reference[key] for key in ('bytes', 'sha256')},
               'plan_binding': {key: review['plan'][key] for key in ('bytes', 'sha256')},
               'calendar_binding': {key: plan['calendar'][key] for key in ('bytes', 'sha256')},
               'bars_binding': {key: review['bars'][key] for key in ('bytes', 'sha256')},
