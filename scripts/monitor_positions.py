@@ -154,10 +154,11 @@ def env_bool(name: str, default: bool = False) -> bool:
 MONITOR_DB_LOGGING_ENV = "MONITOR_ENABLE_DB_LOGGING"
 
 # Monitor DB event vocabulary (aligned with execute_trades where possible).
-# New values here are additive and do not change behavior unless DB logging is enabled.
+# Terminal observations cannot claim canonical fill ownership. Reconciliation
+# records SELL_FILL and closes/decorates trades from verified broker evidence.
 MONITOR_DB_EVENT_TYPES = {
     "sell_submit": "SELL_SUBMIT",
-    "sell_fill": "SELL_FILL",
+    "sell_fill": "SELL_FILL_OBSERVED",
     "sell_cancelled": "SELL_CANCELLED",
     "sell_rejected": "SELL_REJECTED",
     "sell_expired": "SELL_EXPIRED",
@@ -3235,26 +3236,10 @@ def submit_sell_market_order(
                 },
             )
             if status_norm == "filled" and not partial_exit and not is_dryrun:
-                exit_reason = f"{reason_code}:{reason}" if reason_code else str(reason)
-                exit_reason = (exit_reason or "").strip()
-                if len(exit_reason) > 200:
-                    exit_reason = exit_reason[:200]
-                if db_module is not None:
-                    try:
-                        db_module.close_trade_on_sell_fill(
-                            symbol,
-                            order_id_value,
-                            final_ts,
-                            exit_price,
-                            exit_reason,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "DB_TRADE_CLOSE_FAILED symbol=%s order_id=%s err=%s",
-                            symbol,
-                            order_id_value or "",
-                            exc,
-                        )
+                # Keep the monitor's diagnostic executed-trade export, but do
+                # not close canonical trades with polling time/limit price.
+                # Reconciliation owns broker fill identity, time and price in
+                # its atomic transaction, for full and partial observations.
                 pnl_value = None
                 try:
                     pnl_value = (float(exit_price) - float(entry_price)) * float(order_qty)

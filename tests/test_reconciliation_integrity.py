@@ -561,6 +561,7 @@ class TransactionFixture:
         self.trades = {}
         self.trade = ['CLOSED' if closed else 'OPEN', 2, 10, 'XYZ', None, None, None, None, None]
         self.events = []
+        self.observations = []
         self.fail = None
         self.statements = []
         self.commits = self.rollbacks = 0
@@ -582,6 +583,7 @@ class TransactionFixture:
         self.pending_trades = copy.deepcopy(self.trades)
         self.pending_trade = self.pending_trades[1]
         self.pending_events = copy.deepcopy(self.events)
+        self.pending_observations = copy.deepcopy(self.observations)
         self.order_locked = self.trade_locked = False
         self.ownership_checked = False
         self.read_committed = False
@@ -594,6 +596,7 @@ class TransactionFixture:
         else:
             self.trades = self.pending_trades
             self.events = self.pending_events
+            self.observations = self.pending_observations
             self.commits += 1
             if self.fail == 'commit_ack':
                 self.fail = None
@@ -634,8 +637,11 @@ class TransactionFixture:
         elif 'INSERT INTO order_events' in sql:
             if self.fail == 'insert':
                 raise RuntimeError('synthetic event insert failure')
-            self.pending_events.append((params['symbol'], params['qty'], params['status'],
-                                        params['event_time']))
+            if params.get('event_type') == 'SELL_FILL_OBSERVED':
+                self.pending_observations.append(copy.deepcopy(params))
+            else:
+                self.pending_events.append((params['symbol'], params['qty'], params['status'],
+                                            params['event_time']))
         elif 'UPDATE trades' in sql:
             if self.fail == 'update':
                 raise RuntimeError('synthetic trade update failure')
@@ -671,6 +677,51 @@ class AtomicFillTests(unittest.TestCase):
 
     def fill(self, **changes):
         return self.module.reconcile_sell_fill(self.transaction, 1, **(self.parameters | changes))
+
+    def test_untouched_position_closure_upgrades_once_and_rolls_back_on_failure(self):
+        for failure in (None, 'insert', 'update', 'commit_ack'):
+            with self.subTest(failure=failure):
+                self.setup_transaction(closed=True)
+                self.transaction.trade[5:8] = [NOW + timedelta(seconds=1), None, 'POSITION_CLOSED']
+                original = copy.deepcopy(self.transaction.trade)
+                self.transaction.fail = failure
+                result = self.fill(decorate=True)
+                self.assertEqual(result, failure is None)
+                if failure in ('insert', 'update'):
+                    self.assertEqual(self.transaction.trade, original)
+                    self.assertEqual(self.transaction.events, [])
+                self.transaction.fail = None
+                self.assertTrue(self.fill(decorate=True))
+                self.assertEqual(self.transaction.trade[4:9], ['sell-1', NOW, 11.0, 'SELL_FILL', 2.0])
+                self.assertEqual(len(self.transaction.events), 1)
+                self.assertTrue(self.fill(decorate=True))
+                self.assertEqual(len(self.transaction.events), 1)
+
+    def test_position_marker_cannot_replace_bound_or_populated_exit_evidence(self):
+        for field, value in ((4, ''), (4, 'sell-1'), (4, 'another-order'), (6, 11), (8, 2),
+                             (5, None), (5, 'bad'), (5, NOW - timedelta(seconds=1)),
+                             (7, 'SELL_FILL'), (7, 'POSITION_CLOSED ')):
+            with self.subTest(field=field, value=value):
+                self.setup_transaction(closed=True)
+                self.transaction.trade[5:8] = [NOW + timedelta(seconds=1), None, 'POSITION_CLOSED']
+                self.transaction.trade[field] = value
+                original = copy.deepcopy(self.transaction.trade)
+                self.assertFalse(self.fill(decorate=True))
+                self.assertEqual(self.transaction.trade, original)
+                self.assertEqual(self.transaction.events, [])
+
+    def test_position_upgrade_still_rejects_orphans_and_other_trade_ownership(self):
+        for orphan in (False, True):
+            with self.subTest(orphan=orphan):
+                self.setup_transaction(closed=True)
+                self.transaction.trade[5:8] = [NOW, None, 'POSITION_CLOSED']
+                self.transaction.events = [('XYZ', 2, 'filled', NOW)]
+                if not orphan:
+                    self.transaction.trades[2] = ['CLOSED', 2, 10, 'XYZ', 'sell-1', NOW, 11, 'SELL_FILL', 2]
+                original = copy.deepcopy(self.transaction.trades)
+                self.assertFalse(self.fill(decorate=True))
+                self.assertEqual(self.transaction.trades, original)
+                self.assertEqual(len(self.transaction.events), 1)
 
     def test_insert_failure_rolls_back_and_retry_closes_once(self):
         self.setup_transaction()
@@ -951,6 +1002,15 @@ class SharedConnectionFixture(TransactionFixture):
                 raise AssertionError('watermark write in read transaction')
             self.statements.append(sql)
             self.last_after = params['last_after']
+        elif 'SELECT status, qty, entry_price' in sql and 'FOR UPDATE' not in sql:
+            self.statements.append(sql)
+            self.selected = 'position_close'
+            self.pending_trade = self.pending_trades[params['trade_id']]
+        elif 'UPDATE trades' in sql and 'exit_order_id' in params:
+            self.statements.append(sql)
+            self.pending_trade[0] = 'CLOSED'
+            self.pending_trade[4:9] = [params['exit_order_id'], params['exit_time'],
+                params['exit_price'], params['exit_reason'], params['realized_pnl']]
         else:
             if self.read_only:
                 raise AssertionError('atomic write must start a separate transaction')
@@ -960,6 +1020,8 @@ class SharedConnectionFixture(TransactionFixture):
     def fetchone(self):
         if self.selected == 'watermark':
             return {'last_after': self.last_after, 'last_ran_at': NOW}
+        if self.selected == 'position_close':
+            return tuple(self.pending_trade[:3])
         return super().fetchone()
 
     def fetchall(self):
@@ -1002,6 +1064,42 @@ class SharedConnectionCallerTests(unittest.TestCase):
         client.cancel_order_by_id.side_effect = self.forbidden
         self.caller = self.executor.TradeExecutor(self.executor.ExecutorConfig(), client,
                                                  self.executor.ExecutionMetrics())
+
+    def test_absent_position_closure_and_fill_use_real_writers_on_shared_connection(self):
+        self.setup_caller()
+        self.caller.client.get_all_positions.return_value = []
+        filled_at = NOW - timedelta(minutes=1)
+        self.stack.enter_context(mock.patch.object(self.executor, 'alpaca_list_orders_http',
+            return_value=[order(filled_at=filled_at.isoformat())]))
+        self.assertTrue(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.trade[4:9], ['sell-1', filled_at, 11.0, 'SELL_FILL', 2.0])
+        self.assertEqual(len(self.connection.events), 1)
+        self.assertTrue(self.caller.reconcile_closed_trades())
+        self.assertEqual(len(self.connection.events), 1)
+
+    def test_absent_position_without_fill_preserves_placeholder_and_holds_watermark(self):
+        self.setup_caller()
+        self.caller.client.get_all_positions.return_value = []
+        self.stack.enter_context(mock.patch.object(self.executor, 'alpaca_list_orders_http', return_value=[]))
+        watermark = self.connection.last_after
+        self.assertFalse(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.trade[4:9], [None, NOW, None, 'POSITION_CLOSED', None])
+        self.assertEqual(self.connection.events, [])
+        self.assertEqual(self.connection.last_after, watermark)
+
+    def test_saved_position_closure_upgrade_failure_preserves_watermark_and_placeholder(self):
+        self.setup_caller(closed=True)
+        self.connection.trade[5:8] = [NOW, None, 'POSITION_CLOSED']
+        original = copy.deepcopy(self.connection.trade)
+        watermark = self.connection.last_after
+        self.connection.fail = 'update'
+        self.assertFalse(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.trade, original)
+        self.assertEqual(self.connection.events, [])
+        self.assertEqual(self.connection.last_after, watermark)
+        self.connection.fail = None
+        self.assertTrue(self.caller.reconcile_closed_trades())
+        self.assertEqual(len(self.connection.events), 1)
 
     def test_shared_connection_reads_end_before_close_and_decoration(self):
         for closed in (False, True):

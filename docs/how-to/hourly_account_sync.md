@@ -176,7 +176,14 @@ lost. The caller holds its watermark on failure; it does not retry immediately.
 This is a per-fill transaction, not a transaction spanning the whole hourly job.
 Legacy event writers do not take these locks, and existing duplicate/missing
 history is not automatically repaired. Position-only closure remains a separate
-operation until a fill is available for decoration. PostgreSQL locking, rollback
+operation until a fill is available for decoration. Its exact untouched placeholder
+(`CLOSED`, null exit order/price/P&L, `POSITION_CLOSED`, and a valid observation
+timestamp at or after the fill) can be upgraded by the atomic decoration writer.
+The placeholder time/reason are replaced by broker fill time/reason in the same
+transaction as fill insertion and ownership binding. Populated exit evidence,
+different reasons, orphan events and another trade's ownership still block;
+an unavailable fill still holds the watermark. No legacy event repair is implied.
+PostgreSQL locking, rollback
 and concurrent execution have not been verified against a live database: offline
 tests exercise the actual helper with an in-memory transaction model, including
 insert/update failures, rollback, repeat calls and lost acknowledgement. A shared
@@ -260,6 +267,26 @@ independent event/decorate writers are not called. They share the pre-import
 offline boundary fixture and run in the bounded unittest suite; their pytest
 `alpaca_optional` marker is retained. Full repository pytest/plugin/conftest
 integration and live database/provider behavior remain unqualified.
+
+With `MONITOR_ENABLE_DB_LOGGING=true`, monitor filled sell statuses are recorded
+as `SELL_FILL_OBSERVED`, including partial-exit observations. These
+retain the monitor's polling time, intended quantity, limit price and reason
+metadata; they are not canonical executions or ownership claims. The monitor no
+longer closes `trades` independently with that polling time/limit price. The
+hourly reconciler records canonical `SELL_FILL` and closes/decorates the trade
+from broker fill evidence using its existing ownership transaction. This adds
+no cumulative partial-exit accounting or changes to the existing attribution
+heuristic/gross-P&L formula. Historical orphan `SELL_FILL` events remain blocked
+for separate review. Existing diagnostic executed-trade/CSV exports remain
+observations and do not qualify a canonical exit.
+
+To use this boundary, deploy the reviewed monitor, database helper and hourly
+reconciliation source together through the approved deployment workflow. Keep
+the hourly account-sync job enabled; monitor observations alone do not complete
+canonical trade exits. Source tests cover normal monitor imports with synthetic
+provider/database boundaries and temporary runtime storage, then the actual
+event writer, strict readers and atomic reconciler on an in-memory shared
+connection. Live PostgreSQL concurrency and host integration remain unverified.
 
 Supervisor tests use standard-library mocks and temporary storage, avoiding repository
 pytest conftest's Alpaca import. Gate integration tests additionally require pandas,

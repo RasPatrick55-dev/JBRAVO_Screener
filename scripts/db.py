@@ -2825,6 +2825,7 @@ def reconcile_sell_fill(
     Participating reconcilers serialize by broker order, then lock the trade.
     A prior identical event is reused only for its uniquely bound trade.
     Conflicting/duplicate events and another trade's ownership block.
+    An untouched POSITION_CLOSED placeholder may be upgraded during decoration.
     Legacy event writers do not participate in this locking contract.
     """
     def number(value: Any) -> Decimal:
@@ -2885,12 +2886,24 @@ def reconcile_sell_fill(
                         raise ValueError("trade_state_mismatch")
                     if row[4] not in (None, "", order_id):
                         raise ValueError("trade_exit_conflict")
+                    # The position-absence writer records an observation time,
+                    # not a broker execution. Upgrade only its exact untouched
+                    # sentinel; any bound order, price or P&L is real evidence.
+                    position_closed_at = normalize_ts(row[5]) if row[5] is not None else None
+                    position_placeholder = (
+                        decorate and state == "CLOSED" and row[4] is None
+                        and row[6] is None and row[8] is None
+                        and row[7] == "POSITION_CLOSED"
+                        and position_closed_at is not None
+                        and normalized_time <= position_closed_at
+                    )
                     # Missing fields do not make existing exit evidence replaceable.
                     # Validate each supplied field before inserting or decorating.
                     if (
-                        (row[5] is not None and normalize_ts(row[5]) != normalized_time)
+                        (not position_placeholder and row[5] is not None
+                         and position_closed_at != normalized_time)
                         or (row[6] is not None and number(row[6]) != number(exit_price))
-                        or (row[7] is not None and row[7] != exit_reason)
+                        or (not position_placeholder and row[7] is not None and row[7] != exit_reason)
                     ):
                         raise ValueError("trade_exit_conflict")
                     exit_complete = (state == "CLOSED" and row[4] == order_id
