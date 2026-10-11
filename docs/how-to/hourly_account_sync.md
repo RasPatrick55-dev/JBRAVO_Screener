@@ -81,8 +81,8 @@ allowlisted `health_reasons`, such as `RECONCILE_POSITIONS_UNAVAILABLE`,
 `RECONCILE_ORDERS_INCOMPLETE`, `ACT_PAGINATION_INCOMPLETE` and
 `RECONCILE_WATERMARK_HELD`. Later stages remain `not_run` after failure. Raw provider
 response/error text is not included in these health records. Auto-reconciliation
-uses the same safer reconciliation method but its existing dispatcher still ignores
-the Boolean result; this change does not impose a new trading-entry gate.
+uses the same safer method and the dispatcher requires its explicit success before
+entry execution; an end-of-run failure also produces an unsuccessful outcome.
 
 - An OS lock prevents concurrent invocations of this new workflow. It does not lock
   the old individual schedules or the separate executor/monitor. On POSIX the owned
