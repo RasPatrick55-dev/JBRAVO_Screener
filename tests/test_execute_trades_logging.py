@@ -1,10 +1,15 @@
 import json
 import logging
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import shutil
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 import scripts.execute_trades as execute_mod
+from scripts import executor_health, pipeline_postflight, signal_handoff
 from scripts.execute_trades import (
     ExecutionMetrics,
     ExecutorConfig,
@@ -43,6 +48,9 @@ class StubTradingClient:
 
     def get_account(self):
         return self.account
+
+    def get_asset(self, symbol):
+        return SimpleNamespace(symbol=symbol, status="active", tradable=True)
 
     def submit_order(self, request):
         if getattr(request, "trail_percent", None) is not None:
@@ -94,6 +102,96 @@ def paper_api_env(monkeypatch):
     monkeypatch.setenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
 
 
+@pytest.fixture(autouse=True)
+def executor_clock(monkeypatch):
+    # Keep dispatcher tests inside premarket and past their scheduled entry time.
+    now = datetime(2026, 10, 9, 11, tzinfo=timezone.utc)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(execute_mod, "datetime", FixedDateTime)
+    monkeypatch.setattr(execute_mod, "_ny_now", lambda: now.astimezone(execute_mod.NY))
+    return now
+
+
+@pytest.fixture
+def bound_candidates(monkeypatch, tmp_path, executor_clock):
+    """Publish a synthetic completed primary, keeping real entry gates enabled."""
+    source = Path(__file__).resolve().parents[1]
+    for relative in set(executor_health.SOURCES + pipeline_postflight.SOURCE_FILES):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / relative, destination)
+    now = executor_clock
+    started = now.replace(hour=3, minute=45)
+    finished = now.replace(hour=4)
+    batch = started + timedelta(minutes=5)
+    calendar = [
+        {"date": day, "open": "09:30", "close": "16:00"}
+        for day in ("2026-10-08", "2026-10-09")
+    ]
+    session = signal_handoff.session_contract(calendar, now=started)
+    monkeypatch.chdir(tmp_path)
+
+    actual_preflight = executor_health.preflight
+    monkeypatch.setattr(
+        executor_health, "preflight",
+        lambda *args, **kwargs: actual_preflight(*args, **({"now": now} | kwargs)),
+    )
+    # Only provider/database boundaries are stubbed; submission validation runs.
+    monkeypatch.setattr(execute_mod.db, "db_enabled", lambda: False)
+    monkeypatch.setattr(
+        execute_mod.TradeExecutor, "_submit_order",
+        lambda self, request: self.client.submit_order(request),
+    )
+    monkeypatch.setattr(
+        execute_mod, "alpaca_http_get", lambda *args, **kwargs: _mock_orders_response([])
+    )
+
+    def publish(rows):
+        frame = pd.DataFrame([
+            row | {
+                "run_date": "2026-10-08", "run_ts_utc": batch.isoformat(),
+                "timestamp": "2026-10-08T04:00:00Z",
+            }
+            for row in rows
+        ])
+        snapshot = signal_handoff.freeze_candidates(
+            frame.to_dict(orient="records"), session, run_ts=batch
+        )
+        invocation = pipeline_postflight.begin_primary(tmp_path, started)
+        pipeline_postflight.publish_health(
+            tmp_path, started_at=started, finished_at=finished, pipeline_rc=0,
+            steps=pipeline_postflight.REQUIRED_STEPS,
+            step_rcs={step: 0 for step in pipeline_postflight.REQUIRED_STEPS},
+            stage_times={step: 1.0 for step in pipeline_postflight.REQUIRED_STEPS},
+            degraded=False, labels_rows=5,
+            freshness={"stale": False, "pred_compatible": True, "predict_rc": None,
+                       "snapshot_date": "2026-10-08"},
+            coverage={"total": len(frame), "non_null": len(frame), "pct": 100.0,
+                      "run_ts_utc": batch.isoformat()},
+            ml_health={"decision": "allow", "reasons": []},
+            controls={key: True for key in (
+                "strict_predictions_meta", "strict_auto_refresh_predictions",
+                "auto_refresh_features", "auto_refresh_predictions", "use_champion",
+                "ml_health_guard", "refresh_predictions_for_candidates",
+            )},
+            session=session, frozen_candidates=snapshot, invocation_id=invocation["id"],
+        )
+        result = pipeline_postflight.check_health(tmp_path, now=now, require_session=True)
+        assert result["status"] == "ok", result
+        pipeline_postflight.complete_primary(tmp_path, invocation, result)
+        monkeypatch.setattr(
+            execute_mod, "load_candidates_from_db", lambda **kwargs: frame.copy(deep=True)
+        )
+        return frame
+
+    return publish
+
+
 pytestmark = pytest.mark.alpaca_optional
 
 
@@ -138,9 +236,8 @@ def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch, caplog):
     assert "NO_CANDIDATES" in skips
 
 
-def test_execute_flow_attaches_trailing_stop(tmp_path, caplog):
-    csv_path = tmp_path / "candidates.csv"
-    frame = pd.DataFrame(
+def test_execute_flow_attaches_trailing_stop(bound_candidates, caplog):
+    bound_candidates(
         [
             {
                 "symbol": "AAPL",
@@ -151,13 +248,11 @@ def test_execute_flow_attaches_trailing_stop(tmp_path, caplog):
             }
         ]
     )
-    frame.to_csv(csv_path, index=False)
     config = ExecutorConfig(
-        source="path",
-        source_path=csv_path,
+        source="db",
         cancel_after_min=1,
         allocation_pct=0.5,
-        time_window="any",
+        time_window="premarket",
         extended_hours=True,
     )
     metrics = ExecutionMetrics()
@@ -166,16 +261,8 @@ def test_execute_flow_attaches_trailing_stop(tmp_path, caplog):
     df = executor.load_candidates()
     caplog.set_level(logging.INFO, logger="execute_trades")
     caplog.clear()
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(
-        execute_mod.TradeExecutor,
-        "submit_with_retries",
-        lambda self, req: self.client.submit_order(req),
-    )
-    try:
-        rc = executor.execute(df)
-    finally:
-        monkeypatch.undo()
+    assert execute_mod._check_entry_preflight(config, df)["status"] == "pass"
+    rc = executor.execute(df)
     assert rc == 0
     assert metrics.orders_submitted == 1
     assert metrics.trailing_attached == 1
@@ -398,7 +485,7 @@ class StubNoFillTradingClient(StubTradingClient):
         raise KeyError(order_id)
 
 
-def test_exec_plan_runs_and_submits(tmp_path, monkeypatch):
+def test_exec_plan_runs_and_submits(bound_candidates, monkeypatch):
     rows = [
         {
             "symbol": f"S{i:02d}",
@@ -409,8 +496,7 @@ def test_exec_plan_runs_and_submits(tmp_path, monkeypatch):
         }
         for i in range(12)
     ]
-    csv_path = tmp_path / "candidates.csv"
-    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    frame = bound_candidates(rows)
 
     monkeypatch.setattr(
         execute_mod,
@@ -429,25 +515,19 @@ def test_exec_plan_runs_and_submits(tmp_path, monkeypatch):
     monkeypatch.setattr(
         execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, _states, **kwargs: None
     )
-    monkeypatch.setattr(
-        execute_mod.TradeExecutor,
-        "submit_with_retries",
-        lambda self, req: self.client.submit_order(req),
-    )
-
-    config = ExecutorConfig(time_window="any", max_new_positions=4, max_positions=1)
+    config = ExecutorConfig(time_window="premarket", max_new_positions=4, max_positions=1)
     client = StubNoFillTradingClient()
     metrics = ExecutionMetrics()
     executor = TradeExecutor(config, client, metrics, sleep_fn=lambda *_: None)
 
-    rc = executor.execute(pd.DataFrame(rows))
+    assert execute_mod._check_entry_preflight(config, frame)["status"] == "pass"
+    rc = executor.execute(frame)
     assert rc == 0
     assert len(client.submitted_orders) == 4
 
 
-def test_open_trailing_stop_does_not_block(tmp_path, monkeypatch):
-    csv_path = tmp_path / "candidates.csv"
-    pd.DataFrame(
+def test_open_trailing_stop_does_not_block(bound_candidates, monkeypatch):
+    frame = bound_candidates(
         [
             {
                 "symbol": "AAA",
@@ -464,7 +544,7 @@ def test_open_trailing_stop_does_not_block(tmp_path, monkeypatch):
                 "score_breakdown": "{}",
             },
         ]
-    ).to_csv(csv_path, index=False)
+    )
 
     monkeypatch.setattr(
         execute_mod,
@@ -489,18 +569,13 @@ def test_open_trailing_stop_does_not_block(tmp_path, monkeypatch):
     monkeypatch.setattr(
         execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, _states, **kwargs: None
     )
-    monkeypatch.setattr(
-        execute_mod.TradeExecutor,
-        "submit_with_retries",
-        lambda self, req: self.client.submit_order(req),
-    )
-
-    config = ExecutorConfig(time_window="any", max_new_positions=2)
+    config = ExecutorConfig(time_window="premarket", max_new_positions=2)
     client = StubNoFillTradingClient()
     metrics = ExecutionMetrics()
     executor = TradeExecutor(config, client, metrics, sleep_fn=lambda *_: None)
 
-    rc = executor.execute(pd.read_csv(csv_path))
+    assert execute_mod._check_entry_preflight(config, frame)["status"] == "pass"
+    rc = executor.execute(frame)
     assert rc == 0
     assert len(client.submitted_orders) == 2
 
@@ -557,8 +632,8 @@ def test_no_submissions_sets_reason(tmp_path, monkeypatch):
     assert skips.get("OPEN_ORDER", 0) > 0 or skips.get("NO_SUBMISSIONS", 0) > 0
 
 
-@pytest.mark.parametrize("source_mode", ["path", "db"])
-def test_submit_loop_start_and_four_submissions(source_mode, tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize("load_mode", ["frame", "db"])
+def test_submit_loop_start_and_four_submissions(load_mode, bound_candidates, monkeypatch, caplog):
     rows = [
         {
             "symbol": f"P{i}",
@@ -570,20 +645,7 @@ def test_submit_loop_start_and_four_submissions(source_mode, tmp_path, monkeypat
         for i in range(4)
     ]
 
-    config_kwargs = {
-        "source": source_mode,
-        "source_type": source_mode,
-        "time_window": "any",
-        "max_new_positions": 4,
-    }
-    if source_mode == "path":
-        csv_path = tmp_path / "planned_candidates.csv"
-        pd.DataFrame(rows).to_csv(csv_path, index=False)
-        config_kwargs["source_path"] = csv_path
-    else:
-        monkeypatch.setattr(
-            execute_mod, "load_candidates_from_db", lambda **kwargs: pd.DataFrame(rows)
-        )
+    frame = bound_candidates(rows)
 
     monkeypatch.setattr(
         execute_mod, "alpaca_http_get", lambda *args, **kwargs: _mock_orders_response([])
@@ -591,19 +653,16 @@ def test_submit_loop_start_and_four_submissions(source_mode, tmp_path, monkeypat
     monkeypatch.setattr(
         execute_mod.TradeExecutor, "poll_submitted_orders", lambda self, _states, **kwargs: None
     )
-    monkeypatch.setattr(
-        execute_mod.TradeExecutor,
-        "submit_with_retries",
-        lambda self, req: self.client.submit_order(req),
-    )
-
     metrics = ExecutionMetrics()
     client = StubNoFillTradingClient()
     executor = TradeExecutor(
-        ExecutorConfig(**config_kwargs), client, metrics, sleep_fn=lambda *_: None
+        ExecutorConfig(source="db", time_window="premarket", max_new_positions=4),
+        client, metrics, sleep_fn=lambda *_: None,
     )
 
-    df = executor.load_candidates(rank=False)
+    # Live path/CSV entries are forbidden; cover a bound frame and the DB loader.
+    df = executor.load_candidates(rank=False) if load_mode == "db" else frame
+    assert execute_mod._check_entry_preflight(executor.config, df)["status"] == "pass"
     filtered = executor.guard_candidates(executor.hydrate_candidates(df))
     caplog.set_level(logging.INFO, logger="execute_trades")
     caplog.clear()
