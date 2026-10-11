@@ -908,6 +908,8 @@ SKIP_REASON_ORDER: tuple[str, ...] = (
     "DAILY_ENTRY_LIMIT",
     "MAX_POSITIONS",
     "API_FAIL",
+    "ASSET_INACTIVE",
+    "ASSET_NOT_TRADABLE",
     "DATA_MISSING",
     "EXISTING_POSITION",
     "OPEN_ORDER",
@@ -4876,10 +4878,16 @@ class TradeExecutor:
             else:
                 self.metrics.exit_reason = "NO_ACTION"
 
+        failed = bool(self.metrics.api_failures or self.metrics.skipped_reasons.get("API_FAIL", 0)
+                      or self.metrics.exit_reason == "PREFLIGHT")
+        if failed:
+            self.metrics.status = "error"
+            if self.metrics.exit_reason != "PREFLIGHT":
+                self.metrics.exit_reason = "API_FAIL"
         self.persist_metrics()
         self._log_diagnostic_snapshot()
         self.log_summary()
-        return 0
+        return 1 if failed else 0
 
     def fetch_existing_positions(self) -> set[str]:
         symbols: set[str] = set()
@@ -5286,7 +5294,8 @@ class TradeExecutor:
         )
         submitted_order = self.submit_with_retries(order_request)
         if submitted_order is None:
-            self.record_skip_reason("API_FAIL", symbol=prepared.symbol, detail="submit_failed")
+            if not getattr(self, "_last_submit_skip_reason", None):
+                self.record_skip_reason("API_FAIL", symbol=prepared.symbol, detail="submit_failed")
             return None
         order_id = str(getattr(submitted_order, "id", ""))
         self.metrics.orders_submitted += 1
@@ -5665,7 +5674,8 @@ class TradeExecutor:
         )
         submitted_order = self.submit_with_retries(order_request)
         if submitted_order is None:
-            self.record_skip_reason("API_FAIL", symbol=symbol, detail="submit_failed")
+            if not getattr(self, "_last_submit_skip_reason", None):
+                self.record_skip_reason("API_FAIL", symbol=symbol, detail="submit_failed")
             return outcome
         outcome["submitted"] = True
         order_id = str(getattr(submitted_order, "id", ""))
@@ -6087,7 +6097,32 @@ class TradeExecutor:
             return SimpleNamespace(**data)
         return data
 
+    def _entry_asset_allowed(self, symbol: str) -> bool:
+        """Use current broker eligibility for entries, including chase orders."""
+        try:
+            asset = self.client.get_asset(symbol)
+            status = getattr(asset, "status", None)
+            status = str(getattr(status, "value", status)).lower()
+            tradable = getattr(asset, "tradable", None)
+            if status == "inactive":
+                reason = "ASSET_INACTIVE"
+            elif status == "active" and tradable is False:
+                reason = "ASSET_NOT_TRADABLE"
+            elif status == "active" and tradable is True:
+                return True
+            else:
+                raise ValueError("asset_eligibility_unavailable")
+        except Exception:
+            # A failed/ambiguous lookup is an operational failure, not an
+            # assertion that the asset is inactive. Never submit on uncertainty.
+            self.metrics.api_failures += 1
+            reason = "API_FAIL"
+        self._last_submit_skip_reason = reason
+        self.record_skip_reason(reason, symbol=symbol, detail="entry_asset_eligibility")
+        return False
+
     def submit_with_retries(self, request: Any) -> Optional[Any]:
+        self._last_submit_skip_reason = None
         if getattr(self.config, "diagnostic", False):
             request_type = getattr(request, "__class__", type("")).__name__
             self.log_info("DIAGNOSTIC_SUBMIT_SKIP", request_type=request_type)
@@ -6141,6 +6176,11 @@ class TradeExecutor:
                     self.metrics.exit_reason = 'PREFLIGHT'
                     self.metrics.status = 'blocked'
                     return None
+            if side == 'buy' and not self._entry_asset_allowed(
+                    _extract_request_field(request, 'symbol', '')):
+                if last_error is not None:
+                    self.metrics.api_failures += 1
+                return None
             try:
                 log_info("alpaca.submit_order_http", attempt=attempt)
                 _enforce_order_price_ticks(request)
@@ -6205,7 +6245,7 @@ class TradeExecutor:
                     )
                     self.metrics.api_retries += 1
                     continue
-                if attempt < attempts:
+                if attempt < attempts and status not in {400, 401, 403, 404, 422}:
                     self.metrics.api_retries += 1
                     self.log_info("API_RETRY", attempt=attempt, error=error_message)
                     self.sleep(delay)
@@ -6218,6 +6258,7 @@ class TradeExecutor:
                     body.strip()[:500],
                 )
                 _warn_context("alpaca.submit_order failed", str(exc))
+                break
             except Exception as exc:
                 last_error = exc
                 if isinstance(exc, AttributeError):

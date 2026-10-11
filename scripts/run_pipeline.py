@@ -3599,6 +3599,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 sys.executable,
                 "-m",
                 "scripts.label_generator",
+                "--run-date",
+                pipeline_run_date.isoformat(),
                 "--bars-path",
                 str(bars_path),
                 "--output-dir",
@@ -4275,6 +4277,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     sys.executable,
                     "-m",
                     "scripts.label_generator",
+                    "--run-date",
+                    pipeline_run_date.isoformat(),
                     "--bars-path",
                     str(bars_path),
                     "--output-dir",
@@ -4977,6 +4981,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     "monitor_generation_age_seconds": decision.get("monitor_generation_age_seconds"),
                     "monitor_input_coverage": decision.get("monitor_input_coverage"),
                     "monitor_input_age_days": decision.get("monitor_input_age_days"),
+                    "monitor_refresh_due": decision.get("monitor_refresh_due"),
+                    "monitor_refresh_headroom_days": decision.get("monitor_refresh_headroom_days"),
+                    "monitor_input_valid_through": decision.get("monitor_input_valid_through"),
+                    "monitor_generation_valid_until": decision.get("monitor_generation_valid_until"),
                     "monitor_input_source": decision.get("monitor_input_source"),
                     "monitor_observed_at": decision.get("monitor_observed_at"),
                     "monitor_input_reference_date": decision.get("monitor_input_reference_date"),
@@ -5002,6 +5010,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     LOG.warning("[WARN] ML_ENRICHMENT_BLOCKED reason=%s", reason_text)
                 elif decision.get("decision") == "warn":
                     LOG.warning("[WARN] ML_ENRICHMENT_WARN reason=%s", reason_text)
+                if decision.get("monitor_refresh_due"):
+                    LOG.warning(
+                        "[WARN] ML_MONITOR_REFRESH_DUE headroom_days=%s input_valid_through=%s "
+                        "generation_valid_until=%s action=refresh_evidence_before_next_primary",
+                        decision.get("monitor_refresh_headroom_days"),
+                        decision.get("monitor_input_valid_through"),
+                        decision.get("monitor_generation_valid_until"),
+                    )
                 if _env_truthy(os.getenv("JBR_ML_HEALTH_ALERTS")) and decision.get("decision") in {
                     "warn",
                     "block",

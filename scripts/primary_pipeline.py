@@ -36,6 +36,7 @@ def main(argv=None, *, pipeline_main=None, base_dir=ROOT):
         print(json.dumps({'status': 'failed', 'reason': 'fixed_primary_contract_override'}), flush=True)
         return 1
     os.environ.setdefault('JBR_STRICT_PREDICTIONS_META', 'true')
+    os.environ.setdefault('JBR_CAPTURE_PRODUCTION_SCORES', 'true')
     os.environ.setdefault('JBR_STRICT_AUTO_REFRESH_PREDICTIONS', 'true')
     os.environ.setdefault('JBR_RANKER_PREDICT_TIMEOUT_SECS', '900')
     os.environ.setdefault('JBR_RANKER_EVAL_TIMEOUT_SECS', '900')

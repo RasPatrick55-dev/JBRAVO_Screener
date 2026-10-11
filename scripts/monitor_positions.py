@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -978,13 +979,7 @@ def cancel_order_safe(order_id: str, symbol: str, reason: str | None = None) -> 
             return True
     except Exception as exc:  # pragma: no cover - API errors
         logger.error("Failed to cancel order %s: %s", order_id, exc)
-    try:
-        broker_close_position(
-            symbol,
-            {"symbol": symbol, "reason": reason, "action": "close_position_after_cancel_failure"},
-        )
-    except Exception as exc:  # pragma: no cover - API errors
-        logger.error("Failed to close position %s: %s", symbol, exc)
+    logger.warning("CANCEL_UNCONFIRMED symbol=%s order_id=%s", symbol, order_id)
     return False
 
 
@@ -2119,7 +2114,8 @@ def log_trade_exit(
         "exit_price": exit_price,
         "entry_time": entry_time,
         "exit_time": exit_time,
-        "net_pnl": (float(exit_price) - float(entry_price)) * float(qty) if exit_price else None,
+        "net_pnl": ((float(entry_price) - float(exit_price)) if side == "buy"
+                    else (float(exit_price) - float(entry_price))) * abs(float(qty)) if exit_price else None,
         "order_status": order_status,
         "order_type": order_type,
         "exit_reason": exit_reason,
@@ -2143,13 +2139,35 @@ def log_closed_positions(trading_client, closed_symbols, existing_positions_df):
         entry_time = existing_record["entry_time"]
         qty = existing_record["qty"]
 
-        request = GetOrdersRequest(symbols=[symbol], statuses=[QueryOrderStatus.CLOSED])
-        closed_orders = trading_client.get_orders(request)
-
-        exit_price = closed_orders[0].filled_avg_price if closed_orders else None
-        exit_time = (
-            closed_orders[0].filled_at.isoformat() if closed_orders else datetime.now().isoformat()
-        )
+        exit_side = "buy" if str(existing_record.get("side", "long")).lower() == "short" else "sell"
+        request = GetOrdersRequest(symbols=[symbol], status=QueryOrderStatus.CLOSED)
+        try:
+            closed_orders = trading_client.get_orders(request)
+        except Exception as exc:
+            logger.warning("CLOSED_POSITION_FILL_LOOKUP_FAILED symbol=%s err=%s", symbol, exc)
+            closed_orders = []
+        fills = []
+        entry_ts = pd.to_datetime(entry_time, utc=True, errors="coerce")
+        for order in closed_orders or []:
+            status = getattr(order, "status", "")
+            side = getattr(order, "side", "")
+            filled_at = pd.to_datetime(getattr(order, "filled_at", None), utc=True, errors="coerce")
+            try:
+                price = float(getattr(order, "filled_avg_price", None))
+                filled_qty = float(getattr(order, "filled_qty", 0))
+            except (TypeError, ValueError):
+                continue
+            if (str(getattr(status, "value", status)).lower() == "filled"
+                    and str(getattr(side, "value", side)).lower() == exit_side
+                    and pd.notna(entry_ts) and pd.notna(filled_at) and filled_at >= entry_ts
+                    and math.isfinite(price) and price > 0
+                    and math.isclose(filled_qty, abs(float(qty)))):
+                fills.append((filled_at, order))
+        fill_time, fill = max(fills, key=lambda item: item[0]) if fills else (None, None)
+        exit_price = getattr(fill, "filled_avg_price", None)
+        exit_time = fill_time.isoformat() if fill_time is not None else ""
+        if fill is None:
+            logger.warning("CLOSED_POSITION_FILL_UNVERIFIED symbol=%s", symbol)
 
         log_trade_exit(
             symbol,
@@ -2158,10 +2176,11 @@ def log_closed_positions(trading_client, closed_symbols, existing_positions_df):
             exit_price if exit_price is not None else "",
             entry_time,
             exit_time,
-            "closed",
-            "market",
-            "Position closed outside monitor",
-            "sell",
+            "closed" if fill is not None else "closed_unverified",
+            str(getattr(getattr(fill, "order_type", ""), "value", getattr(fill, "order_type", ""))),
+            "Position closed outside monitor" if fill is not None else "Position absent; exit fill unverified",
+            exit_side,
+            order_id=str(getattr(fill, "id", "") or ""),
         )
         if symbol in PARTIAL_EXIT_TAKEN:
             PARTIAL_EXIT_TAKEN.pop(symbol, None)
@@ -3081,7 +3100,8 @@ def submit_sell_market_order(
     qty = position.qty
     entry_price = float(position.avg_entry_price)
     exit_price = round_price(float(getattr(position, "current_price", entry_price)))
-    entry_time = getattr(position, "created_at", datetime.now(timezone.utc)).isoformat()
+    created_at = getattr(position, "created_at", None)
+    entry_time = created_at.isoformat() if created_at is not None else ""
     now_et = datetime.now(pytz.utc).astimezone(EASTERN_TZ).time()
     db_enabled = db_logging_enabled()
     db_module = None
@@ -3099,41 +3119,23 @@ def submit_sell_market_order(
             partial_exit = True
 
     desired_qty = int(qty_override) if qty_override is not None else int(qty)
-    if getattr(position, "qty_available", None) and int(position.qty_available) >= desired_qty:
-        use_qty = int(position.qty_available)
-    else:
-        logger.warning(
-            f"Insufficient available qty for {symbol}: {getattr(position, 'qty_available', 0)}"
-        )
-        return
-
     try:
-        try:
-            available_qty_attr = int(getattr(position, "qty_available", use_qty))
-        except Exception:
-            available_qty_attr = int(use_qty)
-        if available_qty_attr <= 0:
-            logger.warning(
-                "Insufficient available qty for %s: %s",
-                symbol,
-                getattr(position, "qty_available", 0),
-            )
-            return
-        try:
+        if env_bool("MONITOR_DISABLE_SELLS", default=False):
+            available_qty = int(float(getattr(position, "qty_available", 0) or 0))
+        else:
+            # Cancellation releases reserved shares asynchronously. The cycle's
+            # position snapshot may still report zero; require fresh broker data.
             positions = trading_client.get_all_positions()
             existing_symbols = {
-                p.symbol: int(getattr(p, "qty_available", p.qty)) for p in positions
+                p.symbol: int(float(getattr(p, "qty_available", 0) or 0)) for p in positions
             }
-            available_qty = existing_symbols.get(symbol, available_qty_attr)
-        except Exception:
-            available_qty = available_qty_attr
-
-        order_qty = min(int(use_qty), available_qty)
-        if available_qty < order_qty or order_qty <= 0:
-            logger.info(
+            available_qty = existing_symbols.get(symbol, 0)
+        order_qty = desired_qty if available_qty >= desired_qty else 0
+        if order_qty <= 0:
+            logger.warning(
                 f"Skipped selling {symbol}: insufficient available quantity ({available_qty})."
             )
-            return
+            return False
         session = "extended" if is_extended_hours(now_et) else "regular"
         logger.info(
             "[SUBMIT] Order for %s: qty=%s, price=%s, session=%s",
@@ -3162,6 +3164,8 @@ def submit_sell_market_order(
                 "reason_code": reason_code,
             },
         )
+        if order is None:
+            raise RuntimeError("exit_submission_missing_response")
         order_id_value = str(getattr(order, "id", "") or "") or None
         is_dryrun = bool(getattr(order, "dryrun", env_bool("MONITOR_DISABLE_SELLS", default=False)))
         if db_enabled:
@@ -3296,16 +3300,11 @@ def submit_sell_market_order(
             "sell",
             order_id=order_id_value,
         )
+        return status_norm == "filled" and not is_dryrun
     except Exception as e:
         logger.error("Error submitting sell order for %s: %s", symbol, e)
         increment_metric("api_errors")
-        try:
-            broker_close_position(
-                symbol,
-                {"symbol": symbol, "reason": reason, "reason_code": reason_code},
-            )
-        except Exception as exc:  # pragma: no cover - API errors
-            logger.error("Failed to close position %s: %s", symbol, exc)
+        return False
 
 
 def process_positions_cycle():
@@ -3367,13 +3366,16 @@ def process_positions_cycle():
                 except Exception:
                     trail_pct = None
                 try:
-                    cancel_order_safe(trailing_order.id, symbol, reason="max_hold_exit")
+                    if not cancel_order_safe(trailing_order.id, symbol, reason="max_hold_exit"):
+                        logger.warning("EXIT_DEFERRED symbol=%s reason=stop_cancel_unconfirmed", symbol)
+                        continue
                     logger.info(
                         "Cancelled trailing stop for %s due to max hold exit",
                         symbol,
                     )
                 except Exception as e:
                     logger.error("Failed to cancel trailing stop for %s: %s", symbol, e)
+                    continue
             increment_metric("exits_max_hold")
             exit_signals = None
             exit_snapshot = None
@@ -3401,14 +3403,14 @@ def process_positions_cycle():
             else:
                 reason_detail = f"Max Hold {days_held}d"
                 reason_code = "max_hold"
-            submit_sell_market_order(
+            exit_filled = submit_sell_market_order(
                 position,
                 reason=reason_detail,
                 reason_code=reason_code,
                 exit_signals=exit_signals,
                 exit_snapshot=exit_snapshot,
             )
-            if symbol in PARTIAL_EXIT_TAKEN:
+            if exit_filled and symbol in PARTIAL_EXIT_TAKEN:
                 PARTIAL_EXIT_TAKEN.pop(symbol, None)
                 _save_partial_state(PARTIAL_EXIT_TAKEN)
             continue
@@ -3458,7 +3460,9 @@ def process_positions_cycle():
                     trail_pct = float(getattr(trailing_order, "trail_percent", None))
                 except Exception:
                     trail_pct = None
-                cancel_order_safe(trailing_order.id, symbol, reason="partial_exit")
+                if not cancel_order_safe(trailing_order.id, symbol, reason="partial_exit"):
+                    logger.warning("EXIT_DEFERRED symbol=%s reason=stop_cancel_unconfirmed", symbol)
+                    continue
             half_qty = max(1, int(float(position.qty) / 2))
             exit_signals = None
             exit_snapshot = None
@@ -3488,7 +3492,7 @@ def process_positions_cycle():
             else:
                 reason_detail = f"Partial exit at +{PARTIAL_GAIN_THRESHOLD:.0f}% gain"
                 reason_code = "partial_gain"
-            submit_sell_market_order(
+            exit_filled = submit_sell_market_order(
                 position,
                 reason=reason_detail,
                 reason_code=reason_code,
@@ -3496,9 +3500,10 @@ def process_positions_cycle():
                 exit_signals=exit_signals,
                 exit_snapshot=exit_snapshot,
             )
-            PARTIAL_EXIT_TAKEN[symbol] = True
-            _save_partial_state(PARTIAL_EXIT_TAKEN)
-            logger.info("Partial exit recorded for %s; awaiting trailing re-attachment.", symbol)
+            if exit_filled:
+                PARTIAL_EXIT_TAKEN[symbol] = True
+                _save_partial_state(PARTIAL_EXIT_TAKEN)
+                logger.info("Partial exit filled for %s; awaiting trailing re-attachment.", symbol)
             continue
 
         if exit_intel_enabled:
@@ -3520,9 +3525,12 @@ def process_positions_cycle():
                         except Exception:
                             trail_pct = None
                         try:
-                            cancel_order_safe(trailing_order.id, symbol, reason="signal_exit")
+                            if not cancel_order_safe(trailing_order.id, symbol, reason="signal_exit"):
+                                logger.warning("EXIT_DEFERRED symbol=%s reason=stop_cancel_unconfirmed", symbol)
+                                continue
                         except Exception as e:
                             logger.error("Failed to cancel trailing stop for %s: %s", symbol, e)
+                            continue
                     primary_signal = (
                         _select_primary_exit_signal(actionable_signals) or actionable_signals[0]
                     )
@@ -3534,14 +3542,14 @@ def process_positions_cycle():
                         _extract_risk_score(position, indicators),
                     )
                     increment_metric("exits_signal")
-                    submit_sell_market_order(
+                    exit_filled = submit_sell_market_order(
                         position,
                         reason=str(primary_signal.get("detail", "")),
                         reason_code=str(primary_signal.get("code", "SIGNAL_REVERSAL")),
                         exit_signals=actionable_signals,
                         exit_snapshot=exit_snapshot,
                     )
-                    if symbol in PARTIAL_EXIT_TAKEN:
+                    if exit_filled and symbol in PARTIAL_EXIT_TAKEN:
                         PARTIAL_EXIT_TAKEN.pop(symbol, None)
                         _save_partial_state(PARTIAL_EXIT_TAKEN)
             else:
@@ -3557,19 +3565,22 @@ def process_positions_cycle():
                 trailing_order = get_trailing_stop_order(symbol)
                 if trailing_order:
                     try:
-                        cancel_order_safe(trailing_order.id, symbol, reason="signal_exit")
+                        if not cancel_order_safe(trailing_order.id, symbol, reason="signal_exit"):
+                            logger.warning("EXIT_DEFERRED symbol=%s reason=stop_cancel_unconfirmed", symbol)
+                            continue
                     except Exception as e:
                         logger.error("Failed to cancel trailing stop for %s: %s", symbol, e)
+                        continue
                 reason_text = "; ".join(reasons)
                 increment_metric("exits_signal")
-                submit_sell_market_order(
+                exit_filled = submit_sell_market_order(
                     position,
                     reason=reason_text,
                     reason_code="monitor",
                     exit_signals=None,
                     exit_snapshot=None,
                 )
-                if symbol in PARTIAL_EXIT_TAKEN:
+                if exit_filled and symbol in PARTIAL_EXIT_TAKEN:
                     PARTIAL_EXIT_TAKEN.pop(symbol, None)
                     _save_partial_state(PARTIAL_EXIT_TAKEN)
             else:

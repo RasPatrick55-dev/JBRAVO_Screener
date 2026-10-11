@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -179,6 +179,19 @@ def _monitor_provenance(payload, *, now, reference_date, max_age_days):
                     reasons.append("stale_monitor_input_" + field)
             if generated is not None and end is not None and end > generated.date():
                 reasons.append("monitor_input_after_generation")
+    ends = [dates.get(field) for field in ("dataset_end", "recent_end")]
+    try:
+        input_valid_through = (min(ends) + timedelta(days=max_age_days)
+                               if all(end is not None for end in ends) else None)
+        generation_valid_until = generated + timedelta(days=max_age_days) if generated else None
+    except OverflowError:
+        input_valid_through = generation_valid_until = None
+    headroom = []
+    if input_valid_through is not None and reference_date is not None:
+        headroom.append((input_valid_through - reference_date).days)
+    if generation_valid_until is not None:
+        headroom.append(int((generation_valid_until - now).total_seconds() // 86400))
+    refresh_headroom = min(headroom) if len(headroom) == 2 else None
     return {
         "monitor_generated_at": generated.isoformat() if generated else None,
         "monitor_generation_age_seconds": (now - generated).total_seconds() if generated else None,
@@ -189,10 +202,63 @@ def _monitor_provenance(payload, *, now, reference_date, max_age_days):
         "monitor_input_age_days": ((reference_date - dates["dataset_end"]).days
                                    if reference_date is not None and dates.get("dataset_end") else None),
         "provenance_reasons": sorted(set(reasons)),
+        # Advisory only: start refreshing with one day of headroom. This never
+        # clears a provenance/drift warning or launches a model operation.
+        "monitor_refresh_due": bool(reasons) or refresh_headroom is None or refresh_headroom <= 1,
+        "monitor_refresh_headroom_days": refresh_headroom,
+        "monitor_input_valid_through": input_valid_through.isoformat() if input_valid_through else None,
+        "monitor_generation_valid_until": generation_valid_until.isoformat() if generation_valid_until else None,
     }
 
 
-def _extract_health(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _production_qualification_reasons(payload, current_capture):
+    """A saved candidate is not an approved publication or current model proof."""
+    from scripts.production_evidence import (POLICY, identity, model_identity,
+                                            reviewed_window_bounds, MAX_OUTPUT_BYTES, PRODUCER_FILES)
+    reasons = []
+    if any(payload.get(key) is not True for key in ('qualified_for_monitoring',
+            'monitor_candidate_eligible', 'publication_approved')):
+        reasons.append('production_evidence_not_approved_and_qualified')
+    if payload.get('policy') != POLICY:
+        reasons.append('production_evidence_policy_mismatch')
+    try:
+        expected = model_identity(payload.get('model_binding'))
+        sources = payload.get('producer_sources')
+        if not isinstance(sources, Mapping) or set(sources) != set(PRODUCER_FILES):
+            raise ValueError('invalid_producer_identity')
+        for value in sources.values():
+            identity(value)
+        for key in ('review_binding', 'plan_binding', 'calendar_binding', 'bars_binding'):
+            identity(payload.get(key))
+        identity(payload.get('qualified_rows_binding'), MAX_OUTPUT_BYTES)
+    except (ValueError, TypeError, KeyError):
+        expected = None
+        reasons.append('production_evidence_identity_incomplete')
+    if (not isinstance(current_capture, Mapping) or expected is None
+            or current_capture.get('model_binding') != expected
+            or current_capture.get('producer_sources') != payload.get('producer_sources')):
+        reasons.append('current_prediction_model_or_producer_not_comparable')
+    comparison = payload.get('model_comparison')
+    if (not isinstance(comparison, Mapping) or comparison.get('scope') != 'reviewed_fixed_production_model'
+            or comparison.get('production_drift_established') is not True
+            or comparison.get('common_model_sha256') != ([expected['sha256']] if expected else [])):
+        reasons.append('production_comparison_unestablished')
+    windows = payload.get('windows')
+    try:
+        reviewed_window_bounds({name + suffix: windows.get(name + suffix)
+                                for name in ('baseline', 'recent') for suffix in ('_start', '_end')},
+                               payload.get('window_lengths'))
+    except (ValueError, TypeError, AttributeError):
+        reasons.append('production_window_design_invalid')
+    if (payload.get('missing_capture_sessions') != [] or type(payload.get('incomplete_outcome_rows')) is not int
+            or payload['incomplete_outcome_rows'] != 0 or not isinstance(windows, Mapping)
+            or any(type(windows.get(key)) is not int or windows[key] < POLICY['calibration_min_rows']
+                   for key in ('baseline_rows', 'recent_rows'))):
+        reasons.append('production_population_incomplete')
+    return sorted(set(reasons))
+
+
+def _extract_health(payload: Mapping[str, Any], current_capture=None) -> dict[str, Any]:
     drift = payload.get("drift")
     if not isinstance(drift, Mapping):
         drift = {}
@@ -201,6 +267,12 @@ def _extract_health(payload: Mapping[str, Any]) -> dict[str, Any]:
         recent_strategy = {}
 
     action = _normalize_action(payload.get("recommended_action"))
+    qualification = (_production_qualification_reasons(payload, current_capture)
+                     if payload.get('monitor_contract_version') == 3 else [])
+    if payload.get('monitor_contract_version') not in (None, 1, 2, 3):
+        qualification.append('unsupported_monitor_contract')
+    if qualification:
+        action = 'investigate'
 
     psi_score = _safe_float(payload.get("psi_score"))
     if psi_score is None:
@@ -222,6 +294,7 @@ def _extract_health(payload: Mapping[str, Any]) -> dict[str, Any]:
         "monitor_input_coverage": payload.get("windows"),
         "monitor_input_source": payload.get("data_source"),
         "run_date_source": "payload" if run_date_text is not None else "missing",
+        "monitor_production_qualification_reasons": qualification,
     }
 
 
@@ -297,7 +370,15 @@ def load_latest_ml_health(
             if record:
                 payload = _payload_to_mapping(record.get("payload"))
                 if payload:
-                    health = _extract_health(payload)
+                    current_capture = None
+                    if payload.get('monitor_contract_version') == 3:
+                        try:
+                            predictions = db.fetch_latest_ml_artifact('predictions')
+                            current_capture = _payload_to_mapping((predictions or {}).get('payload')).get('production_score_capture')
+                        except Exception:
+                            # Missing/unreadable current identity remains investigation.
+                            pass
+                    health = _extract_health(payload, current_capture)
                     run_date = health.get("run_date")
                     if run_date in (None, "") and record.get("run_date") is not None:
                         run_date = str(record.get("run_date"))
@@ -323,7 +404,18 @@ def load_latest_ml_health(
         if source_mode in {"auto", "fs"} and fs_path.exists():
             payload = _payload_to_mapping(fs_path.read_text(encoding="utf-8"))
             if payload:
-                health = _extract_health(payload)
+                current_capture = None
+                if payload.get('monitor_contract_version') == 3:
+                    try:
+                        metadata = resolved_base / 'data' / 'predictions' / 'latest_meta.json'
+                        if not any(part.is_symlink() for part in (metadata, *metadata.parents)):
+                            with metadata.open('rb') as handle:
+                                raw = handle.read(1024 * 1024 + 1)
+                            if len(raw) <= 1024 * 1024:
+                                current_capture = _payload_to_mapping(raw.decode('utf-8')).get('production_score_capture')
+                    except Exception:
+                        pass
+                health = _extract_health(payload, current_capture)
                 result = {**default, **health, "present": True, "source": "fs"}
                 log.info(
                     "[INFO] ML_HEALTH_LOAD source=fs present=true run_date=%s",
@@ -383,6 +475,13 @@ def decide_ml_enrichment(
     monitor_run_date = (_strict_monitor_date if require_monitor_provenance else _parse_date)(payload.get("run_date"))
 
     reasons: list[str] = []
+    qualification = payload.get('monitor_production_qualification_reasons')
+    if isinstance(qualification, list):
+        allowed = {'production_evidence_not_approved_and_qualified', 'production_evidence_policy_mismatch',
+                   'production_evidence_identity_incomplete', 'current_prediction_model_or_producer_not_comparable',
+                   'production_comparison_unestablished', 'production_population_incomplete',
+                   'unsupported_monitor_contract'}
+        reasons.extend(item for item in qualification if item in allowed)
     if not present:
         reasons.append("missing_monitor")
     if reference_date is None and require_monitor_provenance:

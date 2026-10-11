@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
@@ -43,6 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=("Generate forward return labels for multiple symbols from a daily bars CSV.")
     )
+    parser.add_argument('--run-date', type=date.fromisoformat, default=None,
+                        help='Canonical signal-session date (YYYY-MM-DD); defaults to current New York date for legacy callers.')
     parser.add_argument(
         "--bars-path",
         required=True,
@@ -306,7 +308,7 @@ def main() -> int:
         )
         return 2
 
-    run_date = _current_run_date()
+    run_date = getattr(args, 'run_date', None) or _current_run_date()
     latest_bar_date = _latest_timestamp_date(labeled)
     if latest_bar_date and latest_bar_date < run_date:
         logging.warning(

@@ -1043,6 +1043,25 @@ Outputs:
 2. If DB connectivity fails, stop trade execution and fix DB health first.
 3. Use CSVs only for diagnosis; do not promote CSV data above DB outputs.
 
+### Task-log remediation and acceptance
+
+ML freshness checks cover both report generation and the actual OOS dataset/recent-window end dates. A newly dated report cannot make old inputs fresh. `ML_MONITOR_REFRESH_DUE` warns when either clock has at most one day of headroom, or provenance is unavailable. Pipeline summary and postflight evidence include `monitor_refresh_due`, `monitor_refresh_headroom_days`, `monitor_input_valid_through`, and `monitor_generation_valid_until`. This advisory does not change the seven-day limit or the acceptance decision.
+
+Prepare an independently approved evidence-refresh job before the primary pipeline, with sufficient time for evaluation and publication. Freeze the source revision, features, labels, target, OOS inputs, and their byte identities; evaluate mature outcomes with the deployed monitor contract. Publish PostgreSQL artifacts only after complete provenance validation. A research-fold PSI warning requires investigation of model fingerprints, per-model populations, score bins, outcome maturity, and calibration. It does not establish production-model drift. Keep postflight degraded until its existing qualifications are satisfied; do not relabel artifact dates, relax the age limit, or automatically promote a model to clear the warning.
+
+The executor checks current broker asset status and `tradable` before each entry attempt, including chase replacements. Known inactive/untradable assets produce `SKIP_ASSET_INACTIVE` or `SKIP_ASSET_NOT_TRADABLE`; an unavailable eligibility lookup blocks submission and records `API_FAIL`. Operational submission failures produce task exit `1` and metrics `status=error`, even when another order succeeds. Permanent HTTP rejections are not retried, except the existing bounded sub-penny correction. Protective sells retain their submission path.
+
+The monitor uses confirmed closing-side fills with valid timestamps and matching quantities. An absent position without a matching fill is recorded as `closed_unverified`, with blank exit price/time rather than invented fill facts. Stop cancellation must succeed before an exit proceeds; the monitor then refreshes available quantity from the broker and submits exactly the requested quantity. Failed/uncertain cancellation or submission no longer escalates to a separate position-close operation. Partial-exit state changes only after a confirmed fill. Continue checking actual protective-order coverage after cancellations, partial exits, and deferred exits; a reservation alone does not establish protection.
+
+Validate on the paper account after deployment: observe consecutive monitor cycles without timestamp exceptions, verify protective order quantities against all positions, confirm deferred exits and inactive skips are distinct from API failures, and require a new successful primary/postflight receipt. Hourly account synchronization has a separate health signal and does not establish pipeline or executor success.
+
+Offline regression commands:
+
+```bash
+python -m unittest tests.test_monitor_task_log_regressions tests.test_executor_preflight_health tests.test_ml_health_provenance tests.test_ranker_monitor_contract tests.test_pipeline_postflight
+python -m scripts.docs_consistency_check
+```
+
 ## Verifier Commands
 
 ```bash
