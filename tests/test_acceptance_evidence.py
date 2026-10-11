@@ -172,6 +172,14 @@ class EvidenceTests(unittest.TestCase):
                 self.assertEqual(self.run_predictor(mutate, fail), 2)
                 self.assertFalse((self.root / 'predictions').exists())
 
+    def test_changed_producer_prevents_prediction_publication(self):
+        original = capture.producer_binding()
+        changed = {key: dict(value) for key, value in original.items()}
+        changed['scripts/ranker_predict.py']['sha256'] = 'a' * 64
+        with patch.object(capture, 'producer_binding', side_effect=[original, changed]):
+            self.assertEqual(self.run_predictor(), 2)
+        self.assertFalse((self.root / 'predictions').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -666,9 +666,10 @@ def main(argv: list[str] | None = None) -> int:
 
     capture_enabled = _parse_boolish(os.getenv('JBR_CAPTURE_PRODUCTION_SCORES'))
     if capture_enabled:
-        from scripts.production_score_capture import capture, scoring_binding
+        from scripts.production_score_capture import capture, scoring_binding, producer_binding
         try:
             observed_model = scoring_binding(model, scaler, feature_columns, args.label_column, posthoc_calibrator)
+            observed_producer = producer_binding()
             observed_features = features_df[['symbol', 'timestamp', *feature_columns]].copy(deep=True)
         except Exception:
             LOG.error('[ERROR] PRODUCTION_SCORE_CAPTURE_BINDING_FAILED')
@@ -701,7 +702,7 @@ def main(argv: list[str] | None = None) -> int:
             if scoring_binding(model, scaler, feature_columns, args.label_column, posthoc_calibrator) != observed_model:
                 raise ValueError('scoring_bundle_changed_during_prediction')
             score_capture = capture(BASE_DIR, observed_features, output_df, snapshot_date=snapshot_date,
-                                    model_binding=observed_model)
+                                    model_binding=observed_model, producer_sources=observed_producer)
         except Exception:
             LOG.error('[ERROR] PRODUCTION_SCORE_CAPTURE_FAILED')
             return 2

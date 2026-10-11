@@ -26,6 +26,8 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 
 - `docs/reference/cli_reference.md`
 - `docs/reference/artifacts_and_schemas.md`
+- [Forward predictor observations](reference/production_score_observations.md)
+- [Production evidence qualification](reference/production_evidence_qualification.md)
 - `docs/reference/dashboard_screener_health.md`
 - `docs/reference/logging_metrics.md`
 - `docs/reference/brand_assets.md`

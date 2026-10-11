@@ -24,6 +24,12 @@ unpickles input and does not retain new model pickle files. Serialization can
 vary by runtime. Equality identifies a serialized bundle, not mathematical model
 equivalence or independent attestation of its deployment approval.
 
+V2 observations also bind the predictor, capture and primary producer source
+bytes before and after scoring. A source change prevents prediction publication.
+Existing v1 captures remain unchanged. The [qualification consumer](production_evidence_qualification.md)
+validates reviewed v2 evidence and joins it to later, mature exchange-session
+outcomes; a saved monitor candidate cannot grant publication or acceptance.
+
 Each observation has `outcomes_attached=false`, `research_qualified=false` and
 `operating_acceptance=false`. It is evidence for later review, not an acceptance
 token. Full acceptance still needs independently reviewed model identity and

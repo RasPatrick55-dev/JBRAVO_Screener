@@ -36,8 +36,6 @@ from scripts.ranker_strategy_eval import (  # noqa: E402
 from scripts.utils.champion_config import load_latest_champion  # noqa: E402
 from utils.env import load_env  # noqa: E402
 
-load_env()
-
 LOG = logging.getLogger("ranker_monitor")
 logging.basicConfig(
     level=logging.INFO,
@@ -654,6 +652,7 @@ def _recommend_action(
 
 
 def run_monitor(args: MonitorArgs) -> dict[str, Any]:
+    load_env()
     LOG.info(
         "[INFO] RANKER_MONITOR_START target=%s recent_days=%d baseline_days=%d psi_bins=%d psi_warn=%s psi_alert=%s calibration_bins=%d calibration_min_rows=%d calibration_ece_warn=%s calibration_ece_alert=%s",
         args.target,
