@@ -3038,6 +3038,8 @@ def get_open_trades(
 def get_closed_trades_missing_exit(
     engine: Optional[PGConnection], updated_after: datetime, limit: int = 200, *, strict: bool = False
 ) -> list[dict[str, Any]]:
+    # Strict reconciliation must keep every unresolved exit visible, including
+    # initial runs without a saved watermark. Aging must never imply completion.
     limit = max(1, int(limit or 0))
     with _maybe_conn(engine) as conn:
         if conn is None:
@@ -3054,11 +3056,11 @@ def get_closed_trades_missing_exit(
                         WHERE status='CLOSED'
                           AND (exit_price IS NULL OR exit_order_id IS NULL OR exit_time IS NULL
                                OR exit_reason IS NULL OR realized_pnl IS NULL)
-                          AND updated_at >= %(updated_after)s
+                          AND (%(strict)s OR updated_at >= %(updated_after)s)
                         ORDER BY updated_at DESC NULLS LAST, trade_id DESC
                         LIMIT %(limit)s
                         """,
-                        {"updated_after": updated_after, "limit": limit},
+                        {"updated_after": updated_after, "limit": limit, "strict": strict},
                     )
                     rows = cursor.fetchall()
                     if strict and len(rows) >= limit:
@@ -3102,7 +3104,7 @@ def close_trade(
                         """
                         SELECT status, qty, entry_price
                         FROM trades
-                        WHERE trade_id=%(trade_id)s
+                        WHERE trade_id=%(trade_id)s FOR UPDATE
                         """,
                         {"trade_id": trade_id},
                     )
@@ -3116,7 +3118,7 @@ def close_trade(
                         )
                         return False
                     status_value = (row[0] or "").upper()
-                    if status_value == "CLOSED":
+                    if status_value != "OPEN":
                         logger.info(
                             "[INFO] DB_TRADE_CLOSE_SKIPPED trade_id=%s exit_order_id=%s reason=%s",
                             trade_id,
@@ -3144,7 +3146,7 @@ def close_trade(
                             exit_reason=%(exit_reason)s,
                             status='CLOSED',
                             updated_at=now()
-                        WHERE trade_id=%(trade_id)s
+                        WHERE trade_id=%(trade_id)s AND status='OPEN'
                         """,
                         {
                             "exit_order_id": exit_order_id,
@@ -3155,6 +3157,8 @@ def close_trade(
                             "trade_id": trade_id,
                         },
                     )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError("trade_close_not_applied")
             _log_write_result(True, "trades", 1)
             return True
         except Exception as exc:  # pragma: no cover - defensive logging

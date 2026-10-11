@@ -6932,15 +6932,15 @@ def _seed_initial_metrics(metrics: ExecutionMetrics, config: ExecutorConfig) -> 
 _RECONCILE_DB_DISABLED_LOGGED = False
 
 
-def _run_auto_reconcile(executor: TradeExecutor, config: ExecutorConfig, stage: str) -> None:
+def _run_auto_reconcile(executor: TradeExecutor, config: ExecutorConfig, stage: str) -> bool:
     global _RECONCILE_DB_DISABLED_LOGGED
     if not getattr(config, "reconcile_auto", True):
-        return
+        return True
     if not db.db_enabled():
         if not _RECONCILE_DB_DISABLED_LOGGED:
-            LOGGER.info("[INFO] RECONCILE_AUTO_SKIP reason=db_disabled")
+            LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s reason=db_disabled", stage)
             _RECONCILE_DB_DISABLED_LOGGED = True
-        return
+        return False
     lookback_days = getattr(config, "reconcile_lookback_days", 7)
     limit = getattr(config, "reconcile_limit", 500)
     LOGGER.info(
@@ -6950,9 +6950,13 @@ def _run_auto_reconcile(executor: TradeExecutor, config: ExecutorConfig, stage: 
         limit,
     )
     try:
-        executor.reconcile_closed_trades(lookback_days=lookback_days, limit=limit)
+        complete = executor.reconcile_closed_trades(lookback_days=lookback_days, limit=limit)
+        if complete is not True:
+            LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s reason=incomplete", stage)
+        return complete is True
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s err=%s", stage, exc)
+        LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s error_type=%s", stage, type(exc).__name__)
+        return False
     finally:
         LOGGER.info("[INFO] RECONCILE_AUTO_END stage=%s", stage)
 
@@ -6987,8 +6991,12 @@ def run_executor(
     auto_reconcile_enabled = bool(getattr(config, "reconcile_auto", True)) and not getattr(
         config, "reconcile_only", False
     )
-    if auto_reconcile_enabled:
-        _run_auto_reconcile(loader, config, stage="start")
+    if auto_reconcile_enabled and not _run_auto_reconcile(loader, config, stage="start"):
+        metrics.status = "failed"
+        metrics.exit_reason = "RECONCILE_INCOMPLETE"
+        loader.persist_metrics()
+        loader.log_summary()
+        return 1
     try:
         if config.dry_run:
             banner = "=" * 72
@@ -7345,8 +7353,14 @@ def run_executor(
             return 1
         return result
     finally:
-        if auto_reconcile_enabled:
-            _run_auto_reconcile(loader, config, stage="end")
+        if auto_reconcile_enabled and not _run_auto_reconcile(loader, config, stage="end"):
+            metrics.status = "failed"
+            metrics.exit_reason = "RECONCILE_INCOMPLETE"
+            loader.persist_metrics()
+            loader.log_summary()
+            # Preserve an exception already propagating from execution.
+            if sys.exc_info()[0] is None:
+                return 1
 
 
 def load_candidates(path: Path) -> pd.DataFrame:

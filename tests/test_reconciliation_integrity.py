@@ -86,6 +86,53 @@ class ReconciliationTests(unittest.TestCase):
         self.client.submit_order.assert_not_called()
         self.client.cancel_order_by_id.assert_not_called()
 
+    def test_automatic_failure_blocks_before_clock_candidates_or_execution(self):
+        self.prepare()
+        with mock.patch.object(self.executor.TradeExecutor, 'reconcile_closed_trades', return_value=False), \
+             mock.patch.object(self.executor.TradeExecutor, '_get_trading_clock', side_effect=self.forbidden), \
+             mock.patch.object(self.executor.TradeExecutor, 'execute', side_effect=self.forbidden), \
+             mock.patch.object(self.executor.TradeExecutor, 'persist_metrics', autospec=True) as persist:
+            self.assertEqual(self.executor.run_executor(self.executor.ExecutorConfig(), client=self.client), 1)
+            self.assertEqual(persist.call_args.args[0].metrics.exit_reason, 'RECONCILE_INCOMPLETE')
+            self.assertEqual(persist.call_args.args[0].metrics.status, 'failed')
+        self.client.submit_order.assert_not_called()
+
+    def test_auto_reconcile_requires_explicit_success_and_sanitizes_exceptions(self):
+        self.prepare()
+        for result in (False, None, True):
+            with self.subTest(result=result), mock.patch.object(self.run, 'reconcile_closed_trades', return_value=result):
+                self.assertIs(self.executor._run_auto_reconcile(self.run, self.run.config, 'start'), result is True)
+        with mock.patch.object(self.run, 'reconcile_closed_trades', side_effect=RuntimeError('private_error_text')):
+            self.assertFalse(self.executor._run_auto_reconcile(self.run, self.run.config, 'start'))
+        self.assertNotIn('private_error_text', self.messages.getvalue())
+
+    def test_auto_reconcile_disabled_database_fails_and_explicit_opt_out_skips(self):
+        self.prepare()
+        with mock.patch.object(self.executor.db, 'db_enabled', return_value=False), \
+             mock.patch.object(self.run, 'reconcile_closed_trades') as reconcile:
+            self.assertFalse(self.executor._run_auto_reconcile(self.run, self.run.config, 'start'))
+            self.run.config.reconcile_auto = False
+            self.assertTrue(self.executor._run_auto_reconcile(self.run, self.run.config, 'start'))
+            reconcile.assert_not_called()
+
+    def test_automatic_end_failure_changes_successful_skip_to_failure(self):
+        self.prepare()
+        with mock.patch.object(self.executor, '_run_auto_reconcile', side_effect=[True, False]), \
+             mock.patch.object(self.executor, '_ny_now', return_value=NOW + timedelta(days=1)), \
+             mock.patch.object(self.executor, 'write_execute_metrics'), \
+             mock.patch.object(self.executor.TradeExecutor, '_get_trading_clock', return_value=None), \
+             mock.patch.object(self.executor.TradeExecutor, 'persist_metrics', autospec=True) as persist:
+            self.assertEqual(self.executor.run_executor(self.executor.ExecutorConfig(), client=self.client), 1)
+            self.assertEqual(persist.call_args.args[0].metrics.exit_reason, 'RECONCILE_INCOMPLETE')
+
+    def test_automatic_end_failure_does_not_suppress_execution_exception(self):
+        self.prepare()
+        with mock.patch.object(self.executor, '_run_auto_reconcile', side_effect=[True, False]), \
+             mock.patch.object(self.executor.TradeExecutor, '_get_trading_clock', side_effect=RuntimeError('inert_failure')), \
+             mock.patch.object(self.executor.TradeExecutor, 'persist_metrics'):
+            with self.assertRaisesRegex(RuntimeError, 'inert_failure'):
+                self.executor.run_executor(self.executor.ExecutorConfig(), client=self.client)
+
     def test_each_future_order_time_blocks_before_any_trade_write(self):
         for field in ('updated_at', 'filled_at', 'submitted_at', 'created_at'):
             with self.subTest(field=field):
@@ -965,6 +1012,8 @@ class SharedConnectionFixture(TransactionFixture):
         self.read_failure = None
         self.read_commit_failure = False
         self.transaction_modes = []
+        self.updated_at = {1: NOW}
+        self.before_position_lock = None
 
     def __enter__(self):
         super().__enter__()
@@ -997,13 +1046,19 @@ class SharedConnectionFixture(TransactionFixture):
                 raise AssertionError('missing time and reason must be queried')
             self.statements.append(sql)
             self.selected = 'missing'
+            self.missing_cutoff = None if params.get('strict') else params['updated_after']
         elif 'INSERT INTO reconcile_state' in sql:
             if self.read_only:
                 raise AssertionError('watermark write in read transaction')
             self.statements.append(sql)
             self.last_after = params['last_after']
-        elif 'SELECT status, qty, entry_price' in sql and 'FOR UPDATE' not in sql:
+        elif 'SELECT status, qty, entry_price' in sql and 'symbol' not in sql:
             self.statements.append(sql)
+            if 'FOR UPDATE' in sql and self.before_position_lock:
+                self.before_position_lock()
+                self.before_position_lock = None
+                self.pending_trades = copy.deepcopy(self.trades)
+                self.pending_events = copy.deepcopy(self.events)
             self.selected = 'position_close'
             self.pending_trade = self.pending_trades[params['trade_id']]
         elif 'UPDATE trades' in sql and 'exit_order_id' in params:
@@ -1029,7 +1084,8 @@ class SharedConnectionFixture(TransactionFixture):
             rows = []
             for trade_id, row in self.trades.items():
                 eligible = row[0] == 'OPEN' if self.selected == 'open' else (
-                    row[0] == 'CLOSED' and any(row[i] is None for i in (4, 5, 6, 7, 8)))
+                    row[0] == 'CLOSED' and any(row[i] is None for i in (4, 5, 6, 7, 8))
+                    and (self.missing_cutoff is None or self.updated_at.get(trade_id, NOW) >= self.missing_cutoff))
                 if eligible:
                     rows.append(dict(trade_id=trade_id, symbol=row[3], qty=row[1], entry_price=row[2],
                          entry_time=NOW, entry_order_id='entry-1', exit_order_id=row[4],
@@ -1076,6 +1132,42 @@ class SharedConnectionCallerTests(unittest.TestCase):
         self.assertEqual(len(self.connection.events), 1)
         self.assertTrue(self.caller.reconcile_closed_trades())
         self.assertEqual(len(self.connection.events), 1)
+
+    def test_old_unresolved_exit_cannot_age_out_of_strict_coverage(self):
+        self.setup_caller(closed=True)
+        observed = NOW - timedelta(days=10)
+        self.connection.trade[5:8] = [observed, None, 'POSITION_CLOSED']
+        self.connection.updated_at[1] = observed
+        self.connection.last_after = observed - timedelta(minutes=5)
+        watermark = self.connection.last_after
+        # Non-strict legacy readers leave transaction ownership with the caller.
+        with self.connection:
+            self.assertEqual(self.module.get_closed_trades_missing_exit(self.connection, NOW - timedelta(days=2)), [])
+        with mock.patch.object(self.executor, 'alpaca_list_orders_http', return_value=[]):
+            for _ in range(2):
+                self.assertFalse(self.caller.reconcile_closed_trades())
+                self.assertEqual(self.connection.last_after, watermark)
+        with mock.patch.object(self.executor, 'alpaca_list_orders_http', return_value=[order(filled_at=observed.isoformat())]):
+            self.assertTrue(self.caller.reconcile_closed_trades())
+        self.assertEqual(self.connection.trade[4], 'sell-1')
+
+    def test_position_close_waits_for_canonical_fill_and_does_not_replace_it(self):
+        self.setup_caller()
+        filled = NOW - timedelta(minutes=1)
+
+        def canonical_commit():
+            other = TransactionFixture()
+            self.assertTrue(self.module.reconcile_sell_fill(other, 1, symbol='XYZ', qty=2,
+                order_id='sell-1', status='filled', event_time=filled, raw={},
+                exit_price=11, exit_reason='SELL_FILL'))
+            self.connection.trades = copy.deepcopy(other.trades)
+            self.connection.events = copy.deepcopy(other.events)
+
+        self.connection.before_position_lock = canonical_commit
+        self.assertFalse(self.module.close_trade(self.connection, 1, None, NOW, None, 'POSITION_CLOSED'))
+        self.assertEqual(self.connection.trade[4:9], ['sell-1', filled, 11, 'SELL_FILL', 2.0])
+        self.assertEqual(len(self.connection.events), 1)
+        self.assertTrue(any('FOR UPDATE' in sql and 'symbol' not in sql for sql in self.connection.statements))
 
     def test_absent_position_without_fill_preserves_placeholder_and_holds_watermark(self):
         self.setup_caller()

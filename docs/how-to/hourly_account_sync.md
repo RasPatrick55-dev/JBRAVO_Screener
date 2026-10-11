@@ -58,9 +58,22 @@ Their other callers retain the existing non-strict default.
 Unresolved exit decoration, failed database writes/reads or unavailable watermark
 state prevents watermark advancement. Earlier committed writes are not rolled back;
 the workflow is not a cross-stage transaction or a snapshot of simultaneous broker
-and database state. Existing 14-day fallback, two-day decoration lookback, 300-second
-overlap and activity request parameters remain unchanged; bounded-window completion
+and database state. Strict reconciliation scans all incomplete closed exits,
+regardless of age or whether a watermark has been saved. Its bounded 200-row limit
+still fails on saturation; historical unresolved exits require remediation rather
+than silently aging out. Non-strict callers keep the two-day decoration lookback.
+The 14-day broker fallback, 300-second overlap and activity request parameters
+remain unchanged; bounded-window completion
 does not establish historical completeness, attribution or matching correctness.
+
+Automatic execution requires successful reconciliation before loading candidates
+or submitting entries. A disabled database, unsuccessful return or exception
+records `RECONCILE_INCOMPLETE` and returns nonzero when automatic reconciliation
+is enabled. An end-of-run reconciliation failure also makes the run unsuccessful;
+an existing execution exception still propagates. Explicit `reconcile_auto=False`
+retains the opt-out behavior. Position-absence closure now locks and rechecks the
+trade row in its transaction and only updates an OPEN row, so a canonical fill
+committed while it waits cannot be overwritten by a placeholder.
 
 The reconcile-only caller returns nonzero for incomplete reconciliation. Hourly
 health requires `ACT_COVERAGE_COMPLETE` / `RECONCILE_COVERAGE_COMPLETE` and retains
