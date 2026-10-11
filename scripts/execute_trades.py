@@ -697,7 +697,7 @@ def alpaca_list_orders_http(
     payload = response.json()
     if isinstance(payload, list):
         return payload
-    return []
+    raise ValueError("RECONCILE_ORDERS_INVALID")
 
 
 def log_trade_event_db(
@@ -2871,17 +2871,16 @@ class TradeExecutor:
 
     def reconcile_closed_trades(
         self, *, lookback_days: int | None = None, limit: int | None = None
-    ) -> None:
+    ) -> bool:
+        """Require usable broker evidence before writes; hold unresolved watermarks."""
         watermark_enabled = bool(getattr(self.config, "reconcile_use_watermark", True))
         if not db.db_enabled():
-            if watermark_enabled:
-                LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=db_unavailable")
-            return
+            LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=db_unavailable")
+            return False
         engine = db.get_db_conn()
         if engine is None:
-            if watermark_enabled:
-                LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=db_unavailable")
-            return
+            LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=db_unavailable")
+            return False
 
         try:
             lookback_days = int(
@@ -2914,17 +2913,25 @@ class TradeExecutor:
 
         if watermark_enabled:
             try:
-                reconcile_state = db.get_reconcile_state(engine)
+                reconcile_state = db.get_reconcile_state(engine, strict=True)
             except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=db_error err=%s", exc)
-                reconcile_state = {}
-                watermark_enabled = False
+                LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=db_error error_type=%s", type(exc).__name__)
+                return False
             if watermark_enabled:
+                if not isinstance(reconcile_state, Mapping):
+                    LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=invalid_state")
+                    return False
                 last_after = (
                     db.normalize_ts(reconcile_state.get("last_after"), field="last_after")
                     if reconcile_state
                     else None
                 )
+                if reconcile_state.get("last_after") is not None and last_after is None:
+                    LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=invalid_timestamp")
+                    return False
+                if last_after is not None and last_after > now_utc:
+                    LOGGER.warning("[WARN] RECONCILE_WATERMARK_DISABLED reason=future_timestamp")
+                    return False
                 if last_after is not None:
                     fetch_after_dt = last_after
                 else:
@@ -2946,7 +2953,43 @@ class TradeExecutor:
                     limit=limit,
                     after_iso=fetch_after_iso if watermark_enabled else None,
                 )
-                orders_cache["orders"] = orders or []
+                if not isinstance(orders, list):
+                    LOGGER.warning("[WARN] RECONCILE_ORDERS_INVALID")
+                    raise ValueError("invalid_orders")
+                # A saturated descending window cannot establish complete coverage.
+                # Do not move past older orders by advancing to its newest timestamp.
+                if len(orders) >= limit:
+                    LOGGER.warning("[WARN] RECONCILE_ORDERS_INCOMPLETE fetched=%s limit=%s", len(orders), limit)
+                    orders_cache["error"] = True
+                    return []
+                seen_ids = set()
+                for order in orders:
+                    if (not isinstance(order, Mapping)
+                            or any(not isinstance(order.get(key), str) or not order[key].strip()
+                                   for key in ("id", "symbol", "side", "status"))
+                            or order["id"] in seen_ids or _best_order_timestamp(order) is None):
+                        LOGGER.warning("[WARN] RECONCILE_ORDERS_INVALID")
+                        raise ValueError("invalid_order_record")
+                    seen_ids.add(order["id"])
+                    # Fixed run-start cutoff, zero clock-skew tolerance. Check
+                    # every timestamp used for attribution/watermark fallback,
+                    # rather than allowing an earlier field to hide a future one.
+                    for field in ("updated_at", "filled_at", "submitted_at", "created_at"):
+                        timestamp = db.normalize_ts(order.get(field), field=field)
+                        if timestamp is not None and timestamp > now_utc:
+                            LOGGER.warning("[WARN] RECONCILE_ORDERS_INVALID reason=future_timestamp field=%s", field)
+                            raise ValueError("future_order_timestamp")
+                    if str(order["side"]).lower() == "sell" and str(order["status"]).lower() == "filled":
+                        try:
+                            price = Decimal(str(order.get("filled_avg_price")))
+                            quantity = Decimal(str(order.get("filled_qty", order.get("qty"))))
+                            if (not price.is_finite() or price <= 0 or not quantity.is_finite()
+                                    or quantity <= 0 or db.normalize_ts(order.get("filled_at")) is None):
+                                raise ValueError("invalid_fill")
+                        except (ValueError, InvalidOperation):
+                            LOGGER.warning("[WARN] RECONCILE_ORDERS_INVALID")
+                            raise ValueError("invalid_fill_record") from None
+                orders_cache["orders"] = orders
                 if watermark_enabled:
                     LOGGER.info(
                         "[INFO] RECONCILE_WATERMARK after=%s fetched_orders=%s",
@@ -2960,19 +3003,10 @@ class TradeExecutor:
                         len(orders_cache["orders"]),
                     )
                 return orders_cache["orders"]
-            except requests.HTTPError as exc:
-                response = getattr(exc, "response", None)
-                status = getattr(response, "status_code", "ERR")
-                err_text = getattr(response, "text", None) or str(exc)
-                LOGGER.warning(
-                    "[WARN] RECONCILE_ALPACA_FAIL action=http_orders status=%s err=%s",
-                    status,
-                    err_text,
-                )
             except Exception as exc:
                 LOGGER.warning(
-                    "[WARN] RECONCILE_ALPACA_FAIL action=http_orders status=ERR err=%s",
-                    exc,
+                    "[WARN] RECONCILE_ORDERS_UNAVAILABLE error_type=%s",
+                    type(exc).__name__,
                 )
             orders_cache["error"] = True
             orders_cache["orders"] = []
@@ -3031,18 +3065,25 @@ class TradeExecutor:
             return best_order, best_filled_at, stats
 
         try:
-            open_trades = db.get_open_trades(engine)
+            open_trades = db.get_open_trades(engine, strict=True)
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=open_trades err=%s", exc)
-            open_trades = []
+            return False
         LOGGER.info("[INFO] RECONCILE_START open_trades=%s", len(open_trades))
         if self.client is None:
             tc = get_trading_client()
             if tc is None:
                 LOGGER.warning("RECONCILE_ALPACA_FAIL action=get_trading_client err=unavailable")
-                return
+                return False
             self.client = tc
 
+        # Fetch and validate orders before any close/decorate/event write, including
+        # the position-absence path. An empty list is distinct from a failed read.
+        _fetch_orders()
+        if orders_cache["error"]:
+            LOGGER.warning("[WARN] RECONCILE_WATERMARK_HELD")
+            return False
+        unresolved = False
         closed_count = 0
         open_by_symbol: Dict[str, list[dict[str, Any]]] = {}
 
@@ -3050,18 +3091,27 @@ class TradeExecutor:
             try:
                 log_info("alpaca.get_positions")
                 positions = self.client.get_all_positions()
+                if not isinstance(positions, list):
+                    raise ValueError("invalid_positions")
+                open_symbols_on_alpaca = set()
+                for pos in positions:
+                    symbol = getattr(pos, "symbol", None)
+                    raw_qty = getattr(pos, "qty", None)
+                    if not isinstance(symbol, str) or not symbol.strip() or isinstance(raw_qty, bool):
+                        raise ValueError("invalid_position")
+                    qty = Decimal(str(raw_qty))
+                    if not qty.is_finite():
+                        raise ValueError("invalid_position_quantity")
+                    if qty != 0:
+                        open_symbols_on_alpaca.add(symbol.upper())
             except Exception as exc:  # pragma: no cover - defensive guard
                 LOGGER.warning(
-                    "[WARN] RECONCILE_ALPACA_FAIL symbol=ALL err=%s err_type=%s",
-                    exc,
+                    "[WARN] RECONCILE_POSITIONS_UNAVAILABLE error_type=%s",
                     type(exc).__name__,
                 )
-                positions = []
-            open_symbols_on_alpaca = {
-                str(getattr(pos, "symbol", "")).upper()
-                for pos in positions
-                if getattr(pos, "qty", None) not in (None, "", 0, "0", 0.0)
-            }
+                LOGGER.warning("[WARN] RECONCILE_WATERMARK_HELD")
+                return False
+            LOGGER.info("[INFO] RECONCILE_POSITIONS_OK count=%s", len(positions))
 
             for trade in open_trades:
                 symbol = str(trade.get("symbol", "")).upper()
@@ -3104,6 +3154,9 @@ class TradeExecutor:
                                 trade_id,
                                 symbol,
                             )
+                        else:
+                            unresolved = True
+                            LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=close_trade_position")
                     else:
                         remaining_trades.append(trade)
                 open_by_symbol[symbol] = remaining_trades
@@ -3150,33 +3203,24 @@ class TradeExecutor:
                     )
                     order_id = str(order.get("id") or order.get("order_id") or "")
                     try:
-                        db.insert_order_event(
+                        closed = db.reconcile_sell_fill(
                             engine=engine,
-                            event_type="SELL_FILL",
+                            trade_id=trade_id,
                             symbol=symbol,
                             qty=order.get("filled_qty", order.get("qty")),
                             order_id=order_id,
                             status=str(order.get("status", "")),
                             event_time=exit_time_raw,
                             raw=_order_snapshot(order),
+                            exit_price=exit_price,
+                            exit_reason=exit_reason,
                         )
                     except Exception as exc:  # pragma: no cover - defensive guard
                         LOGGER.warning(
-                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=order_event err=%s",
+                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=atomic_fill error_type=%s",
                             trade_id,
                             symbol,
-                            exc,
-                        )
-                    try:
-                        closed = db.close_trade(
-                            engine, trade_id, order_id, exit_time_raw, exit_price, exit_reason
-                        )
-                    except Exception as exc:  # pragma: no cover - defensive guard
-                        LOGGER.warning(
-                            "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
-                            trade_id,
-                            symbol,
-                            exc,
+                            type(exc).__name__,
                         )
                         closed = False
                     if closed:
@@ -3189,6 +3233,7 @@ class TradeExecutor:
                             exit_reason,
                         )
                     else:
+                        unresolved = True
                         LOGGER.warning(
                             "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=close_trade err=%s",
                             trade_id,
@@ -3199,9 +3244,10 @@ class TradeExecutor:
         decorated_count = 0
         try:
             trades_to_decorate = db.get_closed_trades_missing_exit(
-                engine=engine, updated_after=decorate_after_time
+                engine=engine, updated_after=decorate_after_time, strict=True
             )
         except Exception as exc:  # pragma: no cover - defensive guard
+            unresolved = True
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=get_closed_trades err=%s", exc)
             trades_to_decorate = []
 
@@ -3217,6 +3263,7 @@ class TradeExecutor:
                 latest_sell_order_by_symbol[symbol] = _latest_filled_sell_order(symbol)
             order, filled_at, stats = latest_sell_order_by_symbol[symbol]
             if order is None:
+                unresolved = True
                 LOGGER.warning(
                     "[WARN] RECONCILE_DECORATE_MISS trade_id=%s symbol=%s after_iso=%s lookback_days=%s fetched_orders=%s tsla_sell_orders=%s filled_sells=%s orders_error=%s",
                     trade_id,
@@ -3241,53 +3288,25 @@ class TradeExecutor:
             order_id = str(order.get("id") or order.get("order_id") or "")
 
             try:
-                db.insert_order_event(
+                decorated = db.reconcile_sell_fill(
                     engine=engine,
-                    event_type="SELL_FILL",
+                    trade_id=trade_id,
                     symbol=symbol,
                     qty=order.get("filled_qty", order.get("qty")),
                     order_id=order_id,
                     status=str(order.get("status", "")),
                     event_time=exit_time_raw,
                     raw=_order_snapshot(order),
-                )
-            except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning(
-                    "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=order_event err=%s",
-                    trade_id,
-                    symbol,
-                    exc,
-                )
-
-            realized_pnl = None
-            try:
-                entry_price_value = trade.get("entry_price")
-                qty_value = trade.get("qty")
-                if (
-                    exit_price is not None
-                    and entry_price_value is not None
-                    and qty_value is not None
-                ):
-                    realized_pnl = (float(exit_price) - float(entry_price_value)) * float(qty_value)
-            except Exception:
-                realized_pnl = None
-
-            try:
-                decorated = db.decorate_trade_exit(
-                    engine=engine,
-                    trade_id=trade_id,
-                    exit_order_id=order_id,
-                    exit_time=exit_time_raw,
                     exit_price=exit_price,
                     exit_reason=exit_reason,
-                    realized_pnl=realized_pnl,
+                    decorate=True,
                 )
             except Exception as exc:  # pragma: no cover - defensive guard
                 LOGGER.warning(
-                    "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=decorate_exit err=%s",
+                    "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=atomic_fill error_type=%s",
                     trade_id,
                     symbol,
-                    exc,
+                    type(exc).__name__,
                 )
                 decorated = False
 
@@ -3302,12 +3321,18 @@ class TradeExecutor:
                     exit_reason,
                 )
             else:
+                unresolved = True
                 LOGGER.warning(
                     "[WARN] RECONCILE_DB_FAIL trade_id=%s symbol=%s stage=decorate_exit err=%s",
                     trade_id,
                     symbol,
                     "decorate_failed",
                 )
+        if unresolved:
+            LOGGER.warning("[WARN] RECONCILE_WATERMARK_HELD")
+            LOGGER.info("[INFO] RECONCILE_END closed=%s decorated=%s", closed_count, decorated_count)
+            return False
+        LOGGER.info("[INFO] RECONCILE_COVERAGE_COMPLETE fetched_orders=%s", len(orders_cache["orders"]))
         if watermark_enabled:
             if orders_cache.get("orders") is None and not orders_cache.get("error"):
                 _fetch_orders()
@@ -3333,7 +3358,11 @@ class TradeExecutor:
                 LOGGER.info(
                     "[INFO] RECONCILE_WATERMARK_UPDATE last_after=%s", new_last_after.isoformat()
                 )
+            else:
+                LOGGER.warning("[WARN] RECONCILE_WATERMARK_HELD")
+                return False
         LOGGER.info("[INFO] RECONCILE_END closed=%s decorated=%s", closed_count, decorated_count)
+        return True
 
     def log_info(self, event: str, **payload: Any) -> None:
         log_info(event, **payload)
@@ -6903,15 +6932,15 @@ def _seed_initial_metrics(metrics: ExecutionMetrics, config: ExecutorConfig) -> 
 _RECONCILE_DB_DISABLED_LOGGED = False
 
 
-def _run_auto_reconcile(executor: TradeExecutor, config: ExecutorConfig, stage: str) -> None:
+def _run_auto_reconcile(executor: TradeExecutor, config: ExecutorConfig, stage: str) -> bool:
     global _RECONCILE_DB_DISABLED_LOGGED
     if not getattr(config, "reconcile_auto", True):
-        return
+        return True
     if not db.db_enabled():
         if not _RECONCILE_DB_DISABLED_LOGGED:
-            LOGGER.info("[INFO] RECONCILE_AUTO_SKIP reason=db_disabled")
+            LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s reason=db_disabled", stage)
             _RECONCILE_DB_DISABLED_LOGGED = True
-        return
+        return False
     lookback_days = getattr(config, "reconcile_lookback_days", 7)
     limit = getattr(config, "reconcile_limit", 500)
     LOGGER.info(
@@ -6921,9 +6950,13 @@ def _run_auto_reconcile(executor: TradeExecutor, config: ExecutorConfig, stage: 
         limit,
     )
     try:
-        executor.reconcile_closed_trades(lookback_days=lookback_days, limit=limit)
+        complete = executor.reconcile_closed_trades(lookback_days=lookback_days, limit=limit)
+        if complete is not True:
+            LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s reason=incomplete", stage)
+        return complete is True
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s err=%s", stage, exc)
+        LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s error_type=%s", stage, type(exc).__name__)
+        return False
     finally:
         LOGGER.info("[INFO] RECONCILE_AUTO_END stage=%s", stage)
 
@@ -6958,8 +6991,12 @@ def run_executor(
     auto_reconcile_enabled = bool(getattr(config, "reconcile_auto", True)) and not getattr(
         config, "reconcile_only", False
     )
-    if auto_reconcile_enabled:
-        _run_auto_reconcile(loader, config, stage="start")
+    if auto_reconcile_enabled and not _run_auto_reconcile(loader, config, stage="start"):
+        metrics.status = "failed"
+        metrics.exit_reason = "RECONCILE_INCOMPLETE"
+        loader.persist_metrics()
+        loader.log_summary()
+        return 1
     try:
         if config.dry_run:
             banner = "=" * 72
@@ -7267,10 +7304,13 @@ def run_executor(
             metrics.status = "skipped"
             metrics.record_skip("RECONCILE_ONLY", count=1)
             metrics.exit_reason = "RECONCILE_ONLY"
-            executor.reconcile_closed_trades()
+            complete = executor.reconcile_closed_trades()
+            if complete is not True:
+                metrics.status = "failed"
+                metrics.exit_reason = "RECONCILE_INCOMPLETE"
             executor.persist_metrics()
             executor.log_summary()
-            return 0
+            return 0 if complete is True else 1
 
         metrics.in_window = bool(in_window)
         if not in_window:
@@ -7313,8 +7353,14 @@ def run_executor(
             return 1
         return result
     finally:
-        if auto_reconcile_enabled:
-            _run_auto_reconcile(loader, config, stage="end")
+        if auto_reconcile_enabled and not _run_auto_reconcile(loader, config, stage="end"):
+            metrics.status = "failed"
+            metrics.exit_reason = "RECONCILE_INCOMPLETE"
+            loader.persist_metrics()
+            loader.log_summary()
+            # Preserve an exception already propagating from execution.
+            if sys.exc_info()[0] is None:
+                return 1
 
 
 def load_candidates(path: Path) -> pd.DataFrame:

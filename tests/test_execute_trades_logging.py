@@ -120,7 +120,7 @@ def test_compute_limit_price_rounds_to_tick():
 def test_header_only_candidates_exit_cleanly(tmp_path, monkeypatch, caplog):
     csv_path = tmp_path / "candidates.csv"
     csv_path.write_text("symbol,close,score,universe_count,score_breakdown\n", encoding="utf-8")
-    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True)
+    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True, reconcile_auto=False)
     caplog.set_level(logging.INFO, logger="execute_trades")
     caplog.clear()
     rc = run_executor(config, client=StubTradingClient())
@@ -250,7 +250,7 @@ def test_time_window_metrics_include_position_fields(tmp_path, monkeypatch):
         ]
     )
     frame.to_csv(csv_path, index=False)
-    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True)
+    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True, reconcile_auto=False)
 
     def fake_window(self):
         return False, "outside premarket (NY)", "premarket"
@@ -294,7 +294,8 @@ def test_dry_run_creates_metrics_with_zero_orders(tmp_path, caplog):
     )
     frame.to_csv(csv_path, index=False)
 
-    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True, time_window="any")
+    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True, time_window="any",
+                            reconcile_auto=False)
     caplog.set_level(logging.INFO, logger="execute_trades")
     caplog.clear()
 
@@ -326,7 +327,8 @@ def test_auth_log_includes_buying_power(tmp_path, caplog):
         ]
     )
     frame.to_csv(csv_path, index=False)
-    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True, time_window="any")
+    config = ExecutorConfig(source="path", source_path=csv_path, dry_run=True, time_window="any",
+                            reconcile_auto=False)
     caplog.set_level(logging.INFO, logger="execute_trades")
     caplog.clear()
     rc = run_executor(config, client=StubTradingClient())
