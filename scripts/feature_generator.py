@@ -11,7 +11,7 @@ import argparse
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Tuple
 from zoneinfo import ZoneInfo
@@ -74,6 +74,12 @@ def parse_args() -> argparse.Namespace:
         help="Directory where the generated features CSV will be written.",
     )
     parser.add_argument(
+        "--run-date",
+        type=date.fromisoformat,
+        default=None,
+        help="Expected daily-bar session (YYYY-MM-DD); unavailable sessions are rejected.",
+    )
+    parser.add_argument(
         "--keep-na",
         action="store_true",
         help="Keep rows with NaNs in the output instead of dropping them.",
@@ -102,10 +108,9 @@ def _latest_timestamp_date(df: pd.DataFrame) -> datetime.date | None:
     if pd.isna(latest_timestamp):
         return None
 
-    try:
-        return latest_timestamp.tz_convert(RUN_TZ).date()
-    except Exception:
-        return latest_timestamp.date()
+    # Daily-bar timestamps identify their session by the UTC date, matching
+    # production_score_capture. Wall-clock generation time is separate.
+    return latest_timestamp.date()
 
 
 def _require_columns(df: pd.DataFrame, required: Iterable[str]) -> None:
@@ -504,7 +509,7 @@ def build_feature_set(
         features = _compute_features_v2(bars, price_col=price_col)
     else:
         features = _compute_features_v1(bars, price_col=price_col)
-    merged = features.merge(label_subset, on=["symbol", "timestamp"], how="inner")
+    merged = features.merge(label_subset, on=["symbol", "timestamp"], how="left", validate="one_to_one")
 
     if merged.empty:
         raise ValueError(
@@ -560,7 +565,9 @@ def build_feature_set(
     columns = base_columns + (v2_columns if feature_set == "v2" else []) + label_columns
 
     if not keep_na:
-        merged = merged.dropna(subset=columns)
+        # Pending forward outcomes must not remove current inference inputs.
+        # Training independently drops rows without its chosen target label.
+        merged = merged.dropna(subset=base_columns + (v2_columns if feature_set == "v2" else []))
 
     metadata: dict[str, Any] = {
         "price_col_used": price_col,
@@ -592,14 +599,13 @@ def main() -> None:
             "[INFO] FEATURES_PRICE_COL price_col=%s", feature_meta.get("price_col_used", "close")
         )
 
-        run_date = _current_run_date()
-        if latest_bars_date and latest_bars_date < run_date:
-            logging.warning(
-                "[WARN] FEATURES_BARS_STALE latest_bar_date=%s run_date=%s bars_path=%s",
-                latest_bars_date,
-                run_date,
-                args.bars_path,
-            )
+        run_date = latest_bars_date
+        if run_date is None or _latest_timestamp_date(merged) != run_date:
+            raise ValueError("features_current_session_missing")
+        if args.run_date is not None and args.run_date != run_date:
+            raise ValueError("features_signal_session_mismatch")
+        if run_date > datetime.now(timezone.utc).date():
+            raise ValueError("features_future_session_rejected")
         if latest_labels_date and latest_labels_date < run_date:
             logging.warning(
                 "[WARN] FEATURES_LABELS_STALE latest_label_date=%s run_date=%s labels_path=%s",
@@ -618,6 +624,8 @@ def main() -> None:
         ml_feature_columns = infer_feature_columns_for_ml(merged)
         feature_signature = compute_feature_signature(ml_feature_columns)
         features_payload = {
+            "signal_session": run_date.isoformat(),
+            "outcomes_pending": int(merged["label_5d_pos_300bp"].isna().sum()),
             "feature_set": feature_set,
             "feature_signature": feature_signature,
             "feature_columns": ml_feature_columns,

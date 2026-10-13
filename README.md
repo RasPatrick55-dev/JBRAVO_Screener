@@ -46,3 +46,18 @@ cd /home/RasPatrick/jbravo_screener && set -a; . ~/.config/jbravo/.env; set +a; 
 python -m scripts.docs_consistency_check
 python -m scripts.dashboard_consistency_check
 ```
+### Current-session feature and prediction inputs
+
+Feature artifacts use the actual daily-bar session date. To generate inputs for a
+specific completed session, run `python -m scripts.feature_generator --run-date
+YYYY-MM-DD` in the configured environment. A missing or mismatched session fails
+before file or database publication. The primary pipeline supplies this date and
+refreshes legacy feature metadata that lacks a matching `signal_session`.
+
+Recent rows retain unknown forward labels as blank values so prediction can use
+current features. Training still excludes rows without its chosen target label.
+Production score captures contain normalized features and scores without outcomes;
+capture failures export fixed reason codes and continue to block publication.
+
+See [the October 13 recovery runbook](docs/how-to/oct13_pipeline_recovery.md) for
+the separate deployment and prospective research-enrollment steps.

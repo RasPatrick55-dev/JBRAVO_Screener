@@ -17,6 +17,23 @@ import pandas as pd
 MAX_BYTES = 64 * 1024 * 1024
 PRODUCER_FILES = ('scripts/ranker_predict.py', 'scripts/production_score_capture.py',
                   'scripts/primary_pipeline.py')
+FAILURE_CODES = frozenset({
+    'capture_time_ineligible', 'capture_population_ineligible',
+    'capture_future_feature_timestamp', 'capture_symbol_ineligible',
+    'capture_duplicate_identity', 'capture_score_identity_mismatch',
+    'capture_score_ineligible', 'capture_features_ineligible',
+    'producer_changed_during_prediction', 'scoring_bundle_changed_during_prediction',
+    'capture_symlink_rejected', 'capture_size_rejected', 'capture_readback_failed',
+})
+
+
+def failure_code(error):
+    """Export only fixed codes; exceptions can include private paths or values."""
+    if isinstance(error, (ValueError, OSError)) and str(error) in FAILURE_CODES:
+        return str(error)
+    if isinstance(error, OSError):
+        return 'capture_io_failure'
+    return 'capture_details_withheld'
 
 
 def binding(content):

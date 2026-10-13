@@ -3513,6 +3513,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         ):
             stale = True
             reason = "feature_set_mismatch"
+        elif features_meta.get("signal_session") != pipeline_run_date.isoformat():
+            stale = True
+            reason = "features_signal_session_mismatch"
         LOG.info(
             "[INFO] FEATURES_FRESHNESS stale=%s reason=%s model_feature_set=%s features_feature_set=%s model_feature_signature=%s features_feature_signature=%s",
             str(bool(stale)).lower(),
@@ -3644,7 +3647,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         try:
             rc_features, secs_features = run_step(
                 "features",
-                [sys.executable, "-m", "scripts.feature_generator"],
+                [sys.executable, "-m", "scripts.feature_generator", "--run-date", pipeline_run_date.isoformat()],
                 timeout=_features_timeout_secs(),
                 env=features_env or None,
             )
@@ -4430,7 +4433,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     LOG.info("[INFO] FEATURES_TIMEOUT secs=%s", features_timeout)
                     rc_features, secs = run_step(
                         "features",
-                        [sys.executable, "-m", "scripts.feature_generator"],
+                        [sys.executable, "-m", "scripts.feature_generator", "--run-date", pipeline_run_date.isoformat()],
                         timeout=features_timeout,
                         env=_step_env("features"),
                     )

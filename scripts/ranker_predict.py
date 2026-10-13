@@ -155,13 +155,14 @@ def _normalize_features_frame(
     required_columns: set[str] = {
         "symbol",
         "timestamp",
-        label_column,
     }
     missing = required_columns - set(df.columns)
     if missing:
         raise RuntimeError(f"Features input missing columns: {sorted(missing)}")
 
     work = df.copy()
+    if label_column not in work.columns:
+        work[label_column] = np.nan
     if "close" not in work.columns:
         work["close"] = 0.0
     missing_model_columns = [col for col in feature_columns if col not in work.columns]
@@ -186,7 +187,9 @@ def _normalize_features_frame(
     for column in feature_columns:
         work[column] = pd.to_numeric(work[column], errors="coerce")
     work[feature_columns] = work[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    work = work.dropna(subset=["timestamp", label_column]).sort_values("timestamp")
+    # Prediction needs features, not a future outcome. Preserve unknown labels
+    # as NaN rather than fabricating training targets to retain inference rows.
+    work = work.dropna(subset=["timestamp"]).sort_values("timestamp")
     stats = {
         "missing_columns": missing_model_columns,
         "missing_count": int(len(missing_model_columns)),
@@ -666,7 +669,7 @@ def main(argv: list[str] | None = None) -> int:
 
     capture_enabled = _parse_boolish(os.getenv('JBR_CAPTURE_PRODUCTION_SCORES'))
     if capture_enabled:
-        from scripts.production_score_capture import capture, scoring_binding, producer_binding
+        from scripts.production_score_capture import capture, scoring_binding, producer_binding, failure_code
         try:
             observed_model = scoring_binding(model, scaler, feature_columns, args.label_column, posthoc_calibrator)
             observed_producer = producer_binding()
@@ -703,8 +706,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError('scoring_bundle_changed_during_prediction')
             score_capture = capture(BASE_DIR, observed_features, output_df, snapshot_date=snapshot_date,
                                     model_binding=observed_model, producer_sources=observed_producer)
-        except Exception:
-            LOG.error('[ERROR] PRODUCTION_SCORE_CAPTURE_FAILED')
+        except Exception as error:
+            LOG.error('[ERROR] PRODUCTION_SCORE_CAPTURE_FAILED reason=%s', failure_code(error))
             return 2
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
