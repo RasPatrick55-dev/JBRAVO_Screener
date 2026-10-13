@@ -121,7 +121,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(str(db.upsert_ml_artifact_frame.call_args.args[1]), '2026-10-09')
         self.assertTrue((self.root / 'labels_20261009.csv').exists())
 
-    def run_predictor(self, mutate=False, fail_capture=False):
+    def run_predictor(self, mutate=False, fail_capture=False, pending_labels=False):
         db = ModuleType('scripts.db')
         db.db_enabled = Mock(return_value=False)
         train = ModuleType('scripts.ranker_train')
@@ -142,7 +142,7 @@ class EvidenceTests(unittest.TestCase):
         selection.select_compatible_model = lambda *a, **k: (self.root / 'trusted.pkl', {'selected_model_meta': {}, 'selection_mode': 'fixture'})
         selection.summary_path_for_model = lambda path: None
         features_path = self.root / 'features_2026-10-09.csv'
-        self.features.assign(label_5d_pos_300bp=0, close=100.).to_csv(features_path, index=False)
+        self.features.assign(label_5d_pos_300bp=float('nan') if pending_labels else 0, close=100.).to_csv(features_path, index=False)
         spec = importlib.util.spec_from_file_location('inert_predictor', ROOT / 'scripts/ranker_predict.py')
         module = importlib.util.module_from_spec(spec)
         with ExitStack() as stack:
@@ -165,6 +165,30 @@ class EvidenceTests(unittest.TestCase):
         proof = meta['production_score_capture']
         self.assertEqual(capture.binding(Path(proof['manifest_path']).read_bytes()), proof['manifest_binding'])
         self.assertEqual(proof['rows'], 2)
+
+    def test_current_prediction_and_capture_do_not_require_future_labels(self):
+        self.assertEqual(self.run_predictor(pending_labels=True), 0)
+        output = pd.read_csv(self.root / 'predictions/predictions_2026-10-09.csv')
+        self.assertEqual(list(output['score_5d']), [.1, .2, .3])
+        self.assertTrue(output['label_5d_pos_300bp'].isna().all())
+        meta = json.loads((self.root / 'predictions/latest_meta.json').read_bytes())
+        proof = meta['production_score_capture']
+        features = pd.read_csv(Path(proof['manifest_path']).parent / 'features.csv')
+        self.assertNotIn('label_5d_pos_300bp', features)
+        self.assertEqual(proof['rows'], 2)
+
+    def test_capture_errors_export_only_allowlisted_reasons(self):
+        self.assertEqual(capture.failure_code(ValueError('capture_population_ineligible')), 'capture_population_ineligible')
+        self.assertEqual(capture.failure_code(OSError('private-example-value')), 'capture_io_failure')
+        self.assertEqual(capture.failure_code(ValueError('private-example-value')), 'capture_details_withheld')
+
+    def test_feature_refresh_commands_bind_pipeline_session(self):
+        tree = ast.parse((ROOT / 'scripts/run_pipeline.py').read_text())
+        commands = [node for node in ast.walk(tree) if isinstance(node, ast.List)
+                    and any(isinstance(v, ast.Constant) and v.value == 'scripts.feature_generator' for v in node.elts)]
+        self.assertEqual(len(commands), 2)
+        for node in commands:
+            self.assertIn("'--run-date', pipeline_run_date.isoformat()", ast.unparse(node))
 
     def test_mutated_bundle_or_failed_capture_prevents_prediction_publication(self):
         for mutate, fail in ((True, False), (False, True)):
