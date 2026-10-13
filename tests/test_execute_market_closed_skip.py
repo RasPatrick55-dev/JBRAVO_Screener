@@ -31,7 +31,8 @@ def test_market_closed_skips_before_candidate_load(monkeypatch, tmp_path):
         raise AssertionError("load_candidates should not run on market closed")
 
     monkeypatch.setattr(execute_mod.TradeExecutor, "load_candidates", fail_load)
-    config = ExecutorConfig(source_path=tmp_path / "c.csv", source_type="db", dry_run=True)
+    config = ExecutorConfig(source_path=tmp_path / "c.csv", source_type="db", dry_run=True,
+                            reconcile_auto=False)
     rc = run_executor(config, client=ClosedClockClient())
     assert rc == 0
     payload = execute_mod._EXECUTE_METRICS_PAYLOAD or {}
