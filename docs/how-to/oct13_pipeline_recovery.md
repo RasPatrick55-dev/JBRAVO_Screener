@@ -34,6 +34,12 @@ capture reason codes; a successful host run remains required.
    the narrow deployment registry transition. The existing PythonAnywhere
    deployment registry accepts only previously approved PRs 726–728; this new
    patch cannot reuse their identities, previews or approvals.
+   This repair branch starts at the registered PR 728 host baseline. After PR
+   merge, a narrow registry extension must bind the reviewed repair head and
+   prove it is an ancestor of canonical main. Deploying the main merge commit
+   instead would also include newer reconciliation changes outside this repair.
+   The extension must allow only this exact reviewed head, base and file set;
+   generic branch-head deployment remains unavailable.
 2. Prepare a fresh governed host inspection. Preserve existing generated outputs
    and refuse unrelated tracked changes. Prepare and approve the exact deployment
    preview before its one-time apply. Read back all deployed source bytes.
