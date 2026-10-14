@@ -100,6 +100,9 @@ def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
         health = pipeline.check_health(root, now=now, expected_day=now.date(),
                                        max_age_seconds=max_age_seconds, require_session=require_session,
                                        require_completion=require_session)
+        if health.get('readiness_policy') == pipeline.PIPELINE_ONLY:
+            result['reasons'] = ['pipeline_new_entries_not_authorized']
+            return result
         if health['status'] != 'ok':
             result['reasons'] = ['pipeline_' + r for r in
                                  health.get('failures', []) + health.get('qualifications', [])]

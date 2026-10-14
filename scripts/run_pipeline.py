@@ -2269,6 +2269,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument('--session-handoff', action='store_true',
                         help='Require completed extended-session cutoff and freeze the entry handoff')
     parser.add_argument('--handoff-invocation', help='Primary controller invocation binding')
+    parser.add_argument('--pipeline-readiness-only', action='store_true',
+                        help='Report computational readiness separately; never authorize new entries')
     parser.add_argument(
         "--steps",
         default=None,
@@ -4974,6 +4976,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     decision.get("predictions_stale_reason"),
                 )
                 ml_health_summary = {
+                    "monitor_contract_version": decision.get("monitor_contract_version"),
+                    "model_comparison_scope": decision.get("model_comparison_scope"),
+                    "production_drift_established": decision.get("production_drift_established"),
                     "decision": decision.get("decision"),
                     "mode": decision.get("mode"),
                     "reasons": list(decision.get("reasons") or []),
@@ -5540,6 +5545,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     ml_health=ml_health_summary,
                     session=session_context, frozen_candidates=frozen_candidates,
                     invocation_id=getattr(args, 'handoff_invocation', None),
+                    readiness_policy=('pipeline_only_no_new_entries' if getattr(args, 'pipeline_readiness_only', False)
+                                      else 'coupled'),
                     controls={
                         "strict_predictions_meta": bool(strict_predictions_meta),
                         "strict_auto_refresh_predictions": bool(strict_auto_refresh_predictions),

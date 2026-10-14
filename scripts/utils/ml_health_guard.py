@@ -287,6 +287,11 @@ def _extract_health(payload: Mapping[str, Any], current_capture=None) -> dict[st
 
     return {
         "recommended_action": action,
+        "monitor_contract_version": payload.get("monitor_contract_version"),
+        "model_comparison_scope": (payload.get("model_comparison", {}).get("scope")
+                                   if isinstance(payload.get("model_comparison"), Mapping) else None),
+        "production_drift_established": (payload.get("model_comparison", {}).get("production_drift_established")
+                                         if isinstance(payload.get("model_comparison"), Mapping) else None),
         "psi_score": psi_score,
         "recent_sharpe": recent_sharpe,
         "run_date": run_date_text,
@@ -524,6 +529,9 @@ def decide_ml_enrichment(
         "recommended_action": action,
         "psi_score": psi_score,
         "recent_sharpe": recent_sharpe,
+        "monitor_contract_version": payload.get("monitor_contract_version"),
+        "model_comparison_scope": payload.get("model_comparison_scope"),
+        "production_drift_established": payload.get("production_drift_established"),
         "monitor_run_date": monitor_run_date.isoformat() if monitor_run_date else None,
         "source": source,
         "max_age_days": max_age,
