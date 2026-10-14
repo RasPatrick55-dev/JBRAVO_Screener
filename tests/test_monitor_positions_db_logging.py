@@ -1,33 +1,23 @@
-import importlib
-import os
-import sys
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest import mock
 
+import test_account_sync as hourly_tests
+import test_reconciliation_integrity as integrity
+from test_monitor_reconciliation_boundary import load_monitor
+
 
 class TestMonitorDbLogging(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls._orig_env = os.environ.copy()
-        os.environ["APCA_API_KEY_ID"] = "test_key"
-        os.environ["APCA_API_SECRET_KEY"] = "test_secret"
-        os.environ["APCA_API_BASE_URL"] = "https://paper-api.alpaca.markets"
-        os.environ["APCA_DATA_API_BASE_URL"] = "https://data.alpaca.markets"
-        os.environ["ALPACA_DATA_FEED"] = "iex"
-        os.environ["MONITOR_DISABLE_SELLS"] = "true"
+    prepare = integrity.ActivityTests.prepare
+    read_module = integrity.DatabaseReadTests.read_module
 
-        sys.modules.pop("scripts.monitor_positions", None)
-        cls.monitor = importlib.import_module("scripts.monitor_positions")
+    def setUp(self):
+        hourly_tests.ExecutorGateIntegrationTests.setUp(self)
+        self.read_module()
+        load_monitor(self)
 
-    @classmethod
-    def tearDownClass(cls):
-        os.environ.clear()
-        os.environ.update(cls._orig_env)
-        sys.modules.pop("scripts.monitor_positions", None)
-
-    def test_sell_fill_logs_and_closes_trade(self):
+    def test_sell_fill_logs_observation_and_defers_canonical_closure(self):
         monitor = self.monitor
         start_ok = int(monitor.MONITOR_METRICS.get("db_event_ok", 0))
         start_fail = int(monitor.MONITOR_METRICS.get("db_event_fail", 0))
@@ -67,12 +57,13 @@ class TestMonitorDbLogging(unittest.TestCase):
             )
 
         self.assertEqual(insert_event.call_count, 2)
-        close_trade.assert_called_once()
+        close_trade.assert_not_called()
         insert_exec.assert_called_once()
 
         event_types = [call.kwargs.get("event_type") for call in insert_event.call_args_list]
         self.assertIn(monitor.MONITOR_DB_EVENT_TYPES["sell_submit"], event_types)
-        self.assertIn(monitor.MONITOR_DB_EVENT_TYPES["sell_fill"], event_types)
+        self.assertIn('SELL_FILL_OBSERVED', event_types)
+        self.assertNotIn('SELL_FILL', event_types)
 
         self.assertEqual(int(monitor.MONITOR_METRICS.get("db_event_ok", 0)), start_ok + 2)
         self.assertEqual(int(monitor.MONITOR_METRICS.get("db_event_fail", 0)), start_fail)
@@ -207,6 +198,8 @@ class TestMonitorDbLogging(unittest.TestCase):
             )
         self.assertEqual(insert_event.call_count, 2)
         self.assertFalse(close_trade.called)
+        self.assertEqual(insert_event.call_args.kwargs['event_type'], 'SELL_FILL_OBSERVED')
+        self.assertTrue(insert_event.call_args.kwargs['raw']['partial'])
 
     def test_db_event_fail_metric_increments(self):
         monitor = self.monitor

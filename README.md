@@ -32,6 +32,12 @@ current-data, source, candidate and session checks remain required.
 - PostgreSQL is the source of truth.
 - CSV outputs are debug/parachute exports, not authoritative state.
 
+Monitor sell fills are recorded as `SELL_FILL_OBSERVED`; the hourly account-sync
+reconciler owns canonical `SELL_FILL` recording and trade closure. Deploy the
+reviewed monitor and reconciliation source together and keep account sync enabled.
+See [the observation and position-closure contract](docs/how-to/hourly_account_sync.md)
+for setup, placeholder upgrade rules and offline verification limits.
+
 ## Canonical Daily One-Liners
 
 ```bash

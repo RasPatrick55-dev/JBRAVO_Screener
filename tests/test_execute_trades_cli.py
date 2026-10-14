@@ -89,6 +89,8 @@ def test_run_executor_returns_zero_when_all_filtered(tmp_path: Path, monkeypatch
         min_adv20=200_000,
         log_json=True,
         dry_run=True,
+        reconcile_auto=False,
+        submit_at_ny="",  # This guard test must not wait for the host's 04:00 session.
     )
 
     monkeypatch.setenv("APCA_API_KEY_ID", "PKTEST")

@@ -48,6 +48,7 @@ class WorkflowTests(unittest.TestCase):
         for relative, binding in report['source_bindings'].items():
             data = (sync.ROOT / relative).read_bytes()
             self.assertEqual(binding, {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+        self.assertIn('scripts/db.py', report['source_bindings'])
 
     def test_failure_stops_all_later_stages(self):
         for failed_index in range(3):
@@ -294,7 +295,7 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(self.executor, '_load_execute_metrics', return_value={}))
         self.stack.enter_context(mock.patch.object(self.executor, '_create_trading_client', side_effect=forbidden))
 
-    def exercise_clock(self, when, session, next_open_days=0):
+    def exercise_clock(self, when, session, next_open_days=0, reconciliation_complete=True):
         now = datetime.fromisoformat(when).replace(tzinfo=ZoneInfo('America/New_York'))
         clock = SimpleNamespace(timestamp=now.isoformat(), is_open=False, session=session,
             next_open=(now + timedelta(days=next_open_days)).replace(hour=9, minute=30).isoformat(),
@@ -315,8 +316,12 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
         messages = io.StringIO()
         logger = logging.Logger('offline-executor-gates', logging.INFO)
         logger.addHandler(logging.StreamHandler(messages))
-        execution.reconcile_closed_trades.side_effect = lambda: logger.info(
-            'RECONCILE_START\nRECONCILE_END\nRECONCILE_WATERMARK_UPDATE')
+        def reconcile():
+            logger.info('\n'.join(sync.STAGES[1].required))
+            if not reconciliation_complete:
+                logger.warning('RECONCILE_WATERMARK_HELD')
+            return reconciliation_complete
+        execution.reconcile_closed_trades.side_effect = reconcile
         stage = sync.STAGES[1]
         args = self.executor.parse_args(list(stage.args))
         config = self.executor.build_config(args)
@@ -336,8 +341,8 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
                     mock.patch.object(self.executor, 'TradeExecutor', side_effect=[loader, execution]), \
                     mock.patch.object(self.executor, '_wait_until_submit_at', wraps=self.executor._wait_until_submit_at) as wait:
                 code = self.executor.run_executor(config, client=client)
-                self.assertEqual(code, 0)
-                wait.assert_called_once_with('')
+                self.assertEqual(code, 0 if reconciliation_complete else 1)
+                wait.assert_called_once_with('', session_open=None)
             # Feed the actual dispatcher log into the unchanged supervisor check.
             process = mock.Mock(returncode=code)
             process.poll.return_value = code
@@ -349,17 +354,23 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
                 return sync.run_stage(current, timeout, descriptor)
 
         result = sync.run_workflow(Path(self.storage) / 'health', runner=runner)
-        self.assertEqual(result['status'], 'ok')
-        self.assertEqual(calls, ['activities', 'reconciliation', 'snapshot'])
+        self.assertEqual(result['status'], 'ok' if reconciliation_complete else 'failed')
+        self.assertEqual(calls, ['activities', 'reconciliation', 'snapshot'] if reconciliation_complete
+                         else ['activities', 'reconciliation'])
         execution.reconcile_closed_trades.assert_called_once_with()
         execution.execute.assert_not_called()
         execution.hydrate_candidates.assert_not_called()
         client.submit_order.assert_not_called()
-        self.assertEqual(result['stages'][2]['status'], 'ok')
+        self.assertEqual(result['stages'][2]['status'], 'ok' if reconciliation_complete else 'not_run')
+        if not reconciliation_complete:
+            self.assertIn('RECONCILE_WATERMARK_HELD', result['stages'][1]['health_reasons'])
         return messages.getvalue()
 
     def test_before_0700_et_reconciles_without_waiting(self):
         self.exercise_clock('2026-10-09T06:15:00', 'premarket')
+
+    def test_incomplete_reconciliation_returns_failure_and_stops_snapshot(self):
+        self.exercise_clock('2026-10-09T06:15:00', 'premarket', reconciliation_complete=False)
 
     def test_weekend_closed_session_reconciles_and_reaches_snapshot(self):
         text = self.exercise_clock('2026-10-10T06:15:00', 'closed', 2)
