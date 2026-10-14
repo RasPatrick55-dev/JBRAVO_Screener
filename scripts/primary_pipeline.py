@@ -14,6 +14,7 @@ FIXED_ARGS = (
     '--enrich-candidates-with-ranker', '--refresh-predictions-for-candidates', 'true',
     '--auto-refresh-features', 'true', '--auto-refresh-predictions', 'true', '--postflight-report',
     '--session-handoff',
+    '--pipeline-readiness-only',
 )
 FIXED_FLAGS = {arg for arg in FIXED_ARGS if arg.startswith('--')} | {'--allow-no-screener', '--handoff-invocation'}
 

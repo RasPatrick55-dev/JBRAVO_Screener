@@ -28,6 +28,7 @@ SOURCE_FILES = ('scripts/run_pipeline.py', 'scripts/pipeline_postflight.py',
 SOURCE_FILES += ('scripts/label_generator.py', 'scripts/ranker_predict.py',
                  'scripts/production_score_capture.py', 'scripts/production_evidence.py',
                  'scripts/ranker_monitor.py', 'scripts/ranker_strategy_eval.py')
+SOURCE_FILES += ('scripts/executor_health.py',)
 MAX_REPORT_BYTES = 64 * 1024
 MAX_SOURCE_BYTES = 1024 * 1024
 ML_PROVENANCE_FIELDS = ('monitor_run_date', 'monitor_run_date_source', 'monitor_artifact_run_date',
@@ -36,7 +37,11 @@ ML_PROVENANCE_FIELDS = ('monitor_run_date', 'monitor_run_date_source', 'monitor_
                         'monitor_refresh_due', 'monitor_refresh_headroom_days',
                         'monitor_input_valid_through', 'monitor_generation_valid_until',
                         'monitor_observed_at', 'monitor_input_reference_date', 'max_age_days', 'source', 'mode',
-                        'monitor_provenance_required', 'monitor_provenance_reasons')
+                        'monitor_provenance_required', 'monitor_provenance_reasons',
+                        'monitor_contract_version', 'model_comparison_scope', 'production_drift_established')
+PIPELINE_ONLY = 'pipeline_only_no_new_entries'
+RESEARCH_PENDING_REASONS = frozenset(('action_investigate', 'stale_monitor',
+                                    'stale_monitor_input_dataset_end', 'stale_monitor_input_recent_end'))
 
 
 def _save_control(base_dir, name, record):
@@ -124,7 +129,10 @@ def _number(value):
 
 def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, require_session=False):
     """Assess declared outcomes; success is not trading or research acceptance."""
-    failures, warnings = [], []
+    failures, warnings, research_reasons = [], [], []
+    policy = record.get('readiness_policy', 'coupled') if isinstance(record, dict) else None
+    if policy not in ('coupled', PIPELINE_ONLY):
+        raise ValueError('invalid_readiness_policy')
     if not isinstance(record, dict) or type(record.get('schema_version')) is not int or record['schema_version'] != 1:
         raise ValueError('unsupported_schema')
     run_id = record.get('run_id')
@@ -207,15 +215,28 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
              'auto_refresh_predictions', 'use_champion', 'ml_health_guard', 'refresh_predictions_for_candidates')):
         failures.append('required_ml_controls_missing')
     health = record.get('ml_health')
+    # Only explicitly identified research-fold diagnostics may become advisory.
+    # Their original verdict/provenance stays intact. Missing/malformed health,
+    # production-derived alerts, unknown reasons and stale predictions still block.
+    health_reasons = health.get('reasons') if isinstance(health, dict) else None
+    research_pending = (policy == PIPELINE_ONLY and isinstance(health, dict)
+        and type(health.get('monitor_contract_version')) is int and health['monitor_contract_version'] == 2
+        and health.get('model_comparison_scope') == 'cross_model_diagnostic'
+        and health.get('production_drift_established') is False and health.get('decision') == 'warn'
+        and isinstance(health_reasons, list) and bool(health_reasons)
+        and all(isinstance(reason, str) and reason in RESEARCH_PENDING_REASONS for reason in health_reasons)
+        and 'action_investigate' in health_reasons)
     if not isinstance(health, dict) or health.get('decision') not in ('allow', 'warn', 'block'):
         warnings.append('ml_health_unknown')
+    elif research_pending:
+        research_reasons.extend(health_reasons)
     elif health['decision'] != 'allow':
         warnings.append('ml_health_' + health['decision'])
     if isinstance(health, dict):
         reasons = health.get('reasons')
         if not isinstance(reasons, list) or any(not isinstance(r, str) or not re.fullmatch('[a-z0-9_:-]{1,80}', r) for r in reasons):
             warnings.append('ml_health_reasons_unknown')
-        elif reasons:
+        elif reasons and not research_pending:
             warnings.extend('ml_health_reason_' + r for r in reasons)
     coverage = record.get('coverage')
     if not isinstance(coverage, dict):
@@ -237,14 +258,19 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
                     failures.append('coverage_not_from_this_run')
             except (ValueError, TypeError):
                 failures.append('coverage_run_unknown')
-    return {'run_id': run_id, 'status': 'failed' if failures else 'degraded' if warnings else 'ok',
+    status = 'failed' if failures else 'degraded' if warnings else 'ok'
+    return {'run_id': run_id, 'status': status,
             'failures': sorted(set(failures)), 'qualifications': sorted(set(warnings)),
+            'readiness_policy': policy, 'pipeline_ready': status == 'ok',
+            'entry_ready': False if policy == PIPELINE_ONLY else status == 'ok',
+            'research_status': 'pending' if research_reasons else 'unqualified',
+            'research_reasons': sorted(set(research_reasons)),
             'research_qualified': False, 'operating_acceptance': False}
 
 
 def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, step_rcs,
                    stage_times, degraded, labels_rows, freshness, coverage, ml_health, controls,
-                   session=None, frozen_candidates=None, invocation_id=None):
+                   session=None, frozen_candidates=None, invocation_id=None, readiness_policy='coupled'):
     """The pipeline writes selected facts from this invocation, not shared-log greps."""
     base_dir = Path(base_dir)
     freshness = freshness if isinstance(freshness, dict) else {}
@@ -258,6 +284,7 @@ def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, ste
                    else 'unknown_ml_health_reason' for r in reasons]
     record = {
         'schema_version': 1, 'run_id': uuid.uuid4().hex,
+        'readiness_policy': readiness_policy,
         'started_at': started_at.isoformat(), 'finished_at': finished_at.isoformat(),
         'pipeline_rc': pipeline_rc, 'degraded': degraded, 'steps': list(steps),
         'stages': {name: {'rc': value, 'seconds': stage_times.get(name)} for name, value in step_rcs.items()},
@@ -333,6 +360,9 @@ def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=
         result['report_binding'] = _binding(data)
         # Display provenance only after source/history saved-byte checks pass.
         result['ml_health'] = record['ml_health']
+        if require_completion and result.get('readiness_policy') == PIPELINE_ONLY:
+            result.update(status='failed', failures=sorted(set(result['failures'] +
+                          ['new_entries_blocked_by_pipeline_only_policy'])))
         if record.get('session') is not None:
             result.update(session=record['session'], frozen_candidates=record['frozen_candidates'])
         return result

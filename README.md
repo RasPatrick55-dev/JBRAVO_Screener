@@ -22,6 +22,12 @@ These declaration checks do not qualify historical data or authorize execution.
 
 ## Current Operating Mode
 
+The fixed primary separates computational completion from research qualification
+under the [pipeline-only readiness policy](docs/how-to/pipeline_readiness_only.md).
+Valid research diagnostics can remain pending while the pipeline completes.
+New trading entries remain blocked, including after a healthy monitor verdict;
+current-data, source, candidate and session checks remain required.
+
 - Paper-only trading workflow.
 - PostgreSQL is the source of truth.
 - CSV outputs are debug/parachute exports, not authoritative state.
