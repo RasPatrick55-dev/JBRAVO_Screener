@@ -65,7 +65,7 @@ class MonitorRegressions(unittest.TestCase):
                 root.removeHandler(handler)
 
     def order(self, **changes):
-        return SimpleNamespace(**(dict(id="fill", side=OrderSide.SELL, status=OrderStatus.FILLED,
+        return SimpleNamespace(**(dict(id="fill", symbol="AAA", side=OrderSide.SELL, status=OrderStatus.FILLED,
             filled_at=self.entry + timedelta(days=1), filled_avg_price="110", filled_qty="10",
             order_type="limit") | changes))
 
@@ -247,7 +247,7 @@ class MonitorRegressions(unittest.TestCase):
         self.monitor.PARTIAL_EXIT_TAKEN['AAA']=True
         order=[]
         with self.cycle_patches(filled=False), \
-             mock.patch.object(self.monitor,'log_closed_positions',side_effect=lambda client,symbols,frame:order.append(('closed',symbols,frame.copy()))), \
+             mock.patch.object(self.monitor,'log_closed_positions',side_effect=lambda client,symbols,frame,**kwargs:order.append(('closed',symbols,frame.copy()))), \
              mock.patch.object(self.monitor,'save_positions_csv',side_effect=lambda positions,path:order.append(('save',list(positions)))):
             self.client.get_all_positions.return_value=[]
             # Permit the normal target branch to attempt an exit this cycle.

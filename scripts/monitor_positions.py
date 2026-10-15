@@ -5,6 +5,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 import time
 import types
 from datetime import datetime, timedelta, timezone, time as dt_time
@@ -1426,6 +1427,78 @@ def get_open_positions():
 
 
 # Save open positions to CSV for dashboard consumption
+def _positive_accounting_number(value, *, absolute=False):
+    if isinstance(value, bool):
+        return None
+    try:
+        number = abs(float(value)) if absolute else float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _observed_entry_time(value):
+    try:
+        stamp = pd.to_datetime(value, errors='coerce')
+        if pd.isna(stamp) or getattr(stamp, 'tzinfo', None) is None:
+            return None
+        return stamp.tz_convert('UTC').isoformat()
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _accounted_exit_ids(record):
+    value = record.get('accounted_exit_order_ids')
+    if value is None or (not isinstance(value, (str, list)) and pd.isna(value)):
+        return set()
+    if isinstance(value, str):
+        value = json.loads(value)
+    if (not isinstance(value, list) or len(value) > 128
+            or any(not isinstance(item, str) or not item or len(item) > 128 for item in value)):
+        raise ValueError('position_exit_identity_unverified')
+    return set(value)
+
+
+def _position_closure_record(position, retained):
+    """Use current basis; retain old time only for a continuing basis and side."""
+    basis = _positive_accounting_number(getattr(position, 'avg_entry_price', None))
+    side = _determine_position_side(position)
+    entry_time = (_observed_entry_time(getattr(position, 'entry_time', None))
+                  or _observed_entry_time(getattr(position, 'created_at', None)))
+    prior = retained[retained['symbol'] == position.symbol] if 'symbol' in retained else pd.DataFrame()
+    accounted_ids = set()
+    if basis is not None and len(prior) == 1:
+        previous = prior.iloc[0]
+        old_basis = _positive_accounting_number(previous.get('entry_price'))
+        old_side = _determine_position_side(types.SimpleNamespace(**previous.to_dict()))
+        if old_basis is not None and math.isclose(basis, old_basis) and side == old_side:
+            previous_time = _observed_entry_time(previous.get('entry_time'))
+            if entry_time is None:
+                entry_time = previous_time
+            if previous_time is None or entry_time == previous_time:
+                accounted_ids = _accounted_exit_ids(previous)
+    return {'symbol': position.symbol, 'qty': position.qty, 'side': side,
+            'entry_price': basis, 'entry_time': entry_time,
+            'accounted_exit_order_ids': json.dumps(sorted(accounted_ids))}
+
+
+def _save_position_frame(frame, csv_path):
+    """Atomically checkpoint entry identity and unrecorded closure quantity."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='',
+                dir=os.path.dirname(csv_path), prefix='.positions-', suffix='.tmp', delete=False) as stream:
+            temporary = stream.name
+            frame.to_csv(stream, index=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, csv_path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            os.unlink(temporary)
+
+
 def save_positions_csv(positions, csv_path):
     REQUIRED_COLUMNS = [
         "symbol",
@@ -1449,25 +1522,15 @@ def save_positions_csv(positions, csv_path):
         if col not in positions_df.columns:
             positions_df[col] = None
 
-    # Broker positions may omit entry timestamps. Keep observed entry metadata
-    # for a continuing position instead of erasing it on every refresh.
-    for index, row in positions_df.iterrows():
-        prior = retained[retained['symbol'] == row['symbol']] if 'symbol' in retained else pd.DataFrame()
-        if len(prior) != 1:
-            continue
-        previous = prior.iloc[0]
-        try:
-            same_entry = math.isclose(float(row.get('avg_entry_price')), float(previous.get('entry_price')))
-        except (TypeError, ValueError):
-            same_entry = False
-        if same_entry:
-            for field in ('entry_price', 'entry_time'):
-                if pd.isna(row.get(field)) and pd.notna(previous.get(field)):
-                    positions_df.at[index, field] = previous[field]
+    # Share the same continuity rules with in-memory disappearance accounting.
+    for index, position in enumerate(positions or []):
+        metadata = _position_closure_record(position, retained)
+        for field in ('entry_price', 'entry_time', 'side', 'accounted_exit_order_ids'):
+            positions_df.at[index, field] = metadata[field]
     positions_df["entry_time"] = pd.to_datetime(positions_df["entry_time"], utc=True, errors='coerce')
     positions_df["days_in_trade"] = (datetime.now(timezone.utc) - positions_df["entry_time"]).dt.days
 
-    positions_df.to_csv(csv_path, index=False)
+    _save_position_frame(positions_df, csv_path)
     logger.info(f"Positions saved successfully to {csv_path}")
 
 
@@ -2153,13 +2216,17 @@ def log_trade_exit(
     )
 
 
-def log_closed_positions(trading_client, closed_symbols, existing_positions_df):
+def log_closed_positions(trading_client, closed_symbols, existing_positions_df, *, excluded_order_ids=None):
+    excluded_order_ids = excluded_order_ids or set()
     for symbol in closed_symbols:
         existing_record = existing_positions_df[existing_positions_df["symbol"] == symbol].iloc[0]
 
         entry_price = existing_record["entry_price"]
         entry_time = existing_record["entry_time"]
         qty = existing_record["qty"]
+        remaining_qty = _positive_accounting_number(qty, absolute=True)
+        basis = _positive_accounting_number(entry_price)
+        recorded_exits = excluded_order_ids | _accounted_exit_ids(existing_record)
 
         exit_side = "buy" if str(existing_record.get("side", "long")).lower() == "short" else "sell"
         request = GetOrdersRequest(symbols=[symbol], status=QueryOrderStatus.CLOSED)
@@ -2171,6 +2238,9 @@ def log_closed_positions(trading_client, closed_symbols, existing_positions_df):
         fills = []
         entry_ts = pd.to_datetime(entry_time, utc=True, errors="coerce")
         for order in closed_orders or []:
+            order_id = str(getattr(order, 'id', '') or '')
+            if not order_id or order_id in recorded_exits or getattr(order, 'symbol', None) != symbol:
+                continue
             status = getattr(order, "status", "")
             side = getattr(order, "side", "")
             filled_at = pd.to_datetime(getattr(order, "filled_at", None), utc=True, errors="coerce")
@@ -2181,9 +2251,10 @@ def log_closed_positions(trading_client, closed_symbols, existing_positions_df):
                 continue
             if (str(getattr(status, "value", status)).lower() == "filled"
                     and str(getattr(side, "value", side)).lower() == exit_side
+                    and basis is not None and remaining_qty is not None
                     and pd.notna(entry_ts) and pd.notna(filled_at) and filled_at >= entry_ts
                     and math.isfinite(price) and price > 0
-                    and math.isclose(filled_qty, abs(float(qty)))):
+                    and math.isfinite(filled_qty) and math.isclose(filled_qty, remaining_qty)):
                 fills.append((filled_at, order))
         fill_time, fill = max(fills, key=lambda item: item[0]) if fills else (None, None)
         exit_price = getattr(fill, "filled_avg_price", None)
@@ -2193,14 +2264,16 @@ def log_closed_positions(trading_client, closed_symbols, existing_positions_df):
 
         log_trade_exit(
             symbol,
-            qty,
+            remaining_qty if remaining_qty is not None else '',
             entry_price,
             exit_price if exit_price is not None else "",
             entry_time,
             exit_time,
             "closed" if fill is not None else "closed_unverified",
             str(getattr(getattr(fill, "order_type", ""), "value", getattr(fill, "order_type", ""))),
-            "Position closed outside monitor" if fill is not None else "Position absent; exit fill unverified",
+            ("Position closed outside monitor" if fill is not None else
+             "Position absent; residual quantity unverified" if remaining_qty is None else
+             "Position absent; exit fill unverified"),
             exit_side,
             order_id=str(getattr(fill, "id", "") or ""),
         )
@@ -3139,8 +3212,11 @@ def submit_sell_market_order(
     *,
     exit_signals: list[dict] | None = None,
     exit_snapshot: dict | None = None,
+    fill_receipt: dict | None = None,
 ):
     """Submit a limit sell order compatible with extended hours."""
+    if fill_receipt is not None:
+        fill_receipt.clear()
     symbol = position.symbol
     qty = position.qty
     entry_price = float(position.avg_entry_price)
@@ -3354,6 +3430,11 @@ def submit_sell_market_order(
             "sell",
             order_id=order_id_value,
         )
+        if fill_receipt is not None:
+            # This is an accounting receipt, not a second broker request. Keep
+            # terminal-status strategy behavior separate from verified quantity.
+            fill_receipt.update(order_id=order_id_value, verified=fill is not None,
+                                qty=fill['qty'] if fill is not None else None)
         return status_norm == "filled" and not is_dryrun
     except Exception as e:
         logger.error("Error submitting sell order for %s: %s", symbol, e)
@@ -3379,16 +3460,7 @@ def process_positions_cycle():
     save_positions_csv(positions, csv_path)
     # Retain the exact pre-exit quantities and entry metadata until every
     # disappearance in the refreshed broker snapshot has been accounted for.
-    closure_rows = []
-    for position in positions:
-        prior = existing_positions_df[existing_positions_df['symbol'] == position.symbol]
-        record = prior.iloc[0].to_dict() if len(prior) == 1 else {}
-        record.update(symbol=position.symbol, qty=position.qty)
-        record.setdefault('entry_price', getattr(position, 'avg_entry_price', None))
-        record.setdefault('entry_time', getattr(position, 'created_at', None))
-        record.setdefault('side', getattr(position, 'side', 'long'))
-        closure_rows.append(record)
-    closure_snapshot = pd.DataFrame(closure_rows)
+    closure_snapshot = pd.DataFrame([{**vars(p), **_position_closure_record(p, existing_positions_df)} for p in positions])
 
     use_live = env_bool("MONITOR_ENABLE_LIVE_PRICES", default=False)
     latest_prices: dict[str, float] = {}
@@ -3410,6 +3482,7 @@ def process_positions_cycle():
         return positions
     exit_attempted = False
     full_exits_logged = set()
+    partial_order_ids = set()
     for position in positions:
         symbol = position.symbol
         live_price = latest_prices.get(symbol)
@@ -3564,6 +3637,7 @@ def process_positions_cycle():
                 reason_detail = f"Partial exit at +{PARTIAL_GAIN_THRESHOLD:.0f}% gain"
                 reason_code = "partial_gain"
             exit_attempted = True
+            fill_receipt = {}
             exit_filled = submit_sell_market_order(
                 position,
                 reason=reason_detail,
@@ -3571,10 +3645,25 @@ def process_positions_cycle():
                 qty_override=half_qty,
                 exit_signals=exit_signals,
                 exit_snapshot=exit_snapshot,
+                fill_receipt=fill_receipt,
             )
             if exit_filled and half_qty < float(position.qty):
                 PARTIAL_EXIT_TAKEN[symbol] = True
                 _save_partial_state(PARTIAL_EXIT_TAKEN)
+                order_id = fill_receipt.get('order_id')
+                if order_id:
+                    partial_order_ids.add(order_id)
+                filled_qty = _positive_accounting_number(fill_receipt.get('qty'))
+                remaining_qty = (float(position.qty) - filled_qty
+                    if fill_receipt.get('verified') is True and order_id and filled_qty is not None
+                    and math.isclose(filled_qty, half_qty) else None)
+                closure_snapshot.loc[closure_snapshot['symbol'] == symbol, 'qty'] = remaining_qty
+                row_index = closure_snapshot.index[closure_snapshot['symbol'] == symbol][0]
+                accounted_ids = _accounted_exit_ids(closure_snapshot.loc[row_index]) | ({order_id} if order_id else set())
+                closure_snapshot.loc[row_index, 'accounted_exit_order_ids'] = json.dumps(sorted(accounted_ids))
+                _save_position_frame(closure_snapshot, csv_path)
+                if remaining_qty is None:
+                    logger.warning('PARTIAL_EXIT_QUANTITY_UNVERIFIED symbol=%s', symbol)
                 logger.info("Partial exit filled for %s; awaiting trailing re-attachment.", symbol)
             elif exit_filled:
                 full_exits_logged.add(symbol)
@@ -3677,7 +3766,8 @@ def process_positions_cycle():
         if not isinstance(positions, (list, tuple)):
             raise RuntimeError("post_exit_positions_unverified")
         refreshed_symbols = {p.symbol for p in positions}
-        log_closed_positions(trading_client, current_symbols - refreshed_symbols - full_exits_logged, closure_snapshot)
+        log_closed_positions(trading_client, current_symbols - refreshed_symbols - full_exits_logged,
+                             closure_snapshot, excluded_order_ids=partial_order_ids)
         save_positions_csv(positions, csv_path)
     return positions
 
