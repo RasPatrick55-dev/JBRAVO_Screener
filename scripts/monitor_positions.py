@@ -42,6 +42,11 @@ if __package__ in {None, ""}:
 else:
     from .utils import fetch_bars_with_cutoff
 
+from scripts.position_accounting import (
+    _positive_accounting_number, _accounted_exit_ids, _position_closure_record,
+    position_frame, position_csv_lock,
+)
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import logging
 
@@ -1427,61 +1432,6 @@ def get_open_positions():
 
 
 # Save open positions to CSV for dashboard consumption
-def _positive_accounting_number(value, *, absolute=False):
-    if isinstance(value, bool):
-        return None
-    try:
-        number = abs(float(value)) if absolute else float(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return number if math.isfinite(number) and number > 0 else None
-
-
-def _observed_entry_time(value):
-    try:
-        stamp = pd.to_datetime(value, errors='coerce')
-        if pd.isna(stamp) or getattr(stamp, 'tzinfo', None) is None:
-            return None
-        return stamp.tz_convert('UTC').isoformat()
-    except (TypeError, ValueError, AttributeError):
-        return None
-
-
-def _accounted_exit_ids(record):
-    value = record.get('accounted_exit_order_ids')
-    if value is None or (not isinstance(value, (str, list)) and pd.isna(value)):
-        return set()
-    if isinstance(value, str):
-        value = json.loads(value)
-    if (not isinstance(value, list) or len(value) > 128
-            or any(not isinstance(item, str) or not item or len(item) > 128 for item in value)):
-        raise ValueError('position_exit_identity_unverified')
-    return set(value)
-
-
-def _position_closure_record(position, retained):
-    """Use current basis; retain old time only for a continuing basis and side."""
-    basis = _positive_accounting_number(getattr(position, 'avg_entry_price', None))
-    side = _determine_position_side(position)
-    entry_time = (_observed_entry_time(getattr(position, 'entry_time', None))
-                  or _observed_entry_time(getattr(position, 'created_at', None)))
-    prior = retained[retained['symbol'] == position.symbol] if 'symbol' in retained else pd.DataFrame()
-    accounted_ids = set()
-    if basis is not None and len(prior) == 1:
-        previous = prior.iloc[0]
-        old_basis = _positive_accounting_number(previous.get('entry_price'))
-        old_side = _determine_position_side(types.SimpleNamespace(**previous.to_dict()))
-        if old_basis is not None and math.isclose(basis, old_basis) and side == old_side:
-            previous_time = _observed_entry_time(previous.get('entry_time'))
-            if entry_time is None:
-                entry_time = previous_time
-            if previous_time is None or entry_time == previous_time:
-                accounted_ids = _accounted_exit_ids(previous)
-    return {'symbol': position.symbol, 'qty': position.qty, 'side': side,
-            'entry_price': basis, 'entry_time': entry_time,
-            'accounted_exit_order_ids': json.dumps(sorted(accounted_ids))}
-
-
 def _save_position_frame(frame, csv_path):
     """Atomically checkpoint entry identity and unrecorded closure quantity."""
     temporary = None
@@ -1500,37 +1450,10 @@ def _save_position_frame(frame, csv_path):
 
 
 def save_positions_csv(positions, csv_path):
-    REQUIRED_COLUMNS = [
-        "symbol",
-        "qty",
-        "avg_entry_price",
-        "current_price",
-        "net_pnl",
-        "unrealized_pl",
-        "entry_price",
-        "entry_time",
-        "days_in_trade",
-    ]
-
-    retained = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
-    if positions:
-        positions_df = pd.DataFrame([p.__dict__ for p in positions])
-    else:
-        positions_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
-
-    for col in REQUIRED_COLUMNS:
-        if col not in positions_df.columns:
-            positions_df[col] = None
-
-    # Share the same continuity rules with in-memory disappearance accounting.
-    for index, position in enumerate(positions or []):
-        metadata = _position_closure_record(position, retained)
-        for field in ('entry_price', 'entry_time', 'side', 'accounted_exit_order_ids'):
-            positions_df.at[index, field] = metadata[field]
-    positions_df["entry_time"] = pd.to_datetime(positions_df["entry_time"], utc=True, errors='coerce')
-    positions_df["days_in_trade"] = (datetime.now(timezone.utc) - positions_df["entry_time"]).dt.days
-
-    _save_position_frame(positions_df, csv_path)
+    with position_csv_lock(csv_path):
+        retained = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+        positions_df = position_frame(positions, retained)
+        _save_position_frame(positions_df, csv_path)
     logger.info(f"Positions saved successfully to {csv_path}")
 
 
@@ -3460,7 +3383,7 @@ def process_positions_cycle():
     save_positions_csv(positions, csv_path)
     # Retain the exact pre-exit quantities and entry metadata until every
     # disappearance in the refreshed broker snapshot has been accounted for.
-    closure_snapshot = pd.DataFrame([{**vars(p), **_position_closure_record(p, existing_positions_df)} for p in positions])
+    closure_snapshot = position_frame(positions, existing_positions_df)
 
     use_live = env_bool("MONITOR_ENABLE_LIVE_PRICES", default=False)
     latest_prices: dict[str, float] = {}
@@ -3658,10 +3581,13 @@ def process_positions_cycle():
                     if fill_receipt.get('verified') is True and order_id and filled_qty is not None
                     and math.isclose(filled_qty, half_qty) else None)
                 closure_snapshot.loc[closure_snapshot['symbol'] == symbol, 'qty'] = remaining_qty
+                # The pre-fill unrealized values do not describe the remainder.
+                closure_snapshot.loc[closure_snapshot['symbol'] == symbol, ['net_pnl', 'pnl', 'unrealized_pl']] = None
                 row_index = closure_snapshot.index[closure_snapshot['symbol'] == symbol][0]
                 accounted_ids = _accounted_exit_ids(closure_snapshot.loc[row_index]) | ({order_id} if order_id else set())
                 closure_snapshot.loc[row_index, 'accounted_exit_order_ids'] = json.dumps(sorted(accounted_ids))
-                _save_position_frame(closure_snapshot, csv_path)
+                with position_csv_lock(csv_path):
+                    _save_position_frame(closure_snapshot, csv_path)
                 if remaining_qty is None:
                     logger.warning('PARTIAL_EXIT_QUANTITY_UNVERIFIED symbol=%s', symbol)
                 logger.info("Partial exit filled for %s; awaiting trailing re-attachment.", symbol)

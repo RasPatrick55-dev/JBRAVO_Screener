@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 from datetime import datetime, timedelta
 from tempfile import NamedTemporaryFile
+from pathlib import Path
 
 import pandas as pd
 from alpaca.trading.client import TradingClient
@@ -12,6 +13,8 @@ from alpaca.trading.requests import GetOrdersRequest, GetPortfolioHistoryRequest
 from dotenv import load_dotenv
 from utils.alerts import send_alert
 from typing import Optional
+
+from scripts.position_accounting import position_frame, position_csv_lock
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -153,72 +156,26 @@ def write_csv_atomic(path: str, df: pd.DataFrame):
 
 def update_open_positions():
     try:
-        columns = [
-            "symbol",
-            "qty",
-            "avg_entry_price",
-            "current_price",
-            "unrealized_pl",
-            "entry_price",
-            "entry_time",
-            "side",
-            "order_status",
-            "net_pnl",
-            "pnl",
-            "order_type",
-        ]
+        def current_bytes():
+            return Path(OPEN_POSITIONS_CSV).read_bytes() if os.path.exists(OPEN_POSITIONS_CSV) else None
 
+        with position_csv_lock(OPEN_POSITIONS_CSV):
+            before = current_bytes()
         positions = trading_client.get_all_positions()
-        existing_df = (
-            pd.read_csv(OPEN_POSITIONS_CSV)
-            if os.path.exists(OPEN_POSITIONS_CSV)
-            else pd.DataFrame()
-        )
-
-        def get_entry_time(sym: str, default: str) -> str:
-            if not existing_df.empty and sym in existing_df.get("symbol", []).values:
-                try:
-                    return existing_df.loc[existing_df["symbol"] == sym, "entry_time"].iloc[0]
-                except Exception:
-                    return default
-            return default
-
-        rows = []
-        for p in positions:
-            try:
-                ts = getattr(p, "created_at", None)
-                default_time = ts.isoformat() if ts is not None else datetime.utcnow().isoformat()
-                rows.append(
-                    {
-                        "symbol": p.symbol,
-                        "qty": float(p.qty),
-                        "avg_entry_price": float(p.avg_entry_price),
-                        "current_price": float(p.current_price),
-                        "unrealized_pl": float(p.unrealized_pl),
-                        "entry_price": float(p.avg_entry_price),
-                        "entry_time": get_entry_time(p.symbol, default_time),
-                        "side": getattr(p, "side", "long"),
-                        "order_status": "open",
-                        "net_pnl": float(p.unrealized_pl),
-                        "pnl": float(p.unrealized_pl),
-                        "order_type": getattr(p, "order_type", "limit"),
-                    }
-                )
-            except Exception as exc:
-                logger.error("Error processing position %s: %s", getattr(p, "symbol", ""), exc)
-
-        logger.info("Fetched %s open positions", len(rows))
-
-        df = pd.DataFrame(rows)
-        if df.empty:
-            df = pd.DataFrame(columns=columns)
-        df["side"] = df.get("side", "long")
-        df["order_status"] = df.get("order_status", "open")
-        df["net_pnl"] = df.get("unrealized_pl", 0.0)
-        df["pnl"] = df["net_pnl"]
-        df["order_type"] = df.get("order_type", "limit")
-        df = df[columns]
-        write_csv_atomic(OPEN_POSITIONS_CSV, df)
+        with position_csv_lock(OPEN_POSITIONS_CSV):
+            # A newer monitor checkpoint wins over a broker read begun earlier.
+            # Discard this refresh; do not block accounting on a network request.
+            if current_bytes() != before:
+                logger.info('POSITION_SNAPSHOT_SUPERSEDED; dashboard refresh deferred')
+                return
+            existing_df = (
+                pd.read_csv(OPEN_POSITIONS_CSV)
+                if os.path.exists(OPEN_POSITIONS_CSV)
+                else pd.DataFrame()
+            )
+            df = position_frame(positions, existing_df)
+            write_csv_atomic(OPEN_POSITIONS_CSV, df)
+        logger.info("Fetched %s open positions", len(df))
         with sqlite3.connect(DB_PATH) as conn:
             df.to_sql("open_positions", conn, if_exists="replace", index=False)
         logger.info("Updated open_positions.csv successfully.")
