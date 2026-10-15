@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 from datetime import datetime, timedelta
 from tempfile import NamedTemporaryFile
+from pathlib import Path
 
 import pandas as pd
 from alpaca.trading.client import TradingClient
@@ -155,8 +156,18 @@ def write_csv_atomic(path: str, df: pd.DataFrame):
 
 def update_open_positions():
     try:
+        def current_bytes():
+            return Path(OPEN_POSITIONS_CSV).read_bytes() if os.path.exists(OPEN_POSITIONS_CSV) else None
+
+        with position_csv_lock(OPEN_POSITIONS_CSV):
+            before = current_bytes()
         positions = trading_client.get_all_positions()
         with position_csv_lock(OPEN_POSITIONS_CSV):
+            # A newer monitor checkpoint wins over a broker read begun earlier.
+            # Discard this refresh; do not block accounting on a network request.
+            if current_bytes() != before:
+                logger.info('POSITION_SNAPSHOT_SUPERSEDED; dashboard refresh deferred')
+                return
             existing_df = (
                 pd.read_csv(OPEN_POSITIONS_CSV)
                 if os.path.exists(OPEN_POSITIONS_CSV)

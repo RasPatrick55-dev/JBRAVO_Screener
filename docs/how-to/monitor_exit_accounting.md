@@ -52,6 +52,10 @@ An adjacent kernel-backed lock serializes each CSV writer's metadata
 read/build/write and the partial checkpoint. Lock acquisition times out after
 ten seconds and preserves existing bytes. It does not make the broker snapshot,
 trade export, positions CSV and dashboard database a single transaction.
+The dashboard binds its broker read to the preceding CSV bytes. If a monitor
+write changes those bytes while the read is in flight, that dashboard refresh is
+discarded. This prevents a delayed pre-partial broker response from restoring the
+original quantity. Network reads stay outside the lock and are not retried here.
 
 The monitor records SELL_FILL_OBSERVED; canonical trade closure and SELL_FILL
 ownership remain with reconciliation. This change does not repair old database

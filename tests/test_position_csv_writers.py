@@ -133,5 +133,42 @@ class PositionWriters(unittest.TestCase):
         self.assertEqual(frame.iloc[0]['qty'],5)
         self.assertEqual(frame.iloc[0]['accounted_exit_order_ids'],'["partial"]')
 
+        self.case.f.client.get_orders.return_value=[self.case.order(id='partial',filled_qty='5')]
+        with mock.patch.object(self.monitor,'get_open_positions',return_value=[]), \
+             mock.patch.object(self.monitor,'refresh_ml_risk_state',return_value={}):
+            self.monitor.process_positions_cycle()
+        self.assertEqual(self.case.rows()['qty'].tolist(),[5,5])
+        self.assertEqual(self.case.rows().iloc[1]['order_status'],'closed_unverified')
+
+    def test_dashboard_broker_read_cannot_reinflate_a_partial_checkpoint(self):
+        import threading
+        from types import SimpleNamespace
+        read=threading.Event();release=threading.Event();finished=threading.Event()
+        errors=[]
+        old=SimpleNamespace(**vars(self.case.f.position))
+        def paused_broker_read():
+            read.set()
+            if not release.wait(3):raise RuntimeError('synthetic_test_timeout')
+            return [old]
+        def dashboard():
+            try:self.dashboard.update_open_positions()
+            except Exception as exc:errors.append(exc)
+        def monitor():
+            try:self.case.cycle(partial=True,refresh_error=True)
+            except Exception as exc:errors.append(exc)
+            finally:finished.set()
+        with mock.patch.object(self.dashboard,'trading_client',SimpleNamespace(get_all_positions=paused_broker_read)):
+            first=threading.Thread(target=dashboard);first.start()
+            self.assertTrue(read.wait(2))
+            second=threading.Thread(target=monitor);second.start()
+            try:self.assertTrue(finished.wait(2),'broker reads must not hold the CSV lock')
+            finally:
+                release.set();first.join(3);second.join(3)
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertEqual(errors,[])
+        frame=pd.read_csv(self.case.path)
+        self.assertEqual(frame.iloc[0]['qty'],5)
+        self.assertEqual(frame.iloc[0]['accounted_exit_order_ids'],'["partial"]')
+
 
 if __name__=='__main__':unittest.main()
