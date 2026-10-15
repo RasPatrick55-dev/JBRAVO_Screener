@@ -1023,7 +1023,7 @@ def _paper_only_guard(trading_client: Any | None, base_url: str | None = "") -> 
         return
 
     base = (os.getenv("APCA_API_BASE_URL") or base_url or "").lower()
-    if "paper-api.alpaca.markets" not in base:
+    if not executor_health.is_paper_endpoint(base):
         logger.error(
             "PAPER_ONLY guard: APCA_API_BASE_URL is not a paper endpoint: %s",
             base,
@@ -1467,6 +1467,13 @@ def _wait_until_submit_at(target: Optional[str], *, session_open=None) -> None:
         now_ny = datetime.now(ny)
 
 
+def _paper_research_options(config):
+    if getattr(config, 'paper_research_entries', False) is not True:
+        return {}
+    return {'paper_research_entries': True,
+            'paper_base_url': os.getenv('APCA_API_BASE_URL', '')}
+
+
 def _check_entry_preflight(config, frame=None, *, raw_batch=False):
     """Fail closed for entries; diagnostic/path dry-runs and reconciliation stay separate."""
     if config.reconcile_only or config.diagnostic or (config.dry_run and config.source == 'path'):
@@ -1481,7 +1488,7 @@ def _check_entry_preflight(config, frame=None, *, raw_batch=False):
             Path.cwd(), rows=rows,
             prior_binding=getattr(config, '_entry_pipeline_binding', previous.get('pipeline_binding')),
             prior_value_binding=getattr(config, '_entry_raw_value_binding', previous.get('candidate_value_binding')),
-            require_session=True)
+            require_session=True, **_paper_research_options(config))
         if result['status'] == 'pass' and (config.submit_at_ny != '04:00'
                 or config.price_source != 'signal' or not config.extended_hours
                 or config.time_window not in ('auto', 'premarket')):
@@ -2222,6 +2229,7 @@ class ExecutorConfig:
     chase_enabled: bool = False
     diagnostic: bool = False
     reconcile_only: bool = False
+    paper_research_entries: bool = False
     reconcile_auto: bool = True
     reconcile_lookback_days: int = 14
     reconcile_limit: int = 500
@@ -6145,7 +6153,7 @@ class TradeExecutor:
                 result = executor_health.preflight(Path.cwd(), rows=rows,
                     prior_binding=getattr(self.config, '_entry_pipeline_binding', prior.get('pipeline_binding')),
                     prior_value_binding=getattr(self.config, '_entry_raw_value_binding', prior.get('candidate_value_binding')),
-                    require_session=True, for_entry=True)
+                    require_session=True, for_entry=True, **_paper_research_options(self.config))
                 if result['status'] == 'pass' and hasattr(self.config, '_entry_execution_frame'):
                     actual = executor_health.candidate_values(
                         self.config._entry_execution_frame.to_dict(orient='records'), ordered=True)
@@ -6482,6 +6490,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         )
 
     parser = argparse.ArgumentParser(description="Execute trades for pipeline candidates")
+    parser.add_argument('--paper-research-entries', action='store_true',
+                        help='Allow bound paper-session test entries while research qualification is pending; operational checks remain required.')
     parser.add_argument(
         "--source",
         choices=("db", "path"),
@@ -6885,6 +6895,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         diagnostic=bool(getattr(args, "diagnostic", False)),
         reconcile_auto=bool(getattr(args, "reconcile_auto", True)),
         reconcile_only=getattr(args, "reconcile_only", False),
+        paper_research_entries=bool(getattr(args, 'paper_research_entries', False)),
         reconcile_lookback_days=int(
             getattr(args, "reconcile_lookback_days", ExecutorConfig.reconcile_lookback_days)
         ),

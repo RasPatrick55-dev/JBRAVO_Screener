@@ -241,6 +241,46 @@ class MonitorRegressions(unittest.TestCase):
         self.assertEqual(len(saved), 1)
         self.assertEqual(saved.iloc[0]["order_id"], "same-order")
 
+    def test_late_fill_disappearance_is_logged_before_snapshot_replacement(self):
+        csv_path=Path(self.monitor.BASE_DIR)/'data/open_positions.csv'
+        self.frame.to_csv(csv_path,index=False)
+        self.monitor.PARTIAL_EXIT_TAKEN['AAA']=True
+        order=[]
+        with self.cycle_patches(filled=False), \
+             mock.patch.object(self.monitor,'log_closed_positions',side_effect=lambda client,symbols,frame:order.append(('closed',symbols,frame.copy()))), \
+             mock.patch.object(self.monitor,'save_positions_csv',side_effect=lambda positions,path:order.append(('save',list(positions)))):
+            self.client.get_all_positions.return_value=[]
+            # Permit the normal target branch to attempt an exit this cycle.
+            self.monitor.PARTIAL_EXIT_TAKEN.clear()
+            self.monitor.process_positions_cycle()
+        self.assertEqual(order[-2][0:2],('closed',{'AAA'}))
+        self.assertEqual(order[-2][2].iloc[0]['entry_time'],self.entry.isoformat())
+        self.assertEqual(order[-1],('save',[]))
+
+    def test_unrelated_position_closing_during_exit_keeps_metadata_and_clears_partial(self):
+        other=SimpleNamespace(**(vars(self.position)|{'symbol':'BBB'}))
+        frame=pd.concat([self.frame,self.frame.assign(symbol='BBB')],ignore_index=True)
+        frame.to_csv(Path(self.monitor.BASE_DIR)/'data/open_positions.csv',index=False)
+        self.monitor.PARTIAL_EXIT_TAKEN['BBB']=True
+        self.client.get_orders.return_value=[self.order(symbol='BBB',id='bbb-fill')]
+        with self.cycle_patches(filled=False):
+            self.monitor.get_open_positions.return_value=[self.position,other]
+            self.client.get_all_positions.return_value=[self.position]
+            self.monitor.process_positions_cycle()
+        self.assertNotIn('BBB',self.monitor.PARTIAL_EXIT_TAKEN)
+        self.assertEqual(self.logged.call_args.args[0],'BBB')
+        self.assertEqual(self.logged.call_args.args[4],self.entry.isoformat())
+
+    def test_refresh_preserves_entry_metadata_but_does_not_invent_new_time(self):
+        path=Path(self.monitor.BASE_DIR)/'data/open_positions.csv'
+        self.frame.to_csv(path,index=False)
+        self.monitor.save_positions_csv([self.position],str(path))
+        saved=pd.read_csv(path)
+        self.assertEqual(pd.to_datetime(saved.iloc[0]['entry_time'],utc=True),self.entry)
+        self.position.avg_entry_price=105
+        self.monitor.save_positions_csv([self.position],str(path))
+        self.assertTrue(pd.isna(pd.read_csv(path).iloc[0]['entry_time']))
+
 
 if __name__ == "__main__":
     unittest.main()

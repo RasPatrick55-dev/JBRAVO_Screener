@@ -186,7 +186,8 @@ options:
 ## `python -m scripts.execute_trades --help`
 
 ```text
-usage: execute_trades.py [-h] [--source {db,path}] [--source-path SOURCE_PATH]
+usage: execute_trades.py [-h] [--paper-research-entries] [--source {db,path}]
+                         [--source-path SOURCE_PATH]
                          [--allocation-pct ALLOCATION_PCT]
                          [--alloc-weight-key {score,model_score,none}]
                          [--min-model-score MIN_MODEL_SCORE]
@@ -236,6 +237,10 @@ Execute trades for pipeline candidates
 
 options:
   -h, --help            show this help message and exit
+  --paper-research-entries
+                        Allow bound paper-session test entries while research
+                        qualification is pending; operational checks remain
+                        required.
   --source {db,path}    Candidate source: db (latest run in PostgreSQL) or
                         path (CSV file)
   --source-path SOURCE_PATH

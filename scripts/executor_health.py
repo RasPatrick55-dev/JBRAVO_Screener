@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import stat
 import uuid
+from urllib.parse import urlsplit
 
 from scripts import pipeline_postflight as pipeline
 from scripts import signal_handoff
@@ -82,9 +83,23 @@ def utc(value):
 candidate_values = signal_handoff.candidate_values
 
 
+def is_paper_endpoint(value):
+    """Accept only the canonical HTTPS paper trading origin, never substrings."""
+    if not isinstance(value, str) or value != value.strip():
+        return False
+    try:
+        parsed = urlsplit(value)
+        return (parsed.scheme == 'https' and parsed.hostname == 'paper-api.alpaca.markets'
+                and parsed.port in (None, 443) and parsed.username is None and parsed.password is None
+                and parsed.path in ('', '/') and not parsed.query and not parsed.fragment)
+    except ValueError:
+        return False
+
+
 def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
               prior_value_binding=None,
-              max_age_seconds=MAX_AGE_SECONDS, require_session=False, for_entry=False):
+              max_age_seconds=MAX_AGE_SECONDS, require_session=False, for_entry=False,
+              paper_research_entries=False, paper_base_url=None):
     """Inspect legacy health or require a completed, frozen session handoff.
 
     The executor explicitly requires session/completion; legacy mode only keeps
@@ -97,12 +112,27 @@ def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
               'max_age_seconds': max_age_seconds, 'research_qualified': False,
               'operating_acceptance': False}
     try:
+        if type(paper_research_entries) is not bool:
+            raise ValueError('paper_research_option_invalid')
+        if paper_research_entries and (not require_session or not is_paper_endpoint(paper_base_url)):
+            raise ValueError('paper_research_requires_bound_paper_session')
         health = pipeline.check_health(root, now=now, expected_day=now.date(),
                                        max_age_seconds=max_age_seconds, require_session=require_session,
                                        require_completion=require_session)
         if health.get('readiness_policy') == pipeline.PIPELINE_ONLY:
-            result['reasons'] = ['pipeline_new_entries_not_authorized']
-            return result
+            # Explicit paper testing may waive only the intentional no-entry
+            # policy. Source/history/completion/session and operational failures
+            # still block; the original pipeline/research verdict is unchanged.
+            if (not paper_research_entries or health.get('pipeline_ready') is not True
+                    or health.get('entry_ready') is not False or health.get('status') != 'failed'
+                    or health.get('failures') != ['new_entries_blocked_by_pipeline_only_policy']
+                    or health.get('qualifications') != []):
+                result['reasons'] = ['pipeline_new_entries_not_authorized']
+                return result
+            result.update(entry_authorization='paper_research_test', paper_only=True,
+                          pipeline_entry_ready=False, research_status=health.get('research_status'),
+                          research_reasons=health.get('research_reasons', []))
+            health = {**health, 'status': 'ok'}
         if health['status'] != 'ok':
             result['reasons'] = ['pipeline_' + r for r in
                                  health.get('failures', []) + health.get('qualifications', [])]
@@ -252,7 +282,7 @@ def publish_receipt(base_dir, *, role, started_at, finished_at, rc, metrics,
               'filtered_candidate_value_binding': getattr(config, '_entry_filtered_binding', None),
               'execution_candidate_binding': getattr(config, '_entry_execution_binding', None),
               'effective_settings': {key: getattr(config, key, None) for key in (
-                  'source', 'dry_run', 'diagnostic', 'reconcile_only', 'submit_at_ny',
+                  'source', 'dry_run', 'diagnostic', 'reconcile_only', 'paper_research_entries', 'submit_at_ny',
                   'time_window', 'extended_hours', 'allocation_pct', 'min_order_usd',
                   'max_new_positions', 'disable_open_position_cap', 'trailing_percent',
                   'price_source', 'limit_buffer_pct', 'max_gap_pct')},

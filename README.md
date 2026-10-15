@@ -69,3 +69,8 @@ capture failures export fixed reason codes and continue to block publication.
 
 See [the October 13 recovery runbook](docs/how-to/oct13_pipeline_recovery.md) for
 the separate deployment and prospective research-enrollment steps.
+
+For simulated strategy testing while research evidence accumulates, see
+[paper research entries](docs/how-to/paper_research_entries.md). The explicit
+paper-only executor option retains operational checks and does not qualify a
+strategy for live trading.
