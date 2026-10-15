@@ -39,6 +39,20 @@ the fill and checkpointing still needs independent reconciliation. Basis/side
 continuity alone cannot prove an unobserved close-and-reopen at identical basis.
 Canonical broker reconciliation remains the owner of trade history.
 
+Both CSV writers (`monitor_positions` and `update_dashboard_data`) use the pure
+`position_accounting.position_frame` builder. Dashboard refreshes retain partial
+fill identities only for the same continuing basis, side and entry time. They do
+not invent missing entry timestamps. The builder emits the complete shared CSV
+schema, including `net_pnl`, even for an empty portfolio or a partial checkpoint
+followed by refresh failure. A partial checkpoint clears pre-fill unrealized P&L
+values because they do not describe the remaining quantity; the next verified
+broker position refresh supplies current values. CSV and dashboard SQLite exports
+exclude broker-internal fields that are outside this schema.
+An adjacent kernel-backed lock serializes each CSV writer's metadata
+read/build/write and the partial checkpoint. Lock acquisition times out after
+ten seconds and preserves existing bytes. It does not make the broker snapshot,
+trade export, positions CSV and dashboard database a single transaction.
+
 The monitor records SELL_FILL_OBSERVED; canonical trade closure and SELL_FILL
 ownership remain with reconciliation. This change does not repair old database
 or CSV records, alter entry eligibility, or qualify research.
@@ -48,6 +62,7 @@ Offline verification uses mocked broker/database boundaries and temporary files:
 ```powershell
 python -m unittest discover -s tests -p test_monitor_task_log_regressions.py
 python -m unittest tests.test_monitor_closure_followup
+python -m unittest tests.test_position_csv_writers
 python -m unittest discover -s tests -p test_monitor_positions_db_logging.py
 python -m unittest discover -s tests -p test_monitor_reconciliation_boundary.py
 ```
