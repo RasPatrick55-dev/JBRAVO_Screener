@@ -1439,6 +1439,7 @@ def save_positions_csv(positions, csv_path):
         "days_in_trade",
     ]
 
+    retained = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
     if positions:
         positions_df = pd.DataFrame([p.__dict__ for p in positions])
     else:
@@ -1448,8 +1449,23 @@ def save_positions_csv(positions, csv_path):
         if col not in positions_df.columns:
             positions_df[col] = None
 
-    positions_df["entry_time"] = pd.to_datetime(positions_df["entry_time"])
-    positions_df["days_in_trade"] = (datetime.now() - positions_df["entry_time"]).dt.days
+    # Broker positions may omit entry timestamps. Keep observed entry metadata
+    # for a continuing position instead of erasing it on every refresh.
+    for index, row in positions_df.iterrows():
+        prior = retained[retained['symbol'] == row['symbol']] if 'symbol' in retained else pd.DataFrame()
+        if len(prior) != 1:
+            continue
+        previous = prior.iloc[0]
+        try:
+            same_entry = math.isclose(float(row.get('avg_entry_price')), float(previous.get('entry_price')))
+        except (TypeError, ValueError):
+            same_entry = False
+        if same_entry:
+            for field in ('entry_price', 'entry_time'):
+                if pd.isna(row.get(field)) and pd.notna(previous.get(field)):
+                    positions_df.at[index, field] = previous[field]
+    positions_df["entry_time"] = pd.to_datetime(positions_df["entry_time"], utc=True, errors='coerce')
+    positions_df["days_in_trade"] = (datetime.now(timezone.utc) - positions_df["entry_time"]).dt.days
 
     positions_df.to_csv(csv_path, index=False)
     logger.info(f"Positions saved successfully to {csv_path}")
@@ -3361,6 +3377,18 @@ def process_positions_cycle():
 
     positions = get_open_positions()
     save_positions_csv(positions, csv_path)
+    # Retain the exact pre-exit quantities and entry metadata until every
+    # disappearance in the refreshed broker snapshot has been accounted for.
+    closure_rows = []
+    for position in positions:
+        prior = existing_positions_df[existing_positions_df['symbol'] == position.symbol]
+        record = prior.iloc[0].to_dict() if len(prior) == 1 else {}
+        record.update(symbol=position.symbol, qty=position.qty)
+        record.setdefault('entry_price', getattr(position, 'avg_entry_price', None))
+        record.setdefault('entry_time', getattr(position, 'created_at', None))
+        record.setdefault('side', getattr(position, 'side', 'long'))
+        closure_rows.append(record)
+    closure_snapshot = pd.DataFrame(closure_rows)
 
     use_live = env_bool("MONITOR_ENABLE_LIVE_PRICES", default=False)
     latest_prices: dict[str, float] = {}
@@ -3381,6 +3409,7 @@ def process_positions_cycle():
         logger.info("No open positions found.")
         return positions
     exit_attempted = False
+    full_exits_logged = set()
     for position in positions:
         symbol = position.symbol
         live_price = latest_prices.get(symbol)
@@ -3450,6 +3479,8 @@ def process_positions_cycle():
                 exit_signals=exit_signals,
                 exit_snapshot=exit_snapshot,
             )
+            if exit_filled:
+                full_exits_logged.add(symbol)
             if exit_filled and symbol in PARTIAL_EXIT_TAKEN:
                 PARTIAL_EXIT_TAKEN.pop(symbol, None)
                 _save_partial_state(PARTIAL_EXIT_TAKEN)
@@ -3546,6 +3577,7 @@ def process_positions_cycle():
                 _save_partial_state(PARTIAL_EXIT_TAKEN)
                 logger.info("Partial exit filled for %s; awaiting trailing re-attachment.", symbol)
             elif exit_filled:
+                full_exits_logged.add(symbol)
                 PARTIAL_EXIT_TAKEN.pop(symbol, None)
                 _save_partial_state(PARTIAL_EXIT_TAKEN)
                 logger.info("Full profit-target exit filled for %s.", symbol)
@@ -3595,6 +3627,8 @@ def process_positions_cycle():
                         exit_signals=actionable_signals,
                         exit_snapshot=exit_snapshot,
                     )
+                    if exit_filled:
+                        full_exits_logged.add(symbol)
                     if exit_filled and symbol in PARTIAL_EXIT_TAKEN:
                         PARTIAL_EXIT_TAKEN.pop(symbol, None)
                         _save_partial_state(PARTIAL_EXIT_TAKEN)
@@ -3627,6 +3661,8 @@ def process_positions_cycle():
                     exit_signals=None,
                     exit_snapshot=None,
                 )
+                if exit_filled:
+                    full_exits_logged.add(symbol)
                 if exit_filled and symbol in PARTIAL_EXIT_TAKEN:
                     PARTIAL_EXIT_TAKEN.pop(symbol, None)
                     _save_partial_state(PARTIAL_EXIT_TAKEN)
@@ -3640,6 +3676,8 @@ def process_positions_cycle():
         positions = trading_client.get_all_positions()
         if not isinstance(positions, (list, tuple)):
             raise RuntimeError("post_exit_positions_unverified")
+        refreshed_symbols = {p.symbol for p in positions}
+        log_closed_positions(trading_client, current_symbols - refreshed_symbols - full_exits_logged, closure_snapshot)
         save_positions_csv(positions, csv_path)
     return positions
 

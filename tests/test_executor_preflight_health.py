@@ -981,6 +981,29 @@ class CallerTests(Fixture):
             self.assertEqual(self.mod.main(['--help']), 0)
         self.assertIn('Minutes from order submission', out.getvalue())
 
+    def test_explicit_paper_cli_delivers_policy_to_load_and_submission_gates(self):
+        self.publish(readiness_policy=pipeline.PIPELINE_ONLY)
+        config=self.mod.build_config(self.mod.parse_args(['--paper-research-entries']))
+        self.assertTrue(config.paper_research_entries)
+        self.assertFalse(self.mod.build_config(self.mod.parse_args([])).paper_research_entries)
+        with mock.patch.dict(os.environ,{'APCA_API_BASE_URL':'https://paper-api.alpaca.markets'}):
+            frame=pd.DataFrame(self.rows)
+            self.assertEqual(self.mod._check_entry_preflight(config,frame,raw_batch=True)['status'],'pass')
+            executor=self.mod.TradeExecutor(config,SimpleNamespace(),self.mod.ExecutionMetrics())
+            with mock.patch.object(executor,'_submit_order',return_value=SimpleNamespace(id='inert-paper-fill')) as submit, \
+                 mock.patch.object(executor,'_entry_asset_allowed',return_value=True):
+                self.assertIsNotNone(executor.submit_with_retries(SimpleNamespace(side='buy',symbol='AAA',limit_price=10.0)))
+                submit.assert_called_once()
+            os.environ['APCA_API_BASE_URL']='https://api.alpaca.markets'
+            with mock.patch.object(executor,'_submit_order') as submit:
+                self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy',symbol='AAA',limit_price=10.0)))
+                submit.assert_not_called()
+
+    def test_paper_only_guard_rejects_live_and_deceptive_origin(self):
+        for base in ('https://api.alpaca.markets','https://paper-api.alpaca.markets.evil.test'):
+            with mock.patch.dict(os.environ,{'APCA_API_BASE_URL':base}),self.assertRaises(SystemExit):
+                self.mod._paper_only_guard(SimpleNamespace(),base)
+
 
 if __name__ == '__main__':
     unittest.main()
