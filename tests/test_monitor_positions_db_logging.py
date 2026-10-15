@@ -16,6 +16,10 @@ class TestMonitorDbLogging(unittest.TestCase):
         hourly_tests.ExecutorGateIntegrationTests.setUp(self)
         self.read_module()
         load_monitor(self)
+        self.stack.enter_context(mock.patch.object(self.monitor.trading_client, "get_order_by_id",
+            side_effect=lambda oid: SimpleNamespace(id=oid, symbol="AAPL", side="sell",
+                status="filled", filled_qty=5 if oid == "OID-3" else 10,
+                filled_avg_price="101.95", filled_at=datetime.now(timezone.utc))))
 
     def test_sell_fill_logs_observation_and_defers_canonical_closure(self):
         monitor = self.monitor
@@ -59,6 +63,10 @@ class TestMonitorDbLogging(unittest.TestCase):
         self.assertEqual(insert_event.call_count, 2)
         close_trade.assert_not_called()
         insert_exec.assert_called_once()
+        payload = insert_exec.call_args.args[0]
+        self.assertEqual(payload["exit_price"], 101.95)
+        self.assertAlmostEqual(payload["pnl"], 19.5)
+        self.assertTrue(payload["exit_time"])
 
         event_types = [call.kwargs.get("event_type") for call in insert_event.call_args_list]
         self.assertIn(monitor.MONITOR_DB_EVENT_TYPES["sell_submit"], event_types)
@@ -70,6 +78,22 @@ class TestMonitorDbLogging(unittest.TestCase):
 
         monitor.MONITOR_METRICS["db_event_ok"] = start_ok
         monitor.MONITOR_METRICS["db_event_fail"] = start_fail
+
+    def test_missing_entry_time_cannot_create_a_fabricated_executed_trade(self):
+        monitor = self.monitor
+        position = SimpleNamespace(symbol="AAPL", qty=10, qty_available=10,
+            avg_entry_price=100.0, current_price=101.23, created_at=None)
+        with (
+            mock.patch.object(monitor, "db_logging_enabled", return_value=True),
+            mock.patch("scripts.db.insert_order_event", return_value=True),
+            mock.patch("scripts.db.insert_executed_trade") as insert_exec,
+            mock.patch.object(monitor, "wait_for_order_terminal", return_value="filled"),
+            mock.patch.object(monitor, "broker_submit_order",
+                return_value=SimpleNamespace(id="OID-1", status="accepted", dryrun=False)),
+            mock.patch.object(monitor, "log_trade_exit"),
+        ):
+            self.assertTrue(monitor.submit_sell_market_order(position, "test", "monitor"))
+        insert_exec.assert_not_called()
 
     def test_trailing_adjust_logs_cancel_and_adjust(self):
         monitor = self.monitor

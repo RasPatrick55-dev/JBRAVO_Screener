@@ -2,6 +2,8 @@
 
 Documentation entry point: `docs/INDEX.md`
 
+Monitor exit accounting: [verified fill exports and fresh coverage snapshots](docs/how-to/monitor_exit_accounting.md).
+
 Acceptance evidence preparation: [forward predictor observations and session labels](docs/reference/production_score_observations.md).
 The primary preserves new score observations when it refreshes predictions;
 these records do not clear model or trading acceptance gates.

@@ -2124,6 +2124,12 @@ def log_trade_exit(
     }
 
     trades_log_df = pd.read_csv(trades_log_real_path)
+    if (order_id and order_status in {"filled", "closed"}
+            and {"order_id", "order_status"}.issubset(trades_log_df.columns)):
+        prior = trades_log_df[trades_log_df["order_id"].fillna("").astype(str) == str(order_id)]
+        if not prior.empty and prior["order_status"].isin(["filled", "closed"]).any():
+            logger.info("TRADE_EXIT_ALREADY_RECORDED symbol=%s order_id=%s", symbol, order_id)
+            return
     trades_log_df = pd.concat([trades_log_df, pd.DataFrame([trade_entry])], ignore_index=True)
     trades_log_df.to_csv(trades_log_real_path, index=False)
     logger.info(
@@ -3086,6 +3092,29 @@ def check_pending_orders():
 # Execute sell orders
 
 
+def _verified_sell_fill(order_id: str, symbol: str, expected_qty: int) -> dict | None:
+    """Read actual fill details; a limit price or polling time is never a fill."""
+    try:
+        order = trading_client.get_order_by_id(order_id)
+        filled_at = pd.to_datetime(getattr(order, "filled_at", None), utc=True, errors="coerce")
+        raw_time = getattr(order, "filled_at", None)
+        parsed_time = pd.to_datetime(raw_time, errors="coerce")
+        price = float(getattr(order, "filled_avg_price", None))
+        qty = float(getattr(order, "filled_qty", None))
+        if (str(getattr(order, "id", "")) != order_id
+                or getattr(order, "symbol", None) != symbol
+                or order_attr_str(order, ("side",)) != "sell"
+                or order_attr_str(order, ("status",)) != "filled"
+                or pd.isna(filled_at) or getattr(parsed_time, "tzinfo", None) is None
+                or not math.isfinite(price) or price <= 0
+                or not math.isfinite(qty) or not math.isclose(qty, expected_qty)):
+            raise ValueError("fill_identity_or_values")
+        return {"price": price, "qty": qty, "time": filled_at.isoformat()}
+    except Exception:
+        logger.warning("EXIT_FILL_DETAILS_UNVERIFIED symbol=%s order_id=%s", symbol, order_id)
+        return None
+
+
 def submit_sell_market_order(
     position,
     reason: str,
@@ -3206,6 +3235,11 @@ def submit_sell_market_order(
         final_status = str(status or "")
         status_norm = final_status.lower()
         final_ts = datetime.now(timezone.utc)
+        fill = (_verified_sell_fill(order_id_value, symbol, order_qty)
+                if status_norm == "filled" and not is_dryrun and order_id_value else None)
+        entry_ts = pd.to_datetime(entry_time, errors="coerce")
+        entry_verified = (pd.notna(entry_ts) and getattr(entry_ts, "tzinfo", None) is not None
+                          and fill is not None and entry_ts <= pd.Timestamp(fill["time"]))
         if status_norm == "filled":
             final_event_type = MONITOR_DB_EVENT_TYPES["sell_fill"]
         elif status_norm in {"canceled", "cancelled"}:
@@ -3228,6 +3262,10 @@ def submit_sell_market_order(
                     "exit_reason_code": reason_code,
                     "exit_reason_detail": reason,
                     "limit_price": exit_price,
+                    "filled_price": fill["price"] if fill else None,
+                    "filled_qty": fill["qty"] if fill else None,
+                    "filled_at": fill["time"] if fill else None,
+                    "fill_details_verified": fill is not None,
                     "qty": order_qty,
                     "side": "sell",
                     "order_type": "limit",
@@ -3239,14 +3277,14 @@ def submit_sell_market_order(
                     "exit_snapshot": exit_snapshot,
                 },
             )
-            if status_norm == "filled" and not partial_exit and not is_dryrun:
+            if fill is not None and not partial_exit and not is_dryrun and entry_verified:
                 # Keep the monitor's diagnostic executed-trade export, but do
                 # not close canonical trades with polling time/limit price.
                 # Reconciliation owns broker fill identity, time and price in
                 # its atomic transaction, for full and partial observations.
                 pnl_value = None
                 try:
-                    pnl_value = (float(exit_price) - float(entry_price)) * float(order_qty)
+                    pnl_value = (fill["price"] - float(entry_price)) * fill["qty"]
                 except Exception:
                     pnl_value = None
                 executed_payload = {
@@ -3254,8 +3292,8 @@ def submit_sell_market_order(
                     "qty": float(order_qty),
                     "entry_time": entry_time,
                     "entry_price": float(entry_price),
-                    "exit_time": final_ts.isoformat(),
-                    "exit_price": float(exit_price),
+                    "exit_time": fill["time"],
+                    "exit_price": fill["price"],
                     "pnl": pnl_value,
                     "net_pnl": pnl_value,
                     "order_id": order_id_value,
@@ -3291,10 +3329,10 @@ def submit_sell_market_order(
             symbol,
             float(order_qty),
             entry_price,
-            str(exit_price),
+            str(fill["price"]) if fill else "",
             entry_time,
-            "",
-            status,
+            fill["time"] if fill else "",
+            status if fill or status_norm != "filled" else "filled_unverified",
             "limit",
             reason,
             "sell",
@@ -3342,6 +3380,7 @@ def process_positions_cycle():
     if not positions:
         logger.info("No open positions found.")
         return positions
+    exit_attempted = False
     for position in positions:
         symbol = position.symbol
         live_price = latest_prices.get(symbol)
@@ -3403,6 +3442,7 @@ def process_positions_cycle():
             else:
                 reason_detail = f"Max Hold {days_held}d"
                 reason_code = "max_hold"
+            exit_attempted = True
             exit_filled = submit_sell_market_order(
                 position,
                 reason=reason_detail,
@@ -3492,6 +3532,7 @@ def process_positions_cycle():
             else:
                 reason_detail = f"Partial exit at +{PARTIAL_GAIN_THRESHOLD:.0f}% gain"
                 reason_code = "partial_gain"
+            exit_attempted = True
             exit_filled = submit_sell_market_order(
                 position,
                 reason=reason_detail,
@@ -3500,10 +3541,14 @@ def process_positions_cycle():
                 exit_signals=exit_signals,
                 exit_snapshot=exit_snapshot,
             )
-            if exit_filled:
+            if exit_filled and half_qty < float(position.qty):
                 PARTIAL_EXIT_TAKEN[symbol] = True
                 _save_partial_state(PARTIAL_EXIT_TAKEN)
                 logger.info("Partial exit filled for %s; awaiting trailing re-attachment.", symbol)
+            elif exit_filled:
+                PARTIAL_EXIT_TAKEN.pop(symbol, None)
+                _save_partial_state(PARTIAL_EXIT_TAKEN)
+                logger.info("Full profit-target exit filled for %s.", symbol)
             continue
 
         if exit_intel_enabled:
@@ -3542,6 +3587,7 @@ def process_positions_cycle():
                         _extract_risk_score(position, indicators),
                     )
                     increment_metric("exits_signal")
+                    exit_attempted = True
                     exit_filled = submit_sell_market_order(
                         position,
                         reason=str(primary_signal.get("detail", "")),
@@ -3573,6 +3619,7 @@ def process_positions_cycle():
                         continue
                 reason_text = "; ".join(reasons)
                 increment_metric("exits_signal")
+                exit_attempted = True
                 exit_filled = submit_sell_market_order(
                     position,
                     reason=reason_text,
@@ -3587,6 +3634,13 @@ def process_positions_cycle():
                 logger.info(f"No sell signal for {symbol}; managing trailing stop.")
                 manage_trailing_stop(position)
 
+    if exit_attempted:
+        # Do not attach stops or emit heartbeat coverage from a pre-exit snapshot.
+        # Failure propagates to the cycle error handler; it must not mean flat.
+        positions = trading_client.get_all_positions()
+        if not isinstance(positions, (list, tuple)):
+            raise RuntimeError("post_exit_positions_unverified")
+        save_positions_csv(positions, csv_path)
     return positions
 
 
