@@ -43,6 +43,7 @@ class TestMonitorExitPayloadDb(unittest.TestCase):
             mock.patch.object(monitor, "db_logging_enabled", return_value=True),
             mock.patch("scripts.db.insert_order_event", return_value=True) as insert_event,
             mock.patch.object(monitor, "get_open_positions", return_value=[position]),
+            mock.patch.object(monitor.trading_client, "get_all_positions", return_value=[position]),
             mock.patch.object(monitor, "save_positions_csv", return_value=None),
             mock.patch.object(monitor, "log_closed_positions", return_value=None),
             mock.patch.object(monitor, "refresh_ml_risk_state", return_value={}),

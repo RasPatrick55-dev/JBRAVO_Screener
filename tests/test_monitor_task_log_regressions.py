@@ -160,6 +160,7 @@ class MonitorRegressions(unittest.TestCase):
 
     def cycle_patches(self, cancellation=True, filled=False):
         stack = ExitStack()
+        stack.enter_context(mock.patch.object(self.client, "get_all_positions", return_value=[self.position]))
         for name, result in (("refresh_ml_risk_state", {}), ("get_open_positions", [self.position]),
                              ("save_positions_csv", None), ("calculate_days_held", 0),
                              ("fetch_indicators", {"close": 110, "EMA20": 101, "RSI": 60}),
@@ -181,6 +182,64 @@ class MonitorRegressions(unittest.TestCase):
             self.monitor.process_positions_cycle()
             self.monitor.submit_sell_market_order.assert_not_called()
             self.assertNotIn("AAA", self.monitor.PARTIAL_EXIT_TAKEN)
+
+    def test_sell_export_uses_broker_fill_not_limit_or_poll_time(self):
+        self.client.get_all_positions.return_value = [SimpleNamespace(symbol="AAA", qty_available=10)]
+        fill = self.order(id="exit", symbol="AAA", filled_avg_price="112.25")
+        self.client.get_order_by_id.return_value = fill
+        with mock.patch.object(self.monitor, "broker_submit_order", return_value=SimpleNamespace(id="exit", dryrun=False)), \
+                mock.patch.object(self.monitor, "wait_for_order_terminal", return_value="filled"):
+            self.assertTrue(self.monitor.submit_sell_market_order(self.position, "exit", "monitor"))
+        args = self.logged.call_args.args
+        self.assertEqual(args[3], "112.25")
+        self.assertEqual(args[5], fill.filled_at.isoformat())
+        self.assertEqual(args[6], "filled")
+
+    def test_unverified_fill_never_exports_limit_as_execution(self):
+        self.client.get_all_positions.return_value = [SimpleNamespace(symbol="AAA", qty_available=10)]
+        for changes in (dict(id="other"), dict(symbol="BBB"), dict(side="buy"), dict(filled_qty=5),
+                        dict(filled_avg_price="nan"), dict(filled_at=None),
+                        dict(filled_at=datetime(2026, 10, 2))):
+            with self.subTest(changes=changes):
+                self.client.get_order_by_id.return_value = self.order(**(dict(id="exit", symbol="AAA") | changes))
+                with mock.patch.object(self.monitor, "broker_submit_order", return_value=SimpleNamespace(id="exit", dryrun=False)), \
+                        mock.patch.object(self.monitor, "wait_for_order_terminal", return_value="filled"):
+                    self.assertTrue(self.monitor.submit_sell_market_order(self.position, "exit", "monitor"))
+                self.assertEqual(self.logged.call_args.args[3], "")
+                self.assertEqual(self.logged.call_args.args[5], "")
+                self.assertEqual(self.logged.call_args.args[6], "filled_unverified")
+
+    def test_one_share_target_returns_flat_snapshot_without_partial_flag(self):
+        self.position.qty = 1
+        self.monitor.PARTIAL_EXIT_TAKEN.clear()
+        with self.cycle_patches(filled=True):
+            self.client.get_all_positions.return_value = []
+            self.assertEqual(self.monitor.process_positions_cycle(), [])
+            self.monitor.save_positions_csv.assert_called_with([], mock.ANY)
+        self.assertNotIn("AAA", self.monitor.PARTIAL_EXIT_TAKEN)
+
+    def test_partial_target_returns_remaining_broker_quantity(self):
+        remaining = SimpleNamespace(symbol="AAA", qty=5, qty_available=5)
+        with self.cycle_patches(filled=True):
+            self.client.get_all_positions.return_value = [remaining]
+            self.assertEqual(self.monitor.process_positions_cycle(), [remaining])
+            self.monitor.save_positions_csv.assert_called_with([remaining], mock.ANY)
+
+    def test_post_exit_position_failure_cannot_be_interpreted_as_flat(self):
+        with self.cycle_patches(filled=True):
+            self.client.get_all_positions.side_effect = RuntimeError("unavailable")
+            with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                self.monitor.process_positions_cycle()
+
+    def test_verified_exit_order_is_not_appended_twice(self):
+        pd.DataFrame(columns=["symbol", "order_id", "order_status"]).to_csv(self.monitor.trades_log_real_path, index=False)
+        args = ("AAA", 10, 100, "110", self.entry.isoformat(),
+                (self.entry + timedelta(days=1)).isoformat(), "filled", "limit", "exit", "sell")
+        self.real_trade_exit(*args, order_id="same-order")
+        self.real_trade_exit(*args, order_id="same-order")
+        saved = pd.read_csv(self.monitor.trades_log_real_path)
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved.iloc[0]["order_id"], "same-order")
 
 
 if __name__ == "__main__":
