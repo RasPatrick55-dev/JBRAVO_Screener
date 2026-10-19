@@ -18,6 +18,121 @@ from psycopg2.extensions import connection as PGConnection
 
 logger = logging.getLogger(__name__)
 
+# Pure policy contract; no connection/environment/approval discovery at import.
+from scripts import trade_disposition as disposition
+
+
+def configure_disposition_identity(deployment_id, database_id, *, environment, evidence_ref, verified):
+    return disposition.bind_runtime_identity(deployment_id, database_id,
+        environment=environment, evidence_ref=evidence_ref, verified=verified)
+
+
+def trade_policy(conn, *, scope=None, expected_revision=None, exclusive=False):
+    if expected_revision is not None:
+        disposition.revision(expected_revision)
+    if conn is None or conn.autocommit:
+        raise disposition.TradePolicyError('TRADE_POLICY_DB_UNAVAILABLE')
+    try:
+        with conn.cursor() as cursor:
+            policy = disposition.read_policy(cursor, disposition.runtime_identity(), scope=scope, exclusive=exclusive)
+        if expected_revision is not None and policy.revision != expected_revision:
+            raise disposition.TradePolicyError('TRADE_POLICY_REVISION_CHANGED')
+        return policy
+    except disposition.TradePolicyError:
+        raise
+    except Exception:
+        raise disposition.TradePolicyError('TRADE_POLICY_UNAVAILABLE') from None
+
+
+@contextmanager
+def _policy_read_transaction(conn, *, scope, expected_revision=None):
+    if conn is None or conn.autocommit or conn.get_transaction_status() != 0:
+        raise disposition.TradePolicyError('TRADE_POLICY_TRANSACTION_NOT_IDLE')
+    with conn:
+        with conn.cursor() as cursor:
+            cursor.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            cursor.execute('SET TRANSACTION READ ONLY')
+        yield trade_policy(conn, scope=scope, expected_revision=expected_revision)
+
+
+def performance_input(conn, policy):
+    """Exact eligible physical-row snapshot; ownership/history stay unfiltered elsewhere."""
+    if policy.scope != 'VALIDATED_PERFORMANCE':
+        raise disposition.TradePolicyError('TRADE_POLICY_SCOPE_REQUIRED')
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_catalog.to_jsonb(trades)::pg_catalog.text FROM public.trades "
+            "WHERE status='CLOSED' AND " + disposition.eligible_sql(scope='VALIDATED_PERFORMANCE') +
+            " ORDER BY trade_id")
+        records = [disposition.document(row[0]) for row in cursor.fetchall()]
+    disposition.require_complete_accounting(records)
+    return records
+
+
+def performance_evidence(policy, records):
+    return {'policy': policy.metadata(), 'input_fingerprint': disposition.fingerprint({'rows': records}),
+        'input_count': len(records), 'input_basis': 'public.trades:CLOSED:VALIDATED_PERFORMANCE:full-row',
+        'recovery_complete': False, 'accounting_complete': False,
+        'activity_ingestion_complete': False}
+
+
+def bind_performance_summary(evidence, summary):
+    result = dict(evidence)
+    result['summary_fingerprint'] = disposition.fingerprint(performance_summary_values(summary))
+    return result
+
+
+def performance_summary_values(summary):
+    return {key: summary.get(key) for key in ('total_trades', 'win_rate', 'net_pnl',
+        'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino')}
+
+
+def validated_performance_snapshot(engine=None):
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE') as policy:
+            records = performance_input(conn, policy)
+            return records, performance_evidence(policy, records)
+
+
+@contextmanager
+def validated_performance_artifact(evidence, engine=None):
+    if not isinstance(evidence, Mapping):
+        raise disposition.TradePolicyError('TRADE_POLICY_ARTIFACT_UNVALIDATED')
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE',
+                expected_revision=evidence.get('policy', {}).get('policy_revision')) as policy:
+            current = performance_evidence(policy, performance_input(conn, policy))
+            if current != dict(evidence):
+                raise disposition.TradePolicyError('TRADE_POLICY_ARTIFACT_INPUT_CHANGED')
+            yield current
+
+
+def validated_metrics_summary(engine=None):
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE') as policy:
+            current = performance_evidence(policy, performance_input(conn, policy))
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT run_date, total_trades, win_rate, net_pnl, expectancy, "
+                    "profit_factor, max_drawdown, sharpe, sortino, trade_policy::pg_catalog.text "
+                    "FROM public.metrics_daily ORDER BY run_date DESC LIMIT 1")
+                row = cursor.fetchone()
+            if row is None:
+                raise disposition.TradePolicyError('TRADE_POLICY_METRICS_UNAVAILABLE')
+            summary = dict(zip(('total_trades','win_rate','net_pnl','expectancy','profit_factor',
+                'max_drawdown','sharpe','sortino'), row[1:9]))
+            saved = disposition.document(row[9])
+            if saved != bind_performance_summary(current, summary):
+                raise disposition.TradePolicyError('TRADE_POLICY_METRICS_STALE_OR_UNVALIDATED')
+            return dict(summary, last_run_utc=str(row[0]), trade_policy=saved,
+                validation_status='VALIDATED_PERFORMANCE', recovery_complete=False,
+                accounting_complete=False, activity_ingestion_complete=False)
+
+
+def reconciliation_policy_status(engine=None, *, expected_revision=None):
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='ACTIVE_RECONCILIATION', expected_revision=expected_revision) as policy:
+            return policy.metadata()
+
+
 _DUMPED_CANDIDATES = False
 
 DEFAULT_DB_PORT = 5432
@@ -271,22 +386,12 @@ def _maybe_conn(engine: Optional[PGConnection]) -> Iterator[Optional[PGConnectio
 
 
 @contextmanager
-def _reconciliation_read_transaction(conn: PGConnection, *, strict: bool) -> Iterator[None]:
-    """Own strict reconciliation reads without committing a caller's work.
-
-    Legacy non-strict callers retain their existing transaction behavior.
-    A strict read starts idle, owns a read-only transaction and ends it before
-    the connection can be passed to an atomic write.
-    """
+def _reconciliation_read_transaction(conn: PGConnection, *, strict: bool, expected_revision=None):
     if not strict:
-        yield
+        yield None
         return
-    if conn.autocommit or conn.get_transaction_status() != 0:
-        raise RuntimeError("RECONCILE_DB_TRANSACTION_NOT_IDLE")
-    with conn:
-        with conn.cursor() as cursor:
-            cursor.execute("SET TRANSACTION READ ONLY")
-        yield
+    with _policy_read_transaction(conn, scope='ACTIVE_RECONCILIATION', expected_revision=expected_revision) as policy:
+        yield policy
 
 
 def _conn_or_none() -> Optional[PGConnection]:
@@ -1647,14 +1752,17 @@ def fetch_latest_backtest_results(
 def upsert_metrics_daily(
     run_date: Any | Mapping[str, Any],
     summary_metrics_dict: Mapping[str, Any] | Any | None = None,
-) -> None:
+    *, trade_policy_metadata: Mapping[str, Any] | None = None,
+) -> bool:
     if isinstance(run_date, Mapping) and summary_metrics_dict is not None:
         run_date, summary_metrics_dict = summary_metrics_dict, run_date
     if not summary_metrics_dict:
-        return
+        return False
+    if not isinstance(trade_policy_metadata, Mapping):
+        raise disposition.TradePolicyError('TRADE_POLICY_PERFORMANCE_PROVENANCE_REQUIRED')
     conn = _conn_or_none()
     if conn is None:
-        return
+        return False
 
     payload = {
         "run_date": _coerce_date(run_date),
@@ -1668,17 +1776,33 @@ def upsert_metrics_daily(
         "sortino": summary_metrics_dict.get("sortino"),
     }
     try:
+        if conn.autocommit or conn.get_transaction_status() != 0:
+            raise disposition.TradePolicyError('TRADE_POLICY_TRANSACTION_NOT_IDLE')
         with conn:
+            with conn.cursor() as cursor:
+                cursor.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            with conn.cursor() as cursor:
+                cursor.execute('SET LOCAL search_path = pg_catalog')
+                cursor.execute("SET LOCAL lock_timeout = '1500ms'")
+                cursor.execute("SET LOCAL statement_timeout = '5000ms'")
+                cursor.execute("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('jbravo:trade-disposition:policy'))")
+            current = trade_policy(conn, scope='VALIDATED_PERFORMANCE',
+                expected_revision=trade_policy_metadata.get('policy', {}).get('policy_revision'))
+            records = performance_input(conn, current)
+            expected = bind_performance_summary(performance_evidence(current, records), summary_metrics_dict)
+            if expected != dict(trade_policy_metadata):
+                raise disposition.TradePolicyError('TRADE_POLICY_PERFORMANCE_INPUT_OR_PAYLOAD_CHANGED')
+            payload['trade_policy'] = disposition.canonical(dict(trade_policy_metadata))
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO metrics_daily (
+                    INSERT INTO public.metrics_daily (
                         run_date, total_trades, win_rate, net_pnl, expectancy,
-                        profit_factor, max_drawdown, sharpe, sortino
+                        profit_factor, max_drawdown, sharpe, sortino, trade_policy
                     )
                     VALUES (
                         %(run_date)s, %(total_trades)s, %(win_rate)s, %(net_pnl)s, %(expectancy)s,
-                        %(profit_factor)s, %(max_drawdown)s, %(sharpe)s, %(sortino)s
+                        %(profit_factor)s, %(max_drawdown)s, %(sharpe)s, %(sortino)s, %(trade_policy)s::pg_catalog.jsonb
                     )
                     ON CONFLICT (run_date) DO UPDATE SET
                         total_trades=EXCLUDED.total_trades,
@@ -1688,13 +1812,18 @@ def upsert_metrics_daily(
                         profit_factor=EXCLUDED.profit_factor,
                         max_drawdown=EXCLUDED.max_drawdown,
                         sharpe=EXCLUDED.sharpe,
-                        sortino=EXCLUDED.sortino
+                        sortino=EXCLUDED.sortino,
+                        trade_policy=EXCLUDED.trade_policy
                     """,
                     payload,
                 )
         _log_write_result(True, "metrics_daily", 1)
+        return True
+    except disposition.TradePolicyError:
+        raise
     except Exception as exc:  # pragma: no cover - defensive logging
         _log_write_result(False, "metrics_daily", 0, exc)
+        return False
     finally:
         try:
             conn.close()
@@ -2818,7 +2947,7 @@ def insert_order_event(
 def reconcile_sell_fill(
     engine: Optional[PGConnection], trade_id: Any, *, symbol: str, qty: Any,
     order_id: str, status: str, event_time: Any, raw: Any,
-    exit_price: Any, exit_reason: str, decorate: bool = False,
+    exit_price: Any, exit_reason: str, decorate: bool = False, expected_policy_revision=None,
 ) -> bool:
     """Commit a reconciliation SELL_FILL and its trade update together.
 
@@ -2866,16 +2995,19 @@ def reconcile_sell_fill(
                     # event after acquiring the advisory lock. Freeze statement
                     # snapshots, rather than inheriting repeatable-read defaults.
                     cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                    policy = trade_policy(conn, expected_revision=expected_policy_revision)
+                    disposition.require_writable(policy, trade_id)
+                    cursor.execute("SET LOCAL search_path = pg_catalog")
                     # Colliding hash keys only serialize unrelated orders; they
                     # cannot cause event identities to compare equal.
                     cursor.execute(
-                        "SELECT pg_advisory_xact_lock(hashtext(%(key)s))",
+                        "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(%(key)s))",
                         {"key": "jbravo:SELL_FILL:" + order_id},
                     )
                     cursor.execute(
                         """SELECT status, qty, entry_price, symbol, exit_order_id,
                                   exit_time, exit_price, exit_reason, realized_pnl
-                           FROM trades WHERE trade_id=%(trade_id)s FOR UPDATE""",
+                           FROM public.trades WHERE trade_id=%(trade_id)s FOR UPDATE""",
                         payload,
                     )
                     row = cursor.fetchone()
@@ -2931,7 +3063,7 @@ def reconcile_sell_fill(
                     # Persist ownership in trades.exit_order_id in the same
                     # transaction as the event; never reuse another trade's fill.
                     cursor.execute(
-                        """SELECT trade_id FROM trades
+                        """SELECT trade_id FROM public.trades
                            WHERE exit_order_id=%(order_id)s LIMIT 2""",
                         payload,
                     )
@@ -2939,7 +3071,7 @@ def reconcile_sell_fill(
                     if owners and (len(owners) != 1 or owners[0][0] != trade_id):
                         raise ValueError("fill_trade_ownership_conflict")
                     cursor.execute(
-                        """SELECT symbol, qty, status, event_time FROM order_events
+                        """SELECT symbol, qty, status, event_time FROM public.order_events
                            WHERE order_id=%(order_id)s AND event_type='SELL_FILL'""",
                         payload,
                     )
@@ -2958,18 +3090,18 @@ def reconcile_sell_fill(
                             raise ValueError("fill_event_conflict")
                     else:
                         cursor.execute(
-                            """INSERT INTO order_events
+                            """INSERT INTO public.order_events
                                (symbol, qty, order_id, status, event_type, event_time, raw)
                                VALUES (%(symbol)s, %(qty)s, %(order_id)s, %(status)s,
-                                       'SELL_FILL', %(event_time)s, CAST(%(raw)s AS JSONB))""",
+                                       'SELL_FILL', %(event_time)s, CAST(%(raw)s AS pg_catalog.jsonb))""",
                             payload,
                         )
                     if not already_complete:
                         cursor.execute(
-                            """UPDATE trades SET exit_order_id=%(order_id)s,
+                            """UPDATE public.trades SET exit_order_id=%(order_id)s,
                                exit_time=%(event_time)s, exit_price=%(exit_price)s,
                                realized_pnl=%(realized_pnl)s, exit_reason=%(exit_reason)s,
-                               status='CLOSED', updated_at=now()
+                               status='CLOSED', updated_at=pg_catalog.now()
                                WHERE trade_id=%(trade_id)s""",
                             payload,
                         )
@@ -3000,7 +3132,7 @@ def _reconciliation_trade_records(rows: Any, *, strict: bool) -> list[dict[str, 
 
 
 def get_open_trades(
-    engine: Optional[PGConnection] = None, limit: int = 200, *, strict: bool = False
+    engine: Optional[PGConnection] = None, limit: int = 200, *, strict: bool = False, expected_policy_revision=None
 ) -> list[dict[str, Any]]:
     limit = max(1, int(limit or 0))
     with _maybe_conn(engine) as conn:
@@ -3009,13 +3141,14 @@ def get_open_trades(
                 raise RuntimeError("RECONCILE_DB_UNAVAILABLE")
             return []
         try:
-            with _reconciliation_read_transaction(conn, strict=strict):
+            with _reconciliation_read_transaction(conn, strict=strict, expected_revision=expected_policy_revision):
+                eligible = disposition.eligible_sql(scope='ACTIVE_RECONCILIATION') if strict else 'TRUE'
                 with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
                     cursor.execute(
-                        """
+                        f"""
                         SELECT trade_id, symbol, qty, entry_time, entry_price, entry_order_id
-                        FROM trades
-                        WHERE status='OPEN'
+                        FROM public.trades
+                        WHERE status='OPEN' AND {eligible}
                         ORDER BY entry_time DESC NULLS LAST, trade_id DESC
                         LIMIT %(limit)s
                         """,
@@ -3025,6 +3158,8 @@ def get_open_trades(
                     if strict and len(rows) >= limit:
                         raise RuntimeError("RECONCILE_DB_INCOMPLETE")
                     return _reconciliation_trade_records(rows, strict=strict)
+        except disposition.TradePolicyError:
+            raise
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
             if strict:
@@ -3036,7 +3171,7 @@ def get_open_trades(
 
 
 def get_closed_trades_missing_exit(
-    engine: Optional[PGConnection], updated_after: datetime, limit: int = 200, *, strict: bool = False
+    engine: Optional[PGConnection], updated_after: datetime, limit: int = 200, *, strict: bool = False, expected_policy_revision=None
 ) -> list[dict[str, Any]]:
     # Strict reconciliation must keep every unresolved exit visible, including
     # initial runs without a saved watermark. Aging must never imply completion.
@@ -3047,13 +3182,14 @@ def get_closed_trades_missing_exit(
                 raise RuntimeError("RECONCILE_DB_UNAVAILABLE")
             return []
         try:
-            with _reconciliation_read_transaction(conn, strict=strict):
+            with _reconciliation_read_transaction(conn, strict=strict, expected_revision=expected_policy_revision):
+                eligible = disposition.eligible_sql(scope='ACTIVE_RECONCILIATION') if strict else 'TRUE'
                 with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
                     cursor.execute(
-                        """
+                        f"""
                         SELECT trade_id, symbol, qty, entry_price, exit_price, exit_order_id, exit_time, exit_reason, realized_pnl
-                        FROM trades
-                        WHERE status='CLOSED'
+                        FROM public.trades
+                        WHERE status='CLOSED' AND {eligible}
                           AND (exit_price IS NULL OR exit_order_id IS NULL OR exit_time IS NULL
                                OR exit_reason IS NULL OR realized_pnl IS NULL)
                           AND (%(strict)s OR updated_at >= %(updated_after)s)
@@ -3066,6 +3202,8 @@ def get_closed_trades_missing_exit(
                     if strict and len(rows) >= limit:
                         raise RuntimeError("RECONCILE_DB_INCOMPLETE")
                     return _reconciliation_trade_records(rows, strict=strict)
+        except disposition.TradePolicyError:
+            raise
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_TRADE_FETCH_FAILED err=%s", exc)
             if strict:
@@ -3083,6 +3221,7 @@ def close_trade(
     exit_time: Any,
     exit_price: Any,
     exit_reason: str | None,
+    *, expected_policy_revision=None,
 ) -> bool:
     with _maybe_conn(engine) as conn:
         if conn is None:
@@ -3098,12 +3237,18 @@ def close_trade(
             timezone.utc
         )
         try:
+            if conn.autocommit or conn.get_transaction_status() != 0:
+                raise disposition.TradePolicyError('TRADE_POLICY_TRANSACTION_NOT_IDLE')
             with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+                policy = trade_policy(conn, expected_revision=expected_policy_revision)
+                disposition.require_writable(policy, trade_id)
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
                         SELECT status, qty, entry_price
-                        FROM trades
+                        FROM public.trades
                         WHERE trade_id=%(trade_id)s FOR UPDATE
                         """,
                         {"trade_id": trade_id},
@@ -3138,14 +3283,14 @@ def close_trade(
                         realized_pnl = None
                     cursor.execute(
                         """
-                        UPDATE trades
+                        UPDATE public.trades
                         SET exit_order_id=%(exit_order_id)s,
                             exit_time=%(exit_time)s,
                             exit_price=%(exit_price)s,
                             realized_pnl=%(realized_pnl)s,
                             exit_reason=%(exit_reason)s,
                             status='CLOSED',
-                            updated_at=now()
+                            updated_at=pg_catalog.now()
                         WHERE trade_id=%(trade_id)s AND status='OPEN'
                         """,
                         {

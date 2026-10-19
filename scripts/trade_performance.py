@@ -17,6 +17,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
+from scripts import db
 from utils import atomic_write_bytes
 from utils.env import get_alpaca_creds
 
@@ -160,56 +161,18 @@ def _coalesce_pnl_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_trades_log(base_dir: Path | str | None = None) -> pd.DataFrame:
-    """Load trades_log.csv with safe defaults and normalized columns."""
-
-    base = Path(base_dir) if base_dir else BASE_DIR
-    path = Path(base) / "data" / "trades_log.csv"
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        df = pd.read_csv(path)
-    except Exception:
-        logger.warning("Unable to read trades log at %s", path, exc_info=True)
-        return pd.DataFrame()
-
-    try:
-        df = _normalize_pnl(df)
-        df = _coalesce_pnl_columns(df)
-
-        if "symbol" not in df.columns:
-            logger.warning("Trades log missing symbol column at %s", path)
-            return pd.DataFrame()
-
-        df["symbol"] = df["symbol"].astype("string").str.upper().str.strip().fillna("")
-        for col in ("entry_time", "exit_time"):
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
-        for price_col in ("entry_price", "exit_price"):
-            if price_col in df.columns:
-                df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
-        if "qty" in df.columns:
-            df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
-        if "pnl" not in df.columns and {"qty", "entry_price", "exit_price"}.issubset(df.columns):
-            df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["qty"]
-        if "pnl" in df.columns:
-            df["pnl"] = pd.to_numeric(df["pnl"], errors="coerce")
-        if "return_pct" not in df.columns and {"entry_price", "exit_price"}.issubset(df.columns):
-            entry_price = pd.to_numeric(df["entry_price"], errors="coerce")
-            exit_price = pd.to_numeric(df["exit_price"], errors="coerce")
-            df["return_pct"] = np.where(
-                entry_price > 0,
-                (exit_price / entry_price - 1) * 100,
-                0.0,
-            )
-        elif "return_pct" in df.columns:
-            df["return_pct"] = pd.to_numeric(df["return_pct"], errors="coerce")
-        df = df.dropna(subset=["symbol"])
-        if "exit_time" in df.columns:
-            df = df.dropna(subset=["exit_time"])
-        return df
-    except Exception:
-        logger.warning("Trades log malformed at %s; returning empty frame", path, exc_info=True)
-        return pd.DataFrame()
+    """Canonical validated-performance DB snapshot; legacy CSV is not authority."""
+    records, evidence = db.validated_performance_snapshot()
+    columns = ['trade_id','symbol','qty','status','entry_time','entry_price',
+        'exit_time','exit_price','realized_pnl','exit_reason']
+    df = pd.DataFrame(records, columns=columns)
+    df['pnl'] = pd.to_numeric(df['realized_pnl'], errors='raise')
+    for column in ('qty','entry_price','exit_price'):
+        df[column] = pd.to_numeric(df[column], errors='raise')
+    for column in ('entry_time','exit_time'):
+        df[column] = pd.to_datetime(df[column], utc=True, errors='raise')
+    df.attrs['trade_policy'] = evidence
+    return df
 
 
 def _normalize_bars_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -960,7 +923,7 @@ def write_cache(
     """Persist cache to disk."""
 
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    evidence = df.attrs.get('trade_policy')
 
     records: list[dict[str, Any]] = []
     for record in df.to_dict(orient="records"):
@@ -983,25 +946,33 @@ def write_cache(
         "trades_enriched": trades_enriched,
         "lookback_days_used": lookback_days_used,
     }
-    atomic_write_bytes(target, json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"))
+    payload['trade_policy'] = evidence
+    payload['result_fingerprint'] = db.disposition.fingerprint({'trades': records, 'summary': summary})
+    with db.validated_performance_artifact(evidence):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(target, db.disposition.canonical(payload).encode('utf-8'))
     return target
 
 
 def read_cache(path: Path | str = CACHE_PATH) -> dict[str, Any] | None:
     target = Path(path)
     try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
+        payload = db.disposition.document(target.read_text(encoding='utf-8'))
     except FileNotFoundError:
         return None
-    except Exception:
-        logger.warning("Failed to read trade performance cache at %s", path, exc_info=True)
-        return None
-    df = pd.DataFrame(payload.get("trades", []))
-    for col in ("entry_time", "exit_time"):
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
-    payload["df"] = df
-    return payload
+    evidence = payload.get('trade_policy')
+    with db.validated_performance_artifact(evidence):
+        if payload.get('result_fingerprint') != db.disposition.fingerprint({
+                'trades': payload.get('trades'), 'summary': payload.get('summary')}):
+            raise db.disposition.TradePolicyError('TRADE_POLICY_ARTIFACT_RESULT_CHANGED')
+        df = pd.DataFrame(payload.get('trades', []))
+        for col in ('entry_time','exit_time'):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], utc=True, errors='raise')
+        df.attrs['trade_policy'] = evidence
+        payload['df'] = df
+        payload['validation_status'] = 'VALIDATED_PERFORMANCE'
+        return payload
 
 
 def is_cache_stale(
@@ -1054,8 +1025,11 @@ def refresh_trade_performance_cache(
     trades_log = Path(base) / "data" / "trades_log.csv"
     cache = Path(cache_path)
 
-    if not force and not is_cache_stale(cache, trades_log):
-        cached = read_cache(cache)
+    if not force:
+        try:
+            cached = read_cache(cache)
+        except db.disposition.TradePolicyError:
+            cached = None  # Recompute only from the validated DB loader below.
         if cached is not None:
             return cached.get("df", pd.DataFrame()), cached.get("summary", {})
 
@@ -1163,6 +1137,7 @@ def refresh_trade_performance_cache(
             rebound_frame["is_trailing_stop_exit"] = False
         if "is_stop_exit" not in rebound_frame.columns:
             rebound_frame["is_stop_exit"] = False
+    rebound_frame.attrs['trade_policy'] = trades_df.attrs['trade_policy']
     summary = summarize_by_window(rebound_frame)
     try:
         trades_mtime = trades_log.stat().st_mtime

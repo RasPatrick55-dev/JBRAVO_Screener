@@ -561,77 +561,15 @@ def screener_table() -> Tuple[pd.DataFrame, str, str]:
 
 
 def metrics_summary_snapshot() -> Dict[str, Any]:
-    """Return the latest metrics summary row from ``data/metrics_summary.csv``."""
-
-    if db.db_enabled():
-        conn = db.get_db_conn()
-        if conn is not None:
-            try:
-                with conn.cursor() as cursor:
-                    cursor.execute("SELECT MAX(run_date) FROM metrics_daily")
-                    row = cursor.fetchone()
-                    latest_run_date = row[0] if row else None
-                if latest_run_date:
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            """
-                            SELECT run_date, total_trades, win_rate, net_pnl, expectancy,
-                                   profit_factor, max_drawdown, sharpe, sortino
-                            FROM metrics_daily
-                            WHERE run_date = %(run_date)s
-                            LIMIT 1
-                            """,
-                            {"run_date": latest_run_date},
-                        )
-                        row = cursor.fetchone()
-                        if row:
-                            logger.info(
-                                "DASH_DB_READ_OK table=metrics_daily run_date=%s", latest_run_date
-                            )
-                            return {
-                                "profit_factor": row[5],
-                                "expectancy": row[4],
-                                "win_rate": row[2],
-                                "net_pnl": row[3],
-                                "max_drawdown": row[6],
-                                "sharpe": row[7],
-                                "sortino": row[8],
-                                "last_run_utc": str(row[0]),
-                            }
-                logger.info("DASH_DB_READ_OK table=metrics_daily rows=0")
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.info("DASH_DB_READ_FALLBACK reason=%s", exc)
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-        else:
-            logger.info("DASH_DB_READ_FALLBACK reason=db_disabled")
-    else:
-        logger.info("DASH_DB_READ_FALLBACK reason=db_disabled")
-
-    path = DATA_DIR / "metrics_summary.csv"
+    """Validated scoped summary, or explicit held values; never a legacy CSV fallback."""
     try:
-        df = pd.read_csv(path)
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        return {}
-    if df.empty:
-        return {}
-    row = df.tail(1).to_dict("records")[0]
-    fields = [
-        "profit_factor",
-        "expectancy",
-        "win_rate",
-        "net_pnl",
-        "max_drawdown",
-        "sharpe",
-        "sortino",
-        "last_run_utc",
-    ]
-    return {field: row.get(field) for field in fields}
+        return db.validated_metrics_summary()
+    except Exception as exc:
+        logger.warning('VALIDATED_PERFORMANCE_HELD error_type=%s', type(exc).__name__)
+        return dict.fromkeys(('profit_factor','expectancy','win_rate','net_pnl',
+            'max_drawdown','sharpe','sortino','total_trades','last_run_utc'), None) | {
+            'validation_status':'HELD_UNVALIDATED_PERFORMANCE', 'recovery_complete':False,
+            'accounting_complete':False, 'activity_ingestion_complete':False}
 
 
 def diagnostics() -> Dict[str, Any]:
