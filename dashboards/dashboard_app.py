@@ -59,6 +59,8 @@ from scripts.run_pipeline import write_complete_screener_metrics
 from scripts.trade_performance import (
     CACHE_PATH as TRADE_PERFORMANCE_CACHE_PATH,
     evaluate_sold_too_soon_flags,
+    load_trades_log as load_validated_performance_trades,
+    read_cache as read_validated_performance_cache,
     summarize_by_window,
 )
 from scripts.indicators import macd as _macd, rsi as _rsi, adx as _adx, obv as _obv
@@ -1649,23 +1651,7 @@ def _db_fetch_all(sql: str, params: dict[str, Any] | None = None) -> list[dict[s
 
 
 def _metrics_summary_db() -> dict[str, Any]:
-    row = _db_fetch_one(
-        """
-        SELECT run_date, total_trades, win_rate, net_pnl, profit_factor
-        FROM metrics_daily
-        ORDER BY run_date DESC
-        LIMIT 1
-        """
-    )
-    if not row:
-        return {}
-    return {
-        "last_run_utc": _serialize_record(row.get("run_date")),
-        "total_trades": _serialize_record(row.get("total_trades")),
-        "win_rate": _serialize_record(row.get("win_rate")),
-        "net_pnl": _serialize_record(row.get("net_pnl")),
-        "profit_factor": _serialize_record(row.get("profit_factor")),
-    }
+    return metrics_summary_snapshot()
 
 
 _TRADES_RANGE_ORDER = ["d", "w", "m", "y", "all"]
@@ -1899,26 +1885,22 @@ def _normalize_trades_api_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_trades_analytics_frame(max_rows: int = 100_000) -> tuple[pd.DataFrame, str, str]:
-    db_frame, db_status = _load_trades_for_api_from_db(max_rows=max_rows)
-    if db_status == "ok":
-        normalized_db = _normalize_trades_api_frame(db_frame)
-        if normalized_db.empty and _trades_api_allow_file_fallback():
-            file_frame, file_source = _load_trades_for_api_from_files()
-            normalized_file = _normalize_trades_api_frame(file_frame)
-            if not normalized_file.empty:
-                detail = f"{file_source};db=ok-empty;fallback=enabled"
-                return normalized_file, "fallback", detail
-        return normalized_db, "postgres", ("trades-empty" if normalized_db.empty else "trades")
-
-    if _trades_api_allow_file_fallback():
-        file_frame, file_source = _load_trades_for_api_from_files()
-        normalized_file = _normalize_trades_api_frame(file_frame)
-        if not normalized_file.empty:
-            detail = f"{file_source};db={db_status};fallback=enabled"
-            return normalized_file, "fallback", detail
-
-    empty = _normalize_trades_api_frame(pd.DataFrame())
-    return empty, "postgres", f"trades-db-{db_status}"
+    try:
+        frame = load_validated_performance_trades()
+        if len(frame) >= max_rows:
+            raise db.disposition.TradePolicyError('TRADE_POLICY_ANALYTICS_SATURATED')
+        evidence = frame.attrs['trade_policy']
+        normalized = _normalize_trades_api_frame(frame)
+        normalized.attrs['trade_policy'] = evidence
+        normalized.attrs.update(policy_validation_status='VALIDATED_POLICY',
+            policy_revision=evidence['policy']['policy_revision'],
+            excluded_count=evidence['policy']['excluded_count'], unresolved_trade_ids=[])
+        return normalized, 'postgres', 'validated-performance'
+    except Exception as exc:
+        logger.warning('TRADES_ANALYTICS_HELD error_type=%s', type(exc).__name__)
+        held = pd.DataFrame()
+        held.attrs.update(db.performance_hold_visibility())
+        return held, 'postgres', 'trades-db-held-unvalidated-performance'
 
 
 def _filter_trades_by_range(frame: pd.DataFrame, range_key: str) -> pd.DataFrame:
@@ -4665,40 +4647,30 @@ def make_trades_exits_layout():
 
 
 def _load_trade_perf_cache() -> dict[str, Any]:
-    defaults: dict[str, Any] = {
-        "summary": {},
-        "trades": [],
-        "written_at": None,
-        "trades_total": 0,
-    }
     try:
-        with open(TRADE_PERFORMANCE_CACHE, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except Exception:
-        payload = {}
-    if not isinstance(payload, Mapping):
-        payload = {}
-    summary = payload.get("summary", {})
-    if not isinstance(summary, Mapping):
-        summary = {}
-    trades = payload.get("trades", [])
-    if not isinstance(trades, list):
-        trades = []
-    written_at = payload.get("written_at")
-    trades_total = payload.get("trades_total", len(trades))
-    try:
-        trades_total = int(trades_total)
-    except Exception:
-        trades_total = len(trades)
-    defaults.update(
-        {
-            "summary": summary,
-            "trades": trades,
-            "written_at": written_at,
-            "trades_total": trades_total,
-        }
-    )
-    return defaults
+        payload = read_validated_performance_cache(TRADE_PERFORMANCE_CACHE)
+        if payload is None:
+            raise db.disposition.TradePolicyError('TRADE_POLICY_CACHE_UNAVAILABLE')
+        return payload
+    except Exception as exc:
+        logger.warning('TRADE_PERFORMANCE_CACHE_HELD error_type=%s', type(exc).__name__)
+        return {'summary':{}, 'trades':[], 'written_at':None, 'trades_total':None,
+            'validation_status':'HELD_UNVALIDATED_PERFORMANCE',
+            **db.performance_hold_visibility()}
+
+
+def _performance_hold_message(payload):
+    message = 'Validated performance held; recovery/accounting remain incomplete. '
+    if payload.get('policy_validation_status') != 'VALIDATED_POLICY':
+        return message + 'Policy visibility unavailable; excluded count unknown.'
+    policy = payload['trade_policy']['policy']
+    cases = ', '.join(item['case_id'] for item in policy['exclusions']) or 'none'
+    message += (f"Policy revision {policy['policy_revision']}; excluded trades {policy['excluded_count']}; "
+        f"case IDs {cases}.")
+    unresolved = payload.get('unresolved_trade_ids')
+    if unresolved:
+        message += ' Accounting inputs unresolved for trades ' + ', '.join(map(str, unresolved)) + '.'
+    return message
 
 
 def _build_trade_perf_kpis(
@@ -4778,13 +4750,15 @@ def _build_window_net_pnl_bar(summary: Mapping[str, Mapping[str, Any]]) -> go.Fi
 
 def render_trade_performance_panel() -> html.Div:
     payload = _load_trade_perf_cache()
+    if payload.get('validation_status') != 'VALIDATED_PERFORMANCE':
+        return html.Div(dbc.Alert(_performance_hold_message(payload), color='warning'))
     store_data = {
         "trades": payload.get("trades", []),
         "summary": payload.get("summary", {}),
         "written_at": payload.get("written_at"),
         "trades_total": payload.get("trades_total", 0),
     }
-    status_badges: list[Any] = []
+    status_badges: list[Any] = [dbc.Badge('Scoped performance; recovery/accounting held', color='warning')]
     if store_data.get("written_at"):
         status_badges.append(
             dbc.Badge(
@@ -6291,6 +6265,8 @@ def api_trades_overview():
         "ok": bool(metrics or trade_records),
         "db_source_of_truth": True,
         "metrics": metrics,
+        "trade_view": "PHYSICAL_HISTORY_UNFILTERED",
+        "performance_status": metrics.get("validation_status"),
         "trades": trade_records,
         "open_positions": {"count": open_count, "realized_pnl": open_pnl, "source": open_source},
     }
@@ -6304,7 +6280,7 @@ def api_trades_stats():
     db_ready = _trades_api_db_ready(source, source_detail)
 
     range_keys = _TRADES_RANGE_ORDER if requested_range == "all" else [requested_range]
-    rows = [_build_range_metrics(trades_frame, key) for key in range_keys]
+    rows = [_build_range_metrics(trades_frame, key) for key in range_keys] if db_ready else []
 
     recorded = _record_trades_api_request(
         endpoint="/api/trades/stats",
@@ -6319,6 +6295,13 @@ def api_trades_stats():
             "source_detail": source_detail,
             "db_source_of_truth": True,
             "db_ready": bool(db_ready),
+            "performance_status": 'VALIDATED_PERFORMANCE' if db_ready else 'HELD_UNVALIDATED_PERFORMANCE',
+            "trade_policy": trades_frame.attrs.get('trade_policy'),
+            "policy_validation_status": trades_frame.attrs.get('policy_validation_status', 'VALIDATED_POLICY' if db_ready else 'UNAVAILABLE'),
+            "excluded_count": trades_frame.attrs.get('excluded_count'),
+            "unresolved_trade_ids": trades_frame.attrs.get('unresolved_trade_ids'),
+            "recovery_complete": False,
+            "accounting_complete": False,
             "range": requested_range,
             "rows": rows,
             "recorded_to_db": recorded,
@@ -6366,6 +6349,13 @@ def api_trades_leaderboard():
             "source_detail": source_detail,
             "db_source_of_truth": True,
             "db_ready": bool(db_ready),
+            "performance_status": 'VALIDATED_PERFORMANCE' if db_ready else 'HELD_UNVALIDATED_PERFORMANCE',
+            "trade_policy": trades_frame.attrs.get('trade_policy'),
+            "policy_validation_status": trades_frame.attrs.get('policy_validation_status', 'VALIDATED_POLICY' if db_ready else 'UNAVAILABLE'),
+            "excluded_count": trades_frame.attrs.get('excluded_count'),
+            "unresolved_trade_ids": trades_frame.attrs.get('unresolved_trade_ids'),
+            "recovery_complete": False,
+            "accounting_complete": False,
             "range": range_key,
             "mode": mode,
             "limit": limit,
@@ -6395,6 +6385,13 @@ def api_trades_latest():
             "source_detail": source_detail,
             "db_source_of_truth": True,
             "db_ready": bool(db_ready),
+            "performance_status": 'VALIDATED_PERFORMANCE' if db_ready else 'HELD_UNVALIDATED_PERFORMANCE',
+            "trade_policy": trades_frame.attrs.get('trade_policy'),
+            "policy_validation_status": trades_frame.attrs.get('policy_validation_status', 'VALIDATED_POLICY' if db_ready else 'UNAVAILABLE'),
+            "excluded_count": trades_frame.attrs.get('excluded_count'),
+            "unresolved_trade_ids": trades_frame.attrs.get('unresolved_trade_ids'),
+            "recovery_complete": False,
+            "accounting_complete": False,
             "limit": limit,
             "rows": rows,
             "recorded_to_db": recorded,
@@ -11301,7 +11298,9 @@ def _render_tab(tab, _n_intervals, _n_log_intervals, _refresh_clicks):
             )
             health_columns.append(dbc.Col(card, md=2, sm=6))
         health_cards = dbc.Row(health_columns, className="g-3 mb-4")
-        kpi_tiles = _build_metrics_summary_tiles(metrics_summary_row or {})
+        kpi_tiles = (_build_metrics_summary_tiles(metrics_summary_row)
+            if metrics_summary_row.get('validation_status') == 'VALIDATED_PERFORMANCE'
+            else dbc.Alert('Validated performance held: no current verified policy/input-bound summary. Recovery and accounting remain incomplete.', color='warning'))
 
         timings = metrics_data.get("timings", {}) or {}
 
@@ -12548,7 +12547,12 @@ def _prepare_trade_perf_frame(store_data: Mapping[str, Any], window: str) -> pd.
 )
 def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]):
     window = range_value or "30D"
-    store_mapping = store_data if isinstance(store_data, Mapping) else {}
+    # Browser store is not evidence: revalidate current policy/input on every callback.
+    store_mapping = _load_trade_perf_cache()
+    if store_mapping.get('validation_status') != 'VALIDATED_PERFORMANCE':
+        held = _performance_hold_message(store_mapping)
+        return (dbc.Alert(held, color='warning'),
+            *[_empty_trade_perf_fig(held) for _ in range(6)], [], [dbc.Badge('HELD', color='warning')])
     frame = _prepare_trade_perf_frame(store_mapping, window)
     summary = store_mapping.get("summary", {}) if isinstance(store_mapping, Mapping) else {}
     if not summary:
@@ -12741,6 +12745,8 @@ def update_trade_pnl_table(
 
     window = window or "30D"
     payload = _load_trade_perf_cache()
+    if payload.get('validation_status') != 'VALIDATED_PERFORMANCE':
+        return [], [dbc.Alert(_performance_hold_message(payload), color='warning')]
     trades = payload.get("trades", [])
     if not trades:
         empty_frame = pd.DataFrame(columns=["exit_time"])
@@ -12856,6 +12862,8 @@ def update_sold_too_soon_table(
         return dash.no_update, dash.no_update
 
     payload = _load_trade_perf_cache()
+    if payload.get('validation_status') != 'VALIDATED_PERFORMANCE':
+        return [], [dbc.Alert(_performance_hold_message(payload), color='warning')]
     trades = payload.get("trades", [])
     if not trades:
         return [], []

@@ -543,6 +543,7 @@ def _order_snapshot(order: Any) -> Dict[str, Any]:
         "limit_price",
         "filled_qty",
         "filled_avg_price",
+        "filled_at",
         "submitted_at",
         "created_at",
         "client_order_id",
@@ -2276,6 +2277,7 @@ class ExecutionMetrics:
     skipped_reasons: Counter = field(default_factory=Counter)
     status: str = "ok"
     _error_info: Optional[Dict[str, Any]] = None
+    reconciliation: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         # Maintain backward compatibility with legacy attribute name
@@ -2356,6 +2358,8 @@ class ExecutionMetrics:
             "skips": skip_payload,
             "status": self.status,
         }
+        if self.reconciliation is not None:
+            payload["reconciliation"] = json.loads(json.dumps(self.reconciliation))
         if self._error_info:
             payload["error"] = dict(self._error_info)
         return payload
@@ -2881,6 +2885,9 @@ class TradeExecutor:
         self, *, lookback_days: int | None = None, limit: int | None = None
     ) -> bool:
         """Require usable broker evidence before writes; hold unresolved watermarks."""
+        self.metrics.reconciliation = dict(scope='ACTIVE_RECONCILIATION', operational_complete=False,
+            recovery_complete=False, accounting_complete=False, activity_ingestion_complete=False,
+            watermark_advanced=False, recovery_pending_case_ids=[], reason='NOT_STARTED')
         watermark_enabled = bool(getattr(self.config, "reconcile_use_watermark", True))
         if not db.db_enabled():
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=db_unavailable")
@@ -2888,6 +2895,17 @@ class TradeExecutor:
         engine = db.get_db_conn()
         if engine is None:
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=db_unavailable")
+            return False
+
+        try:
+            policy_status = db.reconciliation_policy_status(engine)
+            policy_revision = policy_status['policy_revision']
+            self.metrics.reconciliation.update(trade_policy=policy_status,
+                recovery_pending_case_ids=[case['case_id'] for case in policy_status['recovery_pending_cases']],
+                reason='OPERATIONAL_WORK_PENDING')
+        except Exception as exc:
+            LOGGER.warning('[WARN] RECONCILE_DB_FAIL stage=policy error_type=%s', type(exc).__name__)
+            self.metrics.reconciliation['reason'] = 'POLICY_UNAVAILABLE'
             return False
 
         try:
@@ -3027,8 +3045,8 @@ class TradeExecutor:
                     return ts
             return None
 
-        def _latest_filled_sell_order(
-            symbol: str,
+        def _bound_filled_sell_order(
+            symbol: str, bound_order_id: str,
         ) -> tuple[Any | None, datetime | None, Dict[str, Any]]:
             stats: Dict[str, Any] = {
                 "after_iso": fetch_after_iso,
@@ -3045,6 +3063,8 @@ class TradeExecutor:
             filled_sells: list[tuple[Any, datetime]] = []
 
             for order in orders or []:
+                if order.get('id') != bound_order_id:
+                    continue
                 if str(order.get("symbol", "")).upper() != symbol_upper:
                     continue
                 side_value = str(order.get("side", "")).lower()
@@ -3073,9 +3093,15 @@ class TradeExecutor:
             return best_order, best_filled_at, stats
 
         try:
-            open_trades = db.get_open_trades(engine, strict=True)
+            open_trades = db.get_open_trades(engine, strict=True, expected_policy_revision=policy_revision)
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=open_trades err=%s", exc)
+            return False
+        try:
+            open_exit_lineage = db.get_open_trade_exit_lineage(engine, open_trades,
+                expected_policy_revision=policy_revision, observed_before=now_utc)
+        except Exception as exc:
+            LOGGER.warning('[WARN] RECONCILE_DB_FAIL stage=open_exit_lineage error_type=%s', type(exc).__name__)
             return False
         LOGGER.info("[INFO] RECONCILE_START open_trades=%s", len(open_trades))
         if self.client is None:
@@ -3137,7 +3163,10 @@ class TradeExecutor:
                 remaining_trades: list[dict[str, Any]] = []
                 for trade in trades:
                     trade_id = trade.get("trade_id")
-                    if symbol not in open_symbols_on_alpaca:
+                    candidate_exit_id = trade.get('exit_order_id') or open_exit_lineage.get(trade_id)
+                    # Retain OPEN for exact-child processing even if its fill
+                    # leaves positions[]. Never clear a known candidate first.
+                    if symbol not in open_symbols_on_alpaca and not candidate_exit_id:
                         try:
                             closed = db.close_trade(
                                 engine=engine,
@@ -3146,6 +3175,7 @@ class TradeExecutor:
                                 exit_time=datetime.now(timezone.utc),
                                 exit_price=None,
                                 exit_reason="POSITION_CLOSED",
+                                expected_policy_revision=policy_revision,
                             )
                         except Exception as exc:  # pragma: no cover - defensive guard
                             LOGGER.warning(
@@ -3198,8 +3228,25 @@ class TradeExecutor:
                 for order, filled_at_dt in symbol_orders:
                     if not trades:
                         break
-                    trade = trades.pop(0)
+                    order_id = str(order.get("id") or order.get("order_id") or "")
+                    matching_trades = [trade for trade in trades if (trade.get('exit_order_id') or open_exit_lineage.get(trade.get('trade_id'))) == order_id]
+                    if len(matching_trades) != 1:
+                        if matching_trades or any(not (trade.get('exit_order_id') or open_exit_lineage.get(trade.get('trade_id'))) for trade in trades):
+                            unresolved = True
+                            LOGGER.warning('[WARN] RECONCILE_FILL_HELD symbol=%s reason=fill_allocation_unbound_or_ambiguous', symbol)
+                        continue
+                    trade = matching_trades[0]
                     trade_id = trade.get("trade_id")
+                    try:
+                        trade_quantity = Decimal(str(trade.get('qty')))
+                        fill_quantity = Decimal(str(order.get('filled_qty', order.get('qty'))))
+                        if (not trade_quantity.is_finite() or trade_quantity <= 0
+                                or not fill_quantity.is_finite() or fill_quantity != trade_quantity):
+                            raise ValueError('partial_fill_allocation_unsupported')
+                    except (ValueError, TypeError, InvalidOperation):
+                        unresolved = True
+                        LOGGER.warning('[WARN] RECONCILE_FILL_HELD trade_id=%s reason=partial_fill_allocation_unsupported', trade_id)
+                        continue
                     exit_time_raw = filled_at_dt or datetime.now(timezone.utc)
                     exit_price_raw = order.get("filled_avg_price")
                     try:
@@ -3220,6 +3267,7 @@ class TradeExecutor:
                             status=str(order.get("status", "")),
                             event_time=exit_time_raw,
                             raw=_order_snapshot(order),
+                            expected_policy_revision=policy_revision,
                             exit_price=exit_price,
                             exit_reason=exit_reason,
                         )
@@ -3232,6 +3280,7 @@ class TradeExecutor:
                         )
                         closed = False
                     if closed:
+                        trades.remove(trade)
                         closed_count += 1
                         LOGGER.info(
                             "[INFO] RECONCILE_CLOSE trade_id=%s symbol=%s exit_price=%s reason=%s",
@@ -3249,17 +3298,21 @@ class TradeExecutor:
                             "close_failed",
                         )
 
+            for symbol, remaining in open_by_symbol.items():
+                if remaining and symbol not in open_symbols_on_alpaca:
+                    unresolved = True
+                    LOGGER.warning('[WARN] RECONCILE_FILL_HELD symbol=%s reason=flat_exact_child_unresolved', symbol)
         decorated_count = 0
         try:
             trades_to_decorate = db.get_closed_trades_missing_exit(
-                engine=engine, updated_after=decorate_after_time, strict=True
+                engine=engine, updated_after=decorate_after_time, strict=True, expected_policy_revision=policy_revision
             )
         except Exception as exc:  # pragma: no cover - defensive guard
             unresolved = True
             LOGGER.warning("[WARN] RECONCILE_DB_FAIL stage=get_closed_trades err=%s", exc)
             trades_to_decorate = []
 
-        latest_sell_order_by_symbol: Dict[
+        bound_sell_orders: Dict[
             str, tuple[Any | None, datetime | None, Dict[str, Any]]
         ] = {}
         for trade in trades_to_decorate:
@@ -3267,9 +3320,14 @@ class TradeExecutor:
             symbol = str(trade.get("symbol", "")).upper()
             if trade_id is None or not symbol:
                 continue
-            if symbol not in latest_sell_order_by_symbol:
-                latest_sell_order_by_symbol[symbol] = _latest_filled_sell_order(symbol)
-            order, filled_at, stats = latest_sell_order_by_symbol[symbol]
+            bound_order_id = trade.get('exit_order_id')
+            if not isinstance(bound_order_id, str) or not bound_order_id.strip():
+                unresolved = True
+                LOGGER.warning('[WARN] RECONCILE_DECORATE_HELD trade_id=%s reason=historical_fill_allocation_unbound', trade_id)
+                continue
+            if bound_order_id not in bound_sell_orders:
+                bound_sell_orders[bound_order_id] = _bound_filled_sell_order(symbol, bound_order_id)
+            order, filled_at, stats = bound_sell_orders[bound_order_id]
             if order is None:
                 unresolved = True
                 LOGGER.warning(
@@ -3283,6 +3341,17 @@ class TradeExecutor:
                     stats.get("filled_sells", 0),
                     stats.get("orders_error", False),
                 )
+                continue
+
+            try:
+                trade_quantity = Decimal(str(trade.get('qty')))
+                fill_quantity = Decimal(str(order.get('filled_qty', order.get('qty'))))
+                if (not trade_quantity.is_finite() or trade_quantity <= 0
+                        or not fill_quantity.is_finite() or fill_quantity != trade_quantity):
+                    raise ValueError('partial_fill_allocation_unsupported')
+            except (ValueError, TypeError, InvalidOperation):
+                unresolved = True
+                LOGGER.warning('[WARN] RECONCILE_DECORATE_HELD trade_id=%s reason=partial_fill_allocation_unsupported', trade_id)
                 continue
 
             exit_time_raw = filled_at
@@ -3305,6 +3374,7 @@ class TradeExecutor:
                     status=str(order.get("status", "")),
                     event_time=exit_time_raw,
                     raw=_order_snapshot(order),
+                    expected_policy_revision=policy_revision,
                     exit_price=exit_price,
                     exit_reason=exit_reason,
                     decorate=True,
@@ -3340,37 +3410,28 @@ class TradeExecutor:
             LOGGER.warning("[WARN] RECONCILE_WATERMARK_HELD")
             LOGGER.info("[INFO] RECONCILE_END closed=%s decorated=%s", closed_count, decorated_count)
             return False
-        LOGGER.info("[INFO] RECONCILE_COVERAGE_COMPLETE fetched_orders=%s", len(orders_cache["orders"]))
-        if watermark_enabled:
-            if orders_cache.get("orders") is None and not orders_cache.get("error"):
-                _fetch_orders()
-            orders_for_watermark = orders_cache.get("orders") or []
-            max_ts: datetime | None = None
-            for order in orders_for_watermark:
-                ts = _best_order_timestamp(order)
-                if ts is None:
-                    continue
-                if max_ts is None or ts > max_ts:
-                    max_ts = ts
-            new_last_after = fetch_after_dt
-            if max_ts is not None:
-                new_last_after = max_ts - timedelta(seconds=overlap_secs)
-            try:
-                updated = db.set_reconcile_state(engine, new_last_after, now_utc)
-            except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.warning(
-                    "[WARN] RECONCILE_WATERMARK_DISABLED reason=write_failed err=%s", exc
-                )
-                updated = False
-            if updated:
-                LOGGER.info(
-                    "[INFO] RECONCILE_WATERMARK_UPDATE last_after=%s", new_last_after.isoformat()
-                )
-            else:
-                LOGGER.warning("[WARN] RECONCILE_WATERMARK_HELD")
-                return False
-        LOGGER.info("[INFO] RECONCILE_END closed=%s decorated=%s", closed_count, decorated_count)
-        return True
+        # An order listing, count or approved operational exclusion is not an
+        # independently proved, durably recorded activity-ingestion checkpoint.
+        # This minimal increment has no such receipt path: never advance the
+        # legacy reconciliation cursor or imply historical recovery completed.
+        try:
+            # Provider I/O is complete. Hold the shared policy lock until the
+            # metrics and success receipt have been published for this revision.
+            with db.reconciliation_publication(engine, expected_revision=policy_revision) as final_policy:
+                if final_policy != policy_status:
+                    raise RuntimeError('RECONCILE_POLICY_CHANGED')
+                self.metrics.reconciliation.update(operational_complete=True,
+                    reason='INDEPENDENT_DURABLE_ACTIVITY_INGESTION_UNPROVED', trade_policy=final_policy)
+                LOGGER.info('[INFO] RECONCILE_OPERATIONAL_COMPLETE scope=ACTIVE_RECONCILIATION policy_revision=%s excluded_count=%s recovery_pending_case_ids=%s',
+                    policy_revision, final_policy['excluded_count'], self.metrics.reconciliation['recovery_pending_case_ids'])
+                LOGGER.warning('[WARN] RECONCILE_WATERMARK_HELD reason=independent_durable_activity_ingestion_unproved')
+                LOGGER.info('[INFO] RECONCILE_END closed=%s decorated=%s operational_complete=true recovery_complete=false accounting_complete=false activity_ingestion_complete=false watermark_advanced=false',
+                    closed_count, decorated_count)
+                return True
+        except Exception as exc:
+            LOGGER.warning('[WARN] RECONCILE_DB_FAIL stage=policy_final error_type=%s', type(exc).__name__)
+            self.metrics.reconciliation.update(operational_complete=False, reason='POLICY_CHANGED_OR_UNAVAILABLE')
+            return False
 
     def log_info(self, event: str, **payload: Any) -> None:
         log_info(event, **payload)
@@ -6943,6 +7004,22 @@ def _seed_initial_metrics(metrics: ExecutionMetrics, config: ExecutorConfig) -> 
 _RECONCILE_DB_DISABLED_LOGGED = False
 
 
+def _operational_reconciliation_complete(executor, result):
+    """Bool success is scoped operational completion, never global recovery."""
+    status = getattr(executor.metrics, 'reconciliation', None)
+    if not isinstance(status, Mapping):
+        return False
+    policy = status.get('trade_policy')
+    return (result is True and status.get('operational_complete') is True
+        and status.get('scope') == 'ACTIVE_RECONCILIATION'
+        and status.get('recovery_complete') is False
+        and status.get('accounting_complete') is False
+        and status.get('activity_ingestion_complete') is False
+        and status.get('watermark_advanced') is False
+        and isinstance(policy, Mapping) and policy.get('scope') == 'ACTIVE_RECONCILIATION'
+        and type(policy.get('policy_revision')) is int and policy['policy_revision'] >= 0)
+
+
 def _run_auto_reconcile(executor: TradeExecutor, config: ExecutorConfig, stage: str) -> bool:
     global _RECONCILE_DB_DISABLED_LOGGED
     if not getattr(config, "reconcile_auto", True):
@@ -6961,9 +7038,15 @@ def _run_auto_reconcile(executor: TradeExecutor, config: ExecutorConfig, stage: 
         limit,
     )
     try:
-        complete = executor.reconcile_closed_trades(lookback_days=lookback_days, limit=limit)
+        executor.metrics.reconciliation = None
+        result = executor.reconcile_closed_trades(lookback_days=lookback_days, limit=limit)
+        complete = _operational_reconciliation_complete(executor, result)
         if complete is not True:
             LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s reason=incomplete", stage)
+        if complete:
+            LOGGER.info('[INFO] RECONCILE_AUTO_OPERATIONAL_ONLY stage=%s recovery_complete=false accounting_complete=false activity_ingestion_complete=false watermark_advanced=false policy_revision=%s recovery_pending_case_ids=%s',
+                stage, executor.metrics.reconciliation['trade_policy']['policy_revision'],
+                executor.metrics.reconciliation.get('recovery_pending_case_ids', []))
         return complete is True
     except Exception as exc:  # pragma: no cover - defensive guard
         LOGGER.warning("[WARN] RECONCILE_AUTO_FAIL stage=%s error_type=%s", stage, type(exc).__name__)
@@ -7315,7 +7398,9 @@ def run_executor(
             metrics.status = "skipped"
             metrics.record_skip("RECONCILE_ONLY", count=1)
             metrics.exit_reason = "RECONCILE_ONLY"
-            complete = executor.reconcile_closed_trades()
+            complete = _operational_reconciliation_complete(executor, executor.reconcile_closed_trades())
+            if complete is True:
+                metrics.exit_reason = 'RECONCILE_OPERATIONAL_ONLY_RECOVERY_HELD'
             if complete is not True:
                 metrics.status = "failed"
                 metrics.exit_reason = "RECONCILE_INCOMPLETE"
