@@ -569,7 +569,8 @@ def metrics_summary_snapshot() -> Dict[str, Any]:
         return dict.fromkeys(('profit_factor','expectancy','win_rate','net_pnl',
             'max_drawdown','sharpe','sortino','total_trades','last_run_utc'), None) | {
             'validation_status':'HELD_UNVALIDATED_PERFORMANCE', 'recovery_complete':False,
-            'accounting_complete':False, 'activity_ingestion_complete':False}
+            'accounting_complete':False, 'activity_ingestion_complete':False,
+            **db.performance_hold_visibility()}
 
 
 def diagnostics() -> Dict[str, Any]:

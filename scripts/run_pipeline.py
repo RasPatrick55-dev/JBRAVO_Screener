@@ -4866,12 +4866,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if rc_attr:
                 LOG.warning("[WARN] RANKER_TRADE_ATTRIBUTION_FAILED rc=%s (continuing)", rc_attr)
             else:
-                if db.db_enabled():
-                    attribution_payload = db.load_ml_artifact_payload("ranker_trade_attribution")
-                else:
-                    attribution_payload = _read_json(
-                        DATA_DIR / "ranker_trade_attribution" / "latest.json"
-                    )
+                try:
+                    attribution_payload = db.validated_ml_trade_artifact("ranker_trade_attribution")
+                except Exception:
+                    attribution_payload = {"status": "HELD_UNVALIDATED_PERFORMANCE", "summary": {}}
+                    step_rcs["ranker_trade_attribution"] = 1
+                    LOG.warning("RANKER_TRADE_ATTRIBUTION_HELD_UNVALIDATED_PERFORMANCE")
                 summary = attribution_payload.get("summary") or {}
                 LOG.info(
                     "[INFO] RANKER_TRADE_ATTRIBUTION trades_scored=%s win_rate=%s brier=%s unmatched=%s",

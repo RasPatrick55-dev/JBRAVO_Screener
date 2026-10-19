@@ -224,6 +224,15 @@ def _artifact_record(
     fs_glob: str | None = None,
     fs_file: Path | None = None,
 ) -> dict[str, Any]:
+    if artifact_type == "ranker_trade_attribution":
+        try:
+            payload = db.validated_ml_trade_artifact(artifact_type)
+            return {"present": True, "source": "db:VALIDATED_PERFORMANCE", "payload": payload,
+                "created_at": payload.get("run_utc"), "run_date": payload.get("run_date"),
+                "rows_count": payload["artifact_binding"]["rows_count"], "file_name": "latest.json"}
+        except Exception:
+            return {"present": False, "source": "HELD", "payload": {"status": "HELD_UNVALIDATED_PERFORMANCE"},
+                "created_at": None, "run_date": None, "rows_count": None, "file_name": None}
     if db.db_enabled():
         record = db.fetch_latest_ml_artifact(artifact_type)
         if record:
@@ -676,8 +685,8 @@ def build_ml_overview(base_dir: Path) -> dict[str, Any]:
     trade_attr_tone = "success"
     trade_attr_detail = _clean_text(trade_attr_payload.get("status")) or "No attribution data"
     if not trade_attr_record.get("present"):
-        trade_attr_status = "skipped"
-        trade_attr_tone = "neutral"
+        trade_attr_status = "blocked"
+        trade_attr_tone = "warning"
     elif str(trade_attr_payload.get("status") or "").strip().lower() not in {"ok", "success"}:
         trade_attr_status = "warn"
         trade_attr_tone = "warning"

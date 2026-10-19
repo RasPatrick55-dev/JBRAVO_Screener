@@ -1892,10 +1892,15 @@ def _load_trades_analytics_frame(max_rows: int = 100_000) -> tuple[pd.DataFrame,
         evidence = frame.attrs['trade_policy']
         normalized = _normalize_trades_api_frame(frame)
         normalized.attrs['trade_policy'] = evidence
+        normalized.attrs.update(policy_validation_status='VALIDATED_POLICY',
+            policy_revision=evidence['policy']['policy_revision'],
+            excluded_count=evidence['policy']['excluded_count'], unresolved_trade_ids=[])
         return normalized, 'postgres', 'validated-performance'
     except Exception as exc:
         logger.warning('TRADES_ANALYTICS_HELD error_type=%s', type(exc).__name__)
-        return pd.DataFrame(), 'postgres', 'trades-db-held-unvalidated-performance'
+        held = pd.DataFrame()
+        held.attrs.update(db.performance_hold_visibility())
+        return held, 'postgres', 'trades-db-held-unvalidated-performance'
 
 
 def _filter_trades_by_range(frame: pd.DataFrame, range_key: str) -> pd.DataFrame:
@@ -4650,7 +4655,22 @@ def _load_trade_perf_cache() -> dict[str, Any]:
     except Exception as exc:
         logger.warning('TRADE_PERFORMANCE_CACHE_HELD error_type=%s', type(exc).__name__)
         return {'summary':{}, 'trades':[], 'written_at':None, 'trades_total':None,
-            'validation_status':'HELD_UNVALIDATED_PERFORMANCE'}
+            'validation_status':'HELD_UNVALIDATED_PERFORMANCE',
+            **db.performance_hold_visibility()}
+
+
+def _performance_hold_message(payload):
+    message = 'Validated performance held; recovery/accounting remain incomplete. '
+    if payload.get('policy_validation_status') != 'VALIDATED_POLICY':
+        return message + 'Policy visibility unavailable; excluded count unknown.'
+    policy = payload['trade_policy']['policy']
+    cases = ', '.join(item['case_id'] for item in policy['exclusions']) or 'none'
+    message += (f"Policy revision {policy['policy_revision']}; excluded trades {policy['excluded_count']}; "
+        f"case IDs {cases}.")
+    unresolved = payload.get('unresolved_trade_ids')
+    if unresolved:
+        message += ' Accounting inputs unresolved for trades ' + ', '.join(map(str, unresolved)) + '.'
+    return message
 
 
 def _build_trade_perf_kpis(
@@ -4731,7 +4751,7 @@ def _build_window_net_pnl_bar(summary: Mapping[str, Mapping[str, Any]]) -> go.Fi
 def render_trade_performance_panel() -> html.Div:
     payload = _load_trade_perf_cache()
     if payload.get('validation_status') != 'VALIDATED_PERFORMANCE':
-        return html.Div(dbc.Alert('Validated performance held: current policy, eligible input and cache provenance are unverified. Historical records are preserved.', color='warning'))
+        return html.Div(dbc.Alert(_performance_hold_message(payload), color='warning'))
     store_data = {
         "trades": payload.get("trades", []),
         "summary": payload.get("summary", {}),
@@ -6277,6 +6297,9 @@ def api_trades_stats():
             "db_ready": bool(db_ready),
             "performance_status": 'VALIDATED_PERFORMANCE' if db_ready else 'HELD_UNVALIDATED_PERFORMANCE',
             "trade_policy": trades_frame.attrs.get('trade_policy'),
+            "policy_validation_status": trades_frame.attrs.get('policy_validation_status', 'VALIDATED_POLICY' if db_ready else 'UNAVAILABLE'),
+            "excluded_count": trades_frame.attrs.get('excluded_count'),
+            "unresolved_trade_ids": trades_frame.attrs.get('unresolved_trade_ids'),
             "recovery_complete": False,
             "accounting_complete": False,
             "range": requested_range,
@@ -6328,6 +6351,9 @@ def api_trades_leaderboard():
             "db_ready": bool(db_ready),
             "performance_status": 'VALIDATED_PERFORMANCE' if db_ready else 'HELD_UNVALIDATED_PERFORMANCE',
             "trade_policy": trades_frame.attrs.get('trade_policy'),
+            "policy_validation_status": trades_frame.attrs.get('policy_validation_status', 'VALIDATED_POLICY' if db_ready else 'UNAVAILABLE'),
+            "excluded_count": trades_frame.attrs.get('excluded_count'),
+            "unresolved_trade_ids": trades_frame.attrs.get('unresolved_trade_ids'),
             "recovery_complete": False,
             "accounting_complete": False,
             "range": range_key,
@@ -6361,6 +6387,9 @@ def api_trades_latest():
             "db_ready": bool(db_ready),
             "performance_status": 'VALIDATED_PERFORMANCE' if db_ready else 'HELD_UNVALIDATED_PERFORMANCE',
             "trade_policy": trades_frame.attrs.get('trade_policy'),
+            "policy_validation_status": trades_frame.attrs.get('policy_validation_status', 'VALIDATED_POLICY' if db_ready else 'UNAVAILABLE'),
+            "excluded_count": trades_frame.attrs.get('excluded_count'),
+            "unresolved_trade_ids": trades_frame.attrs.get('unresolved_trade_ids'),
             "recovery_complete": False,
             "accounting_complete": False,
             "limit": limit,
@@ -12521,7 +12550,7 @@ def update_trade_performance_tab(range_value: str, store_data: Mapping[str, Any]
     # Browser store is not evidence: revalidate current policy/input on every callback.
     store_mapping = _load_trade_perf_cache()
     if store_mapping.get('validation_status') != 'VALIDATED_PERFORMANCE':
-        held = 'Validated performance held; recovery/accounting remain incomplete.'
+        held = _performance_hold_message(store_mapping)
         return (dbc.Alert(held, color='warning'),
             *[_empty_trade_perf_fig(held) for _ in range(6)], [], [dbc.Badge('HELD', color='warning')])
     frame = _prepare_trade_perf_frame(store_mapping, window)
@@ -12717,7 +12746,7 @@ def update_trade_pnl_table(
     window = window or "30D"
     payload = _load_trade_perf_cache()
     if payload.get('validation_status') != 'VALIDATED_PERFORMANCE':
-        return [], [dbc.Alert('Validated performance held; recovery/accounting remain incomplete.', color='warning')]
+        return [], [dbc.Alert(_performance_hold_message(payload), color='warning')]
     trades = payload.get("trades", [])
     if not trades:
         empty_frame = pd.DataFrame(columns=["exit_time"])
@@ -12834,7 +12863,7 @@ def update_sold_too_soon_table(
 
     payload = _load_trade_perf_cache()
     if payload.get('validation_status') != 'VALIDATED_PERFORMANCE':
-        return [], [dbc.Alert('Validated performance held; recovery/accounting remain incomplete.', color='warning')]
+        return [], [dbc.Alert(_performance_hold_message(payload), color='warning')]
     trades = payload.get("trades", [])
     if not trades:
         return [], []

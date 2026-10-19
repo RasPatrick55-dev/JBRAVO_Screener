@@ -141,13 +141,11 @@ def _ensure_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _table_exists(conn: Any, table_name: str) -> bool:
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT to_regclass(%s)", (table_name,))
-            row = cursor.fetchone()
-        return bool(row and row[0])
-    except Exception:
-        return False
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_catalog.to_regclass(%s)", ("public." + table_name,))
+        row = cursor.fetchone()
+    return bool(row and row[0])
 
 
 def _diag_counts(
@@ -166,57 +164,57 @@ def _diag_counts(
         "run_map_rows_available": 0,
         "oos_rows_available": 0,
     }
-    try:
-        with conn.cursor() as cursor:
-            if entry_context_table_exists:
-                cursor.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM trade_entry_ml_context_app
-                    WHERE COALESCE(entry_time, created_at) >= %(start_dt)s
-                      AND COALESCE(entry_time, created_at) <= %(end_dt)s
-                    """,
-                    {"start_dt": start_dt, "end_dt": end_dt},
-                )
-                row = cursor.fetchone()
-                if row:
-                    out["entry_context_rows_available"] = int(row[0] or 0)
-            if score_table_exists:
-                cursor.execute(
-                    """
-                    SELECT
-                        COUNT(*) AS rows_count,
-                        COUNT(DISTINCT date_trunc('second', run_ts_utc)) AS run_count
-                    FROM screener_ranker_scores_app
-                    WHERE run_ts_utc >= %(start_dt)s
-                      AND run_ts_utc <= %(end_dt)s
-                    """,
-                    {"start_dt": start_dt, "end_dt": end_dt},
-                )
-                row = cursor.fetchone()
-                if row:
-                    out["score_rows_available"] = int(row[0] or 0)
-                    out["score_runs_available"] = int(row[1] or 0)
-            if run_map_table_exists:
-                cursor.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM screener_run_map_app
-                    WHERE run_ts_utc >= %(start_dt)s
-                      AND run_ts_utc <= %(end_dt)s
-                    """,
-                    {"start_dt": start_dt, "end_dt": end_dt},
-                )
-                row = cursor.fetchone()
-                if row:
-                    out["run_map_rows_available"] = int(row[0] or 0)
-    except Exception:
-        pass
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    with conn.cursor() as cursor:
+        if entry_context_table_exists:
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM public.trade_entry_ml_context_app
+                WHERE COALESCE(entry_time, created_at) >= %(start_dt)s
+                  AND COALESCE(entry_time, created_at) <= %(end_dt)s
+                """,
+                {"start_dt": start_dt, "end_dt": end_dt},
+            )
+            row = cursor.fetchone()
+            if row:
+                out["entry_context_rows_available"] = int(row[0] or 0)
+        if score_table_exists:
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS rows_count,
+                    COUNT(DISTINCT date_trunc('second', run_ts_utc)) AS run_count
+                FROM public.screener_ranker_scores_app
+                WHERE run_ts_utc >= %(start_dt)s
+                  AND run_ts_utc <= %(end_dt)s
+                """,
+                {"start_dt": start_dt, "end_dt": end_dt},
+            )
+            row = cursor.fetchone()
+            if row:
+                out["score_rows_available"] = int(row[0] or 0)
+                out["score_runs_available"] = int(row[1] or 0)
+        if run_map_table_exists:
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM public.screener_run_map_app
+                WHERE run_ts_utc >= %(start_dt)s
+                  AND run_ts_utc <= %(end_dt)s
+                """,
+                {"start_dt": start_dt, "end_dt": end_dt},
+            )
+            row = cursor.fetchone()
+            if row:
+                out["run_map_rows_available"] = int(row[0] or 0)
     return out
 
 
 def _query_closed_trades_base(conn: Any, *, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
-    query = """
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    predicate = db.disposition.eligible_sql("t", scope="VALIDATED_PERFORMANCE")
+    query = f"""
         SELECT
             t.trade_id,
             t.symbol,
@@ -239,8 +237,9 @@ def _query_closed_trades_base(conn: Any, *, start_dt: datetime, end_dt: datetime
             NULL::boolean AS symbol_has_score,
             NULL::boolean AS symbol_has_run_map,
             NULL::boolean AS symbol_has_oos
-        FROM trades t
+        FROM public.trades t
         WHERE UPPER(COALESCE(t.status, '')) = 'CLOSED'
+              AND {predicate}
           AND COALESCE(t.exit_time, t.entry_time) >= %(start_dt)s
           AND COALESCE(t.exit_time, t.entry_time) <= %(end_dt)s
         ORDER BY COALESCE(t.exit_time, t.entry_time) DESC NULLS LAST, t.trade_id DESC
@@ -252,7 +251,9 @@ def _query_closed_trades_base(conn: Any, *, start_dt: datetime, end_dt: datetime
 
 
 def _query_entry_context(conn: Any, *, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
-    query = """
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    predicate = db.disposition.eligible_sql("t", scope="VALIDATED_PERFORMANCE")
+    query = f"""
         WITH closed_trades AS (
             SELECT
                 t.trade_id,
@@ -267,8 +268,9 @@ def _query_entry_context(conn: Any, *, start_dt: datetime, end_dt: datetime) -> 
                 t.realized_pnl,
                 t.exit_reason,
                 t.status
-            FROM trades t
+            FROM public.trades t
             WHERE UPPER(COALESCE(t.status, '')) = 'CLOSED'
+              AND {predicate}
               AND COALESCE(t.exit_time, t.entry_time) >= %(start_dt)s
               AND COALESCE(t.exit_time, t.entry_time) <= %(end_dt)s
         )
@@ -300,7 +302,7 @@ def _query_entry_context(conn: Any, *, start_dt: datetime, end_dt: datetime) -> 
         FROM closed_trades ct
         LEFT JOIN LATERAL (
             SELECT e.*
-            FROM trade_entry_ml_context_app e
+            FROM public.trade_entry_ml_context_app e
             WHERE e.order_id = ct.entry_order_id
             LIMIT 1
         ) ec ON TRUE
@@ -313,7 +315,9 @@ def _query_entry_context(conn: Any, *, start_dt: datetime, end_dt: datetime) -> 
 
 
 def _query_scores_direct(conn: Any, *, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
-    query = """
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    predicate = db.disposition.eligible_sql("t", scope="VALIDATED_PERFORMANCE")
+    query = f"""
         WITH closed_trades AS (
             SELECT
                 t.trade_id,
@@ -328,8 +332,9 @@ def _query_scores_direct(conn: Any, *, start_dt: datetime, end_dt: datetime) -> 
                 t.realized_pnl,
                 t.exit_reason,
                 t.status
-            FROM trades t
+            FROM public.trades t
             WHERE UPPER(COALESCE(t.status, '')) = 'CLOSED'
+              AND {predicate}
               AND COALESCE(t.exit_time, t.entry_time) >= %(start_dt)s
               AND COALESCE(t.exit_time, t.entry_time) <= %(end_dt)s
         )
@@ -358,7 +363,7 @@ def _query_scores_direct(conn: Any, *, start_dt: datetime, end_dt: datetime) -> 
         FROM closed_trades ct
         LEFT JOIN LATERAL (
             SELECT s.run_ts_utc, s.model_score_5d
-            FROM screener_ranker_scores_app s
+            FROM public.screener_ranker_scores_app s
             WHERE UPPER(TRIM(COALESCE(s.symbol, ''))) = ct.symbol_norm
               AND date_trunc('second', s.run_ts_utc)
                     <= date_trunc('second', COALESCE(ct.entry_time, ct.exit_time))
@@ -367,7 +372,7 @@ def _query_scores_direct(conn: Any, *, start_dt: datetime, end_dt: datetime) -> 
         ) sd ON TRUE
         LEFT JOIN LATERAL (
             SELECT 1 AS has_score
-            FROM screener_ranker_scores_app s2
+            FROM public.screener_ranker_scores_app s2
             WHERE UPPER(TRIM(COALESCE(s2.symbol, ''))) = ct.symbol_norm
             LIMIT 1
         ) sym_score ON TRUE
@@ -380,7 +385,9 @@ def _query_scores_direct(conn: Any, *, start_dt: datetime, end_dt: datetime) -> 
 
 
 def _query_run_map(conn: Any, *, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
-    query = """
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    predicate = db.disposition.eligible_sql("t", scope="VALIDATED_PERFORMANCE")
+    query = f"""
         WITH closed_trades AS (
             SELECT
                 t.trade_id,
@@ -395,8 +402,9 @@ def _query_run_map(conn: Any, *, start_dt: datetime, end_dt: datetime) -> pd.Dat
                 t.realized_pnl,
                 t.exit_reason,
                 t.status
-            FROM trades t
+            FROM public.trades t
             WHERE UPPER(COALESCE(t.status, '')) = 'CLOSED'
+              AND {predicate}
               AND COALESCE(t.exit_time, t.entry_time) >= %(start_dt)s
               AND COALESCE(t.exit_time, t.entry_time) <= %(end_dt)s
         )
@@ -425,7 +433,7 @@ def _query_run_map(conn: Any, *, start_dt: datetime, end_dt: datetime) -> pd.Dat
         FROM closed_trades ct
         LEFT JOIN LATERAL (
             SELECT m.run_ts_utc
-            FROM screener_run_map_app m
+            FROM public.screener_run_map_app m
             WHERE UPPER(TRIM(COALESCE(m.symbol, ''))) = ct.symbol_norm
               AND date_trunc('second', m.run_ts_utc)
                     <= date_trunc('second', COALESCE(ct.entry_time, ct.exit_time))
@@ -434,7 +442,7 @@ def _query_run_map(conn: Any, *, start_dt: datetime, end_dt: datetime) -> pd.Dat
         ) rm ON TRUE
         LEFT JOIN LATERAL (
             SELECT s.run_ts_utc, s.model_score_5d
-            FROM screener_ranker_scores_app s
+            FROM public.screener_ranker_scores_app s
             WHERE UPPER(TRIM(COALESCE(s.symbol, ''))) = ct.symbol_norm
               AND date_trunc('second', s.run_ts_utc) = date_trunc('second', rm.run_ts_utc)
             ORDER BY s.run_ts_utc DESC
@@ -442,13 +450,13 @@ def _query_run_map(conn: Any, *, start_dt: datetime, end_dt: datetime) -> pd.Dat
         ) rs ON TRUE
         LEFT JOIN LATERAL (
             SELECT 1 AS has_score
-            FROM screener_ranker_scores_app s2
+            FROM public.screener_ranker_scores_app s2
             WHERE UPPER(TRIM(COALESCE(s2.symbol, ''))) = ct.symbol_norm
             LIMIT 1
         ) sym_score ON TRUE
         LEFT JOIN LATERAL (
             SELECT 1 AS has_run_map
-            FROM screener_run_map_app m2
+            FROM public.screener_run_map_app m2
             WHERE UPPER(TRIM(COALESCE(m2.symbol, ''))) = ct.symbol_norm
             LIMIT 1
         ) sym_run_map ON TRUE
@@ -471,39 +479,21 @@ def _select_oos_score_column(frame: pd.DataFrame) -> str | None:
     return None
 
 
-def _load_oos_predictions_frame(run_date: date | None) -> tuple[pd.DataFrame, str]:
-    if db.db_enabled():
-        record = db.fetch_ml_artifact("ranker_oos_predictions", run_date=run_date)
-        if record is None and run_date is not None:
-            LOG.warning(
-                "[WARN] TRADE_ATTRIBUTION_RUN_DATE_FALLBACK artifact=ranker_oos_predictions run_date=%s",
-                run_date,
-            )
-            record = db.fetch_latest_ml_artifact("ranker_oos_predictions")
-        if record is not None:
-            csv_data = record.get("csv_data")
-            if csv_data:
-                try:
-                    frame = pd.read_csv(io.StringIO(str(csv_data)))
-                    return frame, "db://ml_artifacts/ranker_oos_predictions"
-                except Exception as exc:
-                    LOG.warning(
-                        "[WARN] TRADE_ATTRIBUTION_OOS_LOAD_FAILED source=db err=%s",
-                        exc,
-                    )
-            else:
-                LOG.warning(
-                    "[WARN] TRADE_ATTRIBUTION_DB_ARTIFACT_EMPTY artifact=ranker_oos_predictions "
-                    "falling_back=filesystem"
-                )
-
-    if DEFAULT_OOS_PATH.exists():
-        try:
-            frame = pd.read_csv(DEFAULT_OOS_PATH)
-            return frame, str(DEFAULT_OOS_PATH)
-        except Exception as exc:
-            LOG.warning("[WARN] TRADE_ATTRIBUTION_OOS_LOAD_FAILED source=filesystem err=%s", exc)
-    return pd.DataFrame(), "missing://ranker_oos_predictions"
+def _load_oos_predictions_frame(run_date: date | None, conn: Any) -> tuple[pd.DataFrame, str]:
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    sql = "SELECT csv_data FROM public.ml_artifacts WHERE artifact_type=%s"
+    params = ["ranker_oos_predictions"]
+    if run_date is not None:
+        sql += " AND run_date=%s"
+        params.append(run_date)
+    sql += " ORDER BY run_date DESC LIMIT 1"
+    with conn.cursor() as cursor:
+        cursor.execute(sql, tuple(params))
+        row = cursor.fetchone()
+    if row is None or row[0] is None:
+        return pd.DataFrame(), "missing://public.ml_artifacts/ranker_oos_predictions"
+    # Prediction CSV is score context, never a fallback trade population.
+    return pd.read_csv(io.StringIO(str(row[0]))), "db://public.ml_artifacts/ranker_oos_predictions"
 
 
 def _prepare_oos_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
@@ -660,8 +650,9 @@ def _query_oos_predictions(
     trades_frame: pd.DataFrame,
     *,
     run_date: date | None,
+    conn: Any,
 ) -> tuple[pd.DataFrame, int, str, str | None]:
-    raw_oos, source = _load_oos_predictions_frame(run_date)
+    raw_oos, source = _load_oos_predictions_frame(run_date, conn)
     prepared, score_col = _prepare_oos_frame(raw_oos)
     oos_rows_available = int(prepared.shape[0]) if prepared is not None else 0
     matched_frame = _build_oos_match_frame(trades_frame, prepared)
@@ -739,224 +730,98 @@ def _load_closed_trades_db(
     conn = db.get_db_conn()
     if conn is None:
         raise RuntimeError("DB disabled or unreachable")
-    db.ensure_screener_ranker_scores_app_table()
-    db.ensure_trade_entry_ml_context_app_table()
     try:
-        entry_context_table_exists = _table_exists(conn, "trade_entry_ml_context_app")
-        score_table_exists = _table_exists(conn, "screener_ranker_scores_app")
-        run_map_table_exists = _table_exists(conn, "screener_run_map_app")
-        diag = _diag_counts(
-            conn,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            entry_context_table_exists=entry_context_table_exists,
-            score_table_exists=score_table_exists,
-            run_map_table_exists=run_map_table_exists,
-        )
-        requested_mode = str(match_mode).strip().lower()
-        if requested_mode not in VALID_MATCH_MODES:
-            requested_mode = "auto"
+        with db.ml_trade_read_transaction(conn) as policy:
+            records = db.ml_trade_input(conn, policy, start_dt=start_dt, end_dt=end_dt)
+            db.disposition.require_complete_accounting(records)
+            db.ml_trade_order_owners(conn, [(row["trade_id"], row.get("entry_order_id")) for row in records])
+            match_inputs = db.ml_trade_match_inputs(conn, records, oos_run_date=run_date)
+            evidence = db.ml_trade_evidence(policy, records, start_dt=start_dt, end_dt=end_dt, match_inputs=match_inputs)
+            entry_context_table_exists = _table_exists(conn, "trade_entry_ml_context_app")
+            score_table_exists = _table_exists(conn, "screener_ranker_scores_app")
+            run_map_table_exists = _table_exists(conn, "screener_run_map_app")
+            diag = _diag_counts(
+                conn,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                entry_context_table_exists=entry_context_table_exists,
+                score_table_exists=score_table_exists,
+                run_map_table_exists=run_map_table_exists,
+            )
+            requested_mode = str(match_mode).strip().lower()
+            if requested_mode not in VALID_MATCH_MODES:
+                requested_mode = "auto"
 
-        base_frame = _query_closed_trades_base(conn, start_dt=start_dt, end_dt=end_dt)
-        mode_used = requested_mode
-        if requested_mode == "entry_context" and not entry_context_table_exists:
-            raise RuntimeError("entry_context requested but trade_entry_ml_context_app unavailable")
-        elif requested_mode == "scores_direct" and not score_table_exists:
-            raise RuntimeError("scores_direct requested but screener_ranker_scores_app unavailable")
-        elif requested_mode == "run_map" and (not run_map_table_exists or not score_table_exists):
-            raise RuntimeError("run_map requested but required tables unavailable")
+            base_frame = _query_closed_trades_base(conn, start_dt=start_dt, end_dt=end_dt)
+            mode_used = requested_mode
+            if requested_mode == "entry_context" and not entry_context_table_exists:
+                raise RuntimeError("entry_context requested but trade_entry_ml_context_app unavailable")
+            elif requested_mode == "scores_direct" and not score_table_exists:
+                raise RuntimeError("scores_direct requested but screener_ranker_scores_app unavailable")
+            elif requested_mode == "run_map" and (not run_map_table_exists or not score_table_exists):
+                raise RuntimeError("run_map requested but required tables unavailable")
 
-        if requested_mode == "auto":
-            mode_used = "auto"
-            frame = base_frame
-            if entry_context_table_exists:
-                try:
+            if requested_mode == "auto":
+                mode_used = "auto"
+                frame = base_frame
+                if entry_context_table_exists:
                     frame = _merge_match_frames(
                         frame,
                         _query_entry_context(conn, start_dt=start_dt, end_dt=end_dt),
                     )
-                except Exception as exc:
-                    LOG.warning(
-                        "[WARN] TRADE_ATTRIBUTION_MATCH_FALLBACK from=entry_context reason=%s",
-                        exc,
-                    )
-            if score_table_exists:
-                try:
+                if score_table_exists:
                     frame = _merge_match_frames(
                         frame,
                         _query_scores_direct(conn, start_dt=start_dt, end_dt=end_dt),
                     )
-                except Exception as exc:
-                    LOG.warning(
-                        "[WARN] TRADE_ATTRIBUTION_MATCH_FALLBACK from=scores_direct reason=%s",
-                        exc,
-                    )
-            if run_map_table_exists and score_table_exists:
-                try:
+                if run_map_table_exists and score_table_exists:
                     frame = _merge_match_frames(
                         frame,
                         _query_run_map(conn, start_dt=start_dt, end_dt=end_dt),
                     )
-                except Exception as exc:
-                    LOG.warning(
-                        "[WARN] TRADE_ATTRIBUTION_MATCH_FALLBACK from=run_map reason=%s",
-                        exc,
-                    )
-            try:
                 oos_frame, oos_rows_available, _, _ = _query_oos_predictions(
                     frame,
                     run_date=run_date,
+                    conn=conn,
                 )
                 diag["oos_rows_available"] = int(oos_rows_available)
                 frame = _merge_match_frames(frame, oos_frame)
-            except Exception as exc:
-                LOG.warning(
-                    "[WARN] TRADE_ATTRIBUTION_MATCH_FALLBACK from=oos_predictions reason=%s",
-                    exc,
+            elif mode_used == "entry_context":
+                frame = _query_entry_context(conn, start_dt=start_dt, end_dt=end_dt)
+            elif mode_used == "scores_direct":
+                frame = _query_scores_direct(conn, start_dt=start_dt, end_dt=end_dt)
+            elif mode_used == "run_map":
+                frame = _query_run_map(conn, start_dt=start_dt, end_dt=end_dt)
+            else:
+                frame = base_frame
+                oos_frame, oos_rows_available, _, _ = _query_oos_predictions(
+                    frame,
+                    run_date=run_date,
+                    conn=conn,
                 )
-        elif mode_used == "entry_context":
-            frame = _query_entry_context(conn, start_dt=start_dt, end_dt=end_dt)
-        elif mode_used == "scores_direct":
-            frame = _query_scores_direct(conn, start_dt=start_dt, end_dt=end_dt)
-        elif mode_used == "run_map":
-            frame = _query_run_map(conn, start_dt=start_dt, end_dt=end_dt)
-        else:
-            frame = base_frame
-            oos_frame, oos_rows_available, _, _ = _query_oos_predictions(
-                frame,
-                run_date=run_date,
-            )
-            diag["oos_rows_available"] = int(oos_rows_available)
-            frame = _merge_match_frames(frame, oos_frame)
+                diag["oos_rows_available"] = int(oos_rows_available)
+                frame = _merge_match_frames(frame, oos_frame)
 
-        source = f"db://trades+{mode_used}"
-        return _ensure_columns(frame), source, mode_used, diag
+            db._ml_trade_current(conn, evidence)
+            source = f"db://public.trades+{mode_used}"
+            frame = _ensure_columns(frame)
+            frame.attrs["ml_trade_evidence"] = evidence
+            return frame, source, mode_used, diag
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
 
 
-def _load_closed_trades_fs(
-    *,
-    trades_path: Path,
-    start_dt: datetime,
-    end_dt: datetime,
-) -> tuple[pd.DataFrame, str, str, dict[str, int]]:
-    if not trades_path.exists():
-        return (
-            _ensure_columns(pd.DataFrame()),
-            str(trades_path),
-            "fs",
-            {
-                "entry_context_rows_available": 0,
-                "score_rows_available": 0,
-                "score_runs_available": 0,
-                "run_map_rows_available": 0,
-                "oos_rows_available": 0,
-            },
-        )
-    frame = pd.read_csv(trades_path)
-    if frame.empty:
-        return (
-            _ensure_columns(frame),
-            str(trades_path),
-            "fs",
-            {
-                "entry_context_rows_available": 0,
-                "score_rows_available": 0,
-                "score_runs_available": 0,
-                "run_map_rows_available": 0,
-                "oos_rows_available": 0,
-            },
-        )
-
-    work = _ensure_columns(frame)
-    status_series = work["status"].astype("string").str.upper()
-    if status_series.notna().any():
-        work = work.loc[status_series == "CLOSED"].copy()
-    if work.empty:
-        return (
-            _ensure_columns(work),
-            str(trades_path),
-            "fs",
-            {
-                "entry_context_rows_available": 0,
-                "score_rows_available": 0,
-                "score_runs_available": 0,
-                "run_map_rows_available": 0,
-                "oos_rows_available": 0,
-            },
-        )
-
-    for column in ("entry_time", "exit_time"):
-        work[column] = pd.to_datetime(work[column], utc=True, errors="coerce")
-    ref_ts = pd.to_datetime(
-        work["exit_time"].where(work["exit_time"].notna(), work["entry_time"]),
-        utc=True,
-        errors="coerce",
-    )
-    mask = (ref_ts >= pd.Timestamp(start_dt)) & (ref_ts <= pd.Timestamp(end_dt))
-    work = work.loc[mask].copy()
-    work.sort_values(by=["exit_time", "entry_time", "symbol"], inplace=True)
-    return (
-        _ensure_columns(work.reset_index(drop=True)),
-        str(trades_path),
-        "fs",
-        {
-            "entry_context_rows_available": 0,
-            "score_rows_available": 0,
-            "score_runs_available": 0,
-            "run_map_rows_available": 0,
-            "oos_rows_available": 0,
-        },
-    )
+def _load_closed_trades_fs(*, trades_path: Path, start_dt: datetime, end_dt: datetime):
+    raise db.disposition.TradePolicyError("ML_TRADE_CSV_UNVALIDATED")
 
 
-def _load_trades(
-    args: AttributionArgs,
-    *,
-    start_dt: datetime,
-    end_dt: datetime,
-) -> tuple[pd.DataFrame, str, str, dict[str, int]]:
-    source = str(args.source).strip().lower()
-    if source not in {"auto", "db", "fs"}:
-        source = "auto"
-
-    if source in {"auto", "db"}:
-        if db.db_enabled():
-            try:
-                return _load_closed_trades_db(
-                    start_dt=start_dt,
-                    end_dt=end_dt,
-                    match_mode=args.match_mode,
-                    run_date=args.run_date,
-                )
-            except Exception as exc:
-                if source == "db":
-                    raise
-                LOG.warning(
-                    "[WARN] TRADE_ATTRIBUTION_DB_FALLBACK reason=%s fallback=filesystem",
-                    exc,
-                )
-        elif source == "db":
-            raise RuntimeError("DB requested but disabled/unreachable")
-
-    frame, source_used, mode_used, diag = _load_closed_trades_fs(
-        trades_path=args.trades_path,
-        start_dt=start_dt,
-        end_dt=end_dt,
-    )
-    requested_mode = str(args.match_mode).strip().lower()
-    if requested_mode not in VALID_MATCH_MODES:
-        requested_mode = "auto"
-    if requested_mode in {"auto", "oos_predictions"}:
-        oos_frame, oos_rows_available, _, _ = _query_oos_predictions(frame, run_date=args.run_date)
-        diag["oos_rows_available"] = int(oos_rows_available)
-        frame = _merge_match_frames(frame, oos_frame)
-        mode_used = requested_mode
-    return _ensure_columns(frame), source_used, mode_used, diag
+def _load_trades(args: AttributionArgs, *, start_dt: datetime, end_dt: datetime):
+    if str(args.source).strip().lower() == "fs":
+        raise db.disposition.TradePolicyError("ML_TRADE_CSV_UNVALIDATED")
+    if not db.db_enabled():
+        raise db.disposition.TradePolicyError("TRADE_POLICY_DB_UNAVAILABLE")
+    return _load_closed_trades_db(start_dt=start_dt, end_dt=end_dt,
+        match_mode=args.match_mode, run_date=args.run_date)
 
 
 def _safe_float(value: Any) -> float | None:
@@ -1227,6 +1092,9 @@ def run_trade_attribution(args: AttributionArgs) -> dict[str, Any]:
     trades, source_used, match_mode_used, diag_counts = _load_trades(
         args, start_dt=start_dt, end_dt=end_dt
     )
+    evidence = trades.attrs.get("ml_trade_evidence")
+    if not isinstance(evidence, dict):
+        raise db.disposition.TradePolicyError("ML_TRADE_ARTIFACT_UNVALIDATED")
     work = _ensure_columns(trades).copy()
     if "symbol" in work.columns:
         work["symbol"] = work["symbol"].astype("string").str.upper()
@@ -1363,7 +1231,6 @@ def run_trade_attribution(args: AttributionArgs) -> dict[str, Any]:
         status = "insufficient_trades"
 
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
     latest_path = output_dir / "latest.json"
     trades_path = output_dir / "trades_scored.csv"
 
@@ -1374,7 +1241,6 @@ def run_trade_attribution(args: AttributionArgs) -> dict[str, Any]:
         inplace=True,
     )
     output_frame.reset_index(drop=True, inplace=True)
-    output_frame.to_csv(trades_path, index=False)
 
     payload: dict[str, Any] = {
         "run_utc": datetime.now(timezone.utc).isoformat(),
@@ -1418,35 +1284,14 @@ def run_trade_attribution(args: AttributionArgs) -> dict[str, Any]:
         },
     }
     payload = _to_json_safe(payload)
-    latest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    run_date_for_artifact = args.run_date or datetime.now(timezone.utc).date()
-    if db.db_enabled():
-        if db.upsert_ml_artifact(
-            "ranker_trade_attribution",
-            run_date_for_artifact,
-            payload=payload,
-            rows_count=int(trades_total),
-            source="ranker_trade_attribution",
-            file_name=latest_path.name,
-        ):
-            LOG.info(
-                "[INFO] TRADE_ATTRIBUTION_DB_WRITTEN artifact_type=ranker_trade_attribution run_date=%s",
-                run_date_for_artifact,
-            )
-        if db.upsert_ml_artifact_frame(
-            "ranker_trade_attribution_trades",
-            run_date_for_artifact,
-            output_frame,
-            source="ranker_trade_attribution",
-            file_name=trades_path.name,
-        ):
-            LOG.info(
-                "[INFO] TRADE_ATTRIBUTION_DB_WRITTEN artifact_type=ranker_trade_attribution_trades run_date=%s",
-                run_date_for_artifact,
-            )
-    else:
-        LOG.warning("[WARN] DB_DISABLED ranker_trade_attribution_using_fs_fallback=true")
+    rows_csv = output_frame.to_csv(index=False)
+    payload = db.publish_ml_trade_artifacts(evidence, kind="ranker_trade_attribution",
+        run_date=args.run_date or datetime.now(timezone.utc).date(), payload=payload,
+        rows_csv=rows_csv, rows_count=int(trades_total))
+    # Cached contextual copies; all consumers revalidate current DB evidence.
+    output_dir.mkdir(parents=True, exist_ok=True)
+    trades_path.write_text(rows_csv, encoding="utf-8")
+    latest_path.write_text(db.disposition.canonical(payload), encoding="utf-8")
 
     LOG.info(
         "[INFO] TRADE_ATTRIBUTION_END win_rate=%s avg_return=%s brier=%s output=%s",

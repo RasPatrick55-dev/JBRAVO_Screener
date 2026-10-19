@@ -110,13 +110,15 @@ def _load_closed_trades(
     end_dt: datetime,
     limit: int | None,
 ) -> pd.DataFrame:
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    predicate = db.disposition.eligible_sql("t", scope="VALIDATED_PERFORMANCE")
     limit_sql = ""
     params: dict[str, Any] = {"start_dt": start_dt, "end_dt": end_dt}
     if limit is not None and int(limit) > 0:
         params["limit"] = int(limit)
         limit_sql = " LIMIT %(limit)s"
     query = (
-        """
+        f"""
         SELECT
             t.trade_id,
             UPPER(TRIM(COALESCE(t.symbol, ''))) AS symbol,
@@ -129,10 +131,11 @@ def _load_closed_trades(
             t.exit_reason,
             t.status,
             CASE WHEN c.order_id IS NOT NULL THEN TRUE ELSE FALSE END AS has_context
-        FROM trades t
-        LEFT JOIN trade_entry_ml_context_app c
+        FROM public.trades t
+        LEFT JOIN public.trade_entry_ml_context_app c
           ON c.order_id = t.entry_order_id
         WHERE UPPER(COALESCE(t.status, '')) = 'CLOSED'
+          AND {predicate}
           AND COALESCE(t.exit_time, t.entry_time) >= %(start_dt)s
           AND COALESCE(t.exit_time, t.entry_time) <= %(end_dt)s
         ORDER BY COALESCE(t.exit_time, t.entry_time) DESC NULLS LAST, t.trade_id DESC
@@ -178,6 +181,8 @@ def _extract_ml_context_from_payload(payload: Mapping[str, Any]) -> dict[str, An
 
 
 def _raw_context_candidates(conn: Any, trades_missing: pd.DataFrame) -> pd.DataFrame:
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    predicate = db.disposition.eligible_sql("t", scope="VALIDATED_PERFORMANCE")
     if trades_missing.empty:
         return pd.DataFrame()
     order_ids = [
@@ -199,14 +204,18 @@ def _raw_context_candidates(conn: Any, trades_missing: pd.DataFrame) -> pd.DataF
             "entry_time": row.get("entry_time"),
         }
 
-    query = """
-        SELECT order_id, raw
-        FROM executed_trades
-        WHERE order_id = ANY(%(order_ids)s)
-        ORDER BY entry_time DESC NULLS LAST
+    trade_ids = [int(x) for x in trades_missing["trade_id"].tolist()]
+    db.ml_trade_order_owners(conn, list(zip(trade_ids, trades_missing["entry_order_id"].astype("string").tolist())))
+    query = f"""
+        SELECT e.order_id, e.raw
+        FROM public.executed_trades e
+        JOIN public.trades t ON t.entry_order_id=e.order_id
+        WHERE e.order_id = ANY(%(order_ids)s) AND t.trade_id=ANY(%(trade_ids)s)
+          AND {predicate} AND pg_catalog.upper(COALESCE(t.status,''))='CLOSED'
+        ORDER BY e.entry_time DESC NULLS LAST
     """
     with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
-        cursor.execute(query, {"order_ids": order_ids})
+        cursor.execute(query, {"order_ids": order_ids, "trade_ids": trade_ids})
         rows = cursor.fetchall()
 
     candidates_by_order: dict[str, dict[str, Any]] = {}
@@ -252,6 +261,8 @@ def _scores_asof_candidates(
     *,
     max_lag_hours: int,
 ) -> pd.DataFrame:
+    db.trade_policy(conn, scope="VALIDATED_PERFORMANCE")
+    predicate = db.disposition.eligible_sql("t", scope="VALIDATED_PERFORMANCE")
     if trades_missing.empty:
         return pd.DataFrame()
     order_ids = [
@@ -261,19 +272,25 @@ def _scores_asof_candidates(
     ]
     if not order_ids:
         return pd.DataFrame()
-    query = """
+    trade_ids = [int(x) for x in trades_missing["trade_id"].tolist()]
+    db.ml_trade_order_owners(conn, list(zip(trade_ids, trades_missing["entry_order_id"].astype("string").tolist())))
+    query = f"""
         WITH missing AS (
             SELECT DISTINCT
+                t.trade_id,
                 t.entry_order_id AS order_id,
                 UPPER(TRIM(COALESCE(t.symbol, ''))) AS symbol_norm,
                 UPPER(TRIM(COALESCE(t.symbol, ''))) AS symbol,
                 t.entry_time
-            FROM trades t
+            FROM public.trades t
             WHERE t.entry_order_id = ANY(%(order_ids)s)
+              AND t.trade_id=ANY(%(trade_ids)s) AND {predicate}
+              AND pg_catalog.upper(COALESCE(t.status,''))='CLOSED'
               AND t.entry_order_id IS NOT NULL
               AND t.entry_time IS NOT NULL
         )
         SELECT
+            m.trade_id,
             m.order_id,
             m.symbol,
             m.entry_time,
@@ -283,7 +300,7 @@ def _scores_asof_candidates(
         FROM missing m
         LEFT JOIN LATERAL (
             SELECT run_ts_utc, model_score_5d
-            FROM screener_ranker_scores_app s
+            FROM public.screener_ranker_scores_app s
             WHERE UPPER(TRIM(COALESCE(s.symbol, ''))) = m.symbol_norm
               AND date_trunc('second', s.run_ts_utc) <= date_trunc('second', m.entry_time)
             ORDER BY s.run_ts_utc DESC
@@ -296,7 +313,7 @@ def _scores_asof_candidates(
     with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
         cursor.execute(
             query,
-            {"order_ids": order_ids, "max_lag_hours": max(int(max_lag_hours), 0)},
+            {"order_ids": order_ids, "trade_ids": trade_ids, "max_lag_hours": max(int(max_lag_hours), 0)},
         )
         rows = cursor.fetchall()
     if not rows:
@@ -316,16 +333,12 @@ def _scores_asof_candidates(
 
 
 def _write_fs_outputs(output_dir: Path, summary: Mapping[str, Any], rows: pd.DataFrame) -> None:
-    _ensure_output_dir(output_dir)
-    latest_json = output_dir / "latest.json"
-    rows_csv = output_dir / "backfilled_rows.csv"
-    latest_json.write_text(json.dumps(_json_safe(dict(summary)), indent=2), encoding="utf-8")
-    rows.to_csv(rows_csv, index=False)
+    raise db.disposition.TradePolicyError("ML_TRADE_PUBLICATION_UNVALIDATED")
 
 
 def run_backfill(args: BackfillArgs) -> dict[str, Any]:
     start_dt, end_dt = _window_bounds(args.lookback_days)
-    output_dir = _ensure_output_dir(args.output_dir)
+    output_dir = Path(args.output_dir)
     run_date = datetime.now(timezone.utc).date()
 
     LOG.info(
@@ -359,123 +372,83 @@ def run_backfill(args: BackfillArgs) -> dict[str, Any]:
     }
 
     if not db.db_enabled():
-        LOG.warning("[WARN] DB_DISABLED trade_entry_ml_context_backfill status=no_db")
-        default_summary["status"] = "no_db"
-        LOG.info(
-            "[INFO] ENTRY_CONTEXT_BACKFILL_DIAG trades_total=0 missing_context=0 candidates_from_raw=0 candidates_from_scores=0"
-        )
-        LOG.info("[INFO] ENTRY_CONTEXT_BACKFILL_UPSERTED rows=0")
-        _write_fs_outputs(output_dir, default_summary, pd.DataFrame())
-        LOG.info(
-            "[INFO] ENTRY_CONTEXT_BACKFILL_END rows_upserted=0 rows_skipped=0 output=%s",
-            output_dir / "latest.json",
-        )
-        return default_summary
-
+        raise db.disposition.TradePolicyError("TRADE_POLICY_DB_UNAVAILABLE")
     conn = db.get_db_conn()
     if conn is None:
-        LOG.warning("[WARN] DB_DISABLED trade_entry_ml_context_backfill status=no_db")
-        default_summary["status"] = "no_db"
-        LOG.info(
-            "[INFO] ENTRY_CONTEXT_BACKFILL_DIAG trades_total=0 missing_context=0 candidates_from_raw=0 candidates_from_scores=0"
-        )
-        LOG.info("[INFO] ENTRY_CONTEXT_BACKFILL_UPSERTED rows=0")
-        _write_fs_outputs(output_dir, default_summary, pd.DataFrame())
-        LOG.info(
-            "[INFO] ENTRY_CONTEXT_BACKFILL_END rows_upserted=0 rows_skipped=0 output=%s",
-            output_dir / "latest.json",
-        )
-        return default_summary
-
+        raise db.disposition.TradePolicyError("TRADE_POLICY_DB_UNAVAILABLE")
     try:
-        db.ensure_trade_entry_ml_context_app_table()
-        trades = _load_closed_trades(conn, start_dt=start_dt, end_dt=end_dt, limit=args.limit)
-        trades_total = int(trades.shape[0]) if not trades.empty else 0
-        if trades.empty:
-            summary = dict(default_summary)
-            summary["status"] = "no_data"
-            summary["reasons"] = {"no_closed_trades": trades_total}
-            LOG.info(
-                "[INFO] ENTRY_CONTEXT_BACKFILL_DIAG trades_total=0 missing_context=0 candidates_from_raw=0 candidates_from_scores=0"
-            )
-            LOG.info("[INFO] ENTRY_CONTEXT_BACKFILL_UPSERTED rows=0")
-            _write_fs_outputs(output_dir, summary, pd.DataFrame())
-            if db.upsert_ml_artifact(
-                "trade_entry_ml_context_backfill",
-                run_date,
-                payload=summary,
-                rows_count=0,
-                source="trade_entry_ml_context_backfill",
-                file_name="latest.json",
-            ):
-                LOG.info(
-                    "[INFO] ENTRY_CONTEXT_BACKFILL_DB_WRITTEN artifact_type=trade_entry_ml_context_backfill run_date=%s",
-                    run_date,
+        with db.ml_trade_read_transaction(conn) as policy:
+            records = db.ml_trade_input(conn, policy, start_dt=start_dt, end_dt=end_dt)
+            db.ml_trade_order_owners(conn, [(row["trade_id"], row.get("entry_order_id")) for row in records])
+            match_inputs = db.ml_trade_match_inputs(conn, records, oos_run_date=None)
+            evidence = db.ml_trade_evidence(policy, records, start_dt=start_dt, end_dt=end_dt, match_inputs=match_inputs)
+            trades = _load_closed_trades(conn, start_dt=start_dt, end_dt=end_dt, limit=args.limit)
+            trades_total = int(trades.shape[0])
+            if trades.empty:
+                combined = pd.DataFrame()
+                summary = dict(default_summary, status="no_data", selection_limit=args.limit)
+            else:
+                missing = trades.loc[~trades["has_context"]].copy()
+                missing_context = int(missing.shape[0])
+                missing_order_id = int(
+                    missing["entry_order_id"].astype("string").fillna("").str.strip().eq("").sum()
                 )
-            LOG.info(
-                "[INFO] ENTRY_CONTEXT_BACKFILL_END rows_upserted=0 rows_skipped=0 output=%s",
-                output_dir / "latest.json",
-            )
-            return summary
+                missing_entry_time = int(missing["entry_time"].isna().sum())
+                eligible = missing.loc[
+                    missing["entry_order_id"].astype("string").fillna("").str.strip().ne("")
+                    & missing["entry_time"].notna()
+                ].copy()
 
-        missing = trades.loc[~trades["has_context"]].copy()
-        missing_context = int(missing.shape[0])
-        missing_order_id = int(
-            missing["entry_order_id"].astype("string").fillna("").str.strip().eq("").sum()
-        )
-        missing_entry_time = int(missing["entry_time"].isna().sum())
-        eligible = missing.loc[
-            missing["entry_order_id"].astype("string").fillna("").str.strip().ne("")
-            & missing["entry_time"].notna()
-        ].copy()
+                raw_candidates = _raw_context_candidates(conn, eligible)
+                raw_order_ids = set(
+                    str(x).strip()
+                    for x in raw_candidates.get("order_id", pd.Series(dtype="string")).dropna().tolist()
+                    if str(x).strip()
+                )
+                remaining = eligible.loc[
+                    ~eligible["entry_order_id"].astype("string").isin(list(raw_order_ids))
+                ].copy()
+                score_candidates = _scores_asof_candidates(
+                    conn, remaining, max_lag_hours=args.max_lag_hours
+                )
+                score_order_ids = set(
+                    str(x).strip()
+                    for x in score_candidates.get("order_id", pd.Series(dtype="string")).dropna().tolist()
+                    if str(x).strip()
+                )
+                no_score_within_lag = max(
+                    int(remaining.shape[0]) - len(score_order_ids),
+                    0,
+                )
 
-        raw_candidates = _raw_context_candidates(conn, eligible)
-        raw_order_ids = set(
-            str(x).strip()
-            for x in raw_candidates.get("order_id", pd.Series(dtype="string")).dropna().tolist()
-            if str(x).strip()
-        )
-        remaining = eligible.loc[
-            ~eligible["entry_order_id"].astype("string").isin(list(raw_order_ids))
-        ].copy()
-        score_candidates = _scores_asof_candidates(
-            conn, remaining, max_lag_hours=args.max_lag_hours
-        )
-        score_order_ids = set(
-            str(x).strip()
-            for x in score_candidates.get("order_id", pd.Series(dtype="string")).dropna().tolist()
-            if str(x).strip()
-        )
-        no_score_within_lag = max(
-            int(remaining.shape[0]) - len(score_order_ids),
-            0,
-        )
+                raw_candidates["source_priority"] = 0
+                score_candidates["source_priority"] = 1
+                combined = pd.concat([raw_candidates, score_candidates], ignore_index=True, sort=False)
+                if not combined.empty:
+                    combined.sort_values(
+                        by=["source_priority", "lag_hours", "order_id"],
+                        ascending=[True, True, True],
+                        inplace=True,
+                    )
+                    combined = combined.drop_duplicates(subset=["order_id"], keep="first")
+                    combined.reset_index(drop=True, inplace=True)
+                rows_candidate_total = int(combined.shape[0]) if not combined.empty else 0
 
-        raw_candidates["source_priority"] = 0
-        score_candidates["source_priority"] = 1
-        combined = pd.concat([raw_candidates, score_candidates], ignore_index=True, sort=False)
-        if not combined.empty:
-            combined.sort_values(
-                by=["source_priority", "lag_hours", "order_id"],
-                ascending=[True, True, True],
-                inplace=True,
-            )
-            combined = combined.drop_duplicates(subset=["order_id"], keep="first")
-            combined.reset_index(drop=True, inplace=True)
-        rows_candidate_total = int(combined.shape[0]) if not combined.empty else 0
+                LOG.info(
+                    "[INFO] ENTRY_CONTEXT_BACKFILL_DIAG trades_total=%d missing_context=%d candidates_from_raw=%d candidates_from_scores=%d",
+                    trades_total,
+                    missing_context,
+                    int(raw_candidates.shape[0]) if not raw_candidates.empty else 0,
+                    int(score_candidates.shape[0]) if not score_candidates.empty else 0,
+                )
 
-        LOG.info(
-            "[INFO] ENTRY_CONTEXT_BACKFILL_DIAG trades_total=%d missing_context=%d candidates_from_raw=%d candidates_from_scores=%d",
-            trades_total,
-            missing_context,
-            int(raw_candidates.shape[0]) if not raw_candidates.empty else 0,
-            int(score_candidates.shape[0]) if not score_candidates.empty else 0,
-        )
+            db._ml_trade_current(conn, evidence)
 
-        rows_upserted = 0
+        context_rows = []
         if not args.dry_run and not combined.empty:
             for _, row in combined.iterrows():
                 payload = {
+                    "trade_id": int(row.get("trade_id")),
                     "order_id": str(row.get("order_id") or "").strip(),
                     "symbol": str(row.get("symbol") or "").strip().upper(),
                     "entry_time": row.get("entry_time"),
@@ -491,66 +464,22 @@ def run_backfill(args: BackfillArgs) -> dict[str, Any]:
                         "backfill_run_utc": datetime.now(timezone.utc).isoformat(),
                     },
                 }
-                if db.upsert_trade_entry_ml_context(payload):
-                    rows_upserted += 1
-        LOG.info("[INFO] ENTRY_CONTEXT_BACKFILL_UPSERTED rows=%d", rows_upserted)
-
-        rows_skipped = max(rows_candidate_total - rows_upserted, 0) if not args.dry_run else 0
-        summary = dict(default_summary)
-        summary.update(
-            {
-                "status": "dry_run" if args.dry_run else "ok",
-                "trades_total": trades_total,
-                "missing_context": missing_context,
-                "candidates_from_raw": int(raw_candidates.shape[0])
-                if not raw_candidates.empty
-                else 0,
-                "candidates_from_scores": int(score_candidates.shape[0])
-                if not score_candidates.empty
-                else 0,
-                "rows_candidate_total": rows_candidate_total,
-                "rows_upserted": rows_upserted,
-                "rows_skipped": rows_skipped,
-                "reasons": {
-                    "missing_order_id": missing_order_id,
-                    "missing_entry_time": missing_entry_time,
-                    "no_score_within_lag": no_score_within_lag,
-                },
-            }
-        )
-        rows_out = combined.copy() if not combined.empty else pd.DataFrame()
-        _write_fs_outputs(output_dir, summary, rows_out)
-
-        if db.upsert_ml_artifact(
-            "trade_entry_ml_context_backfill",
-            run_date,
-            payload=summary,
-            rows_count=rows_candidate_total,
-            source="trade_entry_ml_context_backfill",
-            file_name="latest.json",
-        ):
-            LOG.info(
-                "[INFO] ENTRY_CONTEXT_BACKFILL_DB_WRITTEN artifact_type=trade_entry_ml_context_backfill run_date=%s",
-                run_date,
-            )
-        if db.upsert_ml_artifact_frame(
-            "trade_entry_ml_context_backfill_rows",
-            run_date,
-            rows_out,
-            source="trade_entry_ml_context_backfill",
-            file_name="backfilled_rows.csv",
-        ):
-            LOG.info(
-                "[INFO] ENTRY_CONTEXT_BACKFILL_DB_WRITTEN artifact_type=trade_entry_ml_context_backfill_rows run_date=%s",
-                run_date,
-            )
-
-        LOG.info(
-            "[INFO] ENTRY_CONTEXT_BACKFILL_END rows_upserted=%d rows_skipped=%d output=%s",
-            rows_upserted,
-            rows_skipped,
-            output_dir / "latest.json",
-        )
+                context_rows.append(_json_safe(payload))
+        if not trades.empty:
+            summary = dict(default_summary, status="dry_run" if args.dry_run else "ok",
+                trades_total=trades_total, missing_context=missing_context,
+                rows_candidate_total=rows_candidate_total, selection_limit=args.limit,
+                candidates_from_raw=int(raw_candidates.shape[0]), candidates_from_scores=int(score_candidates.shape[0]),
+                reasons={"missing_order_id":missing_order_id,"missing_entry_time":missing_entry_time,
+                    "no_score_within_lag":no_score_within_lag})
+        rows_out = combined.copy()
+        rows_csv = rows_out.to_csv(index=False)
+        summary = db.publish_ml_trade_artifacts(evidence, kind="trade_entry_ml_context_backfill",
+            run_date=run_date, payload=_json_safe(summary), rows_csv=rows_csv,
+            rows_count=int(rows_out.shape[0]), context_rows=context_rows)
+        _ensure_output_dir(output_dir)
+        (output_dir / "latest.json").write_text(db.disposition.canonical(summary), encoding="utf-8")
+        (output_dir / "backfilled_rows.csv").write_text(rows_csv, encoding="utf-8")
         return summary
     finally:
         try:

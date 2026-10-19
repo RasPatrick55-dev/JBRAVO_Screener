@@ -90,6 +90,16 @@ class Cursor:
             a=s.audit.get(params[0]); self.one=(a[0],D.canonical(a[1])) if a else None
         elif q.startswith('SELECT pg_catalog.to_jsonb(t)'):
             snap=s.rows.get(params[0]); self.one=(D.canonical(snap),) if snap else None
+        elif q.startswith('SELECT status, qty, entry_price, symbol, exit_order_id'):
+            snap=s.rows.get(params['trade_id'])
+            self.one=tuple(snap.get(key) for key in ('status','qty','entry_price','symbol','exit_order_id',
+                'exit_time','exit_price','exit_reason','realized_pnl','entry_order_id','entry_time')) if snap else None
+        elif q.startswith('SELECT last_after, last_ran_at FROM public.reconcile_state WHERE id=1'):
+            self.one=copy.deepcopy(s.watermark)
+        elif q.startswith('SELECT c.relname,c.relkind,c.relrowsecurity,c.relforcerowsecurity'):
+            self.many=[(name,'r',False,False,False) for name in ('order_events','trades')]
+        elif q.startswith('SELECT pg_catalog.pg_try_advisory_xact_lock'):
+            self.one=(True,)
         elif q.startswith('SELECT state, case_revision'):
             c=s.cases.get(params[0]); self.one=(c[0],c[1],D.canonical(c[2]),D.canonical(c[3]),D.canonical(c[4])) if c else None
         elif q.startswith('INSERT INTO public.trade_disposition_cases'):
@@ -115,10 +125,11 @@ class Cursor:
                 self.one=tuple(last[k] for k in ('run_date','total_trades','win_rate','net_pnl','expectancy','profit_factor','max_drawdown','sharpe','sortino','trade_policy'))
         elif q.startswith('SELECT trade_id, symbol'):
             self.many=copy.deepcopy(s.direct_rows)
-        elif q.startswith(('SET ','SELECT pg_catalog.pg_advisory')): pass
+        elif q.startswith(('SET ','LOCK TABLE ONLY public.','SELECT pg_catalog.pg_advisory')): pass
         else: raise AssertionError('Unmodeled SQL: '+q)
     def fetchone(self): return self.one
     def fetchall(self): return self.many
+    def fetchmany(self,count): return self.many[:count]
 
 @contextmanager
 def conn_context(conn): yield conn
@@ -126,16 +137,22 @@ def conn_context(conn): yield conn
 
 def db_functions(conn):
     env=dict(disposition=D, contextmanager=contextmanager, logger=LOG, Decimal=Decimal, math=__import__('math'),
+        os=types.SimpleNamespace(environ={'APCA_API_BASE_URL':'https://paper-api.alpaca.markets','JBR_EXEC_PAPER':'true'}),
+        _PAPER_DISPOSITION_BINDING=(*IDENTITY,'fixture-only'),
         datetime=datetime,timezone=timezone, Mapping=Mapping, _maybe_conn=lambda supplied:conn_context(supplied if supplied is not None else conn),
         extras=types.SimpleNamespace(RealDictCursor=object), _conn_or_none=lambda:conn,
+        parser=types.SimpleNamespace(isoparse=lambda value:datetime.fromisoformat(value.replace('Z','+00:00'))),
         _coerce_date=lambda v:str(v), _log_write_result=lambda *args:None,
         normalize_ts=lambda value,**kw: datetime.fromisoformat(value) if isinstance(value,str) else value,
         _json_dumps_or_none=lambda v:json.dumps(v))
-    return selected('db', {'trade_policy','_policy_read_transaction','_reconciliation_read_transaction',
-        'reconciliation_policy_status','performance_input','performance_evidence','bind_performance_summary',
+    return selected('db', {'configure_disposition_identity','_paper_disposition_identity','trade_policy','_policy_read_transaction','_reconciliation_read_transaction',
+        'reconciliation_policy_status','reconciliation_publication','_performance_input_records',
+        'performance_input','performance_hold_visibility','performance_evidence','bind_performance_summary',
         'performance_summary_values','validated_performance_snapshot','validated_performance_artifact','validated_metrics_summary',
         'upsert_metrics_daily','_reconciliation_trade_records','get_open_trades','get_closed_trades_missing_exit',
-        'close_trade','reconcile_sell_fill'},env)
+        'close_trade','reconcile_sell_fill','_open_exit_lineage_guard','get_reconcile_state',
+        '_lineage_uuid','_lineage_number','_lineage_time','_lineage_rows',
+        '_open_exit_lineage_record','_require_open_exit_lineage'},env)
 
 class PolicyTests(unittest.TestCase):
     def setUp(self):
@@ -200,6 +217,14 @@ class PolicyTests(unittest.TestCase):
         self.s.direct_rows=[{'trade_id':1,'symbol':'CRC'}]
         with self.assertRaises(RuntimeError):self.db['get_open_trades'](self.s,limit=1,strict=True)
         with self.assertRaises(D.TradePolicyError):self.db['get_open_trades'](self.s,strict=True,expected_policy_revision=7)
+    def test_default_watermark_read_uses_public_namespace_under_policy_transaction(self):
+        self.s.watermark={'last_after':STAMP,'last_ran_at':STAMP}
+        result=self.db['get_reconcile_state'](self.s,strict=True)
+        self.assertEqual(result,dict.fromkeys(('last_after','last_ran_at'),datetime.fromisoformat(STAMP)))
+        queries=[q for q,_ in self.s.trace]
+        actual='SELECT last_after, last_ran_at FROM public.reconcile_state WHERE id=1'
+        self.assertIn(actual,queries)
+        self.assertLess(queries.index('SET LOCAL search_path = pg_catalog'),queries.index(actual))
     def test_approved_rows_never_reach_legacy_update_or_fill_event(self):
         self.apply();self.s.trace=[]
         self.assertFalse(self.db['close_trade'](self.s,110,None,STAMP,None,'POSITION_CLOSED',expected_policy_revision=1))
@@ -256,21 +281,33 @@ class CallerTests(unittest.TestCase):
         case=D.ActiveCase('case110',110,'approval','UNRESOLVED',('ACTIVE_RECONCILIATION',))
         self.policy=D.Policy(*IDENTITY,1,(case,), 'ACTIVE_RECONCILIATION').metadata()
         self.writes=[];self.orders=[];self.open=[];self.closed=[];self.policy_calls=0
-        self.provider_error=False;self.final_changed=False
+        self.provider_error=False;self.final_changed=False;self.publication_held=False;self.publication_exit_error=False
         def status(*args,**kw):
             self.policy_calls+=1
             if self.final_changed and self.policy_calls>1:raise D.TradePolicyError('TRADE_POLICY_REVISION_CHANGED')
             return copy.deepcopy(self.policy)
+        @contextmanager
+        def publication(*args,**kw):
+            current=status(*args,**kw)
+            self.publication_held=True
+            try:
+                yield current
+                if self.publication_exit_error:raise D.TradePolicyError('TRADE_POLICY_TRANSACTION_FAILED')
+            finally:self.publication_held=False
         self.db=types.SimpleNamespace(db_enabled=lambda:True,get_db_conn=lambda:object(),
-            reconciliation_policy_status=status,get_reconcile_state=lambda *a,**kw:{'last_after':None},
+            reconciliation_policy_status=status,reconciliation_publication=publication,
+            get_reconcile_state=lambda *a,**kw:{'last_after':None},
+            get_open_trade_exit_lineage=lambda *a,**kw:{},
             get_open_trades=lambda *a,**kw:self.open,get_closed_trades_missing_exit=lambda *a,**kw:self.closed,
             normalize_ts=normalized_time,set_reconcile_state=lambda *a:self.writes.append(a),
             reconcile_sell_fill=lambda *a,**kw:False,close_trade=lambda *a,**kw:False)
         def fetch(**kw):
+            self.assertFalse(self.publication_held,'provider I/O must precede the publication lock')
             if self.provider_error:raise RuntimeError('synthetic unavailable')
             return self.orders
         env=dict(db=self.db,LOGGER=LOG,logging=logging,Mapping=Mapping,datetime=datetime,timezone=timezone,
             timedelta=timedelta,Decimal=Decimal,InvalidOperation=InvalidOperation,
+            isoparse=normalized_time,_order_snapshot=lambda order:dict(order),
             alpaca_list_orders_http=fetch,log_info=lambda *a,**kw:None,
             _RECONCILE_DB_DISABLED_LOGGED=False)
         selected('execute_trades',{'_operational_reconciliation_complete','_run_auto_reconcile'},env)
@@ -305,6 +342,84 @@ class CallerTests(unittest.TestCase):
         self.assertFalse(self.executor.reconcile_closed_trades())
         self.closed=[];self.policy_calls=0;self.final_changed=True
         self.assertFalse(self.executor.reconcile_closed_trades());self.assertEqual(self.writes,[])
+    def test_success_metrics_and_logs_publish_while_revision_is_locked(self):
+        calls=[];fixture=self
+        class Receipt(dict):
+            def update(self,*args,**kwargs):
+                proposed=dict(*args,**kwargs)
+                if proposed.get('operational_complete') is True:
+                    fixture.assertTrue(fixture.publication_held);calls.append('metrics_locked')
+                return super().update(proposed)
+        class Metrics:
+            @property
+            def reconciliation(self):return self.value
+            @reconciliation.setter
+            def reconciliation(self,value):self.value=Receipt(value)
+        class ReceiptLogger:
+            def info(self,message,*args):
+                if 'RECONCILE_OPERATIONAL_COMPLETE' in message or 'operational_complete=true' in message:
+                    fixture.assertTrue(fixture.publication_held);calls.append('operator_waits_at_success')
+            def warning(self,*args):pass
+        self.executor.metrics=Metrics();self.env['LOGGER']=ReceiptLogger()
+        self.assertTrue(self.executor.reconcile_closed_trades())
+        self.assertEqual(calls,['metrics_locked','operator_waits_at_success','operator_waits_at_success'])
+        self.assertFalse(self.publication_held);self.assertEqual(self.writes,[])
+    def test_publication_transaction_failure_clears_operational_success(self):
+        self.publication_exit_error=True
+        self.assertFalse(self.executor.reconcile_closed_trades())
+        self.assertFalse(self.executor.metrics.reconciliation['operational_complete'])
+        self.assertEqual(self.executor.metrics.reconciliation['reason'],'POLICY_CHANGED_OR_UNAVAILABLE')
+        self.assertFalse(self.publication_held);self.assertEqual(self.writes,[])
+    def test_unbound_historical_crc_never_assigns_latest_partial_order(self):
+        self.closed=[dict(trade_id=110,symbol='CRC',qty='30',entry_price='65',exit_order_id=None)]
+        self.orders=[dict(id='second-crc-exit',symbol='CRC',side='sell',status='filled',filled_at=STAMP,
+            filled_qty='15',filled_avg_price='63.26')]
+        self.db.reconcile_sell_fill=lambda *a,**kw:self.writes.append(kw) or True
+        self.assertFalse(self.executor.reconcile_closed_trades());self.assertEqual(self.writes,[])
+    def test_bound_historical_partial_order_is_held_before_db_write(self):
+        self.closed=[dict(trade_id=110,symbol='CRC',qty='30',entry_price='65',exit_order_id='second-crc-exit')]
+        self.orders=[dict(id='second-crc-exit',symbol='CRC',side='sell',status='filled',filled_at=STAMP,
+            filled_qty='15',filled_avg_price='63.26')]
+        self.db.reconcile_sell_fill=lambda *a,**kw:self.writes.append(kw) or True
+        self.assertFalse(self.executor.reconcile_closed_trades());self.assertEqual(self.writes,[])
+    def test_historical_lookup_uses_exact_bound_order_instead_of_latest_symbol_order(self):
+        self.closed=[dict(trade_id=42,symbol='OTHER',qty='2',entry_price='10',exit_order_id='bound')]
+        self.orders=[dict(id=order_id,symbol='OTHER',side='sell',status='filled',filled_at=stamp,
+            filled_qty='2',filled_avg_price='11') for order_id,stamp in
+            [('different-later-order','2026-01-02T00:00:00+00:00'),('bound',STAMP)]]
+        self.db.reconcile_sell_fill=lambda *a,**kw:self.writes.append(kw) or True
+        self.assertTrue(self.executor.reconcile_closed_trades())
+        self.assertEqual([write['order_id'] for write in self.writes],['bound'])
+    def test_open_equal_quantity_unbound_order_does_not_create_financial_ownership(self):
+        self.open=[dict(trade_id=42,symbol='OTHER',qty='2',entry_time=STAMP,exit_order_id=None)]
+        self.executor.client=types.SimpleNamespace(get_all_positions=lambda:[types.SimpleNamespace(symbol='OTHER',qty='2')])
+        self.orders=[dict(id='unbound-order',symbol='OTHER',side='sell',status='filled',filled_at=STAMP,
+            filled_qty='2',filled_avg_price='11')]
+        self.db.reconcile_sell_fill=lambda *a,**kw:self.writes.append(kw) or True
+        self.assertFalse(self.executor.reconcile_closed_trades());self.assertEqual(self.writes,[])
+    def test_open_equal_quantity_orders_match_existing_ids_instead_of_trade_sort_order(self):
+        self.open=[dict(trade_id=trade_id,symbol='OTHER',qty='2',entry_time=stamp,exit_order_id=order_id)
+            for trade_id,stamp,order_id in [(41,STAMP,'bound-one'),(42,'2026-01-02T00:00:00+00:00','bound-two')]]
+        self.executor.client=types.SimpleNamespace(get_all_positions=lambda:[types.SimpleNamespace(symbol='OTHER',qty='4')])
+        self.orders=[dict(id=order_id,symbol='OTHER',side='sell',status='filled',filled_at=stamp,
+            filled_qty='2',filled_avg_price='11') for order_id,stamp in
+            [('bound-one','2026-01-04T00:00:00+00:00'),('bound-two','2026-01-03T00:00:00+00:00')]]
+        self.db.reconcile_sell_fill=lambda *a,**kw:self.writes.append(kw) or True
+        self.assertTrue(self.executor.reconcile_closed_trades())
+        self.assertEqual([(write['trade_id'],write['order_id']) for write in self.writes],[(41,'bound-one'),(42,'bound-two')])
+    def test_flat_open_lineage_child_ignores_newer_unrelated_sell_and_never_precloses(self):
+        self.open=[dict(trade_id=42,symbol='OTHER',qty='2',entry_time=STAMP,exit_order_id=None)]
+        self.db.get_open_trade_exit_lineage=lambda *a,**kw:{42:'exact-child'}
+        self.executor.client=types.SimpleNamespace(get_all_positions=lambda:[])
+        self.orders=[dict(id=order_id,symbol='OTHER',side='sell',status='filled',filled_at=stamp,
+            filled_qty='2',filled_avg_price='11') for order_id,stamp in
+            [('unrelated-newer','2026-01-03T00:00:00+00:00'),('exact-child','2026-01-02T00:00:00+00:00')]]
+        self.db.reconcile_sell_fill=lambda *a,**kw:self.writes.append(kw) or True
+        self.db.close_trade=lambda *a,**kw:self.fail('exact child must be processed while OPEN')
+        self.assertTrue(self.executor.reconcile_closed_trades())
+        self.assertEqual([write['order_id'] for write in self.writes],['exact-child'])
+        self.assertIsNone(self.open[0]['exit_order_id'],'candidate mapping must not fabricate stored ownership')
+        self.assertFalse(self.executor.metrics.reconciliation['watermark_advanced'])
     def test_reconciliation_never_advances_watermark_or_claims_full_coverage(self):
         tree=ast.parse(SOURCE['execute_trades']); cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='TradeExecutor')
         node=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='reconcile_closed_trades')
@@ -486,7 +601,7 @@ class ConsumerTests(unittest.TestCase):
         class Components:
             def __getattr__(self,name):return lambda *args,**kw:{'component':name,'args':args,'props':kw}
         def unvalidated(*args):raise D.TradePolicyError('TRADE_POLICY_ARTIFACT_INPUT_CHANGED')
-        env=selected('dashboard_app',{'_load_trade_perf_cache','update_trade_performance_tab'},dict(db=self.db,logger=LOG,
+        env=selected('dashboard_app',{'_load_trade_perf_cache','_performance_hold_message','update_trade_performance_tab'},dict(db=self.db,logger=LOG,
             read_validated_performance_cache=unvalidated,TRADE_PERFORMANCE_CACHE='legacy',dbc=Components(),
             _empty_trade_perf_fig=lambda title:{'title':title}))
         result=env['update_trade_performance_tab']('ALL',{'trades':[{'trade_id':63,'pnl':99999}],
@@ -501,10 +616,138 @@ class ConsumerTests(unittest.TestCase):
         result=env['api_trades_stats']()
         self.assertFalse(result['ok']);self.assertEqual(result['rows'],[])
         self.assertEqual(result['performance_status'],'HELD_UNVALIDATED_PERFORMANCE')
+    def test_held_consumers_keep_current_policy_audit_and_unresolved_crc_visible(self):
+        self.s.rows={63:dict(row(63),symbol='AAPL'),110:row(110)}
+        req,manifest=approval(self.s.rows[63]);D.change_disposition(self.s,req,manifest,IDENTITY)
+        summary=selected('data_io',{'metrics_summary_snapshot'},dict(db=self.db,logger=LOG))['metrics_summary_snapshot']()
+        env=selected('dashboard_app',{'_load_trades_analytics_frame','_load_trade_perf_cache'},
+            dict(db=self.db,pd=self.pd,logger=LOG,load_validated_performance_trades=self.perf['load_trades_log'],
+                read_validated_performance_cache=self.perf['read_cache'],TRADE_PERFORMANCE_CACHE='cache',
+                _normalize_trades_api_frame=lambda frame:frame))
+        frame,source,detail=env['_load_trades_analytics_frame']()
+        cache=env['_load_trade_perf_cache']()
+        for visible in (summary,frame.attrs,cache):
+            self.assertEqual(visible['policy_validation_status'],'VALIDATED_POLICY')
+            self.assertEqual(visible['policy_revision'],1);self.assertEqual(visible['excluded_count'],1)
+            self.assertEqual(visible['unresolved_trade_ids'],[110])
+            policy=visible['trade_policy']['policy']
+            self.assertEqual(policy['scope'],'VALIDATED_PERFORMANCE')
+            self.assertEqual(policy['exclusions'][0]['trade_id'],63)
+            self.assertEqual(policy['exclusions'][0]['approval_ref'],req['approval_ref'])
+        self.assertIsNone(summary['net_pnl']);self.assertTrue(frame.empty);self.assertEqual(cache['trades'],[])
+        api=selected('dashboard_app',{'api_trades_stats','_trades_api_db_ready'},dict(request=types.SimpleNamespace(args={}),
+            _parse_trades_range=lambda value,**kw:'all',_load_trades_analytics_frame=lambda:(frame,source,detail),
+            _TRADES_RANGE_ORDER=['all'],_build_range_metrics=lambda *a:(_ for _ in ()).throw(AssertionError('HELD aggregate')),
+            _record_trades_api_request=lambda **kw:False,_json_no_store=lambda payload:payload))['api_trades_stats']()
+        self.assertFalse(api['ok']);self.assertEqual(api['rows'],[])
+        self.assertEqual(api['excluded_count'],1);self.assertEqual(api['unresolved_trade_ids'],[110])
+    def test_policy_read_failure_keeps_visibility_counts_unknown(self):
+        def unavailable(*args,**kwargs):raise D.TradePolicyError('TRADE_POLICY_UNAVAILABLE')
+        self.functions['trade_policy']=unavailable
+        summary=selected('data_io',{'metrics_summary_snapshot'},dict(db=self.db,logger=LOG))['metrics_summary_snapshot']()
+        self.assertEqual(summary['policy_validation_status'],'UNAVAILABLE')
+        for key in ('excluded_count','policy_revision','trade_policy','unresolved_trade_ids','net_pnl'):
+            self.assertIsNone(summary[key])
+    def test_held_cache_visibility_tracks_apply_and_revoke_revisions(self):
+        self.write()
+        req,manifest=approval(self.s.rows[63]);D.change_disposition(self.s,req,manifest,IDENTITY)
+        self.s.rows[110]=row(110)
+        env=selected('dashboard_app',{'_load_trade_perf_cache'},dict(db=self.db,logger=LOG,
+            read_validated_performance_cache=self.perf['read_cache'],TRADE_PERFORMANCE_CACHE='cache'))
+        held=env['_load_trade_perf_cache']()
+        self.assertEqual(held['policy_revision'],1);self.assertEqual(held['excluded_count'],1)
+        self.assertEqual(held['unresolved_trade_ids'],[110]);self.assertEqual(held['trades'],[])
+        revoke=dict(req,action='REVOKE',expected_policy_revision=1,expected_case_revision=1,approval_ref='revoke-visible')
+        D.change_disposition(self.s,revoke,manifest,IDENTITY)
+        held=env['_load_trade_perf_cache']()
+        self.assertEqual(held['policy_revision'],2);self.assertEqual(held['excluded_count'],0)
+        self.assertEqual(held['unresolved_trade_ids'],[110]);self.assertEqual(held['trades'],[])
+    def test_held_message_distinguishes_valid_policy_from_unknown_count(self):
+        visible=self.functions['performance_hold_visibility']()
+        message=selected('dashboard_app',{'_performance_hold_message'},{} )['_performance_hold_message']
+        self.assertIn('excluded trades 0',message(visible))
+        self.assertIn('excluded count unknown',message({'policy_validation_status':'UNAVAILABLE'}))
+        self.assertNotIn('excluded trades 0',message({'policy_validation_status':'UNAVAILABLE'}))
     def test_physical_history_loader_remains_unfiltered_and_named_history(self):
         source=SOURCE['data_io'];tree=ast.parse(source)
         node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='load_trades_db')
         self.assertNotIn('eligible_sql',ast.get_source_segment(source,node))
         self.assertIn('PHYSICAL_HISTORY_UNFILTERED',SOURCE['dashboard_app'])
+
+class ExactFillAllocationTests(unittest.TestCase):
+    def setUp(self):
+        D._RUNTIME_IDENTITY=None
+        self.s=Store();self.functions=db_functions(self.s)
+        self.s.rows[110]=dict(row(110),qty=Decimal('30'),entry_price=Decimal('65'),
+            exit_time='2026-01-02T00:00:00+00:00',exit_reason='POSITION_CLOSED')
+    def fill(self,qty,decorate=True):
+        return self.functions['reconcile_sell_fill'](self.s,110,symbol='CRC',qty=qty,
+            order_id='second-crc-exit',status='filled',event_time=STAMP,raw={},exit_price='63.26',
+            exit_reason='SELL_FILL',decorate=decorate)
+    def test_partial_quantity_never_writes_or_computes_whole_trade_result(self):
+        before=copy.deepcopy(self.s.rows)
+        for state,decorate in [('CLOSED',True),('OPEN',False)]:
+            with self.subTest(state=state):
+                self.s.rows[110]['status']=state
+                self.assertFalse(self.fill('15',decorate))
+        self.s.rows[110]['status']='CLOSED'
+        self.assertEqual(self.s.rows,before)
+        self.assertFalse(any(sql.lstrip().startswith(('INSERT','UPDATE','DELETE')) for sql,_ in self.s.trace))
+    def test_equal_quantity_does_not_authorize_unbound_historical_allocation(self):
+        before=copy.deepcopy(self.s.rows)
+        for state,decorate in [('CLOSED',True),('OPEN',False)]:
+            with self.subTest(state=state):
+                self.s.rows[110]['status']=state
+                self.assertFalse(self.fill('30',decorate))
+        self.s.rows[110]['status']='CLOSED'
+        self.assertEqual(self.s.rows,before)
+        self.assertFalse(any(sql.lstrip().startswith(('INSERT','UPDATE','DELETE')) for sql,_ in self.s.trace))
+
+class PaperBindingTests(unittest.TestCase):
+    def setUp(self):
+        D._RUNTIME_IDENTITY=None
+        self.s=Store();self.functions=db_functions(self.s)
+
+    def test_compiled_target_is_exact_reviewed_public_binding(self):
+        binding=next(n for n in ast.parse(SOURCE['db']).body if isinstance(n,ast.Assign)
+            and any(isinstance(t,ast.Name) and t.id=='_PAPER_DISPOSITION_BINDING' for t in n.targets))
+        self.assertEqual(ast.literal_eval(binding.value),(
+            'jbravo-pythonanywhere-production','0dbad265-9d1c-4de9-9eaa-1b234a533a05',
+            'metadata-owner-003:sha256:f6084a05d141c316850fe76b58ec36c802d585f5e45b6274dc0224ad0710d793'))
+
+    def test_missing_or_live_context_refuses_before_policy_sql(self):
+        for environment in ({},{'APCA_API_BASE_URL':'https://paper-api.alpaca.markets'},
+            {'APCA_API_BASE_URL':'https://api.alpaca.markets','JBR_EXEC_PAPER':'true'},
+            {'APCA_API_BASE_URL':'https://paper-api.alpaca.markets','JBR_EXEC_PAPER':'false'}):
+            with self.subTest(environment=environment):
+                self.functions['os'].environ=environment
+                with self.assertRaisesRegex(D.TradePolicyError,'PAPER_CONTEXT_REQUIRED'):
+                    self.functions['trade_policy'](self.s)
+                self.assertEqual(self.s.trace,[])
+                self.assertIsNone(D._RUNTIME_IDENTITY)
+
+    def test_every_operation_rechecks_paper_context(self):
+        self.functions['trade_policy'](self.s)
+        count=len(self.s.trace)
+        self.functions['os'].environ['JBR_EXEC_PAPER']='false'
+        with self.assertRaisesRegex(D.TradePolicyError,'PAPER_CONTEXT_REQUIRED'):
+            self.functions['trade_policy'](self.s)
+        self.assertEqual(len(self.s.trace),count)
+
+    def test_fixed_binding_refuses_conflicting_prebound_identity(self):
+        D.bind_runtime_identity('other-paper',IDENTITY[1],environment='paper',evidence_ref='fixture-only',verified=True)
+        with self.assertRaisesRegex(D.TradePolicyError,'ALREADY_BOUND'):
+            self.functions['trade_policy'](self.s)
+        self.assertEqual(self.s.trace,[])
+
+    def test_connected_policy_identity_remains_independent_and_required(self):
+        class OtherTarget(Cursor):
+            def execute(self,sql,params=None):
+                super().execute(sql,params)
+                if sql.startswith('SELECT deployment_id'):
+                    self.one=('other-deployment',IDENTITY[1],'jbravo',0,'jbravo')
+        self.s.cursor=lambda **kw:OtherTarget(self.s)
+        with self.assertRaisesRegex(D.TradePolicyError,'IDENTITY_MISMATCH'):
+            self.functions['trade_policy'](self.s)
 
 if __name__ == '__main__': unittest.main(verbosity=2)

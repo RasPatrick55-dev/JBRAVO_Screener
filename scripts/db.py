@@ -21,10 +21,28 @@ logger = logging.getLogger(__name__)
 # Pure policy contract; no connection/environment/approval discovery at import.
 from scripts import trade_disposition as disposition
 
+# Public owner-reviewed identity; the connected policy singleton is checked on
+# every operation. This is configuration, not service/account attestation.
+_PAPER_DISPOSITION_BINDING = (
+    'jbravo-pythonanywhere-production',
+    '0dbad265-9d1c-4de9-9eaa-1b234a533a05',
+    'metadata-owner-003:sha256:f6084a05d141c316850fe76b58ec36c802d585f5e45b6274dc0224ad0710d793',
+)
+
 
 def configure_disposition_identity(deployment_id, database_id, *, environment, evidence_ref, verified):
     return disposition.bind_runtime_identity(deployment_id, database_id,
         environment=environment, evidence_ref=evidence_ref, verified=verified)
+
+
+def _paper_disposition_identity():
+    """Bind only an explicitly configured paper process to the reviewed target."""
+    if (os.environ.get('APCA_API_BASE_URL') != 'https://paper-api.alpaca.markets'
+            or os.environ.get('JBR_EXEC_PAPER') != 'true'):
+        raise disposition.TradePolicyError('TRADE_POLICY_PAPER_CONTEXT_REQUIRED')
+    deployment_id, database_id, evidence_ref = _PAPER_DISPOSITION_BINDING
+    return configure_disposition_identity(deployment_id, database_id,
+        environment='paper', evidence_ref=evidence_ref, verified=True)
 
 
 def trade_policy(conn, *, scope=None, expected_revision=None, exclusive=False):
@@ -34,7 +52,7 @@ def trade_policy(conn, *, scope=None, expected_revision=None, exclusive=False):
         raise disposition.TradePolicyError('TRADE_POLICY_DB_UNAVAILABLE')
     try:
         with conn.cursor() as cursor:
-            policy = disposition.read_policy(cursor, disposition.runtime_identity(), scope=scope, exclusive=exclusive)
+            policy = disposition.read_policy(cursor, _paper_disposition_identity(), scope=scope, exclusive=exclusive)
         if expected_revision is not None and policy.revision != expected_revision:
             raise disposition.TradePolicyError('TRADE_POLICY_REVISION_CHANGED')
         return policy
@@ -55,8 +73,8 @@ def _policy_read_transaction(conn, *, scope, expected_revision=None):
         yield trade_policy(conn, scope=scope, expected_revision=expected_revision)
 
 
-def performance_input(conn, policy):
-    """Exact eligible physical-row snapshot; ownership/history stay unfiltered elsewhere."""
+def _performance_input_records(conn, policy):
+    """Exact eligible rows; callers decide whether incomplete fields are fatal."""
     if policy.scope != 'VALIDATED_PERFORMANCE':
         raise disposition.TradePolicyError('TRADE_POLICY_SCOPE_REQUIRED')
     with conn.cursor() as cursor:
@@ -64,8 +82,39 @@ def performance_input(conn, policy):
             "WHERE status='CLOSED' AND " + disposition.eligible_sql(scope='VALIDATED_PERFORMANCE') +
             " ORDER BY trade_id")
         records = [disposition.document(row[0]) for row in cursor.fetchall()]
+    return records
+
+
+def performance_input(conn, policy):
+    """Financial consumers require complete fields; history stays unfiltered."""
+    records = _performance_input_records(conn, policy)
     disposition.require_complete_accounting(records)
     return records
+
+
+def performance_hold_visibility(engine=None):
+    """Independently validate policy visibility without inventing financial results."""
+    try:
+        with _maybe_conn(engine) as conn:
+            with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE') as policy:
+                records = _performance_input_records(conn, policy)
+                unresolved = []
+                for row in records:
+                    try:
+                        disposition.require_complete_accounting([row])
+                    except disposition.TradePolicyError:
+                        unresolved.append(disposition.positive_id(row.get('trade_id')))
+                metadata = policy.metadata()
+                return {'trade_policy': {'policy': metadata},
+                    'policy_validation_status': 'VALIDATED_POLICY',
+                    'policy_revision': metadata['policy_revision'],
+                    'excluded_count': metadata['excluded_count'],
+                    'accounting_input_status': 'INCOMPLETE' if unresolved else 'COMPLETE_FIELDS_ONLY',
+                    'unresolved_trade_ids': sorted(unresolved)}
+    except Exception:
+        return {'trade_policy': None, 'policy_validation_status': 'UNAVAILABLE',
+            'policy_revision': None, 'excluded_count': None,
+            'accounting_input_status': 'UNAVAILABLE', 'unresolved_trade_ids': None}
 
 
 def performance_evidence(policy, records):
@@ -131,6 +180,322 @@ def reconciliation_policy_status(engine=None, *, expected_revision=None):
     with _maybe_conn(engine) as conn:
         with _policy_read_transaction(conn, scope='ACTIVE_RECONCILIATION', expected_revision=expected_revision) as policy:
             return policy.metadata()
+
+
+@contextmanager
+def reconciliation_publication(engine=None, *, expected_revision):
+    """Keep the policy stable through the bounded operational success receipt."""
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='ACTIVE_RECONCILIATION',
+                expected_revision=expected_revision) as policy:
+            yield policy.metadata()
+
+
+def _ml_trade_policy_lock(conn):
+    """Serialize ML publication while keeping policy-table access SELECT-only."""
+    with conn.cursor() as cursor:
+        cursor.execute('SET LOCAL search_path = pg_catalog')
+        cursor.execute("SET LOCAL lock_timeout = '1500ms'")
+        cursor.execute("SET LOCAL statement_timeout = '5000ms'")
+        cursor.execute("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('jbravo:trade-disposition:policy'))")
+
+
+def _ml_trade_lock_inputs(conn):
+    """Fixed deterministic SHARE locks, including matching/artifact writers.
+
+    Existing table-level UPDATE/DELETE/TRUNCATE rights are required for SHARE.
+    This is not a SELECT-only privilege and creates no runtime grants.
+    """
+    tables = ('trades', 'trade_entry_ml_context_app', 'executed_trades',
+        'screener_ranker_scores_app', 'screener_run_map_app', 'ml_artifacts')
+    with conn.cursor() as cursor:
+        for table in tables:
+            cursor.execute('SELECT pg_catalog.to_regclass(%s)', ('public.' + table,))
+            row = cursor.fetchone()
+            if not row or row[0] is None:
+                if table in ('trades', 'ml_artifacts'):
+                    raise disposition.TradePolicyError('ML_TRADE_INPUT_RELATION_MISSING')
+                continue
+            # Identifiers come only from the fixed tuple above, never input.
+            cursor.execute('LOCK TABLE public.' + table + ' IN SHARE MODE')
+
+
+@contextmanager
+def ml_trade_read_transaction(conn):
+    if conn is None or conn.autocommit or conn.get_transaction_status() != 0:
+        raise disposition.TradePolicyError('TRADE_POLICY_TRANSACTION_NOT_IDLE')
+    with conn:
+        with conn.cursor() as cursor:
+            cursor.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+        _ml_trade_policy_lock(conn)
+        policy = trade_policy(conn, scope='VALIDATED_PERFORMANCE')
+        _ml_trade_lock_inputs(conn)
+        yield policy
+
+
+def ml_trade_input(conn, policy, *, start_dt, end_dt):
+    """Full eligible window, before match joins/limits; not broker-ingestion proof."""
+    if policy.scope != 'VALIDATED_PERFORMANCE':
+        raise disposition.TradePolicyError('TRADE_POLICY_SCOPE_REQUIRED')
+    if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime):
+        raise disposition.TradePolicyError('ML_TRADE_WINDOW_INVALID')
+    if start_dt.tzinfo is None or end_dt.tzinfo is None or start_dt > end_dt:
+        raise disposition.TradePolicyError('ML_TRADE_WINDOW_INVALID')
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_catalog.to_jsonb(t)::pg_catalog.text FROM public.trades t "
+            "WHERE pg_catalog.upper(COALESCE(t.status,''))='CLOSED' AND " +
+            disposition.eligible_sql('t', scope='VALIDATED_PERFORMANCE') +
+            " AND COALESCE(t.exit_time,t.entry_time)>=%s AND COALESCE(t.exit_time,t.entry_time)<=%s "
+            "ORDER BY t.trade_id", (start_dt, end_dt))
+        return [disposition.document(row[0]) for row in cursor.fetchall()]
+
+
+def ml_trade_match_inputs(conn, records, *, oos_run_date=None):
+    """Exact stored matching context; hashes are source observations, not provenance proof.
+
+    Symbol-history populations deliberately mirror legacy any-score/run-map flags.
+    Query cost/indices and actual-role access still require native acceptance.
+    """
+    orders = sorted({str(row['entry_order_id']) for row in records if row.get('entry_order_id')})
+    symbols = sorted({str(row.get('symbol') or '').strip().upper() for row in records})
+    result = {'oos_run_date': str(oos_run_date) if oos_run_date is not None else None, 'sources': {}}
+    # All table identifiers/predicates are fixed source literals, never supplied SQL.
+    specs = (
+        ('trade_entry_ml_context_app', 'order_id=ANY(%s)', orders),
+        ('executed_trades', 'order_id=ANY(%s)', orders),
+        ('screener_ranker_scores_app', "pg_catalog.upper(pg_catalog.btrim(COALESCE(symbol,'')))=ANY(%s)", symbols),
+        ('screener_run_map_app', "pg_catalog.upper(pg_catalog.btrim(COALESCE(symbol,'')))=ANY(%s)", symbols),
+    )
+    with conn.cursor() as cursor:
+        for table, predicate, values in specs:
+            cursor.execute('SELECT pg_catalog.to_regclass(%s)', ('public.' + table,))
+            present = cursor.fetchone()
+            if not present or present[0] is None:
+                result['sources'][table] = {'present': False, 'count': 0, 'fingerprint': None}
+                continue
+            cursor.execute('SELECT pg_catalog.to_jsonb(x)::pg_catalog.text FROM public.' + table +
+                ' x WHERE ' + predicate + ' ORDER BY pg_catalog.to_jsonb(x)::pg_catalog.text', (values,))
+            rows = [disposition.document(row[0]) for row in cursor.fetchall()]
+            result['sources'][table] = {'present': True, 'count': len(rows),
+                'fingerprint': disposition.fingerprint({'rows': rows})}
+        query = 'SELECT run_date,csv_data FROM public.ml_artifacts WHERE artifact_type=%s'
+        params = ['ranker_oos_predictions']
+        if oos_run_date is not None:
+            query += ' AND run_date=%s'
+            params.append(oos_run_date)
+        cursor.execute(query + ' ORDER BY run_date DESC LIMIT 1', tuple(params))
+        row = cursor.fetchone()
+        if row is None:
+            result['sources']['ranker_oos_predictions'] = {'present': False}
+        else:
+            import hashlib
+            if row[1] is not None and not isinstance(row[1], str):
+                raise disposition.TradePolicyError('ML_TRADE_OOS_REPRESENTATION_INVALID')
+            result['sources']['ranker_oos_predictions'] = {'present': True, 'run_date': str(row[0]),
+                'csv_sha256': hashlib.sha256(row[1].encode('utf8')).hexdigest() if row[1] is not None else None}
+    return result
+
+
+def ml_trade_evidence(policy, records, *, start_dt, end_dt, match_inputs):
+    return {'policy': policy.metadata(), 'input_fingerprint': disposition.fingerprint({'rows': records}),
+        'input_count': len(records), 'input_basis': 'public.trades:CLOSED:VALIDATED_PERFORMANCE:window:full-row',
+        'match_inputs': disposition.document(match_inputs),
+        'window_start': start_dt.astimezone(timezone.utc).isoformat(),
+        'window_end': end_dt.astimezone(timezone.utc).isoformat(),
+        'recovery_complete': False, 'accounting_complete': False, 'activity_ingestion_complete': False}
+
+
+def _ml_trade_current(conn, evidence):
+    if not isinstance(evidence, Mapping) or not isinstance(evidence.get('policy'), Mapping):
+        raise disposition.TradePolicyError('ML_TRADE_ARTIFACT_UNVALIDATED')
+    try:
+        start_dt = datetime.fromisoformat(evidence['window_start'])
+        end_dt = datetime.fromisoformat(evidence['window_end'])
+    except (KeyError, TypeError, ValueError):
+        raise disposition.TradePolicyError('ML_TRADE_WINDOW_INVALID') from None
+    policy = trade_policy(conn, scope='VALIDATED_PERFORMANCE',
+        expected_revision=disposition.revision(evidence['policy'].get('policy_revision')))
+    records = ml_trade_input(conn, policy, start_dt=start_dt, end_dt=end_dt)
+    match_inputs = ml_trade_match_inputs(conn, records,
+        oos_run_date=evidence.get('match_inputs', {}).get('oos_run_date'))
+    current = ml_trade_evidence(policy, records, start_dt=start_dt, end_dt=end_dt, match_inputs=match_inputs)
+    if current != dict(evidence):
+        raise disposition.TradePolicyError('ML_TRADE_INPUT_CHANGED')
+    return policy, records
+
+
+def ml_trade_order_owners(conn, pairs):
+    """Physical ownership is global, even when ML eligibility is scope-filtered."""
+    selected = {}
+    for trade_id, order_id in pairs:
+        if order_id is None or not str(order_id).strip():
+            continue
+        key = str(order_id)
+        if key in selected:
+            raise disposition.TradePolicyError('ML_TRADE_ORDER_AMBIGUOUS')
+        selected[key] = disposition.positive_id(trade_id)
+    if not selected:
+        return
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT trade_id,entry_order_id FROM public.trades '
+            'WHERE entry_order_id=ANY(%s) ORDER BY trade_id', (sorted(selected),))
+        owners = {}
+        for trade_id, order_id in cursor.fetchall():
+            owners.setdefault(str(order_id), []).append(trade_id)
+    if owners != {key: [value] for key, value in selected.items()}:
+        raise disposition.TradePolicyError('ML_TRADE_ORDER_OWNER_CHANGED')
+
+
+def _ml_trade_kinds(kind):
+    allowed = {'ranker_trade_attribution': 'ranker_trade_attribution_trades',
+        'trade_entry_ml_context_backfill': 'trade_entry_ml_context_backfill_rows'}
+    if kind not in allowed:
+        raise disposition.TradePolicyError('ML_TRADE_ARTIFACT_KIND_INVALID')
+    return allowed[kind]
+
+
+def _ml_trade_write_artifact(cursor, kind, run_date, payload, csv_data, count, file_name):
+    cursor.execute("INSERT INTO public.ml_artifacts (artifact_type,run_date,created_at,rows_count,"
+        "payload,csv_data,source,file_name) VALUES (%s,%s,pg_catalog.clock_timestamp(),%s,%s::pg_catalog.jsonb,%s,%s,%s) "
+        "ON CONFLICT(artifact_type,run_date) DO UPDATE SET created_at=EXCLUDED.created_at,"
+        "rows_count=EXCLUDED.rows_count,payload=EXCLUDED.payload,csv_data=EXCLUDED.csv_data,"
+        "source=EXCLUDED.source,file_name=EXCLUDED.file_name",
+        (kind, run_date, count, disposition.canonical(payload), csv_data, kind, file_name))
+
+
+def publish_ml_trade_artifacts(evidence, *, kind, run_date, payload, rows_csv, rows_count,
+        context_rows=(), engine=None):
+    """One existing-store transaction; no bootstrap, independent commits, or CSV authority."""
+    import hashlib
+    rows_kind = _ml_trade_kinds(kind)
+    if not isinstance(rows_csv, str) or type(rows_count) is not int or rows_count < 0:
+        raise disposition.TradePolicyError('ML_TRADE_ARTIFACT_ROWS_INVALID')
+    # Detach before taking locks; never mutate caller's payload/rows.
+    result = disposition.document(disposition.canonical(dict(payload)))
+    contexts = disposition.document(disposition.canonical({'rows': list(context_rows)}))['rows']
+    if kind != 'trade_entry_ml_context_backfill' and contexts:
+        raise disposition.TradePolicyError('ML_TRADE_CONTEXT_KIND_INVALID')
+    with _maybe_conn(engine) as conn:
+        if conn is None or conn.autocommit or conn.get_transaction_status() != 0:
+            raise disposition.TradePolicyError('TRADE_POLICY_TRANSACTION_NOT_IDLE')
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            # Install timeouts and acquire the same policy-first order before
+            # any context snapshot; fixed table locks block all ordinary DML.
+            _ml_trade_policy_lock(conn)
+            trade_policy(conn, scope='VALIDATED_PERFORMANCE',
+                expected_revision=disposition.revision(evidence['policy'].get('policy_revision')))
+            _ml_trade_lock_inputs(conn)
+            policy, records = _ml_trade_current(conn, evidence)
+            ml_trade_order_owners(conn, [(row['trade_id'], row.get('entry_order_id')) for row in records])
+            selected = {str(row['entry_order_id']): row for row in records if row.get('entry_order_id')}
+            order_ids = sorted({str(row.get('order_id') or '') for row in contexts})
+            if '' in order_ids or len(order_ids) != len(contexts):
+                raise disposition.TradePolicyError('ML_TRADE_ORDER_AMBIGUOUS')
+            with conn.cursor() as cursor:
+                # Global physical owners include excluded/open/out-of-window history.
+                # Row locks require genuine UPDATE privilege, never called a SELECT-only grant.
+                if order_ids:
+                    cursor.execute('SELECT trade_id,entry_order_id FROM public.trades '
+                        'WHERE entry_order_id=ANY(%s) ORDER BY trade_id FOR UPDATE', (order_ids,))
+                    owners = cursor.fetchall()
+                    by_order = {}
+                    for trade_id, order_id in owners:
+                        by_order.setdefault(str(order_id), []).append(trade_id)
+                    for item in contexts:
+                        order_id = str(item['order_id'])
+                        owner = selected.get(order_id)
+                        if owner is None or by_order.get(order_id) != [owner['trade_id']] or item.get('trade_id') != owner['trade_id']:
+                            raise disposition.TradePolicyError('ML_TRADE_ORDER_OWNER_CHANGED')
+                        if str(item.get('symbol') or '').upper() != str(owner.get('symbol') or '').upper():
+                            raise disposition.TradePolicyError('ML_TRADE_ORDER_OWNER_CHANGED')
+                # Re-read after physical-row lock wait under READ COMMITTED.
+                _ml_trade_current(conn, evidence)
+                inserted = 0
+                for item in contexts:
+                    raw = dict(item.get('raw') or {}, trade_policy=dict(evidence))
+                    cursor.execute('INSERT INTO public.trade_entry_ml_context_app '
+                        '(order_id,symbol,entry_time,screener_run_ts_utc,model_score,model_score_5d,score_col,score_source,raw) '
+                        'VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s::pg_catalog.jsonb) ON CONFLICT(order_id) DO NOTHING '
+                        'RETURNING order_id,symbol,entry_time,screener_run_ts_utc,model_score,model_score_5d,score_col,score_source,raw::pg_catalog.text',
+                        (item['order_id'], item['symbol'], item.get('entry_time'), item.get('screener_run_ts_utc'),
+                         item.get('model_score'), item.get('model_score_5d'), item.get('score_col'), item.get('score_source'),
+                         disposition.canonical(raw)))
+                    if cursor.rowcount:
+                        saved = cursor.fetchone()
+                        if saved is None or saved[0] != item['order_id'] or saved[1] != item['symbol']:
+                            raise disposition.TradePolicyError('ML_TRADE_CONTEXT_INSERT_CHANGED')
+                        for index, key in ((2,'entry_time'),(3,'screener_run_ts_utc')):
+                            if normalize_ts(saved[index]) != normalize_ts(item.get(key)):
+                                raise disposition.TradePolicyError('ML_TRADE_CONTEXT_INSERT_CHANGED')
+                        for index, key in ((4,'model_score'),(5,'model_score_5d')):
+                            expected = item.get(key)
+                            actual = saved[index]
+                            if (actual is None) != (expected is None) or (actual is not None and Decimal(str(actual)) != Decimal(str(expected))):
+                                raise disposition.TradePolicyError('ML_TRADE_CONTEXT_INSERT_CHANGED')
+                        if saved[6] != item.get('score_col') or saved[7] != item.get('score_source') or disposition.document(saved[8]) != disposition.document(raw):
+                            raise disposition.TradePolicyError('ML_TRADE_CONTEXT_INSERT_CHANGED')
+                        inserted += 1
+                if kind == 'trade_entry_ml_context_backfill':
+                    result['rows_upserted'] = inserted
+                    result['rows_skipped'] = len(contexts) - inserted
+                published_evidence = dict(evidence)
+                if contexts:
+                    # Context insertion changes matching inputs by design. Preserve the
+                    # exact pre-write input and bind consumers to the post-write state.
+                    result['pre_write_input'] = dict(evidence)
+                    post_match = ml_trade_match_inputs(conn, records,
+                        oos_run_date=evidence['match_inputs'].get('oos_run_date'))
+                    before_sources = evidence['match_inputs']['sources']
+                    after_sources = post_match['sources']
+                    if (post_match.get('oos_run_date') != evidence['match_inputs'].get('oos_run_date')
+                            or set(before_sources) != set(after_sources)
+                            or any(after_sources[key] != before_sources[key]
+                                for key in before_sources if key != 'trade_entry_ml_context_app')):
+                        raise disposition.TradePolicyError('ML_TRADE_NONCONTEXT_INPUT_CHANGED')
+                    published_evidence['match_inputs'] = post_match
+                result['trade_policy'] = published_evidence
+                result['artifact_binding'] = {'kind': kind, 'rows_kind': rows_kind, 'rows_count': rows_count,
+                    'rows_sha256': hashlib.sha256(rows_csv.encode('utf8')).hexdigest(),
+                    'payload_fingerprint': disposition.fingerprint(result)}
+                _ml_trade_write_artifact(cursor, kind, run_date, result, None, rows_count, 'latest.json')
+                _ml_trade_write_artifact(cursor, rows_kind, run_date, {'trade_policy': published_evidence,
+                    'artifact_binding': dict(result['artifact_binding'])}, rows_csv, rows_count, 'rows.csv')
+        return result
+
+
+def validated_ml_trade_artifact(kind, engine=None):
+    """Current bound DB artifact only; old files and absent policy never become fallback."""
+    import hashlib
+    rows_kind = _ml_trade_kinds(kind)
+    with _maybe_conn(engine) as conn:
+        with ml_trade_read_transaction(conn):
+            with conn.cursor() as cursor:
+                cursor.execute('SELECT run_date,payload::pg_catalog.text FROM public.ml_artifacts '
+                    'WHERE artifact_type=%s ORDER BY run_date DESC LIMIT 1', (kind,))
+                row = cursor.fetchone()
+                if row is None:
+                    raise disposition.TradePolicyError('ML_TRADE_ARTIFACT_UNAVAILABLE')
+                payload = disposition.document(row[1])
+                binding = payload.get('artifact_binding')
+                if not isinstance(binding, dict) or binding.get('kind') != kind or binding.get('rows_kind') != rows_kind or type(binding.get('rows_count')) is not int or binding['rows_count'] < 0:
+                    raise disposition.TradePolicyError('ML_TRADE_ARTIFACT_UNVALIDATED')
+                unsigned = dict(payload)
+                unsigned.pop('artifact_binding')
+                if disposition.fingerprint(unsigned) != binding.get('payload_fingerprint'):
+                    raise disposition.TradePolicyError('ML_TRADE_ARTIFACT_PAYLOAD_CHANGED')
+                _ml_trade_current(conn, payload.get('trade_policy'))
+                cursor.execute('SELECT payload::pg_catalog.text,csv_data,rows_count FROM public.ml_artifacts '
+                    'WHERE artifact_type=%s AND run_date=%s', (rows_kind, row[0]))
+                data = cursor.fetchone()
+                if data is None or not isinstance(data[1], str):
+                    raise disposition.TradePolicyError('ML_TRADE_ARTIFACT_ROWS_UNAVAILABLE')
+                saved = disposition.document(data[0])
+                if saved != {'trade_policy': payload['trade_policy'], 'artifact_binding': binding} or data[2] != binding.get('rows_count') or hashlib.sha256(data[1].encode('utf8')).hexdigest() != binding.get('rows_sha256'):
+                    raise disposition.TradePolicyError('ML_TRADE_ARTIFACT_ROWS_CHANGED')
+                return payload
+
 
 
 _DUMPED_CANDIDATES = False
@@ -725,7 +1090,7 @@ def get_reconcile_state(engine: Optional[PGConnection] = None, *, strict: bool =
         try:
             with _reconciliation_read_transaction(conn, strict=strict):
                 with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
-                    cursor.execute("SELECT last_after, last_ran_at FROM reconcile_state WHERE id=1")
+                    cursor.execute("SELECT last_after, last_ran_at FROM public.reconcile_state WHERE id=1")
                     row = cursor.fetchone()
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("[WARN] DB_RECONCILE_STATE_FETCH err=%s", exc)
@@ -2826,13 +3191,13 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO executed_trades (
+                    INSERT INTO public.executed_trades (
                         symbol, qty, entry_time, entry_price, exit_time, exit_price,
                         pnl, net_pnl, order_id, status, raw
                     )
                     VALUES (
                         %(symbol)s, %(qty)s, %(entry_time)s, %(entry_price)s, %(exit_time)s, %(exit_price)s,
-                        %(pnl)s, %(net_pnl)s, %(order_id)s, %(status)s, CAST(%(raw)s AS JSONB)
+                        %(pnl)s, %(net_pnl)s, %(order_id)s, %(status)s, CAST(%(raw)s AS pg_catalog.jsonb)
                     )
                     """,
                     payload,
@@ -2921,12 +3286,12 @@ def insert_order_event(
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
-                        INSERT INTO order_events (
+                        INSERT INTO public.order_events (
                             symbol, qty, order_id, status, event_type, event_time, raw
                         )
                         VALUES (
                             %(symbol)s, %(qty)s, %(order_id)s, %(status)s, %(event_type)s,
-                            %(event_time)s, CAST(%(raw)s AS JSONB)
+                            %(event_time)s, CAST(%(raw)s AS pg_catalog.jsonb)
                         )
                         """,
                         stmt_payload,
@@ -2944,6 +3309,244 @@ def insert_order_event(
             return False
 
 
+_OPEN_EXIT_LINEAGE_CAP = 512
+_OPEN_EXIT_EVENT_COLUMNS = """event_id,
+ CASE WHEN pg_catalog.octet_length(event_type)<=128 THEN event_type END AS event_type,
+ CASE WHEN pg_catalog.octet_length(symbol)<=128 THEN symbol END AS symbol,
+ CASE WHEN pg_catalog.octet_length(qty::pg_catalog.text)<=128 THEN qty::pg_catalog.text END AS qty,
+ CASE WHEN pg_catalog.octet_length(order_id)<=128 THEN order_id END AS order_id,
+ event_time,
+ CASE WHEN pg_catalog.octet_length(raw->'raw'->>'parent_order_id')<=128 THEN raw->'raw'->>'parent_order_id' END AS parent_order_id,
+ raw ? 'parent_order_id' AS top_parent_key_present,
+ CASE WHEN pg_catalog.octet_length(raw->>'parent_order_id')<=128 THEN raw->>'parent_order_id' END AS top_parent_order_id,
+ CASE WHEN pg_catalog.octet_length(raw->>'order_id')<=128 THEN raw->>'order_id' END AS envelope_order_id,
+ CASE WHEN pg_catalog.octet_length(raw->>'event_type')<=128 THEN raw->>'event_type' END AS envelope_event_type,
+ CASE WHEN pg_catalog.octet_length(raw->'raw'->>'event_type')<=128 THEN raw->'raw'->>'event_type' END AS metadata_event_type,
+ CASE WHEN pg_catalog.octet_length(raw->'raw'->>'submitted_at')<=128 THEN raw->'raw'->>'submitted_at' END AS recorded_submitted_at,
+ COALESCE(pg_catalog.jsonb_typeof(raw)='object' AND pg_catalog.jsonb_typeof(raw->'raw')='object'
+ AND pg_catalog.jsonb_typeof(raw->'raw'->'parent_order_id')='string'
+ AND pg_catalog.jsonb_typeof(raw->'order_id')='string'
+ AND pg_catalog.jsonb_typeof(raw->'event_type')='string'
+ AND pg_catalog.jsonb_typeof(raw->'raw'->'event_type')='string'
+ AND (raw->'raw'->'submitted_at' IS NULL OR pg_catalog.jsonb_typeof(raw->'raw'->'submitted_at') IN('string','null'))
+ AND COALESCE(pg_catalog.octet_length(raw->'raw'->>'submitted_at')<=128,true),false) AS raw_shape_valid
+"""
+
+
+def _lineage_uuid(value):
+    if (type(value) is not str or len(value) != 36
+            or any(value[i] != '-' for i in (8, 13, 18, 23))
+            or len(value.replace('-', '')) != 32
+            or any(c not in '0123456789abcdef' for c in value.replace('-', ''))):
+        raise ValueError('open_exit_lineage_uuid_invalid')
+    return value
+
+
+def _lineage_number(value):
+    if isinstance(value, bool):
+        raise ValueError('open_exit_lineage_number_invalid')
+    result = Decimal(str(value))
+    if not result.is_finite() or result <= 0:
+        raise ValueError('open_exit_lineage_number_invalid')
+    return result
+
+
+def _lineage_time(value):
+    if isinstance(value, datetime):
+        result = value
+    elif isinstance(value, str) and len(value) <= 128:
+        result = parser.isoparse(value)
+    else:
+        raise ValueError('open_exit_lineage_time_invalid')
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError('open_exit_lineage_time_invalid')
+    return result.astimezone(timezone.utc)
+
+
+def _lineage_rows(cursor, query, parameters, cap):
+    cursor.execute(query, parameters)
+    rows = cursor.fetchmany(cap + 1)
+    if len(rows) > cap:
+        raise ValueError('open_exit_lineage_incomplete')
+    names = [field.name for field in cursor.description]
+    return [dict(zip(names, row)) for row in rows]
+
+
+def _open_exit_lineage_guard(cursor):
+    cursor.execute("""SELECT c.relname,c.relkind,c.relrowsecurity,c.relforcerowsecurity,
+        EXISTS(SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid)
+        FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname IN('trades','order_events') ORDER BY c.relname""")
+    rows = cursor.fetchmany(3)
+    if (len(rows) != 2 or {row[0] for row in rows} != {'trades', 'order_events'}
+            or any(row[1] != 'r' or row[2] or row[3] or row[4] for row in rows)):
+        raise ValueError('open_exit_lineage_physical_visibility_unverified')
+
+
+def _open_exit_lineage_record(event, trade, *, observed_before, provider_fill=None):
+    """Validate the exact existing producer envelope; never infer a lot/order."""
+    if (type(trade.get('trade_id')) is not int or trade['trade_id'] <= 0
+            or trade.get('status') != 'OPEN' or trade.get('exit_order_id') not in (None, '')
+            or trade.get('exit_order_id_oversize') is True
+            or type(event.get('event_id')) is not int or event['event_id'] <= 0
+            or not isinstance(trade.get('symbol'), str) or not trade['symbol'].strip()
+            or len(trade['symbol']) > 128 or event.get('symbol') != trade['symbol']
+            or event.get('event_type') != 'TRAIL_SUBMIT' or event.get('raw_shape_valid') is not True
+            or event.get('envelope_event_type') != 'TRAIL_SUBMIT'
+            or event.get('metadata_event_type') != 'TRAIL_SUBMIT'):
+        raise ValueError('open_exit_lineage_record_invalid')
+    parent = _lineage_uuid(trade.get('entry_order_id'))
+    child = _lineage_uuid(event.get('order_id'))
+    claimed_parent = _lineage_uuid(event.get('parent_order_id'))
+    if claimed_parent != parent:
+        raise ValueError('open_exit_lineage_contrary_parent')
+    if (child == parent
+            or event.get('envelope_order_id') != child
+            or _lineage_number(event.get('qty')) != _lineage_number(trade.get('qty'))):
+        raise ValueError('open_exit_lineage_identity_or_quantity_conflict')
+    if event.get('top_parent_key_present') is True:
+        if event.get('top_parent_order_id') is None:
+            raise ValueError('open_exit_lineage_optional_parent_unverified')
+        if _lineage_uuid(event.get('top_parent_order_id')) != parent:
+            raise ValueError('open_exit_lineage_contrary_parent')
+    entry_at, event_at, cutoff = (_lineage_time(trade.get('entry_time')),
+        _lineage_time(event.get('event_time')), _lineage_time(observed_before))
+    if not entry_at <= event_at <= cutoff:
+        raise ValueError('open_exit_lineage_chronology_conflict')
+    recorded = event.get('recorded_submitted_at')
+    if recorded is not None and _lineage_time(recorded) != event_at:
+        raise ValueError('open_exit_lineage_recorded_time_conflict')
+    if provider_fill is not None:
+        if (not isinstance(provider_fill, Mapping)
+                or _lineage_uuid(provider_fill.get('id')) != child
+                or provider_fill.get('symbol') != trade['symbol']
+                or str(provider_fill.get('side', '')).lower() != 'sell'
+                or str(provider_fill.get('status', '')).lower() != 'filled'
+                or str(provider_fill.get('type', '')).lower() != 'trailing_stop'
+                or _lineage_number(provider_fill.get('qty')) != _lineage_number(trade['qty'])
+                or _lineage_number(provider_fill.get('filled_qty')) != _lineage_number(trade['qty'])):
+            raise ValueError('open_exit_lineage_provider_identity_conflict')
+        created, filled = (_lineage_time(provider_fill.get('created_at')),
+            _lineage_time(provider_fill.get('filled_at')))
+        if not entry_at <= created <= event_at <= filled <= cutoff:
+            raise ValueError('open_exit_lineage_provider_chronology_conflict')
+    return child
+
+
+def get_open_trade_exit_lineage(engine, open_trades, *, expected_policy_revision=None, observed_before=None):
+    """Read a bounded candidate mapping separately from original exit fields.
+
+    This mapping is advisory: the writer repeats its proof under stronger locks.
+    Missing, malformed, ambiguous or conflicting lineage yields no candidate.
+    Incomplete reads and policy/schema failures raise; there is no fallback.
+    """
+    if not isinstance(open_trades, list) or len(open_trades) > 256:
+        raise ValueError('open_exit_lineage_input_incomplete')
+    requested = {}
+    for trade in open_trades:
+        if not isinstance(trade, Mapping) or type(trade.get('trade_id')) is not int:
+            raise ValueError('open_exit_lineage_input_invalid')
+        if trade.get('exit_order_id') not in (None, ''):
+            continue
+        try:
+            parent = _lineage_uuid(trade.get('entry_order_id'))
+        except ValueError:
+            continue
+        if trade['trade_id'] in requested:
+            raise ValueError('open_exit_lineage_input_duplicate')
+        requested[trade['trade_id']] = parent
+    if not requested:
+        return {}
+    cutoff = _lineage_time(observed_before if observed_before is not None else datetime.now(timezone.utc))
+    parameters = {'parents': sorted(set(requested.values())), 'trade_ids': sorted(requested)}
+    with _maybe_conn(engine) as conn:
+        with _reconciliation_read_transaction(conn, strict=True, expected_revision=expected_policy_revision):
+            with conn.cursor() as cursor:
+                _open_exit_lineage_guard(cursor)
+                owners = _lineage_rows(cursor, """SELECT trade_id,
+                    CASE WHEN pg_catalog.octet_length(symbol)<=128 THEN symbol END AS symbol,
+                    CASE WHEN pg_catalog.octet_length(qty::pg_catalog.text)<=128 THEN qty::pg_catalog.text END AS qty,
+                    CASE WHEN pg_catalog.octet_length(entry_order_id)<=128 THEN entry_order_id END AS entry_order_id,
+                    entry_time,CASE WHEN pg_catalog.octet_length(status)<=128 THEN status END AS status,
+                    CASE WHEN pg_catalog.octet_length(exit_order_id)<=128 THEN exit_order_id END AS exit_order_id,
+                    COALESCE(pg_catalog.octet_length(exit_order_id)>128,false) AS exit_order_id_oversize
+                    FROM ONLY public.trades WHERE trade_id=ANY(%(trade_ids)s)
+                    OR entry_order_id=ANY(%(parents)s) ORDER BY trade_id LIMIT 513""", parameters, _OPEN_EXIT_LINEAGE_CAP)
+                events = _lineage_rows(cursor, 'SELECT ' + _OPEN_EXIT_EVENT_COLUMNS + """
+                    FROM ONLY public.order_events WHERE event_type='TRAIL_SUBMIT'
+                    AND raw->'raw'->>'parent_order_id'=ANY(%(parents)s)
+                    ORDER BY event_id LIMIT 513""", parameters, _OPEN_EXIT_LINEAGE_CAP)
+                children = sorted({e['order_id'] for e in events if isinstance(e.get('order_id'), str)})
+                child_facts = _lineage_rows(cursor, 'SELECT ' + _OPEN_EXIT_EVENT_COLUMNS + """
+                    FROM ONLY public.order_events WHERE order_id=ANY(%(children)s)
+                    AND (event_type='TRAIL_SUBMIT' OR raw ? 'parent_order_id' OR (raw->'raw') ? 'parent_order_id')
+                    ORDER BY event_id LIMIT 513""", {'children': children}, _OPEN_EXIT_LINEAGE_CAP) if children else []
+                binding_ids = sorted(set(parameters['parents'] + children))
+                binding_owners = _lineage_rows(cursor, """SELECT trade_id,
+                    CASE WHEN pg_catalog.octet_length(entry_order_id)<=128 THEN entry_order_id END AS entry_order_id,
+                    CASE WHEN pg_catalog.octet_length(exit_order_id)<=128 THEN exit_order_id END AS exit_order_id,
+                    COALESCE(pg_catalog.octet_length(entry_order_id)>128 OR pg_catalog.octet_length(exit_order_id)>128,false) AS identity_oversize
+                    FROM ONLY public.trades WHERE entry_order_id=ANY(%(binding_ids)s)
+                    OR exit_order_id=ANY(%(binding_ids)s) ORDER BY trade_id LIMIT 513""",
+                    {'binding_ids': binding_ids}, _OPEN_EXIT_LINEAGE_CAP)
+    mapping = {}
+    for trade_id, parent in requested.items():
+        entry_owners = [t for t in owners if t.get('entry_order_id') == parent]
+        related = [e for e in events if e.get('parent_order_id') == parent]
+        if len(entry_owners) != 1 or entry_owners[0]['trade_id'] != trade_id or len(related) != 1:
+            continue
+        try:
+            child = _open_exit_lineage_record(related[0], entry_owners[0], observed_before=cutoff)
+            selected_child_facts = [e for e in child_facts if e.get('order_id') == child]
+            if len(selected_child_facts) != 1 or selected_child_facts[0]['event_id'] != related[0]['event_id']:
+                continue
+            physical = [t for t in binding_owners
+                if t.get('entry_order_id') in (parent, child) or t.get('exit_order_id') in (parent, child)]
+            if (len(physical) != 1 or physical[0]['trade_id'] != trade_id
+                    or physical[0].get('entry_order_id') != parent
+                    or physical[0].get('exit_order_id') not in (None, '')
+                    or physical[0].get('identity_oversize') is True):
+                continue
+        except (ValueError, TypeError, ArithmeticError):
+            continue
+        mapping[trade_id] = child
+    # One child cannot be offered to two parents/trades even in a malformed read.
+    duplicates = {child for child in mapping.values() if list(mapping.values()).count(child) > 1}
+    return {trade_id: child for trade_id, child in mapping.items() if child not in duplicates}
+
+
+def _require_open_exit_lineage(cursor, trade, order_id, provider_fill, event_time, exit_price):
+    """Revalidate under caller-owned table/order/row locks before any write."""
+    parent = _lineage_uuid(trade.get('entry_order_id'))
+    _lineage_uuid(order_id)
+    if any(trade.get(key) is not None for key in ('exit_time', 'exit_price', 'exit_reason', 'realized_pnl')):
+        raise ValueError('open_exit_lineage_existing_exit_evidence')
+    owners = _lineage_rows(cursor, """SELECT trade_id,
+        CASE WHEN pg_catalog.octet_length(entry_order_id)<=128 THEN entry_order_id END AS entry_order_id,
+        CASE WHEN pg_catalog.octet_length(exit_order_id)<=128 THEN exit_order_id END AS exit_order_id,
+        COALESCE(pg_catalog.octet_length(entry_order_id)>128 OR pg_catalog.octet_length(exit_order_id)>128,false) AS identity_oversize
+        FROM ONLY public.trades WHERE entry_order_id=ANY(%(binding_ids)s)
+        OR exit_order_id=ANY(%(binding_ids)s) ORDER BY trade_id LIMIT 2""",
+        {'binding_ids': [parent, order_id]}, 1)
+    if (len(owners) != 1 or owners[0]['trade_id'] != trade['trade_id']
+            or owners[0].get('entry_order_id') != parent
+            or owners[0].get('exit_order_id') not in (None, '')
+            or owners[0].get('identity_oversize') is True):
+        raise ValueError('open_exit_lineage_entry_owner_conflict')
+    events = _lineage_rows(cursor, 'SELECT ' + _OPEN_EXIT_EVENT_COLUMNS + """
+        FROM ONLY public.order_events WHERE
+        (order_id=%(child)s AND (event_type='TRAIL_SUBMIT' OR raw ? 'parent_order_id' OR (raw->'raw') ? 'parent_order_id'))
+        OR (event_type='TRAIL_SUBMIT' AND raw->'raw'->>'parent_order_id'=%(parent)s)
+        ORDER BY event_id LIMIT 2""", {'child': order_id, 'parent': parent}, 1)
+    if len(events) != 1:
+        raise ValueError('open_exit_lineage_event_missing')
+    child = _open_exit_lineage_record(events[0], trade,
+        observed_before=datetime.now(timezone.utc), provider_fill=provider_fill)
+    if (child != order_id or _lineage_time(provider_fill.get('filled_at')) != _lineage_time(event_time)
+            or _lineage_number(provider_fill.get('filled_avg_price')) != _lineage_number(exit_price)):
+        raise ValueError('open_exit_lineage_fill_conflict')
+
+
 def reconcile_sell_fill(
     engine: Optional[PGConnection], trade_id: Any, *, symbol: str, qty: Any,
     order_id: str, status: str, event_time: Any, raw: Any,
@@ -2954,8 +3557,9 @@ def reconcile_sell_fill(
     Participating reconcilers serialize by broker order, then lock the trade.
     A prior identical event is reused only for its uniquely bound trade.
     Conflicting/duplicate events and another trade's ownership block.
-    An untouched POSITION_CLOSED placeholder may be upgraded during decoration.
-    Legacy event writers do not participate in this locking contract.
+    CLOSED rows require existing ownership. OPEN first binding additionally
+    requires the exact producer lineage revalidated under physical table locks.
+    Symbol, chronology or equal quantity alone never allocate a fill.
     """
     def number(value: Any) -> Decimal:
         if isinstance(value, bool):
@@ -2998,16 +3602,26 @@ def reconcile_sell_fill(
                     policy = trade_policy(conn, expected_revision=expected_policy_revision)
                     disposition.require_writable(policy, trade_id)
                     cursor.execute("SET LOCAL search_path = pg_catalog")
+                    # Strongest table modes precede proof/owner reads. NOWAIT
+                    # and try-lock refusal avoid mixed-writer waiting cycles.
+                    cursor.execute("SET LOCAL lock_timeout='1500ms'")
+                    cursor.execute("SET LOCAL statement_timeout='5000ms'")
+                    cursor.execute("LOCK TABLE ONLY public.trades IN SHARE ROW EXCLUSIVE MODE NOWAIT")
+                    cursor.execute("LOCK TABLE ONLY public.order_events IN SHARE ROW EXCLUSIVE MODE NOWAIT")
+                    _open_exit_lineage_guard(cursor)
                     # Colliding hash keys only serialize unrelated orders; they
                     # cannot cause event identities to compare equal.
                     cursor.execute(
-                        "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(%(key)s))",
+                        "SELECT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext(%(key)s))",
                         {"key": "jbravo:SELL_FILL:" + order_id},
                     )
+                    order_lock = cursor.fetchone()
+                    if not order_lock or order_lock[0] is not True:
+                        raise ValueError('fill_order_lock_busy')
                     cursor.execute(
                         """SELECT status, qty, entry_price, symbol, exit_order_id,
-                                  exit_time, exit_price, exit_reason, realized_pnl
-                           FROM public.trades WHERE trade_id=%(trade_id)s FOR UPDATE""",
+                                  exit_time, exit_price, exit_reason, realized_pnl, entry_order_id, entry_time
+                           FROM public.trades WHERE trade_id=%(trade_id)s FOR UPDATE NOWAIT""",
                         payload,
                     )
                     row = cursor.fetchone()
@@ -3016,26 +3630,25 @@ def reconcile_sell_fill(
                     state = (row[0] or "").upper()
                     if state not in ("OPEN", "CLOSED") or (decorate and state != "CLOSED"):
                         raise ValueError("trade_state_mismatch")
+                    if fill_qty != number(row[1]):
+                        raise ValueError("partial_fill_allocation_unsupported")
+                    if row[4] != order_id:
+                        if state != 'OPEN' or decorate or row[4] not in (None, ''):
+                            raise ValueError("fill_allocation_unbound")
+                        proof_trade = dict(trade_id=trade_id, symbol=row[3], qty=row[1],
+                            status=state, exit_order_id=row[4], entry_order_id=row[9], entry_time=row[10],
+                            exit_time=row[5], exit_price=row[6], exit_reason=row[7], realized_pnl=row[8])
+                        _require_open_exit_lineage(cursor, proof_trade, order_id, raw, normalized_time, exit_price)
                     if row[4] not in (None, "", order_id):
                         raise ValueError("trade_exit_conflict")
-                    # The position-absence writer records an observation time,
-                    # not a broker execution. Upgrade only its exact untouched
-                    # sentinel; any bound order, price or P&L is real evidence.
                     position_closed_at = normalize_ts(row[5]) if row[5] is not None else None
-                    position_placeholder = (
-                        decorate and state == "CLOSED" and row[4] is None
-                        and row[6] is None and row[8] is None
-                        and row[7] == "POSITION_CLOSED"
-                        and position_closed_at is not None
-                        and normalized_time <= position_closed_at
-                    )
                     # Missing fields do not make existing exit evidence replaceable.
                     # Validate each supplied field before inserting or decorating.
                     if (
-                        (not position_placeholder and row[5] is not None
+                        (row[5] is not None
                          and position_closed_at != normalized_time)
                         or (row[6] is not None and number(row[6]) != number(exit_price))
-                        or (not position_placeholder and row[7] is not None and row[7] != exit_reason)
+                        or (row[7] is not None and row[7] != exit_reason)
                     ):
                         raise ValueError("trade_exit_conflict")
                     exit_complete = (state == "CLOSED" and row[4] == order_id
@@ -3064,7 +3677,7 @@ def reconcile_sell_fill(
                     # transaction as the event; never reuse another trade's fill.
                     cursor.execute(
                         """SELECT trade_id FROM public.trades
-                           WHERE exit_order_id=%(order_id)s LIMIT 2""",
+                           WHERE exit_order_id=%(order_id)s OR entry_order_id=%(order_id)s LIMIT 2""",
                         payload,
                     )
                     owners = cursor.fetchall()
@@ -3146,7 +3759,7 @@ def get_open_trades(
                 with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
                     cursor.execute(
                         f"""
-                        SELECT trade_id, symbol, qty, entry_time, entry_price, entry_order_id
+                        SELECT trade_id, symbol, qty, entry_time, entry_price, entry_order_id, exit_order_id
                         FROM public.trades
                         WHERE status='OPEN' AND {eligible}
                         ORDER BY entry_time DESC NULLS LAST, trade_id DESC
@@ -3546,7 +4159,7 @@ def upsert_trade_on_buy_fill(
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO trades (
+                    INSERT INTO public.trades (
                         symbol, qty, entry_order_id, entry_time, entry_price, status, updated_at
                     )
                     VALUES (
