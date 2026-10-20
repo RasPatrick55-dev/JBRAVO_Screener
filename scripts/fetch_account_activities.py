@@ -303,6 +303,7 @@ def insert_activities(
         if engine is None:
             raise RuntimeError("db_disabled")
         with engine:
+            db._policy_write_lock(engine)
             with engine.cursor() as cursor:
                 extras.execute_batch(
                     cursor,

@@ -218,11 +218,15 @@ class Policy:
     revision: int
     active: tuple
     scope: str | None = None
+    allocations: tuple = ()
+    allocation_metadata_json: str = '{}'
 
     @property
     def all_excluded_ids(self):
-        # Any active case continues to protect the historical row from writes.
-        return frozenset(item.trade_id for item in self.active)
+        # Active overlays protect originals. Historical order reservations are
+        # enforced separately by require_order_owner, not a trade-wide ban.
+        return frozenset(item.trade_id for item in self.active) | frozenset(
+            positive_id(item.trade_id) for item in self.allocations)
 
     @property
     def excluded_ids(self):
@@ -240,8 +244,9 @@ class Policy:
                 'operational_scopes': list(item.operational_scopes)} for item in selected],
             'recovery_pending_cases': [{'case_id': item.case_id, 'trade_id': item.trade_id,
                 'classification': 'UNRESOLVED'} for item in self.active],
-            'recovery_complete': not self.active,
-            'accounting_complete': False if self.active else None,
+            'allocation_overlay': document(self.allocation_metadata_json),
+            'recovery_complete': not (self.active or self.allocations),
+            'accounting_complete': False if (self.active or self.allocations) else None,
             'provenance_proved': False}
 
 
@@ -310,7 +315,27 @@ def read_policy(cursor, expected_identity, *, exclusive=False, scope=None):
         seen.add(request["trade_id"])
         active.append(ActiveCase(request["case_id"], request["trade_id"], request["approval_ref"],
             "UNRESOLVED", tuple(sorted(document(manifest)["operational_scopes"]))))
-    return Policy(*expected_identity, policy_revision, tuple(active), scope)
+    # Optional schema absence is an explicit core-reader result; import,
+    # privilege, partial-schema or evidence errors must never become empty policy.
+    overlay = _read_allocation_overlay(cursor, expected_identity, policy_revision, frozenset(seen))
+    allocation_metadata = overlay.metadata_dict()
+    if (allocation_metadata.get('deployment_id') != expected_identity[0]
+            or allocation_metadata.get('database_id') != expected_identity[1]
+            or allocation_metadata.get('policy_revision') != policy_revision):
+        fail('ALLOCATION_IDENTITY_MISMATCH')
+    allocations = tuple(overlay.allocations)
+    ids = [positive_id(item.trade_id) for item in allocations]
+    if len(ids) != len(set(ids)) or seen.intersection(ids):
+        fail('ALLOCATION_CASE_CONFLICT')
+    return Policy(*expected_identity, policy_revision, tuple(active), scope,
+        allocations, canonical(allocation_metadata))
+
+
+def _read_allocation_overlay(cursor, expected_identity, policy_revision, excluded_ids):
+    # Pure module; no connection/provider/config discovery at import.
+    from scripts import trade_allocation
+    return trade_allocation.read_active(cursor, expected_identity, policy_revision, excluded_ids)
+
 
 
 def eligible_sql(alias='trades', *, scope):
@@ -321,6 +346,48 @@ def eligible_sql(alias='trades', *, scope):
     return ("NOT EXISTS (SELECT 1 FROM public.trade_disposition_cases disposition "
         f"WHERE disposition.trade_id={alias}.trade_id AND disposition.state='ACTIVE' "
         f"AND pg_catalog.jsonb_exists(disposition.manifest->'operational_scopes','{scope}'))")
+
+
+def reconciliation_eligible_sql(policy, alias='trades'):
+    """Use only validated allocation identities, in the same locked transaction."""
+    if policy.scope != 'ACTIVE_RECONCILIATION':
+        fail('SCOPE_REQUIRED')
+    predicate = eligible_sql(alias, scope='ACTIVE_RECONCILIATION')
+    resolved = sorted(positive_id(item.trade_id) for item in policy.allocations)
+    if resolved:
+        predicate += ' AND ' + alias + '.trade_id NOT IN (' + ','.join(map(str, resolved)) + ')'
+    return predicate
+
+
+def require_financial_eligible(policy, records=None):
+    # An audited gross result is never net PnL or a replacement scalar price.
+    # ML windows are bounded populations; allocations outside them do not make
+    # their unaffected records incomplete. Whole-history consumers pass None.
+    selected = None if records is None else frozenset(positive_id(row.get('trade_id')) for row in records)
+    if any(item.financial_eligible is not True and (selected is None or item.trade_id in selected)
+            for item in policy.allocations):
+        fail('ALLOCATION_ACCOUNTING_INCOMPLETE')
+
+
+def require_order_owner(policy, trade_id, *order_ids):
+    """Retained audited order claims protect ownership even after revocation."""
+    trade_id = positive_id(trade_id)
+    metadata = document(policy.allocation_metadata_json)
+    owners = metadata.get('reserved_order_owners')
+    if owners is None and metadata.get('status') == 'MIGRATION_PENDING' and not policy.allocations:
+        owners = {}
+    if not isinstance(owners, dict):
+        fail('ALLOCATION_ORDER_CLAIMS_UNAVAILABLE')
+    for order_id, owner in owners.items():
+        text_field(order_id)
+        positive_id(owner)
+    for item in policy.allocations:
+        if any(owners.get(order_id) != item.trade_id for order_id in item.order_ids):
+            fail('ALLOCATION_ORDER_CLAIMS_INVALID')
+    for order_id in order_ids:
+        text_field(order_id)
+        if order_id in owners and owners[order_id] != trade_id:
+            fail('ALLOCATION_ORDER_OWNER_CONFLICT')
 
 
 def require_writable(policy, trade_id):
@@ -366,6 +433,12 @@ def change_disposition(conn, request, manifest, expected_identity):
             cursor.execute("SET LOCAL lock_timeout = '1500ms'")
             cursor.execute("SET LOCAL statement_timeout = '5000ms'")
             policy = read_policy(cursor, expected_identity, exclusive=True)
+            # Approval references cannot identify two different mechanisms.
+            if policy.metadata()['allocation_overlay'].get('allocation_schema_version') == 1:
+                cursor.execute('SELECT approval_ref FROM public.trade_allocation_audit WHERE approval_ref=%s',
+                    (request['approval_ref'],))
+                if cursor.fetchone() is not None:
+                    fail('APPROVAL_REUSED')
             cursor.execute("SELECT request_digest, result::text FROM public.trade_disposition_audit WHERE approval_ref=%s",
                            (request["approval_ref"],))
             previous = cursor.fetchone()

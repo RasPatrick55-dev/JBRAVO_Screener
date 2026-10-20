@@ -231,7 +231,8 @@ def _artifact_record(
                 "created_at": payload.get("run_utc"), "run_date": payload.get("run_date"),
                 "rows_count": payload["artifact_binding"]["rows_count"], "file_name": "latest.json"}
         except Exception:
-            return {"present": False, "source": "HELD", "payload": {"status": "HELD_UNVALIDATED_PERFORMANCE"},
+            return {"present": False, "source": "HELD", "payload": {"status": "HELD_UNVALIDATED_PERFORMANCE",
+                    **db.performance_hold_visibility()},
                 "created_at": None, "run_date": None, "rows_count": None, "file_name": None}
     if db.db_enabled():
         record = db.fetch_latest_ml_artifact(artifact_type)

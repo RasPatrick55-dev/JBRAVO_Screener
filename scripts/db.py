@@ -87,6 +87,7 @@ def _performance_input_records(conn, policy):
 
 def performance_input(conn, policy):
     """Financial consumers require complete fields; history stays unfiltered."""
+    disposition.require_financial_eligible(policy)
     records = _performance_input_records(conn, policy)
     disposition.require_complete_accounting(records)
     return records
@@ -98,7 +99,7 @@ def performance_hold_visibility(engine=None):
         with _maybe_conn(engine) as conn:
             with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE') as policy:
                 records = _performance_input_records(conn, policy)
-                unresolved = []
+                unresolved = [item.trade_id for item in policy.allocations if item.financial_eligible is not True]
                 for row in records:
                     try:
                         disposition.require_complete_accounting([row])
@@ -110,14 +111,17 @@ def performance_hold_visibility(engine=None):
                     'policy_revision': metadata['policy_revision'],
                     'excluded_count': metadata['excluded_count'],
                     'accounting_input_status': 'INCOMPLETE' if unresolved else 'COMPLETE_FIELDS_ONLY',
-                    'unresolved_trade_ids': sorted(unresolved)}
+                    'unresolved_trade_ids': sorted(set(unresolved)),
+                    'allocation_visibility': metadata['allocation_overlay']}
     except Exception:
         return {'trade_policy': None, 'policy_validation_status': 'UNAVAILABLE',
             'policy_revision': None, 'excluded_count': None,
-            'accounting_input_status': 'UNAVAILABLE', 'unresolved_trade_ids': None}
+            'accounting_input_status': 'UNAVAILABLE', 'unresolved_trade_ids': None,
+            'allocation_visibility': None}
 
 
 def performance_evidence(policy, records):
+    disposition.require_financial_eligible(policy)
     return {'policy': policy.metadata(), 'input_fingerprint': disposition.fingerprint({'rows': records}),
         'input_count': len(records), 'input_basis': 'public.trades:CLOSED:VALIDATED_PERFORMANCE:full-row',
         'recovery_complete': False, 'accounting_complete': False,
@@ -191,6 +195,25 @@ def reconciliation_publication(engine=None, *, expected_revision):
             yield policy.metadata()
 
 
+def _policy_write_lock(conn):
+    """Take the shared policy lock before an input-table DML/row lock.
+
+    The caller owns this exact connection and its transaction/commit. Statement
+    triggers run after PostgreSQL takes the target relation lock, so they cannot
+    establish this order for INSERT/ON CONFLICT/UPDATE by themselves. Do not set
+    search_path here: legacy writers deliberately retain their existing namespace.
+    """
+    if conn is None or conn.autocommit:
+        raise disposition.TradePolicyError('TRADE_POLICY_WRITE_TRANSACTION_REQUIRED')
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_catalog.current_setting('transaction_isolation')")
+        if cursor.fetchone() != ('read committed',):
+            raise disposition.TradePolicyError('TRADE_POLICY_ISOLATION_INVALID')
+        cursor.execute("SET LOCAL lock_timeout = '1500ms'")
+        cursor.execute("SET LOCAL statement_timeout = '5000ms'")
+        cursor.execute("SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtext('jbravo:trade-disposition:policy'))")
+
+
 def _ml_trade_policy_lock(conn):
     """Serialize ML publication while keeping policy-table access SELECT-only."""
     with conn.cursor() as cursor:
@@ -247,7 +270,9 @@ def ml_trade_input(conn, policy, *, start_dt, end_dt):
             disposition.eligible_sql('t', scope='VALIDATED_PERFORMANCE') +
             " AND COALESCE(t.exit_time,t.entry_time)>=%s AND COALESCE(t.exit_time,t.entry_time)<=%s "
             "ORDER BY t.trade_id", (start_dt, end_dt))
-        return [disposition.document(row[0]) for row in cursor.fetchall()]
+        records = [disposition.document(row[0]) for row in cursor.fetchall()]
+    disposition.require_financial_eligible(policy, records)
+    return records
 
 
 def ml_trade_match_inputs(conn, records, *, oos_run_date=None):
@@ -297,6 +322,7 @@ def ml_trade_match_inputs(conn, records, *, oos_run_date=None):
 
 
 def ml_trade_evidence(policy, records, *, start_dt, end_dt, match_inputs):
+    disposition.require_financial_eligible(policy, records)
     return {'policy': policy.metadata(), 'input_fingerprint': disposition.fingerprint({'rows': records}),
         'input_count': len(records), 'input_basis': 'public.trades:CLOSED:VALIDATED_PERFORMANCE:window:full-row',
         'match_inputs': disposition.document(match_inputs),
@@ -1412,6 +1438,7 @@ def insert_screener_candidates(
             """
             try:
                 with conn:
+                    _policy_write_lock(conn)
                     with conn.cursor() as cursor:
                         cursor.execute(create_stmt)
                         _repair_screener_run_map_app_schema(cursor)
@@ -2443,6 +2470,7 @@ def ensure_ml_artifacts_table() -> None:
     if conn is None:
         return
     try:
+        _policy_write_lock(conn)
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -2481,6 +2509,7 @@ def ensure_screener_ranker_scores_app_table() -> None:
         return
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2523,6 +2552,7 @@ def ensure_trade_entry_ml_context_app_table() -> None:
         return
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2612,6 +2642,7 @@ def upsert_trade_entry_ml_context(row: Mapping[str, Any] | None) -> bool:
         return False
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2749,6 +2780,7 @@ def upsert_screener_ranker_scores_frame(
 
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 extras.execute_batch(
                     cursor,
@@ -2809,6 +2841,7 @@ def upsert_ml_artifact(
         return False
     run_date_value = _coerce_date(run_date)
     try:
+        _policy_write_lock(conn)
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -3188,6 +3221,7 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
     }
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3460,7 +3494,7 @@ def get_open_trade_exit_lineage(engine, open_trades, *, expected_policy_revision
     cutoff = _lineage_time(observed_before if observed_before is not None else datetime.now(timezone.utc))
     parameters = {'parents': sorted(set(requested.values())), 'trade_ids': sorted(requested)}
     with _maybe_conn(engine) as conn:
-        with _reconciliation_read_transaction(conn, strict=True, expected_revision=expected_policy_revision):
+        with _reconciliation_read_transaction(conn, strict=True, expected_revision=expected_policy_revision) as policy:
             with conn.cursor() as cursor:
                 _open_exit_lineage_guard(cursor)
                 owners = _lineage_rows(cursor, """SELECT trade_id,
@@ -3489,6 +3523,12 @@ def get_open_trade_exit_lineage(engine, open_trades, *, expected_policy_revision
                     FROM ONLY public.trades WHERE entry_order_id=ANY(%(binding_ids)s)
                     OR exit_order_id=ANY(%(binding_ids)s) ORDER BY trade_id LIMIT 513""",
                     {'binding_ids': binding_ids}, _OPEN_EXIT_LINEAGE_CAP)
+    # Physical and retained allocation owners form one global ownership view.
+    # A contradiction is a held read, never a silently omitted owner.
+    for owner in binding_owners:
+        for key in ('entry_order_id', 'exit_order_id'):
+            if owner.get(key) not in (None, ''):
+                disposition.require_order_owner(policy, owner['trade_id'], owner[key])
     mapping = {}
     for trade_id, parent in requested.items():
         entry_owners = [t for t in owners if t.get('entry_order_id') == parent]
@@ -3497,6 +3537,7 @@ def get_open_trade_exit_lineage(engine, open_trades, *, expected_policy_revision
             continue
         try:
             child = _open_exit_lineage_record(related[0], entry_owners[0], observed_before=cutoff)
+            disposition.require_order_owner(policy, trade_id, parent, child)
             selected_child_facts = [e for e in child_facts if e.get('order_id') == child]
             if len(selected_child_facts) != 1 or selected_child_facts[0]['event_id'] != related[0]['event_id']:
                 continue
@@ -3515,10 +3556,11 @@ def get_open_trade_exit_lineage(engine, open_trades, *, expected_policy_revision
     return {trade_id: child for trade_id, child in mapping.items() if child not in duplicates}
 
 
-def _require_open_exit_lineage(cursor, trade, order_id, provider_fill, event_time, exit_price):
+def _require_open_exit_lineage(cursor, trade, order_id, provider_fill, event_time, exit_price, *, policy):
     """Revalidate under caller-owned table/order/row locks before any write."""
     parent = _lineage_uuid(trade.get('entry_order_id'))
     _lineage_uuid(order_id)
+    disposition.require_order_owner(policy, trade['trade_id'], parent, order_id)
     if any(trade.get(key) is not None for key in ('exit_time', 'exit_price', 'exit_reason', 'realized_pnl')):
         raise ValueError('open_exit_lineage_existing_exit_evidence')
     owners = _lineage_rows(cursor, """SELECT trade_id,
@@ -3638,7 +3680,7 @@ def reconcile_sell_fill(
                         proof_trade = dict(trade_id=trade_id, symbol=row[3], qty=row[1],
                             status=state, exit_order_id=row[4], entry_order_id=row[9], entry_time=row[10],
                             exit_time=row[5], exit_price=row[6], exit_reason=row[7], realized_pnl=row[8])
-                        _require_open_exit_lineage(cursor, proof_trade, order_id, raw, normalized_time, exit_price)
+                        _require_open_exit_lineage(cursor, proof_trade, order_id, raw, normalized_time, exit_price, policy=policy)
                     if row[4] not in (None, "", order_id):
                         raise ValueError("trade_exit_conflict")
                     position_closed_at = normalize_ts(row[5]) if row[5] is not None else None
@@ -3795,8 +3837,8 @@ def get_closed_trades_missing_exit(
                 raise RuntimeError("RECONCILE_DB_UNAVAILABLE")
             return []
         try:
-            with _reconciliation_read_transaction(conn, strict=strict, expected_revision=expected_policy_revision):
-                eligible = disposition.eligible_sql(scope='ACTIVE_RECONCILIATION') if strict else 'TRUE'
+            with _reconciliation_read_transaction(conn, strict=strict, expected_revision=expected_policy_revision) as policy:
+                eligible = disposition.reconciliation_eligible_sql(policy) if strict else 'TRUE'
                 with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
                     cursor.execute(
                         f"""
@@ -3956,6 +3998,7 @@ def update_trade_exit_fields(
 
         try:
             with conn:
+                _policy_write_lock(conn)
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -4064,6 +4107,7 @@ def decorate_trade_exit(
         )
         try:
             with conn:
+                _policy_write_lock(conn)
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -4156,6 +4200,7 @@ def upsert_trade_on_buy_fill(
     }
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -4213,6 +4258,7 @@ def close_trade_on_sell_fill(
     symbol_value = (symbol or "").upper()
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """

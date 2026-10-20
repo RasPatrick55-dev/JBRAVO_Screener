@@ -4670,6 +4670,13 @@ def _performance_hold_message(payload):
     unresolved = payload.get('unresolved_trade_ids')
     if unresolved:
         message += ' Accounting inputs unresolved for trades ' + ', '.join(map(str, unresolved)) + '.'
+    overlay = policy.get('allocation_overlay') or {}
+    for allocation in overlay.get('allocations', []):
+        message += (f" Trade {allocation['trade_id']} audited allocation gross {allocation['gross_result']}; "
+            'fees and net UNKNOWN; financial performance remains held.')
+        audit_refs = allocation.get('audit_refs') or []
+        if audit_refs:
+            message += ' Allocation audit refs ' + ', '.join(map(str, audit_refs)) + '.'
     return message
 
 

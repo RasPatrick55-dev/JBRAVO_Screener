@@ -55,7 +55,8 @@ def load_actual():
         _json_dumps_or_none=lambda value: json.dumps(value, default=str),
         logger=SimpleNamespace(warning=lambda *a, **k: None),
         _log_write_result=lambda *a, **k: None,
-        disposition=SimpleNamespace(require_writable=lambda policy, trade_id: None))
+        disposition=SimpleNamespace(require_writable=lambda policy, trade_id: None,
+            require_order_owner=lambda policy, trade_id, *orders: None))
     def policy(connection, **kwargs):
         connection.actions.append('write_policy')
         return SimpleNamespace()

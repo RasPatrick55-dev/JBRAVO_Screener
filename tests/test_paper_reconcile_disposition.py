@@ -14,15 +14,30 @@ from typing import Any, Dict, Mapping, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = {name: (ROOT / 'scripts' / (name + '.py')).read_text(encoding='utf-8')
-          for name in ('trade_disposition', 'db', 'execute_trades', 'metrics', 'trade_performance')}
+          for name in ('trade_disposition', 'trade_allocation', 'db', 'execute_trades', 'metrics', 'trade_performance')}
 SOURCE.update({name:(ROOT/'dashboards'/(name+'.py')).read_text(encoding='utf-8') for name in ('data_io','dashboard_app')})
 D = types.ModuleType('paper_disposition_fixture')
 sys.modules[D.__name__] = D
 exec(compile(SOURCE['trade_disposition'], 'actual_trade_disposition', 'exec'), D.__dict__)
+# Bind the actual pure optional-store dependency without package/app startup.
+# The real read_active/schema_present execute against the explicit SQL protocol.
+A = types.ModuleType('paper_allocation_fixture')
+sys.modules[A.__name__] = A
+exec(compile(SOURCE['trade_allocation'], 'actual_trade_allocation', 'exec'), A.__dict__)
+A.policy_module = lambda: D
+D._read_allocation_overlay = lambda cursor, identity, revision, excluded: A.read_active(cursor, identity, revision, excluded)
+
 IDENTITY = ('paper-fixture', '00000000-0000-4000-8000-000000000001')
 STAMP = '2026-01-01T00:00:00+00:00'
 LOG = logging.getLogger('paper-fixture')
 LOG.addHandler(logging.NullHandler())
+
+def pending_allocation_policy(*, scope='VALIDATED_PERFORMANCE'):
+    # Pure real metadata construction only: do not add earlier SQL/settings to
+    # the publication-ordering fixture's trace or fabricate an empty overlay.
+    overlay = A.result_read('MIGRATION_PENDING', (), IDENTITY, 0)
+    return D.Policy(*IDENTITY, 0, (), scope, (), D.canonical(overlay.metadata_dict()))
+
 
 def selected(module, names, env):
     tree = ast.parse(SOURCE[module])
@@ -76,7 +91,9 @@ class Cursor:
     def execute(self, sql, params=None):
         self.s.trace.append((sql,copy.deepcopy(params))); self.one=None; self.many=[]
         q=' '.join(sql.split()); s=self.s
-        if q.startswith('SHOW transaction_isolation'): self.one=('read committed',)
+        if q.startswith('SELECT pg_catalog.to_regclass(%s),pg_catalog.to_regclass(%s),'): self.one=(None,None,None,None)
+        elif q.startswith('SELECT a.atttypid='): self.one=None  # Never-installed optional-store fixture.
+        elif q.startswith('SHOW transaction_isolation') or q == "SELECT pg_catalog.current_setting('transaction_isolation')": self.one=('read committed',)
         elif q.startswith('SELECT deployment_id'): self.one=(*IDENTITY,'jbravo',s.revision,'jbravo')
         elif q.startswith('SELECT c.request'):
             for c in s.cases.values():
@@ -145,7 +162,7 @@ def db_functions(conn):
         _coerce_date=lambda v:str(v), _log_write_result=lambda *args:None,
         normalize_ts=lambda value,**kw: datetime.fromisoformat(value) if isinstance(value,str) else value,
         _json_dumps_or_none=lambda v:json.dumps(v))
-    return selected('db', {'configure_disposition_identity','_paper_disposition_identity','trade_policy','_policy_read_transaction','_reconciliation_read_transaction',
+    return selected('db', {'_policy_write_lock','configure_disposition_identity','_paper_disposition_identity','trade_policy','_policy_read_transaction','_reconciliation_read_transaction',
         'reconciliation_policy_status','reconciliation_publication','_performance_input_records',
         'performance_input','performance_hold_visibility','performance_evidence','bind_performance_summary',
         'performance_summary_values','validated_performance_snapshot','validated_performance_artifact','validated_metrics_summary',
@@ -243,7 +260,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(records[0]['realized_pnl'],Decimal('0'))
     def test_publication_binds_input_summary_and_policy(self):
         self.s.rows[110]=row(pnl=Decimal('2'))
-        policy=D.Policy(*IDENTITY,0,(), 'VALIDATED_PERFORMANCE');records=self.db['performance_input'](self.s,policy)
+        policy=pending_allocation_policy();records=self.db['performance_input'](self.s,policy)
         summary={'total_trades':1,'net_pnl':2.0,'profit_factor':2.0}
         ev=self.db['bind_performance_summary'](self.db['performance_evidence'](policy,records),summary)
         self.assertTrue(self.db['upsert_metrics_daily'](summary,date(2026,1,1),trade_policy_metadata=ev))
@@ -253,7 +270,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(len(self.s.metrics_writes),1)
     def test_publication_timeouts_precede_first_exclusive_policy_lock(self):
         self.s.rows={};summary={'total_trades':0,'net_pnl':0}
-        policy=D.Policy(*IDENTITY,0,(), 'VALIDATED_PERFORMANCE')
+        policy=pending_allocation_policy()
         ev=self.db['bind_performance_summary'](self.db['performance_evidence'](policy,[]),summary)
         self.assertTrue(self.db['upsert_metrics_daily'](summary,date(2026,1,1),trade_policy_metadata=ev))
         queries=[q for q,p in self.s.trace]
@@ -261,7 +278,7 @@ class PolicyTests(unittest.TestCase):
         for setting in ("SET LOCAL search_path = pg_catalog", "SET LOCAL lock_timeout = '1500ms'", "SET LOCAL statement_timeout = '5000ms'"):
             self.assertLess(queries.index(setting), first_lock)
     def test_publication_changed_payload_or_epoch_and_unbound_csv_refuse(self):
-        self.s.rows={};policy=D.Policy(*IDENTITY,0,(), 'VALIDATED_PERFORMANCE');summary={'total_trades':0,'net_pnl':0}
+        self.s.rows={};policy=pending_allocation_policy();summary={'total_trades':0,'net_pnl':0}
         ev=self.db['bind_performance_summary'](self.db['performance_evidence'](policy,[]),summary)
         with self.assertRaises(D.TradePolicyError):self.db['upsert_metrics_daily'](dict(summary,net_pnl=9),date(2026,1,1),trade_policy_metadata=ev)
         self.s.revision=1

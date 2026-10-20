@@ -83,10 +83,13 @@ class MLDispositionParity(unittest.TestCase):
         exec(compile((ROOT/'scripts/trade_disposition.py').read_text(encoding='utf8'),
             'pure-disposition','exec',dont_inherit=True),pure)
         self.d=SimpleNamespace(**pure);self.conn=Conn();self.conn.handler=lambda sql,params:[(1,)] if sql.startswith('SELECT pg_catalog.to_regclass') else []
-        self.policy=SimpleNamespace(scope='VALIDATED_PERFORMANCE',revision=0,
+        self.policy=SimpleNamespace(scope='VALIDATED_PERFORMANCE',revision=0,allocations=(),
             metadata=lambda:{'deployment_id':'fixture','database_id':'fixture','policy_revision':0})
         self.db=SimpleNamespace(disposition=self.d,trade_policy=self.policy_read,
-            ml_trade_order_owners=Mock(),db_enabled=lambda:True)
+            ml_trade_order_owners=Mock(),db_enabled=lambda:True,
+            performance_hold_visibility=lambda:{'trade_policy':None,'policy_validation_status':'UNAVAILABLE',
+                'policy_revision':None,'excluded_count':None,'accounting_input_status':'UNAVAILABLE',
+                'unresolved_trade_ids':None,'allocation_visibility':None})
         self.ns={'Any':Any,'Mapping':Mapping,'datetime':datetime,'timezone':timezone,
             'contextmanager':contextmanager,'json':json,'Decimal':Decimal,'disposition':self.d,'trade_policy':self.policy_read,
             'normalize_ts':lambda value:datetime.fromisoformat(value) if isinstance(value,str) else value,
