@@ -93,7 +93,7 @@ class Cursor:
         q=' '.join(sql.split()); s=self.s
         if q.startswith('SELECT pg_catalog.to_regclass(%s),pg_catalog.to_regclass(%s),'): self.one=(None,None,None,None)
         elif q.startswith('SELECT a.atttypid='): self.one=None  # Never-installed optional-store fixture.
-        elif q.startswith('SHOW transaction_isolation'): self.one=('read committed',)
+        elif q.startswith('SHOW transaction_isolation') or q == "SELECT pg_catalog.current_setting('transaction_isolation')": self.one=('read committed',)
         elif q.startswith('SELECT deployment_id'): self.one=(*IDENTITY,'jbravo',s.revision,'jbravo')
         elif q.startswith('SELECT c.request'):
             for c in s.cases.values():
@@ -162,7 +162,7 @@ def db_functions(conn):
         _coerce_date=lambda v:str(v), _log_write_result=lambda *args:None,
         normalize_ts=lambda value,**kw: datetime.fromisoformat(value) if isinstance(value,str) else value,
         _json_dumps_or_none=lambda v:json.dumps(v))
-    return selected('db', {'configure_disposition_identity','_paper_disposition_identity','trade_policy','_policy_read_transaction','_reconciliation_read_transaction',
+    return selected('db', {'_policy_write_lock','configure_disposition_identity','_paper_disposition_identity','trade_policy','_policy_read_transaction','_reconciliation_read_transaction',
         'reconciliation_policy_status','reconciliation_publication','_performance_input_records',
         'performance_input','performance_hold_visibility','performance_evidence','bind_performance_summary',
         'performance_summary_values','validated_performance_snapshot','validated_performance_artifact','validated_metrics_summary',

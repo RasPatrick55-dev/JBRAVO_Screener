@@ -195,6 +195,25 @@ def reconciliation_publication(engine=None, *, expected_revision):
             yield policy.metadata()
 
 
+def _policy_write_lock(conn):
+    """Take the shared policy lock before an input-table DML/row lock.
+
+    The caller owns this exact connection and its transaction/commit. Statement
+    triggers run after PostgreSQL takes the target relation lock, so they cannot
+    establish this order for INSERT/ON CONFLICT/UPDATE by themselves. Do not set
+    search_path here: legacy writers deliberately retain their existing namespace.
+    """
+    if conn is None or conn.autocommit:
+        raise disposition.TradePolicyError('TRADE_POLICY_WRITE_TRANSACTION_REQUIRED')
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_catalog.current_setting('transaction_isolation')")
+        if cursor.fetchone() != ('read committed',):
+            raise disposition.TradePolicyError('TRADE_POLICY_ISOLATION_INVALID')
+        cursor.execute("SET LOCAL lock_timeout = '1500ms'")
+        cursor.execute("SET LOCAL statement_timeout = '5000ms'")
+        cursor.execute("SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtext('jbravo:trade-disposition:policy'))")
+
+
 def _ml_trade_policy_lock(conn):
     """Serialize ML publication while keeping policy-table access SELECT-only."""
     with conn.cursor() as cursor:
@@ -1419,6 +1438,7 @@ def insert_screener_candidates(
             """
             try:
                 with conn:
+                    _policy_write_lock(conn)
                     with conn.cursor() as cursor:
                         cursor.execute(create_stmt)
                         _repair_screener_run_map_app_schema(cursor)
@@ -2450,6 +2470,7 @@ def ensure_ml_artifacts_table() -> None:
     if conn is None:
         return
     try:
+        _policy_write_lock(conn)
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -2488,6 +2509,7 @@ def ensure_screener_ranker_scores_app_table() -> None:
         return
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2530,6 +2552,7 @@ def ensure_trade_entry_ml_context_app_table() -> None:
         return
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2619,6 +2642,7 @@ def upsert_trade_entry_ml_context(row: Mapping[str, Any] | None) -> bool:
         return False
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2756,6 +2780,7 @@ def upsert_screener_ranker_scores_frame(
 
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 extras.execute_batch(
                     cursor,
@@ -2816,6 +2841,7 @@ def upsert_ml_artifact(
         return False
     run_date_value = _coerce_date(run_date)
     try:
+        _policy_write_lock(conn)
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -3195,6 +3221,7 @@ def insert_executed_trade(row_dict: Mapping[str, Any] | None) -> bool:
     }
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3971,6 +3998,7 @@ def update_trade_exit_fields(
 
         try:
             with conn:
+                _policy_write_lock(conn)
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -4079,6 +4107,7 @@ def decorate_trade_exit(
         )
         try:
             with conn:
+                _policy_write_lock(conn)
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
@@ -4171,6 +4200,7 @@ def upsert_trade_on_buy_fill(
     }
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -4228,6 +4258,7 @@ def close_trade_on_sell_fill(
     symbol_value = (symbol or "").upper()
     try:
         with conn:
+            _policy_write_lock(conn)
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
