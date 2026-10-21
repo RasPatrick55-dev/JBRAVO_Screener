@@ -13,4 +13,4 @@ source "${VENV_PATH}"
 set -a
 . "${ENV_FILE}"
 set +a
-exec python -B -m scripts.primary_pipeline "$@"
+exec python -B -m scripts.primary_paper_pipeline "$@"
