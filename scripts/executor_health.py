@@ -248,6 +248,109 @@ def assess_outcome(rc, metrics, observations, truncated, gate, role):
     return health, pending, unknown
 
 
+_POLICY_REFUSAL_CODES = frozenset((
+    'TRADE_ALLOCATION_ACTIVE_CASE_INVALID TRADE_ALLOCATION_APPROVAL_INVALID '
+    'TRADE_ALLOCATION_APPROVAL_REUSED TRADE_ALLOCATION_APPROVAL_TIME '
+    'TRADE_ALLOCATION_AUDIT_HISTORY_INCOMPLETE TRADE_ALLOCATION_AUDIT_HISTORY_INVALID '
+    'TRADE_ALLOCATION_AUDIT_INVALID TRADE_ALLOCATION_CASE_CAS_FAILED TRADE_ALLOCATION_CASE_CONFLICT '
+    'TRADE_ALLOCATION_CLAIMS_INVALID TRADE_ALLOCATION_CONSERVATION_FAILED '
+    'TRADE_ALLOCATION_DECIMAL_INVALID TRADE_ALLOCATION_DOCUMENT_BOUND TRADE_ALLOCATION_EVIDENCE_INVALID '
+    'TRADE_ALLOCATION_FILL_CHANGED TRADE_ALLOCATION_FILL_COUNT TRADE_ALLOCATION_FILL_DOCUMENT '
+    'TRADE_ALLOCATION_FILL_DOMAIN TRADE_ALLOCATION_FILL_DUPLICATE_OR_UNKNOWN '
+    'TRADE_ALLOCATION_FILL_FACT_CHANGED TRADE_ALLOCATION_FILL_FINGERPRINT '
+    'TRADE_ALLOCATION_FILL_IDENTITY TRADE_ALLOCATION_FILL_IDENTITY_CONFLICT '
+    'TRADE_ALLOCATION_FILL_OVERSIZE TRADE_ALLOCATION_FILL_SNAPSHOT_INCOMPLETE '
+    'TRADE_ALLOCATION_GLOBAL_OWNER_CONFLICT TRADE_ALLOCATION_HISTORY_BOUND '
+    'TRADE_ALLOCATION_IDENTITY_MISMATCH TRADE_ALLOCATION_MANIFEST_BINDING '
+    'TRADE_ALLOCATION_MANIFEST_DIGEST TRADE_ALLOCATION_MANIFEST_SCOPE '
+    'TRADE_ALLOCATION_MIGRATION_PENDING TRADE_ALLOCATION_ORIGINAL_VISIBILITY_INVALID '
+    'TRADE_ALLOCATION_PARTIAL_MIGRATION TRADE_ALLOCATION_POLICY_BINDING_CHANGED '
+    'TRADE_ALLOCATION_POLICY_CAS_FAILED TRADE_ALLOCATION_POPULATION_CENSORED '
+    'TRADE_ALLOCATION_REPLAY_SUPERSEDED TRADE_ALLOCATION_RESERVED_OWNER_CONFLICT '
+    'TRADE_ALLOCATION_ROW_CHANGED TRADE_ALLOCATION_ROW_INVALID TRADE_ALLOCATION_ROW_OVERSIZE '
+    'TRADE_ALLOCATION_SCHEMA_MARKER_INVALID TRADE_ALLOCATION_SCHEMA_MARKER_MISSING '
+    'TRADE_ALLOCATION_SCHEMA_METADATA TRADE_ALLOCATION_SCHEMA_VISIBILITY_INVALID '
+    'TRADE_ALLOCATION_TARGET_INVALID TRADE_ALLOCATION_TRADE_EXCLUDED '
+    'TRADE_ALLOCATION_TRANSACTION_NOT_IDLE TRADE_ALLOCATION_TRIGGER_ATTACHMENT_CHANGED '
+    'TRADE_ALLOCATION_TRIGGER_ATTACHMENT_MISSING TRADE_ALLOCATION_TRIGGER_FUNCTION_CHANGED '
+    'TRADE_ALLOCATION_TRIGGER_FUNCTION_MISSING TRADE_ALLOCATION_TRIGGER_SESSION_INVALID '
+    'TRADE_ALLOCATION_UUID_INVALID TRADE_POLICY_ACCOUNTING_INCOMPLETE '
+    'TRADE_POLICY_ALLOCATION_ACCOUNTING_INCOMPLETE TRADE_POLICY_ALLOCATION_CASE_CONFLICT '
+    'TRADE_POLICY_ALLOCATION_IDENTITY_MISMATCH TRADE_POLICY_ALLOCATION_ORDER_CLAIMS_INVALID '
+    'TRADE_POLICY_ALLOCATION_ORDER_CLAIMS_UNAVAILABLE TRADE_POLICY_ALLOCATION_ORDER_OWNER_CONFLICT '
+    'TRADE_POLICY_APPROVAL_INVALID TRADE_POLICY_APPROVAL_REUSED TRADE_POLICY_APPROVAL_TIME_INVALID '
+    'TRADE_POLICY_ARTIFACT_INPUT_CHANGED TRADE_POLICY_ARTIFACT_UNVALIDATED TRADE_POLICY_AUDIT_INVALID '
+    'TRADE_POLICY_CASE_CAS_FAILED TRADE_POLICY_CASE_CONFLICT TRADE_POLICY_CASE_INVALID '
+    'TRADE_POLICY_DB_UNAVAILABLE TRADE_POLICY_DIGEST_INVALID TRADE_POLICY_DOCUMENT_DUPLICATE_KEY '
+    'TRADE_POLICY_DOCUMENT_INVALID TRADE_POLICY_EVIDENCE_INVALID TRADE_POLICY_EVIDENCE_MISMATCH '
+    'TRADE_POLICY_EVIDENCE_SCOPE_INVALID TRADE_POLICY_IDENTITY_INVALID TRADE_POLICY_IDENTITY_MISMATCH '
+    'TRADE_POLICY_ISOLATION_INVALID TRADE_POLICY_METRICS_STALE_OR_UNVALIDATED '
+    'TRADE_POLICY_METRICS_UNAVAILABLE TRADE_POLICY_PAPER_CONTEXT_REQUIRED '
+    'TRADE_POLICY_PERFORMANCE_INPUT_OR_PAYLOAD_CHANGED TRADE_POLICY_PERFORMANCE_PROVENANCE_REQUIRED '
+    'TRADE_POLICY_POLICY_CAS_FAILED TRADE_POLICY_REVISION_CHANGED TRADE_POLICY_REVISION_INVALID '
+    'TRADE_POLICY_ROW_CHANGED TRADE_POLICY_RUNTIME_IDENTITY_ALREADY_BOUND '
+    'TRADE_POLICY_RUNTIME_IDENTITY_UNBOUND TRADE_POLICY_RUNTIME_IDENTITY_UNVERIFIED '
+    'TRADE_POLICY_SCOPE_INVALID TRADE_POLICY_SCOPE_REQUIRED TRADE_POLICY_SQL_ALIAS_INVALID '
+    'TRADE_POLICY_TIME_INVALID TRADE_POLICY_TRADE_EXCLUDED TRADE_POLICY_TRADE_ID_INVALID '
+    'TRADE_POLICY_TRADE_MISSING TRADE_POLICY_TRADE_NOT_CLOSED TRADE_POLICY_TRANSACTION_NOT_IDLE '
+    'TRADE_POLICY_UNAVAILABLE TRADE_POLICY_WRITE_TRANSACTION_REQUIRED '
+).split())
+_POLICY_SQLSTATE_CATEGORIES = {
+    '42501': 'INSUFFICIENT_PRIVILEGE', '42P01': 'UNDEFINED_TABLE',
+    '42703': 'UNDEFINED_COLUMN', '55P03': 'LOCK_UNAVAILABLE',
+    '57014': 'QUERY_CANCELED', '25001': 'ACTIVE_TRANSACTION',
+    '25006': 'READ_ONLY_TRANSACTION', '25P02': 'FAILED_TRANSACTION',
+    '08000': 'CONNECTION_ERROR', '08003': 'CONNECTION_MISSING',
+    '08006': 'CONNECTION_FAILURE', '08P01': 'PROTOCOL_VIOLATION',
+    '40001': 'SERIALIZATION_FAILURE', '40P01': 'DEADLOCK'}
+
+
+def policy_failure_diagnostic(error):
+    """Fixed diagnostic enums only; never expose exception/configuration text."""
+    result = {'refusal_code': 'UNKNOWN', 'sqlstate_category': 'UNKNOWN',
+              'paper_endpoint_exact': os.environ.get('APCA_API_BASE_URL') == 'https://paper-api.alpaca.markets',
+              'paper_flag_exact_true': os.environ.get('JBR_EXEC_PAPER') == 'true'}
+    seen = set()
+    current = error
+    for _ in range(4):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        try:
+            kind = (type(current).__module__, type(current).__name__)
+            if kind in {('scripts.trade_disposition', 'TradePolicyError'),
+                        ('scripts.trade_allocation', 'AllocationError')}:
+                args = current.args
+                if (type(args) is tuple and len(args) == 1 and type(args[0]) is str
+                        and len(args[0]) <= 96 and args[0] in _POLICY_REFUSAL_CODES
+                        and result['refusal_code'] in ('UNKNOWN', 'TRADE_POLICY_UNAVAILABLE')):
+                    result['refusal_code'] = args[0]
+            state = getattr(current, 'pgcode', None)
+            if type(state) is str and state in _POLICY_SQLSTATE_CATEGORIES and result['sqlstate_category'] == 'UNKNOWN':
+                result['sqlstate_category'] = _POLICY_SQLSTATE_CATEGORIES[state]
+            # db.trade_policy raises from None; its context still holds the
+            # original driver/overlay exception. Inspect only fixed enums.
+            current = current.__cause__ if current.__cause__ is not None else current.__context__
+        except Exception:
+            # Diagnostic extraction must never replace the original held result.
+            break
+    return result
+
+
+def _policy_failure_payload(value):
+    """Copy only the four validated enum/boolean fields into run-bound receipts."""
+    if type(value) is not dict or set(value) != {
+            'refusal_code', 'sqlstate_category', 'paper_endpoint_exact', 'paper_flag_exact_true'}:
+        return None
+    code, category = value['refusal_code'], value['sqlstate_category']
+    if (type(code) is not str or code not in _POLICY_REFUSAL_CODES | {'UNKNOWN'}
+            or type(category) is not str or category not in set(_POLICY_SQLSTATE_CATEGORIES.values()) | {'UNKNOWN'}
+            or type(value['paper_endpoint_exact']) is not bool
+            or type(value['paper_flag_exact_true']) is not bool):
+        return None
+    return dict(value)
+
+
 def publish_receipt(base_dir, *, role, started_at, finished_at, rc, metrics,
                     config=None, observations=(), observations_truncated=False):
     if role not in ROLES or type(rc) is not int:
@@ -265,6 +368,11 @@ def publish_receipt(base_dir, *, role, started_at, finished_at, rc, metrics,
         raise ValueError('oversize_observations')
     gate = getattr(config, '_entry_preflight', None) if config else None
     health, pending, unknown = assess_outcome(rc, selected, observations, observations_truncated, gate, role)
+    reconciliation = metrics.get('reconciliation')
+    if rc != 0 and type(reconciliation) is dict and reconciliation.get('reason') == 'POLICY_UNAVAILABLE':
+        diagnostic = _policy_failure_payload(reconciliation.get('policy_failure'))
+        if diagnostic is not None:
+            selected['policy_failure'] = diagnostic
     record = {'schema_version': 1, 'run_id': run_id, 'role': role,
               'started_at': utc(started_at).isoformat(), 'finished_at': utc(finished_at).isoformat(),
               'process_rc': rc, 'health': health, 'metrics': selected, 'preflight': gate,
