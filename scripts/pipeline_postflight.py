@@ -21,7 +21,8 @@ from scripts import signal_handoff
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_STEPS = ('screener', 'backtest', 'metrics', 'labels', 'ranker_eval')
 SOURCE_FILES = ('scripts/run_pipeline.py', 'scripts/pipeline_postflight.py',
-                'scripts/primary_pipeline.py', 'scripts/ops/run_primary_pipeline.sh',
+                'scripts/primary_pipeline.py', 'scripts/primary_paper_pipeline.py',
+                'scripts/ops/run_primary_pipeline.sh',
                 'scripts/ops/run_canary_smoke.sh', 'scripts/utils/ml_health_guard.py',
                 'scripts/signal_handoff.py', 'scripts/db_queries.py',
                 'scripts/utils/calendar.py', 'scripts/screener.py')
