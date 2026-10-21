@@ -14,6 +14,13 @@ from scripts import primary_paper_pipeline as paper
 from scripts import primary_pipeline as primary
 from scripts import pipeline_postflight as postflight
 
+try:
+    import pytest
+except ImportError:
+    pass  # Keep standalone unittest execution available without pytest.
+else:
+    pytestmark = pytest.mark.alpaca_optional
+
 
 ROOT = Path(__file__).resolve().parents[1]
 

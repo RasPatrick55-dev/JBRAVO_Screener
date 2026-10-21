@@ -322,7 +322,7 @@ class PostflightTests(unittest.TestCase):
         self.assertIn('exec python -B -m scripts.pipeline_postflight "$@"', checker)
         launcher = (SOURCE_ROOT / 'scripts/ops/run_primary_pipeline.sh').read_text()
         self.assertIn('flock -n 9', launcher)
-        self.assertIn('exec python -B -m scripts.primary_pipeline "$@"', launcher)
+        self.assertIn('exec python -B -m scripts.primary_paper_pipeline "$@"', launcher)
 
     def test_symlink_path_rejected_without_writing(self):
         self.publish()
