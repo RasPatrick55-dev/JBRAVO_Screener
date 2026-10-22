@@ -116,7 +116,17 @@ def digest(value):
 
 def aware_time(value):
     try:
-        stamp = datetime.fromisoformat(text_field(value).replace("Z", "+00:00"))
+        stamp_text = text_field(value).replace("Z", "+00:00")
+        fractional = re.fullmatch(
+            r"([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}\.)"
+            r"([0-9]{1,6})([+-][0-9]{2}:[0-9]{2})",
+            stamp_text,
+        )
+        if fractional:
+            # PostgreSQL JSON trims fractional zeros; Python3.10 accepts3 or6 digits.
+            # Pad without rounding or changing the stored value, instant or offset.
+            stamp_text = fractional[1] + fractional[2].ljust(6, "0") + fractional[3]
+        stamp = datetime.fromisoformat(stamp_text)
         if stamp.utcoffset() is None:
             fail("TIME_INVALID")
         return stamp
