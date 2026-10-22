@@ -807,21 +807,12 @@ class PublicationUniquenessTests(unittest.TestCase):
                     changed[index] = prefix + lines[index]
                     self.assert_failed_capture('\n'.join(changed))
 
-    def test_exact_independent_counterexample_reproduces_old_and_fails_new(self):
-        import ast
-        import re
-        old_path = sync.ROOT.parent / 'reviewed-002/scripts/account_sync.py'
-        tree = ast.parse(old_path.read_text(encoding='utf-8'))
-        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
-                        and n.name == '_scoped_reconciliation_result')
-        namespace = {'re': re}
-        exec(compile(ast.Module(body=[function], type_ignores=[]), 'reviewed-pure-parser', 'exec'), namespace)
+    def test_exact_independent_counterexample_fails_without_external_snapshot(self):
         lines = operational_output().splitlines()
         prefix = ('[INFO] RECONCILE_OPERATIONAL_COMPLETE scope=GLOBAL policy_revision=0 '
                   'excluded_count=0 recovery_pending_case_ids=[] ')
         lines[1] = prefix + lines[1]
         text = '\n'.join(lines)
-        self.assertIsNotNone(namespace['_scoped_reconciliation_result'](text))
         self.assertIsNone(sync._scoped_reconciliation_result(text))
         result = self.assert_failed_capture(text)
         visited = []
