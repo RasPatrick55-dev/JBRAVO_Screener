@@ -161,7 +161,8 @@ class StageTests(unittest.TestCase):
         def create(command, **options):
             options['stdout'].write(text.encode('utf-8'))
             return process
-        with mock.patch.object(sync.subprocess, 'Popen', side_effect=create) as popen:
+        with mock.patch.dict(os.environ, {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets'}, clear=True), \
+                mock.patch.object(sync.subprocess, 'Popen', side_effect=create) as popen:
             result = sync.run_stage(stage, 300, 123)
             self.assertEqual(popen.call_args.args[0], [sync.sys.executable, '-m', stage.module, *stage.args])
             self.assertFalse(popen.call_args.kwargs['shell'])
@@ -254,7 +255,8 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         self.storage = self.stack.enter_context(tempfile.TemporaryDirectory())
-        self.stack.enter_context(mock.patch.dict(os.environ, {}, clear=True))
+        self.stack.enter_context(mock.patch.dict(os.environ, {
+            'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets'}, clear=True))
 
         def forbidden(*args, **kwargs):
             raise AssertionError('external effect forbidden')
@@ -310,6 +312,13 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
         loader._rank_candidates.return_value = frame
         loader._apply_alloc_weight_key.return_value = frame
         execution = mock.Mock()
+        execution.metrics.reconciliation = {
+            'scope': 'ACTIVE_RECONCILIATION',
+            'operational_complete': reconciliation_complete,
+            'recovery_complete': False, 'accounting_complete': False,
+            'activity_ingestion_complete': False, 'watermark_advanced': False,
+            'trade_policy': {'scope': 'ACTIVE_RECONCILIATION', 'policy_revision': 0},
+        }
         execution.execute.side_effect = self.forbidden
         execution.execute_order.side_effect = self.forbidden
         execution.hydrate_candidates.side_effect = self.forbidden
@@ -358,6 +367,8 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
         self.assertEqual(calls, ['activities', 'reconciliation', 'snapshot'] if reconciliation_complete
                          else ['activities', 'reconciliation'])
         execution.reconcile_closed_trades.assert_called_once_with()
+        self.assertFalse(execution.metrics.reconciliation['accounting_complete'])
+        self.assertFalse(execution.metrics.reconciliation['recovery_complete'])
         execution.execute.assert_not_called()
         execution.hydrate_candidates.assert_not_called()
         client.submit_order.assert_not_called()
@@ -379,6 +390,177 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
     def test_weekday_holiday_closed_session_reconciles(self):
         text = self.exercise_clock('2026-12-25T06:15:00', 'holiday', 3)
         self.assertIn('MARKET_GATE_BYPASSED', text)
+
+
+class PaperContextTests(unittest.TestCase):
+    """Validate the actual child environment, with no real child or credentials."""
+
+    def invoke(self, environment, stage=None, text=None):
+        stage = stage or sync.STAGES[1]
+        text = '\n'.join(stage.required) if text is None else text
+        process = mock.Mock(returncode=0)
+        process.poll.return_value = 0
+        calls = []
+
+        def spawn(command, **options):
+            calls.append((command, options))
+            options['stdout'].write(text.encode())
+            return process
+
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(sync.subprocess, 'Popen', side_effect=spawn):
+            parent_before = dict(os.environ)
+            result = sync.run_stage(stage, 300, 123)
+            self.assertEqual(dict(os.environ), parent_before)
+        return result, calls
+
+    def test_absent_flag_is_declared_only_for_validated_paper_child(self):
+        environment = {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets',
+                       'SYNTHETIC_SENTINEL': 'preserved'}
+        result, calls = self.invoke(environment)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1]['env'], {**environment, 'JBR_EXEC_PAPER': 'true'})
+        self.assertNotIn('JBR_EXEC_PAPER', environment)
+
+    def test_explicit_true_and_unrelated_child_values_are_preserved(self):
+        environment = {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets',
+                       'JBR_EXEC_PAPER': 'true', 'SYNTHETIC_SENTINEL': 'preserved'}
+        result, calls = self.invoke(environment)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(calls[0][1]['env'], environment)
+        self.assertIsNot(calls[0][1]['env'], os.environ)
+
+    def test_false_or_malformed_flags_refuse_before_capture_or_child(self):
+        for flag in ('false', 'False', 'TRUE', '1', '0', '', 'true ', ' true'):
+            with self.subTest(flag=flag), mock.patch.dict(os.environ, {
+                    'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets',
+                    'JBR_EXEC_PAPER': flag}, clear=True), \
+                    mock.patch.object(sync.subprocess, 'Popen') as popen, \
+                    mock.patch.object(sync.tempfile, 'TemporaryFile') as capture:
+                before = dict(os.environ)
+                with self.assertRaisesRegex(ValueError, '^primary_paper_context_conflict$'):
+                    sync.run_stage(sync.STAGES[1], 300, 123)
+                popen.assert_not_called()
+                capture.assert_not_called()
+                self.assertEqual(dict(os.environ), before)
+
+    def test_missing_live_and_noncanonical_endpoints_refuse(self):
+        for endpoint in (None, 'https://api.alpaca.markets', 'https://example.invalid',
+                         'https://paper-api.alpaca.markets/', 'HTTP://paper-api.alpaca.markets'):
+            for flag in (None, 'true'):
+                with self.subTest(endpoint=endpoint, flag=flag):
+                    environment = {}
+                    if endpoint is not None:
+                        environment['APCA_API_BASE_URL'] = endpoint
+                    if flag is not None:
+                        environment['JBR_EXEC_PAPER'] = flag
+                    with mock.patch.dict(os.environ, environment, clear=True), \
+                            mock.patch.object(sync.subprocess, 'Popen') as popen, \
+                            mock.patch.object(sync.tempfile, 'TemporaryFile') as capture:
+                        with self.assertRaisesRegex(ValueError, '^primary_paper_endpoint_required$'):
+                            sync.run_stage(sync.STAGES[1], 300, 123)
+                        popen.assert_not_called()
+                        capture.assert_not_called()
+                        self.assertEqual(dict(os.environ), environment)
+
+    def test_uses_existing_context_validator_once(self):
+        from scripts import primary_paper_pipeline
+        actual = primary_paper_pipeline.configure_paper_context
+        with mock.patch.object(primary_paper_pipeline, 'configure_paper_context', wraps=actual) as validate:
+            _, calls = self.invoke({'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets'})
+        validate.assert_called_once()
+        self.assertIs(validate.call_args.args[0], calls[0][1]['env'])
+
+    def test_only_reconciliation_has_explicit_environment_copy(self):
+        environment = {'APCA_API_BASE_URL': 'https://api.alpaca.markets', 'JBR_EXEC_PAPER': 'false'}
+        for stage in (sync.STAGES[0], sync.STAGES[2]):
+            with self.subTest(stage=stage.name):
+                result, calls = self.invoke(environment, stage)
+                self.assertEqual(result['status'], 'ok')
+                self.assertNotIn('env', calls[0][1])
+
+    def test_no_order_arguments_and_shell_behavior_unchanged(self):
+        _, calls = self.invoke({'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets'})
+        command, options = calls[0]
+        stage = sync.STAGES[1]
+        self.assertEqual(command, [sys.executable, '-m', stage.module, *stage.args])
+        args = dict(zip(stage.args[::2], stage.args[1::2]))
+        self.assertEqual(args['--reconcile-only'], 'true')
+        self.assertEqual(args['--dry-run'], 'true')
+        self.assertEqual(args['--submit-at-ny'], '')
+        self.assertEqual(args['--reconcile-use-watermark'], 'true')
+        self.assertFalse(options['shell'])
+        self.assertEqual(options['cwd'], sync.ROOT)
+
+    def test_configured_values_inherit_without_being_exported(self):
+        environment = {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets',
+                       'APCA_API_KEY_ID': 'SYNTHETIC_KEY_ONLY',
+                       'APCA_API_SECRET_KEY': 'SYNTHETIC_SECRET_ONLY'}
+        result, calls = self.invoke(environment)
+        child = calls[0][1]['env']
+        self.assertEqual(child['APCA_API_KEY_ID'], environment['APCA_API_KEY_ID'])
+        self.assertEqual(child['APCA_API_SECRET_KEY'], environment['APCA_API_SECRET_KEY'])
+        self.assertNotIn('SYNTHETIC_KEY_ONLY', json.dumps(result))
+        self.assertNotIn('SYNTHETIC_SECRET_ONLY', json.dumps(result))
+
+    def test_rejected_context_stops_workflow_before_snapshot(self):
+        with tempfile.TemporaryDirectory() as storage:
+            calls = []
+            def run(stage, timeout, descriptor):
+                calls.append(stage.name)
+                if stage.name == 'activities':
+                    return successful_stage()
+                return sync.run_stage(stage, timeout, descriptor)
+            with mock.patch.dict(os.environ, {
+                    'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets',
+                    'JBR_EXEC_PAPER': 'false'}, clear=True), \
+                    mock.patch.object(sync.subprocess, 'Popen') as popen:
+                report = sync.run_workflow(Path(storage) / 'health', runner=run)
+            self.assertEqual(report['status'], 'failed')
+            self.assertEqual(calls, ['activities', 'reconciliation'])
+            self.assertEqual(report['stages'][1]['reason'], 'stage_exception')
+            self.assertEqual(report['stages'][1]['error_type'], 'ValueError')
+            self.assertEqual(report['stages'][2]['status'], 'not_run')
+            popen.assert_not_called()
+
+    def test_admission_does_not_hide_reconciliation_failure(self):
+        stage = sync.STAGES[1]
+        result, _ = self.invoke({'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets'},
+                                text='\n'.join((*stage.required, 'RECONCILE_WATERMARK_HELD')))
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('RECONCILE_WATERMARK_HELD', result['failure_markers'])
+        self.assertIn('RECONCILE_WATERMARK_HELD', result['health_reasons'])
+
+    def test_spawn_failure_cannot_mutate_parent_context(self):
+        environment = {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets'}
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(sync.subprocess, 'Popen', side_effect=OSError()):
+            with self.assertRaises(OSError):
+                sync.run_stage(sync.STAGES[1], 300, 123)
+            self.assertEqual(dict(os.environ), environment)
+
+    def test_actual_policy_context_guard_accepts_only_the_declared_child(self):
+        import ast
+        tree = ast.parse((sync.ROOT / 'scripts/db.py').read_text(encoding='utf-8'))
+        guard = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                     and n.name == '_paper_disposition_identity')
+        binding = next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id == '_PAPER_DISPOSITION_BINDING'
+                               for t in n.targets))
+        namespace = {'os': os, 'disposition': SimpleNamespace(TradePolicyError=RuntimeError),
+                     '_PAPER_DISPOSITION_BINDING': ast.literal_eval(binding),
+                     'configure_disposition_identity': lambda *args, **kwargs: kwargs}
+        exec(compile(ast.Module(body=[guard], type_ignores=[]), 'pure-policy-guard', 'exec'), namespace)
+        environment = {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets'}
+        with mock.patch.dict(os.environ, environment, clear=True):
+            with self.assertRaisesRegex(RuntimeError, '^TRADE_POLICY_PAPER_CONTEXT_REQUIRED$'):
+                namespace['_paper_disposition_identity']()
+        _, calls = self.invoke(environment)
+        with mock.patch.dict(os.environ, calls[0][1]['env'], clear=True):
+            accepted = namespace['_paper_disposition_identity']()
+        self.assertEqual(accepted['environment'], 'paper')
+        self.assertTrue(accepted['verified'])
 
 
 if __name__ == '__main__':

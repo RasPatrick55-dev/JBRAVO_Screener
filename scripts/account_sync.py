@@ -104,6 +104,13 @@ def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
     """Bound local runtime/output. Never expose arbitrary child output or secrets."""
     command = [sys.executable, '-m', stage.module, *stage.args]
     options = {'cwd': ROOT, 'stderr': subprocess.STDOUT, 'shell': False}
+    if stage.name == 'reconciliation':
+        from scripts.primary_paper_pipeline import configure_paper_context
+
+        # Declare PAPER only for this child after validating inherited settings.
+        child_environment = os.environ.copy()
+        configure_paper_context(child_environment)
+        options['env'] = child_environment
     if os.name == 'posix':
         options.update(start_new_session=True, pass_fds=(lock_fd,))
     reason = None
