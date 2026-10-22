@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -100,6 +101,59 @@ def workflow_lock(path: Path):
             pass
 
 
+def _scoped_reconciliation_result(text: str) -> dict | None:
+    """Recognize only the current complete operational-only publication."""
+    if re.search(r'\bRECONCILE_(?:FILL_HELD|DECORATE_HELD|INCOMPLETE|AUTO_FAIL)\b', text):
+        return None
+    markers = ('RECONCILE_START', 'RECONCILE_OPERATIONAL_COMPLETE',
+               'RECONCILE_WATERMARK_HELD', 'RECONCILE_END')
+    selected = {}
+    for marker in markers:
+        token = r'\b' + marker + r'\b'
+        if len(re.findall(token, text)) != 1:
+            return None
+        lines = [line for line in text.splitlines() if re.search(token, line)]
+        if len(lines) != 1 or len(lines[0]) > 16384 or any(ord(c) < 32 for c in lines[0]):
+            return None
+        selected[marker] = lines[0]
+    number = r'(?:0|[1-9][0-9]{0,18})'
+    timestamp = (r'\[[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01]) '
+                 r'(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9],[0-9]{3}\] ')
+    prefix = r'(?:' + timestamp + r'\[INFO\] )?\[INFO\] '
+    warning_prefix = r'(?:' + timestamp + r'\[WARNING\] )?\[WARN\] '
+    if not re.fullmatch(prefix + 'RECONCILE_START open_trades=' + number, selected[markers[0]]):
+        return None
+    match = re.fullmatch(prefix + r'RECONCILE_OPERATIONAL_COMPLETE scope=ACTIVE_RECONCILIATION '
+        r'policy_revision=(' + number + r') excluded_count=(' + number +
+        r') recovery_pending_case_ids=(\[.*\])', selected[markers[1]])
+    if match is None:
+        return None
+    case = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+    cases = match[3]
+    if not re.fullmatch(r"\[(?:'" + case + r"'(?:, '" + case + r"')*)?\]", cases):
+        return None
+    case_ids = re.findall(case, cases)
+    if len(case_ids) > 1024 or len(case_ids) != len(set(case_ids)):
+        return None
+    if not re.fullmatch(warning_prefix + r'RECONCILE_WATERMARK_HELD '
+                       r'reason=independent_durable_activity_ingestion_unproved', selected[markers[2]]):
+        return None
+    if not re.fullmatch(prefix + r'RECONCILE_END closed=' + number + r' decorated=' + number +
+        r' operational_complete=true recovery_complete=false accounting_complete=false '
+        r'activity_ingestion_complete=false watermark_advanced=false', selected[markers[3]]):
+        return None
+    if re.search(r'\bRECONCILE_WATERMARK_UPDATE\b', text):
+        return None
+    positions = [text.index(selected[marker]) for marker in markers]
+    if positions != sorted(positions):
+        return None
+    return dict(scope='ACTIVE_RECONCILIATION', policy_revision=int(match[1]),
+                excluded_count=int(match[2]), recovery_pending_case_ids=case_ids,
+                operational_complete=True, recovery_complete=False, accounting_complete=False,
+                activity_ingestion_complete=False, watermark_advanced=False, snapshot_eligible=False,
+                reason='INDEPENDENT_DURABLE_ACTIVITY_INGESTION_UNPROVED')
+
+
 def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
     """Bound local runtime/output. Never expose arbitrary child output or secrets."""
     command = [sys.executable, '-m', stage.module, *stage.args]
@@ -161,13 +215,30 @@ def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
     status = 'failed' if reason or process.returncode != 0 or failures or missing else 'ok'
     if status == 'ok' and qualifications:
         status = 'degraded'
-    return {
+    scoped = None
+    if stage.name == 'reconciliation':
+        observed = _scoped_reconciliation_result(text)
+        if (reason == 'RECONCILE_WATERMARK_HELD' and process.returncode == 0
+                and observed is not None and failures == ['RECONCILE_WATERMARK_HELD']
+                and not qualifications and set(missing) <= {
+                    'RECONCILE_COVERAGE_COMPLETE', 'RECONCILE_WATERMARK_UPDATE'}):
+            status, reason, scoped = 'degraded', 'RECONCILE_RECOVERY_HELD', observed
+            qualifications = ['RECONCILE_RECOVERY_HELD']
+            # Preserve the hold as a health reason; it is not a fatal DB error.
+            failures, missing = [], []
+        elif status in ('ok', 'degraded'):
+            status, reason = 'failed', 'RECONCILE_SCOPED_RESULT_UNPROVED'
+    result = {
         'status': status, 'exit_code': process.returncode, 'reason': reason,
         'elapsed_seconds': time.monotonic() - started, 'output_bytes': size,
         'failure_markers': failures, 'missing_completion_markers': missing,
         'qualifications': qualifications,
         'health_reasons': health_reasons,
     }
+    if scoped is not None:
+        result['completion_contract'] = 'ACTIVE_RECONCILIATION_OPERATIONAL_V1'
+        result['reconciliation'] = scoped
+    return result
 
 
 def run_workflow(state_dir: Path, stage_timeout: float = 300, *, runner=run_stage) -> dict:

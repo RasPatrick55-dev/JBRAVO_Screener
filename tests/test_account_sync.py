@@ -174,7 +174,8 @@ class StageTests(unittest.TestCase):
     def test_all_stages_require_successful_completion(self):
         for stage in sync.STAGES:
             with self.subTest(stage=stage.name):
-                self.assertEqual(self.invoke(stage, '\n'.join(stage.required))['status'], 'ok')
+                self.assertEqual(self.invoke(stage, '\n'.join(stage.required))['status'],
+                                 'failed' if stage.name == 'reconciliation' else 'ok')
 
     def test_zero_exit_without_completion_is_failed(self):
         for stage in sync.STAGES:
@@ -202,10 +203,10 @@ class StageTests(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         self.assertIn('RECONCILE_WATERMARK_UPDATE', result['missing_completion_markers'])
 
-    def test_unresolved_decoration_is_degraded(self):
+    def test_unresolved_decoration_without_scoped_proof_is_failed(self):
         stage = sync.STAGES[1]
         result = self.invoke(stage, '\n'.join((*stage.required, 'RECONCILE_DECORATE_MISS')))
-        self.assertEqual(result['status'], 'degraded')
+        self.assertEqual(result['status'], 'failed')
 
     def test_arbitrary_child_output_is_not_saved(self):
         stage = sync.STAGES[0]
@@ -326,7 +327,7 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
         logger = logging.Logger('offline-executor-gates', logging.INFO)
         logger.addHandler(logging.StreamHandler(messages))
         def reconcile():
-            logger.info('\n'.join(sync.STAGES[1].required))
+            logger.info(operational_output() if reconciliation_complete else 'RECONCILE_START')
             if not reconciliation_complete:
                 logger.warning('RECONCILE_WATERMARK_HELD')
             return reconciliation_complete
@@ -363,16 +364,15 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
                 return sync.run_stage(current, timeout, descriptor)
 
         result = sync.run_workflow(Path(self.storage) / 'health', runner=runner)
-        self.assertEqual(result['status'], 'ok' if reconciliation_complete else 'failed')
-        self.assertEqual(calls, ['activities', 'reconciliation', 'snapshot'] if reconciliation_complete
-                         else ['activities', 'reconciliation'])
+        self.assertEqual(result['status'], 'degraded' if reconciliation_complete else 'failed')
+        self.assertEqual(calls, ['activities', 'reconciliation'])
         execution.reconcile_closed_trades.assert_called_once_with()
         self.assertFalse(execution.metrics.reconciliation['accounting_complete'])
         self.assertFalse(execution.metrics.reconciliation['recovery_complete'])
         execution.execute.assert_not_called()
         execution.hydrate_candidates.assert_not_called()
         client.submit_order.assert_not_called()
-        self.assertEqual(result['stages'][2]['status'], 'ok' if reconciliation_complete else 'not_run')
+        self.assertEqual(result['stages'][2]['status'], 'not_run')
         if not reconciliation_complete:
             self.assertIn('RECONCILE_WATERMARK_HELD', result['stages'][1]['health_reasons'])
         return messages.getvalue()
@@ -383,7 +383,7 @@ class ExecutorGateIntegrationTests(unittest.TestCase):
     def test_incomplete_reconciliation_returns_failure_and_stops_snapshot(self):
         self.exercise_clock('2026-10-09T06:15:00', 'premarket', reconciliation_complete=False)
 
-    def test_weekend_closed_session_reconciles_and_reaches_snapshot(self):
+    def test_weekend_scoped_completion_holds_snapshot(self):
         text = self.exercise_clock('2026-10-10T06:15:00', 'closed', 2)
         self.assertIn('MARKET_GATE_BYPASSED', text)
 
@@ -397,7 +397,7 @@ class PaperContextTests(unittest.TestCase):
 
     def invoke(self, environment, stage=None, text=None):
         stage = stage or sync.STAGES[1]
-        text = '\n'.join(stage.required) if text is None else text
+        text = (operational_output() if stage.name == 'reconciliation' else '\n'.join(stage.required)) if text is None else text
         process = mock.Mock(returncode=0)
         process.poll.return_value = 0
         calls = []
@@ -418,7 +418,7 @@ class PaperContextTests(unittest.TestCase):
         environment = {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets',
                        'SYNTHETIC_SENTINEL': 'preserved'}
         result, calls = self.invoke(environment)
-        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['status'], 'degraded')
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1]['env'], {**environment, 'JBR_EXEC_PAPER': 'true'})
         self.assertNotIn('JBR_EXEC_PAPER', environment)
@@ -427,7 +427,7 @@ class PaperContextTests(unittest.TestCase):
         environment = {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets',
                        'JBR_EXEC_PAPER': 'true', 'SYNTHETIC_SENTINEL': 'preserved'}
         result, calls = self.invoke(environment)
-        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['status'], 'degraded')
         self.assertEqual(calls[0][1]['env'], environment)
         self.assertIsNot(calls[0][1]['env'], os.environ)
 
@@ -561,6 +561,272 @@ class PaperContextTests(unittest.TestCase):
             accepted = namespace['_paper_disposition_identity']()
         self.assertEqual(accepted['environment'], 'paper')
         self.assertTrue(accepted['verified'])
+
+
+def operational_output(drift=False, formatter=None):
+    """Render the unchanged real executor publication tail with synthetic state."""
+    import ast
+    import copy
+    source = ast.parse((sync.ROOT / 'scripts/execute_trades.py').read_text(encoding='utf-8'))
+    executor = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'TradeExecutor')
+    method = next(n for n in executor.body if isinstance(n, ast.FunctionDef) and n.name == 'reconcile_closed_trades')
+    tail = copy.deepcopy(method.body[-1])
+    assert isinstance(tail, ast.Try)
+    wrapper = ast.parse('def publish(self, db, engine, policy_revision, policy_status, LOGGER, closed_count=0, decorated_count=0):\n    pass\n').body[0]
+    wrapper.body = [tail]
+    namespace = {}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper], type_ignores=[])),
+                 'source-exact-publication', 'exec'), namespace)
+    status = dict(scope='ACTIVE_RECONCILIATION', policy_revision=0, excluded_count=1)
+    @contextlib.contextmanager
+    def publication(engine, *, expected_revision):
+        assert expected_revision == 0
+        yield {**status, 'policy_revision': 1} if drift else status
+    metrics = SimpleNamespace(reconciliation=dict(recovery_pending_case_ids=[
+        '00000000-0000-4000-8000-000000000001']))
+    stream = io.StringIO()
+    logger = logging.Logger('synthetic-exact-publication', logging.INFO)
+    handler = logging.StreamHandler(stream)
+    if formatter is not None:
+        handler.setFormatter(logging.Formatter(formatter))
+    logger.addHandler(handler)
+    logger.info('[INFO] RECONCILE_START open_trades=0')
+    result = namespace['publish'](SimpleNamespace(metrics=metrics),
+        SimpleNamespace(reconciliation_publication=publication), object(), 0, status, logger)
+    assert result is (not drift)
+    return stream.getvalue()
+
+
+class CompletionContractTests(unittest.TestCase):
+    def invoke(self, text, code=0):
+        child = mock.Mock(returncode=code)
+        child.poll.return_value = code
+        def spawn(command, **options):
+            options['stdout'].write(text.encode())
+            return child
+        with mock.patch.dict(os.environ, {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets'}, clear=True), \
+                mock.patch.object(sync.subprocess, 'Popen', side_effect=spawn):
+            return sync.run_stage(sync.STAGES[1], 300, 123)
+
+    def test_real_scoped_publication_is_degraded_with_all_holds_explicit(self):
+        text = operational_output()
+        self.assertNotIn('RECONCILE_COVERAGE_COMPLETE', text)
+        self.assertNotIn('RECONCILE_WATERMARK_UPDATE', text)
+        result = self.invoke(text)
+        self.assertEqual(result['status'], 'degraded')
+        self.assertEqual(result['reason'], 'RECONCILE_RECOVERY_HELD')
+        self.assertEqual(result['completion_contract'], 'ACTIVE_RECONCILIATION_OPERATIONAL_V1')
+        self.assertEqual(result['failure_markers'], [])
+        self.assertEqual(result['missing_completion_markers'], [])
+        self.assertIn('RECONCILE_WATERMARK_HELD', result['health_reasons'])
+        self.assertIn('RECONCILE_RECOVERY_HELD', result['qualifications'])
+        scoped = result['reconciliation']
+        self.assertIs(scoped['operational_complete'], True)
+        self.assertEqual(scoped['scope'], 'ACTIVE_RECONCILIATION')
+        self.assertEqual(scoped['policy_revision'], 0)
+        self.assertEqual(scoped['excluded_count'], 1)
+        self.assertEqual(scoped['recovery_pending_case_ids'], ['00000000-0000-4000-8000-000000000001'])
+        for flag in ('recovery_complete', 'accounting_complete', 'activity_ingestion_complete',
+                     'watermark_advanced', 'snapshot_eligible'):
+            with self.subTest(flag=flag): self.assertIs(scoped[flag], False)
+
+    def test_fatal_markers_never_become_qualified_success(self):
+        text = operational_output()
+        for marker in (*sync.STAGES[1].failures, *sync.GENERIC_FAILURES, 'RECONCILE_DECORATE_MISS',
+                       'RECONCILE_FILL_HELD', 'RECONCILE_DECORATE_HELD',
+                       'RECONCILE_INCOMPLETE', 'RECONCILE_AUTO_FAIL'):
+            with self.subTest(marker=marker):
+                result = self.invoke(text + '\n' + marker)
+                self.assertEqual(result['status'], 'failed')
+                self.assertNotIn('reconciliation', result)
+
+    def test_nonzero_and_output_limit_preserve_failure(self):
+        for code in (1, 2, -9):
+            with self.subTest(code=code):
+                self.assertEqual(self.invoke(operational_output(), code)['status'], 'failed')
+        result = self.invoke(operational_output() + 'x' * sync.OUTPUT_LIMIT)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['reason'], 'output_limit')
+
+    def test_timeout_after_valid_output_cannot_become_degraded_completion(self):
+        child = mock.Mock(pid=4321, returncode=-9)
+        child.poll.return_value = None
+        def spawn(command, **options):
+            options['stdout'].write(operational_output().encode())
+            return child
+        with mock.patch.dict(os.environ, {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets'}, clear=True), \
+                mock.patch.object(sync.subprocess, 'Popen', side_effect=spawn), \
+                mock.patch.object(sync.time, 'monotonic', side_effect=[0, 301, 302]), \
+                mock.patch.object(sync.os, 'killpg', create=True):
+            result = sync.run_stage(sync.STAGES[1], 300, 123)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['reason'], 'timeout')
+        self.assertNotIn('reconciliation', result)
+        child.wait.assert_called_once_with(timeout=5)
+
+    def test_missing_duplicate_and_out_of_order_publications_are_refused(self):
+        lines = operational_output().splitlines()
+        for index in range(4):
+            for mode in ('missing', 'duplicate'):
+                with self.subTest(index=index, mode=mode):
+                    changed = lines[:index] + lines[index + 1:] if mode == 'missing' else lines + [lines[index]]
+                    self.assertEqual(self.invoke('\n'.join(changed))['status'], 'failed')
+        with self.subTest(order='reversed'):
+            self.assertEqual(self.invoke('\n'.join(reversed(lines)))['status'], 'failed')
+
+    def test_overclaims_unknown_scope_reason_and_corrupt_fields_are_refused(self):
+        text = operational_output()
+        changes = [('scope=ACTIVE_RECONCILIATION', 'scope=GLOBAL'),
+                   ('policy_revision=0', 'policy_revision=-1'),
+                   ('policy_revision=0', 'policy_revision=True'),
+                   ('policy_revision=0', 'policy_revision=' + '9' * 20),
+                   ('excluded_count=1', 'excluded_count=-1'),
+                   ('reason=independent_durable_activity_ingestion_unproved', 'reason=unknown'),
+                   ('operational_complete=true', 'operational_complete=false'),
+                   ('00000000-0000-4000-8000-000000000001', 'UNTRUSTED_SECRET_TEXT'),
+                   ('open_trades=0', 'open_trades=0\x08'),
+                   ('closed=0', 'closed=0 extra=unexpected')]
+        for flag in ('recovery_complete', 'accounting_complete', 'activity_ingestion_complete', 'watermark_advanced'):
+            changes.append((flag + '=false', flag + '=true'))
+        for before, after in changes:
+            with self.subTest(field=before):
+                result = self.invoke(text.replace(before, after))
+                self.assertEqual(result['status'], 'failed')
+                self.assertNotIn('reconciliation', result)
+                self.assertNotIn('UNTRUSTED_SECRET_TEXT', json.dumps(result))
+
+    def test_duplicate_cases_and_contradictory_watermark_are_refused(self):
+        text = operational_output()
+        case = "'00000000-0000-4000-8000-000000000001'"
+        variants = [text.replace('[' + case + ']', '[' + case + ', ' + case + ']'),
+                    text + '\nRECONCILE_WATERMARK_UPDATE',
+                    text.replace('[WARN] RECONCILE_WATERMARK_HELD', '[INFO] RECONCILE_WATERMARK_HELD'),
+                    text.replace('RECONCILE_OPERATIONAL_COMPLETE', 'RECONCILE_OPERATIONAL_COMPLETE_EXTRA')]
+        for index, changed in enumerate(variants):
+            with self.subTest(index=index):
+                self.assertEqual(self.invoke(changed)['status'], 'failed')
+
+    def test_legacy_markers_and_zero_exit_do_not_claim_current_readiness(self):
+        result = self.invoke('\n'.join(sync.STAGES[1].required))
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['reason'], 'RECONCILE_SCOPED_RESULT_UNPROVED')
+
+    def test_real_policy_publication_drift_remains_failed(self):
+        result = self.invoke(operational_output(drift=True), code=1)
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('RECONCILE_DB_FAIL', result['failure_markers'])
+        self.assertNotIn('reconciliation', result)
+
+    def test_degraded_report_keeps_nonzero_cli_and_never_runs_snapshot(self):
+        stage_result = self.invoke(operational_output())
+        visited = []
+        def runner(stage, timeout, lock):
+            visited.append(stage.name)
+            return stage_result if stage.name == 'reconciliation' else successful_stage()
+        with tempfile.TemporaryDirectory() as storage:
+            state = Path(storage) / 'reports'
+            report = sync.run_workflow(state, runner=runner)
+            self.assertEqual(json.loads((state / 'latest.json').read_text()), report)
+            self.assertEqual(json.loads((state / ('run-' + report['run_id'] + '.json')).read_text()), report)
+        self.assertEqual(visited, ['activities', 'reconciliation'])
+        self.assertEqual(report['status'], 'degraded')
+        self.assertEqual(report['stages'][2]['status'], 'not_run')
+        with mock.patch.object(sync, 'run_workflow', return_value=report), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(sync.main([]), 1)
+
+
+
+class PublicationUniquenessTests(unittest.TestCase):
+    invoke = CompletionContractTests.invoke
+
+    def assert_failed_capture(self, text):
+        result = self.invoke(text)
+        self.assertEqual(result['status'], 'failed')
+        self.assertNotIn('reconciliation', result)
+        self.assertNotIn('completion_contract', result)
+        return result
+
+    def test_identical_same_line_duplicates_of_every_marker_are_refused(self):
+        lines = operational_output().splitlines()
+        for index in range(4):
+            for separator in (' ', '\t', '', ' | '):
+                with self.subTest(marker=index, separator=repr(separator)):
+                    changed = list(lines)
+                    changed[index] += separator + lines[index]
+                    self.assert_failed_capture('\n'.join(changed))
+
+    def test_different_publications_cannot_share_one_physical_line(self):
+        lines = operational_output().splitlines()
+        for first in range(4):
+            for second in range(first + 1, 4):
+                for reverse in (False, True):
+                    with self.subTest(first=first, second=second, reverse=reverse):
+                        changed = list(lines)
+                        pair = [lines[first], lines[second]]
+                        changed[first] = ' '.join(reversed(pair) if reverse else pair)
+                        del changed[second]
+                        self.assert_failed_capture('\n'.join(changed))
+
+    def test_conflicting_publication_before_or_after_valid_one_is_refused(self):
+        lines = operational_output().splitlines()
+        invalid = [lines[0].replace('open_trades=0', 'open_trades=-1'),
+                   lines[1].replace('scope=ACTIVE_RECONCILIATION', 'scope=GLOBAL'),
+                   lines[2].replace('independent_durable_activity_ingestion_unproved', 'unknown'),
+                   lines[3].replace('accounting_complete=false', 'accounting_complete=true')]
+        for index in range(4):
+            for invalid_first in (False, True):
+                with self.subTest(marker=index, invalid_first=invalid_first):
+                    changed = list(lines)
+                    changed[index] = ' '.join([invalid[index], lines[index]] if invalid_first
+                                              else [lines[index], invalid[index]])
+                    self.assert_failed_capture('\n'.join(changed))
+
+    def test_only_actual_source_logging_formats_have_accepted_prefixes(self):
+        import ast
+        source = ast.parse((sync.ROOT / 'scripts/execute_trades.py').read_text(encoding='utf-8'))
+        configure = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == 'configure_logging')
+        formats = {n.args[0].value for n in ast.walk(configure) if isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Attribute) and n.func.attr == 'Formatter'
+                   and n.args and isinstance(n.args[0], ast.Constant)}
+        self.assertEqual(formats, {'%(message)s', '[%(asctime)s] [%(levelname)s] %(message)s'})
+        for formatter in sorted(formats):
+            with self.subTest(formatter=formatter):
+                result = self.invoke(operational_output(formatter=formatter))
+                self.assertEqual(result['status'], 'degraded')
+                self.assertIs(result['reconciliation']['snapshot_eligible'], False)
+                self.assertIs(result['reconciliation']['accounting_complete'], False)
+        lines = operational_output().splitlines()
+        prefixes = ('untrusted arbitrary text ', '[INFO] ',
+                    '[2026-10-22 20:00:00,123] [ERROR] ',
+                    '[2026-10-22 20:00:00,123] [INFO] untrusted ',
+                    '[2026-99-99 99:99:99,999] [INFO] ')
+        for index in range(4):
+            for prefix in prefixes:
+                with self.subTest(marker=index, prefix=prefix):
+                    changed = list(lines)
+                    changed[index] = prefix + lines[index]
+                    self.assert_failed_capture('\n'.join(changed))
+
+    def test_exact_independent_counterexample_fails_without_external_snapshot(self):
+        lines = operational_output().splitlines()
+        prefix = ('[INFO] RECONCILE_OPERATIONAL_COMPLETE scope=GLOBAL policy_revision=0 '
+                  'excluded_count=0 recovery_pending_case_ids=[] ')
+        lines[1] = prefix + lines[1]
+        text = '\n'.join(lines)
+        self.assertIsNone(sync._scoped_reconciliation_result(text))
+        result = self.assert_failed_capture(text)
+        visited = []
+        def runner(stage, timeout, lock):
+            visited.append(stage.name)
+            return result if stage.name == 'reconciliation' else successful_stage()
+        with tempfile.TemporaryDirectory() as storage:
+            report = sync.run_workflow(Path(storage) / 'reports', runner=runner)
+        self.assertEqual(visited, ['activities', 'reconciliation'])
+        self.assertEqual(report['stages'][2]['status'], 'not_run')
+        self.assertEqual(report['status'], 'failed')
+        with mock.patch.object(sync, 'run_workflow', return_value=report), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(sync.main([]), 1)
+
 
 
 if __name__ == '__main__':
