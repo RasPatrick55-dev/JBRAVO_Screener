@@ -2906,6 +2906,7 @@ class TradeExecutor:
         except Exception as exc:
             LOGGER.warning('[WARN] RECONCILE_DB_FAIL stage=policy error_type=%s', type(exc).__name__)
             self.metrics.reconciliation['reason'] = 'POLICY_UNAVAILABLE'
+            self.metrics.reconciliation['policy_failure'] = executor_health.policy_failure_diagnostic(exc)
             return False
 
         try:
