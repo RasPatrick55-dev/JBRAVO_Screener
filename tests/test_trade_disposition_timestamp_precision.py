@@ -33,11 +33,14 @@ class TimestampPrecisionTests(unittest.TestCase):
                             self.assertEqual(actual,expected);self.assertEqual(actual.utcoffset(),expected.utcoffset())
                             self.assertEqual(actual.microsecond,expected.microsecond)
     def test_zulu_and_existing_supported_forms(self):
-        for text in ('2026-10-22T12:34:56Z','2026-10-22T12:34:56.123Z','2026-10-22T12:34:56.12345Z',
-                     '2026-10-22T12:34:56.123456+00:00','2026-10-22 12:34:56+00:00'):
+        cases = (('2026-10-22T12:34:56Z', 0), ('2026-10-22T12:34:56.123Z', 123000),
+                 ('2026-10-22T12:34:56.12345Z', 123450),
+                 ('2026-10-22T12:34:56.123456+00:00', 123456), ('2026-10-22 12:34:56+00:00', 0))
+        for text, microseconds in cases:
             for parser in (datetime,LegacyFractionBoundary):
                 with self.subTest(text_kind='synthetic',parser=parser.__name__),mock.patch.object(policy,'datetime',parser):
-                    self.assertEqual(policy.aware_time(text),datetime.fromisoformat(text.replace('Z','+00:00')))
+                    expected = datetime(2026, 10, 22, 12, 34, 56, microseconds, tzinfo=timezone.utc)
+                    self.assertEqual(policy.aware_time(text), expected)
     def test_null_nonstring_blank_and_whitespace_still_refuse_identity(self):
         for text in (None,True,1,{},[],'',' ',' 2026-10-22T12:34:56.12345+00:00','2026-10-22T12:34:56.12345+00:00 '):
             for parser in (datetime,LegacyFractionBoundary):
