@@ -8,22 +8,22 @@ on:
     paths:
       - .github/workflows/paper-gross-qualification.yml
       - tests/native_paper_gross_qualification.py
-      - scripts/db.py
-      - scripts/db_migrate.py
+      - scripts/gross_paper_accounting.py
+      - scripts/metrics.py
       - tests/test_paper_gross_recovery.py
 
 permissions:
   contents: read
 
 concurrency:
-  group: paper-gross-native-one-use-6c1c6621
+  group: paper-gross-native-one-use-ef201041
   cancel-in-progress: false
 
 jobs:
   qualify:
     if: >-
       github.repository == 'RasPatrick55-dev/JBRAVO_Screener' &&
-      github.event.before == '6c1c6621068b8e7b9dbb5b47d72206509ed485d8' &&
+      github.event.before == 'ef201041ad3d3c47ad38953455eb23fdf1c08056' &&
       github.run_attempt == 1 && github.event.deleted == false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -40,7 +40,7 @@ jobs:
           --health-cmd "pg_isready -U qualification_admin -d qualification_745"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      QUALIFICATION_ADMISSION: PR745_PRIVILEGE_REPAIR_PREP001
+      QUALIFICATION_ADMISSION: PR745_FINAL_REVIEW_CORRECTION_PREP001
       APCA_API_BASE_URL: https://paper-api.alpaca.markets
       APCA_DATA_API_BASE_URL: https://data.alpaca.markets
       ALPACA_DATA_FEED: iex
@@ -68,11 +68,11 @@ jobs:
           set -euo pipefail
           test "$(git -C app rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git -C qualification rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git -C qualification rev-parse HEAD^)" = 6c1c6621068b8e7b9dbb5b47d72206509ed485d8
+          test "$(git -C qualification rev-parse HEAD^)" = ef201041ad3d3c47ad38953455eb23fdf1c08056
           git -C qualification diff --name-only HEAD^ HEAD | sort > actual-paths
-          printf '%s\n' .github/workflows/paper-gross-qualification.yml tests/native_paper_gross_qualification.py scripts/db.py scripts/db_migrate.py tests/test_paper_gross_recovery.py | sort > expected-paths
+          printf '%s\n' .github/workflows/paper-gross-qualification.yml tests/native_paper_gross_qualification.py scripts/gross_paper_accounting.py scripts/metrics.py tests/test_paper_gross_recovery.py | sort > expected-paths
           diff -u expected-paths actual-paths
-          echo '4fc9e2322bfefa95b235ab946f23d2751e33c11f2ea1dc26bcdb2f3b9354c24c  qualification/tests/native_paper_gross_qualification.py' | sha256sum -c -
+          echo 'bfdcf80d885e8ec808b17b6587b467ab16d9e5f838169a8657f7843f272026f6  qualification/tests/native_paper_gross_qualification.py' | sha256sum -c -
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'

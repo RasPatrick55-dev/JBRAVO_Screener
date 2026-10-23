@@ -9,7 +9,7 @@ import re, signal, socket, subprocess, sys, threading, time, unittest
 from datetime import date, datetime, timezone, timedelta
 
 SOURCE_HEAD = os.environ.get('GITHUB_SHA','UNPUBLISHED_REPAIR')
-EXPECTED_SOURCE = {'dashboards/dashboard_app.py': 'f8317129ba531386007108edb89c77d56e0025ad1432631362fb41f91aa1f438', 'dashboards/data_io.py': 'ffc06966f5b255e3c8e47360f2ad302b5f5aeb22afdfb46ebc8d3e120f851425', 'scripts/db.py': '89d9443e9bd60a721e7471fb8e611a4c43955b6bc8ec3d59bb7d252c8ee87c23', 'scripts/gross_paper_accounting.py': '61510dd5ea90c66c8639978e195a8efbe03c8ca2e9f2f7ac04ff2677b8f722e5', 'scripts/metrics.py': 'ede2f2a36cb0678ee654b14f25bd5ebe950cd5e42c7800142e81387c0a4bc130', 'scripts/pipeline_postflight.py': 'c7d29880164db0ab25563d28a62e6bf4de0313f8025c423536f504e775da0e40', 'scripts/primary_pipeline.py': '1e728cbbc304546b28db9d53f496649716102db6acbd29eec8481ff7de6494a3', 'scripts/run_pipeline.py': '2b022158d7d0d65a6f3dd780f717c3d83dbd078399b5565580c6a03947b0acb9', 'scripts/trade_performance.py': 'd40fe11be566f4e1972d3f5d4d4c3309b74b4459d81f80942c9c456b5cc297e9', 'tests/test_gross_paper_accounting.py': 'de3af06fa9bb2c20ae7670de4319f0a32b15b12260758ec7fc221f247a8a96f1', 'tests/test_paper_gross_integration.py': '9f15f09d58d4fd90d6d36d042af0afe39230161ae7573cc7b112463a905c5a85', 'tests/test_paper_gross_recovery.py': '086d9961f5e6784bb00fb07df7bbd6911d2934069674577151cb807d54640879', 'tests/test_pipeline_postflight.py': '075afb76b7297d46749fb0677eafde0887faee54941f25de4b8e3aee5148d458', 'scripts/db_migrate.py': '6a10b518efc179a64a0a374e57dda8bac07d805034be673bd4033f777708b575'}
+EXPECTED_SOURCE = {'dashboards/dashboard_app.py': 'f8317129ba531386007108edb89c77d56e0025ad1432631362fb41f91aa1f438', 'dashboards/data_io.py': 'ffc06966f5b255e3c8e47360f2ad302b5f5aeb22afdfb46ebc8d3e120f851425', 'scripts/db.py': '89d9443e9bd60a721e7471fb8e611a4c43955b6bc8ec3d59bb7d252c8ee87c23', 'scripts/gross_paper_accounting.py': 'b34bb85de27fbb409954943dcd996d0a66d5ae0d0aac6599776db4ca2da569d4', 'scripts/metrics.py': '4d08f31a6deff14aa740489a7faebf55c879fcd5bff10963cc8edcfd159ebc94', 'scripts/pipeline_postflight.py': 'c7d29880164db0ab25563d28a62e6bf4de0313f8025c423536f504e775da0e40', 'scripts/primary_pipeline.py': '1e728cbbc304546b28db9d53f496649716102db6acbd29eec8481ff7de6494a3', 'scripts/run_pipeline.py': '2b022158d7d0d65a6f3dd780f717c3d83dbd078399b5565580c6a03947b0acb9', 'scripts/trade_performance.py': 'd40fe11be566f4e1972d3f5d4d4c3309b74b4459d81f80942c9c456b5cc297e9', 'tests/test_gross_paper_accounting.py': 'de3af06fa9bb2c20ae7670de4319f0a32b15b12260758ec7fc221f247a8a96f1', 'tests/test_paper_gross_integration.py': '9f15f09d58d4fd90d6d36d042af0afe39230161ae7573cc7b112463a905c5a85', 'tests/test_paper_gross_recovery.py': '6e7b9c136fc17258c1617f50da0578c092c0bf1e6dac3b04f773d43056d4d002', 'tests/test_pipeline_postflight.py': '075afb76b7297d46749fb0677eafde0887faee54941f25de4b8e3aee5148d458', 'scripts/db_migrate.py': '6a10b518efc179a64a0a374e57dda8bac07d805034be673bd4033f777708b575'}
 DATABASE = 'qualification_745'
 PORT = 55432
 PASSWORD = 'EPHEMERAL_QUALIFICATION_ONLY_745'
@@ -383,6 +383,22 @@ class NativeCases(unittest.TestCase):
         finally:owner.close()
         publish();self.assertEqual(originals(),before)
 
+    def test_14_native_derived_values_beyond_source_number_bounds(self):
+        cases=(('1e-1000','1e-1000','2e-1000','0.'+'0'*1999+'1'),
+               ('1e999','1','1e999','9'*999+'0'*999))
+        for qty,entry,exit_price,expected in cases:
+            with self.subTest(qty=qty):
+                sql('UPDATE public.trades SET qty=%s::numeric,entry_price=%s::numeric,exit_price=%s::numeric',
+                    (qty,entry,exit_price))
+                before=originals();proof=publish()
+                doc=D.document(sql('SELECT publication::text FROM public.paper_gross_metrics_daily',fetch=True)[0][0])
+                self.assertEqual(doc['summary']['gross_pnl'],expected)
+                self.assertIsNone(doc['summary']['fees']);self.assertIsNone(doc['summary']['net_pnl'])
+                self.assertFalse(doc['summary']['accounting_complete']);self.assertFalse(proof['entry_ready'])
+                self.assertEqual(originals(),before)
+                self.assertEqual(sql('SELECT net_pnl FROM public.top_candidates',fetch=True),[(5.0,)])
+                with DB.paper_gross_pipeline_evidence(DAY) as read:self.assertEqual(read,proof)
+
 
 class BoundedCapture(io.StringIO):
     def write(self,text):
@@ -432,7 +448,7 @@ def main():
     if (sys.platform!='linux' or sys.version_info[:2]!=(3,10) or os.environ.get('GITHUB_ACTIONS')!='true'
             or os.environ.get('GITHUB_REPOSITORY')!='RasPatrick55-dev/JBRAVO_Screener'
             or os.environ.get('GITHUB_RUN_ATTEMPT')!='1'
-            or os.environ.get('QUALIFICATION_ADMISSION')!='PR745_PRIVILEGE_REPAIR_PREP001'
+            or os.environ.get('QUALIFICATION_ADMISSION')!='PR745_FINAL_REVIEW_CORRECTION_PREP001'
             or not re.fullmatch('[a-f0-9]{40}',SOURCE_HEAD)):
         raise RuntimeError('CI_ONLY_ONE_USE_ADMISSION_REQUIRED')
     WORK=Path(os.environ['GITHUB_WORKSPACE']).resolve();OUT=WORK/'qualification-output';OUT.mkdir(exist_ok=True)

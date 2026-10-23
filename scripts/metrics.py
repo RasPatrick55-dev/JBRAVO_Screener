@@ -402,7 +402,7 @@ def rank_and_filter_candidates(
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run metrics ranking + summary")
+    parser = argparse.ArgumentParser(description="Run metrics ranking + summary", allow_abbrev=False)
     parser.add_argument(
         "--run-date",
         default=None,

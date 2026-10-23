@@ -119,6 +119,49 @@ class RecoveryTests(unittest.TestCase):
     def snapshot(self):return F.build(self.state.policy,self.state.trades)
     def publish(self):return self.db['publish_paper_gross_pipeline'](self.day,self.rank,self.snapshot())
     def evidence(self,**kw):return self.db['paper_gross_pipeline_evidence'](self.day,**kw)
+    def test_metrics_parser_rejects_abbreviated_modes_before_any_publication(self):
+        ns,db=self.metrics()
+        for flag in ('--paper-gross-p','--paper-gross','--paper-gross-pip','--paper-gross-r',
+                     '--paper-gross-report','--paper-gross-pipeline-extra','--run-d'):
+            with self.subTest(flag=flag),mock.patch('sys.stderr',new=io.StringIO()),self.assertRaises(SystemExit) as refused:
+                ns['parse_args']([flag])
+            self.assertEqual(refused.exception.code,2)
+        self.assertTrue(ns['parse_args'](['--paper-gross-pipeline']).paper_gross_pipeline)
+        self.assertTrue(ns['parse_args'](['--paper-gross-report-only']).paper_gross_report_only)
+        self.assertEqual(ns['parse_args'](['--run-date',self.day]).run_date,self.day)
+        self.assertFalse(ns['parse_args']([]).paper_gross_pipeline)
+        self.assertEqual(self.state.sql,[])
+    def test_derived_wide_and_tiny_gross_complete_daily_artifact_and_postflight(self):
+        from decimal import localcontext, Inexact, Rounded
+        big=F.row(112,incomplete=False)|dict(qty='1e1000',entry_price='1',exit_price='1'+'0'*999+'e1000')
+        tiny=F.row(113,incomplete=False)|dict(qty='1e-1000',entry_price='1e-1000',exit_price='2e-1000')
+        inverse=big|dict(trade_id=114,qty='-1e1000')
+        wide='9'*1999+'0'*1000
+        small='0.'+'0'*1999+'1'
+        cases=(([tiny],small),([big],wide),([big,tiny],wide+'.'+'0'*1999+'1'),
+               ([tiny,big],wide+'.'+'0'*1999+'1'),([big,tiny,inverse],small))
+        self.state.policy=F.policy()
+        for rows,expected in cases:
+            with self.subTest(ids=[row['trade_id'] for row in rows]):
+                self.state.trades=deepcopy(rows);original=deepcopy(rows)
+                self.state.top=[];self.state.daily.clear()
+                ns,db=self.metrics()
+                with localcontext() as context,mock.patch('sys.stdout',new=io.StringIO()):
+                    context.prec=6;context.traps[Inexact]=True;context.traps[Rounded]=True
+                    self.assertEqual(ns['main'](['--paper-gross-pipeline']),0)
+                doc=D.document(self.state.daily[self.day])
+                self.assertEqual(doc['summary']['gross_pnl'],expected)
+                self.assertEqual(doc['report']['gross_pnl'],expected)
+                self.assertIsNone(doc['summary']['net_pnl']);self.assertIsNone(doc['summary']['fees'])
+                self.assertEqual(doc['summary']['net_status'],'UNKNOWN')
+                self.assertFalse(doc['summary']['accounting_complete'])
+                self.assertEqual(self.state.trades,original)
+                self.assertEqual(self.state.top[0]['net_pnl'],5.0)
+                self.assertTrue((self.root/G.REPORT_PATH).is_file())
+                with self.evidence() as proof:
+                    P._validate_paper_gross_evidence(proof,datetime.now(timezone.utc)-timedelta(minutes=1),datetime.now(timezone.utc))
+                self.assertEqual(self.state.locks,[])
+        self.assertFalse(any(q.startswith(('CREATE ','GRANT ','UPDATE public.trades')) for q,_ in self.state.sql))
     def test_atomic_db_publication_retains_originals_unknown_net_and_backtest_ranking(self):
         result=self.publish();self.assertEqual(self.state.commits,1);self.assertEqual(self.state.rollbacks,0)
         self.assertEqual(self.state.trades,self.original);self.assertEqual(self.state.top[0]['net_pnl'],5.0)

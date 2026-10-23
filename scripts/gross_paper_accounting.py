@@ -273,7 +273,9 @@ def publish_report(root, current, *, now=None):
 def pipeline_summary(snapshot):
     """Counts and exact gross totals only; no synthetic net or risk ratios."""
     rows = snapshot['rows']
-    values = [_number(row['gross_pnl']) for row in rows]
+    # These strings are already derived from validated, bounded source numbers.
+    # Products and exact sums can legitimately exceed the source-number domain.
+    values = [Decimal(row['gross_pnl']) for row in rows]
     total = _gross_sum(values)
     _require(snapshot['pnl_basis'] == BASIS and snapshot['evidence']['gross_input_complete'] is True,
         'PIPELINE_INPUT_INVALID')
