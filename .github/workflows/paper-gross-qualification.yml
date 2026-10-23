@@ -1,6 +1,6 @@
 name: Paper gross native qualification one-use
 
-# Publishing the reviewed two-file commit is the single authorized admission.
+# Publishing the reviewed five-file repair commit is the single authorized admission.
 # Subsequent pushes, branch rewinds and job reruns are not permitted by this packet.
 on:
   push:
@@ -8,19 +8,22 @@ on:
     paths:
       - .github/workflows/paper-gross-qualification.yml
       - tests/native_paper_gross_qualification.py
+      - scripts/db.py
+      - scripts/db_migrate.py
+      - tests/test_paper_gross_recovery.py
 
 permissions:
   contents: read
 
 concurrency:
-  group: paper-gross-native-one-use-f69a7fdc
+  group: paper-gross-native-one-use-6c1c6621
   cancel-in-progress: false
 
 jobs:
   qualify:
     if: >-
       github.repository == 'RasPatrick55-dev/JBRAVO_Screener' &&
-      github.event.before == 'f69a7fdcfdc36416aa46c9c445212c6678a8da94' &&
+      github.event.before == '6c1c6621068b8e7b9dbb5b47d72206509ed485d8' &&
       github.run_attempt == 1 && github.event.deleted == false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -37,7 +40,7 @@ jobs:
           --health-cmd "pg_isready -U qualification_admin -d qualification_745"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      QUALIFICATION_ADMISSION: PR745_NATIVE_PREP005_06832BA6
+      QUALIFICATION_ADMISSION: PR745_PRIVILEGE_REPAIR_PREP001
       APCA_API_BASE_URL: https://paper-api.alpaca.markets
       APCA_DATA_API_BASE_URL: https://data.alpaca.markets
       ALPACA_DATA_FEED: iex
@@ -56,19 +59,20 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: 06832ba6ede6d0519c89cdbaa8912b55b9df792f
+          ref: ${{ github.sha }}
           path: app
           persist-credentials: false
-      - name: Verify exact application and two-file test-only commit
+      - name: Verify exact application and five-file reviewed repair
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C app rev-parse HEAD)" = 06832ba6ede6d0519c89cdbaa8912b55b9df792f
-          test "$(git -C qualification rev-parse HEAD^)" = f69a7fdcfdc36416aa46c9c445212c6678a8da94
+          test "$(git -C app rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C qualification rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C qualification rev-parse HEAD^)" = 6c1c6621068b8e7b9dbb5b47d72206509ed485d8
           git -C qualification diff --name-only HEAD^ HEAD | sort > actual-paths
-          printf '%s\n' .github/workflows/paper-gross-qualification.yml tests/native_paper_gross_qualification.py | sort > expected-paths
+          printf '%s\n' .github/workflows/paper-gross-qualification.yml tests/native_paper_gross_qualification.py scripts/db.py scripts/db_migrate.py tests/test_paper_gross_recovery.py | sort > expected-paths
           diff -u expected-paths actual-paths
-          echo '4429ea787378172d7ac64cb474db24cb7d5c1f5067204e63be2ce0c23bcab73c  qualification/tests/native_paper_gross_qualification.py' | sha256sum -c -
+          echo '4fc9e2322bfefa95b235ab946f23d2751e33c11f2ea1dc26bcdb2f3b9354c24c  qualification/tests/native_paper_gross_qualification.py' | sha256sum -c -
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -78,6 +82,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -d "$GITHUB_WORKSPACE/app/.git"
+          test ! -e "$GITHUB_WORKSPACE/qualification-retained-inputs"
+          mkdir "$GITHUB_WORKSPACE/qualification-retained-inputs"
+          for name in data tmp debug.log; do
+            test ! -L "$GITHUB_WORKSPACE/app/$name"
+            if test -e "$GITHUB_WORKSPACE/app/$name"; then
+              mv -- "$GITHUB_WORKSPACE/app/$name" "$GITHUB_WORKSPACE/qualification-retained-inputs/$name"
+            fi
+          done
+          mkdir -p "$GITHUB_WORKSPACE/app/data" "$GITHUB_WORKSPACE/app/tmp"
           mkdir -p qualification-output/tmp qualification-output/cache qualification-output/mpl
           touch qualification-output/empty-passfile qualification-output/empty-service
           export TMPDIR="$GITHUB_WORKSPACE/qualification-output/tmp"

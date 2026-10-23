@@ -8,15 +8,15 @@ from pathlib import Path
 import re, signal, socket, subprocess, sys, threading, time, unittest
 from datetime import date, datetime, timezone, timedelta
 
-SOURCE_HEAD = '06832ba6ede6d0519c89cdbaa8912b55b9df792f'
-EXPECTED_SOURCE = {'dashboards/dashboard_app.py': 'f8317129ba531386007108edb89c77d56e0025ad1432631362fb41f91aa1f438', 'dashboards/data_io.py': 'ffc06966f5b255e3c8e47360f2ad302b5f5aeb22afdfb46ebc8d3e120f851425', 'scripts/db.py': 'f8a714e1f752ddc5a68b5e115383f4fdb725e6720f6ec3e44dc22ce21df0cfc9', 'scripts/gross_paper_accounting.py': '61510dd5ea90c66c8639978e195a8efbe03c8ca2e9f2f7ac04ff2677b8f722e5', 'scripts/metrics.py': 'ede2f2a36cb0678ee654b14f25bd5ebe950cd5e42c7800142e81387c0a4bc130', 'scripts/pipeline_postflight.py': 'c7d29880164db0ab25563d28a62e6bf4de0313f8025c423536f504e775da0e40', 'scripts/primary_pipeline.py': '1e728cbbc304546b28db9d53f496649716102db6acbd29eec8481ff7de6494a3', 'scripts/run_pipeline.py': '2b022158d7d0d65a6f3dd780f717c3d83dbd078399b5565580c6a03947b0acb9', 'scripts/trade_performance.py': 'd40fe11be566f4e1972d3f5d4d4c3309b74b4459d81f80942c9c456b5cc297e9', 'tests/test_gross_paper_accounting.py': 'de3af06fa9bb2c20ae7670de4319f0a32b15b12260758ec7fc221f247a8a96f1', 'tests/test_paper_gross_integration.py': '9f15f09d58d4fd90d6d36d042af0afe39230161ae7573cc7b112463a905c5a85', 'tests/test_paper_gross_recovery.py': '1e500a3087d3416780577223a8836e5ef04eb4b074a25966c2af2df85a70db99', 'tests/test_pipeline_postflight.py': '075afb76b7297d46749fb0677eafde0887faee54941f25de4b8e3aee5148d458'}
+SOURCE_HEAD = os.environ.get('GITHUB_SHA','UNPUBLISHED_REPAIR')
+EXPECTED_SOURCE = {'dashboards/dashboard_app.py': 'f8317129ba531386007108edb89c77d56e0025ad1432631362fb41f91aa1f438', 'dashboards/data_io.py': 'ffc06966f5b255e3c8e47360f2ad302b5f5aeb22afdfb46ebc8d3e120f851425', 'scripts/db.py': '89d9443e9bd60a721e7471fb8e611a4c43955b6bc8ec3d59bb7d252c8ee87c23', 'scripts/gross_paper_accounting.py': '61510dd5ea90c66c8639978e195a8efbe03c8ca2e9f2f7ac04ff2677b8f722e5', 'scripts/metrics.py': 'ede2f2a36cb0678ee654b14f25bd5ebe950cd5e42c7800142e81387c0a4bc130', 'scripts/pipeline_postflight.py': 'c7d29880164db0ab25563d28a62e6bf4de0313f8025c423536f504e775da0e40', 'scripts/primary_pipeline.py': '1e728cbbc304546b28db9d53f496649716102db6acbd29eec8481ff7de6494a3', 'scripts/run_pipeline.py': '2b022158d7d0d65a6f3dd780f717c3d83dbd078399b5565580c6a03947b0acb9', 'scripts/trade_performance.py': 'd40fe11be566f4e1972d3f5d4d4c3309b74b4459d81f80942c9c456b5cc297e9', 'tests/test_gross_paper_accounting.py': 'de3af06fa9bb2c20ae7670de4319f0a32b15b12260758ec7fc221f247a8a96f1', 'tests/test_paper_gross_integration.py': '9f15f09d58d4fd90d6d36d042af0afe39230161ae7573cc7b112463a905c5a85', 'tests/test_paper_gross_recovery.py': '086d9961f5e6784bb00fb07df7bbd6911d2934069674577151cb807d54640879', 'tests/test_pipeline_postflight.py': '075afb76b7297d46749fb0677eafde0887faee54941f25de4b8e3aee5148d458', 'scripts/db_migrate.py': '6a10b518efc179a64a0a374e57dda8bac07d805034be673bd4033f777708b575'}
 DATABASE = 'qualification_745'
 PORT = 55432
 PASSWORD = 'EPHEMERAL_QUALIFICATION_ONLY_745'
 USERS = ('qualification_admin', 'qualification_runtime', 'qualification_rowlock')
 DAY = '2000-01-03'
 ROOT = OUT = WORK = None
-PG = DB = G = D = PD = None
+PG = DB = G = D = PD = M = None
 CONNECTIONS = []
 GUARDS = []
 GUARD_EVENTS = []
@@ -26,6 +26,24 @@ ALLOWED_CHILDREN = []
 SERVER_VERIFIED = False
 CLEANING = False
 DEADLINE_HIT = False
+VERSION_METADATA_FALLBACKS = []
+
+
+def configure_test_capabilities():
+    # This test environment admits only IPv4 loopback PostgreSQL. Advertising
+    # IPv6 support would make urllib3 try an unnecessary, forbidden bind probe.
+    socket.has_ipv6=False
+    original=subprocess.check_output
+    def version_metadata(command,*args,**kwargs):
+        # Exercise the application's existing unavailable-Git fallback. This
+        # supplies no fabricated revision and launches no process. All other
+        # process requests still reach the unchanged audit guard.
+        if (not args and command==['git','rev-parse','--short','HEAD'] and set(kwargs)=={'cwd'}
+                and str(kwargs['cwd'])==str(ROOT)):
+            if len(VERSION_METADATA_FALLBACKS)<8:VERSION_METADATA_FALLBACKS.append('VERSION_GIT_UNAVAILABLE')
+            raise FileNotFoundError('CI_VERSION_METADATA_UNAVAILABLE')
+        return original(command,*args,**kwargs)
+    subprocess.check_output=version_metadata
 
 
 class QualificationDeadline(KeyboardInterrupt):
@@ -51,7 +69,7 @@ def safe_error(error):
 
 
 def verify_source():
-    if len(EXPECTED_SOURCE)!=13:raise RuntimeError('SOURCE_PIN_COUNT')
+    if len(EXPECTED_SOURCE)!=14:raise RuntimeError('SOURCE_PIN_COUNT')
     for name,expected in EXPECTED_SOURCE.items():
         path=ROOT/name
         if path.is_symlink() or not path.resolve().is_relative_to(ROOT):raise RuntimeError('SOURCE_PATH')
@@ -108,6 +126,7 @@ def install_guards():
         if event=='open' and not isinstance(args[0],int):
             path=Path(args[0]);name=path.name.casefold()
             if name.startswith('.env') or name in ('.pgpass','.netrc','api-token.dpapi') or 'credential' in name:deny('SECRET_FILE',event)
+            if path.resolve().is_relative_to(WORK/'qualification-retained-inputs'):deny('CHECKOUT_INPUT_REFUSED',event)
             mode=args[1];flags=args[2] if len(args)>2 else 0
             writing=isinstance(mode,str) and any(c in mode for c in 'wax+') or isinstance(flags,int) and flags & (os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC|os.O_APPEND)
             if writing:
@@ -147,14 +166,15 @@ def sql(statement,params=None,fetch=False,user='qualification_admin'):
 
 
 def configure_runtime():
-    global PG,DB,G,D,PD,SERVER_VERIFIED
+    global PG,DB,G,D,PD,M,SERVER_VERIFIED
     sys.dont_write_bytecode=True;sys.path.insert(0,str(ROOT))
     (ROOT/'logs').mkdir(exist_ok=True);(ROOT/'data').mkdir(exist_ok=True)
     os.environ['DATABASE_URL']=ds()
+    configure_test_capabilities()
     PG=install_guards()
-    from scripts import db, gross_paper_accounting, trade_disposition
+    from scripts import db, gross_paper_accounting, trade_disposition, db_migrate
     import pandas
-    DB,G,D,PD=db,gross_paper_accounting,trade_disposition,pandas
+    DB,G,D,PD,M=db,gross_paper_accounting,trade_disposition,pandas,db_migrate
     server=sql('SELECT pg_catalog.current_database(),pg_catalog.current_setting(\'server_version_num\')',fetch=True)
     if server!=[(DATABASE,'120002')]:raise RuntimeError('SYNTHETIC_SERVER_IDENTITY')
     SERVER_VERIFIED=True
@@ -198,6 +218,10 @@ def fixture():
     identity=DB._PAPER_DISPOSITION_BINDING
     sql('INSERT INTO public.trade_disposition_policy VALUES(1,%s,%s,%s,0)',(identity[0],identity[1],DATABASE))
     DB.ensure_top_candidates_table()
+    owner=connect()
+    try:
+        if not M.ensure_paper_gross_schema(owner):raise RuntimeError('SYNTHETIC_SCHEMA_SETUP_FAILED')
+    finally:owner.close()
 
 
 def originals():
@@ -299,12 +323,15 @@ class NativeCases(unittest.TestCase):
         publish()
     def test_08_runtime_minimum_privileges_without_policy_or_schema_expansion(self):
         publish()  # Provision the derived table as fixture owner, not runtime.
-        for user,extra in (('qualification_runtime','GRANT CREATE ON SCHEMA public TO qualification_runtime'),
+        for user,extra in (('qualification_runtime',''),
                            ('qualification_rowlock','GRANT UPDATE ON public.trade_disposition_policy TO qualification_rowlock')):
             with self.subTest(runtime=user):
                 sql('GRANT USAGE ON SCHEMA public TO '+user+'; GRANT SELECT ON ALL TABLES IN SCHEMA public TO '+user+'; '
                     'GRANT INSERT,UPDATE,DELETE ON public.top_candidates TO '+user+'; '
                     'GRANT INSERT,UPDATE ON public.paper_gross_metrics_daily TO '+user+'; '+extra)
+                self.assertEqual(sql('SELECT pg_catalog.has_schema_privilege(%s,\'public\',\'CREATE\')',(user,),fetch=True),[(False,)])
+                if user=='qualification_runtime':
+                    self.assertEqual(sql('SELECT pg_catalog.has_table_privilege(%s,\'public.trade_disposition_policy\',\'UPDATE\')',(user,),fetch=True),[(False,)])
                 before=originals()
                 os.environ['DATABASE_URL']=ds(user)
                 try:
@@ -343,6 +370,18 @@ class NativeCases(unittest.TestCase):
             with DB.paper_gross_pipeline_evidence(DAY,not_before=datetime.now(timezone.utc)+timedelta(seconds=1)):pass
         sql("UPDATE public.trade_disposition_policy SET database_id='00000000-0000-4000-8000-000000000999'")
         with self.assertRaises(D.TradePolicyError):DB.gross_paper_performance_snapshot()
+    def test_13_missing_schema_rolls_back_until_explicit_targeted_setup(self):
+        publish();before=originals()
+        top=sql('SELECT pg_catalog.to_jsonb(t)::text FROM public.top_candidates t',fetch=True)
+        sql('DROP TABLE public.paper_gross_metrics_daily')
+        with self.assertRaises(PG.errors.UndefinedTable):publish()
+        self.assertEqual(sql('SELECT pg_catalog.to_jsonb(t)::text FROM public.top_candidates t',fetch=True),top)
+        self.assertEqual(originals(),before)
+        self.assertEqual(sql("SELECT pg_catalog.to_regclass('public.paper_gross_metrics_daily')",fetch=True),[(None,)])
+        owner=connect()
+        try:self.assertTrue(M.ensure_paper_gross_schema(owner))
+        finally:owner.close()
+        publish();self.assertEqual(originals(),before)
 
 
 class BoundedCapture(io.StringIO):
@@ -393,7 +432,8 @@ def main():
     if (sys.platform!='linux' or sys.version_info[:2]!=(3,10) or os.environ.get('GITHUB_ACTIONS')!='true'
             or os.environ.get('GITHUB_REPOSITORY')!='RasPatrick55-dev/JBRAVO_Screener'
             or os.environ.get('GITHUB_RUN_ATTEMPT')!='1'
-            or os.environ.get('QUALIFICATION_ADMISSION')!='PR745_NATIVE_PREP005_06832BA6'):
+            or os.environ.get('QUALIFICATION_ADMISSION')!='PR745_PRIVILEGE_REPAIR_PREP001'
+            or not re.fullmatch('[a-f0-9]{40}',SOURCE_HEAD)):
         raise RuntimeError('CI_ONLY_ONE_USE_ADMISSION_REQUIRED')
     WORK=Path(os.environ['GITHUB_WORKSPACE']).resolve();OUT=WORK/'qualification-output';OUT.mkdir(exist_ok=True)
     signal.signal(signal.SIGTERM,outer_deadline)
@@ -448,11 +488,12 @@ def main():
         record['child_receipts']=dict(CHILD_RECEIPTS)
         record['guards']=list(GUARDS)+[guard for child in CHILD_RECEIPTS.values() for guard in child.get('guards',[])][:32]
         record['server_verified']=SERVER_VERIFIED
+        record['version_metadata_fallbacks']=list(VERSION_METADATA_FALLBACKS)
         record['deadline_received']=DEADLINE_HIT
         if (DEADLINE_HIT or record['guards'] or not record['cleanup']['all_connections_closed'] or not record['cleanup']['all_owned_children_returned']
                 or record['cleanup']['owned_backend_sessions_remaining'] not in (None,0)):rc=1
         record['status']='PASS' if rc==0 else 'FAIL';record['process_rc']=rc
-        record['qualification']='Real native SQL and process cases separated from repository fake-adapter tests; synthetic ordinary-trade fixture only, no native CRC allocation activation or provider-backed full Pipeline execution. Bootstrap/CLI qualify only if their actual cases pass. PostgreSQL12.2 is a compatibility target, not production-version attestation.'
+        record['qualification']='Real native SQL and process cases separated from repository fake-adapter tests; synthetic ordinary-trade fixture only, no native CRC allocation activation or provider-backed full Pipeline execution. Checkout data/tmp/debug inputs are quarantined unread by the workflow and inaccessible to application reads. IPv4-only test capabilities avoid a bind probe; optional version-banner Git unavailability is explicitly adapted, not an OS Git-process qualification. Bootstrap/CLI qualify only if their actual cases pass. PostgreSQL12.2 is a compatibility target, not production-version attestation.'
         record['finished_at_utc']=datetime.now(timezone.utc).isoformat()
         (OUT/(args.mode+'-result.json')).write_text(json.dumps(record,indent=2),encoding='utf-8')
     print(json.dumps(record));return rc

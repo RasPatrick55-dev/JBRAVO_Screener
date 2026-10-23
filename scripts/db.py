@@ -247,16 +247,18 @@ def publish_paper_gross_pipeline(run_date, ranked_candidates, expected_snapshot)
                 cursor.execute('SET LOCAL search_path = pg_catalog')
                 cursor.execute("SET LOCAL lock_timeout = '1500ms'")
                 cursor.execute("SET LOCAL statement_timeout = '5000ms'")
-            policy = trade_policy(conn, scope='VALIDATED_PERFORMANCE', exclusive=True,
+                # Serialize publication and policy mutations without requiring
+                # UPDATE privilege on the read-only runtime policy table.
+                cursor.execute("SELECT pg_catalog.pg_advisory_xact_lock("
+                    "pg_catalog.hashtext('jbravo:trade-disposition:policy'))")
+            policy = trade_policy(conn, scope='VALIDATED_PERFORMANCE',
                 expected_revision=expected_snapshot['evidence']['policy']['policy_revision'])
             current, sources = _gross_pipeline_current(conn, policy, root)
             if current != disposition.document(expected_snapshot) or sources != expected_sources:
                 raise disposition.TradePolicyError('TRADE_POLICY_GROSS_INPUT_CHANGED')
             with conn.cursor() as cursor:
-                # Additive derived-data table. No existing metrics_daily schema or rows change.
-                cursor.execute("CREATE TABLE IF NOT EXISTS public.paper_gross_metrics_daily ("
-                    "run_date pg_catalog.date PRIMARY KEY, publication pg_catalog.jsonb NOT NULL, "
-                    "CHECK (publication->>'namespace' = 'PAPER_GROSS_PIPELINE_V1'))")
+                # Schema setup belongs to db_migrate, never to this runtime
+                # transaction. Missing/incompatible schema fails and rolls back.
                 cursor.execute('DELETE FROM public.top_candidates WHERE run_date=%s', (run_date,))
                 sql = ('INSERT INTO public.top_candidates (' + ','.join(columns) + ') VALUES (' +
                     ','.join('%(' + key + ')s' for key in columns) + ')')

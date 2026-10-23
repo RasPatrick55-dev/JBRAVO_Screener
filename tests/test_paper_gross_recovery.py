@@ -34,6 +34,7 @@ class State:
         self.trades=[F.row()];self.policy=F.policy((F.allocation(),));self.top=[];self.daily={}
         self.sql=[];self.commits=0;self.rollbacks=0;self.closed=0;self.locks=[]
         self.refuse=None;self.on_trade_read=None;self.trade_reads=0
+        self.advisory=False;self.policy_calls=[];self.gross_schema=True
     def connection(self):return Connection(self)
 
 class Connection:
@@ -42,6 +43,7 @@ class Connection:
     def get_transaction_status(self):return 0
     def __enter__(self):self.saved=deepcopy((self.s.top,self.s.daily));return self
     def __exit__(self,typ,*args):
+        self.s.advisory=False
         if typ:self.s.top,self.s.daily=self.saved;self.s.rollbacks+=1
         else:self.s.commits+=1
     def close(self):self.s.closed+=1
@@ -55,7 +57,9 @@ class Cursor:
         self.s.sql.append((sql,params))
         if self.s.refuse and self.s.refuse in sql:raise RuntimeError('synthetic SQL refusal')
         if sql.startswith('SET '):return
-        if sql.startswith('CREATE TABLE IF NOT EXISTS public.paper_gross_metrics_daily'):return
+        if sql.startswith('SELECT pg_catalog.pg_advisory_xact_lock('):
+            self.s.advisory=True;self.answer=[(None,)];return
+        if sql.startswith('CREATE '):raise AssertionError('Runtime must not perform DDL')
         if sql.startswith('SELECT pg_catalog.to_jsonb(trades)'):
             self.s.trade_reads+=1
             if self.s.on_trade_read:self.s.on_trade_read(self.s.trade_reads)
@@ -65,6 +69,7 @@ class Cursor:
         if sql.startswith('DELETE FROM public.top_candidates WHERE run_date='):
             self.s.top=[x for x in self.s.top if x['run_date']!=params[0]];return
         if sql.startswith('INSERT INTO public.paper_gross_metrics_daily'):
+            if not self.s.gross_schema:raise RuntimeError('synthetic missing derived schema')
             self.s.daily[params[0]]=params[1];return
         if sql.startswith('SELECT publication::pg_catalog.text FROM public.paper_gross_metrics_daily'):
             self.answer=[(self.s.daily[params[0]],)] if params[0] in self.s.daily else [];return
@@ -95,7 +100,9 @@ class RecoveryTests(unittest.TestCase):
             try:yield s.policy
             finally:s.locks.pop()
         def policy(c,**kw):
-            self.assertTrue(kw['exclusive']);self.assertEqual(kw['scope'],'VALIDATED_PERFORMANCE')
+            self.assertTrue(s.advisory);self.assertFalse(kw.get('exclusive',False))
+            s.policy_calls.append(dict(kw,sql_count=len(s.sql)))
+            self.assertEqual(kw['scope'],'VALIDATED_PERFORMANCE')
             self.assertEqual(kw['expected_revision'],s.policy.revision)
             return s.policy
         self.db=dict(__file__=str(self.root/'scripts/db.py'),Path=Path,contextmanager=contextmanager,
@@ -123,6 +130,22 @@ class RecoveryTests(unittest.TestCase):
         with self.evidence(expected_publication=result['publication_fingerprint']) as read:
             self.assertEqual(self.state.locks,['shared']);self.assertEqual(read,result)
         self.assertEqual(self.state.locks,[])
+    def test_runtime_serializes_before_select_only_policy_and_never_runs_ddl(self):
+        self.publish();queries=[q for q,_ in self.state.sql]
+        lock=next(i for i,q in enumerate(queries) if q.startswith('SELECT pg_catalog.pg_advisory_xact_lock('))
+        self.assertIn("pg_catalog.hashtext('jbravo:trade-disposition:policy')",queries[lock])
+        self.assertLess(lock,self.state.policy_calls[0]['sql_count'])
+        self.assertFalse(self.state.policy_calls[0].get('exclusive',False))
+        self.assertFalse(any(q.startswith(('CREATE ','ALTER ','GRANT ')) or 'FOR UPDATE' in q for q in queries))
+        self.assertFalse(self.state.advisory)
+    def test_missing_schema_rolls_back_without_creating_it_or_changing_originals(self):
+        self.state.top=[dict(run_date=self.day,symbol='OLD',score=2)]
+        before=deepcopy((self.state.top,self.state.daily,self.state.trades));self.state.gross_schema=False
+        with self.assertRaises(RuntimeError):self.publish()
+        self.assertEqual((self.state.top,self.state.daily,self.state.trades),before)
+        self.assertEqual(self.state.commits,0);self.assertEqual(self.state.rollbacks,1)
+        self.assertFalse(self.state.gross_schema);self.assertFalse(self.state.advisory)
+        self.assertFalse(any(q.startswith(('CREATE ','ALTER ','GRANT ')) for q,_ in self.state.sql))
     def test_db_write_refusal_rolls_back_candidates_and_daily_publication(self):
         self.state.top=[dict(run_date=self.day,symbol='OLD',score=2)]
         old=deepcopy(self.state.top);self.state.refuse='INSERT INTO public.paper_gross_metrics_daily'
@@ -338,5 +361,50 @@ class RecoveryTests(unittest.TestCase):
         self.state.policy=F.policy()
         with self.assertRaises(D.TradePolicyError):self.publish()
         self.assertEqual(self.state.sql,[]);self.assertEqual(self.state.trades,self.original)
+
+class GrossSchemaSetupTests(unittest.TestCase):
+    def migration(self,refuse=False):
+        source=ROOT/'scripts/db_migrate.py';tree=ast.parse(source.read_bytes())
+        assign=next(n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='PAPER_GROSS_METRICS_DDL' for t in n.targets))
+        ddl=ast.literal_eval(assign.value);calls=[]
+        class Conn:
+            closed=False
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def close(self):self.closed=True
+            def cursor(self):return self
+            def execute(self,statement):
+                calls.append(statement)
+                if refuse:raise RuntimeError('synthetic schema refusal')
+        conn=Conn();ns=dict(PAPER_GROSS_METRICS_DDL=ddl,logger=mock.Mock(),argparse=argparse,
+            logging=SimpleNamespace(INFO=20,basicConfig=mock.Mock()),load_env=mock.Mock(),
+            db=SimpleNamespace(get_db_conn=lambda:conn),run_upgrade=mock.Mock(return_value=True))
+        extract(source,('_execute_statement','ensure_paper_gross_schema','main'),ns)
+        return ns,conn,calls,tree
+    def test_targeted_setup_contains_only_original_additive_table_contract(self):
+        ns,conn,calls,tree=self.migration();self.assertTrue(ns['ensure_paper_gross_schema'](conn))
+        self.assertEqual(calls,[ns['PAPER_GROSS_METRICS_DDL']]);statement=calls[0]
+        self.assertIn('CREATE TABLE IF NOT EXISTS public.paper_gross_metrics_daily',statement)
+        self.assertIn('run_date pg_catalog.date PRIMARY KEY',statement)
+        self.assertIn('publication pg_catalog.jsonb NOT NULL',statement)
+        self.assertIn("CHECK (publication->>'namespace' = 'PAPER_GROSS_PIPELINE_V1')",statement)
+        self.assertFalse(any(word in statement.upper() for word in ('GRANT ','ALTER ','INSERT ','UPDATE ','DELETE ','TRADES','ORDER_EVENTS')))
+        tables=next(n.value for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='TABLE_STATEMENTS' for t in n.targets))
+        self.assertEqual(sum(isinstance(n,ast.Name) and n.id=='PAPER_GROSS_METRICS_DDL' for n in tables.elts),1)
+    def test_targeted_cli_only_executes_schema_statement_and_closes(self):
+        ns,conn,calls,_=self.migration()
+        with mock.patch('sys.argv',['db_migrate','--action','paper-gross-schema']):ns['main']()
+        self.assertTrue(conn.closed);self.assertEqual(calls,[ns['PAPER_GROSS_METRICS_DDL']])
+        ns['run_upgrade'].assert_not_called()
+    def test_schema_refusal_remains_failure_and_closes_without_other_statements(self):
+        ns,conn,calls,_=self.migration(refuse=True)
+        with mock.patch('sys.argv',['db_migrate','--action','paper-gross-schema']),self.assertRaises(RuntimeError):ns['main']()
+        self.assertTrue(conn.closed);self.assertEqual(calls,[ns['PAPER_GROSS_METRICS_DDL']])
+        ns['run_upgrade'].assert_not_called()
+        self.assertFalse(ns['ensure_paper_gross_schema'](None))
+    def test_existing_default_upgrade_dispatch_is_retained(self):
+        ns,conn,calls,_=self.migration()
+        with mock.patch('sys.argv',['db_migrate']):ns['main']()
+        ns['run_upgrade'].assert_called_once_with(conn);self.assertTrue(conn.closed);self.assertEqual(calls,[])
 
 if __name__=='__main__':unittest.main()
