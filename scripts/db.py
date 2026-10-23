@@ -233,6 +233,13 @@ def publish_paper_gross_pipeline(run_date, ranked_candidates, expected_snapshot)
     _paper_disposition_identity()
     run_date = _gross_pipeline_date(run_date)
     columns, rows = _gross_pipeline_candidate_rows(ranked_candidates, run_date)
+    from scripts.pipeline_postflight import provisional_context, mark_provisional_source
+    provisional = provisional_context()
+    if provisional is not None:
+        if provisional['signal_session'] != run_date:
+            raise disposition.TradePolicyError('TRADE_POLICY_PROVISIONAL_SESSION_MISMATCH')
+        for row in rows:
+            row['source'] = mark_provisional_source(row['source'], provisional)
     root = Path(__file__).resolve().parents[1]
     expected_sources = gross.source_bindings(root)
     conn = _conn_or_none()
@@ -267,10 +274,11 @@ def publish_paper_gross_pipeline(run_date, ranked_candidates, expected_snapshot)
             if count != len(rows):
                 raise disposition.TradePolicyError('TRADE_POLICY_GROSS_CANDIDATE_COUNT_CHANGED')
             document = gross.pipeline_document(current, sources, run_date=run_date,
-                candidate_count=count, candidate_fingerprint=fingerprint, publication_id=str(uuid.uuid4()))
+                candidate_count=count, candidate_fingerprint=fingerprint, publication_id=str(uuid.uuid4()),
+                provisional_context=provisional)
             fresh, fresh_sources = _gross_pipeline_current(conn, policy, root)
             gross.validate_pipeline_document(document, fresh, fresh_sources, run_date=run_date,
-                candidate_count=count, candidate_fingerprint=fingerprint)
+                candidate_count=count, candidate_fingerprint=fingerprint, expected_provisional=provisional)
             with conn.cursor() as cursor:
                 cursor.execute('INSERT INTO public.paper_gross_metrics_daily (run_date,publication) '
                     'VALUES (%s,%s::pg_catalog.jsonb) ON CONFLICT (run_date) '
@@ -281,11 +289,16 @@ def publish_paper_gross_pipeline(run_date, ranked_candidates, expected_snapshot)
 
 
 @contextmanager
-def paper_gross_pipeline_evidence(run_date, engine=None, *, not_before=None, expected_publication=None):
+def paper_gross_pipeline_evidence(run_date, engine=None, *, not_before=None, expected_publication=None,
+                                  allow_provisional=False):
     """Revalidate current gross daily output while holding policy lock through caller publication."""
     from scripts import gross_paper_accounting as gross
     root = Path(__file__).resolve().parents[1]
     run_date = _gross_pipeline_date(run_date)
+    from scripts.pipeline_postflight import provisional_context
+    provisional = provisional_context() if allow_provisional else None
+    if allow_provisional and provisional is None:
+        raise disposition.TradePolicyError('TRADE_POLICY_PROVISIONAL_CONTEXT_REQUIRED')
     with _maybe_conn(engine) as conn:
         with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE') as policy:
             with conn.cursor() as cursor:
@@ -297,7 +310,8 @@ def paper_gross_pipeline_evidence(run_date, engine=None, *, not_before=None, exp
             current, sources = _gross_pipeline_current(conn, policy, root)
             count, fingerprint = _gross_pipeline_candidates(conn, run_date)
             document = gross.validate_pipeline_document(row[0], current, sources, run_date=run_date,
-                candidate_count=count, candidate_fingerprint=fingerprint, not_before=not_before)
+                candidate_count=count, candidate_fingerprint=fingerprint, not_before=not_before,
+                expected_provisional=provisional)
             if expected_publication is not None and document['binding_fingerprint'] != expected_publication:
                 raise disposition.TradePolicyError('TRADE_POLICY_GROSS_PUBLICATION_CHANGED')
             yield gross.pipeline_completion(document)
@@ -1423,6 +1437,12 @@ def insert_screener_candidates(
 ) -> None:
     if df_candidates is None or df_candidates.empty:
         return
+    from scripts.pipeline_postflight import provisional_context, mark_provisional_source
+    provisional = provisional_context()
+    if provisional is not None:
+        df_candidates = df_candidates.copy()
+        values = df_candidates['source'].fillna('') if 'source' in df_candidates else pd.Series('', index=df_candidates.index)
+        df_candidates['source'] = values.map(lambda value: mark_provisional_source(value, provisional))
     global _DUMPED_CANDIDATES
     if _env_truthy("DEBUG_DUMP_CANDIDATES") and not _DUMPED_CANDIDATES:
         try:
@@ -3045,6 +3065,14 @@ def upsert_ml_artifact(
 ) -> bool:
     if not db_enabled():
         return False
+    from scripts.pipeline_postflight import provisional_artifact_type, provisional_context
+    context = provisional_context()
+    artifact_type = provisional_artifact_type(artifact_type, writing=True)
+    if context is not None:
+        payload = dict(payload or {})
+        if payload.get('provisional_context', context) != context:
+            raise ValueError('ml_artifact_provisional_context_mismatch')
+        payload['provisional_context'] = context
     ensure_ml_artifacts_table()
     conn = _conn_or_none()
     if conn is None:
@@ -3107,6 +3135,8 @@ def upsert_ml_artifact(
 
 
 def fetch_latest_ml_artifact(artifact_type: str) -> dict[str, Any] | None:
+    from scripts.pipeline_postflight import provisional_artifact_type
+    artifact_type = provisional_artifact_type(artifact_type)
     conn = _conn_or_none()
     if conn is None:
         return None
@@ -3145,13 +3175,15 @@ def fetch_latest_ml_artifact(artifact_type: str) -> dict[str, Any] | None:
 
 
 def fetch_ml_artifact(artifact_type: str, run_date: Any | None = None) -> dict[str, Any] | None:
+    if run_date is None:
+        return fetch_latest_ml_artifact(artifact_type)
+    from scripts.pipeline_postflight import provisional_artifact_type
+    artifact_type = provisional_artifact_type(artifact_type)
     conn = _conn_or_none()
     if conn is None:
         return None
     try:
         with conn.cursor() as cursor:
-            if run_date is None:
-                return fetch_latest_ml_artifact(artifact_type)
             run_date_value = _coerce_date(run_date)
             cursor.execute(
                 """

@@ -47,7 +47,7 @@ from scripts.utils.prediction_freshness import evaluate_predictions_freshness
 from scripts.utils.feature_schema import compute_feature_signature, load_features_meta_for_path
 from scripts.utils.env import load_env, market_data_base_url, trading_base_url
 from utils import write_csv_atomic, atomic_write_bytes
-from utils.screener_metrics import ensure_canonical_metrics, write_screener_metrics_json
+from utils.screener_metrics import ensure_canonical_metrics, write_screener_metrics_json as _write_screener_metrics_json
 from utils.alerts import send_alert
 from utils.env import get_alpaca_creds
 from utils.telemetry import emit_event
@@ -88,6 +88,12 @@ _RANKER_PREDICT_SCORE_SOURCE_RE = re.compile(
 )
 
 
+def write_screener_metrics_json(path, payload):
+    # Every final reconstruction/annotation must retain the invocation label.
+    from scripts.pipeline_postflight import label_provisional_result
+    return _write_screener_metrics_json(path, label_provisional_result(payload))
+
+
 def write_error_report(
     *, step: str | None = None, detail: str | None = None, base_dir: Path = PROJECT_ROOT
 ) -> Path:
@@ -118,6 +124,8 @@ def safe_write_pipeline_summary(rc: int, *, base_dir: Path = PROJECT_ROOT) -> Pa
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "rc": int(rc),
     }
+    from scripts.pipeline_postflight import label_provisional_result
+    payload = label_provisional_result(payload)
     target = reports_dir / "pipeline_summary.json"
     try:
         serialised = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
@@ -450,6 +458,10 @@ def _write_nightly_ml_status(base_dir: Path) -> None:
             "eval": _artifact_payload(_latest_by_glob(data_dir / "ranker_eval", "*.json")),
         }
 
+    from scripts.pipeline_postflight import provisional_context
+    provisional = provisional_context()
+    if provisional is not None:
+        payload.update(provisional_context=provisional, qualified_daily=False)
     try:
         _write_json(data_dir / "nightly_ml_status.json", payload)
         LOG.info("[INFO] NIGHTLY_ML_STATUS_WRITTEN path=%s", data_dir / "nightly_ml_status.json")
@@ -592,6 +604,11 @@ def _latest_summary_for_date(base_dir: Path, day: date) -> Optional[SimpleNamesp
 
 def _write_status_json(base_dir: Path, payload: Mapping[str, Any]) -> None:
     base_dir = Path(base_dir)
+    from scripts.pipeline_postflight import provisional_context
+    provisional = provisional_context()
+    if provisional is not None:
+        payload = dict(payload, provisional_context=provisional, qualified_daily=False,
+                       entry_ready=False)
     status_path = base_dir / "data" / "pipeline_status.json"
     status_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -1079,6 +1096,9 @@ def _ingest_daily_bars_to_db(base_dir: Path, bars_path: Path, run_date: date) ->
             "[WARN] DAILY_BARS_DB_SKIPPED reason=missing_file path=%s",
             bars_path,
         )
+        from scripts.pipeline_postflight import provisional_context
+        if provisional_context() is not None:
+            raise ValueError('provisional_daily_bars_missing')
         return
     try:
         bars_df = pd.read_csv(bars_path)
@@ -2955,6 +2975,15 @@ def _previous_trading_day(value: date) -> date:
     return value
 
 
+def _pipeline_alert(title, payload):
+    from scripts.pipeline_postflight import provisional_context
+    provisional = provisional_context()
+    if provisional is not None:
+        title = 'PROVISIONAL functional test: ' + title
+        payload = dict(payload, provisional_context=provisional, qualified_daily=False)
+    return send_alert(title, payload)
+
+
 def _resolve_pipeline_run_date(now: datetime | None = None) -> date:
     tz = zoneinfo.ZoneInfo("America/New_York")
     local_now = now.astimezone(tz) if now else datetime.now(tz)
@@ -3260,8 +3289,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         LOG.error("[ERROR] ENV_MISSING_KEYS=%s", f"[{', '.join(missing_keys)}]")
         raise SystemExit(2)
     args = parse_args(argv)
+    from scripts.pipeline_postflight import provisional_context, metadata_context_matches
+    provisional = provisional_context()
     session_context = None
-    if args.session_handoff:
+    provisional_session = None
+    if provisional is not None:
+        from scripts.screener import _create_trading_client
+        from scripts.utils.calendar import completed_signal_session
+        provisional_session = completed_signal_session(_create_trading_client(), provisional=True)
+        provisional['signal_session'] = provisional_session['signal_session']
+        from scripts.pipeline_postflight import PROVISIONAL_ENV
+        os.environ[PROVISIONAL_ENV] = json.dumps(provisional, sort_keys=True)
+        os.environ['JBRAVO_SESSION_HANDOFF'] = '0'
+    elif args.session_handoff:
         from scripts.screener import _create_trading_client
         from scripts.utils.calendar import completed_signal_session
         session_context = completed_signal_session(_create_trading_client())
@@ -3279,7 +3319,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         LOG.error("[ERROR] SCREENER_STEP_REQUIRED steps=%s", ",".join(steps))
         write_error_report(step="screener", detail="step_missing")
         try:
-            send_alert(
+            _pipeline_alert(
                 "JBRAVO pipeline failed: screener missing",
                 {"steps": ",".join(steps), "run_utc": datetime.now(timezone.utc).isoformat()},
             )
@@ -3289,7 +3329,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if "screener" not in steps and allow_no_screener:
         LOG.info("[INFO] ALLOW_NO_SCREENER enabled=true steps=%s", ",".join(steps))
     LOG.info("[INFO] PIPELINE_START steps=%s", ",".join(steps))
-    pipeline_run_date = (date.fromisoformat(session_context['signal_session'])
+    pipeline_run_date = (date.fromisoformat(provisional_session['signal_session']) if provisional_session
+                        else date.fromisoformat(session_context['signal_session'])
                          if session_context else _resolve_pipeline_run_date())
     LOG.info(
         "[INFO] PIPELINE_RUN_DATE run_date=%s tz=America/New_York",
@@ -3387,6 +3428,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         extras["backtest"].append("--quick")
 
     export_bars_path = args.export_daily_bars_path
+    if provisional is not None:
+        export_bars_path = str(base_dir / 'data' / 'manual_provisional' / provisional['id'] / 'daily_bars.csv')
+        # Refuse a custom export override rather than ingest an older snapshot.
+        if any(t == '--export-daily-bars-path' or t.startswith('--export-daily-bars-path=')
+               for t in extras['screener']):
+            raise ValueError('provisional_custom_bars_export_refused')
     if "screener" in steps:
         extras["screener"] = _inject_export_daily_bars_arg(extras["screener"], export_bars_path)
     elif export_bars_path:
@@ -3436,6 +3483,28 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     def _latest_model_meta() -> dict[str, Any]:
         features_meta, _ = _load_features_meta()
+        if provisional is not None and (not features_meta or not metadata_context_matches(features_meta)):
+            # A new private run has no feature rows yet. Bootstrap its recipe
+            # from an existing read-only model, never another run's feature data.
+            for path in sorted((base_dir / 'data' / 'models').glob('ranker_*.pkl'), reverse=True):
+                recipe = dict(load_model_artifact_meta(path))
+                columns = recipe.get('feature_columns')
+                if (recipe.get('feature_set') not in ('v1', 'v2') or not isinstance(columns, list)
+                        or not columns or any(type(column) is not str or not column.strip() for column in columns)
+                        or len(columns) != len(set(columns))):
+                    continue
+                signature = compute_feature_signature(columns)
+                if (recipe.get('feature_signature') != signature or
+                        recipe.get('feature_signature_stored') not in (None, signature)):
+                    continue
+                selected, selection = select_compatible_model(
+                    base_dir / 'data' / 'models',
+                    {key: recipe[key] for key in ('feature_set','feature_columns','feature_signature')},
+                    requested_model_path=path)
+                if selected is not None:
+                    recipe['selection_reason'] = 'provisional_model_recipe_bootstrap'
+                    recipe['selection_mode'] = selection.get('selection_mode')
+                    return recipe
         selected_model, selection = select_compatible_model(
             base_dir / "data" / "models",
             features_meta,
@@ -3494,6 +3563,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if not features_meta:
             stale = True
             reason = "features_meta_missing"
+        elif not metadata_context_matches(features_meta):
+            stale = True
+            reason = 'features_provisional_context_mismatch'
         elif not model_path:
             stale = True
             reason = model_selection_reason or "compatible_model_missing"
@@ -3708,6 +3780,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 predictions_meta,
                 strict_meta=bool(strict_predictions_meta),
             )
+            if not metadata_context_matches(predictions_meta):
+                stale_value = True
+                reason_value = _append_reason_tag(reason_value, 'predictions_provisional_context_mismatch')
             snapshot_date = _prediction_snapshot_date(predictions_meta)
             snapshot_lag_days = None
             if snapshot_date is not None:
@@ -4173,7 +4248,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if (metrics_rows or 0) == 0 and rows == 0 and not zero_candidates_alerted:
                 zero_candidates_alerted = True
                 LOG.warning("[WARN] ZERO_CANDIDATES symbols_in=%s", symbols_in)
-                send_alert(
+                _pipeline_alert(
                     "JBRAVO pipeline: 0 candidates after screener",
                     {
                         "symbols_in": symbols_in,
@@ -4277,7 +4352,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 step_rcs["labels"] = 0
             else:
                 labels_output_dir = base_dir / "data" / "labels"
-                labels_before = _snapshot_label_files(labels_output_dir)
+                from scripts.pipeline_postflight import provisional_output_directory
+                observed_labels_dir = provisional_output_directory(labels_output_dir)
+                labels_before = _snapshot_label_files(observed_labels_dir)
                 cmd = [
                     sys.executable,
                     "-m",
@@ -4302,7 +4379,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         env=_step_env("labels"),
                     )
                     try:
-                        labels_path = _detect_new_labels_file(labels_output_dir, labels_before)
+                        labels_path = _detect_new_labels_file(observed_labels_dir, labels_before)
                         labels_rows = _count_csv_lines(labels_path) if labels_path else 0
                     except Exception:
                         LOG.exception("LABELS_DETECT_FAILED output_dir=%s", labels_output_dir)
@@ -5031,7 +5108,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     "block",
                 }:
                     try:
-                        send_alert(
+                        _pipeline_alert(
                             "JBRAVO ML health guard action",
                             {
                                 "decision": decision.get("decision"),
@@ -5139,7 +5216,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "exception": exc.__class__.__name__,
         }
         try:
-            send_alert(
+            _pipeline_alert(
                 "JBRAVO pipeline FAILED",
                 {
                     "step": current_step or "pipeline",
@@ -5390,6 +5467,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     "rc": 0,
                     "rows": rows_for_stamp,
                 }
+                from scripts.pipeline_postflight import label_provisional_result
+                fresh_payload = label_provisional_result(fresh_payload)
                 fresh_path = base_dir / "data" / "pipeline_fresh.json"
                 fresh_path.parent.mkdir(parents=True, exist_ok=True)
                 fresh_path.write_text(json.dumps(fresh_payload, indent=2))
@@ -5464,6 +5543,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "trading_ok": bool(trading_ok),
             "data_ok": bool(data_ok),
         }
+        if provisional is not None:
+            summary_payload.update(provisional_context=provisional, qualified_daily=False)
         if isinstance(ml_health_summary, Mapping):
             summary_payload["ml_health"] = dict(ml_health_summary)
         if isinstance(model_score_coverage_summary, Mapping):
@@ -5546,7 +5627,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     if gross_required and rc == 0:
                         try:
                             gross_evidence = gross_stack.enter_context(
-                                db.paper_gross_pipeline_evidence(pipeline_run_date, not_before=started_dt))
+                                db.paper_gross_pipeline_evidence(pipeline_run_date, not_before=started_dt,
+                                    allow_provisional=provisional is not None))
                         except Exception as failure:
                             rc = 1
                             LOG.error('POSTFLIGHT_PAPER_GROSS_HELD error_type=%s', type(failure).__name__)

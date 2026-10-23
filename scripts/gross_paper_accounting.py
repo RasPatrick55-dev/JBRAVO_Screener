@@ -289,7 +289,7 @@ def pipeline_summary(snapshot):
 
 
 def pipeline_document(snapshot, sources, *, run_date, candidate_count, candidate_fingerprint,
-                      publication_id, now=None):
+                      publication_id, now=None, provisional_context=None):
     """Authoritative gross daily publication; candidate statistics retain their backtest basis."""
     _require(type(run_date) is str and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', run_date), 'RUN_DATE_INVALID')
     from datetime import date
@@ -302,17 +302,24 @@ def pipeline_document(snapshot, sources, *, run_date, candidate_count, candidate
         sources=_sources(sources), report=D.document(snapshot), summary=pipeline_summary(snapshot),
         candidate_count=candidate_count, candidate_fingerprint=candidate_fingerprint,
         candidate_basis='BACKTEST_RESULTS_UNCHANGED', entry_ready=False, operating_acceptance=False)
+    if provisional_context is not None:
+        from scripts.pipeline_postflight import validate_provisional_context
+        context = validate_provisional_context(provisional_context, now=_now(now))
+        _require(context['signal_session'] == run_date, 'PROVISIONAL_SESSION_MISMATCH')
+        body['provisional_context'] = context
     body['binding_fingerprint'] = D.fingerprint(body)
     _require(len(D.canonical(body).encode('utf-8')) <= MAX_REPORT_BYTES, 'FILE_CAP')
     return body
 
 
 def validate_pipeline_document(document, snapshot, sources, *, run_date, candidate_count,
-                               candidate_fingerprint, now=None, not_before=None):
+                               candidate_fingerprint, now=None, not_before=None,
+                               expected_provisional=None):
     body = D.document(document)
     expected = pipeline_document(snapshot, sources, run_date=run_date,
         candidate_count=candidate_count, candidate_fingerprint=candidate_fingerprint,
-        publication_id=body.get('publication_id'), now=D.aware_time(body.get('published_at')))
+        publication_id=body.get('publication_id'), now=D.aware_time(body.get('published_at')),
+        provisional_context=expected_provisional)
     _require(body == expected, 'PIPELINE_PUBLICATION_CHANGED')
     stamp = D.aware_time(body['published_at'])
     _require(stamp <= _now(now) and (not_before is None or stamp >= not_before), 'PIPELINE_PUBLICATION_STALE')
@@ -323,7 +330,7 @@ def pipeline_completion(document):
     """Compact evidence produced only after current DB/source/candidate validation."""
     report = document['report']
     evidence = report['evidence']
-    return dict(schema_version=1, pnl_basis=BASIS, run_date=document['run_date'],
+    result = dict(schema_version=1, pnl_basis=BASIS, run_date=document['run_date'],
         publication_id=document['publication_id'], published_at=document['published_at'],
         publication_fingerprint=document['binding_fingerprint'],
         input_fingerprint=evidence['input_fingerprint'],
@@ -334,3 +341,6 @@ def pipeline_completion(document):
         fees_status='UNKNOWN', net_status='UNKNOWN', net_eligible=False,
         accounting_complete=False, recovery_complete=False, activity_ingestion_complete=False,
         entry_ready=False, operating_acceptance=False)
+    if document.get('provisional_context') is not None:
+        result['provisional_context'] = document['provisional_context']
+    return result

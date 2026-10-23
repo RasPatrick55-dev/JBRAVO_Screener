@@ -410,6 +410,9 @@ def load_screener_metrics(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         "pipeline_rc": _coerce_int(pipeline_rc_value),
     }
 
+    if 'provisional_context' in payload:
+        normalized.update(provisional_context=payload['provisional_context'], qualified_daily=False,
+                          entry_ready=False, run_type='PROVISIONAL functional test: not qualified daily')
     inferred = _parse_pipeline_log(base.parent)
     for key in ("latest_source", "pipeline_rc"):
         if normalized.get(key) in (None, "") and key in inferred:
@@ -469,6 +472,9 @@ def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         "buying_power": connection.get("buying_power"),
     }
 
+    if 'provisional_context' in metrics:
+        snapshot.update(provisional_context=metrics['provisional_context'], qualified_daily=False,
+                        entry_ready=False, run_type='PROVISIONAL functional test: not qualified daily')
     # Legacy aliases for existing callers
     snapshot["symbols_with_bars"] = (
         snapshot["symbols_with_required_bars"] or snapshot["symbols_with_bars_fetch"]
@@ -557,6 +563,9 @@ def screener_table() -> Tuple[pd.DataFrame, str, str]:
             except Exception:
                 continue
 
+    if 'source' in df.columns and df['source'].astype('string').str.startswith('PROVISIONAL:').fillna(False).any():
+        source_file = 'PROVISIONAL manual test - NOT qualified daily: ' + source_file
+        df['qualified_daily'] = False
     return df, (updated or ""), source_file
 
 

@@ -667,6 +667,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    from scripts.pipeline_postflight import provisional_context, metadata_context_matches
+    provisional = provisional_context()
+    if not metadata_context_matches(features_meta_payload):
+        LOG.error('[ERROR] PREDICTION_PROVISIONAL_INPUT_CONTEXT_MISMATCH')
+        return 2
     capture_enabled = _parse_boolish(os.getenv('JBR_CAPTURE_PRODUCTION_SCORES'))
     if capture_enabled:
         from scripts.production_score_capture import capture, scoring_binding, producer_binding, failure_code
@@ -704,12 +709,14 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if scoring_binding(model, scaler, feature_columns, args.label_column, posthoc_calibrator) != observed_model:
                 raise ValueError('scoring_bundle_changed_during_prediction')
-            score_capture = capture(BASE_DIR, observed_features, output_df, snapshot_date=snapshot_date,
+            capture_root = BASE_DIR if provisional is None else BASE_DIR / 'data' / 'manual_provisional' / provisional['id']
+            score_capture = capture(capture_root, observed_features, output_df, snapshot_date=snapshot_date,
                                     model_binding=observed_model, producer_sources=observed_producer)
         except Exception as error:
             LOG.error('[ERROR] PRODUCTION_SCORE_CAPTURE_FAILED reason=%s', failure_code(error))
             return 2
-    output_dir = Path(args.output_dir)
+    from scripts.pipeline_postflight import provisional_output_directory
+    output_dir = provisional_output_directory(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact_type = "predictions_scoped" if symbol_scope else "predictions"
     output_name = (
@@ -761,6 +768,8 @@ def main(argv: list[str] | None = None) -> int:
             "meta_source": features_meta_source,
         },
     }
+    if provisional is not None:
+        predictions_meta['provisional_context'] = provisional
     if not isinstance(predictions_meta.get("feature_compat"), dict):
         predictions_meta["feature_compat"] = {
             "strict": bool(args.strict_feature_match),
@@ -785,7 +794,11 @@ def main(argv: list[str] | None = None) -> int:
     meta_sidecar = output_dir / (
         "latest_scoped_meta.json" if symbol_scope else "latest_meta.json"
     )
-    if _write_predictions_meta(meta_sidecar, predictions_meta):
+    metadata_written = _write_predictions_meta(meta_sidecar, predictions_meta)
+    if provisional is not None and not metadata_written:
+        LOG.error('PROVISIONAL_PREDICTION_METADATA_WRITE_FAILED')
+        return 2
+    if metadata_written:
         LOG.info(
             "[INFO] PREDICTIONS_META_WRITTEN source=fs model_path=%s model_mtime_utc=%s calibrated=%s method=%s feature_set=%s feature_signature=%s feature_meta_source=%s compatible=%s missing_frac=%.6f compat_reason=%s",
             predictions_meta.get("model_path"),
@@ -834,6 +847,8 @@ def main(argv: list[str] | None = None) -> int:
                 artifact_type,
                 snapshot_date,
             )
+            if provisional is not None:
+                return 2
     return 0
 
 

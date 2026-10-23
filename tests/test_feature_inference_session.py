@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pandas as pd
 import scripts
+from scripts.pipeline_postflight import metadata_context_matches
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = 'label_5d_pos_300bp'
@@ -122,10 +123,12 @@ class FeatureSessionTests(unittest.TestCase):
                     meta['signal_session'] = session
                 namespace = {'_latest_model_meta': lambda: model, '_load_features_meta': lambda: (meta, 'fixture'),
                     'pipeline_run_date': date(2026, 10, 12), 'compute_feature_signature': lambda _: 'fixture',
-                    'LOG': Mock(), 'Any': Any}
+                    'LOG': Mock(), 'Any': Any,
+                    'metadata_context_matches': metadata_context_matches}
                 exec(compile(ast.Module(body=[function], type_ignores=[]), '<pipeline_freshness>', 'exec'), namespace)
                 self.assertEqual(namespace['_ensure_features_freshness']('ranker_eval')['stale'], stale)
 
 
 if __name__ == '__main__':
     unittest.main()
+

@@ -318,7 +318,9 @@ def main() -> int:
             args.bars_path,
         )
 
-    output_dir: Path = args.output_dir
+    from scripts.pipeline_postflight import provisional_output_directory, provisional_context
+    provisional = provisional_context()
+    output_dir: Path = provisional_output_directory(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"labels_{run_date.strftime('%Y%m%d')}.csv"
 
@@ -355,6 +357,8 @@ def main() -> int:
             )
         else:
             logging.warning("[WARN] LABELS_DB_WRITE_FAILED run_date=%s", run_date)
+            if provisional is not None:
+                return 2
     return 0
 
 
