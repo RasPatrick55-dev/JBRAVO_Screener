@@ -339,6 +339,163 @@ class PostflightTests(unittest.TestCase):
         self.assertEqual(record['ml_health']['reasons'], ['unknown_ml_health_reason'])
         self.assertEqual(self.check()['status'], 'degraded')
 
+    def session_facts(self, *, failed=True):
+        # Fixed synthetic calendar and values; no provider or account calls.
+        self.started = datetime(2026, 10, 23, 3, 45, tzinfo=timezone.utc)
+        self.finished = self.started + timedelta(minutes=14)
+        self.now = self.finished + timedelta(seconds=1)
+        session = postflight.signal_handoff.session_contract([
+            {'date': '2026-10-22', 'open': '09:30:00', 'close': '16:00:00'},
+            {'date': '2026-10-23', 'open': '09:30:00', 'close': '16:00:00'},
+        ], now=self.started)
+        batch = self.started + timedelta(minutes=1)
+        snapshot = postflight.signal_handoff.freeze_candidates([
+            {'symbol': 'TEST', 'run_date': '2026-10-22', 'run_ts_utc': batch,
+             'timestamp': datetime(2026, 10, 22, 4, tzinfo=timezone.utc), 'close': 100},
+        ], session, run_ts=batch)
+        return self.facts | dict(started_at=self.started, finished_at=self.finished,
+            pipeline_rc=1 if failed else 0,
+            step_rcs=self.facts['step_rcs'] | {'metrics': 2 if failed else 0},
+            coverage={'total': 1, 'non_null': 1, 'pct': 100.0, 'run_ts_utc': batch.isoformat()},
+            session=session, frozen_candidates=None if failed else snapshot,
+            readiness_policy=postflight.PIPELINE_ONLY)
+
+    def publish_session(self, *, failed=True, **changes):
+        facts = self.session_facts(failed=failed) | changes
+        invocation = postflight.begin_primary(self.root, facts['started_at'])
+        facts['invocation_id'] = invocation['id']
+        return postflight.publish_health(self.root, **facts)
+
+    def test_failed_session_publishes_truthful_bound_report_without_snapshot(self):
+        record = self.publish_session()
+        self.assertIsNone(record['frozen_candidates'])
+        self.assertEqual(record['pipeline_rc'], 1)
+        self.assertEqual(record['stages']['metrics']['rc'], 2)
+        result = self.check(require_session=True)
+        self.assertEqual(result['status'], 'failed')
+        for reason in ('pipeline_failed_or_unknown', 'failed_stage_metrics',
+                       'frozen_candidates_missing_failed_run'):
+            self.assertIn(reason, result['failures'])
+        for flag in ('pipeline_ready', 'entry_ready', 'research_qualified', 'operating_acceptance'):
+            self.assertFalse(result[flag])
+        self.assertIsNone(result['frozen_candidates'])
+        latest = self.root / 'reports/pipeline_postflight/latest.json'
+        self.assertEqual(latest.read_bytes(), (latest.parent / ('run-' + record['run_id'] + '.json')).read_bytes())
+        self.assertFalse((latest.parent / 'completed-primary.json').exists())
+
+    def test_success_session_still_requires_strict_snapshot_and_can_complete(self):
+        record = self.publish_session(failed=False)
+        result = self.check(require_session=True)
+        self.assertEqual(result['status'], 'ok')
+        self.assertTrue(result['pipeline_ready'])
+        self.assertFalse(result['entry_ready'])
+        active = json.loads((self.root / 'reports/pipeline_postflight/active-primary.json').read_bytes())
+        postflight.complete_primary(self.root, active, result)
+        self.assertEqual(record['frozen_candidates']['count'], 1)
+        # The pre-existing pipeline-only entry block remains mandatory.
+        self.assertIn('new_entries_blocked_by_pipeline_only_policy',
+                      self.check(require_session=True, require_completion=True)['failures'])
+
+    def test_success_and_unknown_return_codes_cannot_omit_snapshot(self):
+        self.publish_session()
+        latest = self.root / 'reports/pipeline_postflight/latest.json'
+        before = latest.read_bytes()
+        for code in (0, None, True, False, '1', 1.0):
+            with self.subTest(code=code), self.assertRaisesRegex(ValueError, 'invalid_frozen_candidates'):
+                facts = self.session_facts() | {'pipeline_rc': code}
+                postflight.publish_health(self.root, **facts)
+            self.assertEqual(latest.read_bytes(), before)
+
+    def test_failure_does_not_accept_missing_field_or_malformed_supplied_snapshot(self):
+        record = self.publish_session()
+        malformed = ({}, False, [], {'count': 0}, self.session_facts(failed=False)['frozen_candidates'] | {'count': 2})
+        for snapshot in malformed:
+            for code in (0, 1):
+                with self.subTest(code=code, snapshot=snapshot), self.assertRaises(ValueError):
+                    postflight.publish_health(self.root, **(self.session_facts() |
+                        {'pipeline_rc': code, 'frozen_candidates': snapshot}))
+        del record['frozen_candidates']
+        with self.assertRaisesRegex(ValueError, 'invalid_frozen_candidates'):
+            postflight.assess(record, now=self.now, expected_day=self.now.date(), require_session=True)
+
+    def test_failed_run_with_valid_snapshot_remains_failed_and_checks_values(self):
+        snapshot = self.session_facts(failed=False)['frozen_candidates']
+        self.publish_session(frozen_candidates=snapshot)
+        result = self.check(require_session=True)
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('pipeline_failed_or_unknown', result['failures'])
+        self.assertNotIn('frozen_candidates_missing_failed_run', result['failures'])
+        bad = json.loads(json.dumps(snapshot))
+        bad['references'][0]['price'] = '0'
+        with self.assertRaisesRegex(ValueError, 'invalid_signal_price'):
+            self.publish_session(frozen_candidates=bad)
+
+    def test_failed_report_preserves_session_source_history_and_invocation_guards(self):
+        record = self.publish_session()
+        facts = self.session_facts()
+        for session in (facts['session'] | {'execution_session': '2026-10-26'},
+                        facts['session'] | {'version': True}):
+            with self.subTest(session=session), self.assertRaises(ValueError):
+                postflight.publish_health(self.root, **(facts | {'session': session}))
+        directory = self.root / 'reports/pipeline_postflight'
+        active = directory / 'active-primary.json'
+        original = active.read_bytes()
+        active.write_text(json.dumps({'id': 'f' * 32, 'started_at': self.started.isoformat()}))
+        self.assertIn('primary_invocation_binding_mismatch', self.check(require_session=True)['failures'])
+        active.write_bytes(original)
+        history = directory / ('run-' + record['run_id'] + '.json')
+        original_history = history.read_bytes()
+        history.write_bytes(original_history + b' ')
+        self.assertIn('history_binding_mismatch', self.check(require_session=True)['failures'])
+        history.write_bytes(original_history)
+        with (self.root / 'scripts/pipeline_postflight.py').open('ab') as handle:
+            handle.write(b'\n# synthetic drift\n')
+        self.assertIn('source_binding_mismatch', self.check(require_session=True)['failures'])
+
+    def test_actual_failed_session_recording_hook_writes_without_freeze_or_db(self):
+        facts = self.session_facts()
+        invocation = postflight.begin_primary(self.root, self.started)
+        tree = ast.parse((SOURCE_ROOT / 'scripts/run_pipeline.py').read_text(encoding='utf-8'))
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+        hooks = [n for n in ast.walk(main) if isinstance(n, ast.If) and isinstance(n.test, ast.Call)
+                 and isinstance(n.test.func, ast.Name) and n.test.func.id == 'getattr'
+                 and any(isinstance(a, ast.Constant) and a.value == 'postflight_report' for a in n.test.args)]
+        self.assertEqual(len(hooks), 1)
+        namespace = dict(base_dir=self.root, args=SimpleNamespace(postflight_report=True,
+            handoff_invocation=invocation['id'], pipeline_readiness_only=True),
+            session_context=facts['session'], started_dt=self.started,
+            datetime=SimpleNamespace(now=lambda tz: self.finished), timezone=timezone, rc=1,
+            steps=facts['steps'], step_rcs=facts['step_rcs'], stage_times=facts['stage_times'],
+            degraded=False, labels_rows=120, enrichment_freshness=facts['freshness'],
+            model_score_coverage_summary=facts['coverage'], ml_health_summary=facts['ml_health'],
+            LOG=mock.Mock(), **{key: True for key in ('strict_predictions_meta',
+            'strict_auto_refresh_predictions', 'auto_refresh_features', 'auto_refresh_predictions',
+            'use_champion', 'ml_health_guard_enabled', 'refresh_predictions_for_candidates')})
+        # The failed branch must not require a DB object or freeze_candidates.
+        exec(compile(ast.fix_missing_locations(ast.Module(body=hooks, type_ignores=[])),
+                     'actual_failed_session_recording_hook', 'exec'), namespace)
+        namespace['LOG'].error.assert_not_called()
+        self.assertEqual(namespace['rc'], 1)
+        self.assertIn('frozen_candidates_missing_failed_run', self.check(require_session=True)['failures'])
+
+    def test_primary_and_checker_keep_failure_exit_and_never_complete(self):
+        facts = self.session_facts()
+        def failed_pipeline(arguments):
+            invocation_id = arguments[arguments.index('--handoff-invocation') + 1]
+            postflight.publish_health(self.root, **(facts | {'invocation_id': invocation_id}))
+            return 1
+        with mock.patch.object(primary, 'datetime', SimpleNamespace(now=lambda tz: self.started)), \
+             contextlib.redirect_stdout(io.StringIO()), mock.patch.object(postflight, 'complete_primary') as complete:
+            self.assertEqual(primary.main([], pipeline_main=failed_pipeline, base_dir=self.root), 1)
+            complete.assert_not_called()
+        actual = postflight.check_health
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        with mock.patch.object(postflight, 'check_health', wraps=lambda **kw: actual(self.root,
+             now=self.now, require_session=True, **kw)), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(postflight.main([]), 1)
+        self.assertEqual(json.loads(output.getvalue())['status'], 'failed')
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+
 
 if __name__ == '__main__':
     unittest.main()

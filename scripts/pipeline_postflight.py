@@ -146,26 +146,35 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
     if session is not None:
         signal_handoff.validate_session(session, started=started, finished=finished, now=now)
         snapshot = record.get('frozen_candidates')
-        if (not isinstance(snapshot, dict) or type(snapshot.get('count')) is not int or snapshot['count'] <= 0
-                or snapshot.get('binding_version') != 1 or snapshot.get('query_contract') != 'candidate_ranker_join_v1'
-                or snapshot.get('count') != record.get('coverage', {}).get('total')
-                or not isinstance(snapshot.get('references'), list)
-                or len(snapshot['references']) != snapshot['count']
-                or not isinstance(snapshot.get('value_binding'), dict)):
-            raise ValueError('invalid_frozen_candidates')
-        value_binding = snapshot['value_binding']
-        if (type(value_binding.get('bytes')) is not int or not 0 < value_binding['bytes'] <= 4 * 1024 * 1024
-                or not isinstance(value_binding.get('sha256'), str)
-                or not re.fullmatch('[0-9a-f]{64}', value_binding['sha256'])):
-            raise ValueError('invalid_frozen_candidate_binding')
-        references = snapshot['references']
-        if len({r['symbol'] for r in references}) != len(references):
-            raise ValueError('duplicate_frozen_reference')
-        for item in references:
-            signal_handoff.reference(snapshot, item['symbol'])
-            if (item['field'] != 'close' or signal_handoff.utc(item['bar_timestamp']) !=
-                    signal_handoff._at(date.fromisoformat(session['signal_session']), '00:00')):
-                raise ValueError('frozen_reference_session_mismatch')
+        # A failed session run deliberately has no frozen entry candidates.
+        # Record that absence as a failure; never fabricate a snapshot or let
+        # success, unknown return codes, or malformed supplied snapshots pass.
+        omitted_on_failure = ('frozen_candidates' in record and snapshot is None
+                              and type(record.get('pipeline_rc')) is int
+                              and record['pipeline_rc'] != 0)
+        if omitted_on_failure:
+            failures.append('frozen_candidates_missing_failed_run')
+        else:
+            if (not isinstance(snapshot, dict) or type(snapshot.get('count')) is not int or snapshot['count'] <= 0
+                    or snapshot.get('binding_version') != 1 or snapshot.get('query_contract') != 'candidate_ranker_join_v1'
+                    or snapshot.get('count') != record.get('coverage', {}).get('total')
+                    or not isinstance(snapshot.get('references'), list)
+                    or len(snapshot['references']) != snapshot['count']
+                    or not isinstance(snapshot.get('value_binding'), dict)):
+                raise ValueError('invalid_frozen_candidates')
+            value_binding = snapshot['value_binding']
+            if (type(value_binding.get('bytes')) is not int or not 0 < value_binding['bytes'] <= 4 * 1024 * 1024
+                    or not isinstance(value_binding.get('sha256'), str)
+                    or not re.fullmatch('[0-9a-f]{64}', value_binding['sha256'])):
+                raise ValueError('invalid_frozen_candidate_binding')
+            references = snapshot['references']
+            if len({r['symbol'] for r in references}) != len(references):
+                raise ValueError('duplicate_frozen_reference')
+            for item in references:
+                signal_handoff.reference(snapshot, item['symbol'])
+                if (item['field'] != 'close' or signal_handoff.utc(item['bar_timestamp']) !=
+                        signal_handoff._at(date.fromisoformat(session['signal_session']), '00:00')):
+                    raise ValueError('frozen_reference_session_mismatch')
     if started > finished or finished > now or (session is None and (now - started).total_seconds() > max_age_seconds):
         failures.append('invalid_or_stale_run_window')
     if session is None and (started.date() != expected_day or finished.date() != expected_day):
