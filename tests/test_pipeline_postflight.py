@@ -300,7 +300,7 @@ class PostflightTests(unittest.TestCase):
                  and any(isinstance(a, ast.Constant) and a.value == 'postflight_report' for a in n.test.args)]
         self.assertEqual(len(hooks), 1)
         executable = compile(ast.fix_missing_locations(ast.Module(body=hooks, type_ignores=[])), 'pipeline_recording_hook', 'exec')
-        namespace = dict(base_dir=self.root, args=SimpleNamespace(postflight_report=True), session_context=None, started_dt=self.started,
+        namespace = dict(extras={'metrics': []}, base_dir=self.root, args=SimpleNamespace(postflight_report=True), session_context=None, started_dt=self.started,
             datetime=datetime, timezone=timezone, rc=0, steps=self.facts['steps'], step_rcs=self.facts['step_rcs'],
             stage_times=self.facts['stage_times'], degraded=False, labels_rows=120,
             enrichment_freshness=self.facts['freshness'], model_score_coverage_summary=self.facts['coverage'],
@@ -462,7 +462,7 @@ class PostflightTests(unittest.TestCase):
                  and isinstance(n.test.func, ast.Name) and n.test.func.id == 'getattr'
                  and any(isinstance(a, ast.Constant) and a.value == 'postflight_report' for a in n.test.args)]
         self.assertEqual(len(hooks), 1)
-        namespace = dict(base_dir=self.root, args=SimpleNamespace(postflight_report=True,
+        namespace = dict(extras={'metrics': []}, base_dir=self.root, args=SimpleNamespace(postflight_report=True,
             handoff_invocation=invocation['id'], pipeline_readiness_only=True),
             session_context=facts['session'], started_dt=self.started,
             datetime=SimpleNamespace(now=lambda tz: self.finished), timezone=timezone, rc=1,

@@ -408,6 +408,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default=None,
         help="Override run_date for DB writes (YYYY-MM-DD)",
     )
+    parser.add_argument('--paper-gross-pipeline', action='store_true',
+        help='Validated gross-paper Pipeline metrics; fees/net and entry holds retained')
     parser.add_argument('--paper-gross-report-only', action='store_true',
         help='Publish separate paper gross report; fees/net unknown and financial hold exit2 retained')
     return parser.parse_args(list(argv) if argv is not None else None)
@@ -418,6 +420,10 @@ def _run_metrics(argv=None):
     logger.info(">>> METRICS MAIN ENTERED <<<")
     logger.info("⚙️ [METRICS] main() start")
     args = parse_args(argv)
+    if getattr(args, 'paper_gross_pipeline', False):
+        if getattr(args, 'paper_gross_report_only', False):
+            return 2
+        return _run_paper_gross_metrics(args)
     if getattr(args, 'paper_gross_report_only', False):
         if getattr(args, 'run_date', None):
             logger.error('PAPER_GROSS_REPORT_RUN_DATE_OVERRIDE_REFUSED')
@@ -666,6 +672,51 @@ def _run_metrics(argv=None):
     logger.info("[INFO] metrics.py completed successfully")
 
     return exit_code
+
+
+def _run_paper_gross_metrics(args):
+    """Actual paper metrics stage: unchanged backtest ranking, explicit gross daily output."""
+    try:
+        if not db.db_enabled():
+            raise ValueError('paper_gross_run_context_required')
+        # Validate paper context before upstream reads or any output writes.
+        db._paper_disposition_identity()
+        run_date = db.fetch_latest_run_date('backtest_results')
+        if run_date is None or run_date != db.fetch_latest_run_date('screener_candidates'):
+            raise ValueError('paper_gross_upstream_run_mismatch')
+        supplied_date = getattr(args, 'run_date', None)
+        if supplied_date is not None and supplied_date != run_date.isoformat():
+            raise ValueError('paper_gross_upstream_run_mismatch')
+        logger.info('[INFO] STEP_RUN_DATE step=metrics run_date=%s source=backtest_results', run_date)
+        results = load_results(run_date=run_date)
+        candidates, _ = get_latest_screener_candidates(run_date)
+        if results is None or candidates is None or results.empty or candidates.empty:
+            raise ValueError('paper_gross_upstream_empty')
+        if 'net_pnl' not in results.columns:
+            raise ValueError('paper_gross_backtest_contract_missing')
+        # No trade P&L may become a ranking fallback. Retain backtest semantics.
+        ranked = rank_and_filter_candidates(candidates, results, run_date)
+        if ranked is None or ranked.empty:
+            raise ValueError('paper_gross_ranked_candidates_empty')
+        snapshot = db.gross_paper_performance_snapshot()
+        publication = db.publish_paper_gross_pipeline(run_date, ranked, snapshot)
+        # Publish the already reviewed dashboard artifact only after authoritative
+        # DB commit, then revalidate that exact daily publication for this run.
+        db.publish_paper_gross_report(expected_revision=snapshot['evidence']['policy']['policy_revision'])
+        with db.paper_gross_pipeline_evidence(run_date,
+                expected_publication=publication['publication_fingerprint']):
+            pass
+        logger.info('METRICS_PAPER_GROSS_COMPLETE basis=%s fees=UNKNOWN net=UNKNOWN '
+            'accounting_complete=false entry_ready=false', publication['pnl_basis'])
+        print('>>> METRICS COMPLETE <<<')
+        print('>>> METRICS FILE COMPLETED <<<')
+        logger.info('METRICS MAIN COMPLETED')
+        logger.info('[INFO] metrics.py completed successfully')
+        return 0
+    except Exception as exc:
+        # Never expose SQL, DSNs, raw exceptions or sensitive account values.
+        logger.error('METRICS_PAPER_GROSS_HELD error_type=%s', type(exc).__name__)
+        return 2
 
 
 def main(argv=None):

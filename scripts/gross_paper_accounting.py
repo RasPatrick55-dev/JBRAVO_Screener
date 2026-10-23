@@ -21,7 +21,8 @@ MAX_REPORT_BYTES = 4 * 1024 * 1024
 SOURCE_PATHS = ('scripts/gross_paper_accounting.py', 'scripts/db.py',
     'scripts/trade_disposition.py', 'scripts/trade_allocation.py',
     'scripts/metrics.py', 'scripts/trade_performance.py',
-    'dashboards/data_io.py', 'dashboards/dashboard_app.py')
+    'dashboards/data_io.py', 'dashboards/dashboard_app.py',
+    'scripts/primary_pipeline.py', 'scripts/run_pipeline.py', 'scripts/pipeline_postflight.py')
 
 
 def _require(condition, code):
@@ -267,3 +268,67 @@ def publish_report(root, current, *, now=None):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def pipeline_summary(snapshot):
+    """Counts and exact gross totals only; no synthetic net or risk ratios."""
+    rows = snapshot['rows']
+    values = [_number(row['gross_pnl']) for row in rows]
+    total = _gross_sum(values)
+    _require(snapshot['pnl_basis'] == BASIS and snapshot['evidence']['gross_input_complete'] is True,
+        'PIPELINE_INPUT_INVALID')
+    _require(snapshot['gross_pnl'] == _money_text(total) and snapshot['total_trades'] == len(rows),
+        'PIPELINE_TOTAL_INVALID')
+    return dict(pnl_basis=BASIS, total_trades=len(values), gross_pnl=_money_text(total),
+        wins=sum(value > 0 for value in values), losses=sum(value < 0 for value in values),
+        breakeven=sum(value == 0 for value in values), fees=None, net_pnl=None,
+        fees_status='UNKNOWN', net_status='UNKNOWN', net_eligible=False,
+        accounting_complete=False, recovery_complete=False, activity_ingestion_complete=False)
+
+
+def pipeline_document(snapshot, sources, *, run_date, candidate_count, candidate_fingerprint,
+                      publication_id, now=None):
+    """Authoritative gross daily publication; candidate statistics retain their backtest basis."""
+    _require(type(run_date) is str and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', run_date), 'RUN_DATE_INVALID')
+    from datetime import date
+    _require(date.fromisoformat(run_date).isoformat() == run_date, 'RUN_DATE_INVALID')
+    _require(type(candidate_count) is int and 0 < candidate_count <= MAX_ROWS, 'CANDIDATE_CAP_OR_EMPTY')
+    _require(type(candidate_fingerprint) is str and re.fullmatch('[0-9a-f]{64}', candidate_fingerprint), 'CANDIDATE_BINDING_INVALID')
+    _require(type(publication_id) is str and re.fullmatch('[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', publication_id), 'PUBLICATION_ID_INVALID')
+    body = dict(schema_version=1, namespace='PAPER_GROSS_PIPELINE_V1', run_date=run_date,
+        publication_id=publication_id, published_at=_now(now).isoformat(),
+        sources=_sources(sources), report=D.document(snapshot), summary=pipeline_summary(snapshot),
+        candidate_count=candidate_count, candidate_fingerprint=candidate_fingerprint,
+        candidate_basis='BACKTEST_RESULTS_UNCHANGED', entry_ready=False, operating_acceptance=False)
+    body['binding_fingerprint'] = D.fingerprint(body)
+    _require(len(D.canonical(body).encode('utf-8')) <= MAX_REPORT_BYTES, 'FILE_CAP')
+    return body
+
+
+def validate_pipeline_document(document, snapshot, sources, *, run_date, candidate_count,
+                               candidate_fingerprint, now=None, not_before=None):
+    body = D.document(document)
+    expected = pipeline_document(snapshot, sources, run_date=run_date,
+        candidate_count=candidate_count, candidate_fingerprint=candidate_fingerprint,
+        publication_id=body.get('publication_id'), now=D.aware_time(body.get('published_at')))
+    _require(body == expected, 'PIPELINE_PUBLICATION_CHANGED')
+    stamp = D.aware_time(body['published_at'])
+    _require(stamp <= _now(now) and (not_before is None or stamp >= not_before), 'PIPELINE_PUBLICATION_STALE')
+    return body
+
+
+def pipeline_completion(document):
+    """Compact evidence produced only after current DB/source/candidate validation."""
+    report = document['report']
+    evidence = report['evidence']
+    return dict(schema_version=1, pnl_basis=BASIS, run_date=document['run_date'],
+        publication_id=document['publication_id'], published_at=document['published_at'],
+        publication_fingerprint=document['binding_fingerprint'],
+        input_fingerprint=evidence['input_fingerprint'],
+        sources_fingerprint=D.fingerprint(document['sources']),
+        candidate_fingerprint=document['candidate_fingerprint'],
+        candidate_count=document['candidate_count'], total_trades=report['total_trades'],
+        policy_revision=evidence['policy']['policy_revision'], gross_input_complete=True,
+        fees_status='UNKNOWN', net_status='UNKNOWN', net_eligible=False,
+        accounting_complete=False, recovery_complete=False, activity_ingestion_complete=False,
+        entry_ready=False, operating_acceptance=False)
