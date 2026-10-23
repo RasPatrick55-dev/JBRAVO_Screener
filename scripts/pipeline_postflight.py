@@ -233,6 +233,10 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
         validate_provisional_context(provisional, now=finished)
         if record.get('invocation_id') != provisional['id'] or record.get('session') is not None:
             raise ValueError('provisional_invocation_mismatch')
+        if (provisional['signal_session'] is None
+                or not _utc(provisional['started_at']) <= started <= finished
+                or date.fromisoformat(provisional['signal_session']) > _utc(provisional['started_at']).date()):
+            raise ValueError('provisional_run_window_or_session_mismatch')
         if not allow_provisional:
             failures.append('provisional_session_not_qualified')
     elif allow_provisional:
@@ -274,7 +278,11 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
                     raise ValueError('frozen_reference_session_mismatch')
     if started > finished or finished > now or (session is None and (now - started).total_seconds() > max_age_seconds):
         failures.append('invalid_or_stale_run_window')
-    if session is None and (started.date() != expected_day or finished.date() != expected_day):
+    if provisional is not None:
+        # The invocation may legitimately cross UTC midnight in one signal session.
+        if not _utc(provisional['started_at']).date() <= expected_day <= finished.date():
+            failures.append('wrong_run_day')
+    elif session is None and (started.date() != expected_day or finished.date() != expected_day):
         failures.append('wrong_run_day')
     if not_before is not None and started < not_before:
         failures.append('report_predates_invocation')
@@ -314,6 +322,8 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
             snapshot_day = date.fromisoformat(predictions.get('snapshot_date'))
             if snapshot_day > started.date():
                 failures.append('future_prediction_snapshot')
+            if provisional is not None and snapshot_day.isoformat() != provisional['signal_session']:
+                failures.append('provisional_prediction_session_mismatch')
         except (TypeError, ValueError):
             failures.append('prediction_snapshot_unknown')
     controls = record.get('controls')

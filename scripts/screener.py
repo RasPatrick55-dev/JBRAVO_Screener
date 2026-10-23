@@ -4949,7 +4949,8 @@ def write_predictions(
 ) -> None:
     run_ts = datetime.now(tz=timezone.utc)
     run_date = run_ts.date().isoformat()
-    pred_dir = Path("data") / "predictions"
+    from scripts.pipeline_postflight import provisional_output_directory
+    pred_dir = provisional_output_directory(Path('data') / 'predictions')
     pred_dir.mkdir(parents=True, exist_ok=True)
 
     meta = run_meta or {}

@@ -3483,6 +3483,28 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     def _latest_model_meta() -> dict[str, Any]:
         features_meta, _ = _load_features_meta()
+        if provisional is not None and (not features_meta or not metadata_context_matches(features_meta)):
+            # A new private run has no feature rows yet. Bootstrap its recipe
+            # from an existing read-only model, never another run's feature data.
+            for path in sorted((base_dir / 'data' / 'models').glob('ranker_*.pkl'), reverse=True):
+                recipe = dict(load_model_artifact_meta(path))
+                columns = recipe.get('feature_columns')
+                if (recipe.get('feature_set') not in ('v1', 'v2') or not isinstance(columns, list)
+                        or not columns or any(type(column) is not str or not column.strip() for column in columns)
+                        or len(columns) != len(set(columns))):
+                    continue
+                signature = compute_feature_signature(columns)
+                if (recipe.get('feature_signature') != signature or
+                        recipe.get('feature_signature_stored') not in (None, signature)):
+                    continue
+                selected, selection = select_compatible_model(
+                    base_dir / 'data' / 'models',
+                    {key: recipe[key] for key in ('feature_set','feature_columns','feature_signature')},
+                    requested_model_path=path)
+                if selected is not None:
+                    recipe['selection_reason'] = 'provisional_model_recipe_bootstrap'
+                    recipe['selection_mode'] = selection.get('selection_mode')
+                    return recipe
         selected_model, selection = select_compatible_model(
             base_dir / "data" / "models",
             features_meta,

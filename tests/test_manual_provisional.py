@@ -181,6 +181,122 @@ class ProvisionalController(unittest.TestCase):
 
 
 class ProvisionalDataflow(unittest.TestCase):
+    def test_review_legacy_freshness_fixture_runs_actual_three_cases(self):
+        from typing import Any
+        test_tree = ast.parse((SOURCE_ROOT / 'tests/test_feature_inference_session.py').read_bytes())
+        node = next(n for n in ast.walk(test_tree) if isinstance(n, ast.FunctionDef)
+                    and n.name == 'test_pipeline_refreshes_legacy_or_wrong_session_features')
+        namespace = dict(ast=ast, ROOT=SOURCE_ROOT, date=datetime.date,
+                         Mock=mock.Mock, Any=Any, metadata_context_matches=P.metadata_context_matches)
+        from datetime import date
+        namespace['date'] = date
+        actual = extracted(node, namespace)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            actual(self)
+
+    def test_review_screener_predictions_remain_private_even_if_later_work_fails(self):
+        from typing import Mapping
+        tree = ast.parse((SOURCE_ROOT / 'scripts/screener.py').read_bytes())
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'write_predictions')
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); ordinary = root / 'data/predictions'; ordinary.mkdir(parents=True)
+            (ordinary/'latest.csv').write_text('ordinary-latest')
+            dated = ordinary / (datetime.now(timezone.utc).date().isoformat()+'.csv')
+            dated.write_text('ordinary-dated')
+            frame = pd.DataFrame({'symbol':['ONE'], 'score':[1.]})
+            ns = dict(pd=pd, Optional=Optional, Mapping=Mapping, datetime=datetime, timezone=timezone,
+                      Path=lambda path: root/path, LOGGER=mock.Mock(),
+                      _prepare_predictions_frame=lambda *args,**kw: frame.copy())
+            writer = extracted(node, ns)
+            c = context()
+            with mode(c):
+                writer(frame, {})
+            self.assertEqual((ordinary/'latest.csv').read_text(), 'ordinary-latest')
+            self.assertEqual(dated.read_text(), 'ordinary-dated')
+            private = ordinary/'manual_provisional'/c['id']/'latest.csv'
+            self.assertTrue(private.is_file())
+            self.assertEqual(pd.read_csv(private)['symbol'].tolist(), ['ONE'])
+            c['expires_at'] = (datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()
+            with mode(c), self.assertRaises(ValueError):
+                writer(frame,{})
+            self.assertEqual((ordinary/'latest.csv').read_text(), 'ordinary-latest')
+            with mock.patch.dict(os.environ, {}, clear=True):
+                writer(frame,{})
+            self.assertEqual(pd.read_csv(ordinary/'latest.csv')['symbol'].tolist(), ['ONE'])
+
+    def test_review_model_recipe_bootstrap_does_not_borrow_feature_rows(self):
+        from typing import Any
+        tree = ast.parse((SOURCE_ROOT / 'scripts/run_pipeline.py').read_bytes())
+        node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == '_latest_model_meta')
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); models = root/'data/models'; models.mkdir(parents=True)
+            path = models/'ranker_2026-10-20.pkl';path.write_bytes(b'inert-not-loaded')
+            recipe = dict(model_path=str(path),feature_set='v1',feature_columns=['x'],feature_signature='valid',
+                          feature_signature_stored='valid')
+            select = mock.Mock(return_value=(path,{'selection_mode':'explicit'}))
+            ns = dict(Any=Any, base_dir=root, provisional=context(),
+                      _load_features_meta=lambda:({},'missing'), metadata_context_matches=P.metadata_context_matches,
+                      load_model_artifact_meta=lambda path:dict(recipe), select_compatible_model=select,
+                      compute_feature_signature=lambda columns:'valid')
+            latest = extracted(node,ns)
+            result=latest()
+            self.assertEqual(result['selection_reason'],'provisional_model_recipe_bootstrap')
+            self.assertEqual(select.call_args.args[1],{key:recipe[key] for key in
+                ('feature_set','feature_columns','feature_signature')})
+            self.assertEqual(select.call_args.kwargs,{'requested_model_path':path})
+            # The real freshness predicate still requires freshly generated current-run metadata.
+            fresh_node=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='_ensure_features_freshness')
+            ns.update(_latest_model_meta=latest,pipeline_run_date=datetime(2026,10,23).date(),LOG=mock.Mock())
+            check=extracted(fresh_node,ns)
+            self.assertEqual(check('ranker_eval')['reason'],'features_meta_missing')
+            with mode(context()):
+                meta={**recipe, 'signal_session':'2026-10-23','provisional_context':P.provisional_context()}
+                ns['_load_features_meta']=lambda:(meta,'private')
+                self.assertFalse(check('ranker_eval')['stale'])
+                meta['feature_signature']='wrong'
+                meta['feature_columns']=['different']
+                ns['compute_feature_signature']=lambda columns:'different' if columns==['different'] else 'valid'
+                self.assertTrue(check('ranker_eval')['stale'])
+            # Malformed/contradictory model recipes cannot be used to bootstrap.
+            ns['_load_features_meta']=lambda:({},'missing')
+            for change in ({'feature_set':'unknown'},{'feature_columns':[]},{'feature_columns':['x','x']},
+                           {'feature_columns':[['not-a-column']]},
+                           {'feature_signature_stored':'wrong'},{'feature_signature':'wrong'}):
+                with self.subTest(change=change):
+                    ns['load_model_artifact_meta']=lambda path,value=recipe|change:dict(value)
+                    ns['select_compatible_model']=mock.Mock(return_value=(None,{'reason':'missing','selection_mode':'normal'}))
+                    self.assertIsNone(latest()['model_path'])
+                    self.assertNotIn('requested_model_path',ns['select_compatible_model'].call_args.kwargs)
+
+    def test_review_postflight_midnight_uses_bound_invocation_and_signal_session(self):
+        fixture = PF.PostflightTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        started=datetime(2026,10,23,23,59,tzinfo=timezone.utc)
+        finished=started+timedelta(minutes=2)
+        c=context('2026-10-23',started-timedelta(seconds=1))
+        # Build a normal authentic record, then assess specific immutable window variants.
+        record=fixture.publish()
+        record.update(started_at=started.isoformat(),finished_at=finished.isoformat(),
+                      provisional_context=c,invocation_id=c['id'])
+        record['coverage']['run_ts_utc']=(started+timedelta(seconds=1)).isoformat()
+        record['predictions']['snapshot_date']='2026-10-23'
+        now=finished+timedelta(seconds=1)
+        for day in (started.date(),finished.date()):
+            with self.subTest(day=day):
+                result=P.assess(record,now=now,expected_day=day,allow_provisional=True)
+                self.assertTrue(result['functional_pass'])
+                self.assertFalse(result['qualified_daily'])
+        ordinary=deepcopy(record);ordinary.pop('provisional_context');ordinary.pop('invocation_id')
+        self.assertIn('wrong_run_day',P.assess(ordinary,now=now,expected_day=finished.date())['failures'])
+        wrong=deepcopy(record);wrong['predictions']['snapshot_date']='2026-10-22'
+        self.assertIn('provisional_prediction_session_mismatch',P.assess(wrong,now=now,
+                      expected_day=finished.date(),allow_provisional=True)['failures'])
+        for change in ({'started_at':(started+timedelta(seconds=1)).isoformat()},
+                       {'expires_at':(finished-timedelta(seconds=1)).isoformat()},
+                       {'signal_session':None},{'signal_session':'2026-10-24'}):
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                bad=deepcopy(record);bad['provisional_context'].update(change)
+                P.assess(bad,now=now,expected_day=finished.date(),allow_provisional=True)
+
     def test_final_metrics_rebuild_actual_canonical_writer_and_dashboard_keep_label(self):
         from typing import Any, Mapping, Dict
         # Pinned f2 helper is evidence, not another published/modified source file.
@@ -388,8 +504,9 @@ class ProvisionalDataflow(unittest.TestCase):
         namespace = {'TradingClient': object, 'date': date, 'datetime': datetime, 'timedelta': timedelta,
             'timezone': timezone, 'ZoneInfo': ZoneInfo, 'GetCalendarRequest': lambda **kwargs: kwargs}
         window = extracted(node, namespace)
-        current = context()
-        with mode(current):
+        current = context(started=datetime(2026, 10, 23, 21, tzinfo=timezone.utc))
+        # Calendar semantics use a fixed observation, independent of today's clock.
+        with mock.patch.object(P, 'provisional_context', return_value=current):
             _, end, day = window(client, 10, end_date=date(2026, 10, 23), session_cutoff=True)
         self.assertEqual(day, '2026-10-23')
         self.assertEqual(end, current['started_at'])
