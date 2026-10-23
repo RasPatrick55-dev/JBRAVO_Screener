@@ -19,6 +19,8 @@ ROOT = OUT = WORK = None
 PG = DB = G = D = PD = None
 CONNECTIONS = []
 GUARDS = []
+GUARD_EVENTS = []
+CHILD_RECEIPTS = {}
 CHILDREN = []
 ALLOWED_CHILDREN = []
 SERVER_VERIFIED = False
@@ -62,33 +64,56 @@ def ds(user='qualification_admin'):
     return f'postgresql://{user}:{PASSWORD}@127.0.0.1:{PORT}/{DATABASE}?sslmode=disable'
 
 
-def deny(category):
+def deny(category,event='fixed_target_check',request_class='REFUSED'):
     if len(GUARDS)<16:GUARDS.append(category)
+    if len(GUARD_EVENTS)<8:
+        near=[];application=[];frame=sys._getframe(1)
+        for _ in range(64):
+            if frame is None:break
+            module=str(frame.f_globals.get('__name__','UNKNOWN'))
+            function=frame.f_code.co_name
+            if function not in ('deny','audit','guarded_connect'):
+                safe_module=module if re.fullmatch(r'[A-Za-z0-9_.]{1,80}',module) else 'OTHER_MODULE'
+                safe_function=function if re.fullmatch(r'[A-Za-z0-9_<>.]{1,80}',function) else 'OTHER_FUNCTION'
+                item=dict(module=safe_module,function=safe_function,line=frame.f_lineno)
+                if len(near)<3:near.append(item)
+                if module.startswith(('scripts.','dashboards.','utils.')) and len(application)<3:application.append(item)
+            frame=frame.f_back
+        callers=[]
+        for item in near+application:
+            if item not in callers:callers.append(item)
+        GUARD_EVENTS.append(dict(category=category,event=event,request_class=request_class,callers=callers))
     raise RuntimeError('QUALIFICATION_GUARD_'+category)
 
 
 def install_guards():
     def audit(event,args):
         if event=='socket.getaddrinfo':
-            if args[0] not in ('127.0.0.1',) or int(args[1])!=PORT:deny('DNS')
+            if args[0] not in ('127.0.0.1',) or int(args[1])!=PORT:deny('DNS',event)
         if event=='socket.connect':
             address=args[1]
-            if not isinstance(address,tuple) or address[:2]!=('127.0.0.1',PORT):deny('NETWORK')
-        if event in ('socket.bind','socket.sendto'):deny('SERVER_OR_DATAGRAM')
+            if not isinstance(address,tuple) or address[:2]!=('127.0.0.1',PORT):deny('NETWORK',event)
+        if event in ('socket.bind','socket.sendto'):
+            address=args[1]
+            request_class=('LOOPBACK_EPHEMERAL_BIND_REFUSED' if event=='socket.bind' and isinstance(address,tuple)
+                and address[:2] in (('127.0.0.1',0),('::1',0)) else 'SERVER_OR_DATAGRAM_REFUSED')
+            deny('SERVER_OR_DATAGRAM',event,request_class)
         if event=='subprocess.Popen':
             cmd=list(args[1]) if not isinstance(args[1],str) else args[1]
-            if cmd not in ALLOWED_CHILDREN:deny('PROCESS')
+            if cmd not in ALLOWED_CHILDREN:
+                label='READ_ONLY_GIT_VERSION_REFUSED' if cmd==['git','rev-parse','--short','HEAD'] and str(args[2])==str(ROOT) else 'UNAPPROVED_PROCESS_REFUSED'
+                deny('PROCESS',event,label)
             ALLOWED_CHILDREN.remove(cmd)
-        if event in ('os.system','os.posix_spawn','os.spawn'):deny('PROCESS')
+        if event in ('os.system','os.posix_spawn','os.spawn'):deny('PROCESS',event)
         if event=='open' and not isinstance(args[0],int):
             path=Path(args[0]);name=path.name.casefold()
-            if name.startswith('.env') or name in ('.pgpass','.netrc','api-token.dpapi') or 'credential' in name:deny('SECRET_FILE')
+            if name.startswith('.env') or name in ('.pgpass','.netrc','api-token.dpapi') or 'credential' in name:deny('SECRET_FILE',event)
             mode=args[1];flags=args[2] if len(args)>2 else 0
             writing=isinstance(mode,str) and any(c in mode for c in 'wax+') or isinstance(flags,int) and flags & (os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC|os.O_APPEND)
             if writing:
                 resolved=path.resolve()
-                if not resolved.is_relative_to(WORK):deny('EXTERNAL_WRITE')
-                if resolved.is_relative_to(ROOT) and (resolved.suffix in ('.py','.yml','.yaml') or '.git' in resolved.parts):deny('SOURCE_WRITE')
+                if not resolved.is_relative_to(WORK):deny('EXTERNAL_WRITE',event)
+                if resolved.is_relative_to(ROOT) and (resolved.suffix in ('.py','.yml','.yaml') or '.git' in resolved.parts):deny('SOURCE_WRITE',event)
     sys.addaudithook(audit)
     import psycopg2
     original=psycopg2.connect
@@ -194,21 +219,32 @@ def publish(infinite=False):
 def run_child(mode,seconds):
     command=[sys.executable,'-I','-B',str(Path(__file__).resolve()),'--source-root',str(ROOT),'--mode',mode]
     ALLOWED_CHILDREN.append(command)
-    process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
-        text=True,start_new_session=True,env=os.environ.copy(),cwd=ROOT)
-    CHILDREN.append(process)
-    try:output,_=process.communicate(input='',timeout=seconds)
-    except subprocess.TimeoutExpired:
-        os.killpg(process.pid,signal.SIGTERM)
-        try:output,_=process.communicate(timeout=5)
+    cleanup_proved=False
+    try:
+        process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+            text=True,start_new_session=True,env=os.environ.copy(),cwd=ROOT)
+        CHILDREN.append(process)
+        try:output,_=process.communicate(input='',timeout=seconds)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid,signal.SIGKILL);output,_=process.communicate(timeout=5)
-        raise RuntimeError('OWNED_CHILD_TIMEOUT')
-    if len(output)>16384:raise RuntimeError('OWNED_CHILD_OUTPUT_CAP')
-    result=json.loads(output)
-    if result.get('guards'):GUARDS.extend(result['guards'][:16])
-    if process.returncode!=0:raise RuntimeError('OWNED_CHILD_FAILED_'+str(result.get('failure',{}).get('type','UNKNOWN')))
-    return result
+            os.killpg(process.pid,signal.SIGTERM)
+            try:output,_=process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid,signal.SIGKILL);output,_=process.communicate(timeout=5)
+            raise RuntimeError('OWNED_CHILD_TIMEOUT')
+        if len(output)>16384:raise RuntimeError('OWNED_CHILD_OUTPUT_CAP')
+        result=json.loads(output)
+        CHILD_RECEIPTS[mode]=result
+        cleaned=result.get('cleanup',{})
+        cleanup_proved=(cleaned.get('all_connections_closed') is True and cleaned.get('all_owned_children_returned') is True
+                and (cleaned.get('owned_backend_sessions_remaining')==0 or
+                     (result.get('server_verified') is False and cleaned.get('tracked_connections')==0)))
+        if not cleanup_proved:deny('CHILD_CLEANUP_UNKNOWN')
+        if process.returncode!=0:raise RuntimeError('OWNED_CHILD_FAILED_'+str(result.get('failure',{}).get('type','UNKNOWN')))
+        return result
+    finally:
+        if not cleanup_proved and 'CHILD_CLEANUP_UNKNOWN' not in GUARDS:
+            try:deny('CHILD_CLEANUP_UNKNOWN')
+            except RuntimeError:pass
 
 
 class NativeCases(unittest.TestCase):
@@ -357,7 +393,7 @@ def main():
     if (sys.platform!='linux' or sys.version_info[:2]!=(3,10) or os.environ.get('GITHUB_ACTIONS')!='true'
             or os.environ.get('GITHUB_REPOSITORY')!='RasPatrick55-dev/JBRAVO_Screener'
             or os.environ.get('GITHUB_RUN_ATTEMPT')!='1'
-            or os.environ.get('QUALIFICATION_ADMISSION')!='PR745_NATIVE_ONE_USE_06832BA6'):
+            or os.environ.get('QUALIFICATION_ADMISSION')!='PR745_NATIVE_PREP005_06832BA6'):
         raise RuntimeError('CI_ONLY_ONE_USE_ADMISSION_REQUIRED')
     WORK=Path(os.environ['GITHUB_WORKSPACE']).resolve();OUT=WORK/'qualification-output';OUT.mkdir(exist_ok=True)
     signal.signal(signal.SIGTERM,outer_deadline)
@@ -372,7 +408,9 @@ def main():
                     imports=[]
                     for name in ('scripts.db','scripts.metrics','scripts.run_pipeline','scripts.primary_pipeline',
                             'scripts.pipeline_postflight','dashboards.data_io','dashboards.dashboard_app'):
+                        record['active_import']=name
                         importlib.import_module(name);imports.append(name)
+                        if GUARDS:raise RuntimeError('BOOTSTRAP_GUARD_REFUSAL')
                     record.update(imports=imports);rc=0
                 elif args.mode=='metrics-child':
                     from scripts import metrics
@@ -405,9 +443,13 @@ def main():
                 all_owned_children_returned=all(p.poll() is not None for p in CHILDREN),
                 owned_backend_sessions_remaining='UNKNOWN',failure=safe_error(error))
             rc=1
-        record['guards']=list(GUARDS)
+        record['parent_guard_refusals']=list(GUARDS)
+        record['guard_events']=list(GUARD_EVENTS)
+        record['child_receipts']=dict(CHILD_RECEIPTS)
+        record['guards']=list(GUARDS)+[guard for child in CHILD_RECEIPTS.values() for guard in child.get('guards',[])][:32]
+        record['server_verified']=SERVER_VERIFIED
         record['deadline_received']=DEADLINE_HIT
-        if (DEADLINE_HIT or GUARDS or not record['cleanup']['all_connections_closed'] or not record['cleanup']['all_owned_children_returned']
+        if (DEADLINE_HIT or record['guards'] or not record['cleanup']['all_connections_closed'] or not record['cleanup']['all_owned_children_returned']
                 or record['cleanup']['owned_backend_sessions_remaining'] not in (None,0)):rc=1
         record['status']='PASS' if rc==0 else 'FAIL';record['process_rc']=rc
         record['qualification']='Real native SQL and process cases separated from repository fake-adapter tests; synthetic ordinary-trade fixture only, no native CRC allocation activation or provider-backed full Pipeline execution. Bootstrap/CLI qualify only if their actual cases pass. PostgreSQL12.2 is a compatibility target, not production-version attestation.'
