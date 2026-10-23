@@ -1217,6 +1217,10 @@ def _fetch_daily_bars(
     reuse_cache: bool = True,
     verify_hook: Optional[Callable[[str, dict[str, object]], None]] = None,
 ) -> Tuple[pd.DataFrame, dict[str, Any], Dict[str, str]]:
+    from scripts.pipeline_postflight import provisional_context
+    provisional = provisional_context()
+    if provisional is not None:
+        reuse_cache = False
     source = (bars_source or "http").strip().lower()
     if source not in {"http", "sdk"}:
         source = "http"
@@ -1262,6 +1266,8 @@ def _fetch_daily_bars(
         return cached, meta
 
     def _write_batch_cache(batch_idx: int, frame: pd.DataFrame, meta: dict) -> None:
+        if provisional is not None:
+            return
         if frame is None or frame.empty:
             return
         cache_path, meta_path = _cache_paths(batch_idx)
@@ -2184,6 +2190,10 @@ def _load_alpaca_universe(
     The caller provides a ``metrics`` mapping which is updated in place with
     guardrail statistics such as ``universe_prefix_counts``.
     """
+    from scripts.pipeline_postflight import provisional_context
+    if provisional_context() is not None:
+        reuse_cache = False
+        skip_fetch = False
     empty_metrics = {
         "batches_total": 0,
         "batches_paged": 0,
@@ -5879,6 +5889,14 @@ def write_outputs(
         top_df = pd.DataFrame(columns=TOP_CANDIDATE_COLUMNS)
     if scored_df is None:
         scored_df = pd.DataFrame()
+    from scripts.pipeline_postflight import provisional_context, mark_provisional_source
+    provisional = provisional_context()
+    if provisional is not None:
+        top_df = top_df.copy()
+        scored_df = scored_df.copy()
+        for output in (top_df, scored_df):
+            values = output['source'].fillna('') if 'source' in output else pd.Series('', index=output.index)
+            output['source'] = values.map(lambda value: mark_provisional_source(value, provisional))
     db_insert_frame = pd.DataFrame()
     canonical_candidate_rows = int(top_df.shape[0]) if isinstance(top_df, pd.DataFrame) else 0
     if mode in {"screener", "full-nightly"} and db.db_enabled():
@@ -6149,6 +6167,8 @@ def write_outputs(
     metrics["metrics_version"] = 2
     timing_payload = _normalize_timings(timings)
     metrics["timings"] = timing_payload
+    if provisional is not None:
+        metrics.update(provisional_context=provisional, qualified_daily=False)
     _write_json_atomic(metrics_path, metrics)
 
     if mode in {"screener", "full-nightly"} and db.db_enabled():
@@ -6181,7 +6201,10 @@ def write_outputs(
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning("[WARN] DB_WRITE_FAILED table=screener_candidates err=%s", exc)
 
-    hist_path = data_dir / "screener_metrics_history.csv"
+    from scripts.pipeline_postflight import provisional_output_directory
+    history_dir = provisional_output_directory(data_dir)
+    history_dir.mkdir(parents=True, exist_ok=True)
+    hist_path = history_dir / "screener_metrics_history.csv"
     row = {
         "run_utc": metrics.get("last_run_utc"),
         "symbols_in": metrics.get("symbols_in", 0),
@@ -6233,6 +6256,8 @@ def write_outputs(
         "scored_candidates": _artifact_ts(scored_path),
         "screener_metrics": _artifact_ts(metrics_path),
     }
+    if provisional is not None:
+        notes_payload.update(provisional_context=provisional, qualified_daily=False)
     db.insert_pipeline_health(
         {
             "run_date": run_date_str,

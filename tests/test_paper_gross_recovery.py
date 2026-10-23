@@ -375,7 +375,7 @@ class RecoveryTests(unittest.TestCase):
         namespace=dict(extras={'metrics':['--paper-gross-pipeline']},pipeline_run_date=self.day,
             db=SimpleNamespace(paper_gross_pipeline_evidence=self.db['paper_gross_pipeline_evidence']),
             base_dir=facts.root,args=SimpleNamespace(postflight_report=True,pipeline_readiness_only=True),
-            session_context=None,started_dt=facts.started,datetime=datetime,timezone=timezone,rc=0,
+            session_context=None,provisional=None,started_dt=facts.started,datetime=datetime,timezone=timezone,rc=0,
             steps=facts.facts['steps'],step_rcs=facts.facts['step_rcs'],stage_times=facts.facts['stage_times'],
             degraded=False,labels_rows=120,enrichment_freshness=facts.facts['freshness'],
             model_score_coverage_summary=facts.facts['coverage'],ml_health_summary=facts.facts['ml_health'],LOG=mock.Mock(),

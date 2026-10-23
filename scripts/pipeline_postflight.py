@@ -6,7 +6,7 @@ pipeline, loads authentication, queries a database or dispatches work.
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 import hashlib
 import json
 import math
@@ -19,6 +19,89 @@ import uuid
 from scripts import signal_handoff
 
 ROOT = Path(__file__).resolve().parents[1]
+PROVISIONAL_ENV = 'JBR_PRIMARY_PROVISIONAL_CONTEXT'
+
+
+def validate_provisional_context(value, *, now=None):
+    """A short-lived manual invocation label, never a data/entry permit."""
+    fields = {'mode', 'id', 'started_at', 'expires_at', 'signal_session',
+              'qualified_daily', 'entry_ready'}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError('invalid_provisional_context')
+    if (value['mode'] != 'MANUAL_PROVISIONAL_PIPELINE_V1'
+            or not isinstance(value['id'], str) or not re.fullmatch('[0-9a-f]{32}', value['id'])
+            or value['qualified_daily'] is not False or value['entry_ready'] is not False):
+        raise ValueError('invalid_provisional_context')
+    started, expires = _utc(value['started_at']), _utc(value['expires_at'])
+    if not started < expires <= started + timedelta(minutes=22):
+        raise ValueError('invalid_provisional_window')
+    if now is not None and not started <= now < expires:
+        raise ValueError('provisional_context_expired_or_future')
+    day = value['signal_session']
+    if day is not None and (type(day) is not str or date.fromisoformat(day).isoformat() != day):
+        raise ValueError('invalid_provisional_session')
+    return dict(value)
+
+
+def provisional_context():
+    raw = os.environ.get(PROVISIONAL_ENV)
+    if raw is None:
+        return None
+    if len(raw.encode()) > 2048:
+        raise ValueError('invalid_provisional_context')
+    return validate_provisional_context(json.loads(raw), now=datetime.now(timezone.utc))
+
+
+def label_provisional_result(payload):
+    context = provisional_context()
+    if context is None:
+        return payload
+    return dict(payload, provisional_context=context, qualified_daily=False,
+                entry_ready=False, run_type='PROVISIONAL functional test: not qualified daily')
+
+
+def metadata_context_matches(metadata):
+    return (metadata or {}).get('provisional_context') == provisional_context()
+
+
+def provisional_artifact_type(artifact_type, *, writing=False):
+    """Run-private artifacts use the existing TEXT key, without new schema/grants.
+
+    Read-only model/monitor history remains an explicit baseline input. The six
+    artifacts produced by the fixed primary chain can only read this run's key.
+    """
+    context = provisional_context()
+    if context is None:
+        return artifact_type
+    outputs = {'daily_bars', 'labels', 'features', 'predictions',
+               'predictions_scoped', 'ranker_eval'}
+    if writing or artifact_type in outputs:
+        return 'provisional:' + context['id'] + ':' + artifact_type
+    return artifact_type
+
+
+def provisional_output_directory(directory):
+    """Never replace an ordinary ML file/sidecar during a provisional run."""
+    context = provisional_context()
+    directory = Path(directory)
+    if context is None:
+        return directory
+    return directory / 'manual_provisional' / context['id']
+
+
+def mark_provisional_source(value, context):
+    prefix = 'PROVISIONAL:' + context['id'] + ':'
+    original = '' if value is None else str(value)
+    if original.startswith('PROVISIONAL:'):
+        if not original.startswith(prefix):
+            raise ValueError('provisional_source_from_another_run')
+        return original
+    result = prefix + original
+    if len(result) > 2048:
+        raise ValueError('provisional_source_too_long')
+    return result
+
+
 REQUIRED_STEPS = ('screener', 'backtest', 'metrics', 'labels', 'ranker_eval')
 SOURCE_FILES = ('scripts/run_pipeline.py', 'scripts/pipeline_postflight.py',
                 'scripts/primary_pipeline.py', 'scripts/primary_paper_pipeline.py',
@@ -26,7 +109,8 @@ SOURCE_FILES = ('scripts/run_pipeline.py', 'scripts/pipeline_postflight.py',
                 'scripts/ops/run_canary_smoke.sh', 'scripts/utils/ml_health_guard.py',
                 'scripts/signal_handoff.py', 'scripts/db_queries.py',
                 'scripts/utils/calendar.py', 'scripts/screener.py')
-SOURCE_FILES += ('scripts/label_generator.py', 'scripts/ranker_predict.py',
+SOURCE_FILES += ('scripts/label_generator.py', 'scripts/feature_generator.py',
+                 'scripts/ranker_predict.py', 'scripts/ranker_eval.py',
                  'scripts/production_score_capture.py', 'scripts/production_evidence.py',
                  'scripts/ranker_monitor.py', 'scripts/ranker_strategy_eval.py')
 SOURCE_FILES += ('scripts/executor_health.py', 'scripts/metrics.py', 'scripts/db.py',
@@ -74,7 +158,7 @@ def begin_primary(base_dir, started):
 
 
 def complete_primary(base_dir, invocation, result):
-    if result['status'] != 'ok' or not result.get('session'):
+    if result['status'] != 'ok' or not result.get('session') or result.get('provisional'):
         raise ValueError('postflight_not_eligible')
     _save_control(base_dir, 'completed-primary.json',
                   {'id': invocation['id'], 'report_binding': result['report_binding']})
@@ -131,7 +215,8 @@ def _number(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, require_session=False):
+def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, require_session=False,
+           allow_provisional=False):
     """Assess declared outcomes; success is not trading or research acceptance."""
     failures, warnings, research_reasons = [], [], []
     policy = record.get('readiness_policy', 'coupled') if isinstance(record, dict) else None
@@ -143,6 +228,15 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
     if not isinstance(run_id, str) or not re.fullmatch('[0-9a-f]{32}', run_id):
         raise ValueError('invalid_run_id')
     started, finished = _utc(record.get('started_at')), _utc(record.get('finished_at'))
+    provisional = record.get('provisional_context')
+    if provisional is not None:
+        validate_provisional_context(provisional, now=finished)
+        if record.get('invocation_id') != provisional['id'] or record.get('session') is not None:
+            raise ValueError('provisional_invocation_mismatch')
+        if not allow_provisional:
+            failures.append('provisional_session_not_qualified')
+    elif allow_provisional:
+        raise ValueError('provisional_context_missing')
     session = record.get('session')
     if require_session and session is None:
         failures.append('session_handoff_missing')
@@ -276,14 +370,16 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
             if record['paper_gross_required'] is not True or policy != PIPELINE_ONLY:
                 raise ValueError('paper_gross_scope_invalid')
             _validate_paper_gross_evidence(record.get('paper_gross_evidence'), started, finished,
-                sources=record.get('source_bindings', {}))
+                sources=record.get('source_bindings', {}),
+                expected_provisional=provisional if allow_provisional else None)
         except (ValueError, TypeError, KeyError):
             failures.append('paper_gross_performance_unproved')
     status = 'failed' if failures else 'degraded' if warnings else 'ok'
-    return {'run_id': run_id, 'status': status,
+    return {'run_id': run_id, 'status': status, 'provisional': provisional is not None,
+            'functional_pass': status == 'ok', 'qualified_daily': status == 'ok' and provisional is None,
             'failures': sorted(set(failures)), 'qualifications': sorted(set(warnings)),
-            'readiness_policy': policy, 'pipeline_ready': status == 'ok',
-            'entry_ready': False if policy == PIPELINE_ONLY else status == 'ok',
+            'readiness_policy': policy, 'pipeline_ready': status == 'ok' and provisional is None,
+            'entry_ready': False if policy == PIPELINE_ONLY or provisional is not None else status == 'ok',
             'research_status': 'pending' if research_reasons else 'unqualified',
             'research_reasons': sorted(set(research_reasons)),
             'research_qualified': False, 'operating_acceptance': False}
@@ -321,6 +417,11 @@ def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, ste
     }
     if paper_gross_required or paper_gross_evidence is not None:
         record.update(paper_gross_required=paper_gross_required, paper_gross_evidence=paper_gross_evidence)
+    provisional = provisional_context()
+    if provisional is not None:
+        if invocation_id != provisional['id'] or provisional['signal_session'] is None:
+            raise ValueError('provisional_invocation_mismatch')
+        record.update(provisional_context=provisional, invocation_id=provisional['id'])
     if session is not None:
         record.update(session=session, frozen_candidates=frozen_candidates, invocation_id=invocation_id)
     for relative in SOURCE_FILES:
@@ -351,10 +452,12 @@ def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, ste
     return record
 
 
-def _validate_paper_gross_evidence(evidence, started, finished, *, sources=None):
+def _validate_paper_gross_evidence(evidence, started, finished, *, sources=None, expected_provisional=None):
     """A successful gross stage never certifies net accounting or new entries."""
     if not isinstance(evidence, dict):
         raise ValueError('paper_gross_evidence_missing')
+    if evidence.get('provisional_context') != expected_provisional:
+        raise ValueError('paper_gross_provisional_context_mismatch')
     if (type(evidence.get('schema_version')) is not int or evidence['schema_version'] != 1
             or evidence.get('pnl_basis') != 'PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1'
             or evidence.get('fees_status') != 'UNKNOWN' or evidence.get('net_status') != 'UNKNOWN'
@@ -388,7 +491,8 @@ def _validate_paper_gross_evidence(evidence, started, finished, *, sources=None)
 
 
 def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=7200, not_before=None,
-                 require_session=False, require_completion=False, require_paper_gross=False):
+                 require_session=False, require_completion=False, require_paper_gross=False,
+                 allow_provisional=False):
     now = now or datetime.now(timezone.utc)
     expected_day = expected_day or now.date()
     if not _number(max_age_seconds) or not 0 < max_age_seconds <= 86400:
@@ -399,7 +503,7 @@ def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=
         data = _read(path, MAX_REPORT_BYTES)
         record = json.loads(data.decode('utf-8'), object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
         result = assess(record, now=now, expected_day=expected_day, max_age_seconds=max_age_seconds,
-                        not_before=not_before, require_session=require_session)
+                        not_before=not_before, require_session=require_session, allow_provisional=allow_provisional)
         if require_paper_gross and record.get('paper_gross_required') is not True:
             raise ValueError('paper_gross_performance_required')
         for relative in SOURCE_FILES:
@@ -408,7 +512,7 @@ def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=
         history = path.parent / ('run-' + record['run_id'] + '.json')
         if _read(history, MAX_REPORT_BYTES) != data:
             raise ValueError('history_binding_mismatch')
-        if require_session or require_completion:
+        if require_session or require_completion or allow_provisional:
             active = json.loads(_read(path.parent / 'active-primary.json', MAX_REPORT_BYTES),
                                 object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
             if (record.get('invocation_id') != active['id'] or not re.fullmatch('[0-9a-f]{32}', active['id'])

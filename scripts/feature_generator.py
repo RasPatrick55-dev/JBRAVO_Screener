@@ -615,7 +615,9 @@ def main() -> None:
             )
 
         as_of = run_date.strftime("%Y-%m-%d")
-        output_dir: Path = args.output_dir
+        from scripts.pipeline_postflight import provisional_context, provisional_output_directory
+        provisional = provisional_context()
+        output_dir: Path = provisional_output_directory(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"features_{as_of}.csv"
 
@@ -638,9 +640,14 @@ def main() -> None:
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "output_path": str(output_path),
         }
+        if provisional is not None:
+            features_payload['provisional_context'] = provisional
         per_file_meta = per_file_meta_path(output_path)
         latest_meta_path = output_dir / FEATURE_META_NAME
-        if _write_feature_meta(per_file_meta, features_payload):
+        per_file_written = _write_feature_meta(per_file_meta, features_payload)
+        if provisional is not None and not per_file_written:
+            raise ValueError('provisional_feature_metadata_write_failed')
+        if per_file_written:
             logging.info(
                 "[INFO] FEATURES_META_WRITTEN source=fs feature_set=%s feature_signature=%s rows=%d path=%s feature_count=%d",
                 feature_set,
@@ -649,7 +656,9 @@ def main() -> None:
                 per_file_meta,
                 int(len(ml_feature_columns)),
             )
-        _write_feature_meta(latest_meta_path, features_payload)
+        latest_written = _write_feature_meta(latest_meta_path, features_payload)
+        if provisional is not None and (not latest_written or not per_file_meta.exists()):
+            raise ValueError('provisional_feature_metadata_write_failed')
         if db.db_enabled():
             ok = db.upsert_ml_artifact_frame(
                 "features",
@@ -675,6 +684,8 @@ def main() -> None:
                 )
             else:
                 logging.warning("[WARN] FEATURES_DB_WRITE_FAILED run_date=%s", run_date)
+                if provisional is not None:
+                    raise ValueError('provisional_feature_database_write_failed')
         logging.info(
             "[INFO] FEATURES_END rows=%d cols=%d feature_set=%s",
             int(merged.shape[0]),

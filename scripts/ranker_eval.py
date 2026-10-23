@@ -793,7 +793,12 @@ def main(argv: list[str] | None = None) -> int:
         LOG.error("Evaluation failed: %s", exc)
         return 1
 
-    output_dir = Path(args.output_dir)
+    from scripts.pipeline_postflight import provisional_output_directory, provisional_context
+    provisional = provisional_context()
+    if provisional is not None:
+        payload['provisional_context'] = provisional
+        payload['qualified_daily'] = False
+    output_dir = provisional_output_directory(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "latest.json"
     with output_path.open("w", encoding="utf-8") as fh:
@@ -875,6 +880,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             LOG.warning("[WARN] RANKER_EVAL_DB_WRITE_FAILED run_date=%s", run_date)
+            if provisional is not None:
+                return 2
 
     return 0
 

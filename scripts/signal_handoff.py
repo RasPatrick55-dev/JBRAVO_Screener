@@ -75,13 +75,15 @@ def _at(day, hhmm):
     return datetime.combine(day, time.fromisoformat(hhmm), NY).astimezone(timezone.utc)
 
 
-def session_contract(calendar, *, now):
+def session_contract(calendar, *, now, provisional=False):
     """Latest returned exchange session, never yesterday merely because today is incomplete.
 
     Regular-session calendar is NOT an extended-hours calendar. Only standard
     09:30-16:00 signal sessions have the explicit 20:00 ET policy here. Early or
     exceptional signal sessions block pending a separately evidenced policy.
     """
+    if type(provisional) is not bool:
+        raise ValueError('invalid_provisional_mode')
     now = utc(now)
     local_now = now.astimezone(NY)
     today = local_now.date()
@@ -117,11 +119,11 @@ def session_contract(calendar, *, now):
     ready = cutoff + timedelta(minutes=ARRIVAL_MINUTES)
     opening = _at(date.fromisoformat(next_session['date']), '04:00')
     expires = _at(date.fromisoformat(next_session['date']), '09:30')
-    if now < ready:
+    if now < ready and not provisional:
         raise ValueError('signal_session_not_completed')
     if now >= opening:
         raise ValueError('preparation_missed_opening')
-    return {'version': 1, 'signal_session': signal['date'], 'execution_session': next_session['date'],
+    result = {'version': 1, 'signal_session': signal['date'], 'execution_session': next_session['date'],
             'completed_cutoff_utc': cutoff.isoformat(), 'ready_after_utc': ready.isoformat(),
             'entry_open_utc': opening.isoformat(), 'expires_at_utc': expires.isoformat(),
             'arrival_allowance_minutes': ARRIVAL_MINUTES,
@@ -129,12 +131,17 @@ def session_contract(calendar, *, now):
             'calendar_source': 'alpaca_trading_calendar', 'calendar_observed_at': now.isoformat(),
             'calendar': normalized, 'reference_field': 'close',
             'reference_semantics': 'supplied_daily_bar_close_not_guaranteed_20_et_last_trade'}
+    if provisional:
+        result.update(provisional=True, qualified_daily=False)
+    return result
 
 
 def validate_session(session, *, started, finished, now, for_entry=False):
     """Recompute policy fields and require preparation completion before opening."""
     if not isinstance(session, dict) or type(session.get('version')) is not int:
         raise ValueError('invalid_session_contract')
+    if session.get('provisional') is not None:
+        raise ValueError('provisional_session_not_qualified')
     expected = session_contract(session['calendar'], now=utc(session['calendar_observed_at']))
     if session != expected:
         raise ValueError('session_contract_changed')

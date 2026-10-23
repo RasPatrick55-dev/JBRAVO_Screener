@@ -677,6 +677,8 @@ def _run_metrics(argv=None):
 def _run_paper_gross_metrics(args):
     """Actual paper metrics stage: unchanged backtest ranking, explicit gross daily output."""
     try:
+        from scripts.pipeline_postflight import provisional_context
+        provisional = provisional_context()
         if not db.db_enabled():
             raise ValueError('paper_gross_run_context_required')
         # Validate paper context before upstream reads or any output writes.
@@ -704,7 +706,8 @@ def _run_paper_gross_metrics(args):
         # DB commit, then revalidate that exact daily publication for this run.
         db.publish_paper_gross_report(expected_revision=snapshot['evidence']['policy']['policy_revision'])
         with db.paper_gross_pipeline_evidence(run_date,
-                expected_publication=publication['publication_fingerprint']):
+                expected_publication=publication['publication_fingerprint'],
+                allow_provisional=provisional is not None):
             pass
         logger.info('METRICS_PAPER_GROSS_COMPLETE basis=%s fees=UNKNOWN net=UNKNOWN '
             'accounting_complete=false entry_ready=false', publication['pnl_basis'])

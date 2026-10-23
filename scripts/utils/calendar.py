@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from scripts import signal_handoff
 
 
-def completed_signal_session(trading_client, *, now=None):
+def completed_signal_session(trading_client, *, now=None, provisional=False):
     now = now or datetime.now(timezone.utc)
     today = now.astimezone(ZoneInfo('America/New_York')).date()
     response = trading_client.get_calendar(GetCalendarRequest(
@@ -18,7 +18,7 @@ def completed_signal_session(trading_client, *, now=None):
     # hours are local wall times; reject unexpected representations downstream.
     calendar = [{'date': item.date.isoformat(), 'open': item.open.strftime('%H:%M:%S'),
                  'close': item.close.strftime('%H:%M:%S')} for item in response]
-    return signal_handoff.session_contract(calendar, now=now)
+    return signal_handoff.session_contract(calendar, now=now, provisional=provisional)
 
 
 def calc_daily_window(
@@ -37,6 +37,16 @@ def calc_daily_window(
     last = sessions[-1].date
     start_idx = max(0, len(sessions) - 1 - days)
     start = sessions[start_idx].date
+    from scripts.pipeline_postflight import provisional_context
+    provisional = provisional_context()
+    if provisional is not None:
+        if provisional['signal_session'] != last.isoformat():
+            raise ValueError('provisional_signal_window_mismatch')
+        ny = ZoneInfo('America/New_York')
+        lower = datetime.combine(start, datetime.min.time(), ny).astimezone(timezone.utc)
+        period_end = datetime.combine(last, datetime.min.time(), ny).replace(hour=20).astimezone(timezone.utc)
+        requested_end = min(period_end, datetime.fromisoformat(provisional['started_at']))
+        return lower.isoformat(), requested_end.isoformat(), last.isoformat()
     if not session_cutoff:
         return f"{start}T00:00:00Z", f"{last}T23:59:59Z", last.isoformat()
     if end_date is None or last != end_date:
