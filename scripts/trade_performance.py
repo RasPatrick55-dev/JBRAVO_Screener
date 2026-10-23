@@ -960,6 +960,8 @@ def read_cache(path: Path | str = CACHE_PATH) -> dict[str, Any] | None:
         payload = db.disposition.document(target.read_text(encoding='utf-8'))
     except FileNotFoundError:
         return None
+    if payload.get('namespace') == 'PAPER_GROSS_ONLY':
+        raise db.disposition.TradePolicyError('TRADE_POLICY_GROSS_NOT_NET_CACHE')
     evidence = payload.get('trade_policy')
     with db.validated_performance_artifact(evidence):
         if payload.get('result_fingerprint') != db.disposition.fingerprint({

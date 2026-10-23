@@ -93,6 +93,216 @@ def performance_input(conn, policy):
     return records
 
 
+def gross_paper_performance_snapshot(engine=None, *, expected_revision=None):
+    """Explicit gross-only read model; never publish legacy net metrics.
+
+    The existing net/ML/financial APIs and their holds remain unchanged.
+    No activation or trade mutation is performed by this read.
+    """
+    from scripts import gross_paper_accounting as gross
+    identity = _paper_disposition_identity()
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE',
+                                      expected_revision=expected_revision) as policy:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT pg_catalog.to_jsonb(trades)::pg_catalog.text FROM public.trades "
+                    "WHERE status='CLOSED' AND " + disposition.eligible_sql(scope='VALIDATED_PERFORMANCE') +
+                    " ORDER BY trade_id LIMIT " + str(gross.MAX_ROWS + 1))
+                records = [disposition.document(row[0]) for row in cursor.fetchall()]
+            return gross.build_snapshot(policy, records, expected_identity=identity,
+                expected_revision=policy.revision)
+
+
+def _paper_gross_artifact(mode, engine=None, *, expected_revision=None):
+    """The shared policy lock covers every fresh read and artifact operation.
+
+    Financial/net APIs remain separate. This transaction is read-only; only
+    publish mode can replace the dedicated gross sidecar, never database rows.
+    """
+    from pathlib import Path
+    from scripts import gross_paper_accounting as gross
+    if mode not in ('read', 'publish'):
+        raise disposition.TradePolicyError('TRADE_POLICY_GROSS_MODE_INVALID')
+    identity = _paper_disposition_identity()
+    root = Path(__file__).resolve().parents[1]
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE',
+                                      expected_revision=expected_revision) as policy:
+            with conn.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '30s'")
+            def current():
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT pg_catalog.to_jsonb(trades)::pg_catalog.text FROM public.trades "
+                        "WHERE status='CLOSED' AND " + disposition.eligible_sql(scope='VALIDATED_PERFORMANCE') +
+                        " ORDER BY trade_id LIMIT " + str(gross.MAX_ROWS + 1))
+                    records = [disposition.document(row[0]) for row in cursor.fetchall()]
+                report = gross.build_snapshot(policy, records, expected_identity=identity,
+                    expected_revision=policy.revision)
+                return report, gross.source_bindings(root)
+            operation = gross.read_report if mode == 'read' else gross.publish_report
+            return operation(root, current)
+
+
+def publish_paper_gross_report(engine=None, *, expected_revision=None):
+    """Publish only data/paper_gross_performance.json; financial holds stay set."""
+    return _paper_gross_artifact('publish', engine, expected_revision=expected_revision)
+
+
+def validated_paper_gross_report(engine=None, *, expected_revision=None):
+    """Read the gross sidecar only after current DB/policy/source validation."""
+    return _paper_gross_artifact('read', engine, expected_revision=expected_revision)
+
+
+def _gross_pipeline_current(conn, policy, root):
+    from scripts import gross_paper_accounting as gross
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_catalog.to_jsonb(trades)::pg_catalog.text FROM public.trades "
+            "WHERE status='CLOSED' AND " + disposition.eligible_sql(scope='VALIDATED_PERFORMANCE') +
+            " ORDER BY trade_id LIMIT " + str(gross.MAX_ROWS + 1))
+        records = [disposition.document(row[0]) for row in cursor.fetchall()]
+    return gross.build_snapshot(policy, records, expected_identity=_paper_disposition_identity(),
+        expected_revision=policy.revision), gross.source_bindings(root)
+
+
+def _gross_pipeline_candidates(conn, run_date):
+    from scripts import gross_paper_accounting as gross
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_catalog.to_jsonb(candidate)::pg_catalog.text FROM public.top_candidates candidate "
+            "WHERE run_date=%s ORDER BY symbol LIMIT " + str(gross.MAX_ROWS + 1), (run_date,))
+        rows = [disposition.document(row[0]) for row in cursor.fetchall()]
+    if not 0 < len(rows) <= gross.MAX_ROWS:
+        raise disposition.TradePolicyError('TRADE_POLICY_GROSS_CANDIDATE_CAP_OR_EMPTY')
+    return len(rows), disposition.fingerprint({'rows': rows})
+
+
+def _gross_pipeline_candidate_rows(frame, run_date):
+    """Use the existing top-candidate columns and backtest values; no trade-P&L fallback."""
+    import re
+    from scripts import gross_paper_accounting as gross
+    columns = ('run_date', 'symbol', 'score', 'win_rate', 'net_pnl', 'trades', 'wins', 'losses',
+        'expectancy', 'profit_factor', 'max_drawdown', 'sharpe', 'sortino', 'exchange',
+        'entry_price', 'adv20', 'atrp', 'source')
+    if not isinstance(frame, pd.DataFrame) or not 0 < len(frame) <= gross.MAX_ROWS:
+        raise disposition.TradePolicyError('TRADE_POLICY_GROSS_CANDIDATE_CAP_OR_EMPTY')
+    rows = []
+    seen = set()
+    for record in frame.to_dict(orient='records'):
+        row = {key: None for key in columns}
+        symbol = record.get('symbol')
+        if not isinstance(symbol, str) or not re.fullmatch('[A-Z0-9][A-Z0-9./^-]{0,31}', symbol) or symbol in seen:
+            raise disposition.TradePolicyError('TRADE_POLICY_GROSS_CANDIDATE_IDENTITY_INVALID')
+        seen.add(symbol)
+        row.update(run_date=run_date, symbol=symbol)
+        for key in columns[2:]:
+            value = record.get(key)
+            if hasattr(value, 'item'):
+                value = value.item()
+            if value is not None and pd.isna(value):
+                value = None
+            if key in ('source', 'exchange'):
+                if value is not None and (not isinstance(value, str) or len(value) > 2048):
+                    raise disposition.TradePolicyError('TRADE_POLICY_GROSS_CANDIDATE_VALUE_INVALID')
+            elif value is not None:
+                # Existing backtests encode a no-loss profit factor as +Infinity.
+                # Preserve that backtest value, never a gross/net trade result.
+                if type(value) not in (int, float, Decimal) or (not math.isfinite(value)
+                        and not (key == 'profit_factor' and value == float('inf'))):
+                    raise disposition.TradePolicyError('TRADE_POLICY_GROSS_CANDIDATE_VALUE_INVALID')
+            row[key] = value
+        if row['score'] is None:
+            raise disposition.TradePolicyError('TRADE_POLICY_GROSS_CANDIDATE_SCORE_INVALID')
+        row['source'] = row['source'] or 'metrics'
+        rows.append(row)
+    return columns, rows
+
+
+def _gross_pipeline_date(value):
+    text = _coerce_date(value)
+    try:
+        if date.fromisoformat(text).isoformat() != text:
+            raise ValueError('noncanonical_date')
+    except (ValueError, TypeError):
+        raise disposition.TradePolicyError('TRADE_POLICY_GROSS_RUN_DATE_INVALID') from None
+    return text
+
+
+def publish_paper_gross_pipeline(run_date, ranked_candidates, expected_snapshot):
+    """Atomic candidates + explicitly gross daily output. Never writes original trades or net metrics."""
+    import uuid
+    from scripts import gross_paper_accounting as gross
+    _paper_disposition_identity()
+    run_date = _gross_pipeline_date(run_date)
+    columns, rows = _gross_pipeline_candidate_rows(ranked_candidates, run_date)
+    root = Path(__file__).resolve().parents[1]
+    expected_sources = gross.source_bindings(root)
+    conn = _conn_or_none()
+    if conn is None:
+        raise disposition.TradePolicyError('TRADE_POLICY_DB_UNAVAILABLE')
+    try:
+        if conn.autocommit or conn.get_transaction_status() != 0:
+            raise disposition.TradePolicyError('TRADE_POLICY_TRANSACTION_NOT_IDLE')
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+                cursor.execute('SET LOCAL search_path = pg_catalog')
+                cursor.execute("SET LOCAL lock_timeout = '1500ms'")
+                cursor.execute("SET LOCAL statement_timeout = '5000ms'")
+                # Serialize publication and policy mutations without requiring
+                # UPDATE privilege on the read-only runtime policy table.
+                cursor.execute("SELECT pg_catalog.pg_advisory_xact_lock("
+                    "pg_catalog.hashtext('jbravo:trade-disposition:policy'))")
+            policy = trade_policy(conn, scope='VALIDATED_PERFORMANCE',
+                expected_revision=expected_snapshot['evidence']['policy']['policy_revision'])
+            current, sources = _gross_pipeline_current(conn, policy, root)
+            if current != disposition.document(expected_snapshot) or sources != expected_sources:
+                raise disposition.TradePolicyError('TRADE_POLICY_GROSS_INPUT_CHANGED')
+            with conn.cursor() as cursor:
+                # Schema setup belongs to db_migrate, never to this runtime
+                # transaction. Missing/incompatible schema fails and rolls back.
+                cursor.execute('DELETE FROM public.top_candidates WHERE run_date=%s', (run_date,))
+                sql = ('INSERT INTO public.top_candidates (' + ','.join(columns) + ') VALUES (' +
+                    ','.join('%(' + key + ')s' for key in columns) + ')')
+                extras.execute_batch(cursor, sql, rows, page_size=200)
+            count, fingerprint = _gross_pipeline_candidates(conn, run_date)
+            if count != len(rows):
+                raise disposition.TradePolicyError('TRADE_POLICY_GROSS_CANDIDATE_COUNT_CHANGED')
+            document = gross.pipeline_document(current, sources, run_date=run_date,
+                candidate_count=count, candidate_fingerprint=fingerprint, publication_id=str(uuid.uuid4()))
+            fresh, fresh_sources = _gross_pipeline_current(conn, policy, root)
+            gross.validate_pipeline_document(document, fresh, fresh_sources, run_date=run_date,
+                candidate_count=count, candidate_fingerprint=fingerprint)
+            with conn.cursor() as cursor:
+                cursor.execute('INSERT INTO public.paper_gross_metrics_daily (run_date,publication) '
+                    'VALUES (%s,%s::pg_catalog.jsonb) ON CONFLICT (run_date) '
+                    'DO UPDATE SET publication=EXCLUDED.publication', (run_date, disposition.canonical(document)))
+        return gross.pipeline_completion(document)
+    finally:
+        conn.close()
+
+
+@contextmanager
+def paper_gross_pipeline_evidence(run_date, engine=None, *, not_before=None, expected_publication=None):
+    """Revalidate current gross daily output while holding policy lock through caller publication."""
+    from scripts import gross_paper_accounting as gross
+    root = Path(__file__).resolve().parents[1]
+    run_date = _gross_pipeline_date(run_date)
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE') as policy:
+            with conn.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '30s'")
+                cursor.execute('SELECT publication::pg_catalog.text FROM public.paper_gross_metrics_daily WHERE run_date=%s', (run_date,))
+                row = cursor.fetchone()
+            if row is None:
+                raise disposition.TradePolicyError('TRADE_POLICY_GROSS_PUBLICATION_MISSING')
+            current, sources = _gross_pipeline_current(conn, policy, root)
+            count, fingerprint = _gross_pipeline_candidates(conn, run_date)
+            document = gross.validate_pipeline_document(row[0], current, sources, run_date=run_date,
+                candidate_count=count, candidate_fingerprint=fingerprint, not_before=not_before)
+            if expected_publication is not None and document['binding_fingerprint'] != expected_publication:
+                raise disposition.TradePolicyError('TRADE_POLICY_GROSS_PUBLICATION_CHANGED')
+            yield gross.pipeline_completion(document)
+
+
 def performance_hold_visibility(engine=None):
     """Independently validate policy visibility without inventing financial results."""
     try:

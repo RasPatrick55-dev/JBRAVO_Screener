@@ -29,7 +29,10 @@ SOURCE_FILES = ('scripts/run_pipeline.py', 'scripts/pipeline_postflight.py',
 SOURCE_FILES += ('scripts/label_generator.py', 'scripts/ranker_predict.py',
                  'scripts/production_score_capture.py', 'scripts/production_evidence.py',
                  'scripts/ranker_monitor.py', 'scripts/ranker_strategy_eval.py')
-SOURCE_FILES += ('scripts/executor_health.py',)
+SOURCE_FILES += ('scripts/executor_health.py', 'scripts/metrics.py', 'scripts/db.py',
+                 'scripts/gross_paper_accounting.py', 'scripts/trade_disposition.py',
+                 'scripts/trade_allocation.py', 'scripts/trade_performance.py',
+                 'dashboards/data_io.py', 'dashboards/dashboard_app.py')
 MAX_REPORT_BYTES = 64 * 1024
 MAX_SOURCE_BYTES = 1024 * 1024
 ML_PROVENANCE_FIELDS = ('monitor_run_date', 'monitor_run_date_source', 'monitor_artifact_run_date',
@@ -268,6 +271,14 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
                     failures.append('coverage_not_from_this_run')
             except (ValueError, TypeError):
                 failures.append('coverage_run_unknown')
+    if record.get('paper_gross_required') is not None:
+        try:
+            if record['paper_gross_required'] is not True or policy != PIPELINE_ONLY:
+                raise ValueError('paper_gross_scope_invalid')
+            _validate_paper_gross_evidence(record.get('paper_gross_evidence'), started, finished,
+                sources=record.get('source_bindings', {}))
+        except (ValueError, TypeError, KeyError):
+            failures.append('paper_gross_performance_unproved')
     status = 'failed' if failures else 'degraded' if warnings else 'ok'
     return {'run_id': run_id, 'status': status,
             'failures': sorted(set(failures)), 'qualifications': sorted(set(warnings)),
@@ -280,7 +291,8 @@ def assess(record, *, now, expected_day, max_age_seconds=7200, not_before=None, 
 
 def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, step_rcs,
                    stage_times, degraded, labels_rows, freshness, coverage, ml_health, controls,
-                   session=None, frozen_candidates=None, invocation_id=None, readiness_policy='coupled'):
+                   session=None, frozen_candidates=None, invocation_id=None, readiness_policy='coupled',
+                   paper_gross_required=False, paper_gross_evidence=None):
     """The pipeline writes selected facts from this invocation, not shared-log greps."""
     base_dir = Path(base_dir)
     freshness = freshness if isinstance(freshness, dict) else {}
@@ -307,6 +319,8 @@ def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, ste
                       **{field: health[field] for field in ML_PROVENANCE_FIELDS if field in health}},
         'controls': dict(controls), 'source_bindings': {},
     }
+    if paper_gross_required or paper_gross_evidence is not None:
+        record.update(paper_gross_required=paper_gross_required, paper_gross_evidence=paper_gross_evidence)
     if session is not None:
         record.update(session=session, frozen_candidates=frozen_candidates, invocation_id=invocation_id)
     for relative in SOURCE_FILES:
@@ -337,8 +351,44 @@ def publish_health(base_dir, *, started_at, finished_at, pipeline_rc, steps, ste
     return record
 
 
+def _validate_paper_gross_evidence(evidence, started, finished, *, sources=None):
+    """A successful gross stage never certifies net accounting or new entries."""
+    if not isinstance(evidence, dict):
+        raise ValueError('paper_gross_evidence_missing')
+    if (type(evidence.get('schema_version')) is not int or evidence['schema_version'] != 1
+            or evidence.get('pnl_basis') != 'PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1'
+            or evidence.get('fees_status') != 'UNKNOWN' or evidence.get('net_status') != 'UNKNOWN'
+            or evidence.get('gross_input_complete') is not True):
+        raise ValueError('paper_gross_evidence_invalid')
+    for field in ('net_eligible', 'accounting_complete', 'recovery_complete',
+                  'activity_ingestion_complete', 'entry_ready', 'operating_acceptance'):
+        if evidence.get(field) is not False:
+            raise ValueError('paper_gross_hold_missing')
+    for field in ('publication_fingerprint', 'input_fingerprint', 'sources_fingerprint', 'candidate_fingerprint'):
+        if not isinstance(evidence.get(field), str) or not re.fullmatch('[0-9a-f]{64}', evidence[field]):
+            raise ValueError('paper_gross_binding_invalid')
+    if (not isinstance(evidence.get('publication_id'), str)
+            or not re.fullmatch('[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', evidence['publication_id'])):
+        raise ValueError('paper_gross_publication_id_invalid')
+    if not started <= _utc(evidence.get('published_at')) <= finished:
+        raise ValueError('paper_gross_publication_stale')
+    if not isinstance(evidence.get('run_date'), str) or date.fromisoformat(evidence['run_date']).isoformat() != evidence['run_date']:
+        raise ValueError('paper_gross_run_date_invalid')
+    for field in ('candidate_count', 'total_trades', 'policy_revision'):
+        value = evidence.get(field)
+        if type(value) is not int or value < (1 if field == 'candidate_count' else 0):
+            raise ValueError('paper_gross_count_invalid')
+    if evidence['candidate_count'] > 10000 or evidence['total_trades'] > 10000:
+        raise ValueError('paper_gross_count_invalid')
+    if sources is not None:
+        from scripts import gross_paper_accounting as gross
+        selected = {name: sources[name] for name in gross.SOURCE_PATHS}
+        if gross.D.fingerprint(selected) != evidence['sources_fingerprint']:
+            raise ValueError('paper_gross_source_binding_mismatch')
+
+
 def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=7200, not_before=None,
-                 require_session=False, require_completion=False):
+                 require_session=False, require_completion=False, require_paper_gross=False):
     now = now or datetime.now(timezone.utc)
     expected_day = expected_day or now.date()
     if not _number(max_age_seconds) or not 0 < max_age_seconds <= 86400:
@@ -350,6 +400,8 @@ def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=
         record = json.loads(data.decode('utf-8'), object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
         result = assess(record, now=now, expected_day=expected_day, max_age_seconds=max_age_seconds,
                         not_before=not_before, require_session=require_session)
+        if require_paper_gross and record.get('paper_gross_required') is not True:
+            raise ValueError('paper_gross_performance_required')
         for relative in SOURCE_FILES:
             if record.get('source_bindings', {}).get(relative) != _binding(_read(base_dir / relative, MAX_SOURCE_BYTES)):
                 raise ValueError('source_binding_mismatch')

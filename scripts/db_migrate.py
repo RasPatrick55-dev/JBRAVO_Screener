@@ -8,6 +8,15 @@ from scripts.utils.env import load_env
 logger = logging.getLogger(__name__)
 
 
+PAPER_GROSS_METRICS_DDL = """
+CREATE TABLE IF NOT EXISTS public.paper_gross_metrics_daily (
+    run_date pg_catalog.date PRIMARY KEY,
+    publication pg_catalog.jsonb NOT NULL,
+    CHECK (publication->>'namespace' = 'PAPER_GROSS_PIPELINE_V1')
+);
+"""
+
+
 TABLE_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS reconcile_state (
@@ -124,6 +133,7 @@ TABLE_STATEMENTS = [
         created_at TIMESTAMPTZ DEFAULT now()
     );
     """,
+    PAPER_GROSS_METRICS_DDL,
     """
     CREATE TABLE IF NOT EXISTS executed_trades (
         trade_id BIGSERIAL PRIMARY KEY,
@@ -239,6 +249,11 @@ def _execute_statement(engine, statement: str) -> bool:
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning("[WARN] DB_MIGRATE %s", exc)
         return False
+
+
+def ensure_paper_gross_schema(engine) -> bool:
+    """Explicit additive setup only; no grants or trade/event changes."""
+    return _execute_statement(engine, PAPER_GROSS_METRICS_DDL)
 
 
 def run_upgrade(engine) -> bool:
@@ -371,7 +386,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     load_env()
     parser = argparse.ArgumentParser(description="Database migration utility")
-    parser.add_argument("--action", choices=["upgrade"], default="upgrade")
+    parser.add_argument("--action", choices=["upgrade", "paper-gross-schema"], default="upgrade")
     args = parser.parse_args()
 
     conn = db.get_db_conn()
@@ -379,7 +394,10 @@ def main() -> None:
         raise RuntimeError("DB_MIGRATE connection unavailable")
 
     try:
-        if args.action == "upgrade":
+        if args.action == "paper-gross-schema":
+            if not ensure_paper_gross_schema(conn):
+                raise RuntimeError("DB_MIGRATE paper gross schema setup failed")
+        elif args.action == "upgrade":
             success = run_upgrade(conn)
             if success:
                 logger.info("Database migration upgrade completed.")

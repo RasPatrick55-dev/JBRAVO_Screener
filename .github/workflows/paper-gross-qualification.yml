@@ -1,0 +1,110 @@
+name: Paper gross native qualification one-use
+
+# Publishing the reviewed five-file repair commit is the single authorized admission.
+# Subsequent pushes, branch rewinds and job reruns are not permitted by this packet.
+on:
+  push:
+    branches: [repair/paper-gross-performance-20261023]
+    paths:
+      - .github/workflows/paper-gross-qualification.yml
+      - tests/native_paper_gross_qualification.py
+      - scripts/gross_paper_accounting.py
+      - scripts/metrics.py
+      - tests/test_paper_gross_recovery.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-gross-native-one-use-ef201041
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'RasPatrick55-dev/JBRAVO_Screener' &&
+      github.event.before == 'ef201041ad3d3c47ad38953455eb23fdf1c08056' &&
+      github.run_attempt == 1 && github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:12.2
+        env:
+          POSTGRES_USER: qualification_admin
+          POSTGRES_PASSWORD: EPHEMERAL_QUALIFICATION_ONLY_745
+          POSTGRES_DB: qualification_745
+        ports: ['55432:5432']
+        options: >-
+          --cpus 2 --memory 1g
+          --health-cmd "pg_isready -U qualification_admin -d qualification_745"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      QUALIFICATION_ADMISSION: PR745_FINAL_REVIEW_CORRECTION_PREP001
+      APCA_API_BASE_URL: https://paper-api.alpaca.markets
+      APCA_DATA_API_BASE_URL: https://data.alpaca.markets
+      ALPACA_DATA_FEED: iex
+      APCA_API_KEY_ID: DUMMY_CI_KEY
+      APCA_API_SECRET_KEY: DUMMY_CI_SECRET
+      JBR_EXEC_PAPER: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: qualification
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: app
+          persist-credentials: false
+      - name: Verify exact application and five-file reviewed repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C app rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C qualification rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C qualification rev-parse HEAD^)" = ef201041ad3d3c47ad38953455eb23fdf1c08056
+          git -C qualification diff --name-only HEAD^ HEAD | sort > actual-paths
+          printf '%s\n' .github/workflows/paper-gross-qualification.yml tests/native_paper_gross_qualification.py scripts/gross_paper_accounting.py scripts/metrics.py tests/test_paper_gross_recovery.py | sort > expected-paths
+          diff -u expected-paths actual-paths
+          echo 'bfdcf80d885e8ec808b17b6587b467ab16d9e5f838169a8657f7843f272026f6  qualification/tests/native_paper_gross_qualification.py' | sha256sum -c -
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install isolated runner dependencies
+        run: python -m pip install -r app/requirements.txt pytest
+      - name: Run native synthetic qualification once
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$GITHUB_WORKSPACE/app/.git"
+          test ! -e "$GITHUB_WORKSPACE/qualification-retained-inputs"
+          mkdir "$GITHUB_WORKSPACE/qualification-retained-inputs"
+          for name in data tmp debug.log; do
+            test ! -L "$GITHUB_WORKSPACE/app/$name"
+            if test -e "$GITHUB_WORKSPACE/app/$name"; then
+              mv -- "$GITHUB_WORKSPACE/app/$name" "$GITHUB_WORKSPACE/qualification-retained-inputs/$name"
+            fi
+          done
+          mkdir -p "$GITHUB_WORKSPACE/app/data" "$GITHUB_WORKSPACE/app/tmp"
+          mkdir -p qualification-output/tmp qualification-output/cache qualification-output/mpl
+          touch qualification-output/empty-passfile qualification-output/empty-service
+          export TMPDIR="$GITHUB_WORKSPACE/qualification-output/tmp"
+          export XDG_CACHE_HOME="$GITHUB_WORKSPACE/qualification-output/cache"
+          export MPLCONFIGDIR="$GITHUB_WORKSPACE/qualification-output/mpl"
+          export PGPASSFILE="$GITHUB_WORKSPACE/qualification-output/empty-passfile"
+          export PGSERVICEFILE="$GITHUB_WORKSPACE/qualification-output/empty-service"
+          timeout --signal=TERM --kill-after=10s 300s python -I -B qualification/tests/native_paper_gross_qualification.py --source-root "$GITHUB_WORKSPACE/app"
+      - name: Preserve bounded nonsecret qualification receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-gross-native-${{ github.run_id }}
+          path: qualification-output/*-result.json
+          if-no-files-found: warn
+          retention-days: 7

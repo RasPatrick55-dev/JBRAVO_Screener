@@ -5537,26 +5537,41 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                             snapshot_conn.rollback()
                         finally:
                             snapshot_conn.close()
-                publish_health(
-                    base_dir, started_at=started_dt, finished_at=datetime.now(timezone.utc),
-                    pipeline_rc=rc, steps=steps, step_rcs=step_rcs,
-                    stage_times=stage_times, degraded=degraded, labels_rows=labels_rows,
-                    freshness=enrichment_freshness, coverage=model_score_coverage_summary,
-                    ml_health=ml_health_summary,
-                    session=session_context, frozen_candidates=frozen_candidates,
-                    invocation_id=getattr(args, 'handoff_invocation', None),
-                    readiness_policy=('pipeline_only_no_new_entries' if getattr(args, 'pipeline_readiness_only', False)
-                                      else 'coupled'),
-                    controls={
-                        "strict_predictions_meta": bool(strict_predictions_meta),
-                        "strict_auto_refresh_predictions": bool(strict_auto_refresh_predictions),
-                        "auto_refresh_features": bool(auto_refresh_features),
-                        "auto_refresh_predictions": bool(auto_refresh_predictions),
-                        "use_champion": bool(use_champion),
-                        "ml_health_guard": bool(ml_health_guard_enabled),
-                        "refresh_predictions_for_candidates": bool(refresh_predictions_for_candidates),
-                    },
-                )
+                from contextlib import ExitStack
+                gross_required = '--paper-gross-pipeline' in extras['metrics']
+                # Retain the shared policy lock through health publication.
+                # Validation failure still produces a truthful failed receipt.
+                with ExitStack() as gross_stack:
+                    gross_evidence = None
+                    if gross_required and rc == 0:
+                        try:
+                            gross_evidence = gross_stack.enter_context(
+                                db.paper_gross_pipeline_evidence(pipeline_run_date, not_before=started_dt))
+                        except Exception as failure:
+                            rc = 1
+                            LOG.error('POSTFLIGHT_PAPER_GROSS_HELD error_type=%s', type(failure).__name__)
+                    publish_health(
+                        base_dir, started_at=started_dt, finished_at=datetime.now(timezone.utc),
+                        pipeline_rc=rc, steps=steps, step_rcs=step_rcs,
+                        stage_times=stage_times, degraded=degraded, labels_rows=labels_rows,
+                        freshness=enrichment_freshness, coverage=model_score_coverage_summary,
+                        ml_health=ml_health_summary,
+                        session=session_context, frozen_candidates=frozen_candidates,
+                        invocation_id=getattr(args, 'handoff_invocation', None),
+                        readiness_policy=('pipeline_only_no_new_entries' if getattr(args, 'pipeline_readiness_only', False)
+                                          else 'coupled'),
+                        paper_gross_required=gross_required,
+                        paper_gross_evidence=gross_evidence,
+                        controls={
+                            "strict_predictions_meta": bool(strict_predictions_meta),
+                            "strict_auto_refresh_predictions": bool(strict_auto_refresh_predictions),
+                            "auto_refresh_features": bool(auto_refresh_features),
+                            "auto_refresh_predictions": bool(auto_refresh_predictions),
+                            "use_champion": bool(use_champion),
+                            "ml_health_guard": bool(ml_health_guard_enabled),
+                            "refresh_predictions_for_candidates": bool(refresh_predictions_for_candidates),
+                        },
+                    )
             except Exception as failure:
                 # Recording cannot convert a primary failure into success.
                 LOG.error("POSTFLIGHT_RECORD_FAILED error_type=%s", type(failure).__name__)

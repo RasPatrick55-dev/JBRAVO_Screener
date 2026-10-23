@@ -15,8 +15,9 @@ FIXED_ARGS = (
     '--auto-refresh-features', 'true', '--auto-refresh-predictions', 'true', '--postflight-report',
     '--session-handoff',
     '--pipeline-readiness-only',
+    '--metrics-args=--paper-gross-pipeline',
 )
-FIXED_FLAGS = {arg for arg in FIXED_ARGS if arg.startswith('--')} | {'--allow-no-screener', '--handoff-invocation'}
+FIXED_FLAGS = {arg for arg in FIXED_ARGS if arg.startswith('--')} | {'--allow-no-screener', '--handoff-invocation', '--metrics-args', '--metrics-args-split'}
 
 
 def build_arguments(argv):
@@ -58,7 +59,7 @@ def main(argv=None, *, pipeline_main=None, base_dir=ROOT):
         print(json.dumps({'status': 'failed', 'reason': 'pipeline_exception',
                           'error_type': type(failure).__name__}), flush=True)
         return 1
-    result = pipeline_postflight.check_health(base_dir, not_before=started, require_session=True)
+    result = pipeline_postflight.check_health(base_dir, not_before=started, require_session=True, require_paper_gross=True)
     if result['status'] == 'ok':
         try:
             pipeline_postflight.complete_primary(base_dir, invocation, result)
