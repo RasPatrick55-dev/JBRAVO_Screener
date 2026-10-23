@@ -351,6 +351,128 @@ def _policy_failure_payload(value):
     return dict(value)
 
 
+RECONCILIATION_FAILURE_CODES = frozenset({
+    'DB_UNAVAILABLE', 'POLICY_UNAVAILABLE', 'WATERMARK_READ_FAILED',
+    'WATERMARK_STATE_INVALID', 'WATERMARK_TIMESTAMP_INVALID',
+    'WATERMARK_TIMESTAMP_FUTURE', 'OPEN_TRADES_READ_FAILED',
+    'OPEN_EXIT_LINEAGE_UNAVAILABLE', 'TRADING_CLIENT_UNAVAILABLE',
+    'ORDERS_INVALID', 'ORDERS_SATURATED', 'ORDERS_READ_FAILED',
+    'ORDERS_READ_INCOMPLETE', 'POSITIONS_UNAVAILABLE',
+    'POSITION_CLOSE_REFUSED', 'FILL_ALLOCATION_UNBOUND_OR_AMBIGUOUS',
+    'PARTIAL_EXIT_QUANTITY_UNSUPPORTED', 'OPEN_EXIT_CLOSE_REFUSED',
+    'FLAT_EXIT_CHILD_UNRESOLVED', 'CLOSED_TRADES_READ_FAILED',
+    'HISTORICAL_EXIT_UNBOUND', 'BOUND_EXIT_FILL_NOT_FOUND',
+    'EXIT_DECORATION_REFUSED', 'UNRESOLVED_REMAINS',
+    'POLICY_REVISION_CHANGED', 'POLICY_PUBLICATION_UNAVAILABLE',
+})
+MAX_RECONCILIATION_FAILURE_FINDINGS = 64
+MAX_RECONCILIATION_FAILURE_BYTES = 16 * 1024
+_RECONCILIATION_COUNT_MAX = 2**63 - 1
+
+
+def new_reconciliation_failure_evidence():
+    """Counts are guard observations, not unique trades, fills or financial totals."""
+    return dict(schema_version=1, count_semantics='GUARD_OCCURRENCES', total_count=0,
+                reason_counts={}, findings=[], omitted_count=0, unattributed_count=0,
+                truncated=False, invalid=False)
+
+
+def record_reconciliation_failure(evidence, reason_code, trade_id=None):
+    """Record fixed labels/IDs only; diagnostic problems never replace a held result."""
+    if type(evidence) is not dict:
+        return
+    try:
+        if type(reason_code) is not str or reason_code not in RECONCILIATION_FAILURE_CODES:
+            evidence['invalid'] = True
+            return
+        if type(trade_id) is not int or not 0 < trade_id <= _RECONCILIATION_COUNT_MAX:
+            trade_id = None
+        evidence['total_count'] += 1
+        counts = evidence['reason_counts']
+        counts[reason_code] = counts.get(reason_code, 0) + 1
+        if trade_id is None:
+            evidence['unattributed_count'] += 1
+        for finding in evidence['findings']:
+            if finding['reason_code'] == reason_code and finding['trade_id'] == trade_id:
+                finding['occurrences'] += 1
+                return
+        if len(evidence['findings']) < MAX_RECONCILIATION_FAILURE_FINDINGS:
+            evidence['findings'].append(dict(reason_code=reason_code, trade_id=trade_id,
+                                             occurrences=1))
+        else:
+            evidence['omitted_count'] += 1
+            evidence['truncated'] = True
+    except Exception:
+        evidence['invalid'] = True
+
+
+def _validated_reconciliation_failure_payload(value):
+    """Fail closed to a small INVALID marker, never copy arbitrary producer data."""
+    invalid = dict(schema_version=1, status='INVALID', evidence_complete=False)
+    keys = {'schema_version', 'count_semantics', 'total_count', 'reason_counts',
+            'findings', 'omitted_count', 'unattributed_count', 'truncated', 'invalid'}
+    count = lambda v: type(v) is int and 0 <= v <= _RECONCILIATION_COUNT_MAX
+    if (type(value) is not dict or set(value) != keys
+            or type(value['schema_version']) is not int or value['schema_version'] != 1
+            or type(value['count_semantics']) is not str or value['count_semantics'] != 'GUARD_OCCURRENCES'
+            or type(value['invalid']) is not bool or value['invalid']
+            or type(value['truncated']) is not bool
+            or any(not count(value[k]) for k in ('total_count', 'omitted_count', 'unattributed_count'))
+            or value['unattributed_count'] > value['total_count']
+            or value['truncated'] != (value['omitted_count'] > 0)
+            or type(value['reason_counts']) is not dict
+            or len(value['reason_counts']) > len(RECONCILIATION_FAILURE_CODES)
+            or type(value['findings']) is not list
+            or len(value['findings']) > MAX_RECONCILIATION_FAILURE_FINDINGS):
+        return invalid
+    counts = value['reason_counts']
+    if (any(type(k) is not str or k not in RECONCILIATION_FAILURE_CODES
+            or not count(v) or v == 0 for k, v in counts.items())
+            or sum(counts.values()) != value['total_count']):
+        return invalid
+    copied, pairs, represented = [], set(), {}
+    unattributed = 0
+    for finding in value['findings']:
+        if type(finding) is not dict or set(finding) != {'reason_code', 'trade_id', 'occurrences'}:
+            return invalid
+        code, trade_id, occurrences = (finding[k] for k in ('reason_code', 'trade_id', 'occurrences'))
+        if (type(code) is not str or code not in counts or not count(occurrences) or occurrences == 0
+                or trade_id is not None and (type(trade_id) is not int or not 0 < trade_id <= _RECONCILIATION_COUNT_MAX)
+                or (code, trade_id) in pairs):
+            return invalid
+        pairs.add((code, trade_id))
+        represented[code] = represented.get(code, 0) + occurrences
+        if trade_id is None:
+            unattributed += occurrences
+        copied.append(dict(reason_code=code, trade_id=trade_id, occurrences=occurrences))
+    if (sum(represented.values()) + value['omitted_count'] != value['total_count']
+            or any(n > counts[code] for code, n in represented.items())
+            or not unattributed <= value['unattributed_count'] <= unattributed + value['omitted_count']):
+        return invalid
+    result = dict(schema_version=1, status='VALID', count_semantics='GUARD_OCCURRENCES',
+                  trade_id_semantics='GUARD_CONTEXT_NOT_FILL_OWNERSHIP',
+                  total_count=value['total_count'], reason_counts=dict(counts), findings=copied,
+                  omitted_count=value['omitted_count'], unattributed_count=value['unattributed_count'],
+                  truncated=value['truncated'], evidence_complete=not value['truncated'])
+    if len(json.dumps(result, sort_keys=True, separators=(',', ':')).encode('utf-8')) > MAX_RECONCILIATION_FAILURE_BYTES:
+        return invalid
+    return result
+
+
+def reconciliation_failure_payload(value, *, failed=False):
+    """Completeness concerns recorded guards only; never infer a healthy workflow."""
+    try:
+        result = _validated_reconciliation_failure_payload(value)
+        if type(failed) is not bool:
+            return dict(schema_version=1, status='INVALID', evidence_complete=False)
+        if failed and result['status'] == 'VALID' and result['total_count'] == 0:
+            result['status'] = 'UNCLASSIFIED'
+            result['evidence_complete'] = False
+        return result
+    except Exception:
+        return dict(schema_version=1, status='INVALID', evidence_complete=False)
+
+
 def publish_receipt(base_dir, *, role, started_at, finished_at, rc, metrics,
                     config=None, observations=(), observations_truncated=False):
     if role not in ROLES or type(rc) is not int:
@@ -373,6 +495,8 @@ def publish_receipt(base_dir, *, role, started_at, finished_at, rc, metrics,
         diagnostic = _policy_failure_payload(reconciliation.get('policy_failure'))
         if diagnostic is not None:
             selected['policy_failure'] = diagnostic
+    if role == 'reconciliation' and type(reconciliation) is dict and 'failure_evidence' in reconciliation:
+        selected['reconciliation_failure'] = reconciliation_failure_payload(reconciliation['failure_evidence'], failed=(rc != 0))
     record = {'schema_version': 1, 'run_id': run_id, 'role': role,
               'started_at': utc(started_at).isoformat(), 'finished_at': utc(finished_at).isoformat(),
               'process_rc': rc, 'health': health, 'metrics': selected, 'preflight': gate,

@@ -12,6 +12,8 @@ import types
 import unittest
 from typing import Any, Dict, Mapping, Optional
 
+from scripts import executor_health
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = {name: (ROOT / 'scripts' / (name + '.py')).read_text(encoding='utf-8')
           for name in ('trade_disposition', 'trade_allocation', 'db', 'execute_trades', 'metrics', 'trade_performance')}
@@ -322,7 +324,7 @@ class CallerTests(unittest.TestCase):
             self.assertFalse(self.publication_held,'provider I/O must precede the publication lock')
             if self.provider_error:raise RuntimeError('synthetic unavailable')
             return self.orders
-        env=dict(db=self.db,LOGGER=LOG,logging=logging,Mapping=Mapping,datetime=datetime,timezone=timezone,
+        env=dict(db=self.db,executor_health=executor_health,LOGGER=LOG,logging=logging,Mapping=Mapping,datetime=datetime,timezone=timezone,
             timedelta=timedelta,Decimal=Decimal,InvalidOperation=InvalidOperation,
             isoparse=normalized_time,_order_snapshot=lambda order:dict(order),
             alpaca_list_orders_http=fetch,log_info=lambda *a,**kw:None,

@@ -574,7 +574,8 @@ def operational_output(drift=False, formatter=None):
     assert isinstance(tail, ast.Try)
     wrapper = ast.parse('def publish(self, db, engine, policy_revision, policy_status, LOGGER, closed_count=0, decorated_count=0):\n    pass\n').body[0]
     wrapper.body = [tail]
-    namespace = {}
+    recorded_failures = []
+    namespace = {'record_failure': lambda code, trade_id=None: recorded_failures.append((code, trade_id))}
     exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper], type_ignores=[])),
                  'source-exact-publication', 'exec'), namespace)
     status = dict(scope='ACTIVE_RECONCILIATION', policy_revision=0, excluded_count=1)
@@ -594,6 +595,8 @@ def operational_output(drift=False, formatter=None):
     result = namespace['publish'](SimpleNamespace(metrics=metrics),
         SimpleNamespace(reconciliation_publication=publication), object(), 0, status, logger)
     assert result is (not drift)
+    assert recorded_failures == ([('POLICY_REVISION_CHANGED', None),
+                                  ('POLICY_PUBLICATION_UNAVAILABLE', None)] if drift else [])
     return stream.getvalue()
 
 
