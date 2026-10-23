@@ -93,6 +93,66 @@ def performance_input(conn, policy):
     return records
 
 
+def gross_paper_performance_snapshot(engine=None, *, expected_revision=None):
+    """Explicit gross-only read model; never publish legacy net metrics.
+
+    The existing net/ML/financial APIs and their holds remain unchanged.
+    No activation or trade mutation is performed by this read.
+    """
+    from scripts import gross_paper_accounting as gross
+    identity = _paper_disposition_identity()
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE',
+                                      expected_revision=expected_revision) as policy:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT pg_catalog.to_jsonb(trades)::pg_catalog.text FROM public.trades "
+                    "WHERE status='CLOSED' AND " + disposition.eligible_sql(scope='VALIDATED_PERFORMANCE') +
+                    " ORDER BY trade_id LIMIT " + str(gross.MAX_ROWS + 1))
+                records = [disposition.document(row[0]) for row in cursor.fetchall()]
+            return gross.build_snapshot(policy, records, expected_identity=identity,
+                expected_revision=policy.revision)
+
+
+def _paper_gross_artifact(mode, engine=None, *, expected_revision=None):
+    """The shared policy lock covers every fresh read and artifact operation.
+
+    Financial/net APIs remain separate. This transaction is read-only; only
+    publish mode can replace the dedicated gross sidecar, never database rows.
+    """
+    from pathlib import Path
+    from scripts import gross_paper_accounting as gross
+    if mode not in ('read', 'publish'):
+        raise disposition.TradePolicyError('TRADE_POLICY_GROSS_MODE_INVALID')
+    identity = _paper_disposition_identity()
+    root = Path(__file__).resolve().parents[1]
+    with _maybe_conn(engine) as conn:
+        with _policy_read_transaction(conn, scope='VALIDATED_PERFORMANCE',
+                                      expected_revision=expected_revision) as policy:
+            with conn.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '30s'")
+            def current():
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT pg_catalog.to_jsonb(trades)::pg_catalog.text FROM public.trades "
+                        "WHERE status='CLOSED' AND " + disposition.eligible_sql(scope='VALIDATED_PERFORMANCE') +
+                        " ORDER BY trade_id LIMIT " + str(gross.MAX_ROWS + 1))
+                    records = [disposition.document(row[0]) for row in cursor.fetchall()]
+                report = gross.build_snapshot(policy, records, expected_identity=identity,
+                    expected_revision=policy.revision)
+                return report, gross.source_bindings(root)
+            operation = gross.read_report if mode == 'read' else gross.publish_report
+            return operation(root, current)
+
+
+def publish_paper_gross_report(engine=None, *, expected_revision=None):
+    """Publish only data/paper_gross_performance.json; financial holds stay set."""
+    return _paper_gross_artifact('publish', engine, expected_revision=expected_revision)
+
+
+def validated_paper_gross_report(engine=None, *, expected_revision=None):
+    """Read the gross sidecar only after current DB/policy/source validation."""
+    return _paper_gross_artifact('read', engine, expected_revision=expected_revision)
+
+
 def performance_hold_visibility(engine=None):
     """Independently validate policy visibility without inventing financial results."""
     try:

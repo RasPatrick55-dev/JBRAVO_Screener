@@ -560,6 +560,29 @@ def screener_table() -> Tuple[pd.DataFrame, str, str]:
     return df, (updated or ""), source_file
 
 
+def paper_gross_summary_snapshot() -> Dict[str, Any]:
+    """Separate gross namespace; every read validates current DB/code revisions."""
+    try:
+        value = db.validated_paper_gross_report()
+        report = value['report']
+        return {'validation_status': value['validation_status'],
+            'pnl_basis': report['pnl_basis'], 'gross_pnl': report['gross_pnl'],
+            'total_trades': report['total_trades'], 'rows': report['rows'],
+            'generated_at': value['generated_at'], 'validated_at': value['validated_at'],
+            'cache_revision': value['cache_revision'], 'evidence': report['evidence'],
+            'fees': None, 'fees_status': 'UNKNOWN', 'net_pnl': None, 'net_status': 'UNKNOWN',
+            'net_eligible': False, 'accounting_complete': False,
+            'activity_ingestion_complete': False, 'recovery_complete': False}
+    except Exception as exc:
+        logger.warning('PAPER_GROSS_REPORT_HELD error_type=%s', type(exc).__name__)
+        return {'validation_status': 'HELD_PAPER_GROSS', 'gross_pnl': None,
+            'total_trades': None, 'rows': [], 'generated_at': None, 'validated_at': None,
+            'cache_revision': None, 'fees': None, 'fees_status': 'UNKNOWN',
+            'net_pnl': None, 'net_status': 'UNKNOWN', 'net_eligible': False,
+            'accounting_complete': False, 'activity_ingestion_complete': False,
+            'recovery_complete': False}
+
+
 def metrics_summary_snapshot() -> Dict[str, Any]:
     """Validated scoped summary, or explicit held values; never a legacy CSV fallback."""
     try:

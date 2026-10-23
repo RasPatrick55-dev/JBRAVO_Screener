@@ -47,6 +47,7 @@ from dashboards.data_io import (
     screener_health as load_screener_health,
     screener_table,
     metrics_summary_snapshot,
+    paper_gross_summary_snapshot,
     load_trades_db,
     load_open_trades_db,
 )
@@ -4755,7 +4756,46 @@ def _build_window_net_pnl_bar(summary: Mapping[str, Mapping[str, Any]]) -> go.Fi
     return fig
 
 
+def render_paper_gross_performance_panel() -> html.Div:
+    payload = paper_gross_summary_snapshot()
+    if payload.get('validation_status') != 'VALIDATED_PAPER_GROSS':
+        return html.Div(dbc.Alert(
+            'Paper gross results unavailable: current validated inputs are required. '
+            'Fees and net P&L are unknown; financial readiness remains held.', color='warning'))
+    basis_labels = {'AUDITED_MULTI_FILL_GROSS': 'Audited fills',
+        'RECORDED_PRICE_GROSS': 'Recorded prices; fills not independently verified'}
+    report_rows = [{'trade_id': row['trade_id'], 'gross_pnl': row['gross_pnl'],
+        'basis': basis_labels[row['lineage']['kind']]} for row in payload['rows']]
+    policy = payload['evidence']['policy']
+    cases = ', '.join(item['case_id'] for item in policy['exclusions']) or 'none'
+    allocation_audit = [html.Div('Trade ' + str(row['trade_id']) + ': allocation '
+        + row['lineage']['allocation_id'] + ', revision ' + str(row['lineage']['allocation_revision'])
+        + ', approval ' + row['lineage']['approval_ref'])
+        for row in payload['rows'] if row['lineage']['kind'] == 'AUDITED_MULTI_FILL_GROSS']
+    return html.Div([
+        html.H4('Paper gross performance — before fees'),
+        dbc.Alert('Fees: UNKNOWN. Net P&L: unavailable. '
+            'Gross results do not establish complete accounting or authorize entries.', color='warning'),
+        html.Div('Gross P&L: ' + payload['gross_pnl']),
+        html.Div('Trades: ' + str(payload['total_trades'])),
+        html.Div('Generated: ' + payload['generated_at']),
+        html.Div('Validated against current inputs: ' + payload['validated_at']),
+        html.Div('Policy revision: ' + str(policy['policy_revision'])
+            + '; excluded trades: ' + str(policy['excluded_count']) + '; case IDs: ' + cases),
+        html.Div(allocation_audit),
+        dash_table.DataTable(columns=[{'name': 'Trade ID', 'id': 'trade_id'},
+            {'name': 'Gross P&L (before fees)', 'id': 'gross_pnl'},
+            {'name': 'Evidence basis', 'id': 'basis'}], data=report_rows, page_size=25),
+    ])
+
+
 def render_trade_performance_panel() -> html.Div:
+    # Gross has its own schema and display. It never enters legacy net
+    # normalizers, chart calculations, stores or financial-readiness flags.
+    return render_paper_gross_performance_panel()
+
+
+def _render_legacy_net_trade_performance_panel() -> html.Div:
     payload = _load_trade_perf_cache()
     if payload.get('validation_status') != 'VALIDATED_PERFORMANCE':
         return html.Div(dbc.Alert(_performance_hold_message(payload), color='warning'))

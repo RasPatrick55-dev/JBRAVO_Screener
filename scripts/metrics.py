@@ -408,6 +408,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default=None,
         help="Override run_date for DB writes (YYYY-MM-DD)",
     )
+    parser.add_argument('--paper-gross-report-only', action='store_true',
+        help='Publish separate paper gross report; fees/net unknown and financial hold exit2 retained')
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -416,6 +418,19 @@ def _run_metrics(argv=None):
     logger.info(">>> METRICS MAIN ENTERED <<<")
     logger.info("⚙️ [METRICS] main() start")
     args = parse_args(argv)
+    if getattr(args, 'paper_gross_report_only', False):
+        if getattr(args, 'run_date', None):
+            logger.error('PAPER_GROSS_REPORT_RUN_DATE_OVERRIDE_REFUSED')
+            return 2
+        try:
+            db.publish_paper_gross_report()
+        except Exception as exc:
+            logger.error('PAPER_GROSS_REPORT_HELD error_type=%s', type(exc).__name__)
+            return 2
+        logger.warning('PAPER_GROSS_REPORT_PUBLISHED fees=UNKNOWN net=UNKNOWN financial_hold=true')
+        # A successful gross artifact is not a successful financial metrics
+        # stage, pipeline-readiness declaration or entry authorization.
+        return 2
     run_date_override = _coerce_run_date(getattr(args, "run_date", None))
     exit_code = 0
     if getattr(args, "run_date", None) and run_date_override is None:
