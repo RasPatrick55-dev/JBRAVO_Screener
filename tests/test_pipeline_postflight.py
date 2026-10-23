@@ -354,6 +354,7 @@ class PostflightTests(unittest.TestCase):
              'timestamp': datetime(2026, 10, 22, 4, tzinfo=timezone.utc), 'close': 100},
         ], session, run_ts=batch)
         return self.facts | dict(started_at=self.started, finished_at=self.finished,
+            freshness=self.facts['freshness'] | {'snapshot_date': self.started.date().isoformat()},
             pipeline_rc=1 if failed else 0,
             step_rcs=self.facts['step_rcs'] | {'metrics': 2 if failed else 0},
             coverage={'total': 1, 'non_null': 1, 'pct': 100.0, 'run_ts_utc': batch.isoformat()},
