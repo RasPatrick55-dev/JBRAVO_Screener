@@ -18,6 +18,8 @@ import tempfile
 import time
 import uuid
 
+from scripts import activity_ingestion_checkpoint as ingestion_checkpoint
+
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_LIMIT = 2 * 1024 * 1024
@@ -30,6 +32,8 @@ class Stage:
     args: tuple[str, ...]
     required: tuple[str, ...]
     failures: tuple[str, ...]
+    workflow_id: str | None = None
+    cutoff_utc: str | None = None
 
 
 STAGES = (
@@ -101,7 +105,7 @@ def workflow_lock(path: Path):
             pass
 
 
-def _scoped_reconciliation_result(text: str) -> dict | None:
+def _legacy_scoped_reconciliation_result(text: str) -> dict | None:
     """Recognize only the current complete operational-only publication."""
     if re.search(r'\bRECONCILE_(?:FILL_HELD|DECORATE_HELD|INCOMPLETE|AUTO_FAIL)\b', text):
         return None
@@ -154,16 +158,58 @@ def _scoped_reconciliation_result(text: str) -> dict | None:
                 reason='INDEPENDENT_DURABLE_ACTIVITY_INGESTION_UNPROVED')
 
 
+def _scoped_reconciliation_result(text: str, *, expected_workflow_id: str | None = None,
+                                  expected_cutoff: str | None = None) -> dict | None:
+    marker = 'RECONCILE_INGESTION_CHECKPOINT'
+    count = len(re.findall(r'\b'+marker+r'\b', text))
+    if count == 0:
+        return _legacy_scoped_reconciliation_result(text)
+    if count != 1 or expected_workflow_id is None:
+        return None
+    lines = [line for line in text.splitlines() if re.search(r'\b'+marker+r'\b',line)]
+    if len(lines)!=1 or len(lines[0])>16384 or any(ord(c)<32 for c in lines[0]):
+        return None
+    prefix=(r'(?:\[[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01]) '
+            r'(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9],[0-9]{3}\] \[INFO\] )?\[INFO\] ')
+    match=re.fullmatch(prefix+r'RECONCILE_INGESTION_CHECKPOINT (\{.*\})',lines[0])
+    if match is None:
+        return None
+    try:
+        proof=ingestion_checkpoint.decode_proof(match[1])
+        if proof['checkpoint_id']!=ingestion_checkpoint.workflow(expected_workflow_id):return None
+        if ingestion_checkpoint.utc(proof['query_until'])!=ingestion_checkpoint.bound_cutoff(
+                expected_workflow_id,expected_cutoff,datetime.now(timezone.utc)):return None
+    except (RuntimeError,ValueError,TypeError,KeyError):
+        return None
+    # The same strict legacy grammar validates all remaining fields and markers.
+    # Require the original proof marker in sequence and no contradictory flags.
+    positions=[text.find(x) for x in ('RECONCILE_OPERATIONAL_COMPLETE',marker,'RECONCILE_WATERMARK_HELD')]
+    if min(positions)<0 or positions!=sorted(positions):return None
+    old_reason='reason=independent_durable_activity_ingestion_unproved'
+    new_reason='reason=durable_ingestion_proved_accounting_held'
+    if text.count(new_reason)!=1 or text.count('activity_ingestion_complete=true')!=1:return None
+    normalized=text.replace(lines[0]+'\n','').replace(new_reason,old_reason).replace('activity_ingestion_complete=true','activity_ingestion_complete=false')
+    result=_legacy_scoped_reconciliation_result(normalized)
+    if result is None:return None
+    return dict(result,activity_ingestion_complete=True,ingestion_checkpoint=proof,
+                reason='DURABLE_INGESTION_PROVED_ACCOUNTING_HELD')
+
+
 def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
     """Bound local runtime/output. Never expose arbitrary child output or secrets."""
     command = [sys.executable, '-m', stage.module, *stage.args]
     options = {'cwd': ROOT, 'stderr': subprocess.STDOUT, 'shell': False}
-    if stage.name == 'reconciliation':
+    if stage.name in ('activities','reconciliation'):
         from scripts.primary_paper_pipeline import configure_paper_context
 
         # Declare PAPER only for this child after validating inherited settings.
         child_environment = os.environ.copy()
         configure_paper_context(child_environment)
+        if stage.workflow_id is not None:
+            ingestion_checkpoint.workflow(stage.workflow_id)
+            child_environment[ingestion_checkpoint.ENV_WORKFLOW]=stage.workflow_id
+            cutoff=ingestion_checkpoint.bound_cutoff(stage.workflow_id,stage.cutoff_utc,datetime.now(timezone.utc))
+            child_environment[ingestion_checkpoint.ENV_CUTOFF]=cutoff.isoformat()
         options['env'] = child_environment
     if os.name == 'posix':
         options.update(start_new_session=True, pass_fds=(lock_fd,))
@@ -217,7 +263,8 @@ def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
         status = 'degraded'
     scoped = None
     if stage.name == 'reconciliation':
-        observed = _scoped_reconciliation_result(text)
+        observed = _scoped_reconciliation_result(text, expected_workflow_id=stage.workflow_id,
+                                                expected_cutoff=stage.cutoff_utc)
         if (reason == 'RECONCILE_WATERMARK_HELD' and process.returncode == 0
                 and observed is not None and failures == ['RECONCILE_WATERMARK_HELD']
                 and not qualifications and set(missing) <= {
@@ -236,7 +283,7 @@ def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
         'health_reasons': health_reasons,
     }
     if scoped is not None:
-        result['completion_contract'] = 'ACTIVE_RECONCILIATION_OPERATIONAL_V1'
+        result['completion_contract'] = ('ACTIVE_RECONCILIATION_INGESTION_V2' if scoped.get('activity_ingestion_complete') is True else 'ACTIVE_RECONCILIATION_OPERATIONAL_V1')
         result['reconciliation'] = scoped
     return result
 
@@ -258,7 +305,7 @@ def run_workflow(state_dir: Path, stage_timeout: float = 300, *, runner=run_stag
     }
     try:
         with workflow_lock(state_dir / 'account-sync.lock') as lock_fd:
-            for relative in ('scripts/account_sync.py', 'scripts/db.py',
+            for relative in ('scripts/account_sync.py', 'scripts/db.py', 'scripts/activity_ingestion_checkpoint.py',
                              *(s.module.replace('.', '/') + '.py' for s in STAGES)):
                 data = (ROOT / relative).read_bytes()
                 report['source_bindings'][relative] = {
@@ -268,7 +315,9 @@ def run_workflow(state_dir: Path, stage_timeout: float = 300, *, runner=run_stag
                 entry = report['stages'][index]
                 entry['started_at'] = utc_now()
                 try:
-                    result = runner(stage, stage_timeout, lock_fd)
+                    scoped_stage=Stage(stage.name,stage.module,stage.args,stage.required,stage.failures,
+                                       report['run_id'],report['started_at'])
+                    result = runner(scoped_stage, stage_timeout, lock_fd)
                     required_fields = {'status', 'exit_code', 'reason', 'elapsed_seconds',
                                        'output_bytes', 'failure_markers',
                                        'missing_completion_markers', 'qualifications'}

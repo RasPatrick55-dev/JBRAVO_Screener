@@ -3,6 +3,8 @@ import json
 import logging
 import os
 import sys
+import uuid
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -14,6 +16,7 @@ from psycopg2 import extras
 from psycopg2.extensions import connection as PGConnection
 
 from scripts import db
+from scripts import activity_ingestion_checkpoint as ingestion_checkpoint
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -366,52 +369,42 @@ def _normalize_page_size(requested: int) -> int:
 
 
 def fetch_activities(
-    base_url: str,
-    after: str | None,
-    until: str | None,
-    page_size: int,
-    max_pages: int,
-    *,
-    direction: str = "asc",
+    base_url: str, after: str | None, until: str | None,
+    page_size: int, max_pages: int, *, direction: str = "asc",
 ) -> List[Dict[str, Any]]:
+    """Follow Alpaca's documented last-activity-ID continuation to an empty page.
+
+    This establishes only a response chain for the supplied query, not durable
+    persistence, an accepted historical origin or global account completeness.
+    """
     max_pages = max(1, int(max_pages))
     page_size = _normalize_page_size(page_size)
-    params: Dict[str, Any] = {
-        "page_size": page_size,
-        "direction": direction,
-    }
+    params = {"page_size": page_size, "direction": direction}
     if after:
         params["after"] = after
     if until:
         params["until"] = until
-
-    activities: List[Dict[str, Any]] = []
-    page_count = 0
-    seen_tokens = set()
-    while True:
-        page_count += 1
-        if page_count > max_pages:
-            logger.warning(
-                "[WARN] ACT_MAX_PAGES_REACHED page_count=%s max_pages=%s after=%s until=%s",
-                page_count - 1,
-                max_pages,
-                after or "",
-                until or "",
-            )
-            raise RuntimeError("ACT_PAGINATION_INCOMPLETE")
+    activities, seen_tokens, seen_ids = [], set(), set()
+    for _ in range(max_pages):
         results, token = _request_activity_page(base_url, params)
-        activities.extend(results)
-        if not token:
-            # A full page without a continuation contract is not proof of exhaustion.
-            if len(results) >= page_size:
+        if not results:
+            if token is not None:
                 raise RuntimeError("ACT_PAGINATION_INCOMPLETE")
-            break
-        if token in seen_tokens:
+            return activities
+        for item in results:
+            activity_id = item.get("id")
+            if not isinstance(activity_id, str) or not activity_id.strip() or activity_id in seen_ids:
+                raise RuntimeError("ACT_PAYLOAD_INVALID")
+            seen_ids.add(activity_id)
+        last_id = results[-1]["id"]
+        if (token is not None and token != last_id) or last_id in seen_tokens:
             raise RuntimeError("ACT_PAGINATION_INCOMPLETE")
-        seen_tokens.add(token)
-        params["page_token"] = token
+        activities.extend(results)
+        seen_tokens.add(last_id)
+        params["page_token"] = last_id
+    raise RuntimeError("ACT_PAGINATION_INCOMPLETE")
 
-    return activities
+
 
 
 def _is_newer_watermark(candidate: Optional[str], current: Optional[str]) -> bool:
@@ -431,56 +424,65 @@ def _is_newer_watermark(candidate: Optional[str], current: Optional[str]) -> boo
     return str(candidate) > str(current)
 
 
-def _run_incremental(
-    args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]
-) -> None:
-    # Freeze the acceptance clock before fetching. Do not repair a previously
-    # future watermark or allow an explicit since override to hide it.
+def _run_incremental(args: argparse.Namespace, base_url: str, engine, watermark: Optional[str]) -> None:
     run_started_utc = datetime.now(timezone.utc)
+    if os.environ.get(ingestion_checkpoint.ENV_WORKFLOW):
+        run_started_utc = ingestion_checkpoint.bound_cutoff(
+            os.environ[ingestion_checkpoint.ENV_WORKFLOW],
+            os.environ.get(ingestion_checkpoint.ENV_CUTOFF),run_started_utc)
     for value in (args.since_ts, watermark):
         if value is not None:
             parsed = _parse_timestamp(value)
             if parsed is None or parsed > run_started_utc:
                 raise RuntimeError("ACT_WATERMARK_INVALID")
-    since_iso, origin = compute_since(args.since_ts, watermark, args.lookback_days,
-                                     now_utc=run_started_utc)
-    if _parse_timestamp(since_iso) > run_started_utc:
+    since_iso, origin = compute_since(args.since_ts, watermark, args.lookback_days, now_utc=run_started_utc)
+    before = _parse_timestamp(watermark) if watermark is not None else None
+    start = _parse_timestamp(since_iso)
+    if start is None or start > run_started_utc:
         raise RuntimeError("ACT_WATERMARK_INVALID")
-    max_pages = max(1, int(args.max_pages))
-    page_size = _normalize_page_size(args.page_size)
-
-    logger.info(
-        "[INFO] ACT_START base_url=%s since=%s lookback_days=%s origin=%s page_size=%s max_pages=%s",
-        base_url,
-        since_iso,
-        args.lookback_days,
-        origin,
-        page_size,
-        max_pages,
-    )
-
-    activities = fetch_activities(base_url, since_iso, None, page_size, max_pages)
-    # Validate all identities/time coverage before any insert or watermark update.
+    if before is not None:
+        start = min(start, before)
+    workflow_id = os.environ.get(ingestion_checkpoint.ENV_WORKFLOW) or uuid.uuid4().hex
+    required_after = None
+    if os.environ.get(ingestion_checkpoint.ENV_WORKFLOW):
+        state = db.get_reconcile_state(engine, strict=True)
+        required_after = state.get('last_after') or run_started_utc - timedelta(days=ingestion_checkpoint.ACTIVE_LOOKBACK_DAYS)
+        required_after = ingestion_checkpoint.utc(required_after)
+        if required_after > run_started_utc:
+            raise RuntimeError("ACT_WATERMARK_INVALID")
+    after, until = ingestion_checkpoint.window(start, required_after, run_started_utc, args.lookback_days)
+    if base_url.rstrip('/') != ingestion_checkpoint.ENDPOINT:
+        raise RuntimeError('ACT_CHECKPOINT_PAPER_SOURCE_REQUIRED')
+    # Read only the authenticated PAPER account ID; never log/export its value.
+    try:
+        account_response = requests.get(base_url.rstrip('/')+'/v2/account', headers=_build_headers(), timeout=30)
+        if not account_response.ok:
+            raise RuntimeError('ACT_CHECKPOINT_ACCOUNT_UNAVAILABLE')
+        source = ingestion_checkpoint.source_fingerprint(base_url, account_response.json()['id'])
+    except Exception:
+        raise RuntimeError('ACT_CHECKPOINT_ACCOUNT_UNAVAILABLE') from None
+    logger.info('[INFO] ACT_START base_url=%s since=%s until=%s origin=%s page_size=%s max_pages=%s',
+                base_url, after.isoformat(), until.isoformat(), origin, args.page_size, args.max_pages)
+    activities = fetch_activities(base_url, after.isoformat(), until.isoformat(), args.page_size, args.max_pages)
+    rows = []
     for activity in activities:
-        normalized, _ = _normalize_activity(activity)
-        if (not normalized["activity_id"] or not normalized["activity_type"]
-                or normalized["transaction_time"] is None):
-            raise RuntimeError("ACT_PAYLOAD_INVALID")
-        if normalized["transaction_time"] > run_started_utc:
-            logger.warning("[WARN] ACT_PAYLOAD_INVALID reason=future_timestamp")
-            raise RuntimeError("ACT_PAYLOAD_INVALID")
-    logger.info("[INFO] ACT_COVERAGE_COMPLETE count=%s", len(activities))
-    logger.info("[INFO] ACT_FETCH_OK count=%s", len(activities))
+        row, _ = _normalize_activity(activity)
+        if not row['activity_id'] or not row['activity_type'] or row['transaction_time'] is None or row['transaction_time'] > run_started_utc:
+            raise RuntimeError('ACT_PAYLOAD_INVALID')
+        rows.append(row)
+    logger.info('[INFO] ACT_FETCH_OK count=%s', len(rows))
+    try:
+        result = ingestion_checkpoint.persist(engine, workflow_id=workflow_id, source=source, after=after,
+                    until=until, before=before, rows=rows, policy_lock=db._policy_write_lock)
+    except Exception as failure:
+        code = str(failure) if type(failure) is RuntimeError and re.fullmatch('ACT_CHECKPOINT_[A-Z_]{1,64}', str(failure)) else 'ACT_CHECKPOINT_PERSIST_FAILED_OR_UNCERTAIN'
+        raise RuntimeError(code) from None
+    logger.info('[INFO] ACT_DB_OK inserted=%s matched_existing=%s fetched=%s', result['inserted'], result['matched_existing'], result['fetched'])
+    logger.info('[INFO] ACT_CHECKPOINT_COMMITTED checkpoint_id=%s manifest_sha256=%s', result['checkpoint_id'], result['manifest_sha256'])
+    logger.info('[INFO] ACT_COVERAGE_COMPLETE scope=BOUNDED_CREATED_AT_INTERVAL after=%s until=%s count=%s',after.isoformat(),until.isoformat(),len(rows))
+    logger.info('[INFO] ACT_WATERMARK_OK value=%s axis=created_at', until.isoformat())
 
-    inserted, watermark_candidate, _ = insert_activities(engine, activities)
-    logger.info("[INFO] ACT_DB_OK inserted=%s", inserted)
 
-    if watermark_candidate:
-        if save_watermark(engine, watermark_candidate):
-            logger.info("[INFO] ACT_WATERMARK_OK value=%s", watermark_candidate)
-        else:
-            logger.error("[ERROR] ACT_WATERMARK_FAIL value=%s", watermark_candidate)
-            raise RuntimeError("ACT_WATERMARK_FAIL")
 
 
 def _build_backfill_windows(
@@ -668,7 +670,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             raise RuntimeError("db_unavailable")
 
         try:
-            watermark = load_watermark(conn, strict=args.mode == "incremental")
+            # These catalog/cursor SELECTs start a transaction in psycopg.
+            # Finish that read-only work before the strict policy reader starts
+            # its own transaction; no ledger/cursor write belongs to this block.
+            with conn:
+                watermark = load_watermark(conn, strict=args.mode == "incremental")
             if args.mode == "backfill":
                 _run_backfill(args, base_url, conn, watermark)
             else:

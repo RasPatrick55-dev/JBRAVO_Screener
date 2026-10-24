@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS public.paper_gross_metrics_daily (
 """
 
 
+ACTIVITY_INGESTION_DDL = "-- OFFLINE PROPOSAL ONLY. Not an installed migration and never runtime DDL.\n-- A committed row proves a bounded provider-response/ledger mirror, not an\n-- global account-history claim, financial completeness or entry authority.\nCREATE TABLE public.activity_ingestion_checkpoints (\n    checkpoint_id pg_catalog.uuid PRIMARY KEY,\n    source_fingerprint pg_catalog.text NOT NULL\n        CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),\n    recipe_sha256 pg_catalog.text NOT NULL\n        CHECK (recipe_sha256 ~ '^[0-9a-f]{64}$'),\n    query_axis pg_catalog.text NOT NULL CHECK (query_axis = 'ALPACA_CREATED_AT'),\n    query_after pg_catalog.timestamptz NOT NULL,\n    query_until pg_catalog.timestamptz NOT NULL,\n    fetched_count pg_catalog.int4 NOT NULL CHECK (fetched_count BETWEEN 0 AND 200000),\n    persisted_manifest pg_catalog.jsonb NOT NULL\n        CHECK (pg_catalog.jsonb_typeof(persisted_manifest) = 'array'),\n    manifest_sha256 pg_catalog.text NOT NULL CHECK (manifest_sha256 ~ '^[0-9a-f]{64}$'),\n    terminal_observed_at pg_catalog.timestamptz NOT NULL,\n    cursor_before pg_catalog.timestamptz,\n    cursor_after pg_catalog.timestamptz NOT NULL,\n    recorded_at pg_catalog.timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),\n    CHECK (query_after < query_until),\n    CHECK (cursor_after = query_until),\n    CHECK (terminal_observed_at >= query_until),\n    CHECK (pg_catalog.jsonb_array_length(persisted_manifest) = fetched_count),\n    CHECK (pg_catalog.octet_length(persisted_manifest::pg_catalog.text) <= 67108864)\n);\nCREATE INDEX activity_ingestion_checkpoints_source_until_idx\n    ON public.activity_ingestion_checkpoints(source_fingerprint, query_until DESC);\n"
+
+
 TABLE_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS reconcile_state (
@@ -251,6 +254,11 @@ def _execute_statement(engine, statement: str) -> bool:
         return False
 
 
+def ensure_activity_ingestion_schema(engine) -> bool:
+    """Explicit additive checkpoint setup only; no grants or runtime migration."""
+    return _execute_statement(engine, ACTIVITY_INGESTION_DDL)
+
+
 def ensure_paper_gross_schema(engine) -> bool:
     """Explicit additive setup only; no grants or trade/event changes."""
     return _execute_statement(engine, PAPER_GROSS_METRICS_DDL)
@@ -386,7 +394,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     load_env()
     parser = argparse.ArgumentParser(description="Database migration utility")
-    parser.add_argument("--action", choices=["upgrade", "paper-gross-schema"], default="upgrade")
+    parser.add_argument("--action", choices=["upgrade", "paper-gross-schema", "activity-ingestion-schema"], default="upgrade")
     args = parser.parse_args()
 
     conn = db.get_db_conn()
@@ -397,6 +405,9 @@ def main() -> None:
         if args.action == "paper-gross-schema":
             if not ensure_paper_gross_schema(conn):
                 raise RuntimeError("DB_MIGRATE paper gross schema setup failed")
+        elif args.action == "activity-ingestion-schema":
+            if not ensure_activity_ingestion_schema(conn):
+                raise RuntimeError("DB_MIGRATE activity checkpoint setup failed")
         elif args.action == "upgrade":
             success = run_upgrade(conn)
             if success:

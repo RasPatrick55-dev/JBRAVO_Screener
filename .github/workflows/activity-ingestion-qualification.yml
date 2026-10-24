@@ -1,0 +1,89 @@
+name: Activity ingestion native qualification one-use
+on:
+  push:
+    branches: [repair/durable-ingestion-checkpoint-20261024]
+    paths:
+      - .github/workflows/activity-ingestion-qualification.yml
+      - tests/native_activity_ingestion_qualification.py
+permissions:
+  contents: read
+concurrency:
+  group: ingestion-native-one-use-e2f9bb11
+  cancel-in-progress: false
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'RasPatrick55-dev/JBRAVO_Screener' &&
+      github.event.before == 'e2f9bb112379a1f385a5ea05a745f2a4dfee40ed' &&
+      github.run_attempt == 1 && github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:12.2
+        env:
+          POSTGRES_USER: qualification_admin
+          POSTGRES_PASSWORD: EPHEMERAL_INGESTION_CI_ONLY
+          POSTGRES_DB: qualification_ingestion
+        ports: ['55432:5432']
+        options: >-
+          --cpus 2 --memory 1g
+          --health-cmd "pg_isready -U qualification_admin -d qualification_ingestion"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      QUALIFICATION_ADMISSION: INGESTION_CHECKPOINT_NATIVE_PREP001
+      APCA_API_BASE_URL: https://paper-api.alpaca.markets
+      JBR_EXEC_PAPER: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: app
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Verify exact single admission and reviewed paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C app rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C app rev-parse HEAD^)" = e2f9bb112379a1f385a5ea05a745f2a4dfee40ed
+          git -C app diff --name-only HEAD^ HEAD | sort > actual-paths
+          printf '%s\n' .github/workflows/activity-ingestion-qualification.yml scripts/db_migrate.py tests/native_activity_ingestion_qualification.py | sort > expected-paths
+          diff -u expected-paths actual-paths
+          echo 'c891deb690916d76be0a978a1aaeea4aa601611cb66115f8667649c3084bc88d  app/tests/native_activity_ingestion_qualification.py' | sha256sum -c -
+      - name: Install runner dependencies only
+        run: python -m pip install -r app/requirements.txt pytest
+      - name: Execute one bounded synthetic qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$GITHUB_WORKSPACE/qualification-retained-inputs"
+          mkdir "$GITHUB_WORKSPACE/qualification-retained-inputs"
+          for name in data tmp debug.log; do
+            test ! -L "$GITHUB_WORKSPACE/app/$name"
+            if test -e "$GITHUB_WORKSPACE/app/$name"; then
+              mv -- "$GITHUB_WORKSPACE/app/$name" "$GITHUB_WORKSPACE/qualification-retained-inputs/$name"
+            fi
+          done
+          mkdir -p app/data app/tmp app/logs qualification-output/tmp qualification-output/cache qualification-output/mpl
+          touch qualification-output/empty-passfile qualification-output/empty-service
+          export TMPDIR="$GITHUB_WORKSPACE/qualification-output/tmp"
+          export XDG_CACHE_HOME="$GITHUB_WORKSPACE/qualification-output/cache"
+          export MPLCONFIGDIR="$GITHUB_WORKSPACE/qualification-output/mpl"
+          export PGPASSFILE="$GITHUB_WORKSPACE/qualification-output/empty-passfile"
+          export PGSERVICEFILE="$GITHUB_WORKSPACE/qualification-output/empty-service"
+          timeout --signal=TERM --kill-after=10s 300s python -I -B app/tests/native_activity_ingestion_qualification.py --source-root "$GITHUB_WORKSPACE/app"
+      - name: Preserve bounded nonsecret receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingestion-native-${{ github.run_id }}
+          path: qualification-output/*-result.json
+          if-no-files-found: warn
+          retention-days: 7

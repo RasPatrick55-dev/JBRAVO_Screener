@@ -26,7 +26,8 @@ MAX_CANDIDATES = 10000
 MAX_OBSERVATIONS = 64
 ROLES = ('premarket', 'reconciliation', 'diagnostic', 'dry_run', 'unresolved')
 SOURCES = ('scripts/execute_trades.py', 'scripts/executor_health.py',
-           'scripts/db_queries.py', 'scripts/pipeline_postflight.py', 'scripts/signal_handoff.py')
+           'scripts/db_queries.py', 'scripts/pipeline_postflight.py', 'scripts/signal_handoff.py',
+           'scripts/activity_ingestion_checkpoint.py')
 TERMINAL = {'filled', 'canceled', 'expired', 'rejected'}
 OBSERVATION_STATES = TERMINAL | {'submitted', 'resting', 'cancel_requested',
                                 'cancel_failed', 'cancel_unavailable'}
@@ -352,6 +353,7 @@ def _policy_failure_payload(value):
 
 
 RECONCILIATION_FAILURE_CODES = frozenset({
+    'ACTIVITY_CHECKPOINT_SOURCE_INVALID',
     'DB_UNAVAILABLE', 'POLICY_UNAVAILABLE', 'WATERMARK_READ_FAILED',
     'WATERMARK_STATE_INVALID', 'WATERMARK_TIMESTAMP_INVALID',
     'WATERMARK_TIMESTAMP_FUTURE', 'OPEN_TRADES_READ_FAILED',
