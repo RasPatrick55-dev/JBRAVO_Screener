@@ -35,6 +35,7 @@ from scripts import signal_handoff
 from scripts.fallback_candidates import CANONICAL_COLUMNS, normalize_candidate_df
 from scripts.log_rotate import rotate_if_needed
 from scripts import executor_health
+from scripts import activity_ingestion_checkpoint as ingestion_checkpoint
 from scripts.utils.champion_config import champion_execution_overrides, load_latest_champion
 from scripts.utils.env import load_env
 from utils.alerts import send_alert
@@ -673,6 +674,7 @@ def alpaca_list_orders_http(
     limit: int = 500,
     *,
     after_iso: str | None = None,
+    until_iso: str | None = None,
 ) -> list[dict]:
     """
     Return orders from Alpaca REST /v2/orders using APCA_API_BASE_URL.
@@ -692,6 +694,10 @@ def alpaca_list_orders_http(
         "limit": limit,
         "nested": "true",
     }
+    if until_iso is not None:
+        # Provider filters submission time, not an immutable filled-state view.
+        # Reconciliation also rejects every attribution timestamp past cutoff.
+        params['until'] = ingestion_checkpoint.utc(until_iso).isoformat()
     response = alpaca_http_get("/v2/orders", params=params, timeout=15)
     if response.status_code != 200:
         response.raise_for_status()
@@ -2949,6 +2955,15 @@ class TradeExecutor:
             overlap_secs = 300
         overlap_secs = max(0, overlap_secs)
         now_utc = datetime.now(timezone.utc)
+        workflow_id = os.environ.get(ingestion_checkpoint.ENV_WORKFLOW)
+        if workflow_id:
+            try:
+                now_utc = ingestion_checkpoint.bound_cutoff(workflow_id,
+                    os.environ.get(ingestion_checkpoint.ENV_CUTOFF),now_utc)
+            except (RuntimeError,ValueError,TypeError):
+                record_failure('ACTIVITY_CHECKPOINT_SOURCE_INVALID')
+                self.metrics.reconciliation['reason']='ACTIVITY_CHECKPOINT_SOURCE_INVALID'
+                return False
         after_time = now_utc - timedelta(days=lookback_days)
         decorate_window_days = min(2, max(1, lookback_days or 0))
         decorate_after_time = now_utc - timedelta(days=decorate_window_days)
@@ -2990,6 +3005,34 @@ class TradeExecutor:
                 fetch_after_dt = after_time
                 fetch_after_iso = fetch_after_dt.isoformat()
 
+        # A matching committed checkpoint proves only its explicit active
+        # created-at interval. Financial/global recovery and row1 stay held.
+        ingestion_proof = None
+        workflow_id = os.environ.get(ingestion_checkpoint.ENV_WORKFLOW)
+        if workflow_id:
+            try:
+                endpoint = os.environ.get('APCA_API_BASE_URL') or os.environ.get('ALPACA_API_BASE_URL') or ''
+                if endpoint.rstrip('/') != ingestion_checkpoint.ENDPOINT:
+                    raise RuntimeError('ACT_CHECKPOINT_PAPER_SOURCE_REQUIRED')
+                response = alpaca_http_get('/v2/account', timeout=15)
+                if response.status_code != 200:
+                    raise RuntimeError('ACT_CHECKPOINT_ACCOUNT_UNAVAILABLE')
+                source = ingestion_checkpoint.source_fingerprint(endpoint, response.json()['id'])
+                with db._reconciliation_read_transaction(engine, strict=True):
+                    ingestion_proof = ingestion_checkpoint.consume(engine, workflow_id=workflow_id,
+                        source=source, required_after=fetch_after_dt, required_until=now_utc,
+                        now=datetime.now(timezone.utc))
+            except Exception as failure:
+                code = str(failure) if type(failure) is RuntimeError and re.fullmatch('ACT_CHECKPOINT_[A-Z_]{1,64}',str(failure)) else 'ACT_CHECKPOINT_UNAVAILABLE'
+                self.metrics.reconciliation['ingestion_failure_code'] = code
+                LOGGER.warning('[WARN] RECONCILE_INGESTION_UNPROVED code=%s',code)
+                if code in ('ACT_CHECKPOINT_SOURCE_MISMATCH','ACT_CHECKPOINT_SOURCE_CHANGED',
+                            'ACT_CHECKPOINT_PAPER_SOURCE_REQUIRED','ACT_CHECKPOINT_ACCOUNT_INVALID',
+                            'ACT_CHECKPOINT_ACCOUNT_UNAVAILABLE'):
+                    record_failure('ACTIVITY_CHECKPOINT_SOURCE_INVALID')
+                    self.metrics.reconciliation['reason']='ACTIVITY_CHECKPOINT_SOURCE_INVALID'
+                    return False
+
         def _fetch_orders() -> list[dict]:
             cached = orders_cache.get("orders")
             if cached is not None:
@@ -3001,6 +3044,7 @@ class TradeExecutor:
                     lookback_days=lookback_days,
                     limit=limit,
                     after_iso=fetch_after_iso if watermark_enabled else None,
+                    until_iso=now_utc.isoformat() if workflow_id else None,
                 )
                 if not isinstance(orders, list):
                     record_failure('ORDERS_INVALID')
@@ -3455,10 +3499,6 @@ class TradeExecutor:
             LOGGER.warning("[WARN] RECONCILE_WATERMARK_HELD")
             LOGGER.info("[INFO] RECONCILE_END closed=%s decorated=%s", closed_count, decorated_count)
             return False
-        # An order listing, count or approved operational exclusion is not an
-        # independently proved, durably recorded activity-ingestion checkpoint.
-        # This minimal increment has no such receipt path: never advance the
-        # legacy reconciliation cursor or imply historical recovery completed.
         try:
             # Provider I/O is complete. Hold the shared policy lock until the
             # metrics and success receipt have been published for this revision.
@@ -3466,13 +3506,26 @@ class TradeExecutor:
                 if final_policy != policy_status:
                     record_failure('POLICY_REVISION_CHANGED')
                     raise RuntimeError('RECONCILE_POLICY_CHANGED')
+                if ingestion_proof is not None:
+                    # Recheck the append-only checkpoint and mirrored rows inside
+                    # the current policy publication transaction; no nested commit.
+                    ingestion_proof = ingestion_checkpoint.consume(engine, workflow_id=workflow_id,
+                        source=source, required_after=fetch_after_dt, required_until=now_utc,
+                        now=datetime.now(timezone.utc))
                 self.metrics.reconciliation.update(operational_complete=True,
-                    reason='INDEPENDENT_DURABLE_ACTIVITY_INGESTION_UNPROVED', trade_policy=final_policy)
+                    activity_ingestion_complete=ingestion_proof is not None,
+                    reason=('DURABLE_INGESTION_PROVED_ACCOUNTING_HELD' if ingestion_proof is not None
+                            else 'INDEPENDENT_DURABLE_ACTIVITY_INGESTION_UNPROVED'), trade_policy=final_policy)
+                if ingestion_proof is not None:
+                    self.metrics.reconciliation['ingestion_checkpoint'] = ingestion_proof
                 LOGGER.info('[INFO] RECONCILE_OPERATIONAL_COMPLETE scope=ACTIVE_RECONCILIATION policy_revision=%s excluded_count=%s recovery_pending_case_ids=%s',
                     policy_revision, final_policy['excluded_count'], self.metrics.reconciliation['recovery_pending_case_ids'])
-                LOGGER.warning('[WARN] RECONCILE_WATERMARK_HELD reason=independent_durable_activity_ingestion_unproved')
-                LOGGER.info('[INFO] RECONCILE_END closed=%s decorated=%s operational_complete=true recovery_complete=false accounting_complete=false activity_ingestion_complete=false watermark_advanced=false',
-                    closed_count, decorated_count)
+                if ingestion_proof is not None:
+                    LOGGER.info('[INFO] RECONCILE_INGESTION_CHECKPOINT %s', ingestion_checkpoint.encoded(ingestion_proof))
+                LOGGER.warning('[WARN] RECONCILE_WATERMARK_HELD reason=%s',
+                    'durable_ingestion_proved_accounting_held' if ingestion_proof is not None else 'independent_durable_activity_ingestion_unproved')
+                LOGGER.info('[INFO] RECONCILE_END closed=%s decorated=%s operational_complete=true recovery_complete=false accounting_complete=false activity_ingestion_complete=%s watermark_advanced=false',
+                    closed_count, decorated_count, 'true' if ingestion_proof is not None else 'false')
                 return True
         except Exception as exc:
             record_failure('POLICY_PUBLICATION_UNAVAILABLE')
@@ -7051,6 +7104,24 @@ def _seed_initial_metrics(metrics: ExecutionMetrics, config: ExecutorConfig) -> 
 _RECONCILE_DB_DISABLED_LOGGED = False
 
 
+def _ingestion_completion_valid(status):
+    if status.get('activity_ingestion_complete') is False:
+        return not status.get('ingestion_checkpoint')
+    if status.get('activity_ingestion_complete') is not True or status.get('reason')!='DURABLE_INGESTION_PROVED_ACCOUNTING_HELD':
+        return False
+    try:
+        proof=ingestion_checkpoint.validate_proof(status.get('ingestion_checkpoint'))
+        expected=os.environ.get(ingestion_checkpoint.ENV_WORKFLOW)
+        if expected is None or proof['checkpoint_id']!=ingestion_checkpoint.workflow(expected):
+            return False
+        if ingestion_checkpoint.utc(proof['query_until'])!=ingestion_checkpoint.bound_cutoff(
+                expected,os.environ.get(ingestion_checkpoint.ENV_CUTOFF),datetime.now(timezone.utc)):
+            return False
+    except (RuntimeError,ValueError,TypeError,KeyError):
+        return False
+    return True
+
+
 def _operational_reconciliation_complete(executor, result):
     """Bool success is scoped operational completion, never global recovery."""
     status = getattr(executor.metrics, 'reconciliation', None)
@@ -7061,7 +7132,7 @@ def _operational_reconciliation_complete(executor, result):
         and status.get('scope') == 'ACTIVE_RECONCILIATION'
         and status.get('recovery_complete') is False
         and status.get('accounting_complete') is False
-        and status.get('activity_ingestion_complete') is False
+        and _ingestion_completion_valid(status)
         and status.get('watermark_advanced') is False
         and isinstance(policy, Mapping) and policy.get('scope') == 'ACTIVE_RECONCILIATION'
         and type(policy.get('policy_revision')) is int and policy['policy_revision'] >= 0)
