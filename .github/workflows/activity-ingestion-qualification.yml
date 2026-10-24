@@ -8,13 +8,13 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ingestion-native-one-use-c7c72b38
+  group: ingestion-native-one-use-e2f9bb11
   cancel-in-progress: false
 jobs:
   qualify:
     if: >-
       github.repository == 'RasPatrick55-dev/JBRAVO_Screener' &&
-      github.event.before == 'c7c72b386dea10aca9fc9e6bc00c91296fd2acbf' &&
+      github.event.before == 'e2f9bb112379a1f385a5ea05a745f2a4dfee40ed' &&
       github.run_attempt == 1 && github.event.deleted == false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -52,11 +52,11 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C app rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git -C app rev-parse HEAD^)" = c7c72b386dea10aca9fc9e6bc00c91296fd2acbf
+          test "$(git -C app rev-parse HEAD^)" = e2f9bb112379a1f385a5ea05a745f2a4dfee40ed
           git -C app diff --name-only HEAD^ HEAD | sort > actual-paths
-          printf '%s\n' .github/workflows/activity-ingestion-qualification.yml scripts/account_sync.py scripts/activity_ingestion_checkpoint.py scripts/db_migrate.py scripts/execute_trades.py scripts/executor_health.py scripts/fetch_account_activities.py tests/native_activity_ingestion_qualification.py tests/test_activity_ingestion_checkpoint.py | sort > expected-paths
+          printf '%s\n' .github/workflows/activity-ingestion-qualification.yml scripts/db_migrate.py tests/native_activity_ingestion_qualification.py | sort > expected-paths
           diff -u expected-paths actual-paths
-          echo 'ec5a662fc9b2e7e3bce67029861d2988c9639df79a49fe421d79ef7deecf11da  app/tests/native_activity_ingestion_qualification.py' | sha256sum -c -
+          echo 'c891deb690916d76be0a978a1aaeea4aa601611cb66115f8667649c3084bc88d  app/tests/native_activity_ingestion_qualification.py' | sha256sum -c -
       - name: Install runner dependencies only
         run: python -m pip install -r app/requirements.txt pytest
       - name: Execute one bounded synthetic qualification
