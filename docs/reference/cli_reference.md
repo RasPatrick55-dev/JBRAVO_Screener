@@ -376,8 +376,8 @@ options:
 ## `python -m scripts.screener --help`
 
 ```text
-usage: screener.py [-h]
-                   --mode {screener,strategy-library,strategy-scan,delta-update,build-symbol-stats,coarse-features,full-nightly}
+usage: screener.py [-h] --mode
+                   {screener,strategy-library,strategy-scan,delta-update,build-symbol-stats,coarse-features,full-nightly}
                    [--strategy STRATEGY] [--study-spec STUDY_SPEC]
                    [--as-of AS_OF] [--strategy-fold STRATEGY_FOLD]
                    [--strategy-cost-case STRATEGY_COST_CASE]
