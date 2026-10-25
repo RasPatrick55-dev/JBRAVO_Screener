@@ -17,6 +17,9 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 
 ## How-To
 
+- [Strategy scanner library and paper traces](how-to/strategy_scanner_library.md)
+- [Isolated strategy testing](how-to/strategy_testing.md)
+
 - `docs/how-to/ops_runbook.md`
 - `docs/how-to/dev_setup.md`
 - `docs/how-to/qa_plan.md`

@@ -12,6 +12,18 @@ By design:
 
 from __future__ import annotations
 
+# Pure library CLI must dispatch before importing legacy runtime clients. The
+# regular screener keeps its existing imports/bootstrap below this branch.
+if __name__ == "__main__":
+    import argparse as _strategy_argparse
+    import sys as _strategy_sys
+    _strategy_probe = _strategy_argparse.ArgumentParser(add_help=False)
+    _strategy_probe.add_argument("--mode")
+    _strategy_mode, _ = _strategy_probe.parse_known_args()
+    if _strategy_mode.mode in {"strategy-library", "strategy-scan"}:
+        from scripts.strategy_scanner import main as _strategy_main
+        _strategy_sys.exit(_strategy_main())
+
 import argparse
 import copy
 import gzip
@@ -6447,6 +6459,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--mode",
         choices=[
             "screener",
+            "strategy-library",
+            "strategy-scan",
             "delta-update",
             "build-symbol-stats",
             "coarse-features",
@@ -6455,6 +6469,14 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         required=True,
         help="Pipeline mode to run",
     )
+    parser.add_argument("--strategy", action="append", default=None,
+                        help="Versioned library strategy ID; repeat to scan several (strategy-scan only)")
+    parser.add_argument("--study-spec", type=Path,
+                        help="Hash-bound capture/episode/risk specification for strategy-scan")
+    parser.add_argument("--as-of", help="Explicit completed daily session YYYY-MM-DD for strategy-scan")
+    parser.add_argument("--strategy-fold", help="Declared research episode ID for strategy-scan")
+    parser.add_argument("--strategy-cost-case", default="base_cost",
+                        help="Declared strategy-scan cost case (default: base_cost)")
     parser.add_argument(
         "--universe",
         choices=["alpaca-active", "csv"],
@@ -6665,6 +6687,21 @@ def main(
     input_df: Optional[pd.DataFrame] = None,
     output_dir: Optional[Path] = None,
 ) -> int:
+    # Library scans use verified captured data and a separate paper handoff.
+    # Dispatch before environment/bootstrap/trading-account probes. Existing
+    # default screener and its publication/executor contract stay unchanged.
+    strategy_argv = list(argv) if argv is not None else sys.argv[1:]
+    if argv is not None:
+        argv = strategy_argv
+    mode_probe = argparse.ArgumentParser(add_help=False)
+    mode_probe.add_argument("--mode")
+    strategy_mode, _ = mode_probe.parse_known_args(strategy_argv)
+    if strategy_mode.mode in {"strategy-library", "strategy-scan"}:
+        from scripts.strategy_scanner import run_cli
+        strategy_args = parse_args(strategy_argv)
+        if output_dir is not None:
+            strategy_args.output_dir = str(output_dir)
+        return run_cli(strategy_args)
     _bootstrap_env()
     _ensure_logger()
     screener_handler: logging.Handler | None = None

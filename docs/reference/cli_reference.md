@@ -377,7 +377,10 @@ options:
 
 ```text
 usage: screener.py [-h] --mode
-                   {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}
+                   {screener,strategy-library,strategy-scan,delta-update,build-symbol-stats,coarse-features,full-nightly}
+                   [--strategy STRATEGY] [--study-spec STUDY_SPEC]
+                   [--as-of AS_OF] [--strategy-fold STRATEGY_FOLD]
+                   [--strategy-cost-case STRATEGY_COST_CASE]
                    [--universe {alpaca-active,csv}] [--source-csv SOURCE_CSV]
                    [--output-dir OUTPUT_DIR] [--run-date RUN_DATE]
                    [--ranker-config RANKER_CONFIG] [--local-validate]
@@ -405,8 +408,19 @@ Run the nightly screener
 
 options:
   -h, --help            show this help message and exit
-  --mode {screener,delta-update,build-symbol-stats,coarse-features,full-nightly}
+  --mode {screener,strategy-library,strategy-scan,delta-update,build-symbol-stats,coarse-features,full-nightly}
                         Pipeline mode to run
+  --strategy STRATEGY   Versioned library strategy ID; repeat to scan several
+                        (strategy-scan only)
+  --study-spec STUDY_SPEC
+                        Hash-bound capture/episode/risk specification for
+                        strategy-scan
+  --as-of AS_OF         Explicit completed daily session YYYY-MM-DD for
+                        strategy-scan
+  --strategy-fold STRATEGY_FOLD
+                        Declared research episode ID for strategy-scan
+  --strategy-cost-case STRATEGY_COST_CASE
+                        Declared strategy-scan cost case (default: base_cost)
   --universe {alpaca-active,csv}
                         Universe source to use for screener input
   --source-csv SOURCE_CSV
