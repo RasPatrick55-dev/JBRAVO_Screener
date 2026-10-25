@@ -106,6 +106,12 @@ def test_pagination_consumes_all_pages_and_refuses_repeated_token():
         list(daily.pages(p,daily.DATA+'/v2/stocks/bars',{}))
     assert len(p.calls)==2 and p.calls[1]['page_token']=='same'
 
+def test_missing_pagination_completion_is_refused():
+    class P:
+        def get(self,*args):return dict(corporate_actions={}),b'{"corporate_actions":{}}'
+    with pytest.raises(daily.DailyError,match='COMPLETION_MISSING'):
+        list(daily.pages(P(),daily.DATA+'/v1/corporate-actions',{}))
+
 def test_provider_auth_failure_is_sanitized_and_not_retried(monkeypatch):
     provider=daily.Provider('KEY_FOR_OFFLINE_TEST','SECRET_FOR_OFFLINE_TEST')
     calls=[]
@@ -128,15 +134,18 @@ def test_provider_rejects_order_endpoint_before_network():
 
 @pytest.mark.parametrize('fail',[False,True])
 def test_archive_is_append_only_and_requires_separate_readonly_proof(cfg,tmp_path,monkeypatch,fail):
-    from scripts import research_store
+    from scripts import research_store,strategy_scanner,strategy_library
     from scripts.research_testing import save_json
-    scan=tmp_path/'scan';scan.mkdir()
-    summary=dict(status='COMPLETED_PAPER_SIMULATION',as_of='2026-10-23',run_id='batch',
-        research_qualified=False,order_submission_authorized=False,broker_operations=0)
-    save_json(scan/'result.json',summary)
-    save_json(scan/'paper_handoff.json',dict(scan_run_id='batch',proposals=[],order_submission_authorized=False))
-    save_json(scan/'manifest.json',dict(bindings=[dict(path=p.name,**daily.binding(p.read_bytes())) for p in scan.iterdir()]))
-    save_json(tmp_path/'study.json',dict(schema='test'))
+    from test_research_testing import make_capture,simple_frame
+    spec,*_=make_capture(tmp_path);day=spec['folds'][0]['test_end']
+    frame=simple_frame(3);frame.index=pd.bdate_range(end=day,periods=3)
+    frame['entry_details']=[dict(signal=True,pullback_start='2023-12-01',failures=[]) for _ in range(3)]
+    monkeypatch.setattr(strategy_library.Strategy,'prepare',lambda self,*args:frame.copy(deep=True))
+    summary=strategy_scanner.run_scan(spec,as_of=day,output=tmp_path/'scan',cost_case_id='base')
+    assert isinstance(summary['strategies'][0]['strategy']['buy_rules'],tuple)
+    assert summary['strategies'][0]['metrics']['terminal_open_positions']
+    assert any(isinstance(value,(datetime,pd.Timestamp)) for value in summary['strategies'][0]['metrics']['terminal_open_positions'][0].values())
+    save_json(tmp_path/'study.json',spec)
     stored={};calls=[];connections=[]
     class Cursor:
         def __enter__(self):return self
@@ -172,3 +181,19 @@ def test_archive_is_append_only_and_requires_separate_readonly_proof(cfg,tmp_pat
     assert all(c.closed for c in connections)
     assert sum(sql.startswith('INSERT') for sql in calls)==1
     assert not any(sql.startswith(('CREATE','UPDATE','DELETE','DROP')) for sql in calls)
+
+def test_changed_unbound_request_spec_is_refused_before_database(cfg,tmp_path,monkeypatch):
+    from scripts import research_store
+    from scripts.research_testing import save_json
+    scan=tmp_path/'scan';scan.mkdir()
+    summary=dict(status='COMPLETED_PAPER_SIMULATION',as_of='2026-10-23',run_id='batch',
+        research_qualified=False,order_submission_authorized=False,broker_operations=0)
+    save_json(scan/'result.json',summary)
+    save_json(scan/'paper_handoff.json',dict(scan_run_id='batch',order_submission_authorized=False))
+    save_json(scan/'specification.json',dict(schema='actual-scanned-spec'))
+    save_json(scan/'manifest.json',dict(bindings=[dict(path=p.name,**daily.binding(p.read_bytes())) for p in scan.iterdir()]))
+    save_json(tmp_path/'study.json',dict(schema='changed-after-scan'))
+    def reject(**kwargs):raise AssertionError('No database access for mismatched specification')
+    monkeypatch.setattr(research_store,'connect',reject)
+    with pytest.raises(daily.DailyError,match='SCANNED_SPECIFICATION_CHANGED'):
+        daily.archive_scan(summary,tmp_path,cfg,env={})

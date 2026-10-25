@@ -11,7 +11,7 @@ import time as clock
 from zoneinfo import ZoneInfo
 
 from scripts.research_dataset import canonical_hash,strict_json
-from scripts.research_testing import save_json,validate_spec
+from scripts.research_testing import save_json,validate_spec,json_default
 from scripts.strategy_scanner import run_scan
 from scripts.strategy_library import get_strategy
 
@@ -111,6 +111,7 @@ def pages(provider,url,params,*,max_pages=6):
         if token is not None:request['page_token']=token
         value,raw=provider.get(url,request)
         require(isinstance(value,dict),'PROVIDER_ENVELOPE_INVALID')
+        require('next_page_token' in value,'PROVIDER_PAGINATION_COMPLETION_MISSING')
         yield page,value,raw
         token=value.get('next_page_token')
         if token is None:return
@@ -176,6 +177,8 @@ def capture(provider,cfg,calendar,session,root,*,now):
 def archive_scan(summary,root,cfg,*,env):
     """Append exactly one completed daily row; existing research schema only."""
     from scripts.research_store import connect
+    # Match the scanner's saved JSON representation (tuples, dates and NumPy scalars).
+    summary=json.loads(json.dumps(summary,default=json_default,allow_nan=False))
     require(summary.get('status')=='COMPLETED_PAPER_SIMULATION' and summary.get('research_qualified') is False and
         summary.get('order_submission_authorized') is False and summary.get('broker_operations')==0,'COMPLETED_PAPER_SCAN_REQUIRED')
     manifest_raw=(root/'scan/manifest.json').read_bytes();manifest=strict_json(manifest_raw)
@@ -186,7 +189,9 @@ def archive_scan(summary,root,cfg,*,env):
         require(path.is_relative_to((root/'scan').resolve()) and pin['path'] not in bound,'SCAN_ARTIFACT_PATH_REJECTED')
         require(binding(path.read_bytes())=={k:pin[k] for k in ('bytes','sha256')},'SCAN_ARTIFACT_CHANGED')
         bound.add(pin['path'])
-    require({'result.json','paper_handoff.json'}<=bound,'SCAN_MANIFEST_INCOMPLETE')
+    require({'result.json','paper_handoff.json','specification.json'}<=bound,'SCAN_MANIFEST_INCOMPLETE')
+    spec_raw=(root/'scan/specification.json').read_bytes()
+    require(spec_raw==(root/'study.json').read_bytes(),'SCANNED_SPECIFICATION_CHANGED')
     run_id=canonical_hash(dict(schema='jbravo.daily-strategy-archive-id.v1',pipeline=PIPELINE,
         strategy_id=cfg['strategy_id'],signal_session=summary['as_of']))
     handoff=strict_json((root/'scan/paper_handoff.json').read_bytes())
@@ -196,7 +201,7 @@ def archive_scan(summary,root,cfg,*,env):
         configuration_sha256=canonical_hash(cfg),scan_manifest_sha256=binding(manifest_raw)['sha256'],summary=summary,handoff=handoff,output_root=str(root),
         research_qualified=False,execution_authorized=False,order_submission_authorized=False)
     body=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
-    expected=binding(body.encode())['sha256'];spec_sha=binding((root/'study.json').read_bytes())['sha256']
+    expected=binding(body.encode())['sha256'];spec_sha=binding(spec_raw)['sha256']
     conn=connect(write=True,env=env)
     try:
         with conn.cursor() as cur:
