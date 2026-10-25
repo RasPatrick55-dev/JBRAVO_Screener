@@ -1,0 +1,80 @@
+"""Authoritative strategy batch projection for dashboard readers; no CSV fallback."""
+from datetime import date, datetime
+from decimal import Decimal
+import math
+
+
+def clean(value):
+    if isinstance(value, dict):
+        return {k:clean(v) for k,v in value.items()}
+    if isinstance(value, (list,tuple)):
+        return [clean(v) for v in value]
+    if isinstance(value, (date,datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value,float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def snapshot():
+    from scripts import db
+    from scripts.strategy_pipeline import latest_batch
+    from scripts.strategy_pipeline_store import candidate_frame
+    result=dict(ok=False,status='ERROR',run_date=None,run_ts_utc=None,rows=[],
+        rows_final=0,source='postgres',source_detail='strategy_primary:unavailable',entry_ready=False)
+    conn=db.get_db_conn()
+    if conn is None:
+        return result
+    try:
+        conn.set_session(readonly=True,isolation_level='REPEATABLE READ',autocommit=False)
+        with conn.cursor() as cur:
+            batch=latest_batch(cur)
+        if batch is None:
+            return dict(result,status='PENDING',source_detail='strategy_primary:no_completed_batch')
+        frame,stamp=candidate_frame(conn,batch[0],exact_run_ts=batch[1])
+        if stamp != batch[1] or len(frame) != batch[2]:
+            raise ValueError('strategy_dashboard_population_mismatch')
+        rows=clean(frame.to_dict('records'))
+        return dict(result,ok=True,status='COMPLETE' if rows else 'EMPTY',
+            run_date=batch[0].isoformat(),run_ts_utc=stamp.isoformat(),rows=rows,rows_final=len(rows),
+            source_detail='strategy_primary:'+batch[3]['outcome'],archive_id=batch[3]['archive_id'],
+            scan_run_id=batch[3]['scan_run_id'])
+    except Exception:
+        return result
+    finally:
+        conn.rollback();conn.close()
+
+
+def api_payload(kind, args):
+    """Use a single repeatable snapshot for each endpoint, including empty days."""
+    result=snapshot()
+    if kind=='backtest':
+        # Legacy per-symbol backtests are unrelated to this strategy's replay.
+        return dict(result,rows=[],rows_final=0,window=str(args.get('window') or '6M'),
+            metric_basis='STRATEGY_RESEARCH_SIMULATION',source_detail=result['source_detail']+':see_primary_research_trace')
+    requested=args.get('run_ts_utc')
+    if requested:
+        try:
+            same=datetime.fromisoformat(str(requested).replace('Z','+00:00')) == datetime.fromisoformat(result['run_ts_utc'])
+        except (ValueError,TypeError):same=False
+        if not same:
+            return dict(result,ok=False,status='ERROR',rows=[],rows_final=0,source_detail='strategy_primary:batch_changed')
+    rows=result['rows'];query=str(args.get('q') or '').strip().upper()
+    if query:
+        rows=[r for r in rows if query in r['symbol'] or query in str(r['score_breakdown']).upper()]
+    if args.get('filter') in ('errors','gate_failures','data_issues','high_confidence'):
+        rows=[]  # Only selected valid signals enter this batch.
+    try:limit=max(1,min(200,int(args.get('limit') or 50)))
+    except (ValueError,TypeError):limit=50
+    if args.get('filter')=='top10':limit=min(10,limit)
+    projected=[]
+    for rank,r in enumerate(rows[:limit],1):
+        proposal=r['score_breakdown']['proposal']
+        projected.append(dict(r,rank=rank,screened_at_utc=r.get('timestamp'),price=r['close'],
+            dollar_volume=r['close']*r['volume'],final_score=r['score'],
+            signal_id=proposal['signal_id'],strategy_id=proposal['strategy_id'],
+            strategy_version=proposal['strategy_version'],next_open_at=proposal['next_open_at'],
+            metric_basis='STRATEGY_BUY_SIGNAL'))
+    return dict(result,rows=projected,rows_final=len(projected))

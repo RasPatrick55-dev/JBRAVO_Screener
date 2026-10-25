@@ -6907,6 +6907,10 @@ def _execute_to_int_optional(value: Any) -> Optional[int]:
 
 
 def _execute_latest_candidates_count() -> int:
+    from scripts.strategy_pipeline import enabled as strategy_enabled
+    if strategy_enabled():
+        from scripts.strategy_dashboard import snapshot
+        return snapshot()['rows_final']
     count_row = _db_fetch_one("SELECT COUNT(*) AS count FROM latest_screener_candidates")
     if count_row and count_row.get("count") is not None:
         return _execute_to_int(count_row.get("count"), 0)
@@ -9187,6 +9191,12 @@ def _screener_apply_pick_filter(
 def _screener_latest_run_scope() -> dict[str, Any]:
     global _SCREENER_RUN_SCOPE_CACHE
 
+    from scripts.strategy_pipeline import enabled as strategy_enabled
+    if strategy_enabled():
+        from scripts.strategy_dashboard import snapshot
+        current = snapshot()
+        return {k: current[k] for k in ('run_date','run_ts_utc','status','source_detail')}
+
     now = time.time()
     if _SCREENER_RUN_SCOPE_CACHE is not None:
         cached_at, cached_scope = _SCREENER_RUN_SCOPE_CACHE
@@ -10464,6 +10474,10 @@ def _screener_logs_from_files(stage: str, fetch_limit: int) -> tuple[list[dict[s
 
 @server.route("/api/screener/picks")
 def api_screener_picks():
+    from scripts.strategy_pipeline import enabled as strategy_enabled
+    if strategy_enabled():
+        from scripts.strategy_dashboard import api_payload
+        return _json_no_store(api_payload('picks', request.args))
     limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
     query = str(request.args.get("q") or "").strip()
     filter_key = str(request.args.get("filter") or "all").strip().lower()
@@ -10518,6 +10532,10 @@ def api_screener_picks():
 
 @server.route("/api/screener/backtest")
 def api_screener_backtest():
+    from scripts.strategy_pipeline import enabled as strategy_enabled
+    if strategy_enabled():
+        from scripts.strategy_dashboard import api_payload
+        return _json_no_store(api_payload('backtest', request.args))
     limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
     query = str(request.args.get("q") or "").strip()
     window = str(request.args.get("window") or "6M").strip().upper()
@@ -10565,6 +10583,10 @@ def api_screener_backtest():
 
 @server.route("/api/screener/metrics")
 def api_screener_metrics():
+    from scripts.strategy_pipeline import enabled as strategy_enabled
+    if strategy_enabled():
+        from scripts.strategy_dashboard import api_payload
+        return _json_no_store(api_payload('metrics', request.args))
     limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
     query = str(request.args.get("q") or "").strip()
     filter_key = str(request.args.get("filter") or "all").strip().lower()
@@ -10656,6 +10678,10 @@ def api_screener_logs():
 
 @server.route("/api/screener/candidates")
 def api_screener_candidates():
+    from scripts.strategy_pipeline import enabled as strategy_enabled
+    if strategy_enabled():
+        from scripts.strategy_dashboard import api_payload
+        return _json_no_store(api_payload('candidates', request.args))
     if not db.db_enabled():
         return jsonify({"ok": False, "rows": [], "rows_final": 0, "run_date": None})
 

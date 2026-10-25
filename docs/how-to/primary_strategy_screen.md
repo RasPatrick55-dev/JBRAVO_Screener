@@ -22,6 +22,10 @@ selected symbols into the existing `screener_candidates` and `top_candidates`
 tables. The batch header exists even when there are zero buys. Both canonical
 `latest_*_candidates` views select that header's exact date and timestamp;
 historical rows cannot reappear because an empty day has no candidate rows.
+Dashboard table, scope and API readers use a repeatable strategy batch snapshot
+and preserve authoritative empty/error results without historical or CSV fallback.
+An earlier nonempty header whose canonical rows were replaced by a retry is
+explicitly unavailable; its missing population cannot be reported as an empty scan.
 The migration in `scripts.strategy_pipeline_store.SCHEMA_SQL` must be applied
 explicitly by the database owner before enabling the primary route. There is no
 automatic DDL during a scan. Preserve the previous view definitions for rollback.

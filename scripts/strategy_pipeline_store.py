@@ -54,10 +54,17 @@ def candidate_frame(conn, run_date, *, limit=None, exact_run_ts=None):
             'FROM public.screener_candidates c WHERE c.run_date=%s AND c.run_ts_utc=%s '
             'ORDER BY c.score DESC NULLS LAST,c.symbol')
         params = [batch[0], batch[1]]
-        if limit is not None:
-            if type(limit) is not int or not 1 <= limit <= 10000:
-                raise ValueError('invalid_strategy_candidate_limit')
-            query += ' LIMIT %s'; params.append(limit)
         cur.execute(query, params)
         rows, columns = cur.fetchall(), [d[0] for d in cur.description]
-    return pd.DataFrame(rows, columns=columns), batch[1]
+    frame = pd.DataFrame(rows, columns=columns)
+    # Old same-day headers can outlive overwritten canonical rows. Also reject
+    # a READ COMMITTED race between the header query and candidate query.
+    actual = [(r['symbol'],r['score_breakdown']['proposal']) for r in frame.to_dict('records')]
+    expected = [(p['symbol'],p) for p in batch[3]['proposals']]
+    if len(frame) != batch[2] or sorted(actual) != sorted(expected):
+        raise ValueError('strategy_batch_population_unavailable')
+    if limit is not None:
+        if type(limit) is not int or not 1 <= limit <= 10000:
+            raise ValueError('invalid_strategy_candidate_limit')
+        frame = frame.head(limit)
+    return frame, batch[1]
