@@ -2131,6 +2131,10 @@ def fetch_latest_screener_candidate_count() -> tuple[int, Optional[date]]:
     if conn is None:
         return 0, None
     try:
+        from scripts import strategy_pipeline
+        if strategy_pipeline.enabled():
+            from scripts.strategy_pipeline_store import batch_count
+            return batch_count(conn)
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -2168,6 +2172,10 @@ def fetch_top_candidate_count(run_date: Any | None = None) -> tuple[int, Optiona
     if conn is None:
         return 0, None
     try:
+        from scripts import strategy_pipeline
+        if strategy_pipeline.enabled():
+            from scripts.strategy_pipeline_store import batch_count
+            return batch_count(conn, _coerce_date(run_date) if run_date is not None else None)
         with conn.cursor() as cursor:
             if run_date is None:
                 cursor.execute(
@@ -2602,6 +2610,9 @@ def upsert_daily_bars_frame(frame: pd.DataFrame | None) -> int:
 
 
 def ensure_latest_screener_candidates_view() -> None:
+    from scripts import strategy_pipeline
+    if strategy_pipeline.enabled():
+        return  # Explicit migration owns the batch-aware view; never restore legacy fallback.
     ensure_screener_ranker_scores_app_table()
     conn = _conn_or_none()
     if conn is None:
@@ -2649,6 +2660,9 @@ def ensure_latest_screener_candidates_view() -> None:
 
 
 def ensure_latest_top_candidates_view() -> None:
+    from scripts import strategy_pipeline
+    if strategy_pipeline.enabled():
+        return
     ensure_screener_ranker_scores_app_table()
     conn = _conn_or_none()
     if conn is None:

@@ -173,6 +173,10 @@ def get_latest_screener_candidates(
     include_ranker_scores = True
     scores_rows_for_run = 0
     try:
+        from scripts import strategy_pipeline
+        if strategy_pipeline.enabled():
+            from scripts.strategy_pipeline_store import candidate_frame
+            return candidate_frame(conn, run_date_value, limit=limit, exact_run_ts=exact_run_ts)
         with conn.cursor() as cursor:
             if exact_run_ts is not None:
                 latest_run_ts = exact_run_ts

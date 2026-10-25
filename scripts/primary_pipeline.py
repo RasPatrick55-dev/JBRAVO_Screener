@@ -66,8 +66,10 @@ def _main(argv=None, *, pipeline_main=None, base_dir=ROOT):
         print(json.dumps({'status': 'failed', 'reason': 'pipeline_exception',
                           'error_type': type(failure).__name__}), flush=True)
         return 1
+    from scripts import strategy_pipeline
+    strategy_route = strategy_pipeline.enabled(base_dir)
     result = pipeline_postflight.check_health(base_dir, not_before=started,
-        require_session=provisional is None, require_paper_gross=True,
+        require_session=provisional is None, require_paper_gross=not strategy_route,
         allow_provisional=provisional is not None)
     if provisional is not None:
         passed = result['status'] == 'ok' and result.get('functional_pass') is True
