@@ -146,6 +146,25 @@ def test_real_capture_adapter_writes_valid_empty_day_and_bound_trace(tmp_path):
         strategy_scanner.run_scan(spec, as_of=day, output=output, cost_case_id='base')
 
 
+def test_rebound_capture_at_same_path_has_distinct_scan_batch_id(tmp_path):
+    spec, folder, bind, _ = make_capture(tmp_path)
+    day = spec['folds'][0]['test_end']
+    before = strategy_scanner.run_scan(spec, as_of=day, output=tmp_path/'before', cost_case_id='base')
+    # A corrected provider capture is valid after rebinding, even at the same path.
+    for name in ('alpaca_raw_daily.csv', 'alpaca_split_daily.csv'):
+        path = folder/name
+        frame = pd.read_csv(path)
+        frame.loc[0, 'v'] += 1
+        frame.to_csv(path, index=False)
+    bind()
+    after = strategy_scanner.run_scan(spec, as_of=day, output=tmp_path/'after', cost_case_id='base')
+    assert before['dataset_sha256'] != after['dataset_sha256']
+    assert before['run_id'] != after['run_id']
+    for name, result in [('before', before), ('after', after)]:
+        handoff = json.loads((tmp_path/name/'paper_handoff.json').read_bytes())
+        assert handoff['scan_run_id'] == result['run_id']
+
+
 @pytest.mark.parametrize('moment', [datetime(2026, 5, 26, 23, tzinfo=timezone.utc), datetime(2026, 5, 26, 23)])
 def test_incomplete_session_or_naive_clock_rejects_before_claim(tmp_path, moment):
     spec, _, _, _ = make_capture(tmp_path)
