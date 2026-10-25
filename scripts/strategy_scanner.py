@@ -249,6 +249,7 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
         summary = dict(schema='jbravo.strategy-scan.v1', status='COMPLETED_PAPER_SIMULATION',
             as_of=as_of, generated_at_utc=now.astimezone(timezone.utc).isoformat(),
             run_id=canonical_hash(dict(spec=spec, as_of=as_of, sources=source_hashes,
+                dataset_sha256=dataset.provenance['dataset_sha256'],
                 strategies=[item['strategy']['definition_sha256'] for item in public], cost_case=cost_case_id)),
             strategies=public, top_candidates=candidates, source_sha256=source_hashes,
             dataset_sha256=dataset.provenance['dataset_sha256'], research_qualified=False,
