@@ -150,6 +150,16 @@ def test_empty_db_batch_keeps_timestamp_and_never_reads_legacy_latest():
     assert 'MAX(' not in cur.execute.call_args_list[1].args[0]
 
 
+def test_retried_or_racing_nonempty_batch_cannot_masquerade_as_empty():
+    from scripts.strategy_pipeline_store import candidate_frame
+    cur=Mock();cur.__enter__=Mock(return_value=cur);cur.__exit__=Mock(return_value=False)
+    cur.fetchone.return_value=(date(2026,10,23),NOW,1,dict(proposals=[dict(symbol='SRRK')]))
+    cur.fetchall.return_value=[];cur.description=[('symbol',),('score_breakdown',)]
+    conn=Mock();conn.cursor.return_value=cur
+    with pytest.raises(ValueError,match='population_unavailable'):
+        candidate_frame(conn,date(2026,10,23),exact_run_ts=NOW)
+
+
 def test_premarket_executor_cannot_waive_regular_open_contract(monkeypatch):
     from scripts import executor_health as executor
     monkeypatch.setattr(health,'check_health',lambda *a,**k: p.assess(report(),now=NOW+timedelta(seconds=10)))

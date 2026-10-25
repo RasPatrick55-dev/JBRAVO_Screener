@@ -21,7 +21,7 @@ STRATEGY = 'trend_pullback_reclaim_qualifying_close_v2'
 SCHEMA = 'jbravo.primary-strategy-screen.v1'
 EXTRA_SOURCES = ('scripts/strategy_pipeline.py', 'config/strategy_pipeline.json',
                  'config/strategy_scan_daily.json', 'scripts/daily_strategy_scan.py',
-                 'scripts/strategy_pipeline_store.py')
+                 'scripts/strategy_pipeline_store.py', 'scripts/strategy_dashboard.py')
 EXTRA_SOURCES += tuple('scripts/'+name for name in (
     'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
     'research_testing.py', 'research_strategies.py', 'research_simulation.py',

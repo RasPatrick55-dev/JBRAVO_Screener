@@ -490,6 +490,13 @@ def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
 def screener_table() -> Tuple[pd.DataFrame, str, str]:
     """Return (DataFrame, iso timestamp, file source) for the screener table."""
 
+    from scripts.strategy_pipeline import enabled as strategy_enabled
+    if strategy_enabled():
+        from scripts.strategy_dashboard import snapshot
+        current = snapshot()
+        return (pd.DataFrame(current['rows']), current['run_ts_utc'] or '',
+                current['source_detail'])
+
     def _db_candidates() -> tuple[pd.DataFrame, Optional[str]]:
         if not db.db_enabled():
             return pd.DataFrame(), None
