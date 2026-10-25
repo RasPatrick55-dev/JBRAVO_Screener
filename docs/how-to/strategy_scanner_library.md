@@ -36,10 +36,31 @@ the episode start/universe/risk contract fixed preserves signal identities.
 The output root must be new and outside the repository. Failed runs keep their
 claim and failure receipt; never overwrite them to retry.
 
-This first integration consumes verified captures. It does not install a daily
-provider refresh, recurring host schedule or broker-order consumer. The existing
-default screener/production candidate tables are a separate route. The library
-CLI dispatches before legacy credential bootstrap or trading-account probes.
+The explicit CLI consumes verified captures. The daily worker in
+`scripts/daily_strategy_scan.py` refreshes its own captures and invokes the same
+scanner. Its configuration is `config/strategy_scan_daily.json`: the initial ten
+tested stocks plus SPY, the fixed 2026 paper episode, unchanged risk settings,
+SIP feed, raw execution prices and split-adjusted feature prices. It never
+substitutes IEX, stale files or invented calendar sessions.
+
+The dedicated PythonAnywhere library task runs daily at **01:20 UTC** (20:20 or
+21:20 Eastern on the preceding date). It therefore remains after the assumed
+20:15 Eastern availability cutoff across daylight-saving changes. Exchange
+calendar non-trading days are skipped. Every trading session has a permanent
+single-use output directory; interrupted or completed sessions are not silently
+overwritten. A bounded initial bootstrap may scan the latest completed session.
+
+Each completed daily scan is appended to the existing PostgreSQL
+`jbravo_research.research_runs` archive under its own daily strategy identity,
+then independently read back in a separate read-only transaction. The record
+contains the signal proposals, data/source hashes, output location and explicit
+non-execution status. No new schema is initialized by the worker.
+
+This task screens the initial cohort and records paper proposals. The existing
+legacy primary job, production candidate tables and order executor remain a
+separate route. Routing daily library proposals to orders is a later integration;
+these captures and simulations do not grant order submission authority. The
+library CLI dispatches before legacy credential bootstrap or trading-account probes.
 
 ## Follow a signal through the process
 
