@@ -3279,6 +3279,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 return 1
         return 0
 
+    # The primary invocation owns the active strategy route. Manual legacy and
+    # help invocations keep their existing interfaces; no second Screener run.
+    from scripts import strategy_pipeline
+    primary_args = list(argv) if argv is not None else list(sys.argv[1:])
+    if '--handoff-invocation' in primary_args and strategy_pipeline.enabled():
+        return strategy_pipeline.main(primary_args)
+
     _refresh_logger()
     rotate_if_needed("logs/pipeline.log", max_bytes=10_000_000, max_age_days=14, keep=14)
     loaded_files, missing_keys = load_env(REQUIRED_ENV_KEYS)

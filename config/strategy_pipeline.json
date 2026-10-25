@@ -1,0 +1,8 @@
+{
+  "schema": "jbravo.primary-strategy-route.v1",
+  "enabled": true,
+  "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+  "producer_root": "/home/RasPatrick/jbravo-research-tools/STRATEGY_DAILY_ACTIVATION_20261025_002/runs",
+  "execution_model": "NEXT_SUPPLIED_REGULAR_SESSION_OPEN",
+  "order_submission_authorized": false
+}

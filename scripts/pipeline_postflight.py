@@ -512,6 +512,12 @@ def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=
     try:
         data = _read(path, MAX_REPORT_BYTES)
         record = json.loads(data.decode('utf-8'), object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
+        from scripts import strategy_pipeline
+        if record.get('schema') == strategy_pipeline.SCHEMA:
+            if require_paper_gross or allow_provisional:
+                raise ValueError('strategy_screen_is_not_broker_performance')
+            return strategy_pipeline.check_report(record, data, base_dir, now=now,
+                max_age_seconds=max_age_seconds, not_before=not_before, require_completion=require_completion)
         result = assess(record, now=now, expected_day=expected_day, max_age_seconds=max_age_seconds,
                         not_before=not_before, require_session=require_session, allow_provisional=allow_provisional)
         if require_paper_gross and record.get('paper_gross_required') is not True:

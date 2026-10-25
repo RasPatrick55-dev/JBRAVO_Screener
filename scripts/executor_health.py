@@ -120,6 +120,13 @@ def preflight(base_dir=ROOT, *, now=None, rows=None, prior_binding=None,
         health = pipeline.check_health(root, now=now, expected_day=now.date(),
                                        max_age_seconds=max_age_seconds, require_session=require_session,
                                        require_completion=require_session)
+        if health.get('route') == 'pullback_reclaim_strategy':
+            # Preserve the next-regular-open model. This executor's existing
+            # 04:00 passive-limit policy cannot execute those proposals faithfully.
+            result['reasons'] = [health['entry_block_reason']]
+            result.update(strategy_screen_ready=True, entry_ready=False,
+                          candidate_count=health.get('candidate_count'))
+            return result
         if health.get('readiness_policy') == pipeline.PIPELINE_ONLY:
             # Explicit paper testing may waive only the intentional no-entry
             # policy. Source/history/completion/session and operational failures
