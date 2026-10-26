@@ -115,13 +115,18 @@ def report():
         cost_cases=[cfg['cost_case']],folds=[])
     data=SimpleNamespace(provenance=dict(feed='sip',currency='USD',execution_prices='raw',feature_prices='split'))
     backtest=report_from_replay(batch,None,primary_run_id='a'*32,dataset=data,specification=spec)
-    batch=dict(batch,backtest=backtest)
+    from scripts.strategy_backtest import digest as json_digest
+    backtest['strategy_definition']=json.loads(json.dumps(get_strategy(p.STRATEGY).describe()))
+    backtest['result_id']=json_digest({k:v for k,v in backtest.items() if k!='result_id'})
+    from scripts.strategy_metrics import build_metrics
+    metrics=build_metrics(batch,backtest,primary_run_id='a'*32)
+    batch=dict(batch,backtest=backtest,metrics=metrics)
     return dict(schema=p.SCHEMA,run_id='a'*32,invocation_id='a'*32,started_at=NOW.isoformat(),
         finished_at=(NOW+timedelta(seconds=5)).isoformat(),session=session,batch=batch,
-        handoff=value['handoff'],backtest=backtest,pipeline_rc=0,broker_operations=0,entry_ready=False,
+        handoff=value['handoff'],backtest=backtest,metrics=metrics,pipeline_rc=0,broker_operations=0,entry_ready=False,
         order_submission_authorized=False,research_qualified=False,
         stages=dict(screener='COMPLETED',backtest='SKIPPED_NO_CANDIDATES',
-            metrics='RESEARCH_SIMULATION_ONLY',labels='NOT_USED_BY_STRATEGY',ranker_eval='NOT_USED_BY_STRATEGY',
+            metrics='SKIPPED_NO_CANDIDATES',labels='NOT_USED_BY_STRATEGY',ranker_eval='NOT_USED_BY_STRATEGY',
             handoff='COMMITTED_AND_SEPARATE_READONLY_VERIFIED'))
 
 

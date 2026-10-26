@@ -206,13 +206,8 @@ export const metricsMatchQuery = (row: MetricsRow, query: string): boolean => {
   return includesQuery(
     [
       row.symbol,
-      row.score_breakdown_short,
-      row.liquidity_gate,
-      row.volatility_gate,
-      row.trend_gate,
-      row.bars_complete,
-      row.confidence,
-      row.source_label,
+      row.strategy_id,
+      row.sample_status,
     ],
     query
   );

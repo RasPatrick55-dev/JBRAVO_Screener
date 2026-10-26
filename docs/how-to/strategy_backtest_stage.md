@@ -43,6 +43,11 @@ dataset. They are committed alongside the canonical batch in its existing JSONB
 payload, and included in primary postflight. No additional database migration is
 needed. Missing or mismatched backtest results prevent publication.
 
+[The Metrics stage](strategy_metrics_stage.md) now consumes this exact bound
+backtest report, preserves its strategy/signal/result identities and publishes
+closed-signal statistics in the same transaction. It does not use the archived
+research summary as a substitute.
+
 The dashboard backtest API exposes the actual strategy identity, result ID,
 evaluation period and per-candidate report. It does not borrow earlier runs,
 legacy backtest rows or CSVs. `STRATEGY_EPISODE` identifies the actual study

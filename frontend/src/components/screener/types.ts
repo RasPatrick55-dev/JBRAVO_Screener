@@ -1,6 +1,6 @@
 export type ScreenerPicksFilter = "all" | "top10" | "passed" | "errors";
 export type BacktestWindow = "3M" | "6M" | "1Y" | "ALL";
-export type MetricsFilter = "all" | "gate_failures" | "data_issues" | "high_confidence";
+export type MetricsFilter = "all" | "with_history" | "no_history";
 export type LogsStage = "screener" | "backtest" | "metrics";
 export type LogsChipFilter = "all" | "errors" | "warnings" | "today";
 
@@ -54,19 +54,33 @@ export type ConfidenceValue = "Low" | "Medium" | "High";
 
 export interface MetricsRow {
   symbol: string;
-  score_breakdown_short: string;
-  liquidity_gate: GateValue;
-  volatility_gate: GateValue;
-  trend_gate: GateValue;
-  bars_complete: BarsCompleteValue;
-  confidence: ConfidenceValue;
-  source_label: string;
+  signal_id: string;
+  strategy_id: string;
+  strategy_version: string;
+  definition_sha256: string;
+  backtest_result_id: string;
+  trades: number | null;
+  wins: number | null;
+  losses: number | null;
+  win_rate_pct: number | null;
+  net_pnl: number | null;
+  expectancy: number | null;
+  profit_factor: number | null;
+  max_drawdown_cash: number | null;
+  sample_status: string;
 }
 
 export interface MetricsResponse {
   ok?: boolean;
+  status?: string;
   run_ts_utc?: string | null;
   source?: string | null;
+  strategy_id?: string;
+  strategy_version?: string;
+  definition_sha256?: string;
+  backtest_result_id?: string;
+  metrics_result_id?: string;
+  metrics_status?: string;
   rows?: MetricsRow[];
 }
 

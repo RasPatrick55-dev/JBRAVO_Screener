@@ -39,17 +39,22 @@ def snapshot():
         rows=clean(frame.to_dict('records'))
         backtest=batch[3].get('backtest')
         if backtest is not None:
-            from scripts.strategy_pipeline import validate_backtest
+            from scripts.strategy_pipeline import validate_backtest, selected_batch
             with conn.cursor() as cur:
                 cur.execute('SELECT run_id FROM public.screener_strategy_batches_app WHERE run_ts_utc=%s',(batch[1],))
                 primary=cur.fetchone()
             if primary is None:raise ValueError('backtest_primary_batch_missing')
-            validate_backtest(backtest,{k:v for k,v in batch[3].items() if k!='backtest'},primary[0])
+            validate_backtest(backtest,selected_batch(batch[3]),primary[0])
+        metrics=batch[3].get('metrics')
+        if metrics is not None:
+            if backtest is None:raise ValueError('strategy_metrics_backtest_missing')
+            from scripts.strategy_metrics import validate_metrics
+            validate_metrics(metrics,backtest,selected_batch(batch[3]),primary[0])
         return dict(result,ok=True,status='COMPLETE' if rows else 'EMPTY',
             run_date=batch[0].isoformat(),run_ts_utc=stamp.isoformat(),rows=rows,rows_final=len(rows),
             source_detail='strategy_primary:'+batch[3]['outcome'],archive_id=batch[3]['archive_id'],
             scan_run_id=batch[3]['scan_run_id'],strategy_contract=batch[3].get('strategy_contract'),
-            _strategy_backtest=backtest)
+            _strategy_backtest=backtest,_strategy_metrics=metrics)
     except Exception:
         return result
     finally:
@@ -60,6 +65,7 @@ def api_payload(kind, args):
     """Use a single repeatable snapshot for each endpoint, including empty days."""
     result=dict(snapshot())
     backtest=result.pop('_strategy_backtest',None)
+    metrics=result.pop('_strategy_metrics',None)
     requested=args.get('run_ts_utc')
     if requested:
         try:
@@ -67,6 +73,27 @@ def api_payload(kind, args):
         except (ValueError,TypeError):same=False
         if not same:
             return dict(result,ok=False,status='ERROR',rows=[],rows_final=0,source_detail='strategy_primary:batch_changed')
+    if kind=='metrics':
+        if not result.get('ok'):
+            return dict(result,rows=[],rows_final=0)
+        if metrics is None:
+            return dict(result,ok=False,status='METRICS_PENDING',rows=[],rows_final=0,
+                source_detail='strategy_primary:no_bound_strategy_metrics')
+        contract=metrics['strategy_contract'];rows=list(metrics['rows'])
+        query=str(args.get('q') or '').strip().upper()
+        if query:rows=[r for r in rows if query in (r['symbol']+' '+r['strategy_id']+' '+r['sample_status']).upper()]
+        if args.get('filter')=='with_history':rows=[r for r in rows if r['trades']>0]
+        elif args.get('filter')=='no_history':rows=[r for r in rows if r['trades']==0]
+        elif args.get('filter') not in (None,'','all'):
+            return dict(result,ok=False,status='ERROR',rows=[],rows_final=0,source_detail='strategy_metrics:unsupported_filter')
+        try:limit=max(1,min(200,int(args.get('limit') or 50)))
+        except (ValueError,TypeError):limit=50
+        rows=rows[:limit]
+        return dict(result,rows=rows,rows_final=len(rows),metrics_status=metrics['status'],
+            metric_basis=metrics['metric_basis'],metrics_result_id=metrics['result_id'],
+            backtest_result_id=metrics['backtest_result_id'],strategy_id=contract['strategy_id'],
+            strategy_version=contract['strategy_version'],definition_sha256=contract['definition_sha256'],
+            evaluation=metrics['evaluation'],source_detail='strategy_metrics:'+metrics['status'])
     if kind=='backtest':
         if backtest is None:
             return dict(result,ok=False,status='BACKTEST_PENDING',rows=[],rows_final=0,
