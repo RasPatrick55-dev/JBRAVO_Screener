@@ -88,37 +88,59 @@ def test_mixed_or_changed_inputs_block(change):
         ex.prepare_handoff(record, rows, now=NOW+timedelta(seconds=10))
 
 
-def test_regular_open_uses_calendar_offset_not_fixed_utc_or_premarket():
-    handoff = dict(session=dict(next_open_at='2026-11-02T14:30:00+00:00', next_session='2026-11-02'))
-    assert ex.entry_window(handoff, now='2026-11-02T13:30:00+00:00', clock_open=False) == 'WAIT_REGULAR_OPEN'
-    assert ex.entry_window(handoff, now='2026-11-02T14:30:00+00:00', clock_open=True) == 'REGULAR_OPEN'
+def test_premarket_uses_calendar_offset_and_next_session_clock_through_dst():
+    handoff = dict(session=dict(next_open_at='2026-11-02T14:30:00+00:00', next_session='2026-11-02'),
+        execution_policy=dict(model=ex.EXECUTION_MODEL,entry_open_at='2026-11-02T09:00:00+00:00',cancel_at='2026-11-02T09:35:00+00:00'))
+    def window(now,next_open='2026-11-02T14:30:00+00:00'):
+        return ex.entry_window(handoff,now=now,clock_next_regular_open=next_open,clock_timestamp=now)
+    assert window('2026-11-02T08:55:00+00:00') == 'WAIT_PREMARKET_OPEN'
+    assert window('2026-11-02T09:00:00+00:00') == 'PREMARKET_OPEN'
     with pytest.raises(ValueError, match='expired'):
-        ex.entry_window(handoff, now='2026-11-02T14:31:00+00:00', clock_open=True)
-    with pytest.raises(ValueError, match='not_open'):
-        ex.entry_window(handoff, now='2026-11-02T14:30:00+00:00', clock_open=False)
+        window('2026-11-02T09:35:00+00:00')
+    with pytest.raises(ValueError, match='clock_session'):
+        window('2026-11-02T09:00:00+00:00',next_open='2026-11-03T14:30:00+00:00')
 
 
-def test_bound_signal_produces_a_regular_open_market_plan_with_exact_result_lineage():
+def reference(bars=None):
+    if bars is None:bars=[dict(t='2026-10-23T23:59:00+00:00',o=100.,h=100.,l=100.,c=100.,v=1000.)]
+    return ex.after_hours_reference(bars,symbol='SRRK',signal_session='2026-10-23',
+        observed_at='2026-10-24T00:15:00+00:00',feed='sip',adjustment='raw',currency='USD',complete=True)
+
+
+def test_bound_signal_produces_a_premarket_limit_plan_with_explicit_backtest_gap():
     record,rows=positive();handoff=ex.prepare_handoff(record,rows,now=NOW+timedelta(seconds=10))
     signal=handoff['proposals'][0]['signal_id']
     planned=ex.build_entry_order(handoff,signal_id=signal,account_id='paper-account',cash=100000,
-        price=100,price_at='2026-10-26T13:30:01+00:00',occupied_slots=0,
-        now='2026-10-26T13:30:02+00:00',clock_open=True)
-    assert planned['request']['qty']==50 and planned['request']['extended_hours'] is False
-    assert planned['request']['type']=='market' and planned['request']['time_in_force']=='day'
+        reference=reference(),occupied_slots=0,now='2026-10-26T08:00:02+00:00',
+        clock_next_regular_open='2026-10-26T13:30:00+00:00',clock_timestamp='2026-10-26T08:00:02+00:00')
+    assert planned['request']['qty']==49 and planned['request']['extended_hours'] is True
+    assert planned['request']['type']=='limit' and planned['request']['limit_price']==100.5
+    assert planned['request']['time_in_force']=='day'
     assert planned['lineage']['metrics_result_id']==record['metrics']['result_id']
     assert planned['lineage']['backtest_result_id']==record['backtest']['result_id']
     assert planned['lineage']['signal_id']==signal
+    assert planned['lineage']['backtest_alignment']=='PREMARKET_REPLAY_PENDING'
     assert planned['order_submission_authorized'] is False
 
 
-@pytest.mark.parametrize('price_at',['2026-10-26T08:00:00+00:00','2026-10-26T13:30:03+00:00'])
-def test_premarket_or_future_reference_cannot_size_regular_open_order(price_at):
+@pytest.mark.parametrize('change',['missing','future','changed','wrong_symbol'])
+def test_unavailable_or_changed_after_hours_reference_cannot_create_an_order(change):
     record,rows=positive();handoff=ex.prepare_handoff(record,rows,now=NOW+timedelta(seconds=10))
-    with pytest.raises(ValueError,match='reference_stale_or_future'):
+    ref=reference([]) if change=='missing' else reference()
+    if change=='future':ref['observed_at']='2026-10-26T08:00:01+00:00'
+    elif change=='changed':ref['price']+=1
+    elif change=='wrong_symbol':ref['symbol']='PLUG'
+    with pytest.raises(ValueError,match='after_hours_reference'):
         ex.build_entry_order(handoff,signal_id=handoff['proposals'][0]['signal_id'],account_id='paper-account',
-            cash=100000,price=100,price_at=price_at,occupied_slots=0,
-            now='2026-10-26T13:30:02+00:00',clock_open=True)
+            cash=100000,reference=ref,occupied_slots=0,now='2026-10-26T08:00:02+00:00',
+            clock_next_regular_open='2026-10-26T13:30:00+00:00',clock_timestamp='2026-10-26T08:00:02+00:00')
+
+
+def test_reference_keeps_sparse_last_print_and_does_not_relabel_daily_close_as_20_et():
+    ref=reference([dict(t='2026-10-23T23:53:00+00:00',o=43.79,h=43.79,l=43.6984,c=43.6984,v=476.)])
+    assert ref['last_bar_at']=='2026-10-23T23:53:00+00:00' and ref['price']==43.6984
+    with pytest.raises(ValueError,match='outside_session'):
+        reference([dict(t='2026-10-24T00:01:00+00:00',o=1,h=1,l=1,c=1,v=100)])
 
 
 def test_cash_sizing_preserves_five_percent_whole_shares_and_total_position_cap():
@@ -135,7 +157,7 @@ def position():
     proposal = positive()[0]['batch']['proposals'][0]
     proposal = dict(proposal, signal_atr14_raw=1.5)
     return ex.initial_position(proposal, quantity=10, fill_price=100,
-        filled_at='2026-10-26T13:30:01+00:00')
+        filled_at='2026-10-26T08:00:01+00:00')
 
 
 def bars(close=106, high=107, ema=103):
@@ -204,7 +226,7 @@ class Broker:
 def submit(store, broker):
     return ex.submit_claimed(store, broker, account_id='paper-account',signal_id='a'*64,
         request=dict(client_order_id=ex.client_order_id('paper-account','a'*64),side='buy',
-            symbol='SRRK',type='market',time_in_force='day',extended_hours=False,qty=10),
+            symbol='SRRK',type='limit',limit_price=100.,time_in_force='day',extended_hours=True,qty=10),
         lineage=dict(strategy_contract=dict(strategy_id=pipeline.STRATEGY,strategy_version='2'),
             signal_id='a'*64,symbol='SRRK',handoff_id='b'*64,batch_sha256='c'*64,
             backtest_result_id='d'*64,metrics_result_id='e'*64),paper_research_entries=True)

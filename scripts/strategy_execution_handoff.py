@@ -59,7 +59,9 @@ def main():
         primary_run_id=handoff['primary_run_id'], strategy_contract=handoff['strategy_contract'],
         signal_ids=[p['signal_id'] for p in handoff['proposals']],
         backtest_result_id=handoff['backtest_result_id'], metrics_result_id=handoff['metrics_result_id'],
-        session=handoff['session'], order_submission_authorized=False, broker_operations=0)))
+        session=handoff['session'], execution_policy=handoff['execution_policy'],
+        reference_capture='REQUIRED_BEFORE_ENTRY',
+        order_submission_authorized=False, broker_operations=0)))
     return 0
 
 
