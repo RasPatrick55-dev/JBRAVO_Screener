@@ -162,6 +162,10 @@ def report_from_replay(batch, replay, *, primary_run_id, dataset, specification)
     if proposals:
         require(replay is not None and replay['as_of']==as_of and
             canonical(replay['top_candidates'])==canonical(proposals),'backtest_replay_changed_current_signals')
+        described=replay.get('strategy',{})
+        contract=batch['strategy_contract']
+        require(described.get('id')==contract['strategy_id'] and described.get('version')==contract['strategy_version'] and
+            described.get('definition_sha256')==contract['definition_sha256'],'backtest_engine_strategy_mismatch')
         result['strategy']=replay['strategy']
         result['results']=[symbol_metrics(p,replay,as_of=as_of) for p in proposals]
         result['cohort_portfolio_metrics']=replay['metrics']

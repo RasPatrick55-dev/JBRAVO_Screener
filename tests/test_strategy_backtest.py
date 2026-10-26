@@ -81,7 +81,8 @@ def test_current_signal_is_unknown_and_no_history_is_not_a_zero_win_rate():
     current=dict(signal_id=proposal['signal_id'],symbol=proposal['symbol'],strategy_id=proposal['strategy_id'],
         strategy_version='2',signal_session=proposal['signal_session'],status='UNFILLED_PROPOSAL',
         bought_quantity=0,sold_quantity=0,fills=[])
-    replay=dict(as_of=proposal['signal_session'],top_candidates=batch['proposals'],strategy={},metrics={},lifecycle=[current],observations=[])
+    replay=dict(as_of=proposal['signal_session'],top_candidates=batch['proposals'],
+        strategy=strategy_library.get_strategy(proposal['strategy_id']).describe(),metrics={},lifecycle=[current],observations=[])
     result=backtest.report_from_replay(batch,replay,primary_run_id='1'*32,dataset=data,specification=spec)
     row=result['results'][0]
     assert row['closed_signals']==0 and row['win_rate_pct'] is None and row['expectancy_net_per_closed_signal'] is None
@@ -100,3 +101,13 @@ def test_full_cohort_and_exact_registered_strategy_reach_the_engine(monkeypatch)
     assert len(calls)==1 and calls[0][1].id==batch['strategy_contract']['strategy_id']
     assert calls[0][0]['universe']['symbols']==spec['universe']['symbols'] and len(spec['universe']['symbols'])==10
     assert result['strategy_contract']['definition_sha256']==calls[0][1].describe()['definition_sha256']
+
+
+def test_engine_returning_another_strategy_cannot_publish_a_plausible_candidate(monkeypatch):
+    batch,spec,data=inputs(True)
+    def wrong_engine(*args,**kwargs):
+        return dict(as_of=batch['session']['signal_session'],top_candidates=batch['proposals'],
+            strategy=dict(id='legacy_simulator_core_v1',version='2',definition_sha256=batch['strategy_contract']['definition_sha256']))
+    monkeypatch.setattr(strategy_scanner,'evaluate_strategy',wrong_engine)
+    with pytest.raises(ValueError,match='engine_strategy_mismatch'):
+        backtest.run_candidate_backtest(batch,primary_run_id='1'*32,dataset=data,specification=spec)
