@@ -21,7 +21,8 @@ STRATEGY = 'trend_pullback_reclaim_qualifying_close_v2'
 SCHEMA = 'jbravo.primary-strategy-screen.v1'
 EXTRA_SOURCES = ('scripts/strategy_pipeline.py', 'config/strategy_pipeline.json',
                  'config/strategy_scan_daily.json', 'scripts/daily_strategy_scan.py',
-                 'scripts/strategy_pipeline_store.py', 'scripts/strategy_dashboard.py')
+                 'scripts/strategy_pipeline_store.py', 'scripts/strategy_dashboard.py',
+                 'scripts/strategy_backtest.py')
 EXTRA_SOURCES += tuple('scripts/'+name for name in (
     'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
     'research_testing.py', 'research_strategies.py', 'research_simulation.py',
@@ -217,7 +218,19 @@ def latest_batch(cursor, *, run_date=None, exact_run_ts=None):
     return cursor.fetchone()
 
 
-def publish_batch(conn, value, rows, session, invocation, run_ts):
+def selection_batch(value, session):
+    definition=value['summary']['strategies'][0]['strategy']
+    proposals=value['handoff']['proposals']
+    return dict(schema='jbravo.strategy-primary-batch.v1', archive_id=value['run_id'],
+        archive_sha256=digest(encoded(value)), scan_run_id=value['scan_run_id'],
+        session=session, proposals=proposals, candidate_count=len(proposals),
+        strategy_contract=dict(strategy_id=definition['id'],strategy_version=definition['version'],
+            definition_sha256=definition['definition_sha256']),
+        outcome='BUY_SIGNALS' if proposals else 'NO_BUY_SIGNALS',
+        research_qualified=False, order_submission_authorized=False)
+
+
+def publish_batch(conn, value, rows, session, invocation, run_ts, *, backtest):
     """Single commit for header + canonical candidates + top candidates, even at zero."""
     from scripts import db
     from scripts.research_testing import json_default
@@ -228,11 +241,9 @@ def publish_batch(conn, value, rows, session, invocation, run_ts):
         'strategy_publication_population_mismatch')
     require(not conn.autocommit, 'strategy_publication_requires_transaction')
     conn.set_session(isolation_level='READ COMMITTED', readonly=False)
-    payload = dict(schema='jbravo.strategy-primary-batch.v1', archive_id=value['run_id'],
-        archive_sha256=digest(encoded(value)), scan_run_id=value['scan_run_id'],
-        session=session, proposals=value['handoff']['proposals'],
-        candidate_count=len(rows), outcome='BUY_SIGNALS' if rows else 'NO_BUY_SIGNALS',
-        research_qualified=False, order_submission_authorized=False)
+    selected=selection_batch(value,session)
+    validate_backtest(backtest,selected,invocation)
+    payload=dict(selected,backtest=backtest)
     try:
         db._policy_write_lock(conn)
         with conn.cursor() as cur:
@@ -267,6 +278,25 @@ def publish_batch(conn, value, rows, session, invocation, run_ts):
         conn.rollback()
         raise
     return payload
+
+
+def validate_backtest(backtest, selected, invocation):
+    from scripts.strategy_backtest import digest as backtest_digest
+    require(isinstance(backtest,dict) and backtest.get('schema')=='jbravo.candidate-strategy-backtest.v1',
+            'missing_strategy_backtest')
+    core={k:v for k,v in backtest.items() if k!='result_id'}
+    count=selected['candidate_count']
+    require(backtest_digest(core)==backtest.get('result_id') and
+        backtest['mode']=='REPORT_ONLY' and backtest['primary_run_id']==invocation and
+        backtest['screener_batch_sha256']==backtest_digest(selected) and
+        backtest['strategy_contract']==selected['strategy_contract'] and
+        backtest['candidate_signal_ids']==[p['signal_id'] for p in selected['proposals']] and
+        backtest['input_candidates']==backtest['output_candidates']==count and
+        backtest['signal_session']==selected['session']['signal_session'] and
+        backtest['status']==('COMPLETED_CANDIDATE_BACKTEST' if count else 'SKIPPED_NO_CANDIDATES') and
+        len(backtest['results'])==count and backtest['replay_performed']==bool(count) and
+        backtest['order_submission_authorized'] is False and backtest['broker_operations']==0,
+        'strategy_backtest_lineage_or_result_mismatch')
 
 
 def verify_candidate_readback(cur, expected, day, run_ts):
@@ -317,9 +347,15 @@ def main(argv, *, base_dir=ROOT):
         conn.rollback(); conn.close()
     dataset = verified_dataset(value, archived[0], base_dir=base_dir)
     rows = candidate_rows(value, dataset, started)
+    from scripts.strategy_backtest import run_candidate_backtest
+    spec_raw=(Path(value['output_root'])/'scan/specification.json').read_bytes()
+    require(digest(spec_raw)==archived[0].strip(),'strategy_backtest_specification_changed')
+    spec=json.loads(spec_raw)
+    backtest=run_candidate_backtest(selection_batch(value,session),primary_run_id=args.handoff_invocation,
+        dataset=dataset,specification=spec)
     conn = connect(write=True, env=env)
     try:
-        batch = publish_batch(conn, value, rows, session, args.handoff_invocation, started)
+        batch = publish_batch(conn, value, rows, session, args.handoff_invocation, started,backtest=backtest)
     finally:
         conn.close()
     # A new read-only transaction verifies the committed candidate population.
@@ -334,8 +370,8 @@ def main(argv, *, base_dir=ROOT):
     record = dict(schema=SCHEMA, run_id=args.handoff_invocation, invocation_id=args.handoff_invocation,
         started_at=started.isoformat(), finished_at=finished.isoformat(), pipeline_rc=0,
         session=session, batch=batch, candidate_run_ts_utc=started.isoformat(), source_bindings=sources,
-        handoff=value['handoff'], research_metrics=value['summary']['strategies'][0]['metrics'],
-        stages=dict(screener='COMPLETED', backtest='VERIFIED_ARCHIVED_PAPER_SIMULATION',
+        handoff=value['handoff'], backtest=backtest, research_metrics=value['summary']['strategies'][0]['metrics'],
+        stages=dict(screener='COMPLETED', backtest=backtest['status'],
             metrics='RESEARCH_SIMULATION_ONLY', labels='NOT_USED_BY_STRATEGY', ranker_eval='NOT_USED_BY_STRATEGY',
             handoff='COMMITTED_AND_SEPARATE_READONLY_VERIFIED'),
         legacy_screener_options_applied=False, broker_operations=0, entry_ready=False,
@@ -361,6 +397,9 @@ def assess(record, *, now, max_age_seconds=7200, not_before=None):
     require(started <= finished <= now and 0 <= (now-finished).total_seconds() <= max_age_seconds and
         (not_before is None or started >= not_before), 'strategy_postflight_stale_or_future')
     session, batch, handoff = record['session'], record['batch'], record['handoff']
+    selected={k:v for k,v in batch.items() if k!='backtest'}
+    validate_backtest(record['backtest'],selected,record['run_id'])
+    require(record['backtest']==batch['backtest'],'strategy_backtest_postflight_mismatch')
     require(_utc(session['signal_available_at']) <= started and finished < _utc(session['next_open_at']) and
         now < _utc(session['next_open_at']), 'strategy_handoff_expired_or_early')
     proposals = handoff['proposals']
@@ -372,7 +411,7 @@ def assess(record, *, now, max_age_seconds=7200, not_before=None):
         'strategy_postflight_batch_mismatch')
     require(record['pipeline_rc'] == 0 and record['broker_operations'] == 0 and record['entry_ready'] is False and
         record['order_submission_authorized'] is False and record['research_qualified'] is False and
-        record['stages'] == dict(screener='COMPLETED', backtest='VERIFIED_ARCHIVED_PAPER_SIMULATION',
+        record['stages'] == dict(screener='COMPLETED', backtest=record['backtest']['status'],
         metrics='RESEARCH_SIMULATION_ONLY', labels='NOT_USED_BY_STRATEGY', ranker_eval='NOT_USED_BY_STRATEGY',
         handoff='COMMITTED_AND_SEPARATE_READONLY_VERIFIED'), 'strategy_postflight_scope_mismatch')
     return dict(status='ok', failures=[], qualifications=[], run_id=record['run_id'],

@@ -17,6 +17,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 
 ## How-To
 
+- [Strategy identity in the backtesting stage](how-to/strategy_backtest_stage.md)
 - [Primary strategy Screener and handoff](how-to/primary_strategy_screen.md)
 - [Strategy scanner library and paper traces](how-to/strategy_scanner_library.md)
 - [Isolated strategy testing](how-to/strategy_testing.md)

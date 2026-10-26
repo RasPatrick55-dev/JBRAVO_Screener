@@ -109,12 +109,18 @@ def test_calendar_keeps_holidays_dst_and_rejects_missed_open():
 
 def report():
     cfg,session,value = archive()
-    batch = dict(session=session,proposals=[],candidate_count=0,outcome='NO_BUY_SIGNALS',scan_run_id=value['scan_run_id'])
+    from scripts.strategy_backtest import report_from_replay
+    batch = p.selection_batch(value,session)
+    spec=dict(universe=dict(symbols=cfg['symbols'],benchmark=cfg['benchmark']),portfolio=cfg['portfolio'],
+        cost_cases=[cfg['cost_case']],folds=[])
+    data=SimpleNamespace(provenance=dict(feed='sip',currency='USD',execution_prices='raw',feature_prices='split'))
+    backtest=report_from_replay(batch,None,primary_run_id='a'*32,dataset=data,specification=spec)
+    batch=dict(batch,backtest=backtest)
     return dict(schema=p.SCHEMA,run_id='a'*32,invocation_id='a'*32,started_at=NOW.isoformat(),
         finished_at=(NOW+timedelta(seconds=5)).isoformat(),session=session,batch=batch,
-        handoff=value['handoff'],pipeline_rc=0,broker_operations=0,entry_ready=False,
+        handoff=value['handoff'],backtest=backtest,pipeline_rc=0,broker_operations=0,entry_ready=False,
         order_submission_authorized=False,research_qualified=False,
-        stages=dict(screener='COMPLETED',backtest='VERIFIED_ARCHIVED_PAPER_SIMULATION',
+        stages=dict(screener='COMPLETED',backtest='SKIPPED_NO_CANDIDATES',
             metrics='RESEARCH_SIMULATION_ONLY',labels='NOT_USED_BY_STRATEGY',ranker_eval='NOT_USED_BY_STRATEGY',
             handoff='COMMITTED_AND_SEPARATE_READONLY_VERIFIED'))
 

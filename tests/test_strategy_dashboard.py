@@ -74,3 +74,24 @@ def test_equal_utc_timestamp_forms_accept_same_batch(monkeypatch):
     monkeypatch.setattr(dashboard,'snapshot',lambda:view([positive()]))
     assert dashboard.api_payload('metrics',dict(run_ts_utc='2026-10-27T03:45:00Z'))['rows_final']==1
     assert dashboard.api_payload('metrics',dict(run_ts_utc='2026-10-26T03:45:00Z'))['ok'] is False
+
+
+def test_backtest_endpoint_names_the_screener_strategy_and_bound_result(monkeypatch):
+    from test_strategy_pipeline import report
+    record=report()
+    current=dict(view([]),_strategy_backtest=record['backtest'])
+    monkeypatch.setattr(dashboard,'snapshot',lambda:current)
+    result=dashboard.api_payload('backtest',{})
+    assert result['strategy_id']==pipeline.STRATEGY and result['strategy_version']=='2'
+    assert result['backtest_status']=='SKIPPED_NO_CANDIDATES' and result['rows']==[]
+    assert result['backtest_result_id']==record['backtest']['result_id']
+    assert result['definition_sha256']==record['batch']['strategy_contract']['definition_sha256']
+    assert '_strategy_backtest' not in result
+
+
+def test_backtest_endpoint_does_not_borrow_another_preparation(monkeypatch):
+    from test_strategy_pipeline import report
+    current=dict(view([]),_strategy_backtest=report()['backtest'])
+    monkeypatch.setattr(dashboard,'snapshot',lambda:current)
+    result=dashboard.api_payload('backtest',dict(run_ts_utc='2026-10-26T03:45:00Z'))
+    assert result['ok'] is False and result['status']=='ERROR' and result['rows']==[]
