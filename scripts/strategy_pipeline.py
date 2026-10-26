@@ -27,6 +27,10 @@ EXTRA_SOURCES += tuple('scripts/'+name for name in (
     'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
     'research_testing.py', 'research_strategies.py', 'research_simulation.py',
     'research_store.py', 'backtest_core.py', 'indicators.py'))
+EXTRA_SOURCES += ('config/strategy_execution.json',)+tuple('scripts/'+name for name in (
+    'strategy_execution.py','strategy_execution_handoff.py','strategy_execution_store.py',
+    'strategy_execution_broker.py','strategy_execution_engine.py','strategy_execution_runtime.py',
+    'execute_trades.py','monitor_positions.py'))
 
 
 def require(condition, reason):
@@ -396,7 +400,7 @@ def main(argv, *, base_dir=ROOT):
     return 0
 
 
-def assess(record, *, now, max_age_seconds=7200, not_before=None):
+def assess(record, *, now, max_age_seconds=7200, not_before=None, inspection=False):
     """A separate screen/handoff contract; never invent legacy ML or P&L success."""
     from scripts.pipeline_postflight import _utc
     require(record.get('schema') == SCHEMA and re.fullmatch('[0-9a-f]{32}', record['run_id']) is not None,
@@ -411,8 +415,9 @@ def assess(record, *, now, max_age_seconds=7200, not_before=None):
     from scripts.strategy_metrics import validate_metrics
     validate_metrics(record['metrics'],record['backtest'],selected,record['run_id'])
     require(record['metrics']==batch['metrics'],'strategy_metrics_postflight_mismatch')
-    require(_utc(session['signal_available_at']) <= started and finished < _utc(session['next_open_at']) and
-        now < _utc(session['next_open_at']), 'strategy_handoff_expired_or_early')
+    require(type(inspection) is bool and _utc(session['signal_available_at']) <= started and
+        finished < _utc(session['next_open_at']) and
+        (inspection or now < _utc(session['next_open_at'])), 'strategy_handoff_expired_or_early')
     proposals = handoff['proposals']
     require(batch['session'] == session and batch['proposals'] == proposals and
         type(batch['candidate_count']) is int and batch['candidate_count'] == len(proposals) and
@@ -432,9 +437,9 @@ def assess(record, *, now, max_age_seconds=7200, not_before=None):
         candidate_count=len(proposals), outcome=batch['outcome'])
 
 
-def check_report(record, data, base_dir, *, now, max_age_seconds, not_before, require_completion):
+def check_report(record, data, base_dir, *, now, max_age_seconds, not_before, require_completion, inspection=False):
     from scripts import pipeline_postflight as h
-    result = assess(record, now=now, max_age_seconds=max_age_seconds, not_before=not_before)
+    result = assess(record, now=now, max_age_seconds=max_age_seconds, not_before=not_before,inspection=inspection)
     require(enabled(base_dir), 'strategy_primary_route_disabled')
     for relative in (*h.SOURCE_FILES, *EXTRA_SOURCES):
         require(record['source_bindings'].get(relative) == h._binding(h._read(Path(base_dir)/relative, h.MAX_SOURCE_BYTES)),

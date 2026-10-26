@@ -1,0 +1,15 @@
+{
+  "schema": "jbravo.premarket-paper-execution-config.v1",
+  "enabled": true,
+  "paper_only": true,
+  "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+  "execution_model": "NEXT_PREMARKET_0400_FROZEN_LIMIT_V1",
+  "allocation_pct": 0.05,
+  "max_positions": 4,
+  "limit_buffer_pct": 0.5,
+  "cancel_after_minutes": 35,
+  "reference_feed": "sip",
+  "reference_adjustment": "raw",
+  "currency": "USD",
+  "research_qualified": false
+}

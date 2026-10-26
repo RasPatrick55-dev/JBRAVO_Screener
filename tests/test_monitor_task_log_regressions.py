@@ -13,8 +13,11 @@ import unittest
 from unittest import mock
 
 import pandas as pd
+import pytest
 from alpaca.trading.enums import OrderSide, OrderStatus, QueryOrderStatus
 import scripts
+
+pytestmark = pytest.mark.alpaca_optional
 
 ROOT = Path(__file__).resolve().parents[1]
 

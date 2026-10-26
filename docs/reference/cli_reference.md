@@ -186,7 +186,8 @@ options:
 ## `python -m scripts.execute_trades --help`
 
 ```text
-usage: execute_trades.py [-h] [--paper-research-entries] [--source {db,path}]
+usage: execute_trades.py [-h] [--paper-research-entries]
+                         [--strategy-premarket-entries] [--source {db,path}]
                          [--source-path SOURCE_PATH]
                          [--allocation-pct ALLOCATION_PCT]
                          [--alloc-weight-key {score,model_score,none}]
@@ -241,6 +242,10 @@ options:
                         Allow bound paper-session test entries while research
                         qualification is pending; operational checks remain
                         required.
+  --strategy-premarket-entries
+                        Use the versioned Pullback/Reclaim paper worker at
+                        04:00 Eastern; requires explicit paper testing context
+                        and matching process settings.
   --source {db,path}    Candidate source: db (latest run in PostgreSQL) or
                         path (CSV file)
   --source-path SOURCE_PATH

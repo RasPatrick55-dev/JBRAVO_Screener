@@ -2237,6 +2237,7 @@ class ExecutorConfig:
     diagnostic: bool = False
     reconcile_only: bool = False
     paper_research_entries: bool = False
+    strategy_premarket_entries: bool = False
     reconcile_auto: bool = True
     reconcile_lookback_days: int = 14
     reconcile_limit: int = 500
@@ -6302,6 +6303,11 @@ class TradeExecutor:
         # SELL/protective orders retain their existing behavior and dependencies.
         side_value = _extract_request_field(request, 'side', '')
         side = str(getattr(side_value, 'value', side_value)).lower()
+        if side == 'buy' and getattr(self.config, '_order_submission_unknown', False):
+            self.metrics.record_skip('DATA_MISSING', count=1)
+            self.metrics.status = 'blocked'
+            self.metrics.exit_reason = 'ORDER_SUBMISSION_OUTCOME_UNKNOWN'
+            return None
         if side == 'buy':
             rows = getattr(self.config, '_entry_candidate_rows', None)
             prior = getattr(self.config, '_entry_preflight', {})
@@ -6328,8 +6334,6 @@ class TradeExecutor:
                 LOGGER.error('EXECUTOR_PREFLIGHT status=blocked reasons=%s', result['reasons'])
                 return None
         attempts = 3
-        backoff = 1.5
-        delay = 1.0
         last_error: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
             if side == 'buy' and not self.config.reconcile_only:
@@ -6414,12 +6418,12 @@ class TradeExecutor:
                     )
                     self.metrics.api_retries += 1
                     continue
-                if attempt < attempts and status not in {400, 401, 403, 404, 422}:
-                    self.metrics.api_retries += 1
-                    self.log_info("API_RETRY", attempt=attempt, error=error_message)
-                    self.sleep(delay)
-                    delay *= backoff
-                    continue
+                if status not in {400, 401, 403, 404, 422}:
+                    # A failed response does not prove POST was rejected. Only
+                    # the explicit tick-validation rejection above is retried.
+                    self.config._order_submission_unknown = True
+                    self.metrics.status = 'blocked'
+                    self.metrics.exit_reason = 'ORDER_SUBMISSION_OUTCOME_UNKNOWN'
                 self.metrics.api_failures += 1
                 LOGGER.warning(
                     "[WARN] ALPACA_HTTP_FAIL action=submit_order status=%s err=%s",
@@ -6430,18 +6434,14 @@ class TradeExecutor:
                 break
             except Exception as exc:
                 last_error = exc
-                if isinstance(exc, AttributeError):
-                    self.metrics.api_failures += 1
-                    _warn_context("alpaca.submit_order failed", str(exc))
-                    break
-                if attempt < attempts:
-                    self.metrics.api_retries += 1
-                    self.log_info("API_RETRY", attempt=attempt, error=str(exc))
-                    self.sleep(delay)
-                    delay *= backoff
-                    continue
+                # The server may have accepted an order before a timeout or
+                # connection reset. Do not issue another non-idempotent POST.
+                self.config._order_submission_unknown = True
+                self.metrics.status = 'blocked'
+                self.metrics.exit_reason = 'ORDER_SUBMISSION_OUTCOME_UNKNOWN'
                 self.metrics.api_failures += 1
-                _warn_context("alpaca.submit_order failed", str(exc))
+                self.log_info('ORDER_SUBMISSION_OUTCOME_UNKNOWN', error_type=type(exc).__name__)
+                break
         if last_error is not None:
             self.log_info("API_FAILURE", error=str(last_error))
         return None
@@ -6653,6 +6653,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Execute trades for pipeline candidates")
     parser.add_argument('--paper-research-entries', action='store_true',
                         help='Allow bound paper-session test entries while research qualification is pending; operational checks remain required.')
+    parser.add_argument('--strategy-premarket-entries',action='store_true',
+                        help='Use the versioned Pullback/Reclaim paper worker at 04:00 Eastern; requires explicit paper testing context and matching process settings.')
     parser.add_argument(
         "--source",
         choices=("db", "path"),
@@ -7057,6 +7059,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         reconcile_auto=bool(getattr(args, "reconcile_auto", True)),
         reconcile_only=getattr(args, "reconcile_only", False),
         paper_research_entries=bool(getattr(args, 'paper_research_entries', False)),
+        strategy_premarket_entries=bool(getattr(args,'strategy_premarket_entries',False)),
         reconcile_lookback_days=int(
             getattr(args, "reconcile_lookback_days", ExecutorConfig.reconcile_lookback_days)
         ),
@@ -7210,6 +7213,24 @@ def run_executor(
         loader.log_summary()
         return 1
     try:
+        if getattr(config,'strategy_premarket_entries',False):
+            from scripts.strategy_execution_runtime import run_entry
+            value=run_entry(config,base_dir=Path.cwd())
+            metrics.status=value['status'];metrics.exit_reason=value['exit_reason']
+            metrics.symbols_in=value['candidate_count']
+            metrics.orders_submitted=value['orders_submitted'];metrics.orders_filled=value['orders_filled']
+            if not metrics.orders_submitted:
+                metrics.record_skip(value['exit_reason'],count=1)
+            config._entry_preflight=value.get('preflight',dict(status='pass',candidate_count=metrics.symbols_in,
+                entry_authorization='paper_strategy_test',strategy_contract=value['strategy_contract']))
+            config._entry_cancel_at=value.get('cancellation_deadline')
+            for order in value.get('order_observations',[]):
+                state=order['status'] if order['status'] in executor_health.TERMINAL else 'submitted'
+                executor_health.observe(metrics,order_id=order['id'],symbol=order['symbol'],state=state,
+                    deadline=value.get('cancellation_deadline'))
+            if value['status']=='blocked':metrics.api_failures+=1
+            loader.persist_metrics();loader.log_summary()
+            return 1 if value['status']=='blocked' else 0
         if config.dry_run:
             banner = "=" * 72
             LOGGER.info(banner)
@@ -7723,7 +7744,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     skip_block = metrics_payload.get("skip_reasons")
                 skip_counts = {str(k): _as_int(v) for k, v in (skip_block or {}).items()}
                 candidates_in = _as_int(metrics_payload.get("symbols_in"))
-                if candidates_in <= 0:
+                if candidates_in <= 0 and not getattr(config,'strategy_premarket_entries',False):
                     candidates_in = _count_db_candidates()
                 orders_submitted = _as_int(metrics_payload.get("orders_submitted"))
                 non_time_skips = sum(
