@@ -37,6 +37,21 @@ class SubmissionFaults(unittest.TestCase):
         submit.assert_called_once()
         self.assertTrue(self.executor.config._order_submission_unknown)
 
+    def test_existing_executor_dispatches_strategy_before_legacy_candidate_or_order_path(self):
+        mod=self.fixture.mod
+        cfg=mod.ExecutorConfig(strategy_premarket_entries=True,paper_research_entries=True,reconcile_auto=True)
+        value=dict(status='skipped',exit_reason='NO_STRATEGY_BUY_SIGNALS',candidate_count=0,
+            orders_submitted=0,orders_filled=0,strategy_contract=dict(strategy_id='pullback'))
+        with mock.patch('scripts.strategy_execution_runtime.run_entry',return_value=value) as worker, \
+             mock.patch.object(mod,'_run_auto_reconcile',return_value=True) as reconcile, \
+             mock.patch.object(mod,'configure_logging'), \
+             mock.patch.object(mod.TradeExecutor,'persist_metrics'), \
+             mock.patch.object(mod.TradeExecutor,'log_summary'), \
+             mock.patch.object(mod.TradeExecutor,'_get_trading_clock',side_effect=AssertionError('legacy route')):
+            self.assertEqual(mod.run_executor(cfg,client=SimpleNamespace()),0)
+        worker.assert_called_once()
+        self.assertEqual([c.kwargs['stage'] for c in reconcile.call_args_list],['start','end'])
+
 
 class PositionSnapshotFaults(unittest.TestCase):
     def setUp(self):
@@ -60,3 +75,15 @@ class PositionSnapshotFaults(unittest.TestCase):
         self.fixture.client.get_all_positions.return_value=None
         with self.assertRaisesRegex(RuntimeError,'broker_position_snapshot_unavailable'):
             self.fixture.monitor.get_open_positions()
+
+    def test_strategy_owned_position_bypasses_legacy_exit_and_trailing_rules(self):
+        monitor=self.fixture.monitor
+        monitor._STRATEGY_OWNED_SYMBOLS={'AAA'}
+        self.fixture.client.get_all_positions.return_value=[self.fixture.position]
+        with mock.patch.object(monitor,'save_positions_csv'), \
+             mock.patch.object(monitor,'position_frame',return_value=self.fixture.frame), \
+             mock.patch.object(monitor,'log_closed_positions'), \
+             mock.patch.object(monitor,'refresh_ml_risk_state',return_value={}), \
+             mock.patch.object(monitor,'calculate_days_held',side_effect=AssertionError('legacy exit evaluated')), \
+             mock.patch.object(monitor,'broker_submit_order',side_effect=AssertionError('legacy order submitted')):
+            self.assertEqual(monitor.process_positions_cycle(),[self.fixture.position])

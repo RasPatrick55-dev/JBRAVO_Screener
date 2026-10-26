@@ -11,7 +11,7 @@ from scripts.strategy_execution import prepare_handoff
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_handoff(conn, *, base_dir=ROOT, now=None):
+def load_handoff(conn, *, base_dir=ROOT, now=None, inspection=False):
     """Require source/history/completion proof plus one repeatable DB snapshot.
 
     The connection must be a newly opened read-only research_store connection.
@@ -20,8 +20,14 @@ def load_handoff(conn, *, base_dir=ROOT, now=None):
     now = now or datetime.now(timezone.utc)
     require(conn.readonly is True and conn.autocommit is False and
         conn.isolation_level == 2, 'execution_readonly_repeatable_snapshot_required')
-    result = health.check_health(base_dir, now=now, max_age_seconds=43200,
-        require_session=True, require_completion=True)
+    if inspection:
+        raw=health._read(Path(base_dir)/'reports/pipeline_postflight/latest.json',health.MAX_REPORT_BYTES)
+        record=json.loads(raw,object_pairs_hook=health._strict_object,parse_constant=health._invalid_constant)
+        result=pipeline.check_report(record,raw,base_dir,now=now,max_age_seconds=43200,
+            not_before=None,require_completion=True,inspection=True)
+    else:
+        result = health.check_health(base_dir, now=now, max_age_seconds=43200,
+            require_session=True, require_completion=True)
     require(result.get('status') == 'ok' and result.get('route') == 'pullback_reclaim_strategy' and
         result.get('screen_ready') is True, 'execution_primary_not_healthy')
     raw = health._read(Path(base_dir)/'reports/pipeline_postflight/latest.json', health.MAX_REPORT_BYTES)
@@ -40,7 +46,7 @@ def load_handoff(conn, *, base_dir=ROOT, now=None):
     from scripts.strategy_pipeline_store import candidate_frame
     frame, stamp = candidate_frame(conn, batch[1], exact_run_ts=batch[2])
     require(stamp == batch[2], 'execution_database_snapshot_changed')
-    handoff = prepare_handoff(record, frame.to_dict('records'), now=now)
+    handoff = prepare_handoff(record, frame.to_dict('records'), now=now,inspection=inspection)
     require(health._read(Path(base_dir)/'reports/pipeline_postflight/latest.json', health.MAX_REPORT_BYTES) == raw,
         'execution_primary_changed_after_database_read')
     return handoff

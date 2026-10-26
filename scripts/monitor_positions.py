@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import types
+_STRATEGY_OWNED_SYMBOLS = set()
 from datetime import datetime, timedelta, timezone, time as dt_time
 from pathlib import Path
 import pandas as pd
@@ -2437,6 +2438,7 @@ def enforce_stop_coverage(positions: list) -> tuple[int, float, int]:
         _persist_metrics()
         return 0, 0.0, 0
 
+    open_orders = [o for o in open_orders if getattr(o,'symbol',None) not in _STRATEGY_OWNED_SYMBOLS]
     open_orders = cleanup_orphan_trailing_stops(positions, open_orders)
 
     orders_by_symbol: dict[str, list] = {}
@@ -3412,6 +3414,9 @@ def process_positions_cycle():
     partial_order_ids = set()
     for position in positions:
         symbol = position.symbol
+        if symbol in _STRATEGY_OWNED_SYMBOLS:
+            logger.info('STRATEGY_POSITION_OWNED symbol=%s policy=completed_bar_atr_premarket_v1',symbol)
+            continue
         live_price = latest_prices.get(symbol)
         if live_price is not None:
             try:
@@ -3703,6 +3708,7 @@ def process_positions_cycle():
 
 
 def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None = None) -> str:
+    global _STRATEGY_OWNED_SYMBOLS
     logger.info("[MONITOR_START] Starting real-time position monitoring (pid=%s)", os.getpid())
     write_status(
         status="starting",
@@ -3742,6 +3748,12 @@ def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None =
 
             log_if_stale(open_pos_path, "open_positions.csv", threshold_minutes=10)
 
+            from scripts.strategy_execution_runtime import monitor_cycle
+            strategy_cycle=monitor_cycle(base_dir=Path(BASE_DIR))
+            _STRATEGY_OWNED_SYMBOLS=set(strategy_cycle['owned_symbols'])
+            if strategy_cycle.get('status')=='blocked':
+                raise RuntimeError('strategy_monitor_reconciliation_incomplete')
+
             if market_hours:
                 logger.info("CYCLE_PATH process_positions_cycle")
                 positions = process_positions_cycle() or []
@@ -3752,8 +3764,11 @@ def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None =
                 positions = update_open_positions() or []
 
             protective_orders_count, stop_coverage_pct, trailing_stops_count = (
-                enforce_stop_coverage(positions)
+                enforce_stop_coverage([p for p in positions if p.symbol not in _STRATEGY_OWNED_SYMBOLS])
             )
+            if _STRATEGY_OWNED_SYMBOLS and positions:
+                protective_orders_count+=strategy_cycle['native_covered']
+                stop_coverage_pct=min(100.,100*protective_orders_count/len(positions))
 
             check_pending_orders()
 
@@ -3778,6 +3793,8 @@ def monitor_positions(*, run_once: bool = False, kill_switch_path: Path | None =
             return loop_status
 
         sleep_time = SLEEP_INTERVAL if market_hours else OFF_HOUR_SLEEP_INTERVAL
+        if os.environ.get('JBR_STRATEGY_EXECUTION')=='true':
+            sleep_time=min(sleep_time,10 if market_hours else 30)
         time.sleep(sleep_time)
 
 

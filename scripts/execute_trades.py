@@ -2237,6 +2237,7 @@ class ExecutorConfig:
     diagnostic: bool = False
     reconcile_only: bool = False
     paper_research_entries: bool = False
+    strategy_premarket_entries: bool = False
     reconcile_auto: bool = True
     reconcile_lookback_days: int = 14
     reconcile_limit: int = 500
@@ -6652,6 +6653,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Execute trades for pipeline candidates")
     parser.add_argument('--paper-research-entries', action='store_true',
                         help='Allow bound paper-session test entries while research qualification is pending; operational checks remain required.')
+    parser.add_argument('--strategy-premarket-entries',action='store_true',
+                        help='Use the versioned Pullback/Reclaim paper worker at 04:00 Eastern; requires explicit paper testing context and matching process settings.')
     parser.add_argument(
         "--source",
         choices=("db", "path"),
@@ -7056,6 +7059,7 @@ def build_config(args: argparse.Namespace) -> ExecutorConfig:
         reconcile_auto=bool(getattr(args, "reconcile_auto", True)),
         reconcile_only=getattr(args, "reconcile_only", False),
         paper_research_entries=bool(getattr(args, 'paper_research_entries', False)),
+        strategy_premarket_entries=bool(getattr(args,'strategy_premarket_entries',False)),
         reconcile_lookback_days=int(
             getattr(args, "reconcile_lookback_days", ExecutorConfig.reconcile_lookback_days)
         ),
@@ -7209,6 +7213,24 @@ def run_executor(
         loader.log_summary()
         return 1
     try:
+        if getattr(config,'strategy_premarket_entries',False):
+            from scripts.strategy_execution_runtime import run_entry
+            value=run_entry(config,base_dir=Path.cwd())
+            metrics.status=value['status'];metrics.exit_reason=value['exit_reason']
+            metrics.symbols_in=value['candidate_count']
+            metrics.orders_submitted=value['orders_submitted'];metrics.orders_filled=value['orders_filled']
+            if not metrics.orders_submitted:
+                metrics.record_skip(value['exit_reason'],count=1)
+            config._entry_preflight=value.get('preflight',dict(status='pass',candidate_count=metrics.symbols_in,
+                entry_authorization='paper_strategy_test',strategy_contract=value['strategy_contract']))
+            config._entry_cancel_at=value.get('cancellation_deadline')
+            for order in value.get('order_observations',[]):
+                state=order['status'] if order['status'] in executor_health.TERMINAL else 'submitted'
+                executor_health.observe(metrics,order_id=order['id'],symbol=order['symbol'],state=state,
+                    deadline=value.get('cancellation_deadline'))
+            if value['status']=='blocked':metrics.api_failures+=1
+            loader.persist_metrics();loader.log_summary()
+            return 1 if value['status']=='blocked' else 0
         if config.dry_run:
             banner = "=" * 72
             LOGGER.info(banner)
@@ -7722,7 +7744,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     skip_block = metrics_payload.get("skip_reasons")
                 skip_counts = {str(k): _as_int(v) for k, v in (skip_block or {}).items()}
                 candidates_in = _as_int(metrics_payload.get("symbols_in"))
-                if candidates_in <= 0:
+                if candidates_in <= 0 and not getattr(config,'strategy_premarket_entries',False):
                     candidates_in = _count_db_candidates()
                 orders_submitted = _as_int(metrics_payload.get("orders_submitted"))
                 non_time_skips = sum(

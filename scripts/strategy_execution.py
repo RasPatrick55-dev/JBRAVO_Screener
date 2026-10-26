@@ -43,7 +43,7 @@ def number(value, *, positive=False):
     return result
 
 
-def prepare_handoff(record, rows, *, now):
+def prepare_handoff(record, rows, *, now, inspection=False):
     """Bind the exact published population, strategy, backtest and Metrics.
 
     Callers must separately validate the source-bound completed primary report.
@@ -52,7 +52,7 @@ def prepare_handoff(record, rows, *, now):
     from scripts.strategy_library import get_strategy
     from scripts.signal_handoff import candidate_values
     now = utc(now)
-    pipeline.assess(record, now=now, max_age_seconds=43200)
+    pipeline.assess(record, now=now, max_age_seconds=43200,inspection=inspection)
     batch, backtest, metrics = record['batch'], record['backtest'], record['metrics']
     definition = get_strategy(pipeline.STRATEGY).describe()
     require(batch['strategy_contract'] == dict(strategy_id=definition['id'],
@@ -65,7 +65,9 @@ def prepare_handoff(record, rows, *, now):
     proposals = batch['proposals']
     opening=datetime.combine(date.fromisoformat(record['session']['next_session']),
         datetime.min.time().replace(hour=4),NY).astimezone(timezone.utc)
-    require(utc(record['finished_at']) <= now < opening, 'execution_premarket_preparation_expired')
+    require(utc(record['finished_at']) <= now and (inspection or now < opening),
+            'execution_premarket_preparation_expired')
+    require(inspection or utc(record['finished_at'])<opening,'execution_preparation_missed_premarket_open')
     require(isinstance(rows, list) and len(rows) == len(proposals) <= PORTFOLIO['top_n'],
             'execution_candidate_population_changed')
     require(len({p['symbol'] for p in proposals}) == len(proposals) and
@@ -104,6 +106,7 @@ def prepare_handoff(record, rows, *, now):
     result = dict(schema=SCHEMA, primary_run_id=record['run_id'],
         primary_report_sha256=digest(record), candidate_run_ts_utc=record['candidate_run_ts_utc'],
         batch_sha256=digest(batch), candidate_values=candidate_values(rows),
+        source_bindings=deepcopy(record.get('source_bindings',{})),
         strategy_contract=deepcopy(batch['strategy_contract']),
         backtest_result_id=backtest['result_id'], metrics_result_id=metrics['result_id'],
         session=deepcopy(record['session']), portfolio=deepcopy(PORTFOLIO), proposals=deepcopy(proposals),
@@ -112,7 +115,8 @@ def prepare_handoff(record, rows, *, now):
             broker_order_type='LIMIT_DAY_EXTENDED',reference='CAPTURED_AFTER_HOURS_CLOSE',
             backtest_entry_model=record['session']['execution_model'],
             backtest_alignment='PREMARKET_REPLAY_PENDING'),
-        status='PREPARED' if proposals else 'NO_BUY_SIGNALS', paper_only=True,
+        status=('INSPECTION_ONLY' if inspection else 'PREPARED') if proposals else 'NO_BUY_SIGNALS',
+        inspection_mode=inspection,paper_only=True,
         order_submission_authorized=False, research_qualified=False,
         broker_operations=0, qualification_basis='EXPLICIT_PAPER_STRATEGY_TEST')
     result['handoff_id'] = digest(result)
@@ -155,7 +159,7 @@ def client_order_id(account_id, signal_id, *, role='entry', sequence=0):
     """Stable across primary reruns and crashes; broker maximum is 48 chars."""
     require(isinstance(account_id, str) and 1 <= len(account_id) <= 128 and
         re.fullmatch('[0-9a-f]{64}', signal_id) is not None and
-        role in {'entry', 'stop', 'exit', 'partial'} and
+        role in {'entry', 'stop', 'exit', 'partial', 'cancel'} and
         type(sequence) is int and sequence >= 0, 'execution_order_identity_invalid')
     return 'jbr2-' + hashlib.sha256(json.dumps(
         [account_id, signal_id, role, sequence], separators=(',', ':')).encode()).hexdigest()[:40]
@@ -182,7 +186,7 @@ def after_hours_reference(bars, *, symbol, signal_session, observed_at,
         signal_session=signal_session,price=float(bars[-1]['c']) if bars else None,
         last_bar_at=bars[-1]['t'] if bars else None,observed_at=utc(observed_at).isoformat(),
         cutoff_at=utc(cutoff).isoformat(),feed=feed,adjustment=adjustment,currency=currency,
-        complete=True,bars_sha256=digest(bars))
+        complete=True,bars=deepcopy(bars),bars_sha256=digest(bars))
     result['reference_id']=digest(result)
     return result
 
@@ -193,7 +197,8 @@ def build_entry_order(handoff, *, signal_id, account_id, cash, reference,
     require(handoff.get('schema') == SCHEMA and
         digest({k:v for k,v in handoff.items() if k!='handoff_id'}) == handoff.get('handoff_id') and
         handoff['portfolio'] == PORTFOLIO and handoff['paper_only'] is True and
-        handoff['order_submission_authorized'] is False, 'execution_handoff_changed')
+        handoff['order_submission_authorized'] is False and handoff.get('inspection_mode') is False,
+        'execution_handoff_changed')
     require(entry_window(handoff,now=now,clock_next_regular_open=clock_next_regular_open,
         clock_timestamp=clock_timestamp) == 'PREMARKET_OPEN', 'execution_entry_before_premarket_open')
     now=utc(now)

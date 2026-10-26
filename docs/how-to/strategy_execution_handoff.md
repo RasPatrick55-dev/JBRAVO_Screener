@@ -4,8 +4,9 @@ The intended cycle is to collect completed data after 20:00 Eastern, retain the
 data-arrival allowance through 20:15, and submit at the next trading session's
 04:00 premarket open. The existing executor task already targets 04:00.
 
-This candidate adds a read-only input adapter and pure planning contracts.
-**The production strategy worker is not connected or activated yet.** The
+This change adds an opt-in worker to the existing executor and monitor, with
+PostgreSQL ownership and a durable order outbox. **Code availability does not
+mean the PythonAnywhere tasks have been activated.** The
 current v2 backtest models regular-session opening fills; it remains preserved
 as a reference result and is explicitly marked `PREMARKET_REPLAY_PENDING` in
 the new execution handoff. It does not establish premarket performance.
@@ -56,18 +57,41 @@ partial-fill accounting and durable restart recovery. A native trailing-stop
 acknowledgment must not be reported as premarket stop coverage. Reference:
 [Alpaca order documentation](https://docs.alpaca.markets/us/docs/orders-at-alpaca).
 
-`submit_claimed` defines a future worker's order port. It requires the explicit
-matching paper account and canonical paper origin. A durable unique
-account/signal claim must commit before one POST. An uncertain result is
-recovered by the same broker client ID without another POST. This helper does
-not install a production outbox, schedule or trading authority.
+`strategy_execution_engine.Engine` uses `strategy_execution_store.Store` and
+the bounded native `PaperBroker`. The actual native account ID is verified;
+an account from a separate MCP connection is not assumed to be the same account.
+Each unique account/signal/role/sequence claim commits before one POST, PATCH
+or DELETE. Uncertain submissions are recovered by client ID without repeating
+the mutation. Explicit permanent refusals remain durable and cannot become a
+fresh buy. Position absence does not close a signal; cumulative verified fills
+and the broker position must reconcile. Entry deadlines are reconciled before
+quotes, so a quote outage cannot prevent cancellation.
+
+The monitor owns only enrolled strategy positions, bypassing the legacy exit
+and continuous trailing rules for those symbols. It advances the shared kernel
+once per completed daily session, confirms cancellation before selling, and
+keeps partial-exit targets across restarts. Fixed GTC stops cover regular hours;
+fresh SIP quotes drive extended-hours limit exits. Limits can remain unfilled.
+Reports count native coverage only during regular hours and only for the exact
+remaining owned quantity. With strategy monitoring enabled, the existing loop
+sleeps at most ten seconds during 04:00–20:00 and thirty seconds outside it.
+
+The executor requires a fresh monitor receipt for the same native account and
+source bindings before buying. Database policy identity/revision and source
+pins are checked again before broker mutations. New entries bind all producer
+sources; existing positions bind their frozen exit implementation and strategy
+definition, so unrelated dashboard/producer edits cannot pause protection.
+Existing schema/accounting
+policies are preserved. The two new strategy tables retain lifecycle state,
+strategy/backtest/Metrics identities, raw reference bars and broker observations;
+these records do not assert fee-complete financial performance.
 
 ## Errors repaired in this candidate
 
 The existing executor stops automatic retries after ambiguous order POSTs and
 blocks further buys in that process. Confirmed sub-penny validation rejection
-can still be corrected and retried with fresh asset eligibility. Durable
-restart-safe handling remains part of the pending strategy worker.
+can still be corrected and retried with fresh asset eligibility. The opt-in
+worker additionally retains claims across process restarts.
 
 The monitor raises an unavailable-snapshot error on failed or malformed broker
 position reads. Those failures cannot publish a flat-account snapshot or record
@@ -75,11 +99,28 @@ false closures. A successfully observed empty list remains valid.
 
 ## Activation requirements
 
-Add the after-hours reference capture to the producer, implement a versioned
-premarket limit-fill replay and connect its results to Metrics, then integrate
-durable intents/orders/positions and the strategy-aware monitor. Preserve old
-regular-session results instead of relabeling them as premarket tests. Missing
-liquidity and unfilled/partial orders must remain explicit in research results.
+Install the two new tables through a reviewed migration; deploy the exact
+reviewed source bytes while preserving shared native edits and dashboard assets.
+The primary must then produce a new completed report binding all 54 sources.
+Do not rewrite an existing report or backdate a run to make expired input valid.
+An after-09:30 run cannot renew the prior signal session; wait for the next
+completed session and its normal primary run.
+
+Start the existing monitor with explicit process-scoped paper settings and
+`JBR_STRATEGY_EXECUTION=true`, and verify its fresh bound receipt before enabling
+`--strategy-premarket-entries` on the executor. Keep explicit
+`--paper-research-entries`, DB source, 5% allocation, four total positions,
+three new positions, whole shares, no minimum-order bump, no chase, 0.5% limit
+buffer, 35-minute cancellation and 04:00 Eastern submission. Existing normal
+start/end reconciliation remains required. No private environment-file edit
+is needed. A dry run or zero-signal inspection opens no strategy broker adapter
+or writable strategy store; normal executor reconciliation is separate.
+
+Premarket entry performance remains unqualified until a versioned minute-data
+limit-fill replay is connected to Backtest and Metrics. The owner's explicit
+paper strategy-testing mode permits collecting prospective paper observations;
+it does not relabel the preserved regular-session reference results or qualify
+the strategy. Missing liquidity and unfilled/partial orders remain explicit.
 
 Existing policy locks, recovery exclusions, account/cash limits and explicit
 paper testing authority remain in force. Neither research qualification nor
