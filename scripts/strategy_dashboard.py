@@ -37,10 +37,19 @@ def snapshot():
         if stamp != batch[1] or len(frame) != batch[2]:
             raise ValueError('strategy_dashboard_population_mismatch')
         rows=clean(frame.to_dict('records'))
+        backtest=batch[3].get('backtest')
+        if backtest is not None:
+            from scripts.strategy_pipeline import validate_backtest
+            with conn.cursor() as cur:
+                cur.execute('SELECT run_id FROM public.screener_strategy_batches_app WHERE run_ts_utc=%s',(batch[1],))
+                primary=cur.fetchone()
+            if primary is None:raise ValueError('backtest_primary_batch_missing')
+            validate_backtest(backtest,{k:v for k,v in batch[3].items() if k!='backtest'},primary[0])
         return dict(result,ok=True,status='COMPLETE' if rows else 'EMPTY',
             run_date=batch[0].isoformat(),run_ts_utc=stamp.isoformat(),rows=rows,rows_final=len(rows),
             source_detail='strategy_primary:'+batch[3]['outcome'],archive_id=batch[3]['archive_id'],
-            scan_run_id=batch[3]['scan_run_id'])
+            scan_run_id=batch[3]['scan_run_id'],strategy_contract=batch[3].get('strategy_contract'),
+            _strategy_backtest=backtest)
     except Exception:
         return result
     finally:
@@ -49,11 +58,8 @@ def snapshot():
 
 def api_payload(kind, args):
     """Use a single repeatable snapshot for each endpoint, including empty days."""
-    result=snapshot()
-    if kind=='backtest':
-        # Legacy per-symbol backtests are unrelated to this strategy's replay.
-        return dict(result,rows=[],rows_final=0,window=str(args.get('window') or '6M'),
-            metric_basis='STRATEGY_RESEARCH_SIMULATION',source_detail=result['source_detail']+':see_primary_research_trace')
+    result=dict(snapshot())
+    backtest=result.pop('_strategy_backtest',None)
     requested=args.get('run_ts_utc')
     if requested:
         try:
@@ -61,6 +67,27 @@ def api_payload(kind, args):
         except (ValueError,TypeError):same=False
         if not same:
             return dict(result,ok=False,status='ERROR',rows=[],rows_final=0,source_detail='strategy_primary:batch_changed')
+    if kind=='backtest':
+        if backtest is None:
+            return dict(result,ok=False,status='BACKTEST_PENDING',rows=[],rows_final=0,
+                metric_basis='STRATEGY_RESEARCH_SIMULATION',source_detail='strategy_primary:no_bound_strategy_backtest')
+        contract=backtest['strategy_contract'];rows=[]
+        for r in backtest['results']:
+            rows.append(dict(r,signal_id=r['current_signal_id'],trades=r['closed_signals'],
+                wins=r['winning_signals'],losses=r['losing_signals'],win_rate=r['win_rate_pct'],
+                net_pnl=r['closed_trade_net_pnl'],expectancy=r['expectancy_net_per_closed_signal'],
+                max_drawdown=r['max_closed_signal_drawdown_cash'],drawdown_units='USD_CLOSED_SIGNAL_PNL'))
+        query=str(args.get('q') or '').strip().upper()
+        if query:rows=[r for r in rows if query in r['symbol']]
+        try:limit=max(1,min(200,int(args.get('limit') or 50)))
+        except (ValueError,TypeError):limit=50
+        rows=rows[:limit]
+        return dict(result,rows=rows,rows_final=len(rows),backtest_status=backtest['status'],
+            strategy_id=contract['strategy_id'],strategy_version=contract['strategy_version'],
+            definition_sha256=contract['definition_sha256'],backtest_result_id=backtest['result_id'],
+            window='STRATEGY_EPISODE',evaluation_folds=backtest['parameters']['folds'],
+            evaluation_end=backtest['parameters']['effective_test_end'],
+            metric_basis='STRATEGY_RESEARCH_SIMULATION',source_detail='strategy_backtest:'+backtest['status'])
     rows=result['rows'];query=str(args.get('q') or '').strip().upper()
     if query:
         rows=[r for r in rows if query in r['symbol'] or query in str(r['score_breakdown']).upper()]

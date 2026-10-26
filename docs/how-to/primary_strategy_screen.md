@@ -47,8 +47,10 @@ completion before dispatch. There are no new broker orders during verification.
 
 `reports/pipeline_postflight/latest.json` uses
 `jbravo.primary-strategy-screen.v1`. `BUY_SIGNALS` means the archived proposals
-were published; `NO_BUY_SIGNALS` is a successful zero-candidate screen. Backtest
-and metric fields refer to the verified archived research simulation. Legacy
+were published; `NO_BUY_SIGNALS` is a successful zero-candidate screen. The
+[strategy-aware backtesting stage](strategy_backtest_stage.md) dispatches from
+the Screener's exact strategy/version/definition and records its own bound
+candidate report. Cohort metric fields refer to the verified research simulation. Legacy
 label generation and ranker evaluation are explicitly marked unused. Simulation
 P&L is never published as actual broker performance.
 
