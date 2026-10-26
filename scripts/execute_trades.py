@@ -6302,6 +6302,11 @@ class TradeExecutor:
         # SELL/protective orders retain their existing behavior and dependencies.
         side_value = _extract_request_field(request, 'side', '')
         side = str(getattr(side_value, 'value', side_value)).lower()
+        if side == 'buy' and getattr(self.config, '_order_submission_unknown', False):
+            self.metrics.record_skip('DATA_MISSING', count=1)
+            self.metrics.status = 'blocked'
+            self.metrics.exit_reason = 'ORDER_SUBMISSION_OUTCOME_UNKNOWN'
+            return None
         if side == 'buy':
             rows = getattr(self.config, '_entry_candidate_rows', None)
             prior = getattr(self.config, '_entry_preflight', {})
@@ -6328,8 +6333,6 @@ class TradeExecutor:
                 LOGGER.error('EXECUTOR_PREFLIGHT status=blocked reasons=%s', result['reasons'])
                 return None
         attempts = 3
-        backoff = 1.5
-        delay = 1.0
         last_error: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
             if side == 'buy' and not self.config.reconcile_only:
@@ -6414,12 +6417,12 @@ class TradeExecutor:
                     )
                     self.metrics.api_retries += 1
                     continue
-                if attempt < attempts and status not in {400, 401, 403, 404, 422}:
-                    self.metrics.api_retries += 1
-                    self.log_info("API_RETRY", attempt=attempt, error=error_message)
-                    self.sleep(delay)
-                    delay *= backoff
-                    continue
+                if status not in {400, 401, 403, 404, 422}:
+                    # A failed response does not prove POST was rejected. Only
+                    # the explicit tick-validation rejection above is retried.
+                    self.config._order_submission_unknown = True
+                    self.metrics.status = 'blocked'
+                    self.metrics.exit_reason = 'ORDER_SUBMISSION_OUTCOME_UNKNOWN'
                 self.metrics.api_failures += 1
                 LOGGER.warning(
                     "[WARN] ALPACA_HTTP_FAIL action=submit_order status=%s err=%s",
@@ -6430,18 +6433,14 @@ class TradeExecutor:
                 break
             except Exception as exc:
                 last_error = exc
-                if isinstance(exc, AttributeError):
-                    self.metrics.api_failures += 1
-                    _warn_context("alpaca.submit_order failed", str(exc))
-                    break
-                if attempt < attempts:
-                    self.metrics.api_retries += 1
-                    self.log_info("API_RETRY", attempt=attempt, error=str(exc))
-                    self.sleep(delay)
-                    delay *= backoff
-                    continue
+                # The server may have accepted an order before a timeout or
+                # connection reset. Do not issue another non-idempotent POST.
+                self.config._order_submission_unknown = True
+                self.metrics.status = 'blocked'
+                self.metrics.exit_reason = 'ORDER_SUBMISSION_OUTCOME_UNKNOWN'
                 self.metrics.api_failures += 1
-                _warn_context("alpaca.submit_order failed", str(exc))
+                self.log_info('ORDER_SUBMISSION_OUTCOME_UNKNOWN', error_type=type(exc).__name__)
+                break
         if last_error is not None:
             self.log_info("API_FAILURE", error=str(last_error))
         return None

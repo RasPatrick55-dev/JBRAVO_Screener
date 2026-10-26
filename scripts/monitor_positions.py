@@ -1423,12 +1423,16 @@ def calculate_days_held(position, now_utc: datetime | None = None) -> int:
 def get_open_positions():
     try:
         positions = trading_client.get_all_positions()
+        if not isinstance(positions, (list, tuple)):
+            raise ValueError('invalid_broker_position_snapshot')
         logger.info(f"Fetched {len(positions)} positions from Alpaca API.")
         return positions
-    except Exception as e:
-        logger.error("Failed to fetch open positions: %s", e)
+    except Exception:
+        logger.error("Failed to fetch open positions; position snapshot is unavailable.")
         increment_metric("api_errors")
-        return []
+        # Unknown must not mean flat: callers otherwise record closures and
+        # report healthy zero-position coverage from a failed broker request.
+        raise RuntimeError('broker_position_snapshot_unavailable') from None
 
 
 # Save open positions to CSV for dashboard consumption

@@ -518,6 +518,7 @@ class CallerTests(Fixture):
         self.assertEqual(loaded.attrs['executor_snapshot']['scope'], 'candidate_load_only')
 
     def test_query_join_fallback_keeps_caller_snapshot_open(self):
+        from scripts import strategy_pipeline
         prior = sys.modules.pop('scripts.db_queries')
         try:
             queries = importlib.import_module('scripts.db_queries')
@@ -527,7 +528,8 @@ class CallerTests(Fixture):
             cursor.execute.side_effect = lambda sql, *args: commands.append(sql.strip())
             cursor.fetchone.return_value = (self.batch,)
             connection = SimpleNamespace(cursor=lambda: cursor, close=mock.Mock(), rollback=mock.Mock())
-            with mock.patch.object(queries, '_fetch_latest_candidate_rows', side_effect=[RuntimeError('join unavailable'), ([('AAA', 1)], ['symbol', 'score'])]):
+            with mock.patch.object(strategy_pipeline, 'enabled', return_value=False), \
+                 mock.patch.object(queries, '_fetch_latest_candidate_rows', side_effect=[RuntimeError('join unavailable'), ([('AAA', 1)], ['symbol', 'score'])]):
                 frame, timestamp = queries.get_latest_screener_candidates(self.now.date(), connection=connection)
             self.assertEqual(timestamp, self.batch)
             self.assertEqual(frame['symbol'].tolist(), ['AAA'])
@@ -558,13 +560,15 @@ class CallerTests(Fixture):
         connection.rollback.assert_called_once(); connection.close.assert_called_once()
 
     def test_standalone_query_still_closes_its_owned_connection(self):
+        from scripts import strategy_pipeline
         prior = sys.modules.pop('scripts.db_queries')
         try:
             queries = importlib.import_module('scripts.db_queries')
             cursor = mock.MagicMock(); cursor.__enter__.return_value = cursor
             cursor.fetchone.return_value = (None,)
             connection = SimpleNamespace(cursor=lambda: cursor, close=mock.Mock())
-            with mock.patch.object(queries.db, 'get_db_conn', return_value=connection, create=True):
+            with mock.patch.object(strategy_pipeline, 'enabled', return_value=False), \
+                 mock.patch.object(queries.db, 'get_db_conn', return_value=connection, create=True):
                 frame, timestamp = queries.get_latest_screener_candidates(self.now.date())
             self.assertTrue(frame.empty); self.assertIsNone(timestamp)
             connection.close.assert_called_once()
@@ -677,13 +681,15 @@ class CallerTests(Fixture):
             self.assertEqual(submit.call_count, 1)
         executor.client.get_asset.assert_not_called()
 
-    def test_asset_eligibility_rechecked_on_retry(self):
+    def test_asset_eligibility_rechecked_after_confirmed_tick_rejection(self):
         executor = self.entry_executor()
         executor.client.get_asset.side_effect = [SimpleNamespace(status='active', tradable=True),
                                                SimpleNamespace(status='inactive', tradable=True)]
-        with mock.patch.object(executor, '_submit_order', side_effect=RuntimeError('temporary')) as submit, \
+        error = self.mod.requests.HTTPError('confirmed validation rejection')
+        error.response = SimpleNamespace(status_code=422, text='sub-penny increment')
+        with mock.patch.object(executor, '_submit_order', side_effect=error) as submit, \
              mock.patch.object(executor, 'sleep'):
-            self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA', limit_price=10)))
+            self.assertIsNone(executor.submit_with_retries(SimpleNamespace(side='buy', symbol='AAA', limit_price=10, _normalized_limit=True)))
         self.assertEqual(submit.call_count, 1)
         self.assertEqual(executor.client.get_asset.call_count, 2)
         # A previous submission failure is still visible even if eligibility changes.

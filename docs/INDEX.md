@@ -17,6 +17,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 
 ## How-To
 
+- [Strategy execution handoff and activation requirements](how-to/strategy_execution_handoff.md)
 - [Strategy Metrics stage](how-to/strategy_metrics_stage.md)
 - [Strategy identity in the backtesting stage](how-to/strategy_backtest_stage.md)
 - [Primary strategy Screener and handoff](how-to/primary_strategy_screen.md)
