@@ -22,7 +22,7 @@ SCHEMA = 'jbravo.primary-strategy-screen.v1'
 EXTRA_SOURCES = ('scripts/strategy_pipeline.py', 'config/strategy_pipeline.json',
                  'config/strategy_scan_daily.json', 'scripts/daily_strategy_scan.py',
                  'scripts/strategy_pipeline_store.py', 'scripts/strategy_dashboard.py',
-                 'scripts/strategy_backtest.py')
+                 'scripts/strategy_backtest.py', 'scripts/strategy_metrics.py')
 EXTRA_SOURCES += tuple('scripts/'+name for name in (
     'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
     'research_testing.py', 'research_strategies.py', 'research_simulation.py',
@@ -230,7 +230,11 @@ def selection_batch(value, session):
         research_qualified=False, order_submission_authorized=False)
 
 
-def publish_batch(conn, value, rows, session, invocation, run_ts, *, backtest):
+def selected_batch(payload):
+    return {k:v for k,v in payload.items() if k not in ('backtest','metrics')}
+
+
+def publish_batch(conn, value, rows, session, invocation, run_ts, *, backtest, metrics):
     """Single commit for header + canonical candidates + top candidates, even at zero."""
     from scripts import db
     from scripts.research_testing import json_default
@@ -243,7 +247,9 @@ def publish_batch(conn, value, rows, session, invocation, run_ts, *, backtest):
     conn.set_session(isolation_level='READ COMMITTED', readonly=False)
     selected=selection_batch(value,session)
     validate_backtest(backtest,selected,invocation)
-    payload=dict(selected,backtest=backtest)
+    from scripts.strategy_metrics import validate_metrics
+    validate_metrics(metrics,backtest,selected,invocation)
+    payload=dict(selected,backtest=backtest,metrics=metrics)
     try:
         db._policy_write_lock(conn)
         with conn.cursor() as cur:
@@ -353,9 +359,11 @@ def main(argv, *, base_dir=ROOT):
     spec=json.loads(spec_raw)
     backtest=run_candidate_backtest(selection_batch(value,session),primary_run_id=args.handoff_invocation,
         dataset=dataset,specification=spec)
+    from scripts.strategy_metrics import build_metrics
+    metrics=build_metrics(selection_batch(value,session),backtest,primary_run_id=args.handoff_invocation)
     conn = connect(write=True, env=env)
     try:
-        batch = publish_batch(conn, value, rows, session, args.handoff_invocation, started,backtest=backtest)
+        batch = publish_batch(conn, value, rows, session, args.handoff_invocation, started,backtest=backtest,metrics=metrics)
     finally:
         conn.close()
     # A new read-only transaction verifies the committed candidate population.
@@ -370,9 +378,9 @@ def main(argv, *, base_dir=ROOT):
     record = dict(schema=SCHEMA, run_id=args.handoff_invocation, invocation_id=args.handoff_invocation,
         started_at=started.isoformat(), finished_at=finished.isoformat(), pipeline_rc=0,
         session=session, batch=batch, candidate_run_ts_utc=started.isoformat(), source_bindings=sources,
-        handoff=value['handoff'], backtest=backtest, research_metrics=value['summary']['strategies'][0]['metrics'],
+        handoff=value['handoff'], backtest=backtest, metrics=metrics,
         stages=dict(screener='COMPLETED', backtest=backtest['status'],
-            metrics='RESEARCH_SIMULATION_ONLY', labels='NOT_USED_BY_STRATEGY', ranker_eval='NOT_USED_BY_STRATEGY',
+            metrics=metrics['status'], labels='NOT_USED_BY_STRATEGY', ranker_eval='NOT_USED_BY_STRATEGY',
             handoff='COMMITTED_AND_SEPARATE_READONLY_VERIFIED'),
         legacy_screener_options_applied=False, broker_operations=0, entry_ready=False,
         order_submission_authorized=False, research_qualified=False)
@@ -397,9 +405,12 @@ def assess(record, *, now, max_age_seconds=7200, not_before=None):
     require(started <= finished <= now and 0 <= (now-finished).total_seconds() <= max_age_seconds and
         (not_before is None or started >= not_before), 'strategy_postflight_stale_or_future')
     session, batch, handoff = record['session'], record['batch'], record['handoff']
-    selected={k:v for k,v in batch.items() if k!='backtest'}
+    selected=selected_batch(batch)
     validate_backtest(record['backtest'],selected,record['run_id'])
     require(record['backtest']==batch['backtest'],'strategy_backtest_postflight_mismatch')
+    from scripts.strategy_metrics import validate_metrics
+    validate_metrics(record['metrics'],record['backtest'],selected,record['run_id'])
+    require(record['metrics']==batch['metrics'],'strategy_metrics_postflight_mismatch')
     require(_utc(session['signal_available_at']) <= started and finished < _utc(session['next_open_at']) and
         now < _utc(session['next_open_at']), 'strategy_handoff_expired_or_early')
     proposals = handoff['proposals']
@@ -412,7 +423,7 @@ def assess(record, *, now, max_age_seconds=7200, not_before=None):
     require(record['pipeline_rc'] == 0 and record['broker_operations'] == 0 and record['entry_ready'] is False and
         record['order_submission_authorized'] is False and record['research_qualified'] is False and
         record['stages'] == dict(screener='COMPLETED', backtest=record['backtest']['status'],
-        metrics='RESEARCH_SIMULATION_ONLY', labels='NOT_USED_BY_STRATEGY', ranker_eval='NOT_USED_BY_STRATEGY',
+        metrics=record['metrics']['status'], labels='NOT_USED_BY_STRATEGY', ranker_eval='NOT_USED_BY_STRATEGY',
         handoff='COMMITTED_AND_SEPARATE_READONLY_VERIFIED'), 'strategy_postflight_scope_mismatch')
     return dict(status='ok', failures=[], qualifications=[], run_id=record['run_id'],
         route='pullback_reclaim_strategy', pipeline_ready=True, screen_ready=True,

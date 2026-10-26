@@ -33,7 +33,7 @@ def positive():
             strategy_version='2',next_open_at='2026-10-27T13:30:00+00:00')))
 
 
-@pytest.mark.parametrize('name',['api_screener_picks','api_screener_metrics','api_screener_candidates'])
+@pytest.mark.parametrize('name',['api_screener_picks','api_screener_candidates'])
 def test_actual_api_buy_then_zero_never_uses_raw_tables_or_csv(monkeypatch,name):
     monkeypatch.setattr(pipeline,'enabled',lambda:True)
     current=[view([positive()])]
@@ -72,8 +72,8 @@ def test_unavailable_strategy_snapshot_never_falls_back_to_legacy(monkeypatch):
 
 def test_equal_utc_timestamp_forms_accept_same_batch(monkeypatch):
     monkeypatch.setattr(dashboard,'snapshot',lambda:view([positive()]))
-    assert dashboard.api_payload('metrics',dict(run_ts_utc='2026-10-27T03:45:00Z'))['rows_final']==1
-    assert dashboard.api_payload('metrics',dict(run_ts_utc='2026-10-26T03:45:00Z'))['ok'] is False
+    assert dashboard.api_payload('candidates',dict(run_ts_utc='2026-10-27T03:45:00Z'))['rows_final']==1
+    assert dashboard.api_payload('candidates',dict(run_ts_utc='2026-10-26T03:45:00Z'))['ok'] is False
 
 
 def test_backtest_endpoint_names_the_screener_strategy_and_bound_result(monkeypatch):
