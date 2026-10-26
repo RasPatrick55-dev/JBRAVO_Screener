@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import datetime,timezone
 from types import SimpleNamespace
+import json
 import socket
 import pytest
 
@@ -37,6 +38,7 @@ def test_empty_batch_still_resolves_exact_strategy_without_fake_simulation(monke
     assert result['strategy_definition']['id']==batch['strategy_contract']['strategy_id']
     assert result['strategy_definition']['version']=='2' and not result['replay_performed']
     assert result['candidate_signal_ids']==[] and result['broker_operations']==0
+    assert json.loads(json.dumps(result))==result
 
 @pytest.mark.parametrize('change',['missing','unknown','version','definition','spec','candidate'])
 def test_strategy_dispatch_never_defaults_or_silently_substitutes(monkeypatch,change):
@@ -88,6 +90,7 @@ def test_current_signal_is_unknown_and_no_history_is_not_a_zero_win_rate():
     assert row['closed_signals']==0 and row['win_rate_pct'] is None and row['expectancy_net_per_closed_signal'] is None
     assert row['current_signal_id']==proposal['signal_id'] and row['current_proposal_state']=='UNFILLED_FUTURE_OUTCOME_UNKNOWN'
     assert result['output_candidates']==result['input_candidates']==1
+    assert json.loads(json.dumps(result))==result
 
 def test_full_cohort_and_exact_registered_strategy_reach_the_engine(monkeypatch):
     batch,spec,data=inputs(True);proposal=batch['proposals'][0];calls=[]
@@ -101,6 +104,7 @@ def test_full_cohort_and_exact_registered_strategy_reach_the_engine(monkeypatch)
     assert len(calls)==1 and calls[0][1].id==batch['strategy_contract']['strategy_id']
     assert calls[0][0]['universe']['symbols']==spec['universe']['symbols'] and len(spec['universe']['symbols'])==10
     assert result['strategy_contract']['definition_sha256']==calls[0][1].describe()['definition_sha256']
+    assert json.loads(json.dumps(result))==result
 
 
 def test_engine_returning_another_strategy_cannot_publish_a_plausible_candidate(monkeypatch):

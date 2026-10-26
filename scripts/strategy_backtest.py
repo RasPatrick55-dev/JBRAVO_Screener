@@ -169,6 +169,7 @@ def report_from_replay(batch, replay, *, primary_run_id, dataset, specification)
         result['strategy']=replay['strategy']
         result['results']=[symbol_metrics(p,replay,as_of=as_of) for p in proposals]
         result['cohort_portfolio_metrics']=replay['metrics']
+    result=json.loads(canonical(result))
     result['result_id']=digest(result)
     require(len(canonical(result))<=24*1024,'candidate_backtest_report_oversize')
     return result
@@ -209,5 +210,7 @@ def run_candidate_backtest(batch, *, primary_run_id, dataset, specification):
     result['backtest_source_sha256']=own_source
     result['strategy_definition']=source
     result.pop('result_id')
+    result=json.loads(canonical(result))
     result['result_id']=digest(result)
+    require(len(canonical(result))<=24*1024,'candidate_backtest_report_oversize')
     return result
