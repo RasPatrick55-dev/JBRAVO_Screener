@@ -26,7 +26,15 @@ NY = pipeline.NY
 
 def utc(value):
     if isinstance(value, str):
-        value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        # Alpaca clock/quote/fill timestamps carry up to nanosecond precision.
+        # PythonAnywhere uses Python 3.10, whose fromisoformat only accepts the
+        # fractional forms emitted by datetime.isoformat. Preserve the explicit
+        # offset requirement and normalize to datetime's microsecond precision.
+        require(re.fullmatch(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})',value)
+                is not None,'execution_ambiguous_timestamp')
+        from dateutil.parser import isoparse
+        try:value = isoparse(value)
+        except ValueError:raise ValueError('execution_invalid_timestamp') from None
     require(isinstance(value, datetime) and value.tzinfo is not None and
             value.utcoffset() is not None, 'execution_ambiguous_timestamp')
     return value.astimezone(timezone.utc)
