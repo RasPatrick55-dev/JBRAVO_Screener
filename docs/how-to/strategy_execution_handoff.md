@@ -4,9 +4,10 @@ The intended cycle is to collect completed data after 20:00 Eastern, retain the
 data-arrival allowance through 20:15, and submit at the next trading session's
 04:00 premarket open. The existing executor task already targets 04:00.
 
-This change adds an opt-in worker to the existing executor and monitor, with
-PostgreSQL ownership and a durable order outbox. **Code availability does not
-mean the PythonAnywhere tasks have been activated.** The
+The existing executor and monitor include an opt-in strategy worker, with
+PostgreSQL ownership and a durable order outbox. Activation of both tasks was
+verified on October 26 and their enabled definitions were rechecked October 27.
+**An activated task does not mean its current inputs are entry-ready.** The
 current v2 backtest models regular-session opening fills; it remains preserved
 as a reference result and is explicitly marked `PREMARKET_REPLAY_PENDING` in
 the new execution handoff. It does not establish premarket performance.
@@ -99,9 +100,15 @@ false closures. A successfully observed empty list remains valid.
 
 ## Activation requirements
 
+The initial deployment installed both strategy state tables. Preserve that
+schema and its historical state; do not rerun the migration to refresh inputs.
+The following requirements also apply to future reviewed activations.
+
 Install the two new tables through a reviewed migration; deploy the exact
 reviewed source bytes while preserving shared native edits and dashboard assets.
-The primary must then produce a new completed report binding all 54 sources.
+The primary must then produce a new completed report binding all 56 sources
+required by the current market-wide route. The earlier 54-source pilot report
+does not satisfy the deployed source guard.
 Do not rewrite an existing report or backdate a run to make expired input valid.
 An after-09:30 run cannot renew the prior signal session; wait for the next
 completed session and its normal primary run.
@@ -127,3 +134,36 @@ paper testing authority remain in force. Neither research qualification nor
 live entry readiness is promoted by this adapter. Deploy in the serial window
 released by the dashboard/accounting recovery coordinator. Reviewing/importing
 these helpers does not apply a migration, restart a task or submit an order.
+
+## Inspect entry and monitor evidence
+
+Read these bounded, nonsecret files under `/home/RasPatrick/jbravo_screener/`
+through the shared PythonAnywhere MCP:
+
+| Evidence | Path | Interpretation |
+| --- | --- | --- |
+| Current production pipeline | `reports/pipeline_postflight/latest.json` and `completed-primary.json` in the same directory | Exact-session completed primary, matching invocation, batch and Backtest/Metrics |
+| Strategy entry result | `reports/strategy_execution/entry/latest.json` | Strategy identity, candidate count, order observations and entry disposition |
+| Entry process receipt | `reports/executor/premarket/latest.json` and `run-<observed-run-id>.json` in the same directory | Process return code, effective risk settings and immutable matching history |
+| Strategy monitor heartbeat | `reports/strategy_execution/monitor/latest.json` | Fresh account/source binding, owned symbols, events, entry readiness and regular-hours native coverage |
+| Reconciliation process | `reports/executor/reconciliation/latest.json` | Separate accounting/reconciliation role; not evidence of another entry attempt |
+
+`data/execute_metrics.json` is shared by executor roles and can be overwritten
+by later reconciliation. Use the per-role receipts to identify the last buy
+attempt. A declared scheduler ID is process attribution; its receipt explicitly
+does not claim independent scheduler execution verification. Correlate it with
+the installed task definition and actual times when reviewing a scheduled run.
+
+Inspect the strategy state in `public.strategy_execution_signals_app` and
+`public.strategy_execution_orders_app` only through an authorized read-only
+database connection. Use the exact signal, strategy, account and client-order
+identities; an unrelated MCP account's orders cannot prove the native task's
+behavior. No DDL, historical financial edits or broker writes follow from
+this inspection.
+
+The [dated October 27 record](../reference/pullback_reclaim_verification_2026-10-27.json)
+records a successful empty entry path, a healthy flat monitor, and a separate
+positive isolated pipeline audit. A fresh production candidate followed by an
+observed paper fill, protection and exit still requires its own evidence. The
+department's pending follow-up checks the next scheduled cycle and does not
+force a candidate, retry a task or submit an order itself.

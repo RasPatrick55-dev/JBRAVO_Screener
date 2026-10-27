@@ -13,16 +13,21 @@ not establish deployment or successful full-universe execution on PythonAnywhere
 Deployment must preserve the shared dashboard overlays, model, database history
 and paper execution rules. No schema migration is needed.
 
-The installed producer task 1558334 calls an immutable October 25 launcher with
-exact pilot source/configuration pins. Editing repository files alone would
-make that launcher refuse the next run. Deployment therefore needs a new
-source-pinned launcher and a verified replacement of only that existing task's
-command, retaining its enabled state and 01:20 UTC schedule. Keep the old
-launcher, claims and session folders unchanged. Refresh the monitor process
-once for its held-symbol feature adapter and refresh the existing web app once
-for the coverage API. Do not replay an old deployment or bootstrap today's
-expired signal session. The next completed scheduled dataset must create a
-fresh 56-source primary handoff before new entries can pass their source guard.
+Producer task 1558334 was switched from its immutable pilot launcher to the new
+15-source-pinned market-wide worker; the final repair005 activation was verified
+October 27. Its enabled state and 01:20 UTC schedule were preserved. The worker
+is `/home/RasPatrick/jbravo-research-tools/MARKET_HANDOFF_REPAIR_20261027_005/market_daily_boot.py`;
+the primary still consumes the original enrolled `runs` root. Keep old launchers,
+claims and session folders unchanged. Editing repository sources alone can
+invalidate immutable worker pins: future runtime changes require a new reviewed
+launcher/activation plan rather than replaying this completed deployment.
+
+The monitor was restarted and independently observed healthy. The coverage API
+was observed serving its new field after one web-reload attempt whose transport
+outcome was unknown; that attempt was not repeated. Do not repeat restarts or
+reloads merely by following this historical record. The next completed scheduled
+dataset must create a fresh 56-source primary handoff before new entries can
+pass their source guard. Do not bootstrap an expired signal session.
 
 ## Collection and coverage
 
@@ -119,3 +124,54 @@ limit-order route; sizing, position caps and live-trading restrictions are uncha
 
 Provider references: [assets](https://docs.alpaca.markets/us/reference/get-v2-assets-1)
 and [historical bars and pagination](https://docs.alpaca.markets/us/reference/stockbars).
+
+## Verified deployment and audit, October 27, 2026
+
+PRs [757](https://github.com/RasPatrick55-dev/JBRAVO_Screener/pull/757),
+[758](https://github.com/RasPatrick55-dev/JBRAVO_Screener/pull/758),
+[759](https://github.com/RasPatrick55-dev/JBRAVO_Screener/pull/759) and
+[760](https://github.com/RasPatrick55-dev/JBRAVO_Screener/pull/760) supplied the
+market-wide route, affected-symbol action exclusions and the current-proposal
+capacity repair. Native source was verified at
+`9b428a91892110c593aadb5c44f0ffb9c5a9c8b0`, with 56 runtime bindings and
+78 preserved-file guards. The final handoff repair passed 217 focused tests.
+The [structured verification record](../reference/pullback_reclaim_verification_2026-10-27.json)
+contains the exact run IDs, hashes, task settings and evidence locations.
+
+The first complete acquisition made 2,840 native Alpaca GETs and retained
+1,953,678,560 response bytes. Of 14,407 discovered assets, 6,147 were evaluated,
+8,259 received explicit exclusions, and SPY was benchmark-only. This is complete
+accounting of the returned population, not evaluation of every discovered asset.
+Acquisition took about 58 minutes; each full-cohort Screener/Backtest computation
+took about 20 minutes in the observed environment. These measurements do not
+guarantee future runtime or provider capacity.
+
+Real-data validation exposed three problems that are now repaired: legitimate
+due-bill dividend ordering could abort the capture; nested corporate-action
+recipients could be mistaken for unrelated records; and a full simulated
+historical book suppressed otherwise valid current proposals. Unsupported
+actions now receive explicit affected-symbol exclusions, while current ranking
+uses the original qualifying pool before simulated account capacity. Historical
+fills, cash, exits and rearming remain unchanged.
+
+The final supervised manual005 audit completed at 19:26:56 UTC. It fully
+reverified and reused the immutable capture with zero new provider GETs. The
+actual Screener and primary validation adapter passed 12 qualifying setups
+through the existing top-three limit: TXN, DK and FOCT. Actual Backtest and
+Metrics functions completed with the same strategy and candidate identities.
+One research audit row was committed and independently read back.
+
+This was an **isolated input-root audit**. It did not invoke the scheduled primary
+task, publish canonical production candidates or submit orders. The October 26
+signal's expired entry window was correctly refused. All three current symbols
+had zero completed historical trades in the shared cohort; their statistics
+remain unknown. The cohort overall profit factor was about 0.9224 and terminal
+equity USD 98,799.05 from USD 100,000. A successful technical path is not a
+profitability, promotion or premarket-fill qualification.
+
+At the final readiness observation, the production report still represented
+the earlier empty ten-symbol pilot with 54 bindings. Its 07:55 UTC executor run
+returned zero with `NO_STRATEGY_BUY_SIGNALS`. The monitor was healthy and flat,
+but `entry_ready=false` after deployment. The next fresh producer/primary run,
+canonical candidate, actual paper fill and monitored lifecycle remained pending.
+Recheck current receipts rather than treating this dated snapshot as live state.

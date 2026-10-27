@@ -1,5 +1,12 @@
 # Ops Runbook (Paper + DB-First)
 
+For the active Pullback/Reclaim route, start with the
+[Swing Research Department workflow](strategy_testing.md#department-workflow).
+It connects market-wide collection, Screener, Backtest, Metrics, production
+publication, paper execution and the strategy-aware monitor. Use its task and
+receipt map when checking current operation; legacy manual commands elsewhere
+in this runbook do not describe the installed strategy task definitions.
+
 ## Invariants
 
 - Paper-only broker mode: `APCA_API_BASE_URL` must point to the paper endpoint.
