@@ -74,9 +74,12 @@ kernel. It reconstructs state from the declared episode start through `--as-of`:
 2. Apply the Pullback/Reclaim conditions to every selected symbol.
 3. Apply held/pending exclusions and strict rearming. Qualifying closes consume
    before ranking/capacity, including setups not selected for a portfolio slot.
-4. Rank qualifying setups using the retained composite score; apply the same
-   allocation and position limits as the study. No v2 ranker, ML, sentiment or
-   target-count filler can create a Pullback/Reclaim signal.
+4. Rank today's qualifying pool using the retained composite score and the
+   study's `top_n` proposal limit. Historical simulated positions do not consume
+   the execution account's current slots. The paper executor applies actual
+   account cash, held/pending exclusions and position limits. The historical
+   replay retains its original allocation/capacity accounting. No v2 ranker,
+   ML, sentiment or target-count filler can create a Pullback/Reclaim signal.
 5. Save selected proposals with stable signal IDs, raw signal close/ATR,
    allocation settings, assumed availability and next supplied session/open.
 6. Replay subsequent supplied sessions through modeled entries, partial/full
@@ -87,6 +90,11 @@ The strategy uses the tested R02 rules: close above MA50 above MA200, rising
 MA50, bounded 2–5-session EMA20 pullback, bullish close above EMA20 and the prior
 high, volume above the preceding 20-session mean, and no lower pullback trough.
 The original rearm/consumption semantics and risk engine are unchanged.
+Current proposals have zero fills and unknown future outcomes, including when
+the historical replay's full portfolio could not select them. The saved
+`current_selection` counts distinguish qualifying setups, current proposals and
+historical terminal proposals; current observations retain the historical
+selection flag separately.
 
 The signal clock remains an assumption of 20:15 Eastern after the aggregate
 session. Paper fills use the next supplied 09:30 regular-session open, with
