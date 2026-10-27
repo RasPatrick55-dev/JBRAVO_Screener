@@ -25,7 +25,7 @@ from scripts.strategy_library import select_strategies
 SOURCE_FILES = ('screener.py', 'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
                 'research_testing.py', 'research_strategies.py', 'research_simulation.py',
                 'research_store.py', 'backtest_core.py', 'indicators.py',
-                'strategy_universe.py', 'strategy_market_replay.py')
+                'strategy_universe.py', 'strategy_market_replay.py', 'bull_flag_strategy.py', 'chart_patterns.py')
 
 
 def signal_id(strategy, episode_id, symbol, session):
@@ -37,7 +37,11 @@ def signal_id(strategy, episode_id, symbol, session):
 
 class ScannerPortfolio(ResearchPortfolio):
     def __init__(self, data, *, strategy, episode_id, **kwargs):
-        super().__init__(data, method=strategy.research_method, **kwargs)
+        method = strategy.research_method
+        if strategy.id == 'bull_flag_breakout_v1':
+            from scripts.research_strategies import BASELINE
+            method = BASELINE
+        super().__init__(data, method=method, **kwargs)
         self.strategy = strategy
         self.episode_id = episode_id
         self.daily_scans = []
@@ -99,7 +103,22 @@ class ScannerPortfolio(ResearchPortfolio):
                     signal_close_raw=float(row['close']), signal_atr14_raw=float(row['ATR14']),
                     allocation_pct=self.alloc_pct, max_positions=self.max_positions,
                     execution_model='NEXT_SUPPLIED_REGULAR_SESSION_OPEN', score=observation['score']))
+                if self.strategy.id == 'bull_flag_breakout_v1':
+                    from scripts.bull_flag_strategy import plan_from_row
+                    self.intents[-1]['pattern_exit'] = plan_from_row(observation['symbol'], row)
         super()._after_session(day)
+
+
+def strategy_episode(dataset, spec, strategy, fold, cost_case):
+    market = getattr(dataset, 'market_wide', False)
+    population = (dict(policy={k:dataset.coverage['policy'][k] for k in
+                              ('source','status','asset_class','tradable')}, benchmark=spec['universe']['benchmark'])
+                  if market else spec['universe'])
+    episode = dict(strategy_id=strategy.id, version=strategy.version, fold_id=fold['id'],
+                   warmup_start=fold['warmup_start'], test_start=fold['test_start'],
+                   universe=population, portfolio=spec['portfolio'], cost_case=cost_case,
+                   definition_sha256=strategy.describe()['definition_sha256'])
+    return episode, canonical_hash(episode)
 
 
 def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadline=None, stop_file=None):
@@ -115,15 +134,12 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
         dividends = dataset.dividends
     # Daily additions/removals must not change the strategy's logical episode
     # identity. Exact current membership is separately bound in dataset/run hashes.
-    population = (dict(policy={k:dataset.coverage['policy'][k] for k in
-                              ('source','status','asset_class','tradable')}, benchmark=spec['universe']['benchmark'])
-                  if market else spec['universe'])
-    episode = dict(strategy_id=strategy.id, version=strategy.version, fold_id=fold['id'],
-                   warmup_start=fold['warmup_start'], test_start=fold['test_start'],
-                   universe=population, portfolio=spec['portfolio'], cost_case=cost_case,
-                   definition_sha256=strategy.describe()['definition_sha256'])
-    episode_id = canonical_hash(episode)
-    engine = ScannerPortfolio(data, strategy=strategy, episode_id=episode_id,
+    episode, episode_id = strategy_episode(dataset, spec, strategy, fold, cost_case)
+    portfolio = ScannerPortfolio
+    if strategy.id == 'bull_flag_breakout_v1':
+        from scripts.bull_flag_strategy import scanner_portfolio_class
+        portfolio = scanner_portfolio_class(ScannerPortfolio)
+    engine = portfolio(data, strategy=strategy, episode_id=episode_id,
         dividends=dividends, deadline=deadline, stop_file=stop_file,
         trade_cost=cost_case['fee_per_fill'], slippage=cost_case['slippage_bps']/10000,
         **spec['portfolio'])
@@ -149,6 +165,9 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
                 signal_close_raw=float(row['close']), signal_atr14_raw=float(row['ATR14']),
                 allocation_pct=engine.alloc_pct, max_positions=engine.max_positions,
                 execution_model='NEXT_SUPPLIED_REGULAR_SESSION_OPEN', score=float(score))
+            if strategy.id == 'bull_flag_breakout_v1':
+                from scripts.bull_flag_strategy import plan_from_row
+                intents[sid]['pattern_exit'] = plan_from_row(symbol, row)
     for observation in engine.daily_scans:
         if observation['session'] == as_of:
             observation['historical_portfolio_selected'] = observation['selected']
