@@ -40,6 +40,17 @@ def binding(body):
     return dict(bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
 
 
+def action_symbols(event):
+    """Include reorganization recipients as well as top-level participants."""
+    values = [v for k, v in event.items() if k == 'symbol' or k.endswith('_symbol')]
+    movements = event.get('stock_movements', [])
+    require(isinstance(movements, list) and all(isinstance(v, dict) for v in movements),
+            'INVALID_ACTION_STOCK_MOVEMENTS')
+    values.extend(v.get('symbol') for v in movements)
+    require(all(v is None or isinstance(v, str) for v in values), 'INVALID_ACTION_SYMBOL')
+    return {v for v in values if v}
+
+
 def market_config(cfg):
     return cfg.get('schema') == 'jbravo.daily-strategy-config.v2'
 
@@ -305,7 +316,7 @@ def capture_market(provider, cfg, calendar, session, root, *, now, cache_dir=Non
                     require(isinstance(event, dict) and isinstance(event.get('id'),str) and
                             event['id'] and event['id'] not in action_ids, 'DUPLICATE_ACTION_ID')
                     action_ids.add(event.get('id'))
-                    mentioned = {v for k, v in event.items() if k == 'symbol' or k.endswith('_symbol')}
+                    mentioned = action_symbols(event)
                     require(bool(mentioned & set(batch)), 'ACTION_POPULATION_MISMATCH')
                     for symbol in mentioned & set(batch):
                         events[symbol].append((category, event))
