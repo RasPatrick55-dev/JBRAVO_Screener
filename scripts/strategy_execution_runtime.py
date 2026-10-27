@@ -8,6 +8,8 @@ import tempfile
 import time
 
 from scripts import strategy_execution as rules
+from scripts.pattern_strategy import PATTERNS
+from scripts.swing_patterns import STRATEGIES as EXTRA_PATTERNS
 from scripts import pipeline_postflight as health
 from scripts.strategy_backtest import require
 
@@ -21,7 +23,8 @@ LIFECYCLE_COMPONENTS=tuple(p for p in COMPONENTS if p not in {
     'scripts/strategy_execution_handoff.py','scripts/execute_trades.py'})+(
     'scripts/backtest_core.py','scripts/strategy_library.py')
 LIFECYCLE_COMPONENTS += ('config/strategy_companions.json','scripts/bull_flag_strategy.py',
-                        'scripts/chart_patterns.py','scripts/bull_flag_companion.py')
+                        'scripts/chart_patterns.py','scripts/bull_flag_companion.py',
+                        'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json')
 _FEATURE_CACHE={}
 
 
@@ -102,15 +105,24 @@ def readonly_handoff(env,*,base_dir=ROOT,inspection=False):
     finally:conn.rollback();conn.close()
 
 
-def companion_handoff(env, parent, *, base_dir=ROOT, inspection=False):
-    from scripts.bull_flag_companion import configuration, read_handoff
-    if configuration(base_dir) is None:return None
+def companion_handoff(env, parent, *, base_dir=ROOT, inspection=False, strategy_id='bull_flag_breakout_v1'):
+    from scripts.bull_flag_companion import policy_for, read_handoff
+    if policy_for(strategy_id,base_dir) is None:return None
     from scripts.research_store import connect
     connection=connect(env=env)
     try:
         return read_handoff(connection,parent,now=datetime.now(timezone.utc),
-                            inspection=inspection,base_dir=base_dir)
+                            inspection=inspection,base_dir=base_dir,strategy_id=strategy_id)
     finally:connection.rollback();connection.close()
+
+
+def additional_handoffs(env,parent,*,base_dir=ROOT,inspection=False):
+    result=[]
+    for strategy_id in EXTRA_PATTERNS:
+        try:value=companion_handoff(env,parent,base_dir=base_dir,inspection=inspection,strategy_id=strategy_id)
+        except Exception:value=None
+        if value:result.append(value)
+    return result
 
 
 def available_entry_budget(store, next_session):
@@ -150,8 +162,9 @@ def guard_for(env,*,base_dir=ROOT):
         handoff=signal['payload']['handoff'];source_guard(handoff,base_dir=base_dir,lifecycle=(kind=='lifecycle'))
         if kind=='entry':
             current=readonly_handoff(env,base_dir=base_dir,inspection=True)
-            if handoff['strategy_contract']['strategy_id']=='bull_flag_breakout_v1':
-                current=companion_handoff(env,current,base_dir=base_dir,inspection=True)
+            if handoff['strategy_contract']['strategy_id'] in PATTERNS:
+                current=companion_handoff(env,current,base_dir=base_dir,inspection=True,
+                    strategy_id=handoff['strategy_contract']['strategy_id'])
                 require(current is not None,'companion_current_batch_unavailable')
             require(current['primary_report_sha256']==handoff['primary_report_sha256'] and
                 current['candidate_values']==handoff['candidate_values'] and
@@ -239,7 +252,8 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
         source_guard(inspected,base_dir=base_dir)
         try:companion=companion_handoff(env,inspected,base_dir=base_dir,inspection=True)
         except Exception:companion=None
-        companion_count=len(companion['proposals']) if companion else 0
+        extras=additional_handoffs(env,inspected,base_dir=base_dir,inspection=True)
+        companion_count=(len(companion['proposals']) if companion else 0)+sum(len(h['proposals']) for h in extras)
         if (not inspected['proposals'] and not companion_count) or config.dry_run:
             value=dict(status='skipped',exit_reason='STRATEGY_DRY_RUN_INPUTS_ONLY' if config.dry_run else 'NO_STRATEGY_BUY_SIGNALS',
                 candidate_count=len(inspected['proposals'])+companion_count,
@@ -248,16 +262,19 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
                 finished_at=now.isoformat(),source_bindings=inspected['source_bindings'],
                 companion_handoff_id=companion['handoff_id'] if companion else None,
                 candidate_counts_by_strategy={inspected['strategy_contract']['strategy_id']:len(inspected['proposals']),
-                                              'bull_flag_breakout_v1':companion_count})
+                                              'bull_flag_breakout_v1':len(companion['proposals']) if companion else 0,
+                                              **{h['strategy_contract']['strategy_id']:len(h['proposals']) for h in extras}})
             write_report(value,role='entry',base_dir=base_dir);return value
         handoff=readonly_handoff(env,base_dir=base_dir)
         try:companion=companion_handoff(env,handoff,base_dir=base_dir)
         except Exception:companion=None
+        extras=additional_handoffs(env,handoff,base_dir=base_dir)
+        companions=([companion] if companion else [])+extras
         broker=PaperBroker(env,max_requests=192)
         try:
             account=broker.account();clock=broker.clock()
             monitor_ready(handoff,broker.account_id,now=now,base_dir=base_dir)
-            proposals=[*handoff['proposals'],*(companion['proposals'] if companion else [])]
+            proposals=[*handoff['proposals'],*(p for h in companions for p in h['proposals'])]
             references=broker.references(sorted({p['symbol'] for p in proposals}),handoff['session']['signal_session'],now=now)
         except Exception:broker.close();raise
     try:
@@ -278,9 +295,9 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
                     engine.enter(handoff,references,now=now,clock=clock,account=account,
                         positions=broker.positions(),open_orders=broker.open_orders(),
                         max_new_entries=available_entry_budget(store,handoff['session']['next_session']))
-                    if companion:
-                        source_guard(companion,base_dir=base_dir)
-                        engine.enter(companion,references,now=now,clock=broker.clock(),account=broker.account(),
+                    for extra_handoff in companions:
+                        source_guard(extra_handoff,base_dir=base_dir)
+                        engine.enter(extra_handoff,references,now=now,clock=broker.clock(),account=broker.account(),
                             positions=broker.positions(),open_orders=broker.open_orders(),
                             max_new_entries=available_entry_budget(store,handoff['session']['next_session']))
                     # Observe fills and attach protection promptly. The always-on
@@ -306,11 +323,14 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
                         preflight=dict(status='pass',candidate_binding=handoff['candidate_values'],
                             entry_authorization='paper_strategy_test',strategy_contract=handoff['strategy_contract']))
                     value['candidate_counts_by_strategy']={handoff['strategy_contract']['strategy_id']:len(handoff['proposals']),
-                        'bull_flag_breakout_v1':len(companion['proposals']) if companion else 0}
+                        'bull_flag_breakout_v1':len(companion['proposals']) if companion else 0,
+                        **{h['strategy_contract']['strategy_id']:len(h['proposals']) for h in extras}}
                     if companion:
                         value['companion']=dict(handoff_id=companion['handoff_id'],
                             primary_report_sha256=companion['primary_report_sha256'],
                             strategy_contract=companion['strategy_contract'],candidate_binding=companion['candidate_values'])
+                    value['additional_companions']=[dict(handoff_id=h['handoff_id'],strategy_contract=h['strategy_contract'],
+                        primary_report_sha256=h['primary_report_sha256'],candidate_binding=h['candidate_values']) for h in extras]
                     write_report(value,role='entry',base_dir=base_dir);return value
             finally:conn.rollback();conn.close()
     finally:broker.close()

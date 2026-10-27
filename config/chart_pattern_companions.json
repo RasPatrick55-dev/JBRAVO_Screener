@@ -1,0 +1,12 @@
+{
+  "schema": "jbravo.additional-chart-patterns.v1",
+  "enabled": true,
+  "strategy_ids": ["ascending_triangle_breakout_v1", "double_bottom_breakout_v1", "cup_handle_breakout_v1", "inverse_head_shoulders_breakout_v1"],
+  "priority": "AFTER_PULLBACK_RECLAIM_AND_BULL_FLAG",
+  "max_scan_seconds": 600,
+  "max_new_entries_total": 3,
+  "max_positions_total": 4,
+  "allocation_pct_remaining_cash": 0.05,
+  "paper_only": true,
+  "research_qualified": false
+}

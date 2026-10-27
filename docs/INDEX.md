@@ -20,6 +20,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 ## How-To
 
 - [Bull flag companion alongside Pullback/Reclaim](how-to/bull_flag_companion.md)
+- [Four additional swing chart-pattern companions](how-to/chart_pattern_companions.md)
 - [Market-wide daily strategy screening](how-to/market_wide_strategy_screen.md)
 - [Strategy execution handoff and activation requirements](how-to/strategy_execution_handoff.md)
 - [Strategy Metrics stage](how-to/strategy_metrics_stage.md)

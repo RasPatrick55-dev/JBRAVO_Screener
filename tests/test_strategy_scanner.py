@@ -28,7 +28,7 @@ def offline(monkeypatch):
 
 def test_only_first_strategy_enabled_and_definition_bound():
     definitions = strategy_library.list_strategies()
-    assert len(definitions) == 2
+    assert len(definitions) == 6
     definition = definitions[0]
     assert definition['id'] == CHALLENGER and definition['version'] == '2'
     assert definition['paper_scan_enabled'] is True and definition['research_qualified'] is False

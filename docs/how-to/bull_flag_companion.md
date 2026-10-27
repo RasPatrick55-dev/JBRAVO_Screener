@@ -43,7 +43,7 @@ configuration omits it; changes require a new source-bound deployment. Existing
 signals retain frozen lifecycle bindings: deployment must attest the native paper
 account is flat with no pending orders before changing lifecycle code. The daily
 launcher must be replaced with a newly pinned launcher, and the existing monitor
-must restart. All 60 pipeline source bindings require a genuinely fresh scheduled
+must restart. All current pipeline source bindings require a genuinely fresh scheduled
 producer and primary before new entries. Old reports and consumed runs cannot be
 rebound or replayed. No frontend reload or forced order is needed.
 

@@ -33,7 +33,8 @@ EXTRA_SOURCES += ('config/strategy_execution.json',)+tuple('scripts/'+name for n
     'strategy_execution_broker.py','strategy_execution_engine.py','strategy_execution_runtime.py',
     'execute_trades.py','monitor_positions.py'))
 EXTRA_SOURCES += ('config/strategy_companions.json', 'scripts/bull_flag_strategy.py',
-                  'scripts/chart_patterns.py', 'scripts/bull_flag_companion.py')
+                  'scripts/chart_patterns.py', 'scripts/bull_flag_companion.py',
+                  'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json')
 
 
 def require(condition, reason):
@@ -162,7 +163,8 @@ def verified_dataset(value, spec_sha, *, base_dir=ROOT, strategy_id=STRATEGY):
     root = Path(value['output_root'])
     expected = Path(json.loads((Path(base_dir)/'config/strategy_pipeline.json').read_bytes())['producer_root']) / value['signal_session']
     if strategy_id != STRATEGY:
-        require(strategy_id == 'bull_flag_breakout_v1', 'unknown_companion_strategy')
+        from scripts.pattern_strategy import PATTERNS
+        require(strategy_id in PATTERNS, 'unknown_companion_strategy')
         expected = expected/'companions'/strategy_id
     require(root == expected, 'strategy_archive_path_mismatch')
     raw = _read(root/'scan/manifest.json', 65536)
@@ -427,6 +429,12 @@ def main(argv, *, base_dir=ROOT):
     except Exception as error:
         print(json.dumps(dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',
                               error_type=type(error).__name__)),flush=True)
+    from scripts.swing_patterns import STRATEGIES as extra_patterns
+    for strategy_id in extra_patterns:
+        try:prepare_primary(record, env=env, base_dir=base_dir, strategy_id=strategy_id)
+        except Exception as error:
+            print(json.dumps(dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',strategy_id=strategy_id,
+                                  error_type=type(error).__name__)),flush=True)
     print(json.dumps(dict(status='PRIMARY_STRATEGY_SCREEN_COMPLETE', strategy_id=STRATEGY,
         signal_session=session['signal_session'], candidates=len(rows), outcome=batch['outcome'],
         scan_run_id=value['scan_run_id'], archive_id=archive_id, broker_operations=0)), flush=True)

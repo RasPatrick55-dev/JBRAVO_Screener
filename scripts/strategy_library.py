@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from scripts.research_strategies import CHALLENGER, prepare_signals
+from scripts.swing_patterns import STRATEGIES as EXTRA_PATTERNS
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,9 @@ class Strategy:
         if self.id == 'bull_flag_breakout_v1':
             result['source_sha256'].update({name: sha256((directory/name).read_bytes()).hexdigest()
                 for name in ('bull_flag_strategy.py', 'chart_patterns.py')})
+        if self.id in EXTRA_PATTERNS:
+            result['source_sha256'].update({name: sha256((directory/name).read_bytes()).hexdigest()
+                for name in ('pattern_strategy.py','swing_patterns.py','bull_flag_strategy.py','chart_patterns.py')})
         definition = dict(result)
         # Adding another catalog entry must not change this strategy's logical
         # signal IDs. The catalog file is still bound in each batch's sources.
@@ -43,6 +47,9 @@ class Strategy:
         return result
 
     def prepare(self, raw, split, fold):
+        if self.id in EXTRA_PATTERNS:
+            from scripts.pattern_strategy import prepare
+            return prepare(raw,split,fold,self.id)
         if self.id == 'bull_flag_breakout_v1':
             from scripts.bull_flag_strategy import prepare
             return prepare(raw, split, fold)
@@ -75,6 +82,36 @@ _STRATEGIES = {
         paper_scan_enabled=True,
     ),
 }
+
+
+for _id,_name,_rules in (
+    (EXTRA_PATTERNS[0],'Ascending Triangle Breakout',
+     ('15-60 sessions; two separated resistance touches within 1%',
+      'confirmed reaction lows rise by at least 0.5% of resistance each; at least 2% total',
+      'contracting formation volume; close breakout by 0.1%, at most 5% extended',
+      'bullish breakout volume >= 1.5 times preceding 20 sessions',
+      'stop below last confirmed reaction low; target resistance plus formation height')),
+    (EXTRA_PATTERNS[1],'Double Bottom Breakout',
+     ('two confirmed troughs 20-80 sessions apart and within 3%',
+      'preceding 20-session decline >= 10%; intervening rebound >= 10%',
+      'second-trough volume no greater than first; no previous neckline close breakout',
+      'bullish neckline close breakout by 0.1%, at most 5% extended; volume >= 1.5 prior20',
+      'stop below lower trough; target neckline plus formation height')),
+    (EXTRA_PATTERNS[2],'Cup and Handle Breakout',
+     ('prior 20-session advance >= 10%; cup 30-100 sessions with rims within 3%',
+      'cup depth 12-40%; central bottom and at least 25% of cup closes in lower half',
+      'falling 5-15-session handle retraces at most one third of cup; volume contracts',
+      'bullish resistance close breakout by 0.1%, at most 5% extended; volume >= 1.5 prior20',
+      'stop below handle low; target resistance plus cup depth')),
+    (EXTRA_PATTERNS[3],'Inverse Head and Shoulders Breakout',
+     ('prior 20-session decline >= 10%; three confirmed consecutive reaction lows',
+      'head at least 5% below shoulders; shoulders and neckline highs match within 3%',
+      'shoulder span 20-80 sessions; head 5-40 sessions from each shoulder',
+      'right shoulder volume no greater than left; no earlier neckline close breakout',
+      'bullish neckline close breakout by 0.1%, at most 5% extended; volume >= 1.5 prior20',
+      'stop below right shoulder; target neckline plus head-to-neckline height')),
+):
+    _STRATEGIES[_id]=Strategy(_id,_name,'1',_id,'PAPER_TEST_CANDIDATE',250,_rules,paper_scan_enabled=True)
 
 
 def get_strategy(strategy_id):

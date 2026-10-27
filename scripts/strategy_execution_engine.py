@@ -9,6 +9,7 @@ from datetime import datetime,time,timezone
 from decimal import Decimal,ROUND_FLOOR
 import hashlib
 
+from scripts.pattern_strategy import PATTERNS
 from scripts.strategy_backtest import require
 from scripts import strategy_execution as rules
 
@@ -153,8 +154,8 @@ class Engine:
                     reference=reference,occupied_slots=len(occupied),now=self.now(),
                     clock_next_regular_open=clock['next_open'],clock_timestamp=clock['timestamp'])
             except ValueError as error:
-                if str(error)!='bull_flag_entry_outside_levels':raise
-                self.note(None,'BULL_FLAG_ENTRY_OUTSIDE_LEVELS');continue
+                if str(error) not in {'bull_flag_entry_outside_levels','pattern_entry_outside_levels'}:raise
+                self.note(None,'BULL_FLAG_ENTRY_OUTSIDE_LEVELS' if str(error).startswith('bull_flag') else 'PATTERN_ENTRY_OUTSIDE_LEVELS');continue
             if plan['request']['qty']==0:
                 self.note(None,'WHOLE_SHARE_BUDGET_EMPTY');continue
             signal=self.store.enroll(handoff,proposal,reference)
@@ -257,7 +258,7 @@ class Engine:
                 'strategy_completed_bar_regressed')
         result=rules.completed_bar(payload['position'],frame,session=session,next_session=next_session,
             now=now,rsi_memory=payload['rsi_memory'])
-        if payload['proposal'].get('strategy_id')=='bull_flag_breakout_v1':
+        if payload['proposal'].get('strategy_id') in PATTERNS:
             plan=payload['proposal']['pattern_exit']
             result['position']['atr_stop']=max(result['position']['atr_stop'] or 0,plan['invalidation'])
             result['pending_exit_reasons']=[r for r in result['pending_exit_reasons'] if r!='PARTIAL_5PCT']
@@ -287,7 +288,7 @@ class Engine:
         stop=stops[0] if stops else None
         target=max(position['trailing_stop'] or 0,position['atr_stop'] or 0)
         breached=quote is not None and rules.number(quote['bid'],positive=True)<=Decimal(str(target))
-        if payload['proposal'].get('strategy_id')=='bull_flag_breakout_v1':
+        if payload['proposal'].get('strategy_id') in PATTERNS:
             plan=payload['proposal']['pattern_exit']
             reached=quote is not None and rules.number(quote['bid'],positive=True)>=Decimal(str(plan['target']))
             if reached and not payload['pending_exit_reasons']:
