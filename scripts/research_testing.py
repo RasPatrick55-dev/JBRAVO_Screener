@@ -43,7 +43,7 @@ def validate_spec(spec):
         raise ValueError("Unexpected strategy study schema/fields")
     if spec["purpose"] != "exploratory_research" or spec["research_qualified"] is not False or spec["execution_authorized"] is not False:
         raise ValueError("Only explicit exploratory research is supported")
-    if not 1 <= len(spec["strategies"]) <= 2 or len(set(spec["strategies"])) != len(spec["strategies"]) or not set(spec["strategies"]) <= set(METHODS):
+    if not 1 <= len(spec["strategies"]) <= 2 or len(set(spec["strategies"])) != len(spec["strategies"]) or not set(spec["strategies"]) <= set((*METHODS, 'bull_flag_breakout_v1')):
         raise ValueError("Unknown/duplicate strategy; v1 has two frozen methods")
     folds = spec["folds"]
     if not 1 <= len(folds) <= 10:
@@ -175,14 +175,23 @@ def run_study(spec, output, *, stop_file=None):
                     if time.monotonic() >= deadline or stop_file.exists():
                         raise RuntimeError("Research stopped before next trial")
                     symbols = spec["universe"]["symbols"] if method != BENCHMARK else [spec["universe"]["benchmark"]]
-                    data = {symbol: prepare_signals(dataset.raw[symbol], dataset.features[symbol], method, fold) for symbol in symbols}
+                    if method == 'bull_flag_breakout_v1':
+                        from scripts.bull_flag_strategy import prepare
+                        data = {symbol: prepare(dataset.raw[symbol], dataset.features[symbol], fold) for symbol in symbols}
+                    else:
+                        data = {symbol: prepare_signals(dataset.raw[symbol], dataset.features[symbol], method, fold) for symbol in symbols}
                     options = dict(spec["portfolio"], trade_cost=cost["fee_per_fill"], slippage=cost["slippage_bps"] / 10000)
                     if method == BENCHMARK:
                         options.update(alloc_pct=1.0, top_n=1, max_positions=1, trail_pct=None, atr_multiple=0,
                                        max_hold_days=100000, enable_macd_exit=False, enable_partial_exit=False,
                                        enable_rsi_divergence=False, enable_candlestick_exit=False,
                                        enable_ema_exit=False, enable_trailing_exit=False)
-                    engine = ResearchPortfolio(data, method=method, dividends=dataset.dividends,
+                    if method == 'bull_flag_breakout_v1':
+                        from scripts.bull_flag_strategy import research_portfolio_class
+                        engine = research_portfolio_class()(data, dividends=dataset.dividends,
+                                               deadline=deadline, stop_file=stop_file, **options)
+                    else:
+                        engine = ResearchPortfolio(data, method=method, dividends=dataset.dividends,
                                                deadline=deadline, stop_file=stop_file, **options)
                     engine.run()
                     metrics = engine.summary()

@@ -272,11 +272,20 @@ def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None
         save_json(root/'provider-requests.json',provider.receipts)
         require(archive is not None,'DAILY_POSTGRES_ARCHIVE_REQUIRED')
         proof=archive(result,root,cfg)
+        from scripts.bull_flag_companion import produce
+        companion = dict(status='DISABLED')
+        if market_config(cfg):
+            try:
+                companion = produce(root, spec, cfg, now=now, archive=archive,
+                                    total_deadline=started+cfg['max_total_seconds'])
+            except Exception as error:
+                companion=dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',error_type=type(error).__name__)
         value=dict(status='DAILY_STRATEGY_SCAN_COMPLETE',pipeline=PIPELINE,signal_session=session,
             strategy_id=cfg['strategy_id'],scan_run_id=result['run_id'],candidates=len(result['top_candidates']),
             provider_gets=len(provider.receipts),archive=proof,output_root=str(root),
             research_qualified=False,order_submission_authorized=False,broker_operations=0)
         if market_config(cfg):value['coverage']=result['coverage']
+        if companion.get('status') != 'DISABLED':value['companion']=companion
         save_json(root/'completion.json',value)
         return value
     except Exception as error:

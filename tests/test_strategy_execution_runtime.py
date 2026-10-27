@@ -87,7 +87,9 @@ def test_monitor_receipt_requires_actual_account_freshness_and_identical_sources
 def test_source_contract_includes_executor_monitor_store_and_configuration():
     from scripts import pipeline_postflight as health,strategy_pipeline as pipeline
     bound=(*health.SOURCE_FILES,*pipeline.EXTRA_SOURCES)
-    assert len(bound)==len(set(bound))==56
+    assert len(bound)==len(set(bound))==60
+    assert {'scripts/bull_flag_strategy.py','scripts/chart_patterns.py',
+            'scripts/bull_flag_companion.py','config/strategy_companions.json'}<=set(bound)
     assert set(runtime.COMPONENTS)<=set(bound)
 
 

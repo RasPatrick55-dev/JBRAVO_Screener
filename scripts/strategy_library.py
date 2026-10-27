@@ -29,6 +29,9 @@ class Strategy:
             for name in ('strategy_library.py', 'research_strategies.py', 'indicators.py',
                          'research_simulation.py', 'backtest_core.py')
         }
+        if self.id == 'bull_flag_breakout_v1':
+            result['source_sha256'].update({name: sha256((directory/name).read_bytes()).hexdigest()
+                for name in ('bull_flag_strategy.py', 'chart_patterns.py')})
         definition = dict(result)
         # Adding another catalog entry must not change this strategy's logical
         # signal IDs. The catalog file is still bound in each batch's sources.
@@ -40,10 +43,25 @@ class Strategy:
         return result
 
     def prepare(self, raw, split, fold):
+        if self.id == 'bull_flag_breakout_v1':
+            from scripts.bull_flag_strategy import prepare
+            return prepare(raw, split, fold)
         return prepare_signals(raw, split, self.research_method, fold, self.warmup_sessions)
 
 
 _STRATEGIES = {
+    'bull_flag_breakout_v1': Strategy(
+        'bull_flag_breakout_v1', 'Bull Flag Breakout', '1', 'bull_flag_breakout_v1',
+        'PAPER_TEST_CANDIDATE', 250,
+        ('3-10-bar pole gains at least 8%; 3-10-bar sideways/falling flag',
+         'flag retraces at most 50% of pole; flag volume at most 80% of pole mean',
+         'bullish close > resistance by 0.1%, at most 5% extended',
+         'breakout volume >= 1.5 times preceding 20 sessions',
+         'fixed raw-price stop 0.1% below flag low; target signal close plus pole height',
+         'full target exit; no percentage partial; existing protective/time/risk exits can precede',
+         'shared account: Pullback/Reclaim priority, remaining cash/slots only, no duplicate symbols'),
+        paper_scan_enabled=True,
+    ),
     CHALLENGER: Strategy(
         CHALLENGER, 'Trend Pullback / Reclaim', '2', CHALLENGER, 'PAPER_TEST_CANDIDATE', 250,
         ('close > MA50 > MA200; MA50 higher than ten sessions ago',
@@ -67,11 +85,12 @@ def get_strategy(strategy_id):
 
 
 def list_strategies():
-    return [strategy.describe() for strategy in _STRATEGIES.values()]
+    return [_STRATEGIES[key].describe() for key in (CHALLENGER, *(k for k in _STRATEGIES if k!=CHALLENGER))]
 
 
 def select_strategies(ids=None):
-    chosen = [key for key, value in _STRATEGIES.items() if value.paper_scan_enabled] if ids is None else list(ids)
+    # Preserve existing callers' default strategy; companions opt in explicitly.
+    chosen = [CHALLENGER] if ids is None else list(ids)
     if not chosen or len(chosen) != len(set(chosen)):
         raise ValueError('Select at least one strategy, without duplicates')
     strategies = [get_strategy(strategy_id) for strategy_id in chosen]

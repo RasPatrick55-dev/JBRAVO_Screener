@@ -20,6 +20,8 @@ COMPONENTS=(CONFIG,'scripts/strategy_execution.py','scripts/strategy_execution_h
 LIFECYCLE_COMPONENTS=tuple(p for p in COMPONENTS if p not in {
     'scripts/strategy_execution_handoff.py','scripts/execute_trades.py'})+(
     'scripts/backtest_core.py','scripts/strategy_library.py')
+LIFECYCLE_COMPONENTS += ('config/strategy_companions.json','scripts/bull_flag_strategy.py',
+                        'scripts/chart_patterns.py','scripts/bull_flag_companion.py')
 _FEATURE_CACHE={}
 
 
@@ -100,6 +102,26 @@ def readonly_handoff(env,*,base_dir=ROOT,inspection=False):
     finally:conn.rollback();conn.close()
 
 
+def companion_handoff(env, parent, *, base_dir=ROOT, inspection=False):
+    from scripts.bull_flag_companion import configuration, read_handoff
+    if configuration(base_dir) is None:return None
+    from scripts.research_store import connect
+    connection=connect(env=env)
+    try:
+        return read_handoff(connection,parent,now=datetime.now(timezone.utc),
+                            inspection=inspection,base_dir=base_dir)
+    finally:connection.rollback();connection.close()
+
+
+def available_entry_budget(store, next_session):
+    # Count durable entry attempts, including rejected/uncertain attempts, across
+    # both strategies. Restarting a worker cannot replenish the daily budget.
+    used=sum(any(row['role']=='entry' for row in store.orders(signal['signal_id']))
+             for signal in store.signals(active=False)
+             if signal['payload']['proposal']['next_session']==next_session)
+    return max(0,3-used)
+
+
 def store_connection(env,broker):
     from scripts.research_store import connect
     from scripts import db
@@ -128,6 +150,9 @@ def guard_for(env,*,base_dir=ROOT):
         handoff=signal['payload']['handoff'];source_guard(handoff,base_dir=base_dir,lifecycle=(kind=='lifecycle'))
         if kind=='entry':
             current=readonly_handoff(env,base_dir=base_dir,inspection=True)
+            if handoff['strategy_contract']['strategy_id']=='bull_flag_breakout_v1':
+                current=companion_handoff(env,current,base_dir=base_dir,inspection=True)
+                require(current is not None,'companion_current_batch_unavailable')
             require(current['primary_report_sha256']==handoff['primary_report_sha256'] and
                 current['candidate_values']==handoff['candidate_values'] and
                 current['batch_sha256']==handoff['batch_sha256'],'strategy_entry_batch_changed_before_post')
@@ -212,19 +237,28 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
     with source_lease(base_dir):
         inspected=readonly_handoff(env,base_dir=base_dir,inspection=True)
         source_guard(inspected,base_dir=base_dir)
-        if not inspected['proposals'] or config.dry_run:
+        try:companion=companion_handoff(env,inspected,base_dir=base_dir,inspection=True)
+        except Exception:companion=None
+        companion_count=len(companion['proposals']) if companion else 0
+        if (not inspected['proposals'] and not companion_count) or config.dry_run:
             value=dict(status='skipped',exit_reason='STRATEGY_DRY_RUN_INPUTS_ONLY' if config.dry_run else 'NO_STRATEGY_BUY_SIGNALS',
-                candidate_count=len(inspected['proposals']),
+                candidate_count=len(inspected['proposals'])+companion_count,
                 orders_submitted=0,orders_filled=0,handoff_id=inspected['handoff_id'],
                 strategy_contract=inspected['strategy_contract'],paper_only=True,broker_operations=0,
-                finished_at=now.isoformat(),source_bindings=inspected['source_bindings'])
+                finished_at=now.isoformat(),source_bindings=inspected['source_bindings'],
+                companion_handoff_id=companion['handoff_id'] if companion else None,
+                candidate_counts_by_strategy={inspected['strategy_contract']['strategy_id']:len(inspected['proposals']),
+                                              'bull_flag_breakout_v1':companion_count})
             write_report(value,role='entry',base_dir=base_dir);return value
         handoff=readonly_handoff(env,base_dir=base_dir)
+        try:companion=companion_handoff(env,handoff,base_dir=base_dir)
+        except Exception:companion=None
         broker=PaperBroker(env,max_requests=192)
         try:
             account=broker.account();clock=broker.clock()
             monitor_ready(handoff,broker.account_id,now=now,base_dir=base_dir)
-            references=broker.references([p['symbol'] for p in handoff['proposals']],handoff['session']['signal_session'],now=now)
+            proposals=[*handoff['proposals'],*(companion['proposals'] if companion else [])]
+            references=broker.references(sorted({p['symbol'] for p in proposals}),handoff['session']['signal_session'],now=now)
         except Exception:broker.close();raise
     try:
         opening=rules.utc(handoff['execution_policy']['entry_open_at'])
@@ -242,7 +276,13 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
                     engine=Engine(store,broker,guard=guard_for(env,base_dir=base_dir))
                     before={r['client_order_id'] for s in store.signals(active=False) for r in store.orders(s['signal_id'])}
                     engine.enter(handoff,references,now=now,clock=clock,account=account,
-                        positions=broker.positions(),open_orders=broker.open_orders())
+                        positions=broker.positions(),open_orders=broker.open_orders(),
+                        max_new_entries=available_entry_budget(store,handoff['session']['next_session']))
+                    if companion:
+                        source_guard(companion,base_dir=base_dir)
+                        engine.enter(companion,references,now=now,clock=broker.clock(),account=broker.account(),
+                            positions=broker.positions(),open_orders=broker.open_orders(),
+                            max_new_entries=available_entry_budget(store,handoff['session']['next_session']))
                     # Observe fills and attach protection promptly. The always-on
                     # monitor resumes durable pending orders and the 35m deadline.
                     deadline=time.monotonic()+15
@@ -257,7 +297,7 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
                     refused=any(e['code']=='BROKER_REJECTED' for e in engine.events) or any(o['status']=='rejected' for o in observations)
                     value=dict(status='blocked' if unresolved or refused else 'ok',
                         exit_reason='ORDER_OUTCOME_UNKNOWN' if unresolved else 'BROKER_REJECTED' if refused else 'STRATEGY_PAPER_EXECUTION',
-                        candidate_count=len(handoff['proposals']),orders_submitted=len(observations),
+                        candidate_count=len(proposals),orders_submitted=len(observations),
                         orders_filled=sum(o['status']=='filled' for o in observations),order_observations=observations,
                         handoff_id=handoff['handoff_id'],strategy_contract=handoff['strategy_contract'],
                         primary_report_sha256=handoff['primary_report_sha256'],source_bindings=handoff['source_bindings'],
@@ -265,6 +305,12 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
                         paper_only=True,events=engine.events,finished_at=datetime.now(timezone.utc).isoformat(),
                         preflight=dict(status='pass',candidate_binding=handoff['candidate_values'],
                             entry_authorization='paper_strategy_test',strategy_contract=handoff['strategy_contract']))
+                    value['candidate_counts_by_strategy']={handoff['strategy_contract']['strategy_id']:len(handoff['proposals']),
+                        'bull_flag_breakout_v1':len(companion['proposals']) if companion else 0}
+                    if companion:
+                        value['companion']=dict(handoff_id=companion['handoff_id'],
+                            primary_report_sha256=companion['primary_report_sha256'],
+                            strategy_contract=companion['strategy_contract'],candidate_binding=companion['candidate_values'])
                     write_report(value,role='entry',base_dir=base_dir);return value
             finally:conn.rollback();conn.close()
     finally:broker.close()
