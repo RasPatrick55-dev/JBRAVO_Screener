@@ -131,6 +131,28 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
         engine.dates = [pd.Timestamp(d) for d in dataset.calendar.index if effective['test_start'] <= d <= as_of]
     engine.run()
     intents = {intent['signal_id']: dict(intent) for intent in engine.intents}
+    historical_terminal = {sid for sid, intent in intents.items() if intent['signal_session'] == as_of}
+    # Historical positions are research outcomes, not the execution account's
+    # current holdings. Preserve that replay, but rank today's qualifying pool
+    # before its simulated capacity gate. The executor applies actual cash and
+    # position limits; no historical or future fill is manufactured here.
+    ranked = sorted(engine.latest_pool, key=lambda item: item[1], reverse=True)[:spec['portfolio']['top_n']]
+    today_ids = set()
+    for symbol, score, row in ranked:
+        sid = signal_id(strategy, episode_id, symbol, as_of)
+        today_ids.add(sid)
+        if sid not in intents:
+            intents[sid] = dict(signal_id=sid, strategy_id=strategy.id, strategy_version=strategy.version,
+                symbol=symbol, side='BUY', signal_session=as_of,
+                signal_available_at_assumed=availability_clock(pd.Timestamp(as_of)),
+                paper_only=True, order_submission_authorized=False,
+                signal_close_raw=float(row['close']), signal_atr14_raw=float(row['ATR14']),
+                allocation_pct=engine.alloc_pct, max_positions=engine.max_positions,
+                execution_model='NEXT_SUPPLIED_REGULAR_SESSION_OPEN', score=float(score))
+    for observation in engine.daily_scans:
+        if observation['session'] == as_of:
+            observation['historical_portfolio_selected'] = observation['selected']
+            observation['selected'] = observation['signal_id'] in today_ids
     calendar = dataset.calendar
     for intent in intents.values():
         upcoming = calendar.index[calendar.index > intent['signal_session']]
@@ -152,7 +174,7 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
         if fill['side'] == 'BUY' and fill['session'] != intent['next_session']:
             raise ValueError('Paper entry is not on its supplied next session')
     latest = [record for record in engine.daily_scans if record['session'] == as_of]
-    today_intents = [intent for intent in intents.values() if intent['signal_session'] == as_of]
+    today_intents = [intents[signal_id(strategy, episode_id, symbol, as_of)] for symbol, _, _ in ranked]
     buys = {fill['signal_id'] for fill in engine.fills if fill['side'] == 'BUY'}
     exits = {fill['signal_id'] for fill in engine.fills if fill['side'] == 'SELL'}
     lifecycle = []
@@ -166,6 +188,10 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
             fills=related, strategy_id=strategy.id, strategy_version=strategy.version))
     result = dict(strategy=strategy.describe(), episode_id=episode_id, episode=episode, as_of=as_of,
         latest_observations=latest, top_candidates=today_intents,
+        current_selection=dict(scope='QUALIFYING_POOL_BEFORE_SIMULATED_PORTFOLIO_CAPACITY',
+            qualifying_symbols=len(engine.latest_pool), proposal_limit=spec['portfolio']['top_n'],
+            selected_proposals=len(today_intents), historical_terminal_proposals=len(historical_terminal),
+            actual_account_limits_enforced_by='PAPER_EXECUTOR'),
         observations=engine.daily_scans, intents=list(intents.values()), fills=engine.fills,
         lifecycle=lifecycle, actions=engine.action_events, ledger=engine.reconciliations,
         metrics=engine.summary(), funnel=dict(observations=len(engine.daily_scans),
@@ -275,7 +301,8 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
                for name, expected in source_hashes.items()):
             raise ValueError('Scanner source changed during execution')
         public = [dict(strategy=result['strategy'], episode_id=result['episode_id'],
-            as_of=as_of, funnel=result['funnel'], metrics=result['metrics']) for result in results]
+            as_of=as_of, funnel=result['funnel'], metrics=result['metrics'],
+            current_selection=result['current_selection']) for result in results]
         if getattr(dataset, 'market_wide', False):
             for item,result in zip(public,results):
                 item['observation_storage']=result['observation_storage']

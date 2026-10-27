@@ -90,6 +90,12 @@ universe. There is no independent per-batch portfolio. Asset additions/removals
 and operational batch-size changes do not reset logical signal identities;
 membership and data changes remain bound in the scan/run identity.
 
+Current handoff ranking uses the qualifying pool before simulated portfolio
+capacity. A historical full book cannot erase today's valid buy proposals.
+The `top_n` limit still applies, and the actual paper executor enforces account
+cash and position limits. Historical fills, rearming and portfolio metrics stay
+unchanged; current proposals remain unfilled with unknown future outcomes.
+
 The monitor prepares completed-bar features for held and proposed symbols,
 including held symbols absent from today's buy list. If a held symbol no longer
 has valid completed data, existing protections are retained and the unavailable
