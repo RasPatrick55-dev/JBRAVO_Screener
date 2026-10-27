@@ -30,31 +30,51 @@ def binding(raw):return dict(bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest
 
 def load_config(path=CONFIG):
     cfg=strict_json(Path(path).read_bytes())
-    require(cfg.get('schema')=='jbravo.daily-strategy-config.v1' and cfg.get('enabled') is True,'DAILY_CONFIG_DISABLED_OR_INVALID')
+    from scripts.strategy_universe import market_config
+    require(cfg.get('schema') in ('jbravo.daily-strategy-config.v1','jbravo.daily-strategy-config.v2') and
+        cfg.get('enabled') is True,'DAILY_CONFIG_DISABLED_OR_INVALID')
     require(cfg.get('research_qualified') is False and cfg.get('order_submission_authorized') is False,'PAPER_SCREENING_SCOPE_REQUIRED')
     strategy=get_strategy(cfg['strategy_id'])
     require(strategy.paper_scan_enabled,'STRATEGY_NOT_ENABLED')
-    symbols=cfg['symbols']+[cfg['benchmark']]
-    require(1<=len(cfg['symbols'])<=100 and len(symbols)==len(set(symbols)) and all(
-        isinstance(s,str) and 1<=len(s)<=12 and all(c.isupper() or c.isdigit() or c in '.-' for c in s) for s in symbols),'INVALID_DAILY_UNIVERSE')
-    require(cfg['feed']=='sip' and cfg['currency']=='USD' and 1<=cfg['max_provider_gets']<=24 and
-        1<=cfg['max_scan_seconds']<=600,'INVALID_DAILY_DATA_CONTRACT')
+    if market_config(cfg):
+        universe=cfg['universe']
+        require('symbols' not in cfg and set(universe)=={'source','status','asset_class','tradable','max_symbols','batch_size'} and
+            universe['source']=='alpaca_assets' and universe['status']=='active' and
+            universe['asset_class']=='us_equity' and universe['tradable'] is True and
+            type(universe['max_symbols']) is int and 1<=universe['max_symbols']<=30000 and
+            type(universe['batch_size']) is int and 1<=universe['batch_size']<=25,'INVALID_DAILY_UNIVERSE')
+        require(1<=cfg['max_provider_gets']<=12000 and 1<=cfg['max_scan_seconds']<=3600 and
+            1<=cfg['max_capture_seconds']<=5400 and 1<=cfg['max_total_seconds']<=7200 and
+            1<=cfg['max_provider_bytes']<=16*1024**3,'INVALID_DAILY_DATA_BUDGET')
+    else:
+        symbols=cfg['symbols']+[cfg['benchmark']]
+        require(1<=len(cfg['symbols'])<=100 and len(symbols)==len(set(symbols)) and all(
+            isinstance(s,str) and 1<=len(s)<=12 and all(c.isupper() or c.isdigit() or c in '.-' for c in s) for s in symbols),'INVALID_DAILY_UNIVERSE')
+        require(1<=cfg['max_provider_gets']<=24 and 1<=cfg['max_scan_seconds']<=600,'INVALID_DAILY_DATA_CONTRACT')
+    require(cfg['feed']=='sip' and cfg['currency']=='USD','INVALID_DAILY_DATA_CONTRACT')
     require(date.fromisoformat(cfg['warmup_start'])<date.fromisoformat(cfg['episode_start']),'INVALID_DAILY_EPISODE')
     return cfg
 
 class Provider:
     """Fixed GET endpoints, no redirects/retries; bounded complete responses only."""
-    def __init__(self,key,secret,*,max_gets=24):
+    def __init__(self,key,secret,*,max_gets=24,max_seconds=240,max_bytes=32*1024*1024,min_interval=0):
         require(bool(key and secret),'ALPACA_DATA_AUTH_UNAVAILABLE')
         import requests
         self.session=requests.Session();self.session.trust_env=False
         self.session.headers.update({'APCA-API-KEY-ID':key,'APCA-API-SECRET-KEY':secret,'Accept-Encoding':'identity'})
         self.secrets=(key.encode(),secret.encode());self.max_gets=max_gets
-        self.receipts=[];self.total=0;self.deadline=clock.monotonic()+240
+        self.receipts=[];self.total=0;self.deadline=clock.monotonic()+max_seconds
+        self.max_bytes=max_bytes
+        self.min_interval=min_interval;self.last_request=None
 
     def get(self,url,params):
-        require(url in (CALENDAR,DATA+'/v2/stocks/bars',DATA+'/v1/corporate-actions'),'PROVIDER_ENDPOINT_REFUSED')
+        from scripts.strategy_universe import ASSETS
+        require(url in (CALENDAR,ASSETS,DATA+'/v2/stocks/bars',DATA+'/v1/corporate-actions'),'PROVIDER_ENDPOINT_REFUSED')
+        if self.last_request is not None:
+            delay=self.min_interval-(clock.monotonic()-self.last_request)
+            if delay>0:clock.sleep(delay)
         require(len(self.receipts)<self.max_gets and clock.monotonic()<self.deadline,'PROVIDER_BUDGET_EXCEEDED')
+        self.last_request=clock.monotonic()
         receipt=dict(endpoint=url,parameters=dict(params),status='ATTEMPTED')
         self.receipts.append(receipt)
         response=None
@@ -65,7 +85,8 @@ class Provider:
             raw=b''
             for part in response.iter_content(65536):
                 raw+=part;self.total+=len(part)
-                require(len(raw)<=4*1024*1024 and self.total<=32*1024*1024 and clock.monotonic()<self.deadline,'PROVIDER_RESPONSE_BUDGET_EXCEEDED')
+                require(len(raw)<=(32*1024*1024 if url==ASSETS else 4*1024*1024) and
+                    self.total<=self.max_bytes and clock.monotonic()<self.deadline,'PROVIDER_RESPONSE_BUDGET_EXCEEDED')
             require(not any(secret in raw for secret in self.secrets),'PROVIDER_AUTH_ECHO_REFUSED')
             value=strict_json(raw)
             receipt.update(status='COMPLETE',**binding(raw))
@@ -120,6 +141,9 @@ def pages(provider,url,params,*,max_pages=6):
     raise DailyError('PROVIDER_PAGE_LIMIT_EXCEEDED')
 
 def capture(provider,cfg,calendar,session,root,*,now):
+    from scripts.strategy_universe import capture_market,market_config
+    if market_config(cfg):
+        return capture_market(provider,cfg,calendar,session,root,now=now,cache_dir=root.parent/'market-cache')
     symbols=cfg['symbols']+[cfg['benchmark']]
     folder=root/'capture/analysis';folder.mkdir(parents=True,mode=0o700)
     raw_dir=root/'provider-responses';raw_dir.mkdir(mode=0o700)
@@ -225,6 +249,7 @@ def archive_scan(summary,root,cfg,*,env):
 
 def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None):
     now=now or datetime.now(timezone.utc)
+    started=clock.monotonic()
     rows,raw=provider.get(CALENDAR,dict(start=cfg['warmup_start'],end=(now.astimezone(NY).date()+timedelta(days=14)).isoformat()))
     calendar=normalize_calendar(rows);session=signal_session(calendar,now,bootstrap_latest=bootstrap_latest)
     if session is None:return dict(status='SKIPPED_NON_TRADING_DAY',pipeline=PIPELINE,broker_operations=0)
@@ -237,8 +262,13 @@ def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None
     try:
         (root/'calendar-response.json').write_bytes(raw)
         spec=capture(provider,cfg,calendar,session,root,now=now)
+        from scripts.strategy_universe import market_config
+        if market_config(cfg):
+            remaining=cfg['max_total_seconds']-(clock.monotonic()-started)
+            require(remaining>=1,'DAILY_TOTAL_BUDGET_EXCEEDED')
         result=run_scan(spec,as_of=session,output=root/'scan',strategy_ids=[cfg['strategy_id']],
-            fold_id=cfg['episode_id'],cost_case_id=cfg['cost_case']['id'],now=now)
+            fold_id=cfg['episode_id'],cost_case_id=cfg['cost_case']['id'],now=now,
+            total_deadline=started+cfg['max_total_seconds'] if market_config(cfg) else None)
         save_json(root/'provider-requests.json',provider.receipts)
         require(archive is not None,'DAILY_POSTGRES_ARCHIVE_REQUIRED')
         proof=archive(result,root,cfg)
@@ -246,6 +276,7 @@ def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None
             strategy_id=cfg['strategy_id'],scan_run_id=result['run_id'],candidates=len(result['top_candidates']),
             provider_gets=len(provider.receipts),archive=proof,output_root=str(root),
             research_qualified=False,order_submission_authorized=False,broker_operations=0)
+        if market_config(cfg):value['coverage']=result['coverage']
         save_json(root/'completion.json',value)
         return value
     except Exception as error:
@@ -272,7 +303,9 @@ def main(output,*,bootstrap_latest=False):
     provider=None
     try:
         cfg=load_config();env=configured_environment()
-        provider=Provider(env.get('APCA_API_KEY_ID'),env.get('APCA_API_SECRET_KEY'),max_gets=cfg['max_provider_gets'])
+        provider=Provider(env.get('APCA_API_KEY_ID'),env.get('APCA_API_SECRET_KEY'),max_gets=cfg['max_provider_gets'],
+            max_seconds=cfg.get('max_capture_seconds',240),max_bytes=cfg.get('max_provider_bytes',32*1024*1024),
+            min_interval=.35 if cfg.get('schema')=='jbravo.daily-strategy-config.v2' else 0)
         result=run_daily(cfg,provider,output,bootstrap_latest=bootstrap_latest,
             archive=lambda summary,root,cfg:archive_scan(summary,root,cfg,env=env))
         print(json.dumps(result,sort_keys=True));return 0

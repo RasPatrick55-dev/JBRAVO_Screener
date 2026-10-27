@@ -38,10 +38,13 @@ claim and failure receipt; never overwrite them to retry.
 
 The explicit CLI consumes verified captures. The daily worker in
 `scripts/daily_strategy_scan.py` refreshes its own captures and invokes the same
-scanner. Its configuration is `config/strategy_scan_daily.json`: the initial ten
-tested stocks plus SPY, the fixed 2026 paper episode, unchanged risk settings,
+scanner. Its v2 configuration is `config/strategy_scan_daily.json`: the daily
+active/tradable Alpaca U.S. equity universe plus benchmark-only SPY, the fixed
+2026 paper episode, unchanged risk settings,
 SIP feed, raw execution prices and split-adjusted feature prices. It never
-substitutes IEX, stale files or invented calendar sessions.
+substitutes IEX, stale files or invented calendar sessions. See
+[market-wide screening](market_wide_strategy_screen.md) for data exclusions,
+pagination, caching, complete coverage, sparse replay and deployment acceptance.
 
 The dedicated PythonAnywhere library task runs daily at **01:20 UTC** (20:20 or
 21:20 Eastern on the preceding date). It therefore remains after the assumed
@@ -56,10 +59,10 @@ then independently read back in a separate read-only transaction. The record
 contains the signal proposals, data/source hashes, output location and explicit
 non-execution status. No new schema is initialized by the worker.
 
-This task screens the initial cohort and records paper proposals. The existing
-legacy primary job, production candidate tables and order executor remain a
-separate route. Routing daily library proposals to orders is a later integration;
-these captures and simulations do not grant order submission authority. The
+The primary strategy route consumes this task's verified PostgreSQL archive and
+publishes the canonical candidate batch, Backtest and Metrics together. The
+separately authorized paper executor consumes that handoff under its premarket
+policy; these captures and simulations do not grant order submission authority. The
 library CLI dispatches before legacy credential bootstrap or trading-account probes.
 
 ## Follow a signal through the process

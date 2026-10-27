@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
 import hashlib
+import gzip
 import html
 import json
 from pathlib import Path
@@ -18,12 +19,13 @@ import pandas as pd
 
 from scripts.research_dataset import bounded_read, canonical_hash, load_dataset, strict_json
 from scripts.research_simulation import ResearchPortfolio, availability_clock
-from scripts.research_testing import save_json, validate_spec
+from scripts.research_testing import save_json, validate_spec, json_default
 from scripts.strategy_library import select_strategies
 
 SOURCE_FILES = ('screener.py', 'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
                 'research_testing.py', 'research_strategies.py', 'research_simulation.py',
-                'research_store.py', 'backtest_core.py', 'indicators.py')
+                'research_store.py', 'backtest_core.py', 'indicators.py',
+                'strategy_universe.py', 'strategy_market_replay.py')
 
 
 def signal_id(strategy, episode_id, symbol, session):
@@ -45,6 +47,7 @@ class ScannerPortfolio(ResearchPortfolio):
         self.latest_pool = []
 
     def _entry_candidates(self, day, rows):
+        self._session_observation_start = len(self.daily_scans)
         before = len(self.signals)
         pool = super()._entry_candidates(day, rows)
         self.latest_pool = pool
@@ -81,7 +84,7 @@ class ScannerPortfolio(ResearchPortfolio):
         # The kernel has applied ranking/capacity. Save selected proposals BEFORE
         # research's terminal-entry cancellation; proposals are never orders.
         selected = {symbol for symbol, row in self.pending_entries.items() if row.name == day}
-        for observation in self.daily_scans:
+        for observation in self.daily_scans[getattr(self, '_session_observation_start', 0):]:
             if observation['session'] != key:
                 continue
             observation['selected'] = observation['symbol'] in selected
@@ -101,17 +104,31 @@ class ScannerPortfolio(ResearchPortfolio):
 
 def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadline=None, stop_file=None):
     effective = dict(fold, test_end=as_of)
-    data = {symbol: strategy.prepare(dataset.raw[symbol], dataset.features[symbol], effective)
-            for symbol in spec['universe']['symbols']}
+    market = getattr(dataset, 'market_wide', False)
+    if market:
+        from scripts.strategy_market_replay import prepare_market
+        data, missing, dividends, observation_count = prepare_market(dataset, spec, strategy, effective,
+            deadline=deadline, stop_file=stop_file)
+    else:
+        data = {symbol: strategy.prepare(dataset.raw[symbol], dataset.features[symbol], effective)
+                for symbol in spec['universe']['symbols']}
+        dividends = dataset.dividends
+    # Daily additions/removals must not change the strategy's logical episode
+    # identity. Exact current membership is separately bound in dataset/run hashes.
+    population = (dict(policy={k:dataset.coverage['policy'][k] for k in
+                              ('source','status','asset_class','tradable')}, benchmark=spec['universe']['benchmark'])
+                  if market else spec['universe'])
     episode = dict(strategy_id=strategy.id, version=strategy.version, fold_id=fold['id'],
                    warmup_start=fold['warmup_start'], test_start=fold['test_start'],
-                   universe=spec['universe'], portfolio=spec['portfolio'], cost_case=cost_case,
+                   universe=population, portfolio=spec['portfolio'], cost_case=cost_case,
                    definition_sha256=strategy.describe()['definition_sha256'])
     episode_id = canonical_hash(episode)
     engine = ScannerPortfolio(data, strategy=strategy, episode_id=episode_id,
-        dividends=dataset.dividends, deadline=deadline, stop_file=stop_file,
+        dividends=dividends, deadline=deadline, stop_file=stop_file,
         trade_cost=cost_case['fee_per_fill'], slippage=cost_case['slippage_bps']/10000,
         **spec['portfolio'])
+    if market:
+        engine.dates = [pd.Timestamp(d) for d in dataset.calendar.index if effective['test_start'] <= d <= as_of]
     engine.run()
     intents = {intent['signal_id']: dict(intent) for intent in engine.intents}
     calendar = dataset.calendar
@@ -147,7 +164,7 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
             status=('CLOSED' if bought and bought == sold else 'OPEN' if bought else 'UNFILLED_PROPOSAL'),
             bought_quantity=bought, sold_quantity=sold,
             fills=related, strategy_id=strategy.id, strategy_version=strategy.version))
-    return dict(strategy=strategy.describe(), episode_id=episode_id, episode=episode, as_of=as_of,
+    result = dict(strategy=strategy.describe(), episode_id=episode_id, episode=episode, as_of=as_of,
         latest_observations=latest, top_candidates=today_intents,
         observations=engine.daily_scans, intents=list(intents.values()), fills=engine.fills,
         lifecycle=lifecycle, actions=engine.action_events, ledger=engine.reconciliations,
@@ -155,6 +172,12 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
             qualifying_closes=sum(record['consumed'] for record in engine.daily_scans),
             selected_proposals=len(intents), paper_entries=len(buys), signals_with_exits=len(exits)),
         research_qualified=False, order_submission_authorized=False)
+    if market:
+        from scripts.strategy_market_replay import merge_latest
+        merge_latest(result, missing, strategy, episode_id)
+        result['funnel']['observations'] = observation_count
+        result['metrics']['signal_observations'] = observation_count
+    return result
 
 
 def _report(results):
@@ -190,7 +213,8 @@ def _report(results):
     return '\n'.join(chunks)
 
 
-def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_id='base_cost', now=None):
+def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_id='base_cost', now=None,
+             total_deadline=None):
     validate_spec(spec)
     if date.fromisoformat(as_of).isoformat() != as_of:
         raise ValueError('Noncanonical scanner session')
@@ -217,7 +241,7 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
     save_json(output/'claim.json', dict(status='CLAIMED_NO_REPLAY', as_of=as_of,
         strategy_ids=[strategy.id for strategy in selected], broker_operations=0))
     try:
-        deadline = clock.monotonic()+spec['max_seconds']
+        deadline = min(clock.monotonic()+spec['max_seconds'], total_deadline or float('inf'))
         dataset = load_dataset(spec)
         if as_of not in dataset.calendar.index:
             raise ValueError('Scanner session is absent from supplied exchange calendar')
@@ -239,12 +263,22 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
             folder.mkdir()
             for key in ('latest_observations','top_candidates','observations','intents','fills','lifecycle',
                         'actions','ledger','metrics'):
-                save_json(folder/(key+'.json'), result[key])
+                if getattr(dataset, 'market_wide', False) and key in {
+                        'latest_observations','observations','intents','fills','lifecycle','actions'}:
+                    body=json.dumps(result[key],sort_keys=True,default=json_default,allow_nan=False,
+                                    separators=(',',':')).encode()
+                    with (folder/(key+'.json.gz')).open('xb') as handle:
+                        handle.write(gzip.compress(body,mtime=0))
+                else:
+                    save_json(folder/(key+'.json'), result[key])
         if any(hashlib.sha256((repo/'scripts'/name).read_bytes()).hexdigest() != expected
                for name, expected in source_hashes.items()):
             raise ValueError('Scanner source changed during execution')
         public = [dict(strategy=result['strategy'], episode_id=result['episode_id'],
             as_of=as_of, funnel=result['funnel'], metrics=result['metrics']) for result in results]
+        if getattr(dataset, 'market_wide', False):
+            for item,result in zip(public,results):
+                item['observation_storage']=result['observation_storage']
         candidates = [intent for result in results for intent in result['top_candidates']]
         summary = dict(schema='jbravo.strategy-scan.v1', status='COMPLETED_PAPER_SIMULATION',
             as_of=as_of, generated_at_utc=now.astimezone(timezone.utc).isoformat(),
@@ -258,6 +292,8 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
                 'Daily snapshot availability assumed 20:15 Eastern; execution simulated at next regular open',
                 'Not the existing premarket passive-limit executor; no order submission or scheduler',
                 'Future daily runs require a new verified capture/specification and output directory'])
+        if getattr(dataset, 'market_wide', False):
+            summary['coverage'] = dataset.provenance['selection']
         save_json(output/'result.json', summary)
         save_json(output/'paper_handoff.json', dict(schema='jbravo.strategy-paper-proposals.v1',
             scan_run_id=summary['run_id'], as_of=as_of, proposals=candidates,
@@ -266,7 +302,13 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
                    'signal_session', 'signal_available_at_assumed', 'next_session',
                    'next_open_at', 'score', 'status', 'paper_only', 'order_submission_authorized']
         pd.DataFrame(candidates, columns=columns).to_csv(output/'top_candidates.csv', index=False)
-        (output/'report.html').write_text(_report(results),encoding='utf-8')
+        display = results
+        if getattr(dataset, 'market_wide', False):
+            display = [dict(r,lifecycle=r['lifecycle'][:500],latest_observations=r['latest_observations'][:500]) for r in results]
+        preview_note = ('<p>Preview limited to 500 rows per table. Complete current decisions and sparse historical '
+                        'portfolio traces are in the compressed JSON artifacts.</p>'
+                        if getattr(dataset, 'market_wide', False) else '')
+        (output/'report.html').write_text(_report(display)+preview_note,encoding='utf-8')
         bindings = []
         for path in sorted(output.rglob('*')):
             if path.is_file():

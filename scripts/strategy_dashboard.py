@@ -53,6 +53,7 @@ def snapshot():
         return dict(result,ok=True,status='COMPLETE' if rows else 'EMPTY',
             run_date=batch[0].isoformat(),run_ts_utc=stamp.isoformat(),rows=rows,rows_final=len(rows),
             source_detail='strategy_primary:'+batch[3]['outcome'],archive_id=batch[3]['archive_id'],
+            coverage=clean(batch[3].get('coverage')),
             scan_run_id=batch[3]['scan_run_id'],strategy_contract=batch[3].get('strategy_contract'),
             _strategy_backtest=backtest,_strategy_metrics=metrics)
     except Exception:

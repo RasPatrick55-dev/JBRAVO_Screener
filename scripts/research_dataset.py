@@ -60,6 +60,9 @@ def load_dataset(spec):
     root = manifest_path.parent.parent
     manifest_body = bounded_read(manifest_path)
     manifest = strict_json(manifest_body)
+    if manifest.get('schema') == 'jbravo.market-capture.v1':
+        from scripts.strategy_universe import load_market_dataset
+        return load_market_dataset(spec, manifest, manifest_path)
     if manifest.get("research_qualified") is not False:
         raise DataError("Expected original unqualified capture status")
     bindings = {item["path"].replace("\\", "/"): item for item in manifest["bindings"]}

@@ -26,6 +26,11 @@ features and raw execution references. Signals can fill only at the supplied nex
 regular-session open. No later price bar is used to invent an outcome for the
 current buy proposal. Retrospective data and the selected cohort remain research
 limitations; this stage does not establish untouched validation or qualification.
+For the [market-wide daily capture](market_wide_strategy_screen.md), the full
+current population is hash-bound, data exclusions are explicit, and newer
+listings start evaluating once the same 250-session feature warmup is ready.
+The same sparse replay retains cross-symbol portfolio competition and all rows
+that can affect entries/exits. Compact universe provenance keeps reports bounded.
 
 An empty Screener batch resolves and records the strategy but reports
 `SKIPPED_NO_CANDIDATES`. A nonempty batch reports
@@ -54,5 +59,6 @@ legacy backtest rows or CSVs. `STRATEGY_EPISODE` identifies the actual study
 window; a UI window parameter does not redefine this frozen replay. Old batches
 without a bound strategy backtest remain explicitly pending.
 
-This stage does not submit orders or change the paper executor. The existing
-premarket executor's regular-open model mismatch remains separately blocked.
+This stage does not submit orders or change the paper executor. The separate
+paper execution route retains its explicit premarket policy and pending
+premarket performance validation.

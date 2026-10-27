@@ -7,8 +7,10 @@ primary job obtains a fresh exchange calendar and requires the exact completed
 session's PostgreSQL research archive. Missing, stale, revised, incomplete or
 source-mismatched archives fail without reverting to legacy picks.
 
-The initial cohort remains ALK, FN, HMY, LOGI, MIRM, NVST, PLUG, SKY, SRRK and
-STLD, with SPY as benchmark. Data is Alpaca SIP daily data in USD: raw prices
+The v2 daily worker discovers the active, tradable Alpaca U.S. equity universe,
+with SPY as benchmark-only. The ten-stock research pilot is no longer the daily
+universe. [Coverage and data exclusions](market_wide_strategy_screen.md) are
+bound in the published batch and dashboard API. Data is Alpaca SIP daily data in USD: raw prices
 for price references, split-adjusted prices for strategy features. The scan
 assumes availability at 20:15 Eastern and models entry at the next supplied
 09:30 Eastern regular open. This is a paper testing candidate; research
@@ -54,12 +56,12 @@ candidate report. Cohort metric fields refer to the verified research simulation
 label generation and ranker evaluation are explicitly marked unused. Simulation
 P&L is never published as actual broker performance.
 
-The postflight separates `screen_ready` from `entry_ready`. The current executor
-implements a 04:00 Eastern passive-limit policy, so it explicitly refuses these
-next-regular-open proposals, including when paper research entries are enabled.
-The signal-to-primary-Screener-to-database-to-handoff connection is available;
-broker entry integration requires a matching regular-open paper executor. No
-live trading permission or strategy qualification follows from this connection.
+The postflight separates `screen_ready` from `entry_ready`. The separately
+authorized executor binds the complete strategy/Backtest/Metrics handoff and
+uses its explicit 04:00 Eastern frozen-reference limit-order policy. Historical
+regular-open results retain `PREMARKET_REPLAY_PENDING`; they do not validate
+premarket fills. No live trading permission or strategy qualification follows
+from this connection. See [execution requirements](strategy_execution_handoff.md).
 
 ## Rollback
 
