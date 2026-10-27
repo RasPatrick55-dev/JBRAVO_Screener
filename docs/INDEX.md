@@ -14,6 +14,8 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 - Near-term roadmap: `docs/explanation/roadmap.md`
 - ADR template: `docs/adr/ADR_TEMPLATE.md`
 - Archived material (not current guidance): `docs/archive/README.md`
+- [Swing Research Department workflow and handoff](how-to/strategy_testing.md)
+- [October 27 Pullback/Reclaim verification snapshot](reference/pullback_reclaim_verification_2026-10-27.json)
 
 ## How-To
 
@@ -23,7 +25,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 - [Strategy identity in the backtesting stage](how-to/strategy_backtest_stage.md)
 - [Primary strategy Screener and handoff](how-to/primary_strategy_screen.md)
 - [Strategy scanner library and paper traces](how-to/strategy_scanner_library.md)
-- [Isolated strategy testing](how-to/strategy_testing.md)
+- [Swing Research Department workflow and isolated strategy testing](how-to/strategy_testing.md)
 
 - `docs/how-to/ops_runbook.md`
 - `docs/how-to/dev_setup.md`

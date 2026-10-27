@@ -1,4 +1,80 @@
-# Run an isolated strategy study
+# Swing Research Department: strategy testing and handoff
+
+This is the department's repository entry point for research, paper scanning,
+pipeline integration and the evidence needed to follow a strategy into execution.
+Research approval, a successful software run and a filled paper trade are
+separate decisions. Pullback/Reclaim v2 is enabled for owner-authorized paper
+testing; `research_qualified=false` and premarket performance qualification
+remain pending. Completing this workflow does not change an earlier research
+HOLD or authorize a different trading mode.
+
+## Department workflow
+
+| Stage | Implementation and operator guide | Required handoff |
+| --- | --- | --- |
+| Research | `research_testing.py`; this guide | Frozen specification, data/action provenance, scenario results and source hashes |
+| Strategy library | [Scanner library](strategy_scanner_library.md) | Versioned rules, definition fingerprint and explicit paper-scan enablement |
+| Daily data and Screener | [Market-wide screening](market_wide_strategy_screen.md) | Complete asset accounting, current decisions, ranked proposals and independently verified research archive |
+| Primary input validation | [Primary strategy route](primary_strategy_screen.md) | Exact-session source-bound producer archive and candidate values |
+| Backtest | [Strategy Backtest](strategy_backtest_stage.md) | Same candidate signal IDs, strategy/version/definition and historical cohort |
+| Metrics | [Strategy Metrics](strategy_metrics_stage.md) | Bound Backtest result, unchanged candidate population and honest unknown statistics |
+| Production publication | [Primary strategy route](primary_strategy_screen.md) | Atomic PostgreSQL publication of candidates, Backtest and Metrics; completed primary report |
+| Paper execution and monitor | [Execution handoff](strategy_execution_handoff.md) | Fresh production handoff, actual paper-account ownership, observed orders/fills and protective lifecycle evidence |
+
+The production route currently supports one strategy,
+`trend_pullback_reclaim_qualifying_close_v2`, version `2`. Adding an entry to the
+scanner registry does not automatically connect its production publication,
+account allocation, executor or exit monitoring. Several strategies can be
+compared in isolated studies; shared paper-account capital across strategies
+still needs an explicit contract.
+
+For a new strategy, retain its research proposal and review decision; freeze
+its data convention, causal buy/exit rules, costs, risk settings and versioned
+definition. Test the common kernel and a positive signal handoff before enabling
+its paper scan. Carry that exact identity through Backtest, Metrics and the
+execution state tables. Verify both an empty batch and a nonempty batch, then
+observe actual paper fills and monitor protection. Never relabel an existing
+strategy ID or infer research promotion from a passing technical test.
+
+### Daily operations and proof
+
+The installed PythonAnywhere task definitions are authoritative. The verified
+October 27 configuration is:
+
+| Operation | Task ID | UTC schedule | Dependency |
+| --- | --- | --- | --- |
+| Market-wide producer/Screener | 1558334 | 01:20 daily | Completed signal data after 20:15 Eastern |
+| Primary, Backtest, Metrics and publication | 1322138 | 03:45 daily | Completed exact-session producer archive |
+| Paper entry | 1326478 | 07:55 daily start | Fresh primary and monitor; target entry 04:00 Eastern |
+| Strategy-aware position monitor | 228489 | Always on | Actual strategy-owned orders/positions and frozen lifecycle rules |
+
+Convert UTC schedules using the exchange date and current Eastern/Chicago
+offsets. The entry worker may wait for 04:00 Eastern; its process start is not
+the order time. Exchange-calendar non-trading days and changed session hours
+must remain explicit. Read schedule metadata and command hashes through the
+shared PythonAnywhere MCP; do not copy raw task commands or private environment
+contents into departmental records.
+
+Trace one candidate by signal ID through the producer's `scan/paper_handoff.json`,
+the exact PostgreSQL batch, primary `handoff`, Backtest candidate IDs and Metrics
+rows, then the execution signal/order records. The report locations and recovery
+rules are in the execution guide. A source-bound completed report with separate
+database readback is required; a nonempty local audit file is insufficient.
+
+Record these outcomes separately: candidate published, order submitted, quantity
+filled, protection observed, cancellation confirmed and position exited.
+Submitting a limit order does not prove a fill. A healthy flat-account monitor
+does not prove stop or exit behavior. A valid zero-signal scan is a successful
+screen with an incomplete buy demonstration. Keep the approved rules and wait
+for a fresh qualifying session rather than insert a test candidate.
+
+The [October 27 verification record](../reference/pullback_reclaim_verification_2026-10-27.json)
+and [dated market-wide findings](market_wide_strategy_screen.md#verified-deployment-and-audit-october-27-2026)
+distinguish the completed technical audit from the still-pending production
+candidate, paper-fill and monitor demonstration. These are dated evidence,
+not current execution inputs or instructions to rerun a consumed packet.
+
+## Run an isolated strategy study
 
 `python -m scripts.research_testing` is the research entry point. The new research
 and strategy-scanner paths share the pure `scripts.backtest_core` portfolio kernel,

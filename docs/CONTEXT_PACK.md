@@ -41,6 +41,28 @@ Repository invariants:
 - `scripts/monitor_positions.py`
 - `scripts/db.py`
 
+## E) Swing Research Department pack
+
+Include this pack when working on strategies or the current paper pipeline:
+
+- `docs/how-to/strategy_testing.md` (department workflow and evidence checklist)
+- `docs/how-to/strategy_scanner_library.md`
+- `docs/how-to/market_wide_strategy_screen.md`
+- `docs/how-to/primary_strategy_screen.md`
+- `docs/how-to/strategy_backtest_stage.md`
+- `docs/how-to/strategy_metrics_stage.md`
+- `docs/how-to/strategy_execution_handoff.md`
+- `docs/reference/pullback_reclaim_verification_2026-10-27.json`
+- `config/strategy_scan_daily.json`
+- `config/strategy_pipeline.json`
+- `config/strategy_execution.json`
+
+The dated JSON is a nonsecret evidence summary, not a current candidate source
+or executable deployment packet. Raw captures, private environment files,
+credentials, console transcripts and large local review bundles stay outside
+this context pack. A repo documentation update does not refresh a separate
+ChatGPT Project or departmental workspace automatically.
+
 ## Refresh Protocol
 
 After any merge that changes behavior/docs:

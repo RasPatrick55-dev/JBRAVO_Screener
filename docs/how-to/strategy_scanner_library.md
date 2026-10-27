@@ -103,7 +103,7 @@ orders or the existing premarket passive-limit execution model. An unknown next
 session stays `WAITING_FOR_NEXT_CALENDAR_SESSION`; no Monday/holiday is invented.
 
 The same logical signal ID survives daily replay and is linked to its input
-batch's hashes. A future order consumer must bind that exact batch, check revised
+batch's hashes. The paper order consumer must bind that exact batch, check revised
 data/expiry and deduplicate the signal; these proposal files grant no submission
 authority. A terminal selected setup is retained as a proposal, without inventing
 a fill outside the supplied evaluation period.
@@ -113,7 +113,7 @@ a fill outside the supplied evaluation period.
 - `result.json`: run, strategy/version/fingerprint, provenance and funnel counts.
 - `top_candidates.csv` and `paper_handoff.json`: this session's selected paper
   proposals. Empty files with headers/empty arrays are valid no-buy outcomes.
-- Per-strategy `latest_observations.json`: every symbol's current decision and
+- Per-strategy `latest_observations.json` (or `.json.gz` for market-wide captures): every symbol's current decision and
   failed entry conditions, including warmup/held/pending/rearm reasons.
 - `observations.json`, `intents.json`, `fills.json`, `lifecycle.json`: complete
   chronological audit from setup through modeled outcomes.
@@ -122,6 +122,10 @@ a fill outside the supplied evaluation period.
   traces and latest daily decisions.
 - `specification.json`, `dataset.json`, `source/` and `manifest.json`: actual
   specification, input provenance, source bytes and artifact hashes.
+
+Market-wide historical observations, intents, fills, lifecycle and action
+artifacts also use `.json.gz`; resolve their exact names through `manifest.json`
+rather than assume the small fixed-universe filenames or silently skip them.
 
 These artifacts retain `research_qualified=false` and explicit
 `order_submission_authorized=false`. They do not alter the separately authorized

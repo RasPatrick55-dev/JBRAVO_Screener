@@ -1,0 +1,257 @@
+{
+  "schema": "jbravo.department-verification-snapshot.v1",
+  "purpose": "DATED_EVIDENCE_SUMMARY_NOT_EXECUTION_INPUT_OR_REPLAY_AUTHORITY",
+  "observed_through_utc": "2026-10-27T19:46:13+00:00",
+  "department": "Swing Research Department",
+  "deployed_source": {
+    "commit": "9b428a91892110c593aadb5c44f0ffb9c5a9c8b0",
+    "tree": "72dd2333b210674b56f6ad99e443ded7653a9fa5",
+    "runtime_bindings_verified": 56,
+    "preserved_files_verified": 78,
+    "reviewed_pull_requests": [
+      "https://github.com/RasPatrick55-dev/JBRAVO_Screener/pull/757",
+      "https://github.com/RasPatrick55-dev/JBRAVO_Screener/pull/758",
+      "https://github.com/RasPatrick55-dev/JBRAVO_Screener/pull/759",
+      "https://github.com/RasPatrick55-dev/JBRAVO_Screener/pull/760"
+    ],
+    "final_handoff_fix_local_tests_passed": 217
+  },
+  "strategy_contract": {
+    "definition_sha256": "bf576123697684b933b0f6772ab0121e8546fc9aaa1daa4084dbabcc27de0207",
+    "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+    "strategy_version": "2"
+  },
+  "trading_mode": "PAPER_ONLY",
+  "research_qualified": false,
+  "premarket_performance_status": "PREMARKET_REPLAY_PENDING",
+  "capture": {
+    "acquisition_provider_bytes": 1953678560,
+    "acquisition_provider_gets": 2840,
+    "adjustments": [
+      "raw",
+      "split"
+    ],
+    "coverage_sha256": "85b1adae1a665e9a54da1548b6fcf8662cef3c3588afd5bc505929f98235d9fd",
+    "currency": "USD",
+    "data_asof": "2026-10-27",
+    "feed": "sip",
+    "manifest_sha256": "f9788730349af11a352389fc65453afea10466f5b537d321a3fe285e7bf3a1d4",
+    "reuse": "COMPLETE_IMMUTABLE_CAPTURE_HARDLINKS_FULLY_REVERIFIED",
+    "root": "/home/RasPatrick/jbravo-research-tools/MARKET_PIPELINE_MANUAL_20261027_003/runs/2026-10-26",
+    "signal_session": "2026-10-26",
+    "symbols_sha256": "14c477286890da3035d0ce508b5940c38a7abfa665b1ee96cc268b79826b9091"
+  },
+  "data_session": "COMPLETED_DAILY_AGGREGATES_THROUGH_2026_10_26",
+  "feed_timing_scope": "HISTORICAL_SNAPSHOT_AFTER_ASSUMED_20_15_EASTERN_FINALIZATION_NOT_REALTIME_OR_PREMARKET_FILL_PROOF",
+  "coverage": {
+    "benchmark": "SPY",
+    "coverage_sha256": "85b1adae1a665e9a54da1548b6fcf8662cef3c3588afd5bc505929f98235d9fd",
+    "discovered_count": 14407,
+    "evaluated_count": 6147,
+    "excluded_count": 8259,
+    "policy": {
+      "asset_class": "us_equity",
+      "batch_size": 25,
+      "max_symbols": 30000,
+      "source": "alpaca_assets",
+      "status": "active",
+      "tradable": true
+    },
+    "source": "alpaca_assets",
+    "status": "COMPLETE",
+    "symbols_sha256": "14c477286890da3035d0ce508b5940c38a7abfa665b1ee96cc268b79826b9091",
+    "tradable_count": 13192
+  },
+  "current_selection": {
+    "actual_account_limits_enforced_by": "PAPER_EXECUTOR",
+    "historical_terminal_proposals": 0,
+    "proposal_limit": 3,
+    "qualifying_symbols": 12,
+    "scope": "QUALIFYING_POOL_BEFORE_SIMULATED_PORTFOLIO_CAPACITY",
+    "selected_proposals": 3
+  },
+  "isolated_manual_audit": {
+    "status": "MANUAL_MARKET_PIPELINE_AUDIT_VERIFIED",
+    "verification_scope": "REAL_FULL_UNIVERSE_CAPTURE_SCREEN_PRIMARY_ADAPTER_BACKTEST_METRICS_WITH_ISOLATED_INPUT_ROOT",
+    "root": "/home/RasPatrick/jbravo-research-tools/MARKET_PIPELINE_REPLAY_20261027_005",
+    "plan_sha256": "0c672777324b67a575974e8677dc3dc3ea6749f8df94baf5809a5c23e7ae99e6",
+    "started_at": "2026-10-27T18:44:18.354505+00:00",
+    "finished_at": "2026-10-27T19:26:56.683429+00:00",
+    "run_id": "fcdc8c03bb36fc4dccf779730aff85ef9a435af2fbb01c8fef502a69aa5c219e",
+    "scan_run_id": "23fcf349ec072d381e6196e913a1058620038dfd7c493b93e23480f94806431f",
+    "dataset_sha256": "ea67ad8edd250ac623771d4720b8df40e0640d5d20033ae4cdcbfbb5f4d6e3d7",
+    "candidate_symbols": [
+      "TXN",
+      "DK",
+      "FOCT"
+    ],
+    "candidate_signal_ids": [
+      "f9c6d80d8599f0bc2051314488d76590d0e6212ad9c38ee6a8e6629e07f4979e",
+      "a8551cb181473362ca33c34de8e7610830684e4d02466239af419e0615b1efa9",
+      "c25d826dd0e1b2b06d288b6b10c136ad973a102f4b8e3886d098db1368432472"
+    ],
+    "backtest_status": "COMPLETED_CANDIDATE_BACKTEST",
+    "backtest_result_id": "38642fd1ebbfa3204c0711ea98b89f5c6b4363bf488bae29b9f258f111c54b62",
+    "metrics_status": "COMPLETED_STRATEGY_METRICS",
+    "metrics_result_id": "ff097ef1cb2e2d5e8c6c21fe8e3ebb668843f10cc8ea1e74935dcbdb4fb7efbb",
+    "candidate_closed_history": [
+      {
+        "symbol": "TXN",
+        "completed_signals": 0,
+        "sample_status": "NO_COMPLETED_SIGNALS",
+        "win_rate_pct": null,
+        "expectancy": null,
+        "profit_factor": null
+      },
+      {
+        "symbol": "DK",
+        "completed_signals": 0,
+        "sample_status": "NO_COMPLETED_SIGNALS",
+        "win_rate_pct": null,
+        "expectancy": null,
+        "profit_factor": null
+      },
+      {
+        "symbol": "FOCT",
+        "completed_signals": 0,
+        "sample_status": "NO_COMPLETED_SIGNALS",
+        "win_rate_pct": null,
+        "expectancy": null,
+        "profit_factor": null
+      }
+    ],
+    "cohort_metrics": {
+      "initial_cash": 100000.0,
+      "terminal_equity": 98799.05176287027,
+      "profit_factor": 0.922449285289209,
+      "total_return_pct": -1.2009482371297397,
+      "reconciled_sessions": 205
+    },
+    "database_archive": {
+      "table": "jbravo_research.research_runs",
+      "canonical_candidate_mutations": 0,
+      "inserted_rows": 1,
+      "result_sha256": "badaea25ebc5ccba3cfe3cba0608880c81c8871d418673a0796b63e0459808dc",
+      "run_id": "fcdc8c03bb36fc4dccf779730aff85ef9a435af2fbb01c8fef502a69aa5c219e",
+      "specification_sha256": "ec7874a742f29b594774c53b9fb9450799e01708ad8ded2aa2f84f1a21606dd9",
+      "status": "COMMITTED_AND_SEPARATE_READONLY_VERIFIED"
+    },
+    "audit_result_file_binding": {
+      "bytes": 35426,
+      "sha256": "9a071703fd6274ceeb1cf4a47e43db765e8d99dc4a576dbf8c7fcd35d3e2271b"
+    },
+    "new_provider_gets": 0,
+    "actual_scheduled_primary_task_invoked": false,
+    "canonical_candidates_published": false,
+    "canonical_database_fingerprints_unchanged": true,
+    "expired_entry_refused": true,
+    "broker_mutations": 0,
+    "memory": {
+      "peak_resident_mb": 544.6,
+      "resident_mb": 404.8,
+      "virtual_mb": 631.0
+    }
+  },
+  "production_snapshot": {
+    "primary_run_id": "e07f5bb710eb412890ce706470083d97",
+    "primary_finished_at": "2026-10-27T03:45:14.833813+00:00",
+    "signal_session": "2026-10-26",
+    "primary_source_bindings": 54,
+    "universe_scope": "EARLIER_TEN_SYMBOL_PILOT",
+    "candidate_count": 0,
+    "entry_run_id": "9109f1a99ba04b289d35f6f47a396e9a",
+    "entry_started_at": "2026-10-27T07:55:15.350575+00:00",
+    "entry_finished_at": "2026-10-27T07:55:16.217486+00:00",
+    "entry_process_rc": 0,
+    "entry_reason": "NO_STRATEGY_BUY_SIGNALS",
+    "orders_submitted": 0,
+    "orders_filled": 0,
+    "entry_history_equals_latest": true,
+    "entry_sources_equal_primary": true,
+    "monitor_observed_at": "2026-10-27T19:41:14.959935+00:00",
+    "monitor_status": "ok",
+    "monitor_owned_symbols": [],
+    "monitor_entry_ready": false
+  },
+  "scheduled_tasks_utc": [
+    {
+      "id": 1322138,
+      "enabled": true,
+      "interval": "daily",
+      "hour": 3,
+      "minute": 45,
+      "command_sha256": "fd9c3bfa3a1326ff6a4546317eb4136723fadee22cc0c75556c2a500f49db6d6"
+    },
+    {
+      "id": 1326478,
+      "enabled": true,
+      "interval": "daily",
+      "hour": 7,
+      "minute": 55,
+      "command_sha256": "2e69745c9c3fe52e943c83826c0f88da29fb10ff65c0819ef58cffb8ed7b8183"
+    },
+    {
+      "id": 1558334,
+      "enabled": true,
+      "interval": "daily",
+      "hour": 1,
+      "minute": 20,
+      "command_sha256": "ea229c20300418f43dc3d60ce80c8b6b4313bc47f2eeefbd5648c811b0541cda"
+    }
+  ],
+  "always_on_monitor": [
+    {
+      "id": 228489,
+      "enabled": true,
+      "command_sha256": "8451bfce8c7a06baabb3ba9a94b62470418a4d1e47cf29865edaf12d6b5f1af3"
+    }
+  ],
+  "readiness_checks": {
+    "producer_command_matches_reviewed": true,
+    "daily_worker_matches_reviewed": true,
+    "config_bindings": {
+      "strategy_scan_daily.json": {
+        "bytes": 900,
+        "sha256": "a451c0429919603a77d2a29092a190f5b90b9c0a178d53c04e27181c6ebcf4a1"
+      },
+      "strategy_pipeline.json": {
+        "bytes": 337,
+        "sha256": "43916d49cd3591a247ded1bd5a0e0ea81b87346179be1fc76a99075b8d4700e8"
+      },
+      "strategy_execution.json": {
+        "bytes": 442,
+        "sha256": "e9ac06872118e9da89c938f943e204b7a429b7ca13baafeb308728f3772e2713"
+      }
+    },
+    "http_gets": 6,
+    "remote_mutations": 0
+  },
+  "pending_proof": [
+    "Fresh market-wide producer archive for the next completed session",
+    "Production primary publication and independent committed candidate readback",
+    "Observed paper order and actual fill for that exact valid signal",
+    "Strategy-owned protective lifecycle, cancellation/exit and restart evidence",
+    "Independent research qualification and premarket fill-model validation"
+  ],
+  "follow_up": {
+    "id": "verify-first-pullback-reclaim-production-candidate",
+    "scope": "READ_ONLY_NEXT_SCHEDULED_CYCLE_OBSERVATION",
+    "signal_session": "2026-10-27",
+    "entry_session": "2026-10-28",
+    "final_observation_after_utc": "2026-10-28T09:00:00+00:00",
+    "execution_or_retry_authority": false
+  },
+  "raw_evidence_locations": {
+    "local_review_root": "C:\\Users\\RasPa\\PythonAnywhereReviews\\2026-10-27-market-wide-screener-001",
+    "native_audit_root": "/home/RasPatrick/jbravo-research-tools/MARKET_PIPELINE_REPLAY_20261027_005",
+    "native_activation_root": "/home/RasPatrick/jbravo-research-tools/MARKET_HANDOFF_REPAIR_20261027_005",
+    "production_runs_root": "/home/RasPatrick/jbravo-research-tools/STRATEGY_DAILY_ACTIVATION_20261025_002/runs"
+  },
+  "limitations": [
+    "Retrospectively selected fixed cohort; no untouched validation or promotion claim",
+    "Per-symbol results attribute the shared historical cohort portfolio, not an independent single-stock account",
+    "Current buy proposals have no known future fills or outcomes",
+    "Closed-signal statistics group partial exits; cash dividends are separate from trade P&L",
+    "No minimum-sample or performance rejection rules have been approved for this stage"
+  ]
+}
