@@ -69,7 +69,7 @@ class MarketProvider:
             value=dict(bars=bars,next_page_token=str(offset+self.page_size) if offset+self.page_size<len(values) else None)
         else:
             symbols=set(params['symbols'].split(','))
-            value=dict(corporate_actions={category:[e for e in rows if e['symbol'] in symbols]
+            value=dict(corporate_actions={category:[e for e in rows if u.action_symbols(e) & symbols]
                 for category,rows in self.actions.items()},next_page_token=None)
         raw=json.dumps(value,allow_nan=False).encode()
         self.receipts.append(dict(endpoint=url,parameters=dict(params),**u.binding(raw)))
@@ -197,6 +197,30 @@ def test_duplicate_dividend_identity_still_aborts_capture(cfg,tmp_path):
                payable_date='2026-05-08',rate=0.25)
     provider.actions={'cash_dividends':[event,deepcopy(event)]}
     with pytest.raises(ValueError,match='DUPLICATE_ACTION_ID'):
+        capture(tmp_path,cfg,provider)
+
+
+def test_reorganization_recipient_is_in_population_and_excluded(cfg,tmp_path):
+    provider=MarketProvider()
+    provider.actions={'reorganizations':[dict(id='REORG-1',symbol='OLD',
+        effective_date='2026-06-11',payable_date='2026-06-12',
+        stock_movements=[dict(symbol='AAA',new_rate=1,source_rate=1)])]}
+    root,spec=capture(tmp_path,cfg,provider);data=load_dataset(spec)
+    assert data.coverage['exclusions']['AAA']=='UNSUPPORTED_CORPORATE_ACTION_REORGANIZATIONS'
+    assert spec['universe']['symbols']==['BBB']
+
+
+def test_unrelated_action_still_aborts_capture(cfg,tmp_path):
+    provider=MarketProvider();original=provider.get
+    def get(url,params):
+        value,raw=original(url,params)
+        if url.endswith('/corporate-actions'):
+            value['corporate_actions']={'reorganizations':[dict(id='OTHER',symbol='OLD',
+                stock_movements=[dict(symbol='UNRELATED')],effective_date='2026-06-11')]}
+            raw=json.dumps(value).encode()
+        return value,raw
+    provider.get=get
+    with pytest.raises(ValueError,match='ACTION_POPULATION_MISMATCH'):
         capture(tmp_path,cfg,provider)
 
 

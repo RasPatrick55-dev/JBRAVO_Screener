@@ -57,7 +57,9 @@ exclude the affected symbol until a due-bill accounting adapter is available;
 their payment-before-ex-date ordering can be legitimate. Invalid action dates,
 dividend rates, payment dates or ex-sessions produce explicit symbol exclusions.
 Duplicate action identities and malformed provider envelopes still abort the
-capture. These
+capture. Reorganization recipients in `stock_movements` count as affected
+symbols alongside top-level participants; unsupported actions exclude those
+symbols instead of being mistaken for unrelated provider records. These
 exclusions reflect current data/kernel capability; they are not strategy
 rejections. A run with no evaluable trading symbols fails. A valid scan with
 evaluable symbols and no qualifying setups remains an honest no-buy result.
