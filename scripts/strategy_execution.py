@@ -15,6 +15,7 @@ import math
 import re
 
 from scripts import strategy_pipeline as pipeline
+from scripts.pattern_strategy import PATTERNS
 from scripts.strategy_backtest import digest, require
 
 SCHEMA = 'jbravo.premarket-strategy-execution-handoff.v1'
@@ -222,11 +223,12 @@ def build_entry_order(handoff, *, signal_id, account_id, cash, reference,
         digest({k:v for k,v in reference.items() if k!='reference_id'})==reference['reference_id'],
         'execution_after_hours_reference_unavailable_or_changed')
     price=(number(reference['price'],positive=True)*Decimal('1.005')).quantize(Decimal('.01'),rounding=ROUND_FLOOR)
-    if proposal.get('strategy_id')=='bull_flag_breakout_v1':
-        from scripts.bull_flag_strategy import plan_from_row
+    if proposal.get('strategy_id') in PATTERNS:
+        from scripts.pattern_strategy import plan_from_row
         plan=plan_from_row(proposal['symbol'],dict(entry_details=dict(pattern_exit=proposal.get('pattern_exit'))))
-        require(plan==proposal.get('pattern_exit') and plan['invalidation']<float(price)<plan['target'],
-                'bull_flag_entry_outside_levels')
+        require(plan is not None and plan==proposal.get('pattern_exit') and
+                plan['pattern']==proposal['strategy_id'] and plan['invalidation']<float(price)<plan['target'],
+                'bull_flag_entry_outside_levels' if proposal['strategy_id']=='bull_flag_breakout_v1' else 'pattern_entry_outside_levels')
     quantity=size_entry(cash,price,occupied_slots=occupied_slots,reserved_cash=reserved_cash)
     lineage=dict(handoff_id=handoff['handoff_id'],primary_run_id=handoff['primary_run_id'],
         strategy_contract=deepcopy(handoff['strategy_contract']),signal_id=signal_id,
@@ -271,10 +273,11 @@ def initial_position(proposal, *, quantity, fill_price, filled_at):
     position = Position(symbol=proposal['symbol'], qty=quantity, entry_price=price,
         entry_time=pd.Timestamp(proposal['next_session']), highest_close=price, max_price=price,
         trailing_stop=price * .97, atr_stop=max(0., price - atr))
-    if proposal.get('strategy_id')=='bull_flag_breakout_v1':
-        from scripts.bull_flag_strategy import plan_from_row
+    if proposal.get('strategy_id') in PATTERNS:
+        from scripts.pattern_strategy import plan_from_row
         plan=plan_from_row(proposal['symbol'],dict(entry_details=dict(pattern_exit=proposal.get('pattern_exit'))))
-        require(plan==proposal.get('pattern_exit'),'bull_flag_fill_plan_changed')
+        require(plan is not None and plan==proposal.get('pattern_exit') and plan['pattern']==proposal['strategy_id'],
+                'bull_flag_fill_plan_changed' if proposal['strategy_id']=='bull_flag_breakout_v1' else 'pattern_fill_plan_changed')
         position.atr_stop=max(position.atr_stop,plan['invalidation'])
     return serialize_position(position)
 

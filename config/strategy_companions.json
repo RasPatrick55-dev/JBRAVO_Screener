@@ -2,7 +2,7 @@
   "schema": "jbravo.strategy-companions.v1",
   "enabled": true,
   "strategy_id": "bull_flag_breakout_v1",
-  "priority": "PULLBACK_RECLAIM_FIRST",
+  "selection_policy": "UNIFIED_BEST_SETUPS_V1",
   "max_scan_seconds": 1800,
   "max_new_entries_total": 3,
   "max_positions_total": 4,

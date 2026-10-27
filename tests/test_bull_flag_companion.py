@@ -43,10 +43,10 @@ def fold(frame):
                 test_start=str(frame.index[270].date()),test_end=str(frame.index[-1].date()))
 
 
-def test_original_strategy_definition_and_default_selection_are_preserved():
+def test_original_signal_rule_files_are_preserved_with_all_strategies_enabled():
     # Definition excludes the catalog itself. All rule/kernel bytes remain the
     # same as the base commit; catalog extensions must not rename P/R signals.
-    assert [s.id for s in select_strategies()] == [CHALLENGER]
+    assert len(select_strategies())==6 and CHALLENGER in [s.id for s in select_strategies()]
     expected_sources = {
         'research_strategies.py':'2929fa5caa9b81e7176a2ee7587e25e721940795bb73c26bc38ea736004412fe',
         'indicators.py':'9feece6f7dd98dbaf9866595dd969ab993e12773a6051fd9339c9c6e051b7f70',
@@ -190,7 +190,7 @@ def bull_handoff(parent, symbol='BULL'):
     return handoff
 
 
-def test_shared_account_prioritizes_existing_strategy_and_prevents_duplicate_symbols():
+def test_shared_account_prevents_duplicate_symbols_across_strategies():
     from test_strategy_execution_engine import setup,enter,reference
     from scripts.strategy_execution_runtime import available_entry_budget
     engine,store,broker,parent = setup()

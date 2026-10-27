@@ -280,12 +280,23 @@ def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None
                                     total_deadline=started+cfg['max_total_seconds'])
             except Exception as error:
                 companion=dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',error_type=type(error).__name__)
+        companions={}
+        if market_config(cfg):
+            from scripts.swing_patterns import STRATEGIES as extra_patterns
+            for strategy_id in extra_patterns:
+                try:
+                    outcome=produce(root,spec,cfg,now=now,archive=archive,
+                        total_deadline=started+cfg['max_total_seconds'],strategy_id=strategy_id)
+                except Exception as error:
+                    outcome=dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',error_type=type(error).__name__)
+                if outcome.get('status')!='DISABLED':companions[strategy_id]=outcome
         value=dict(status='DAILY_STRATEGY_SCAN_COMPLETE',pipeline=PIPELINE,signal_session=session,
             strategy_id=cfg['strategy_id'],scan_run_id=result['run_id'],candidates=len(result['top_candidates']),
             provider_gets=len(provider.receipts),archive=proof,output_root=str(root),
             research_qualified=False,order_submission_authorized=False,broker_operations=0)
         if market_config(cfg):value['coverage']=result['coverage']
         if companion.get('status') != 'DISABLED':value['companion']=companion
+        if companions:value['companions']=companions
         save_json(root/'completion.json',value)
         return value
     except Exception as error:

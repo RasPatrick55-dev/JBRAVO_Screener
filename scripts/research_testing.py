@@ -15,6 +15,7 @@ import pandas as pd
 
 from scripts.research_dataset import bounded_read, canonical_hash, digest_bytes, load_dataset, strict_json
 from scripts.research_simulation import ResearchPortfolio
+from scripts.pattern_strategy import PATTERNS
 from scripts.research_strategies import BASELINE, BENCHMARK, CHALLENGER, METHODS, prepare_signals
 
 REPO = Path(__file__).resolve().parents[1]
@@ -43,8 +44,8 @@ def validate_spec(spec):
         raise ValueError("Unexpected strategy study schema/fields")
     if spec["purpose"] != "exploratory_research" or spec["research_qualified"] is not False or spec["execution_authorized"] is not False:
         raise ValueError("Only explicit exploratory research is supported")
-    if not 1 <= len(spec["strategies"]) <= 2 or len(set(spec["strategies"])) != len(spec["strategies"]) or not set(spec["strategies"]) <= set((*METHODS, 'bull_flag_breakout_v1')):
-        raise ValueError("Unknown/duplicate strategy; v1 has two frozen methods")
+    if not 1 <= len(spec["strategies"]) <= len(set((*METHODS,*PATTERNS))) or len(set(spec["strategies"])) != len(spec["strategies"]) or not set(spec["strategies"]) <= set((*METHODS, *PATTERNS)):
+        raise ValueError("Unknown/duplicate registered strategy")
     folds = spec["folds"]
     if not 1 <= len(folds) <= 10:
         raise ValueError("Fold count limit exceeded")
@@ -129,7 +130,7 @@ def report_html(output, result, curves):
             for key, frame in curves.items():
                 if key[1] == fold:
                     figure.add_trace(go.Scatter(x=frame.index, y=frame["equity"], name=key[0] + "/" + key[2]))
-            figure.update_layout(title="Fold " + fold + " — modeled NAV including dividend receivables", yaxis_title="USD")
+            figure.update_layout(title="Fold " + fold + " â€” modeled NAV including dividend receivables", yaxis_title="USD")
             plots += plot(figure, include_plotlyjs=True if not plots else False, output_type="div")
     except ImportError:
         plots = "<p>Plotly is unavailable; full equity CSV files are included.</p>"
@@ -175,9 +176,9 @@ def run_study(spec, output, *, stop_file=None):
                     if time.monotonic() >= deadline or stop_file.exists():
                         raise RuntimeError("Research stopped before next trial")
                     symbols = spec["universe"]["symbols"] if method != BENCHMARK else [spec["universe"]["benchmark"]]
-                    if method == 'bull_flag_breakout_v1':
-                        from scripts.bull_flag_strategy import prepare
-                        data = {symbol: prepare(dataset.raw[symbol], dataset.features[symbol], fold) for symbol in symbols}
+                    if method in PATTERNS:
+                        from scripts.strategy_library import get_strategy
+                        data = {symbol: get_strategy(method).prepare(dataset.raw[symbol], dataset.features[symbol], fold) for symbol in symbols}
                     else:
                         data = {symbol: prepare_signals(dataset.raw[symbol], dataset.features[symbol], method, fold) for symbol in symbols}
                     options = dict(spec["portfolio"], trade_cost=cost["fee_per_fill"], slippage=cost["slippage_bps"] / 10000)
@@ -186,8 +187,10 @@ def run_study(spec, output, *, stop_file=None):
                                        max_hold_days=100000, enable_macd_exit=False, enable_partial_exit=False,
                                        enable_rsi_divergence=False, enable_candlestick_exit=False,
                                        enable_ema_exit=False, enable_trailing_exit=False)
-                    if method == 'bull_flag_breakout_v1':
+                    if method in PATTERNS:
                         from scripts.bull_flag_strategy import research_portfolio_class
+                        if method != 'bull_flag_breakout_v1':
+                            from scripts.pattern_strategy import research_portfolio_class
                         engine = research_portfolio_class()(data, dividends=dataset.dividends,
                                                deadline=deadline, stop_file=stop_file, **options)
                     else:
