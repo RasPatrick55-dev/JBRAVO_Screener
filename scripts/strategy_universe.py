@@ -128,14 +128,36 @@ def data_reason(raw, split, events, calendar, cfg, session):
         require(isinstance(event.get('id'), str) and event['id'] not in ids, 'DUPLICATE_ACTION_ID')
         ids.add(event['id'])
         day = event.get('ex_date') or event.get('effective_date') or event.get('process_date')
-        require(isinstance(day, str) and date.fromisoformat(day).isoformat() == day, 'INVALID_ACTION_DATE')
+        try:
+            valid_day = isinstance(day, str) and date.fromisoformat(day).isoformat() == day
+        except ValueError:
+            valid_day = False
+        if not valid_day:
+            return 'INVALID_ACTION_DATE'
         if not raw_days[0] <= day <= session:
             continue
         if category != 'cash_dividends':
             return 'UNSUPPORTED_CORPORATE_ACTION_' + category.upper()
-        require(type(event.get('rate')) in (int, float) and np.isfinite(event['rate']) and event['rate'] >= 0
-                and date.fromisoformat(event['payable_date']) >= date.fromisoformat(day)
-                and day in expected and event.get('symbol'), 'INVALID_CASH_DIVIDEND')
+        # Large distributions may legitimately pay before the ex-date. Their
+        # due-bill entitlement/settlement needs a different accounting adapter;
+        # exclude this symbol instead of aborting unrelated market coverage.
+        if any(event.get(k) is not None for k in ('due_bill_on_date', 'due_bill_off_date')):
+            return 'CASH_DIVIDEND_DUE_BILL_ADAPTER_REQUIRED'
+        if not (type(event.get('rate')) in (int, float) and
+                np.isfinite(event['rate']) and event['rate'] >= 0):
+            return 'INVALID_CASH_DIVIDEND_RATE'
+        payable = event.get('payable_date')
+        try:
+            valid_payable = (isinstance(payable, str) and
+                date.fromisoformat(payable).isoformat() == payable and payable >= day)
+        except ValueError:
+            valid_payable = False
+        if not valid_payable:
+            return 'INVALID_CASH_DIVIDEND_PAYABLE_DATE'
+        if day not in expected:
+            return 'INVALID_CASH_DIVIDEND_EX_SESSION'
+        if not isinstance(event.get('symbol'), str) or not event['symbol']:
+            return 'INVALID_CASH_DIVIDEND_SYMBOL'
     return None
 
 

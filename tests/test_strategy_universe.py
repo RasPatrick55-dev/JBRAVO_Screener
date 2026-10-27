@@ -155,6 +155,51 @@ def test_provider_failure_never_archives_partial_universe(cfg,tmp_path):
     assert not (tmp_path/'2026-10-26/completion.json').exists()
 
 
+@pytest.mark.parametrize('change,reason',[
+    ({'due_bill_on_date':'2025-08-19','due_bill_off_date':'2025-08-20',
+      'ex_date':'2025-08-20','payable_date':'2025-08-19','rate':23,'special':True},
+     'CASH_DIVIDEND_DUE_BILL_ADAPTER_REQUIRED'),
+    ({'rate':None},'INVALID_CASH_DIVIDEND_RATE'),
+    ({'rate':True},'INVALID_CASH_DIVIDEND_RATE'),
+    ({'rate':-1},'INVALID_CASH_DIVIDEND_RATE'),
+    ({'payable_date':None},'INVALID_CASH_DIVIDEND_PAYABLE_DATE'),
+    ({'payable_date':'unknown'},'INVALID_CASH_DIVIDEND_PAYABLE_DATE'),
+    ({'payable_date':'2026-04-30'},'INVALID_CASH_DIVIDEND_PAYABLE_DATE'),
+    ({'ex_date':'2026-05-02'},'INVALID_CASH_DIVIDEND_EX_SESSION'),
+    ({'ex_date':'2026-02-30'},'INVALID_ACTION_DATE'),
+])
+def test_unusable_dividend_excludes_only_affected_symbol(cfg,tmp_path,change,reason):
+    provider=MarketProvider()
+    event=dict(id='dividend-1',symbol='AAA',ex_date='2026-05-01',
+               payable_date='2026-05-08',rate=0.25)
+    provider.actions={'cash_dividends':[{**event,**change}]}
+    root,spec=capture(tmp_path,cfg,provider);data=load_dataset(spec)
+    assert data.coverage['status']=='COMPLETE'
+    assert data.coverage['exclusions']['AAA']==reason
+    assert spec['universe']['symbols']==['BBB']
+    assert 'AAA' not in data.raw
+
+
+def test_supported_ordinary_dividend_keeps_cash_flow(cfg,tmp_path):
+    provider=MarketProvider()
+    event=dict(id='dividend-1',symbol='AAA',ex_date='2026-05-01',
+               payable_date='2026-05-08',rate=0.25,
+               due_bill_on_date=None,due_bill_off_date=None)
+    provider.actions={'cash_dividends':[event]}
+    root,spec=capture(tmp_path,cfg,provider);data=load_dataset(spec)
+    assert spec['universe']['symbols']==['AAA','BBB']
+    assert data.member('AAA')['actions'][0][1]==event
+
+
+def test_duplicate_dividend_identity_still_aborts_capture(cfg,tmp_path):
+    provider=MarketProvider()
+    event=dict(id='dividend-1',symbol='AAA',ex_date='2026-05-01',
+               payable_date='2026-05-08',rate=0.25)
+    provider.actions={'cash_dividends':[event,deepcopy(event)]}
+    with pytest.raises(ValueError,match='DUPLICATE_ACTION_ID'):
+        capture(tmp_path,cfg,provider)
+
+
 def test_cache_incremental_overlap_and_revised_history_force_full_refresh(cfg,tmp_path):
     cache=tmp_path/'cache'
     capture(tmp_path,cfg,MarketProvider(),cache=cache)

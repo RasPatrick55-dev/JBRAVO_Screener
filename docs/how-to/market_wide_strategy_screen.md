@@ -52,7 +52,12 @@ candidate batch, Backtest, Metrics and dashboard API even when there are no buys
 
 Insufficient 250-session history, missing current or historical sessions,
 zero-volume history, changing split factors and unsupported corporate actions
-receive explicit data exclusions. Malformed data aborts the capture. These
+receive explicit data exclusions. Cash dividends with due-bill settlement also
+exclude the affected symbol until a due-bill accounting adapter is available;
+their payment-before-ex-date ordering can be legitimate. Invalid action dates,
+dividend rates, payment dates or ex-sessions produce explicit symbol exclusions.
+Duplicate action identities and malformed provider envelopes still abort the
+capture. These
 exclusions reflect current data/kernel capability; they are not strategy
 rejections. A run with no evaluable trading symbols fails. A valid scan with
 evaluable symbols and no qualifying setups remains an honest no-buy result.
