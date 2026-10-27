@@ -34,7 +34,8 @@ EXTRA_SOURCES += ('config/strategy_execution.json',)+tuple('scripts/'+name for n
     'execute_trades.py','monitor_positions.py'))
 EXTRA_SOURCES += ('config/strategy_companions.json', 'scripts/bull_flag_strategy.py',
                   'scripts/chart_patterns.py', 'scripts/bull_flag_companion.py',
-                  'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json')
+                  'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json',
+                  'scripts/setup_selection.py')
 
 
 def require(condition, reason):
@@ -435,6 +436,8 @@ def main(argv, *, base_dir=ROOT):
         except Exception as error:
             print(json.dumps(dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',strategy_id=strategy_id,
                                   error_type=type(error).__name__)),flush=True)
+    from scripts.setup_selection import publish as publish_unified_selection
+    publish_unified_selection(record,env=env,base_dir=base_dir)
     print(json.dumps(dict(status='PRIMARY_STRATEGY_SCREEN_COMPLETE', strategy_id=STRATEGY,
         signal_session=session['signal_session'], candidates=len(rows), outcome=batch['outcome'],
         scan_run_id=value['scan_run_id'], archive_id=archive_id, broker_operations=0)), flush=True)

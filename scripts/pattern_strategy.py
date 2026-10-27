@@ -24,7 +24,7 @@ def configuration(base_dir=ROOT):
     if not path.exists():return None
     value=strict_json(_read(path,4096))
     expected=dict(schema='jbravo.additional-chart-patterns.v1',enabled=True,
-        strategy_ids=list(STRATEGIES),priority='AFTER_PULLBACK_RECLAIM_AND_BULL_FLAG',
+        strategy_ids=list(STRATEGIES),selection_policy='UNIFIED_BEST_SETUPS_V1',
         max_scan_seconds=600,max_new_entries_total=3,max_positions_total=4,
         allocation_pct_remaining_cash=.05,paper_only=True,research_qualified=False)
     if value==dict(expected,enabled=False):return None

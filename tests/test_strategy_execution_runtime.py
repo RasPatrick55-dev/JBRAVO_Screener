@@ -51,6 +51,12 @@ def test_no_signal_and_dry_run_do_not_construct_broker_or_write_order_state(monk
     monkeypatch.setattr(runtime,'load_config',lambda *a:{})
     monkeypatch.setattr(runtime,'source_guard',lambda *a,**kw:True)
     monkeypatch.setattr(runtime,'readonly_handoff',lambda *a,**kw:deepcopy(value))
+    def unified(env,parent,**kwargs):
+        selected=[dict(proposal=p,rank=i+1) for i,p in enumerate(parent['proposals'])]
+        return dict(record=dict(run_id='f'*64,selection=dict(selected_setups=selected,
+            selected_signal_ids=[p['signal_id'] for p in parent['proposals']])),result_sha256='e'*64,
+            handoffs={parent['strategy_contract']['strategy_id']:parent})
+    monkeypatch.setattr(runtime,'unified_handoff',unified)
     from scripts import strategy_execution_broker as broker
     monkeypatch.setattr(broker,'PaperBroker',lambda *a,**kw:pytest.fail('No-signal run constructed broker'))
     monkeypatch.setattr(runtime,'store_connection',lambda *a,**kw:pytest.fail('No-signal run opened writable store'))
@@ -87,10 +93,10 @@ def test_monitor_receipt_requires_actual_account_freshness_and_identical_sources
 def test_source_contract_includes_executor_monitor_store_and_configuration():
     from scripts import pipeline_postflight as health,strategy_pipeline as pipeline
     bound=(*health.SOURCE_FILES,*pipeline.EXTRA_SOURCES)
-    assert len(bound)==len(set(bound))==63
+    assert len(bound)==len(set(bound))==64
     assert {'scripts/bull_flag_strategy.py','scripts/chart_patterns.py',
             'scripts/bull_flag_companion.py','config/strategy_companions.json',
-            'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json'}<=set(bound)
+            'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json','scripts/setup_selection.py'}<=set(bound)
     assert set(runtime.COMPONENTS)<=set(bound)
 
 

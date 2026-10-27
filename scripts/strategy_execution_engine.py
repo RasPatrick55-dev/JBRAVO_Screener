@@ -113,7 +113,7 @@ class Engine:
         self.store.observed(key,order)
         return order
 
-    def enter(self,handoff,references,*,now,clock,account,positions,open_orders,max_new_entries=3):
+    def enter(self,handoff,references,*,now,clock,account,positions,open_orders,max_new_entries=3,selected_signal_ids=None):
         require(handoff['paper_only'] is True and handoff['inspection_mode'] is False,
                 'strategy_entry_handoff_not_actionable')
         held=set(positions)
@@ -127,7 +127,11 @@ class Engine:
         attempted=0
         if any(r['state'] in {'CLAIMED','UNKNOWN'} for s in active.values() for r in self.store.orders(s['signal_id'])):
             self.note(None,'UNRESOLVED_ACCOUNT_ORDER_BLOCKS_NEW_ENTRIES');return
+        selected=set(selected_signal_ids) if selected_signal_ids is not None else None
+        require(selected is None or (len(selected)==len(selected_signal_ids) and selected<=
+            {p['signal_id'] for p in handoff['proposals']}),'strategy_selected_signal_not_in_handoff')
         for proposal in handoff['proposals']:
+            if selected is not None and proposal['signal_id'] not in selected:continue
             if attempted>=max_new_entries:
                 self.note(None,'SHARED_DAILY_ENTRY_CAP');break
             sid,symbol=proposal['signal_id'],proposal['symbol']

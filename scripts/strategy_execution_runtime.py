@@ -24,7 +24,7 @@ LIFECYCLE_COMPONENTS=tuple(p for p in COMPONENTS if p not in {
     'scripts/backtest_core.py','scripts/strategy_library.py')
 LIFECYCLE_COMPONENTS += ('config/strategy_companions.json','scripts/bull_flag_strategy.py',
                         'scripts/chart_patterns.py','scripts/bull_flag_companion.py',
-                        'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json')
+                        'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json','scripts/setup_selection.py')
 _FEATURE_CACHE={}
 
 
@@ -125,6 +125,14 @@ def additional_handoffs(env,parent,*,base_dir=ROOT,inspection=False):
     return result
 
 
+def unified_handoff(env,parent,*,base_dir=ROOT):
+    from scripts.research_store import connect
+    from scripts.setup_selection import read_selection
+    connection=connect(env=env)
+    try:return read_selection(connection,parent,now=datetime.now(timezone.utc),base_dir=base_dir)
+    finally:connection.rollback();connection.close()
+
+
 def available_entry_budget(store, next_session):
     # Count durable entry attempts, including rejected/uncertain attempts, across
     # both strategies. Restarting a worker cannot replenish the daily budget.
@@ -162,10 +170,12 @@ def guard_for(env,*,base_dir=ROOT):
         handoff=signal['payload']['handoff'];source_guard(handoff,base_dir=base_dir,lifecycle=(kind=='lifecycle'))
         if kind=='entry':
             current=readonly_handoff(env,base_dir=base_dir,inspection=True)
-            if handoff['strategy_contract']['strategy_id'] in PATTERNS:
-                current=companion_handoff(env,current,base_dir=base_dir,inspection=True,
-                    strategy_id=handoff['strategy_contract']['strategy_id'])
-                require(current is not None,'companion_current_batch_unavailable')
+            from scripts.setup_selection import execution_queue
+            verified=unified_handoff(env,current,base_dir=base_dir)
+            matching=[r for r in execution_queue(verified) if r['proposal']['signal_id']==signal['signal_id']]
+            require(len(matching)==1 and matching[0]['handoff']['unified_selection']==handoff.get('unified_selection'),
+                    'strategy_signal_not_in_current_unified_selection')
+            current=verified['handoffs'][handoff['strategy_contract']['strategy_id']]
             require(current['primary_report_sha256']==handoff['primary_report_sha256'] and
                 current['candidate_values']==handoff['candidate_values'] and
                 current['batch_sha256']==handoff['batch_sha256'],'strategy_entry_batch_changed_before_post')
@@ -250,31 +260,25 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
     with source_lease(base_dir):
         inspected=readonly_handoff(env,base_dir=base_dir,inspection=True)
         source_guard(inspected,base_dir=base_dir)
-        try:companion=companion_handoff(env,inspected,base_dir=base_dir,inspection=True)
-        except Exception:companion=None
-        extras=additional_handoffs(env,inspected,base_dir=base_dir,inspection=True)
-        companion_count=(len(companion['proposals']) if companion else 0)+sum(len(h['proposals']) for h in extras)
-        if (not inspected['proposals'] and not companion_count) or config.dry_run:
+        from scripts.setup_selection import execution_queue,contract as selection_contract
+        verified=unified_handoff(env,inspected,base_dir=base_dir)
+        queue=execution_queue(verified)
+        selection=verified['record']['selection']
+        if not queue or config.dry_run:
             value=dict(status='skipped',exit_reason='STRATEGY_DRY_RUN_INPUTS_ONLY' if config.dry_run else 'NO_STRATEGY_BUY_SIGNALS',
-                candidate_count=len(inspected['proposals'])+companion_count,
-                orders_submitted=0,orders_filled=0,handoff_id=inspected['handoff_id'],
-                strategy_contract=inspected['strategy_contract'],paper_only=True,broker_operations=0,
+                candidate_count=len(queue),orders_submitted=0,orders_filled=0,handoff_id=inspected['handoff_id'],
+                strategy_contract=selection_contract(),paper_only=True,broker_operations=0,
                 finished_at=now.isoformat(),source_bindings=inspected['source_bindings'],
-                companion_handoff_id=companion['handoff_id'] if companion else None,
-                candidate_counts_by_strategy={inspected['strategy_contract']['strategy_id']:len(inspected['proposals']),
-                                              'bull_flag_breakout_v1':len(companion['proposals']) if companion else 0,
-                                              **{h['strategy_contract']['strategy_id']:len(h['proposals']) for h in extras}})
+                selection=selection,unified_selection_run_id=verified['record']['run_id'])
             write_report(value,role='entry',base_dir=base_dir);return value
         handoff=readonly_handoff(env,base_dir=base_dir)
-        try:companion=companion_handoff(env,handoff,base_dir=base_dir)
-        except Exception:companion=None
-        extras=additional_handoffs(env,handoff,base_dir=base_dir)
-        companions=([companion] if companion else [])+extras
+        verified=unified_handoff(env,handoff,base_dir=base_dir)
+        queue=execution_queue(verified);selection=verified['record']['selection']
         broker=PaperBroker(env,max_requests=192)
         try:
             account=broker.account();clock=broker.clock()
             monitor_ready(handoff,broker.account_id,now=now,base_dir=base_dir)
-            proposals=[*handoff['proposals'],*(p for h in companions for p in h['proposals'])]
+            proposals=[r['proposal'] for r in queue]
             references=broker.references(sorted({p['symbol'] for p in proposals}),handoff['session']['signal_session'],now=now)
         except Exception:broker.close();raise
     try:
@@ -292,14 +296,13 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
                 with entry_lease(store,opening,wait=sleeper):
                     engine=Engine(store,broker,guard=guard_for(env,base_dir=base_dir))
                     before={r['client_order_id'] for s in store.signals(active=False) for r in store.orders(s['signal_id'])}
-                    engine.enter(handoff,references,now=now,clock=clock,account=account,
-                        positions=broker.positions(),open_orders=broker.open_orders(),
-                        max_new_entries=available_entry_budget(store,handoff['session']['next_session']))
-                    for extra_handoff in companions:
-                        source_guard(extra_handoff,base_dir=base_dir)
-                        engine.enter(extra_handoff,references,now=now,clock=broker.clock(),account=broker.account(),
+                    for setup in queue:
+                        origin=setup['handoff']
+                        source_guard(origin,base_dir=base_dir)
+                        engine.enter(origin,references,now=now,clock=broker.clock(),account=broker.account(),
                             positions=broker.positions(),open_orders=broker.open_orders(),
-                            max_new_entries=available_entry_budget(store,handoff['session']['next_session']))
+                            max_new_entries=available_entry_budget(store,handoff['session']['next_session']),
+                            selected_signal_ids=[setup['proposal']['signal_id']])
                     # Observe fills and attach protection promptly. The always-on
                     # monitor resumes durable pending orders and the 35m deadline.
                     deadline=time.monotonic()+15
@@ -316,21 +319,19 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
                         exit_reason='ORDER_OUTCOME_UNKNOWN' if unresolved else 'BROKER_REJECTED' if refused else 'STRATEGY_PAPER_EXECUTION',
                         candidate_count=len(proposals),orders_submitted=len(observations),
                         orders_filled=sum(o['status']=='filled' for o in observations),order_observations=observations,
-                        handoff_id=handoff['handoff_id'],strategy_contract=handoff['strategy_contract'],
+                        handoff_id=handoff['handoff_id'],strategy_contract=selection_contract(),
                         primary_report_sha256=handoff['primary_report_sha256'],source_bindings=handoff['source_bindings'],
                         cancellation_deadline=handoff['execution_policy']['cancel_at'],
                         paper_only=True,events=engine.events,finished_at=datetime.now(timezone.utc).isoformat(),
-                        preflight=dict(status='pass',candidate_binding=handoff['candidate_values'],
-                            entry_authorization='paper_strategy_test',strategy_contract=handoff['strategy_contract']))
-                    value['candidate_counts_by_strategy']={handoff['strategy_contract']['strategy_id']:len(handoff['proposals']),
-                        'bull_flag_breakout_v1':len(companion['proposals']) if companion else 0,
-                        **{h['strategy_contract']['strategy_id']:len(h['proposals']) for h in extras}}
-                    if companion:
-                        value['companion']=dict(handoff_id=companion['handoff_id'],
-                            primary_report_sha256=companion['primary_report_sha256'],
-                            strategy_contract=companion['strategy_contract'],candidate_binding=companion['candidate_values'])
-                    value['additional_companions']=[dict(handoff_id=h['handoff_id'],strategy_contract=h['strategy_contract'],
-                        primary_report_sha256=h['primary_report_sha256'],candidate_binding=h['candidate_values']) for h in extras]
+                        preflight=dict(status='pass',candidate_binding=dict(
+                            unified_selection_run_id=verified['record']['run_id'],result_sha256=verified['result_sha256'],
+                            selected_setups=selection['selected_setups']),
+                            entry_authorization='paper_strategy_test',strategy_contract=selection_contract()))
+                    value['selection']=selection
+                    value['unified_selection_run_id']=verified['record']['run_id']
+                    value['unified_selection_sha256']=verified['result_sha256']
+                    value['candidate_counts_by_strategy']={sid:sum(p['strategy_id']==sid for p in proposals)
+                        for sid in verified['handoffs']}
                     write_report(value,role='entry',base_dir=base_dir);return value
             finally:conn.rollback();conn.close()
     finally:broker.close()

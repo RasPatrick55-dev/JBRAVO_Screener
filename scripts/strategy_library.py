@@ -49,11 +49,14 @@ class Strategy:
     def prepare(self, raw, split, fold):
         if self.id in EXTRA_PATTERNS:
             from scripts.pattern_strategy import prepare
-            return prepare(raw,split,fold,self.id)
+            from scripts.setup_selection import enrich
+            return enrich(prepare(raw,split,fold,self.id),split)
         if self.id == 'bull_flag_breakout_v1':
             from scripts.bull_flag_strategy import prepare
-            return prepare(raw, split, fold)
-        return prepare_signals(raw, split, self.research_method, fold, self.warmup_sessions)
+            from scripts.setup_selection import enrich
+            return enrich(prepare(raw, split, fold),split)
+        from scripts.setup_selection import enrich
+        return enrich(prepare_signals(raw, split, self.research_method, fold, self.warmup_sessions),split)
 
 
 _STRATEGIES = {
@@ -66,7 +69,7 @@ _STRATEGIES = {
          'breakout volume >= 1.5 times preceding 20 sessions',
          'fixed raw-price stop 0.1% below flag low; target signal close plus pole height',
          'full target exit; no percentage partial; existing protective/time/risk exits can precede',
-         'shared account: Pullback/Reclaim priority, remaining cash/slots only, no duplicate symbols'),
+         'shared account: unified best-setup selection, remaining cash/slots only, no duplicate symbols'),
         paper_scan_enabled=True,
     ),
     CHALLENGER: Strategy(
@@ -122,12 +125,12 @@ def get_strategy(strategy_id):
 
 
 def list_strategies():
-    return [_STRATEGIES[key].describe() for key in (CHALLENGER, *(k for k in _STRATEGIES if k!=CHALLENGER))]
+    return [_STRATEGIES[key].describe() for key in sorted(_STRATEGIES)]
 
 
 def select_strategies(ids=None):
-    # Preserve existing callers' default strategy; companions opt in explicitly.
-    chosen = [CHALLENGER] if ids is None else list(ids)
+    # Enumeration order is not an execution or selection preference.
+    chosen = sorted(k for k,v in _STRATEGIES.items() if v.paper_scan_enabled) if ids is None else list(ids)
     if not chosen or len(chosen) != len(set(chosen)):
         raise ValueError('Select at least one strategy, without duplicates')
     strategies = [get_strategy(strategy_id) for strategy_id in chosen]

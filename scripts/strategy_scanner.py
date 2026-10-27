@@ -26,7 +26,7 @@ from scripts.pattern_strategy import PATTERNS, plan_from_row
 SOURCE_FILES = ('screener.py', 'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
                 'research_testing.py', 'research_strategies.py', 'research_simulation.py',
                 'research_store.py', 'backtest_core.py', 'indicators.py',
-                'strategy_universe.py', 'strategy_market_replay.py', 'bull_flag_strategy.py', 'chart_patterns.py', 'pattern_strategy.py', 'swing_patterns.py')
+                'strategy_universe.py', 'strategy_market_replay.py', 'bull_flag_strategy.py', 'chart_patterns.py', 'pattern_strategy.py', 'swing_patterns.py', 'setup_selection.py')
 
 
 def signal_id(strategy, episode_id, symbol, session):
@@ -155,7 +155,13 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
     # current holdings. Preserve that replay, but rank today's qualifying pool
     # before its simulated capacity gate. The executor applies actual cash and
     # position limits; no historical or future fill is manufactured here.
-    ranked = sorted(engine.latest_pool, key=lambda item: item[1], reverse=True)[:spec['portfolio']['top_n']]
+    from scripts.setup_selection import evidence, key as setup_key
+    def current_key(item):
+        symbol,score,row=item
+        if 'setup_score' not in row:return (-score,0,symbol,'')
+        return setup_key(dict(symbol=symbol,signal_session=as_of,
+            signal_id=signal_id(strategy,episode_id,symbol,as_of),**evidence(row,as_of)))
+    ranked = sorted(engine.latest_pool, key=current_key)[:spec['portfolio']['top_n']]
     today_ids = set()
     for symbol, score, row in ranked:
         sid = signal_id(strategy, episode_id, symbol, as_of)
@@ -175,6 +181,8 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
         if observation['session'] == as_of:
             observation['historical_portfolio_selected'] = observation['selected']
             observation['selected'] = observation['signal_id'] in today_ids
+    for symbol,_,row in ranked:
+        intents[signal_id(strategy,episode_id,symbol,as_of)].update(evidence(row,as_of))
     calendar = dataset.calendar
     for intent in intents.values():
         upcoming = calendar.index[calendar.index > intent['signal_session']]
@@ -266,7 +274,8 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
     validate_spec(spec)
     if date.fromisoformat(as_of).isoformat() != as_of:
         raise ValueError('Noncanonical scanner session')
-    selected = select_strategies(strategy_ids)
+    selected = select_strategies([s.id for s in select_strategies() if s.research_method in spec['strategies']]
+                                 if strategy_ids is None else strategy_ids)
     if len(selected) > spec['max_runs'] or any(
             strategy.research_method not in spec['strategies'] for strategy in selected):
         raise ValueError('Scanner strategy is outside the declared study budget/methods')

@@ -41,22 +41,42 @@ records and exact primary handoff. Status appears separately at
 record cannot authorize a fallback to another strategy's inputs. PostgreSQL
 remains authoritative, with no schema migration or canonical candidate rewrite.
 
-Execution priority is Pullback/Reclaim, Bull Flag, Ascending Triangle, Double
-Bottom, Cup and Handle, then Inverse Head and Shoulders. Ranking happens within
-each strategy; scores across strategies are not compared. All six share four
-held/pending symbol slots, three durable new entry attempts per session, 5% of
-remaining available cash per entry, account locking and single symbol ownership.
-Adding patterns does not multiply these limits. Existing protection, indicator
-and time exits can precede a measured target. Targets close the full remaining
-quantity, without a percentage partial. Replay resolves ambiguous bars with the
-prior stop first; the native monitor requires a fresh observed bid for targets.
+There is no strategy priority. Every qualifying setup receives the same existing
+technical composite score, computed from completed split-adjusted bars. Relative
+volume breaks score ties; exact ties use symbol and a deterministic signal hash.
+Detector-specific scores and strategy names do not influence the common ranking.
+This is an explicit technical ranking policy, not a proven return forecast.
+
+Each strategy retains its three highest finalists using that same ranking key.
+Their union contains the true global top three distinct symbols: a fourth-ranked
+symbol within one strategy already has three distinct symbols ahead of it under
+the identical ordering. The unified scanner merges duplicate symbols, records
+all matching strategies, and publishes one global selection. An exact stock-level
+tie chooses its exit-plan owner by signal hash, not a preferred strategy. All
+three winners may come from one strategy. Scanner, Backtest/Metrics projections
+and execution use the same immutable selection record in PostgreSQL.
+
+Every enabled strategy must have a complete exact-session result, including an
+honest empty result, before global selection is available. A failed scan cannot
+silently grant another strategy preference. The original per-strategy publications
+remain auditable compatibility/research records, not the final stock selection.
+
+All strategies share four held/pending symbol slots, three durable new entry
+attempts per session, 5% of remaining available cash per entry, account locking
+and single symbol ownership. Existing protection, indicator and time exits can
+precede a measured target. Targets close the full remaining quantity, without a
+percentage partial. Replay resolves ambiguous bars with the prior stop first;
+the native monitor requires a fresh observed bid for targets. Historical reports
+remain per-strategy research outcomes; no combined portfolio performance is
+inferred from selecting setups together.
 
 Pullback/Reclaim's four core rule files and Bull Flag's two versioned rule files
-stay unchanged. The default scanner still selects Pullback/Reclaim. The additions
+stay unchanged. The default library includes every enabled strategy; a scan uses
+the registered strategies declared by its study. The additions
 use a separate adapter with the established exit kernel, durable engine,
 cancellation and reconciliation paths.
 
-Rollout requires a new merged source package and pinned launcher, all **63**
+Rollout requires a new merged source package and pinned launcher, all **64**
 pipeline bindings verified, a flat native paper account with empty durable
 ownership before lifecycle changes, and the existing monitor restart. Fresh
 scheduled producer and primary results must precede entries. Never rewrite old

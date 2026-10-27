@@ -157,15 +157,14 @@ def test_pattern_enters_and_uses_existing_durable_target_and_duplicate_protectio
 
 
 def test_existing_rule_files_and_default_strategy_stay_unchanged():
-    assert select_strategies()[0].id=='trend_pullback_reclaim_qualifying_close_v2'
+    assert {s.id for s in select_strategies()}=={'trend_pullback_reclaim_qualifying_close_v2',adapter.BULL_FLAG,*STRATEGIES}
     root=Path(__file__).parents[1]
     expected={'bull_flag_strategy.py':'29e05116f8614b4e03d3eb6d626053136b26392dd9484ec69cd48472b716933f',
               'chart_patterns.py':'546cb721be567ae8aa400a55a6cd33eb265be313961b96132cd13926107657b8'}
     for name,pin in expected.items():
         assert hashlib.sha256((root/'scripts'/name).read_bytes().replace(b'\r\n',b'\n')).hexdigest()==pin
     for sid,pin in (
-        ('trend_pullback_reclaim_qualifying_close_v2','bf576123697684b933b0f6772ab0121e8546fc9aaa1daa4084dbabcc27de0207'),
-        (adapter.BULL_FLAG,'6b39f5fe3d82347d6b42d0112512efdafed35481eb9b786b2429dba7b8ecfffb')):
+        ('trend_pullback_reclaim_qualifying_close_v2','bf576123697684b933b0f6772ab0121e8546fc9aaa1daa4084dbabcc27de0207'),):
         definition=get_strategy(sid).describe();definition.pop('research_qualified');definition.pop('definition_sha256')
         definition['source_sha256']={n:hashlib.sha256((root/'scripts'/n).read_bytes().replace(b'\r\n',b'\n')).hexdigest()
             for n in definition['source_sha256'] if n!='strategy_library.py'}

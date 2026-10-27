@@ -26,10 +26,10 @@ def offline(monkeypatch):
     monkeypatch.setattr(socket, 'create_connection', reject)
 
 
-def test_only_first_strategy_enabled_and_definition_bound():
+def test_all_registered_strategies_are_enabled_with_bound_definitions():
     definitions = strategy_library.list_strategies()
     assert len(definitions) == 6
-    definition = definitions[0]
+    definition = next(d for d in definitions if d['id']==CHALLENGER)
     assert definition['id'] == CHALLENGER and definition['version'] == '2'
     assert definition['paper_scan_enabled'] is True and definition['research_qualified'] is False
     assert len(definition['definition_sha256']) == 64 and len(definition['buy_rules']) == 8
@@ -38,7 +38,8 @@ def test_only_first_strategy_enabled_and_definition_bound():
 def test_disabled_new_registration_does_not_activate_existing_daily_scan(monkeypatch):
     first = strategy_library.get_strategy(CHALLENGER)
     monkeypatch.setitem(strategy_library._STRATEGIES, 'future', replace(first, id='future', paper_scan_enabled=False))
-    assert [s.id for s in strategy_library.select_strategies()] == [CHALLENGER]
+    assert len(strategy_library.select_strategies())==6
+    assert 'future' not in [s.id for s in strategy_library.select_strategies()]
     with pytest.raises(ValueError, match='not enabled'):
         strategy_library.select_strategies(['future'])
 
@@ -123,7 +124,7 @@ def test_library_uses_exact_research_feature_preparation():
                 test_end=frame.index[-1].strftime('%Y-%m-%d'))
     actual = strategy_library.get_strategy(CHALLENGER).prepare(frame, frame, fold)
     expected = prepare_signals(frame, frame, CHALLENGER, fold)
-    pd.testing.assert_frame_equal(actual, expected)
+    pd.testing.assert_frame_equal(actual.drop(columns=['setup_score','setup_volume_ratio']), expected)
 
 
 def test_real_capture_adapter_writes_valid_empty_day_and_bound_trace(tmp_path):
@@ -199,7 +200,7 @@ def test_screener_main_library_route_skips_private_bootstrap_and_account_probe(m
     monkeypatch.setattr(screener, 'assert_alpaca_creds', reject)
     monkeypatch.setattr(screener, 'probe_trading_only', reject)
     assert screener.main(['--mode', 'strategy-library']) == 0
-    assert json.loads(capsys.readouterr().out)['strategies'][0]['id'] == CHALLENGER
+    assert CHALLENGER in {r['id'] for r in json.loads(capsys.readouterr().out)['strategies']}
 
 
 def test_actual_screener_cli_does_not_import_legacy_clients_or_credentials():
@@ -220,7 +221,7 @@ runpy.run_module('scripts.screener',run_name='__main__')
 """
     result = subprocess.run([sys.executable,'-I','-c',code,str(repo)],capture_output=True,text=True,timeout=15)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)['strategies'][0]['id'] == CHALLENGER
+    assert CHALLENGER in {r['id'] for r in json.loads(result.stdout)['strategies']}
     assert 'credentials' not in result.stderr.lower()
 
 

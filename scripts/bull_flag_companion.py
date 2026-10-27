@@ -26,7 +26,7 @@ def configuration(base_dir=ROOT):
         return None
     value = strict_json(_read(path, 4096))
     expected = dict(schema='jbravo.strategy-companions.v1', enabled=True,
-        strategy_id=BULL_FLAG, priority='PULLBACK_RECLAIM_FIRST', max_scan_seconds=1800,
+        strategy_id=BULL_FLAG, selection_policy='UNIFIED_BEST_SETUPS_V1', max_scan_seconds=1800,
         max_new_entries_total=3, max_positions_total=4, allocation_pct_remaining_cash=.05,
         duplicate_symbol_policy='ONE_OWNER_HELD_OR_PENDING', paper_only=True, research_qualified=False)
     if value == dict(expected, enabled=False):

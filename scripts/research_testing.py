@@ -44,8 +44,8 @@ def validate_spec(spec):
         raise ValueError("Unexpected strategy study schema/fields")
     if spec["purpose"] != "exploratory_research" or spec["research_qualified"] is not False or spec["execution_authorized"] is not False:
         raise ValueError("Only explicit exploratory research is supported")
-    if not 1 <= len(spec["strategies"]) <= 2 or len(set(spec["strategies"])) != len(spec["strategies"]) or not set(spec["strategies"]) <= set((*METHODS, *PATTERNS)):
-        raise ValueError("Unknown/duplicate strategy; v1 has two frozen methods")
+    if not 1 <= len(spec["strategies"]) <= len(set((*METHODS,*PATTERNS))) or len(set(spec["strategies"])) != len(spec["strategies"]) or not set(spec["strategies"]) <= set((*METHODS, *PATTERNS)):
+        raise ValueError("Unknown/duplicate registered strategy")
     folds = spec["folds"]
     if not 1 <= len(folds) <= 10:
         raise ValueError("Fold count limit exceeded")
