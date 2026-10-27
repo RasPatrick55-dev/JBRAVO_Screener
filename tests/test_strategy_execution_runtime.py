@@ -87,8 +87,41 @@ def test_monitor_receipt_requires_actual_account_freshness_and_identical_sources
 def test_source_contract_includes_executor_monitor_store_and_configuration():
     from scripts import pipeline_postflight as health,strategy_pipeline as pipeline
     bound=(*health.SOURCE_FILES,*pipeline.EXTRA_SOURCES)
-    assert len(bound)==len(set(bound))==54
+    assert len(bound)==len(set(bound))==56
     assert set(runtime.COMPONENTS)<=set(bound)
+
+
+def test_market_monitor_prepares_held_symbols_even_when_current_batch_has_no_buys(monkeypatch,tmp_path):
+    from scripts import research_store,strategy_pipeline,daily_strategy_scan
+    from contextlib import contextmanager
+    class Connection:
+        @contextmanager
+        def cursor(self):
+            yield SimpleNamespace(execute=lambda *a:None,fetchone=lambda:('spec','hash',{}))
+        def rollback(self):pass
+        def close(self):pass
+    monkeypatch.setattr(research_store,'connect',lambda **kw:Connection())
+    monkeypatch.setattr(daily_strategy_scan,'load_config',lambda:{})
+    monkeypatch.setattr(strategy_pipeline,'validate_archive',lambda *a,**kw:dict(output_root=str(tmp_path)))
+    prepared=[]
+    dataset=SimpleNamespace(market_wide=True,raw={'HELD':None,'UNRELATED':None},
+        prepare=lambda symbol,*a:prepared.append(symbol) or symbol)
+    monkeypatch.setattr(strategy_pipeline,'verified_dataset',lambda *a,**kw:dataset)
+    path=tmp_path/'reports/pipeline_postflight';path.mkdir(parents=True)
+    (path/'latest.json').write_text(json.dumps(dict(batch=dict(archive_id='archive'))))
+    path=tmp_path/'scan';path.mkdir()
+    (path/'specification.json').write_text(json.dumps(dict(folds=[{}],universe=dict(symbols=['HELD','UNRELATED']))))
+    value=dict(batch_sha256='batch',strategy_contract=dict(strategy_id='trend_pullback_reclaim_qualifying_close_v2',
+        definition_sha256='definition'),proposals=[],session={})
+    runtime._FEATURE_CACHE.clear()
+    result=runtime.features({},value,base_dir=tmp_path,symbols={'HELD'})
+    assert result=={'HELD':'HELD'} and prepared==['HELD']
+    runtime.features({},value,base_dir=tmp_path,symbols={'HELD'})
+    assert prepared==['HELD']
+    runtime._FEATURE_CACHE.clear()
+    dataset.raw={}
+    with pytest.raises(ValueError,match='completed_data_unavailable'):
+        runtime.features({},value,base_dir=tmp_path,symbols={'HELD'})
 
 
 def test_inspection_handoff_cannot_be_used_for_late_buy():

@@ -149,7 +149,8 @@ def report_from_replay(batch, replay, *, primary_run_id, dataset, specification)
         input_candidates=len(proposals),output_candidates=len(proposals),
         candidate_signal_ids=[p['signal_id'] for p in proposals],
         strategy_contract=batch['strategy_contract'],
-        parameters=dict(universe=specification['universe'],portfolio=specification['portfolio'],
+        parameters=dict(universe=(dataset.provenance['selection'] if getattr(dataset,'market_wide',False)
+                                  else specification['universe']),portfolio=specification['portfolio'],
             cost_cases=specification['cost_cases'],folds=specification['folds'],effective_test_end=as_of),
         data=dataset.provenance,results=[],replay_performed=bool(proposals),
         status='COMPLETED_CANDIDATE_BACKTEST' if proposals else 'SKIPPED_NO_CANDIDATES',

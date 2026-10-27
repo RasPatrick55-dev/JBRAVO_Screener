@@ -162,13 +162,14 @@ def entry_lease(store,opening,*,wait=time.sleep):
         yield
 
 
-def features(env,handoff,*,base_dir=ROOT):
+def features(env,handoff,*,base_dir=ROOT,symbols=None):
     """Reopen the frozen producer archive; never substitute a recent CSV/bar."""
     from scripts.research_store import connect
     from scripts import strategy_pipeline as pipeline
     from scripts.daily_strategy_scan import load_config
     from scripts.strategy_library import get_strategy
-    key=(handoff['batch_sha256'],handoff['strategy_contract']['definition_sha256'])
+    wanted={p['symbol'] for p in handoff['proposals']} | set(symbols or ())
+    key=(handoff['batch_sha256'],handoff['strategy_contract']['definition_sha256'],tuple(sorted(wanted)))
     if key in _FEATURE_CACHE:return _FEATURE_CACHE[key]
     conn=connect(env=env)
     try:
@@ -181,7 +182,13 @@ def features(env,handoff,*,base_dir=ROOT):
     dataset=pipeline.verified_dataset(value,archived[0],base_dir=base_dir)
     spec=json.loads((Path(value['output_root'])/'scan/specification.json').read_bytes())
     fold=spec['folds'][0];strategy=get_strategy(handoff['strategy_contract']['strategy_id'])
-    rows={s:strategy.prepare(dataset.raw[s],dataset.features[s],fold) for s in spec['universe']['symbols']}
+    # Only held/proposed symbols need monitor features. A broad market scan must
+    # not make each monitor cycle prepare thousands of unrelated securities.
+    if getattr(dataset,'market_wide',False):
+        require(wanted<=set(dataset.raw),'strategy_held_symbol_completed_data_unavailable')
+        rows={s:dataset.prepare(s,strategy,fold) for s in wanted}
+    else:
+        rows={s:strategy.prepare(dataset.raw[s],dataset.features[s],fold) for s in spec['universe']['symbols']}
     _FEATURE_CACHE.clear();_FEATURE_CACHE[key]=rows
     return rows
 
@@ -293,7 +300,8 @@ def monitor_cycle(*,base_dir=ROOT):
                         completed=handoff['session']['signal_session'];following=handoff['session']['next_session']
                         if any(s['payload'].get('position') and s['payload']['position']['entry_time']<=completed and
                             s['payload'].get('last_completed_session')!=completed for s in signals):
-                            frame=features(env,handoff,base_dir=base_dir)
+                            frame=features(env,handoff,base_dir=base_dir,
+                                symbols={s['payload']['proposal']['symbol'] for s in signals if s['payload'].get('position')})
                     except (ValueError,OSError):
                         # Retain prior stops when the next completed daily input
                         # is unavailable; never fabricate or tighten on live bars.

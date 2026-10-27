@@ -26,7 +26,8 @@ EXTRA_SOURCES = ('scripts/strategy_pipeline.py', 'config/strategy_pipeline.json'
 EXTRA_SOURCES += tuple('scripts/'+name for name in (
     'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
     'research_testing.py', 'research_strategies.py', 'research_simulation.py',
-    'research_store.py', 'backtest_core.py', 'indicators.py'))
+    'research_store.py', 'backtest_core.py', 'indicators.py',
+    'strategy_universe.py', 'strategy_market_replay.py'))
 EXTRA_SOURCES += ('config/strategy_execution.json',)+tuple('scripts/'+name for name in (
     'strategy_execution.py','strategy_execution_handoff.py','strategy_execution_store.py',
     'strategy_execution_broker.py','strategy_execution_engine.py','strategy_execution_runtime.py',
@@ -123,7 +124,10 @@ def validate_archive(row, cfg, session, *, base_dir=ROOT):
     require(isinstance(proposals, list) and len(proposals) <= cfg['portfolio']['top_n'], 'strategy_proposal_limit')
     seen = set()
     for p in proposals:
-        require(p['symbol'] in cfg['symbols'] and p['symbol'] not in seen, 'invalid_strategy_symbol_population')
+        from scripts.strategy_universe import market_config, SYMBOL
+        allowed = (isinstance(p['symbol'], str) and SYMBOL.fullmatch(p['symbol']) is not None
+                   if market_config(cfg) else p['symbol'] in cfg['symbols'])
+        require(allowed and p['symbol'] not in seen, 'invalid_strategy_symbol_population')
         seen.add(p['symbol'])
         expected_signal = canonical_hash(dict(strategy_id=STRATEGY, version='2',
             episode_id=strategies[0]['episode_id'], symbol=p['symbol'], signal_session=day))
@@ -148,6 +152,9 @@ def verified_dataset(value, spec_sha, *, base_dir=ROOT):
     from scripts.research_testing import validate_spec
     from scripts.daily_strategy_scan import load_config
     from scripts.research_dataset import canonical_hash
+    from scripts.strategy_universe import market_config
+    cfg = load_config(Path(base_dir)/'config/strategy_scan_daily.json')
+    market = market_config(cfg)
     root = Path(value['output_root'])
     expected = Path(json.loads((Path(base_dir)/'config/strategy_pipeline.json').read_bytes())['producer_root']) / value['signal_session']
     require(root == expected, 'strategy_archive_path_mismatch')
@@ -161,28 +168,39 @@ def verified_dataset(value, spec_sha, *, base_dir=ROOT):
         require(not relative.is_absolute() and '..' not in relative.parts and pin['path'] not in seen,
                 'strategy_artifact_path_rejected')
         seen.add(pin['path'])
-        body = _read(root/'scan'/relative, 16*1024*1024)
+        body = _read(root/'scan'/relative, (64 if market else 16)*1024*1024)
         total += len(body)
-        require(total <= 32*1024*1024 and len(body) == pin['bytes'] and digest(body) == pin['sha256'],
+        require(total <= (256 if market else 32)*1024*1024 and len(body) == pin['bytes'] and digest(body) == pin['sha256'],
                 'strategy_artifact_changed')
     require({'result.json', 'paper_handoff.json', 'specification.json', 'dataset.json'} <= seen,
             'strategy_manifest_incomplete')
     require(strict_json(_read(root/'scan/result.json', 1024*1024)) == value['summary'] and
         strict_json(_read(root/'scan/paper_handoff.json', 1024*1024)) == value['handoff'], 'strategy_saved_result_changed')
-    spec_raw = _read(root/'scan/specification.json', 65536)
-    require(digest(spec_raw) == spec_sha.strip() and spec_raw == _read(root/'study.json', 65536),
+    spec_limit = 2*1024*1024 if market else 65536
+    spec_raw = _read(root/'scan/specification.json', spec_limit)
+    require(digest(spec_raw) == spec_sha.strip() and spec_raw == _read(root/'study.json', spec_limit),
             'strategy_specification_changed')
     spec = strict_json(spec_raw)
     validate_spec(spec)
-    cfg = load_config()
-    require(spec['universe'] == dict(symbols=cfg['symbols'], benchmark=cfg['benchmark'], excluded={}) and
-        spec['portfolio'] == cfg['portfolio'] and spec['strategies'] == [STRATEGY] and
+    if market:
+        require(set(spec['universe'])=={'symbols','benchmark','excluded'} and
+            spec['universe']['benchmark']==cfg['benchmark'] and spec['universe']['excluded']=={},
+            'strategy_dynamic_universe_scope_changed')
+    else:
+        require(spec['universe']==dict(symbols=cfg['symbols'],benchmark=cfg['benchmark'],excluded={}),
+            'strategy_scan_universe_changed')
+    require(spec['portfolio'] == cfg['portfolio'] and spec['strategies'] == [STRATEGY] and
         spec['cost_cases'] == [cfg['cost_case']] and spec['folds'] == [dict(id=cfg['episode_id'],
         warmup_start=cfg['warmup_start'],test_start=cfg['episode_start'],test_end=value['signal_session'])],
         'strategy_scan_specification_scope_changed')
     require(Path(spec['capture_manifest']) == root/'capture/analysis/manifest.json' and
         Path(spec['actions_capture']['path']) == root/'actions.json', 'strategy_capture_path_mismatch')
     dataset = load_dataset(spec)
+    if market:
+        require(getattr(dataset,'market_wide',False) and dataset.coverage['policy']==cfg['universe'] and
+            value['summary'].get('coverage')==dataset.provenance['selection'] and
+            all(p['symbol'] in spec['universe']['symbols'] for p in value['handoff']['proposals']),
+            'strategy_market_coverage_changed')
     require(dataset.provenance['dataset_sha256'] == value['summary']['dataset_sha256'], 'strategy_dataset_changed')
     expected_scan = canonical_hash(dict(spec=spec, as_of=value['signal_session'], sources=value['summary']['source_sha256'],
         dataset_sha256=dataset.provenance['dataset_sha256'],
@@ -225,13 +243,15 @@ def latest_batch(cursor, *, run_date=None, exact_run_ts=None):
 def selection_batch(value, session):
     definition=value['summary']['strategies'][0]['strategy']
     proposals=value['handoff']['proposals']
-    return dict(schema='jbravo.strategy-primary-batch.v1', archive_id=value['run_id'],
+    result = dict(schema='jbravo.strategy-primary-batch.v1', archive_id=value['run_id'],
         archive_sha256=digest(encoded(value)), scan_run_id=value['scan_run_id'],
         session=session, proposals=proposals, candidate_count=len(proposals),
         strategy_contract=dict(strategy_id=definition['id'],strategy_version=definition['version'],
             definition_sha256=definition['definition_sha256']),
         outcome='BUY_SIGNALS' if proposals else 'NO_BUY_SIGNALS',
         research_qualified=False, order_submission_authorized=False)
+    if 'coverage' in value['summary']:result['coverage']=value['summary']['coverage']
+    return result
 
 
 def selected_batch(payload):

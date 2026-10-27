@@ -5,11 +5,12 @@ import pandas as pd
 import pytest
 from scripts import daily_strategy_scan as daily
 from test_research_testing import featured_source
+from strategy_fixtures import pilot_config
 
 pytestmark=pytest.mark.alpaca_optional
 
 @pytest.fixture
-def cfg():return daily.load_config()
+def cfg():return pilot_config()
 
 class CapturedProvider:
     def __init__(self,cfg,*,missing=False,unsupported=False):
@@ -41,7 +42,7 @@ class CapturedProvider:
         raw=json.dumps(value).encode();self.receipts.append(dict(endpoint=url,parameters=params,**daily.binding(raw)))
         return value,raw
 
-def test_config_is_explicit_first_paper_cohort(cfg):
+def test_legacy_config_remains_a_regression_fixture(cfg):
     assert len(cfg['symbols'])==10 and cfg['feed']=='sip'
     assert cfg['order_submission_authorized'] is False
     assert cfg['strategy_id']=='trend_pullback_reclaim_qualifying_close_v2'

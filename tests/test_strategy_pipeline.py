@@ -15,6 +15,7 @@ from scripts import pipeline_postflight as health
 from scripts.research_dataset import canonical_hash
 from scripts.strategy_library import get_strategy
 from scripts.strategy_scanner import SOURCE_FILES
+from strategy_fixtures import pilot_config
 
 pytestmark = pytest.mark.alpaca_optional
 NOW = datetime.fromisoformat('2026-10-26T03:45:00+00:00')
@@ -27,7 +28,7 @@ def calendar():
 
 
 def archive(*, positive=False):
-    cfg = daily.load_config()
+    cfg = pilot_config()
     session = p.session_context(calendar(), NOW)
     day = session['signal_session']
     episode = 'a'*64

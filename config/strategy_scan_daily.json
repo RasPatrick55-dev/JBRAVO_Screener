@@ -1,8 +1,8 @@
 {
-  "schema": "jbravo.daily-strategy-config.v1",
+  "schema": "jbravo.daily-strategy-config.v2",
   "enabled": true,
   "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
-  "symbols": ["ALK", "FN", "HMY", "LOGI", "MIRM", "NVST", "PLUG", "SKY", "SRRK", "STLD"],
+  "universe": {"source": "alpaca_assets", "status": "active", "asset_class": "us_equity", "tradable": true, "max_symbols": 30000, "batch_size": 25},
   "benchmark": "SPY",
   "warmup_start": "2023-01-03",
   "episode_start": "2026-01-02",
@@ -11,8 +11,11 @@
   "currency": "USD",
   "portfolio": {"initial_cash": 100000.0, "alloc_pct": 0.05, "top_n": 3, "max_positions": 4, "trail_pct": 0.03, "max_hold_days": 7, "atr_multiple": 1.0},
   "cost_case": {"id": "base_cost", "fee_per_fill": 1.0, "slippage_bps": 5.0},
-  "max_provider_gets": 24,
-  "max_scan_seconds": 600,
+  "max_provider_gets": 12000,
+  "max_scan_seconds": 3600,
+  "max_capture_seconds": 5400,
+  "max_total_seconds": 7200,
+  "max_provider_bytes": 17179869184,
   "research_qualified": false,
   "order_submission_authorized": false
 }
