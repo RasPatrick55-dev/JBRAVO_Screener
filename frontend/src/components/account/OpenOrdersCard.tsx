@@ -1,9 +1,11 @@
+import {canDisplay, type SourceKind} from "../ui/sourceState";
 import { formatCurrency, formatNumber } from "../dashboard/formatters";
 import type { OpenOrderRow } from "./types";
 
 interface OpenOrdersCardProps {
   rows: OpenOrderRow[];
   isLoading?: boolean;
+  sourceKind?: SourceKind;
 }
 
 const formatSubmitted = (value: string): string => {
@@ -30,7 +32,9 @@ const sideChipClass = (side: string): string => {
   return "bg-slate-100 text-slate-700 outline outline-1 outline-slate-300 dark:bg-slate-700/40 dark:text-slate-200 dark:outline-slate-600";
 };
 
-export default function OpenOrdersCard({ rows, isLoading = false }: OpenOrdersCardProps) {
+export default function OpenOrdersCard({ rows: inputRows, isLoading = false, sourceKind = "unavailable" }: OpenOrdersCardProps) {
+  const rows = canDisplay(sourceKind) ? inputRows : [];
+  const emptyMessage = sourceKind === "empty" ? "No open orders (confirmed broker read)." : sourceKind === "stale" ? "Last known order list empty; current count is unknown." : "Open order count is unknown.";
   return (
     <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-cyan" aria-label="Open orders">
       <header>
@@ -38,6 +42,8 @@ export default function OpenOrdersCard({ rows, isLoading = false }: OpenOrdersCa
         <p className="mt-1 text-xs text-secondary">Active orders from Alpaca paper account</p>
       </header>
 
+      {sourceKind === "stale" ? <p role="status">Stale last known orders; current order count is unknown.</p> : null}
+      {sourceKind === "unavailable" || sourceKind === "held" ? <p role="alert">Open order count is unknown.</p> : null}
       <div className="mt-3 space-y-2 sm:hidden">
         {isLoading
           ? Array.from({ length: 4 }).map((_, index) => (
@@ -49,7 +55,7 @@ export default function OpenOrdersCard({ rows, isLoading = false }: OpenOrdersCa
 
         {!isLoading && rows.length === 0 ? (
           <div className="rounded-xl px-3 py-6 text-center text-sm text-secondary jbravo-panel-inner jbravo-panel-inner-cyan">
-            No open orders
+            {emptyMessage}
           </div>
         ) : null}
 
@@ -129,7 +135,7 @@ export default function OpenOrdersCard({ rows, isLoading = false }: OpenOrdersCa
             {!isLoading && rows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-3 py-7 text-center text-sm text-secondary">
-                  No open orders
+                  {emptyMessage}
                 </td>
               </tr>
             ) : null}

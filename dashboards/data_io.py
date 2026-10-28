@@ -324,14 +324,17 @@ def load_connection_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     fallback = base / "connectivity.json"
 
     payload = _read_json_safe(primary)
+    source = "connection_health.json" if payload else None
     if not payload:
         payload = _read_json_safe(fallback)
+        source = "connectivity.json" if payload else None
 
     timestamp = payload.get("timestamp") or payload.get("last_run_utc") or payload.get("last_run")
     if timestamp is not None:
         timestamp = str(timestamp)
 
     normalized = {
+        "source": source,
         "trading_ok": _coerce_bool(payload.get("trading_ok")),
         "trading_status": _coerce_int(payload.get("trading_status")),
         "data_ok": _coerce_bool(payload.get("data_ok")),
@@ -430,6 +433,41 @@ def _normalize_feed(value: Any) -> Optional[str]:
     return None
 
 
+def connection_check_snapshot(connection: Dict[str, Any], *, now=None) -> Dict[str, Any]:
+    """Describe an existing stored check; never perform or refresh a broker call."""
+    source = connection.get("source")
+    result = {"source": source if source in {"connection_health.json", "connectivity.json"} else None,
+              "status": "unknown", "reason": "source_missing", "checked_at": None,
+              "trading_ok": connection.get("trading_ok") if type(connection.get("trading_ok")) is bool else None,
+              "freshness": {"age_seconds": None, "freshness_level": "gray"}}
+    if result["source"] is None:
+        return result
+    text = connection.get("timestamp")
+    if not isinstance(text, str) or not text or len(text) > 128:
+        result["reason"] = "timestamp_missing"
+        return result
+    try:
+        stamp = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if stamp.utcoffset() is None:
+            raise ValueError("naive timestamp")
+        stamp = stamp.astimezone(dt.timezone.utc)
+        age = ((now or dt.datetime.now(dt.timezone.utc)) - stamp).total_seconds()
+    except (ValueError, TypeError, OverflowError):
+        result["reason"] = "timestamp_invalid"
+        return result
+    result["checked_at"] = stamp.isoformat()
+    if age < 0:
+        result["reason"] = "timestamp_future"
+        return result
+    result["freshness"] = {"age_seconds": int(age),
+        "freshness_level": "green" if age < 7200 else "amber" if age < 43200 else "gray"}
+    if result["trading_ok"] is None:
+        result["reason"] = "result_unknown"
+    else:
+        result.update(status="fresh" if age < 7200 else "stale", reason="fresh" if age < 7200 else "stale")
+    return result
+
+
 def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     """Return a resilient snapshot for the Screener Health view."""
 
@@ -468,6 +506,7 @@ def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         "latest_source": metrics.get("latest_source"),
         "pipeline_rc": metrics.get("pipeline_rc"),
         "freshness": _freshness(last_run_utc),
+        "connection_check": connection_check_snapshot(connection),
         "run_type": _run_type_hint(),
         "buying_power": connection.get("buying_power"),
     }
@@ -542,25 +581,9 @@ def screener_table() -> Tuple[pd.DataFrame, str, str]:
             except Exception:
                 pass
 
-    db_df, run_label = _db_candidates()
-    if not db_df.empty or run_label is not None:
-        df = db_df
-        updated = run_label or ""
-        source_file = "screener_candidates (db)"
-    else:
-        logger.info("DASH_DB_READ_FALLBACK reason=csv_fallback")
-        top_path = DATA_DIR / "top_candidates.csv"
-        latest_path = DATA_DIR / "latest_candidates.csv"
-
-        df = _read_csv_safe(top_path)
-        updated = _mtime_iso(top_path)
-        source_file = "top_candidates.csv"
-
-        if df.empty:
-            df = _read_csv_safe(latest_path)
-            source_file = "latest_candidates.csv"
-            if not updated:
-                updated = _mtime_iso(latest_path)
+    df, run_label = _db_candidates()
+    updated = run_label or ""
+    source_file = "screener_candidates (postgres)" if run_label is not None else "postgres unavailable or empty; no file fallback"
 
     df = df.copy()
     for column in ("score", "win_rate", "net_pnl", "close", "adv20", "atrp"):

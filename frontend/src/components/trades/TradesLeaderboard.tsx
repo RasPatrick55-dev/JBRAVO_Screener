@@ -12,6 +12,9 @@ interface TradesLeaderboardProps {
   onModeChange: (mode: LeaderboardMode) => void;
   isLoading?: boolean;
   errorMessage?: string | null;
+  sourceNote?: string;
+  gross?: boolean;
+  emptyMessage?: string;
 }
 
 const MAX_LEADERBOARD_ROWS = 12;
@@ -24,13 +27,16 @@ export default function TradesLeaderboard({
   onModeChange,
   isLoading = false,
   errorMessage = null,
+  sourceNote,
+  gross = false,
+  emptyMessage = "No leaderboard trades yet.",
 }: TradesLeaderboardProps) {
   const sortedRows = useMemo(
     () => [...rows].sort((left, right) => left.rank - right.rank).slice(0, MAX_LEADERBOARD_ROWS),
     [rows]
   );
 
-  const title = mode === "winners" ? "TOP WINNERS" : "TOP LOSERS";
+  const title = gross ? mode === "winners" ? "TOP GROSS WINNERS" : "TOP GROSS LOSERS" : mode === "winners" ? "TOP WINNERS" : "TOP LOSERS";
 
   return (
     <section
@@ -71,6 +77,7 @@ export default function TradesLeaderboard({
       </div>
 
       <h3 className="font-arimo mt-4 text-sm font-semibold uppercase tracking-[0.08em] text-primary">{title}</h3>
+      {sourceNote ? <p className="mt-1 text-xs text-secondary" role="status">{sourceNote}</p> : null}
       {errorMessage ? (
         <p className="mt-2 text-xs text-secondary" role="status">
           {errorMessage}
@@ -88,7 +95,7 @@ export default function TradesLeaderboard({
                 Symbol
               </th>
               <th scope="col" className="w-[36%] px-2 py-2 text-center">
-                Total P/L
+                {gross ? "Known Gross P/L" : "Total P/L"}
               </th>
             </tr>
           </thead>
@@ -103,15 +110,15 @@ export default function TradesLeaderboard({
                 ))
               : null}
 
-            {!isLoading && sortedRows.length === 0 ? (
+            {!isLoading && !errorMessage && sortedRows.length === 0 ? (
               <tr>
                 <td colSpan={3} className="px-2 py-6 text-center text-sm text-secondary">
-                  No leaderboard trades yet.
+                  {emptyMessage}
                 </td>
               </tr>
             ) : null}
 
-            {!isLoading
+            {!isLoading && !errorMessage
               ? sortedRows.map((row) => {
                   const plTone = row.pl > 0 ? "jbravo-text-success" : row.pl < 0 ? "jbravo-text-error" : "text-primary";
                   return (
