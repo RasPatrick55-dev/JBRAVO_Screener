@@ -5,6 +5,7 @@ shards and the PostgreSQL archive, never the cache, define a completed scan.
 """
 from collections import OrderedDict
 from collections.abc import Mapping
+from bisect import bisect_left, bisect_right
 from datetime import date, datetime, time, timedelta
 import gzip
 import hashlib
@@ -115,14 +116,22 @@ def data_reason(raw, split, events, calendar, cfg, session):
         o,h,l,c,v = values
         require(min(o,h,l,c)>0 and l<=min(o,c)<=max(o,c)<=h and v>=0 and int(v)==v,
                 'INVALID_MARKET_OHLCV')
-    raw_days = [r['session'] for r in raw]; split_days = [r['session'] for r in split]
+    raw_days = tuple(r['session'] for r in raw)
+    split_days = tuple(r['session'] for r in split)
     if raw_days != split_days:
         return 'RAW_SPLIT_SESSION_MISMATCH'
     if raw_days[-1] != session:
         return 'MISSING_CURRENT_SESSION'
     if len(raw_days) < 250:
         return 'INSUFFICIENT_250_SESSION_HISTORY'
-    expected = [r['date'] for r in calendar if raw_days[0] <= r['date'] <= session]
+    calendar_days = calendar
+    if calendar_days and isinstance(calendar_days[0], dict):
+        calendar_days = tuple(row['date'] for row in calendar_days)
+    elif not isinstance(calendar_days, tuple):
+        calendar_days = tuple(calendar_days)
+    first = bisect_left(calendar_days, raw_days[0])
+    after = bisect_right(calendar_days, session)
+    expected = calendar_days[first:after]
     if raw_days != expected:
         return 'MISSING_HISTORICAL_SESSIONS'
     if any(r['v'] <= 0 for r in raw + split):
@@ -264,6 +273,7 @@ def capture_market(provider, cfg, calendar, session, root, *, now, cache_dir=Non
     symbols = sorted(selected,key=lambda s:(not (cache_dir and
         (cache_dir/(_cache_key(selected[s],cfg)+'.json.gz')).is_file()),s))
     dates = [r['date'] for r in calendar if r['date'] <= session]
+    calendar_days = tuple(r['date'] for r in calendar)
     overlap = dates[max(0, len(dates) - 20)]
     stats = dict(cache_hits=0, full_refresh_batches=0)
     for number, offset in enumerate(range(0, len(symbols), cfg['universe']['batch_size'])):
@@ -322,7 +332,7 @@ def capture_market(provider, cfg, calendar, session, root, *, now, cache_dir=Non
                         events[symbol].append((category, event))
         for symbol in batch:
             raw, split = found['raw'][symbol], found['split'][symbol]
-            reason = data_reason(raw, split, events[symbol], calendar, cfg, session)
+            reason = data_reason(raw, split, events[symbol], calendar_days, cfg, session)
             selected[symbol]['reason'] = reason or ('BENCHMARK_ONLY' if symbol == cfg['benchmark'] else 'EVALUATED')
             if symbol == cfg['benchmark']:
                 require(reason is None, 'BENCHMARK_DATA_INVALID_' + str(reason))
@@ -384,7 +394,10 @@ class MarketDataset:
         self.coverage = coverage; self._cache = OrderedDict()
         self.asset_ids={r['symbol']:r['id'] for r in coverage['assets']}
         self.raw, self.features = SymbolFrames(self, 'raw'), SymbolFrames(self, 'split')
-        self.calendar = pd.DataFrame(strict_json(self.read('analysis/calendar.json'))).set_index('date')
+        calendar_rows = strict_json(self.read('analysis/calendar.json'))
+        self.calendar_days = tuple(row['date'] for row in calendar_rows)
+        require(self.calendar_days == tuple(sorted(set(self.calendar_days))), 'MARKET_CALENDAR_INVALID')
+        self.calendar = pd.DataFrame(calendar_rows).set_index('date')
         self.dividends = ()
         self.market_wide = True
         self.provenance = dict(capture_manifest=str(path), capture_manifest_sha256=binding(path.read_bytes())['sha256'],
@@ -417,8 +430,7 @@ class MarketDataset:
             require(chunk['symbol']==symbol and chunk['asset_id']==self.asset_ids[symbol], 'MARKET_CHUNK_IDENTITY_CHANGED')
             raw.extend(chunk['raw']);split.extend(chunk['split'])
         value.update(raw=raw,split=split)
-        calendar=self.calendar.reset_index().to_dict('records')
-        require(data_reason(value['raw'],value['split'],value['actions'],calendar,
+        require(data_reason(value['raw'],value['split'],value['actions'],self.calendar_days,
             {},self.manifest['signal_session']) is None,'MARKET_SHARD_DATA_CHANGED')
         result = dict(actions=value['actions'])
         for kind in ('raw', 'split'):
