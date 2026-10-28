@@ -175,3 +175,24 @@ returned zero with `NO_STRATEGY_BUY_SIGNALS`. The monitor was healthy and flat,
 but `entry_ready=false` after deployment. The next fresh producer/primary run,
 canonical candidate, actual paper fill and monitored lifecycle remained pending.
 Recheck current receipts rather than treating this dated snapshot as live state.
+
+
+## Runtime preparation repair, October 28, 2026
+
+The merged [PR #768](https://github.com/RasPatrick55-dev/JBRAVO_Screener/pull/768)
+was profiled against the retained 6,149-symbol capture. Its one-time isolated
+profile stopped in `PREPARE_ALL_SIX` with `WALL_CLOCK_BUDGET_EXCEEDED` after
+225 symbols; the profile claim is consumed and must not be replayed. No production
+source, producer schedule, monitor, web app, database or order was changed by that
+profile. The four companion screens and unified selection therefore still need a
+passing full-market verification before candidates are execution-ready.
+
+Source inspection found that every symbol load rebuilt `calendar.reset_index()
+.to_dict('records')` for the full market calendar, then filtered that full list to
+find the symbol's expected sessions. The repaired loader caches one sorted tuple of
+calendar dates per dataset and uses binary search to select the same inclusive
+session range. This removes the per-symbol calendar dictionaries and full-calendar
+scan while retaining the exact raw/split/session validation. The local source change
+is not yet deployed or full-market profiled; keep the pipeline blocked until a new
+source-bound profile proves complete six-strategy preparation and unified
+selection.

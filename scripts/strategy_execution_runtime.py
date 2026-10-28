@@ -242,6 +242,23 @@ def features(env,handoff,*,base_dir=ROOT,symbols=None):
 
 
 def run_entry(config,*,base_dir=ROOT,wait=None):
+    progress = dict(phase='ENTRY_PREFLIGHT', broker_started=False)
+    try:
+        return _run_entry(config, base_dir=base_dir, wait=wait, progress=progress)
+    except Exception as error:
+        # The outer task already fails closed. Also replace the strategy receipt
+        # so yesterday's skipped/green result cannot masquerade as this run.
+        value = dict(status='blocked', exit_reason='STRATEGY_ENTRY_UNAVAILABLE',
+            error_type=type(error).__name__, phase=progress['phase'],
+            orders_submitted=None if progress['broker_started'] else 0,
+            orders_filled=None if progress['broker_started'] else 0,
+            broker_outcome='NOT_ESTABLISHED' if progress['broker_started'] else 'NOT_CONTACTED',
+            paper_only=True, finished_at=datetime.now(timezone.utc).isoformat())
+        write_report(value, role='entry', base_dir=base_dir)
+        raise
+
+
+def _run_entry(config,*,base_dir=ROOT,wait=None,progress):
     """Called by the existing task after its normal reconciliation gate."""
     from scripts.strategy_execution_broker import PaperBroker
     from scripts.strategy_execution_engine import Engine
@@ -261,6 +278,7 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
         inspected=readonly_handoff(env,base_dir=base_dir,inspection=True)
         source_guard(inspected,base_dir=base_dir)
         from scripts.setup_selection import execution_queue,contract as selection_contract
+        progress['phase']='UNIFIED_SELECTION_HANDOFF'
         verified=unified_handoff(env,inspected,base_dir=base_dir)
         queue=execution_queue(verified)
         selection=verified['record']['selection']
@@ -274,6 +292,7 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
         handoff=readonly_handoff(env,base_dir=base_dir)
         verified=unified_handoff(env,handoff,base_dir=base_dir)
         queue=execution_queue(verified);selection=verified['record']['selection']
+        progress.update(phase='BROKER_PREFLIGHT',broker_started=True)
         broker=PaperBroker(env,max_requests=192)
         try:
             account=broker.account();clock=broker.clock()
@@ -294,6 +313,7 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
             conn,store=store_connection(env,broker)
             try:
                 with entry_lease(store,opening,wait=sleeper):
+                    progress['phase']='STRATEGY_PAPER_ENTRY'
                     engine=Engine(store,broker,guard=guard_for(env,base_dir=base_dir))
                     before={r['client_order_id'] for s in store.signals(active=False) for r in store.orders(s['signal_id'])}
                     for setup in queue:
@@ -356,6 +376,14 @@ def monitor_cycle(*,base_dir=ROOT):
                 entry_sources_ready=True
                 try:source_guard(template,base_dir=base_dir)
                 except ValueError:entry_sources_ready=False
+                selection_ready=False
+                if entry_sources_ready:
+                    try:
+                        inspected=readonly_handoff(env,base_dir=base_dir,inspection=True)
+                        unified_handoff(env,inspected,base_dir=base_dir)
+                        selection_ready=True
+                    except Exception:
+                        pass
                 # A changed dashboard/producer must block new entries, without
                 # interrupting protection using unchanged frozen exit code.
                 for signal in signals:source_guard(signal['payload']['handoff'],base_dir=base_dir,lifecycle=True)
@@ -396,7 +424,9 @@ def monitor_cycle(*,base_dir=ROOT):
                             covered_symbols.add(position['symbol'])
                 covered=len(covered_symbols)
                 value=dict(status='blocked' if failures else 'ok',paper_only=True,account_id=broker.account_id,
-                    entry_ready=entry_sources_ready and not failures,
+                    entry_ready=entry_sources_ready and selection_ready and not failures,
+                    entry_sources_ready=entry_sources_ready,unified_selection_ready=selection_ready,
+                    entry_block_reason=None if selection_ready else 'UNIFIED_SELECTION_UNAVAILABLE',
                     source_bindings=record['source_bindings'],owned_symbols=result['owned_symbols'],native_covered=covered,
                     events=engine.events,finished_at=datetime.now(timezone.utc).isoformat(),
                     native_stops_trigger_only_regular_hours=True)

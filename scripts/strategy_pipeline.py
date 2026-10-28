@@ -27,7 +27,8 @@ EXTRA_SOURCES += tuple('scripts/'+name for name in (
     'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
     'research_testing.py', 'research_strategies.py', 'research_simulation.py',
     'research_store.py', 'backtest_core.py', 'indicators.py',
-    'strategy_universe.py', 'strategy_market_replay.py'))
+    'strategy_universe.py', 'strategy_market_replay.py', 'strategy_prepared_market.py',
+    'strategy_runtime_diagnostics.py'))
 EXTRA_SOURCES += ('config/strategy_execution.json',)+tuple('scripts/'+name for name in (
     'strategy_execution.py','strategy_execution_handoff.py','strategy_execution_store.py',
     'strategy_execution_broker.py','strategy_execution_engine.py','strategy_execution_runtime.py',
@@ -151,7 +152,7 @@ def validate_archive(row, cfg, session, *, base_dir=ROOT, strategy_id=STRATEGY):
     return value
 
 
-def verified_dataset(value, spec_sha, *, base_dir=ROOT, strategy_id=STRATEGY):
+def verified_dataset(value, spec_sha, *, base_dir=ROOT, strategy_id=STRATEGY, dataset=None):
     from scripts.pipeline_postflight import _read
     from scripts.research_dataset import load_dataset, strict_json
     from scripts.research_testing import validate_spec
@@ -206,7 +207,11 @@ def verified_dataset(value, spec_sha, *, base_dir=ROOT, strategy_id=STRATEGY):
     capture_root = root if strategy_id == STRATEGY else root.parents[1]
     require(Path(spec['capture_manifest']) == capture_root/'capture/analysis/manifest.json' and
         Path(spec['actions_capture']['path']) == capture_root/'actions.json', 'strategy_capture_path_mismatch')
-    dataset = load_dataset(spec)
+    if dataset is None:
+        dataset = load_dataset(spec)
+    else:
+        from scripts.strategy_prepared_market import reuse_dataset
+        reuse_dataset(dataset, spec)
     if market:
         require(getattr(dataset,'market_wide',False) and dataset.coverage['policy']==cfg['universe'] and
             value['summary'].get('coverage')==dataset.provenance['selection'] and
@@ -410,7 +415,8 @@ def main(argv, *, base_dir=ROOT):
     finally:
         conn.rollback(); conn.close()
     finished = datetime.now(timezone.utc)
-    record = dict(schema=SCHEMA, run_id=args.handoff_invocation, invocation_id=args.handoff_invocation,
+    record = dict(schema=SCHEMA, status='PRIMARY_STAGES_COMPLETE_PENDING_UNIFIED_SELECTION',
+        run_id=args.handoff_invocation, invocation_id=args.handoff_invocation,
         started_at=started.isoformat(), finished_at=finished.isoformat(), pipeline_rc=0,
         session=session, batch=batch, candidate_run_ts_utc=started.isoformat(), source_bindings=sources,
         handoff=value['handoff'], backtest=backtest, metrics=metrics,
@@ -425,23 +431,38 @@ def main(argv, *, base_dir=ROOT):
                 'strategy_primary_source_changed_during_run')
     health._save_control(base_dir, 'run-'+record['run_id']+'.json', record)
     health._save_control(base_dir, 'latest.json', record)
-    from scripts.bull_flag_companion import prepare_primary
-    try:prepare_primary(record, env=env, base_dir=base_dir)
-    except Exception as error:
-        print(json.dumps(dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',
-                              error_type=type(error).__name__)),flush=True)
-    from scripts.swing_patterns import STRATEGIES as extra_patterns
-    for strategy_id in extra_patterns:
-        try:prepare_primary(record, env=env, base_dir=base_dir, strategy_id=strategy_id)
-        except Exception as error:
-            print(json.dumps(dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',strategy_id=strategy_id,
-                                  error_type=type(error).__name__)),flush=True)
-    from scripts.setup_selection import publish as publish_unified_selection
-    publish_unified_selection(record,env=env,base_dir=base_dir)
+    selection = finish_strategy_handoff(record, env=env, base_dir=base_dir, dataset=dataset)
+    if selection.get('status') != 'COMPLETED_UNIFIED_SETUP_SELECTION':
+        print(json.dumps(dict(status='PRIMARY_STRATEGY_SCREEN_BLOCKED',
+            reason='REQUIRED_UNIFIED_SELECTION_UNAVAILABLE', run_id=record['run_id'],
+            signal_session=session['signal_session'], broker_operations=0)), flush=True)
+        return 1
     print(json.dumps(dict(status='PRIMARY_STRATEGY_SCREEN_COMPLETE', strategy_id=STRATEGY,
         signal_session=session['signal_session'], candidates=len(rows), outcome=batch['outcome'],
         scan_run_id=value['scan_run_id'], archive_id=archive_id, broker_operations=0)), flush=True)
     return 0
+
+
+def finish_strategy_handoff(record, *, env, base_dir=ROOT, dataset=None):
+    from scripts.bull_flag_companion import prepare_primary, _status
+    from scripts.setup_selection import publish, required_strategies
+    from scripts.research_strategies import CHALLENGER
+    unavailable=[]
+    for strategy_id in required_strategies(base_dir):
+        if strategy_id == CHALLENGER:
+            continue
+        try:
+            result=prepare_primary(record, env=env, base_dir=base_dir, strategy_id=strategy_id, dataset=dataset)
+            if result.get('status') != 'COMPLETED_COMPANION_PRIMARY':
+                unavailable.append(strategy_id)
+        except Exception:
+            unavailable.append(strategy_id)
+    if unavailable:
+        result=dict(status='UNIFIED_SETUP_SELECTION_UNAVAILABLE', primary_run_id=record['run_id'],
+            parent_report_sha256=digest(encoded(record)), unavailable_strategies=unavailable)
+        _status(result, base_dir, 'unified_setups')
+        return result
+    return publish(record, env=env, base_dir=base_dir)
 
 
 def assess(record, *, now, max_age_seconds=7200, not_before=None, inspection=False):
@@ -491,6 +512,11 @@ def check_report(record, data, base_dir, *, now, max_age_seconds, not_before, re
     directory = Path(base_dir)/'reports/pipeline_postflight'
     require(h._read(directory/('run-'+record['run_id']+'.json'), h.MAX_REPORT_BYTES) == data,
             'strategy_postflight_history_changed')
+    from scripts.setup_selection import selection_id
+    unified = json.loads(h._read(Path(base_dir)/'reports/strategy_companions/unified_setups/latest.json',65536))
+    require(unified.get('status') == 'COMPLETED_UNIFIED_SETUP_SELECTION' and
+        unified.get('run_id') == selection_id(record['run_id']) and
+        unified.get('parent_report_sha256') == digest(encoded(record)), 'strategy_postflight_unified_selection_unavailable')
     active = json.loads(h._read(directory/'active-primary.json', 4096))
     require(record['invocation_id'] == active['id'] == record['run_id'] and
         h._utc(record['started_at']) >= h._utc(active['started_at']), 'strategy_primary_invocation_mismatch')

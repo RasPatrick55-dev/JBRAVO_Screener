@@ -40,8 +40,15 @@ def save_json(path, value):
 def validate_spec(spec):
     required = {"schema", "purpose", "capture_manifest", "actions_capture", "universe", "folds",
                 "strategies", "cost_cases", "portfolio", "max_runs", "max_seconds", "research_qualified", "execution_authorized"}
-    if set(spec) != required or spec["schema"] != "jbravo.strategy-study.v1":
+    if set(spec) not in (required, required | {'prepared_market'}) or spec["schema"] != "jbravo.strategy-study.v1":
         raise ValueError("Unexpected strategy study schema/fields")
+    if 'prepared_market' in spec:
+        import re
+        ref = spec['prepared_market']
+        if (not isinstance(ref, dict) or set(ref) != {'path', 'sha256'} or
+                not isinstance(ref['path'], str) or not isinstance(ref['sha256'], str) or
+                re.fullmatch('[0-9a-f]{64}', ref['sha256']) is None):
+            raise ValueError('Malformed prepared market reference')
     if spec["purpose"] != "exploratory_research" or spec["research_qualified"] is not False or spec["execution_authorized"] is not False:
         raise ValueError("Only explicit exploratory research is supported")
     if not 1 <= len(spec["strategies"]) <= len(set((*METHODS,*PATTERNS))) or len(set(spec["strategies"])) != len(spec["strategies"]) or not set(spec["strategies"]) <= set((*METHODS, *PATTERNS)):

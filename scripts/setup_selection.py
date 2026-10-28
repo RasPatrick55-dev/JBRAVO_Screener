@@ -130,6 +130,8 @@ def publish(primary,*,env,base_dir=ROOT):
     """Publish only after every enabled strategy has a complete, exact result."""
     from scripts.research_store import connect
     from scripts.bull_flag_companion import _publish,_status
+    import time
+    started=time.monotonic();phase='UNIFIED_INPUT_READBACK'
     now=datetime.now(timezone.utc);parent=parent_context(primary)
     try:
         connection=connect(env=env)
@@ -145,11 +147,15 @@ def publish(primary,*,env,base_dir=ROOT):
         from scripts import pipeline_postflight as health
         require(all(health._binding(health._read(Path(base_dir)/n,health.MAX_SOURCE_BYTES))==pin
                     for n,pin in record['source_bindings'].items()),'unified_selection_sources_changed')
+        phase='UNIFIED_PUBLICATION'
         _publish(record,digest(specification),env=env)
         status=dict(status=record['status'],run_id=record['run_id'],result_sha256=digest(record),
+                    primary_run_id=primary['run_id'],parent_report_sha256=digest(primary),
                     selected_signal_ids=selection['selected_signal_ids'])
     except Exception as error:
-        status=dict(status='UNIFIED_SETUP_SELECTION_UNAVAILABLE',error_type=type(error).__name__)
+        from scripts.strategy_runtime_diagnostics import diagnostic
+        status=dict(status='UNIFIED_SETUP_SELECTION_UNAVAILABLE',primary_run_id=primary['run_id'],
+                    parent_report_sha256=digest(primary),**diagnostic(error,phase,started))
     _status(status,base_dir,'unified_setups')
     return status
 
