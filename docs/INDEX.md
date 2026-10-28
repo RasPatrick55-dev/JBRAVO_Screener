@@ -16,6 +16,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 - Archived material (not current guidance): `docs/archive/README.md`
 - [Swing Research Department workflow and handoff](how-to/strategy_testing.md)
 - [October 27 Pullback/Reclaim verification snapshot](reference/pullback_reclaim_verification_2026-10-27.json)
+- [October 28 production run review: candidates published, unified execution blocked](reference/pipeline_run_review_2026-10-28.json)
 
 ## How-To
 
