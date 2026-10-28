@@ -8,6 +8,11 @@ testing; `research_qualified=false` and premarket performance qualification
 remain pending. Completing this workflow does not change an earlier research
 HOLD or authorize a different trading mode.
 
+For frozen six-strategy scorecards, entry/exit comparisons, complete qualifying
+cohorts, experiment registration and prospective paper audits, use the
+[swing research lab](swing_research_lab.md). Its isolated results do not change
+the deployed trading rules or establish profitability.
+
 ## Department workflow
 
 | Stage | Implementation and operator guide | Required handoff |
@@ -21,12 +26,11 @@ HOLD or authorize a different trading mode.
 | Production publication | [Primary strategy route](primary_strategy_screen.md) | Atomic PostgreSQL publication of candidates, Backtest and Metrics; completed primary report |
 | Paper execution and monitor | [Execution handoff](strategy_execution_handoff.md) | Fresh production handoff, actual paper-account ownership, observed orders/fills and protective lifecycle evidence |
 
-The production route currently supports one strategy,
-`trend_pullback_reclaim_qualifying_close_v2`, version `2`. Adding an entry to the
-scanner registry does not automatically connect its production publication,
-account allocation, executor or exit monitoring. Several strategies can be
-compared in isolated studies; shared paper-account capital across strategies
-still needs an explicit contract.
+The production route supports Pullback/Reclaim, Bull Flag and the
+[four additional patterns](chart_pattern_companions.md), with a common ranking,
+no family priority, shared capital/position limits and one exit owner per stock.
+Adding a future entry to the scanner registry does not automatically connect its
+production publication, account allocation, executor or exit monitoring.
 
 For a new strategy, retain its research proposal and review decision; freeze
 its data convention, causal buy/exit rules, costs, risk settings and versioned
