@@ -54,6 +54,8 @@ def test_real_six_strategy_preparation_and_portfolio_replays_are_identical(tmp_p
         return read(relative)
     monkeypatch.setattr(dataset, 'read', count_read)
     ref = prepared.build_prepared(dataset, spec, strategies, root/'prepared', deadline=time.monotonic()+60, batch_size=2)
+    manifest=json.loads((root/'prepared/manifest.json').read_bytes())
+    assert manifest['timing']['shared_pattern_group_seconds']>0
     # One symbol history load serves all six unchanged adapters.
     assert sum(relative in dataset.manifest['shards'].values() for relative in reads) == len(symbols)
     cached_spec = dict(spec, prepared_market=ref)

@@ -11,7 +11,7 @@ import pytest
 
 from scripts import bull_flag_companion as companion
 from scripts import pattern_strategy as adapter
-from scripts.swing_patterns import STRATEGIES, DETECTORS
+from scripts.swing_patterns import STRATEGIES, DETECTORS, _pivots
 from scripts.strategy_library import get_strategy,select_strategies
 from scripts import strategy_execution as rules
 
@@ -42,6 +42,22 @@ def pattern_frame(strategy_id):
     frame.iloc[-20:,frame.columns.get_loc('volume')]=800.
     frame.iloc[-1,frame.columns.get_loc('volume')]=3000.
     return frame
+
+
+@pytest.mark.parametrize('low',[False,True])
+def test_vector_pivots_match_strict_five_bar_reference(low):
+    rng=np.random.default_rng(2741)
+    samples=[np.array([],dtype=float),np.array([1.,2.,1.,2.,1.]),
+             np.array([3.,2.,1.,1.,2.,3.])]
+    samples.extend(rng.integers(1,20,size=n).astype(float) for n in range(1,160))
+    for values in samples:
+        expected=[]
+        for i in range(2,len(values)-2):
+            neighbors=np.r_[values[i-2:i],values[i+1:i+3]]
+            qualifies=np.all(values[i]<neighbors) if low else np.all(values[i]>neighbors)
+            if qualifies:
+                expected.append(i)
+        assert _pivots(values,low=low)==expected
 
 
 @pytest.mark.parametrize('strategy_id',STRATEGIES)

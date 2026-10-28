@@ -19,14 +19,17 @@ def prepare_market(dataset, spec, strategy, fold, *, deadline=None, stop_file=No
                            deadline=deadline, stop_file=stop_file)
 
 
-def prepare_symbols(dataset, spec, strategy, fold, symbols, *, deadline=None, stop_file=None):
+def prepare_symbols(dataset, spec, strategy, fold, symbols, *, deadline=None, stop_file=None,
+                    prepared_frames=None):
     """The same rule kernel and sparse-row policy, also used by the shared builder."""
     data, latest, dividends, observations = {}, {}, [], 0
     for symbol in symbols:
         from scripts.strategy_runtime_diagnostics import checkpoint
         checkpoint('MARKET_PREPARATION', deadline=deadline, stop_file=stop_file)
         try:
-            frame = dataset.prepare(symbol, strategy, fold)
+            frame = prepared_frames.get(symbol) if isinstance(prepared_frames, dict) and symbol in prepared_frames else None
+            if frame is None:
+                frame = dataset.prepare(symbol, strategy, fold)
         except ValueError as error:
             # The strategy kernel can refuse finite but unready indicator history
             # (for example a newly listed or flat-price security). Never swallow
@@ -69,6 +72,41 @@ def prepare_symbols(dataset, spec, strategy, fold, symbols, *, deadline=None, st
             if category == 'cash_dividends' and fold['warmup_start'] <= event['ex_date'] <= fold['test_end']:
                 dividends.append(event)
     return data, latest, dividends, observations
+
+
+def prepare_pattern_group(dataset, spec, strategies, fold, symbol, *, deadline=None, stop_file=None):
+    """Prepare enabled swing patterns from one shared indicator/baseline frame."""
+    from scripts.strategy_runtime_diagnostics import checkpoint
+    from scripts.swing_patterns import STRATEGIES
+    from scripts.pattern_strategy import prepare_many
+    from scripts.indicators import compute_indicators
+    from scripts.research_strategies import ready
+
+    ids=tuple(strategy.id for strategy in strategies)
+    if not ids or not set(ids)<=set(STRATEGIES):
+        raise ValueError('PATTERN_GROUP_SCOPE_INVALID')
+    check=lambda:checkpoint('SHARED_PATTERN_PREPARATION',deadline=deadline,stop_file=stop_file)
+    check()
+    raw=dataset.raw[symbol].loc[fold['warmup_start']:fold['test_end']]
+    split=dataset.features[symbol].loc[fold['warmup_start']:fold['test_end']]
+    if len(raw)<250:
+        return {strategy_id:None for strategy_id in ids}
+    boundary=max(fold['test_start'],raw.index[249].strftime('%Y-%m-%d'))
+    adjusted=dict(fold,test_start=boundary)
+    try:
+        return prepare_many(raw,split,adjusted,ids,enrich_common=True,checkpoint=check)
+    except ValueError as error:
+        if str(error)!='Insufficient fresh warmup at evaluation boundary':
+            raise
+    featured=compute_indicators(split)
+    records=featured.to_dict('records')
+    first=next((i for i in range(249,len(records)) if
+                featured.index[i].strftime('%Y-%m-%d')>=fold['test_start'] and ready(records,i,250)),None)
+    if first is None:
+        return {strategy_id:None for strategy_id in ids}
+    check()
+    return prepare_many(raw,split,dict(fold,test_start=featured.index[first].strftime('%Y-%m-%d')),
+                        ids,enrich_common=True,checkpoint=check)
 
 
 def merge_latest(result, missing, strategy, episode_id):

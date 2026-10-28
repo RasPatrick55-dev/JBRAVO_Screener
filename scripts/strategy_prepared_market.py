@@ -74,7 +74,8 @@ def unpack(value):
 
 def build_prepared(dataset, spec, strategy_ids, output, *, deadline, stop_file=None, batch_size=25):
     from scripts.strategy_library import get_strategy
-    from scripts.strategy_market_replay import prepare_symbols
+    from scripts.strategy_market_replay import prepare_symbols, prepare_pattern_group
+    from scripts.swing_patterns import STRATEGIES as PATTERN_STRATEGIES
     reuse_dataset(dataset, spec)
     require(len(spec['folds']) == 1 and 'prepared_market' not in spec and
             1 <= batch_size <= 25 and len(strategy_ids) == len(set(strategy_ids)), 'PREPARED_BUILD_SCOPE_INVALID')
@@ -84,7 +85,7 @@ def build_prepared(dataset, spec, strategy_ids, output, *, deadline, stop_file=N
     strategies = [get_strategy(sid) for sid in strategy_ids]
     definitions = {s.id: s.describe() for s in strategies}; pins = sources()
     entries = {s.id: [] for s in strategies}; total_bytes = 0
-    started = time.monotonic(); timings = {s.id: 0. for s in strategies}
+    started = time.monotonic(); timings = {s.id: 0. for s in strategies}; pattern_group_seconds=0.
     pending = {s.id: [] for s in strategies}
 
     def flush():
@@ -105,11 +106,20 @@ def build_prepared(dataset, spec, strategy_ids, output, *, deadline, stop_file=N
             rows.clear()
 
     for i, symbol in enumerate(spec['universe']['symbols']):
+        pattern_strategies=[s for s in strategies if s.id in PATTERN_STRATEGIES]
+        pattern_frames={}
+        if pattern_strategies:
+            pattern_started=time.monotonic()
+            pattern_frames=prepare_pattern_group(dataset,spec,pattern_strategies,spec['folds'][0],symbol,
+                deadline=deadline,stop_file=stop_file)
+            pattern_group_seconds+=time.monotonic()-pattern_started
         for strategy in strategies:
             checkpoint('SHARED_MARKET_PREPARATION', deadline=deadline, stop_file=stop_file)
             strategy_started = time.monotonic()
+            prepared_frames=({symbol:pattern_frames[strategy.id]}
+                if strategy.id in pattern_frames and pattern_frames[strategy.id] is not None else None)
             data, latest, dividends, observations = prepare_symbols(dataset, spec, strategy, spec['folds'][0],
-                [symbol], deadline=deadline, stop_file=stop_file)
+                [symbol], deadline=deadline, stop_file=stop_file,prepared_frames=prepared_frames)
             pending[strategy.id].append(dict(symbol=symbol, frame=pack(data[symbol]) if symbol in data else None,
                 latest=latest[symbol], dividends=dividends, observations=observations))
             timings[strategy.id] += time.monotonic()-strategy_started
@@ -121,7 +131,8 @@ def build_prepared(dataset, spec, strategy_ids, output, *, deadline, stop_file=N
     manifest = dict(schema='jbravo.prepared-market.v1', context_sha256=canonical_hash(context(spec)),
         dataset_sha256=dataset.provenance['dataset_sha256'], sources=pins, strategies=definitions, chunks=entries,
         timing=dict(total_seconds=round(time.monotonic()-started,3),
-                    strategy_seconds={sid:round(seconds,3) for sid,seconds in timings.items()}),
+                    strategy_seconds={sid:round(seconds,3) for sid,seconds in timings.items()},
+                    shared_pattern_group_seconds=round(pattern_group_seconds,3)),
         retained_bytes=total_bytes, symbols=len(spec['universe']['symbols']))
     save_json(root/'manifest.json', manifest)
     raw = (root/'manifest.json').read_bytes()
